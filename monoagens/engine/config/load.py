@@ -300,6 +300,7 @@ def _llm_config(
         safety_supported=defaults.safety_supported,
         run_budget_seconds=int(_num(llm_raw.get("run_budget_seconds"), 240)),
         max_calls_per_turn=max(0, int(_num(llm_raw.get("max_calls_per_turn"), 0))),
+        classifier_max_tokens=max(0, int(_num(llm_raw.get("classifier_max_tokens"), 64))),
         prompt_cache=_bool(llm_raw.get("prompt_cache"), True),
         retry=_retry_config(_section(llm_raw, "retry")),
         fallbacks=_llm_fallbacks(llm_raw.get("fallbacks")),

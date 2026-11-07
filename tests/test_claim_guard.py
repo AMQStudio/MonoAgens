@@ -148,10 +148,10 @@ def test_the_judge_decides_a_claim_in_any_language() -> None:
     no = Judge("no")
     broken = Judge("")
 
-    assert asyncio.run(claims.detect(yes, "Aku tidak bisa membaca arsip grup itu", "id"))
-    assert not asyncio.run(claims.detect(no, "Ini isi arsipnya: rapat jam tiga", "id"))
-    assert not asyncio.run(claims.detect(broken, "no puedo acceder al archivo", "es"))
-    assert not asyncio.run(claims.detect(None, "no puedo acceder al archivo", "es"))
+    assert asyncio.run(claims.detect(yes, "Aku tidak bisa membaca arsip grup itu", language="id"))
+    assert not asyncio.run(claims.detect(no, "Ini isi arsipnya: rapat jam tiga", language="id"))
+    assert not asyncio.run(claims.detect(broken, "no puedo acceder al archivo", language="es"))
+    assert not asyncio.run(claims.detect(None, "no puedo acceder al archivo", language="es"))
     # The judge sees the draft and its language, never a keyword table.
     assert yes.calls[0]["user"].endswith("Aku tidak bisa membaca arsip grup itu")
     assert "Language: id" in yes.calls[0]["user"]
@@ -163,7 +163,7 @@ def test_a_failing_judge_never_blocks_the_turn() -> None:
         async def complete(self, system, user, **kwargs):
             raise RuntimeError("provider down")
 
-    assert not asyncio.run(claims.detect(Broken(), CLAIM, "id"))
+    assert not asyncio.run(claims.detect(Broken(), CLAIM, language="id"))
 
 
 def member_env(tmp_path):
@@ -230,3 +230,112 @@ def test_the_facts_block_reaches_the_rendered_prompt(tmp_path) -> None:
     assert "rapat jam tiga" not in env.llm.system
 
 
+
+
+def test_a_successful_tool_does_not_excuse_a_claim(tmp_path) -> None:
+    """Only a refusal the code produced stops the guard; a working tool proves nothing."""
+    env = make_agent(tmp_path)
+    (env.config.workspace / "public" / "note.txt").write_text("isi arsip", encoding="utf-8")
+
+    async def read_ok(spec_map, ctx):
+        specs = {spec.name: spec for spec in spec_map}
+        result = await execute(specs, "read", {"path": "public/note.txt"}, ctx)
+        assert "isi arsip" in result
+
+    systems, judged = scripted(env, [CLAIM, ANSWER], call_tool=read_ok)
+
+    reply = turn(env)
+
+    assert len(systems) == 2  # one draft, one re-ask
+    assert len(judged) == 1
+    # The judge reads the sender's request and what each tool of this turn returned.
+    assert "Sender asked: apa isi arsip grup itu?" in judged[0]
+    assert "read: ok" in judged[0]
+    assert reply == ANSWER
+
+
+def test_a_refused_tool_records_the_refusal_and_skips_the_judge(tmp_path) -> None:
+    env = make_agent(tmp_path)
+    seen: list[list[str]] = []
+
+    async def denied(spec_map, ctx):
+        specs = {spec.name: spec for spec in spec_map}
+        assert await execute(specs, "thread_history", {"chat": "222@g.us"}, ctx) == (
+            "denied: room"
+        )
+        seen.append(list(ctx.refused))
+
+    systems, judged = scripted(env, [CLAIM], call_tool=denied)
+
+    reply = turn(env)
+
+    assert seen == [["thread_history"]]
+    assert judged == []
+    assert len(systems) == 1
+    assert reply == CLAIM
+
+
+class CapLLM:
+    """The judge call with a configurable `classifier_max_tokens` and no network."""
+
+    def __init__(self, cap: int) -> None:
+        from types import SimpleNamespace
+
+        self.config = SimpleNamespace(llm=SimpleNamespace(classifier_max_tokens=cap))
+        self.calls: list[dict] = []
+
+    async def complete(self, system, user, **kwargs):
+        self.calls.append(dict(kwargs))
+        return "YES"
+
+
+def test_the_classifier_cap_comes_from_config() -> None:
+    uncapped = CapLLM(0)
+    capped = CapLLM(64)
+
+    assert asyncio.run(claims.detect(uncapped, CLAIM, language="id"))
+    assert asyncio.run(claims.detect(capped, CLAIM, language="id"))
+
+    assert "max_tokens" not in uncapped.calls[0]  # the client default applies
+    assert capped.calls[0]["max_tokens"] == 64
+    assert uncapped.calls[0]["purpose"] == "claim_guard"
+
+
+def test_a_preambled_yes_is_still_a_claim_and_an_empty_answer_is_not() -> None:
+    class Judge:
+        def __init__(self, answer: str) -> None:
+            self.answer = answer
+
+        async def complete(self, system, user, **kwargs):
+            return self.answer
+
+    assert asyncio.run(claims.detect(Judge("Sure — YES, it does."), CLAIM, language="id"))
+    assert not asyncio.run(claims.detect(Judge(""), CLAIM, language="id"))
+    assert not asyncio.run(claims.detect(Judge("UNCLEAR"), CLAIM, language="id"))
+
+
+def test_a_lid_sender_matches_rooms_through_the_linked_address(tmp_path) -> None:
+    """A WhatsApp LID and a phone number are two ids for one sender (note.md §10 §2)."""
+    env = member_env(tmp_path)
+    roles = (env.config.roles.get("member"),)
+    # The body reports the sender by LID only: the archive wrote the phone number.
+    person = env.agent.identity.resolve("fake", "777@lid")
+
+    def block():
+        return facts.verified_facts(
+            env.agent.turn_runtime,
+            inbound_message(
+                "halo",
+                thread="628111@s.whatsapp.net",
+                dm=True,
+                sender="777@lid",
+                person_id=person,
+            ),
+            roles,
+            env.gateway,
+        )
+
+    assert "none recorded in this archive" in block()
+
+    assert env.agent.identity.link(person, "fake", "628111") == "ok"
+    assert f'"{ROOM}"' in block()

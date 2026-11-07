@@ -534,3 +534,27 @@ def test_soul_rule_promotion_receives_the_soul_timezone() -> None:
 
     assert Agent._sync_soul_rules(fake) == "ok"
     assert calls == [{"tz": "Asia/Jakarta"}]
+
+
+def test_a_command_name_with_invisible_characters_still_resolves(tmp_path) -> None:
+    from monoagens.engine.turn.commands import command_name
+
+    assert command_name("whoami\u200b") == "whoami"
+    assert command_name("WhoAmI,") == "whoami"
+
+    env = make_agent(tmp_path)
+
+    handle(env, inbound_message("/ping\u200b", thread=DM))
+
+    assert env.llm.decisions == 0
+    assert "Pong" in env.gateway.sent[0][1]
+
+
+def test_an_unknown_command_suggests_the_close_name(tmp_path) -> None:
+    env = make_agent(tmp_path)
+
+    handle(env, inbound_message("/whoam", thread=DM))
+
+    reply = env.gateway.sent[0][1]
+    assert "tidak dikenal" in reply
+    assert "/whoami" in reply

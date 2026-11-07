@@ -594,6 +594,12 @@ COMMENTS: dict[str, str] = {
     "engine.llm.max_calls_per_turn": (
         "Model calls allowed in one turn; 0 = unlimited. Default: 0."
     ),
+    "engine.llm.classifier_max_tokens": (
+        "Completion cap for the one-answer classifier calls (claim guard, privacy answer); "
+        "0 sends no max_tokens and uses the client default. Default: 64, measured on "
+        "deepseek-ai/DeepSeek-V4.1-Flash-1017 (p50 2, p95 4, max 4 completion tokens, "
+        "30 samples). Re-measure per model with `python -P scripts/token_probe.py`."
+    ),
     "engine.llm.prompt_cache": (
         "Send a stable prefix first for provider prompt caching. Default: true."
     ),
@@ -1253,16 +1259,16 @@ SOUL_COMMENTS: dict[str, str] = {
     "rules": "Principled rules synced as `kind=rule` memory at primary start.",
     "voice": "Voice tuning; each sub-feature governs itself.",
     "voice.sampling": "LLM sampling values for user-facing replies.",
-    "voice.sampling.daily_temperature": "Casual conversation temperature. Default: 0.9.",
+    "voice.sampling.daily_temperature": "Casual conversation temperature. Default: 0.7.",
     "voice.sampling.professional_temperature": "Technical work temperature. Default: 0.3.",
     "voice.sampling.top_p": "Nucleus sampling ceiling; null uses the provider default.",
     "voice.sampling.top_k": "Top-token candidates; null uses the provider default.",
     "voice.sampling.min_p": "Minimum token probability; null leaves it unused.",
     "voice.affect": (
-        "Internal mood (PAD: pleasure-arousal-dominance) plus per-person bonds (trust, warmth, "
-        "familiarity, grudge) that evolve as people talk to it."
+        "Experimental: off by default. Internal mood (PAD: pleasure-arousal-dominance) plus "
+        "per-person bonds (trust, warmth, familiarity, grudge) that evolve as people talk to it."
     ),
-    "voice.affect.enabled": "Run the affect engine. Default: true.",
+    "voice.affect.enabled": "Run the affect engine. Default: false.",
     "voice.affect.volatility": (
         "How quickly mood shifts: 'steady' (calm, slow), 'expressive' (lively, responsive), or "
         "'dramatic_test' (exaggerated, for testing). Default: expressive."

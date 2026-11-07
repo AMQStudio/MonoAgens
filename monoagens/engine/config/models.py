@@ -132,6 +132,11 @@ class LLMConfig:
     safety_supported: bool = False
     run_budget_seconds: int = 240
     max_calls_per_turn: int = 0  # 0 = unlimited rounds; > 0 caps model calls per turn
+    # Cap for the one-answer classifier calls (claim guard, privacy answer). 0 = no explicit
+    # `max_tokens`, so the client default applies; > 0 is a measured completion budget.
+    # Measured with `scripts/token_probe.py` on deepseek-ai/DeepSeek-V4.1-Flash-1017
+    # (2026-11-07): p50 2, p95 4, max 4 completion tokens over 30 samples.
+    classifier_max_tokens: int = 64
     prompt_cache: bool = True  # two system messages: stable prefix then volatile (ADR-0003 §4.1)
     retry: RetryConfig = field(default_factory=RetryConfig)
     fallbacks: tuple[LLMTargetConfig, ...] = ()  # tried in order after the primary target

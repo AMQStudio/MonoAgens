@@ -62,10 +62,12 @@ class ScriptLLM(FakeLLM):
         super().__init__(answer=text)
         self.audit = audit or {"mentions": [], "verdict": "allow", "reply": "", "question": ""}
         self.answer_payload = answer or {"kind": "unclear", "level": 0}
+        self.audited = 0
 
     async def complete(self, system, user, **kwargs):
         self.decisions += 1
         if "audit" in system.lower():
+            self.audited += 1
             return json.dumps(self.audit)
         if "Classify the sender" in system:
             return json.dumps(self.answer_payload)
@@ -302,13 +304,14 @@ def test_capture_persists_evidence_and_the_policy_version(tmp_path) -> None:
 
 
 def test_privacy_review_does_not_call_the_llm_for_audit(tmp_path) -> None:
+    """Mention detection is local; only the phrasing of the question may reach a model."""
     env = make_agent(tmp_path)
     env.agent.llm = ScriptLLM()
     inbound = inbound_message("halo", thread="111@g.us", dm=False)
 
     review(env, inbound, "draft", [hit(3, text="draft")])
 
-    assert env.agent.llm.decisions == 0
+    assert env.agent.llm.audited == 0
 
 
 def test_capture_level_3_is_stored_without_a_question(tmp_path) -> None:
@@ -439,11 +442,68 @@ def test_privacy_answer_uses_the_canonical_person_not_the_transport_id(tmp_path)
     assert env.memory.hits["m1"].confirmed is True
 
 
-def test_unclear_answer_keeps_pending(tmp_path) -> None:
+class AnswerLLM(FakeLLM):
+    """FakeLLM whose privacy answer is scripted; every classifier call is recorded."""
+
+    def __init__(self, reply: str = "YES") -> None:
+        super().__init__()
+        self.reply = reply
+        self.answered: list[dict] = []
+
+    async def complete(self, system, user, **kwargs):
+        if kwargs.get("purpose") == "privacy_answer":
+            self.answered.append({"system": str(system), "user": str(user), **kwargs})
+            return self.reply
+        return await super().complete(system, user, **kwargs)
+
+
+def privacy_pending(env, *, level: int = 3, thread: str = "chat", person: str = "628111"):
+    """One DM level question for memory `m1`, waiting for this person."""
+    env.memory.hits["m1"] = MemoryHit(
+        id="m1", text="hal memalukan", level=level, owner_id=person, confirmed=False
+    )
+    return asyncio.run(
+        env.agent.approvals.create(
+            kind="privacy",
+            thread_id=thread,
+            sender=person,
+            tool="memory",
+            args={"memory_ids": ["m1"]},
+            payload={"level": level, "question": "seberapa privat?"},
+            summary="seberapa privat?",
+        )
+    )
+
+
+def disclosure_pending(env, *, thread: str = "chat", person: str = "628111"):
+    return asyncio.run(
+        env.agent.approvals.create(
+            kind="disclosure",
+            thread_id=thread,
+            sender=person,
+            tool="disclosure",
+            args={"memory_ids": ["m1"]},
+            payload={"reply": "draf rahasia", "question": "boleh aku sebut?"},
+            summary="boleh aku sebut?",
+        )
+    )
+
+
+def pending_answer(env, text: str, *, thread: str = "chat", person: str = "628111") -> bool:
+    return asyncio.run(
+        env.agent.privacy.handle_pending(
+            inbound_message(text, thread=thread, sender=person, person_id=person),
+            env.gateway,
+        )
+    )
+
+
+def test_unclear_answer_never_swallows_the_turn(tmp_path) -> None:
+    """A message that is not an answer is an ordinary turn: the question keeps waiting."""
     env = make_agent(tmp_path)
-    env.agent.llm = ScriptLLM(answer={"kind": "unclear", "level": 0})
     inbound = inbound_message("halo", thread="111@g.us", dm=False)
     review(env, inbound, "draft", [hit(3, text="draft")])
+    before = len(env.gateway.sent)
 
     handled = asyncio.run(
         env.agent.privacy.handle_pending(
@@ -452,9 +512,107 @@ def test_unclear_answer_keeps_pending(tmp_path) -> None:
         )
     )
 
-    assert handled is True
+    assert handled is False
     assert env.agent.approvals.get(1).status == "pending"
-    assert "ya atau tidak" in env.gateway.sent[-1][1]
+    assert len(env.gateway.sent) == before  # no "reply yes or no" loop
+
+
+def test_a_yes_answer_settles_a_disclosure_once(tmp_path) -> None:
+    env = make_agent(tmp_path)
+    llm = AnswerLLM("YES")
+    env.agent.llm = llm
+    row = disclosure_pending(env)
+
+    assert pending_answer(env, "ya") is True
+
+    assert env.agent.approvals.get(row.id).status == "approved"
+    assert env.gateway.sent[-1][1] == "draf rahasia"
+    # Indonesian "ya" is not in the English lexicon: exactly one classifier call decides it.
+    assert [call["purpose"] for call in llm.answered] == ["privacy_answer"]
+
+
+def test_a_no_answer_forgets_the_memory(tmp_path) -> None:
+    env = make_agent(tmp_path)
+    env.agent.llm = AnswerLLM("NO")
+    row = privacy_pending(env)
+
+    assert pending_answer(env, "tidak") is True
+
+    assert env.agent.approvals.get(row.id).status == "denied"
+    assert "m1" not in env.memory.hits
+    assert env.gateway.sent[-1][1] == env.agent.privacy._text("keep")
+
+
+def test_a_bare_level_answers_without_a_model_call(tmp_path) -> None:
+    env = make_agent(tmp_path)
+    llm = AnswerLLM("UNCLEAR")
+    env.agent.llm = llm
+    row = privacy_pending(env, level=3)
+
+    assert pending_answer(env, "2") is True
+
+    assert llm.answered == []
+    assert env.memory.hits["m1"].level == 2
+    assert env.memory.hits["m1"].confirmed is True
+    assert env.agent.approvals.get(row.id).status == "approved"
+    assert env.gateway.sent[-1][1] == env.agent.privacy._text("saved", level=2)
+
+
+def test_a_long_sentence_with_a_digit_is_not_a_level(tmp_path) -> None:
+    env = make_agent(tmp_path)
+    llm = AnswerLLM("UNCLEAR")
+    env.agent.llm = llm
+    row = privacy_pending(env, level=3)
+
+    assert pending_answer(env, "aku punya 2 anak, jangan sebut mereka") is False
+
+    assert env.agent.approvals.get(row.id).status == "pending"
+    assert len(llm.answered) == 1  # the sentence went to the model, not the digit table
+    assert env.memory.hits["m1"].confirmed is False
+
+
+def test_a_repeated_draft_does_not_stage_a_second_question(tmp_path) -> None:
+    env = make_agent(tmp_path)
+    inbound = inbound_message("halo", thread="111@g.us", dm=False)
+    private = hit(3, text="proyek naga rahasia")
+
+    review(env, inbound, "proyek naga itu rahasia", [private])
+    second = review(env, inbound, "proyek naga itu rahasia sekali", [private])
+
+    rows = env.agent.approvals.pending("111@g.us", "628111")
+    assert second.handled is True
+    assert len(rows) == 1
+    assert rows[0].payload["reply"] == "proyek naga itu rahasia sekali"
+
+
+def test_approve_settles_a_privacy_row(tmp_path) -> None:
+    from monoagens.engine.commands.approve import COMMAND as APPROVE
+
+    env = make_agent(tmp_path)
+    row = privacy_pending(env, level=3)
+    member = env.config.roles.get("member")
+    ctx = env.agent.command_context("chat", "628111", (member,), env.gateway, str(row.id))
+
+    result = asyncio.run(APPROVE.fn(ctx))
+
+    assert result == env.agent.privacy._text("saved", level=3)
+    assert env.agent.approvals.get(row.id).status == "approved"
+    assert env.memory.hits["m1"].confirmed is True
+
+
+def test_deny_forgets_a_privacy_memory(tmp_path) -> None:
+    from monoagens.engine.commands.deny import COMMAND as DENY
+
+    env = make_agent(tmp_path)
+    row = privacy_pending(env, level=3)
+    member = env.config.roles.get("member")
+    ctx = env.agent.command_context("chat", "628111", (member,), env.gateway, str(row.id))
+
+    result = asyncio.run(DENY.fn(ctx))
+
+    assert env.agent.approvals.get(row.id).status == "denied"
+    assert "m1" not in env.memory.hits
+    assert env.agent.privacy._text("keep") in result
 
 
 def test_memory_tool_requires_admin_for_global_and_subject_for_veto(tmp_path) -> None:
@@ -643,3 +801,53 @@ def test_the_model_category_is_kept_on_the_memory(tmp_path) -> None:
     capture(env, "I like coffee")
 
     assert row(env)["category"] == "preference"
+
+
+class PhraseLLM(AnswerLLM):
+    """The model writes the privacy dialogue; every phrasing call is recorded."""
+
+    async def complete(self, system, user, **kwargs):
+        if kwargs.get("purpose") == "privacy_phrase":
+            self.answered.append({"user": str(user), **kwargs})
+            return "Boleh aku sebut yang itu? jawab ya atau tidak ya."
+        return await super().complete(system, user, **kwargs)
+
+
+def test_the_question_is_phrased_by_the_model(tmp_path) -> None:
+    """A canned sentence lands stiff mid-conversation; the fact stays code-owned."""
+    env = make_agent(tmp_path)
+    llm = PhraseLLM("YES")
+    env.agent.llm = llm
+    inbound = inbound_message("aku capek banget sama proyek naga", thread="111@g.us", dm=False)
+
+    review(env, inbound, "proyek naga itu berat ya", [hit(3, text="proyek naga rahasia")])
+
+    sent = env.gateway.sent[-1][1]
+    assert sent == "Boleh aku sebut yang itu? jawab ya atau tidak ya."
+    call = llm.answered[0]
+    assert "aku capek banget sama proyek naga" in call["user"]
+    # The prompt carries the intent, never the memory text.
+    assert "proyek naga rahasia" not in call["user"]
+    assert "permission" in call["user"]
+
+
+def test_a_failing_phrasing_call_falls_back_to_the_catalog(tmp_path) -> None:
+    env = make_agent(tmp_path)  # FakeLLM answers "" for `privacy_phrase`
+    row = privacy_pending(env, level=3)
+
+    assert pending_answer(env, "2") is True
+
+    assert env.gateway.sent[-1][1] == env.agent.privacy._text("saved", level=2)
+    assert env.agent.approvals.get(row.id).status == "approved"
+
+
+def test_an_empty_classifier_answer_keeps_the_question_pending(tmp_path) -> None:
+    """An empty completion (the budget went to reasoning) is not an answer: no loop, no leak."""
+    env = make_agent(tmp_path)
+    env.agent.llm = AnswerLLM("")
+    row = privacy_pending(env, level=4)
+
+    assert pending_answer(env, "hmm gimana ya") is False
+
+    assert env.agent.approvals.get(row.id).status == "pending"
+    assert env.memory.hits["m1"].confirmed is False

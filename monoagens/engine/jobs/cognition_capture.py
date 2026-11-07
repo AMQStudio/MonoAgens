@@ -96,7 +96,7 @@ class CognitionCapture:
     async def _drop_reason(self, body: str, verdict) -> str:
         """Why this candidate is not worth storing; "" keeps it (note.md §10 §6)."""
         if getattr(self.config.memory, "claim_filter", True) and await claims.detect(
-            self.llm, body, self.language
+            self.llm, body, language=self.language
         ):
             return "claim: not evidence"
         return "" if verdict.worth else "assess: not worth"

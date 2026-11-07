@@ -49,20 +49,29 @@ class TurnReview:
         )
 
     async def _claim_guard(self, answer: str, *, draft, tool_ctx) -> str:
-        """Re-ask once when a draft claims an inability that no tool checked (`note.md` §10).
+        """Re-ask once when a draft claims an inability that no tool result answered.
 
-        The guard never re-asks a turn that already ran a tool: a `denied:` or `error:` result
-        is the code's answer, and repeating the call would only spend the budget. A refusal the
-        code itself produced (the catalog's policy notices) is authoritative too.
+        A successful tool does not excuse a claim: only a refusal the code produced
+        (`error:`/`denied:`/`pending approval`) or a catalog policy notice stops the re-ask. The
+        judge sees the sender's request and what each tool returned, so an ordinary impossible
+        plan ("I cannot attend the meeting tomorrow") is not a claim.
         """
         settings = self.runtime.config.turns.claim_guard
         language = self.runtime.soul.language
         if not settings.enabled or tool_ctx is None or not str(answer or "").strip():
             return answer
+        if tool_ctx.refused or claims.official(answer, language):
+            return answer
         for _attempt in range(max(0, int(settings.max_retries))):
-            if tool_ctx.used or not await claims.detect(self.runtime.llm, answer, language):
-                return answer
-            if claims.official(answer, language):
+            refused = set(tool_ctx.refused)
+            tools = [(name, name in refused) for name in tool_ctx.used]
+            if not await claims.detect(
+                self.runtime.llm,
+                answer,
+                language=language,
+                request=str(tool_ctx.request or ""),
+                tools=tools,
+            ):
                 return answer
             log.info("claim guard: re-asking chat=%s", tool_ctx.thread_id)
             answer = await draft(claims.NOTE)

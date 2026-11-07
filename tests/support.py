@@ -409,6 +409,7 @@ class FakeLLM:
         self.calls = 0
         self.decisions = 0
         self.judged = 0
+        self.phrased = 0
         self.sessions: list[str] = []
 
     async def complete(self, system, user, **kwargs):
@@ -418,6 +419,10 @@ class FakeLLM:
             # The fake model never claims an inability unless a test scripts the verdict.
             self.judged += 1
             return "NO"
+        if kwargs.get("purpose") == "privacy_phrase":
+            # No phrasing from the fake model: the privacy dialogue falls back to the catalog.
+            self.phrased += 1
+            return ""
         self.complete_system = str(system)
         self.complete_user = str(user)
         self.decisions += 1

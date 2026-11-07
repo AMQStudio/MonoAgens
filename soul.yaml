@@ -37,8 +37,8 @@ persona: |
 voice:
   # LLM sampling values for user-facing replies.
   sampling:
-    # Casual conversation temperature. Default: 0.9.
-    daily_temperature: 0.9
+    # Casual conversation temperature. Default: 0.7.
+    daily_temperature: 0.7
     # Technical work temperature. Default: 0.3.
     professional_temperature: 0.3
     # Nucleus sampling ceiling; null uses the provider default.
@@ -47,10 +47,10 @@ voice:
     top_k: null
     # Minimum token probability; null leaves it unused.
     min_p: null
-  # Internal mood (PAD: pleasure-arousal-dominance) plus per-person bonds (trust, warmth, familiarity, grudge) that evolve as people talk to it.
+  # Experimental: off by default. Internal mood (PAD: pleasure-arousal-dominance) plus per-person bonds (trust, warmth, familiarity, grudge) that evolve as people talk to it.
   affect:
-    # Run the affect engine. Default: true.
-    enabled: true
+    # Run the affect engine. Default: false.
+    enabled: false
     # How quickly mood shifts: 'steady' (calm, slow), 'expressive' (lively, responsive), or 'dramatic_test' (exaggerated, for testing). Default: expressive.
     volatility: expressive
     # Half-life of a grudge. Default: 1.5.

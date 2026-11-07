@@ -295,7 +295,8 @@ def test_direct_mention_is_forced_reply() -> None:
     forced = ensure_reply(ignored)
 
     assert forced.act == "reply"
-    assert forced.tone == "curt"
+    # A forced reply is neutral: a cold default must never turn a legitimate request down.
+    assert forced.tone == "neutral"
     assert forced.reason.endswith(";direct")
     assert ensure_reply(forced) == forced
 
@@ -361,3 +362,31 @@ def test_ground_tone_leaves_warm_tones_alone() -> None:
     assert decision is not None
 
     assert ground_tone(decision, {"pleasure": -0.5}).tone == "playful"
+
+
+def test_an_empty_decision_falls_back_to_a_neutral_tone() -> None:
+    """A model that answers nothing must never ship a cold default (no `curt` fallback)."""
+
+    class Silent:
+        async def complete(self, system, user, **kwargs):
+            return ""
+
+    class Soul:
+        name = "MonoAgens"
+        mode = "assistant"
+        modes = ("assistant",)
+        persona = ""
+
+    decision = asyncio.run(
+        decision_module.decide_turn(
+            Silent(),
+            thread_id="chat",
+            chat_name="Chat",
+            current="halo",
+            transcript="",
+            soul=Soul(),
+        )
+    )
+
+    assert decision.tone == "neutral"
+    assert decision.reason == "model did not answer"

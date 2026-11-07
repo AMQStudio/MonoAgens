@@ -290,10 +290,10 @@ persona: |
 
 voice:
   sampling:
-    daily_temperature: 0.9        # Creative/conversational turns
+    daily_temperature: 0.7        # Creative/conversational turns
     professional_temperature: 0.3 # Analytical/tool-heavy turns
   affect:
-    enabled: true                 # Continuous PAD emotional state & decay
+    enabled: false                # Optional PAD emotional state & decay
   style:
     enabled: true                 # Per-person linguistic adaptation
   character:

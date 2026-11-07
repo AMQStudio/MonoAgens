@@ -322,6 +322,28 @@ class ApprovalStore(FencedStore):
             outcome = conn.execute(statement)
             return int(outcome.rowcount or 0) == 1
 
+    def set_payload(self, approval_id: int | str, payload: dict) -> bool:
+        """Replace the payload of one pending row (the question, never the decision).
+
+        A repeated question for the same memory set stores the newest draft here instead of
+        staging a second row, so the sender answers once.
+        """
+        try:
+            key = int(approval_id)
+        except (TypeError, ValueError):
+            return False
+        statement = (
+            update(approvals)
+            .where(approvals.c.id == key, approvals.c.status == "pending")
+            .values(payload=dict(payload))
+        )
+        fence = self.fence_clause()
+        if fence is not None:
+            statement = statement.where(fence)
+        with self.db.connect() as conn:
+            outcome = conn.execute(statement)
+            return int(outcome.rowcount or 0) == 1
+
     def expire(self) -> int:
         fence = self.fence_clause()
         statement = (

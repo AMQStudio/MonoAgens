@@ -274,6 +274,10 @@ async def run_approval(
     proof and the current RBAC instead of trusting the conversation.
     """
     lang = str(agent.soul.language)
+    if approval.kind in ("privacy", "disclosure"):
+        # A privacy row is a question, not a tool call: the answer is the decision itself.
+        text = await agent.privacy.decide(approval, approved=True, sender=sender)
+        return text, True
     if approval.kind == "send":
         return await _send_approval(agent, approval, sender=sender, roles=roles, lang=lang)
     return await _tool_approval(

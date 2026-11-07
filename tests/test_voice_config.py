@@ -51,8 +51,14 @@ def test_missing_voice_uses_safe_defaults() -> None:
     soul = load_soul(yaml.safe_load(SOUL))
 
     assert soul.voice.character.enabled is False
+    # The mood layer is the one voice part that is opt-in: mood colors the wording, so it must
+    # never be a shipped default that turns a reply cold.
+    assert soul.voice.affect.enabled is False
+    assert soul.voice.style.enabled is True
+    assert soul.voice.humanize.enabled is True
     assert soul.voice.profanity == "avoid"
     assert soul.voice.safety == "inherit"
+    assert soul.voice.sampling.daily_temperature == 0.7
     assert soul.voice.sampling.top_p is None
     assert soul.voice.sampling.top_k is None
     assert soul.voice.sampling.min_p is None

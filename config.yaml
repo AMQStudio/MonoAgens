@@ -122,6 +122,8 @@ engine:
     run_budget_seconds: 240
     # Model calls allowed in one turn; 0 = unlimited. Default: 0.
     max_calls_per_turn: 0
+    # Completion cap for the one-answer classifier calls (claim guard, privacy answer); 0 sends no max_tokens and uses the client default. Default: 64, measured on deepseek-ai/DeepSeek-V4.1-Flash-1017 (p50 2, p95 4, max 4 completion tokens, 30 samples). Re-measure per model with `python -P scripts/token_probe.py`.
+    classifier_max_tokens: 64
     # Send a stable prefix first for provider prompt caching. Default: true.
     prompt_cache: true
     # Retry policy for the turn and background paths.

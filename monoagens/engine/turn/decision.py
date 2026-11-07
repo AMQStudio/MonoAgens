@@ -313,7 +313,7 @@ def ensure_reply(decision: Decision) -> Decision:
     """A real mention/DM/reply-to-bot must be answered; the tone may still stay cold."""
     if decision.act == "reply":
         return decision
-    tone = decision.tone if decision.tone in COLD_TONES else "curt"
+    tone = decision.tone if decision.tone in COLD_TONES else "neutral"
     return Decision(
         addressed="me",
         act="reply",
@@ -536,7 +536,7 @@ async def decide_turn(
             addressed="me" if direct else "unknown",
             act="reply" if direct else "ignore",
             mode="daily",
-            tone="curt",
+            tone="neutral",
             bubbles=1,
             appraisal=NEUTRAL,
             relationship=RelationshipDelta(),

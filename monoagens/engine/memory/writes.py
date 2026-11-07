@@ -83,7 +83,7 @@ async def add(
 ) -> list[str]:
     """Conscious write (tool/command): canonical first, then the derived index."""
     if getattr(store._limits, "claim_filter", True) and await claims.detect(
-        store.judge, text, store._language
+        store.judge, text, language=store._language
     ):
         raise ValueError(
             "text claims an access/capability limit; verify it with a tool, never store it"

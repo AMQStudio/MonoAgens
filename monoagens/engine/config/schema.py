@@ -50,6 +50,7 @@ ENGINE_SCHEMA: dict[str, object] = {
         "utility_temperature": None,
         "run_budget_seconds": None,
         "max_calls_per_turn": None,
+        "classifier_max_tokens": None,
         "prompt_cache": None,
         "fallbacks": None,
         "retry": {

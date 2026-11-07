@@ -18,6 +18,7 @@ from ..inbound import CONSENT, Action, Address, GatewayCore, Percept, prompt_sec
 from ..memory import MemoryContext
 from ..runtime import ACTIVE_GENERATION
 from .approval_flow import ApprovalFlow
+from .commands import command_name
 from .confirmations import with_tool_result
 from .context import (
     Message,
@@ -186,7 +187,7 @@ class TurnRunner(ApprovalFlow, ResearchFlow, TurnReview):
                 if not is_command and not resuming:
                     approval_block = await self._resume_approvals(state)
                 head_word, _, rest = body[1:].partition(" ") if is_command else ("", "", "")
-                name = head_word.lower()
+                name = command_name(head_word)
                 direct = (
                     bool(inbound.hints.get("dm"))
                     or bool(inbound.hints.get("mention"))

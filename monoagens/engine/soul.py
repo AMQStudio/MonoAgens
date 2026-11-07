@@ -79,7 +79,7 @@ rules:
 class SamplingConfig:
     """Behavior sampling; empty optional values mean the provider default (ADR-0003)."""
 
-    daily_temperature: float = 0.9
+    daily_temperature: float = 0.7
     professional_temperature: float = 0.3
     top_p: float | None = None
     top_k: int | None = None
@@ -97,7 +97,9 @@ class VibeConfig:
 
 @dataclass(frozen=True)
 class AffectConfig:
-    enabled: bool = True
+    """Experimental: off by default; mood colors the wording, so it is opt-in."""
+
+    enabled: bool = False
     volatility: str = "expressive"
     grudge_half_life_hours: float = 1.5
     vibe: VibeConfig = field(default_factory=VibeConfig)
@@ -376,7 +378,7 @@ def _sampling(raw: object) -> SamplingConfig:
     body = _section(raw)
     return SamplingConfig(
         daily_temperature=_number(
-            body.get("daily_temperature"), 0.9, "voice.sampling.daily_temperature",
+            body.get("daily_temperature"), 0.7, "voice.sampling.daily_temperature",
             low=0.0, high=2.0,
         ),
         professional_temperature=_number(
@@ -393,7 +395,7 @@ def _affect(raw: object) -> AffectConfig:
     body = _section(raw)
     vibe = _section(body.get("vibe"))
     return AffectConfig(
-        enabled=_bool(body.get("enabled"), True),
+        enabled=_bool(body.get("enabled"), False),
         volatility=_text(body.get("volatility")) or "expressive",
         grudge_half_life_hours=_number(
             body.get("grudge_half_life_hours"), 1.5,

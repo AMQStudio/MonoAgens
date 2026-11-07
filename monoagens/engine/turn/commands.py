@@ -7,6 +7,7 @@ host is the `Agent` it is bound to.
 
 
 import contextlib
+import difflib
 
 from ..access.permissions import command_allowed, commands_for, tools_for
 from ..access.roles import Role
@@ -16,6 +17,17 @@ from ..inbound import GatewayCore, Percept, prompt_section
 from .prompts import CORE_PARTS, PromptContext, system_prompt
 
 MENTION_HEAD_RE = r"^@([^\s@]+)\s*"
+
+HINT_CUTOFF = 0.6
+
+
+def command_name(word: str) -> str:
+    """Strip invisible characters and punctuation; casefold for the registry lookup.
+
+    A chat client may deliver `/whoami\u200b` or `/whoami,`; the registry only knows `whoami`.
+    """
+    cleaned = "".join(ch for ch in str(word or "") if ch.isprintable())
+    return cleaned.strip().strip(",.;:!?\"'").casefold()
 
 
 def command_body(text: str, bot_name: str, handles: set[str]) -> str:
@@ -60,7 +72,14 @@ class TurnCommands:
             with contextlib.suppress(Exception):
                 recipe = agent.recipes.get(name)
         if handler is None and recipe is None:
-            return t("agent.unknown_command", agent.soul.language, name=name)
+            text = t("agent.unknown_command", agent.soul.language, name=name)
+            close = difflib.get_close_matches(
+                name, agent.commands.names(), n=1, cutoff=HINT_CUTOFF
+            )
+            if not close:
+                return text
+            hint = t("agent.command_hint", agent.soul.language, name=close[0])
+            return f"{text}\n{hint}"
         names = {role.name for role in roles}
         denied = t(
             "agent.command_denied",

@@ -27,6 +27,8 @@ PUBLIC = "public"
 SCRATCH = "scratch"
 PRIVATE = "private"
 LIST_LIMIT = 20
+# A tool result with one of these prefixes is the code's own answer, never a model guess.
+REFUSAL_PREFIXES = ("error:", "denied:", "pending approval")
 # A direct address the archive does not know: a phone number, or `name@server`.
 DIRECT_ADDRESS = re.compile(r"^(?:[0-9+][0-9 ()+-]{4,}|[^@\s]+@[^@\s]+)$")
 
@@ -81,6 +83,9 @@ class ToolContext:
         self.app = str(app or "")
         self.turn_id = str(turn_id or "")
         self.used: list[str] = []
+        # Tools whose result was a refusal (`error:`, `denied:`, `pending approval`): the code
+        # answered this turn, so the claim guard has nothing to re-ask.
+        self.refused: list[str] = []
         self.sent: list[dict] = []
         self.reads: set[str] = set()
         self.cross_reads: list[str] = []
@@ -562,7 +567,10 @@ async def execute(specs: dict[str, Handler], name: str, args: dict, ctx: ToolCon
     except Exception as exc:  # no tool may take the process down
         log.exception("tool %s failed", name)
         result = f"error: {type(exc).__name__}: {exc}"[:MAX_ERROR]
-    return truncate(str(result), spec.max_output_chars)
+    text = truncate(str(result), spec.max_output_chars)
+    if text.startswith(REFUSAL_PREFIXES):
+        ctx.refused.append(spec.name)
+    return text
 
 
 REGISTRY = Registry(

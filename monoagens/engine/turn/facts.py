@@ -21,24 +21,29 @@ GROUP_LINE = (
 )
 
 
-def _ids(inbound: Percept) -> set[str]:
-    """Every id the archive may have written for this sender."""
+def _ids(runtime, inbound: Percept) -> set[str]:
+    """Every id the archive may have written for this sender.
+
+    The transport id, the canonical person, and the person's linked addresses: one body may
+    report the same person under an opaque handle and a phone number, and room membership is
+    recorded under whichever id that body saw first.
+    """
     payload = inbound.payload
-    return {
-        str(value).strip()
-        for value in (
-            inbound.actor,
-            getattr(payload, "sender_id", ""),
-            getattr(payload, "sender_address", ""),
-        )
-        if str(value or "").strip()
-    }
+    found = {inbound.actor, payload.sender_id, payload.sender_address}
+    identity = getattr(runtime, "identity", None)
+    if identity is not None and inbound.actor:
+        try:
+            for row in identity.links(inbound.actor):
+                found.add(str(row.get("address") or ""))
+        except Exception:
+            log.debug("linked addresses lookup failed actor=%s", inbound.actor, exc_info=True)
+    return {value for value in (str(item or "").strip() for item in found) if value}
 
 
 def _rooms(runtime, inbound: Percept, gateway: GatewayCore) -> list[str]:
     """Rooms the sender provably belongs to: the body's proof first, recorded presence next."""
     history = getattr(runtime, "history", None)
-    ids = _ids(inbound)
+    ids = _ids(runtime, inbound)
     if history is None or not ids or getattr(history, "db", None) is None:
         return []
     try:
@@ -85,7 +90,7 @@ def verified_facts(runtime, inbound: Percept, roles, gateway: GatewayCore) -> st
     rooms = _rooms(runtime, inbound, gateway)
     lines.append(
         "- Rooms this sender provably belongs to: "
-        + (", ".join(rooms) if rooms else "none recorded")
+        + (", ".join(rooms) if rooms else "none recorded in this archive")
         + "."
     )
     return "\n".join(lines) + "\n"
