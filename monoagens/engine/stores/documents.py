@@ -7,10 +7,8 @@ conflict and never becomes a fallback for an invalid file.
 """
 
 
-import contextlib
 import hashlib
 import logging
-import os
 import time
 from pathlib import Path
 
@@ -18,6 +16,7 @@ import yaml
 from sqlalchemy import select, text
 
 from ..config import Paths
+from ..config.write import write_text
 from ..db import Database
 from ..schema import documents, state
 
@@ -38,13 +37,7 @@ def _dump(body: object) -> str:
 
 
 def _atomic_write(path: Path, text: str, mode: int | None = None) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    if mode is not None:
-        with contextlib.suppress(OSError):
-            tmp.chmod(mode)
-    os.replace(tmp, path)
+    write_text(path, text, mode=mode)
 
 
 def _hash(value: str | None) -> str | None:

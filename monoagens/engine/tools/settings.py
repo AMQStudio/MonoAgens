@@ -3,7 +3,6 @@
 
 import contextlib
 import difflib
-import os
 import re
 import time
 from pathlib import Path
@@ -12,6 +11,7 @@ import yaml
 
 from ..access.roles import NAME as ROLE_NAME
 from ..config import ConfigError, load_config
+from ..config.write import write_text
 from ..db import redact_dsn
 from ..guard import ActionRequest, scope_proof
 from ..registry import Handler
@@ -284,10 +284,7 @@ def _backup(path: Path) -> Path | None:
 
 
 def _atomic(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    write_text(path, text)
 
 
 def write_gateway_flag(

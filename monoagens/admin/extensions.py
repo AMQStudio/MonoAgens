@@ -161,7 +161,11 @@ def _actor() -> str:
 
 
 def list_plugins(config_path: str | None = None) -> int:
-    found = plugins.states(_loader(config_path))
+    settings = _loader(config_path)
+    found = plugins.states(settings)
+    if settings.fetch:
+        source = str(settings.source or "").strip() or "(empty)"
+        print(f"plugin.source: {source}", flush=True)
     if not found:
         print("plugins: none configured", flush=True)
     for item in found:

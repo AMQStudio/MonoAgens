@@ -9,13 +9,14 @@ rename with `EBUSY`; the fallback truncates and rewrites the same inode, which t
 """
 
 
-import errno
 import os
 import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import yaml
+
+from ..engine.config.write import write_text as write_file
 
 Validator = Callable[[str], object]
 _KEY = re.compile(r"^(?P<pad>\s*)(?P<key>[^#\s][^:#]*?):(?P<rest>.*)$")
@@ -282,15 +283,6 @@ def _validate(text: str, validate: Validator | None) -> None:
         raise YamlUpdateError("the updated YAML is not a mapping")
 
 
-def _write_in_place(path: Path, text: str) -> None:
-    """Rewrite the same inode: what a bind-mounted file needs when rename is refused."""
-    with open(path, "r+" if path.exists() else "w", encoding="utf-8") as handle:
-        handle.write(text)
-        handle.truncate()
-        handle.flush()
-        os.fsync(handle.fileno())
-
-
 def write_text(
     path: str | Path,
     text: str,
@@ -298,25 +290,13 @@ def write_text(
     validate: Validator | None = None,
     mode: int | None = None,
 ) -> None:
-    """Validate, then write atomically; an `EBUSY` rename falls back to an in-place write."""
-    target = Path(path)
+    """Validate, then write atomically; an `EBUSY` rename falls back to an in-place write.
+
+    The write itself is the engine's one host-file writer, so the CLI and the engine cannot
+    drift on how a bind-mounted file is updated.
+    """
     _validate(text, validate)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target_mode = target.stat().st_mode & 0o777 if target.exists() else (mode or 0o644)
-    temp = target.with_name(f".{target.name}.tmp")
-    try:
-        with open(temp, "w", encoding="utf-8") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temp, target_mode)
-        os.replace(temp, target)
-    except OSError as exc:
-        if exc.errno != errno.EBUSY:
-            raise
-        _write_in_place(target, text)
-    finally:
-        temp.unlink(missing_ok=True)
+    write_file(path, text, mode=mode)
 
 
 def update_file(

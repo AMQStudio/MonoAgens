@@ -3,7 +3,6 @@
 
 import io
 import logging
-import os
 import shutil
 import subprocess
 import sys
@@ -16,6 +15,7 @@ from pathlib import Path, PurePosixPath
 
 import yaml
 
+from ..config.write import write_text
 from .loader import (
     PluginLoader,
     _core_names,
@@ -114,6 +114,13 @@ def _install_requires(base: Path, manifest: Manifest) -> None:
 
 
 def _fetch(settings: PluginLoader, name: str, base: Path) -> Plugin:
+    # The source comes first: without it there is nothing to fetch, and naming the pin first
+    # only sends the operator after a value that cannot help yet.
+    if not str(settings.source or "").strip():
+        raise PluginError(
+            "plugin.source is not set; name the operator source (a directory or a URL that "
+            f"holds {name}.tar.gz) before installing plugin code"
+        )
     pin = _pin(settings, name)
     if not pin:
         raise PluginError(f"plugins.{name}.digest is required to install from a source")
@@ -178,11 +185,7 @@ def _config_body(settings: PluginLoader) -> tuple[Path, dict]:
 
 
 def _write_config(path: Path, body: dict) -> None:
-    mode = path.stat().st_mode & 0o777
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(yaml.safe_dump(body, sort_keys=False, allow_unicode=True), encoding="utf-8")
-    os.chmod(tmp, mode)
-    os.replace(tmp, path)
+    write_text(path, yaml.safe_dump(body, sort_keys=False, allow_unicode=True))
 
 
 def _set_enabled(settings: PluginLoader, name: str, enabled: bool) -> None:

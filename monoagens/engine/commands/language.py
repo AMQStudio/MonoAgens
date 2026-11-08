@@ -5,11 +5,10 @@ The language lives in soul.yaml, the operator file; the `soul` cache row follows
 """
 
 
-import contextlib
-import os
 
 import yaml
 
+from ..config.write import write_text
 from ..i18n import available, normalize_language, t
 from ..registry import Handler
 from . import CommandContext
@@ -23,12 +22,7 @@ def _soul_body(text: str) -> dict:
 
 
 def _write_soul(path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    with contextlib.suppress(OSError):
-        tmp.chmod(path.stat().st_mode & 0o777)
-    os.replace(tmp, path)
+    write_text(path, text)
 
 
 async def language_command(ctx: CommandContext) -> str:
