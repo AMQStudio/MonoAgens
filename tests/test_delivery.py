@@ -17,7 +17,7 @@ from monoagens.engine.schema import outbound_messages, turn_steps
 from monoagens.engine.stores.turns import STEP_INTERRUPTED, turn_identity
 from monoagens.engine.tools import execute, resolve_spec
 from monoagens.engine.turn.delivery import MAX_TEXT
-from monoagens.engine.turn.steps import SideEffectAlreadyRan, TurnSteps
+from monoagens.engine.turn.steps import TurnSteps
 
 DM = "628111@s.whatsapp.net"
 PERSON = "per_test"
@@ -140,6 +140,36 @@ def test_a_failed_file_never_resends_the_delivered_text(tmp_path) -> None:
     assert ("sent", f"turn:{tid}:tool:1") in {(row["status"], row["scope_key"]) for row in rows}
 
 
+def test_a_repeated_side_effect_replays_its_result_instead_of_killing_the_turn(
+    tmp_path,
+) -> None:
+    """The live failure: the model calls `settings` twice and the sender loses the answer.
+
+    A side effect must not run twice, but a repeat is a tool result, not a dead turn.
+    """
+    env, _inbound, tid = setup(tmp_path)
+    writer = TurnSteps(env.agent).recorder(tid, "drafted")
+    assert writer.begin("send_message", {"chat": DM}, approval_class="consent") == 0
+    writer(
+        "send_message",
+        {"chat": DM},
+        "ok: msg-1",
+        0.0,
+        0.1,
+        "executed",
+        "room",
+        "consent",
+    )
+
+    lookup = TurnSteps(env.agent).lookup(tid)
+
+    replayed = lookup("send_message", {"chat": DM})
+    other = lookup("send_message", {"chat": DM, "text": "lain"})
+
+    assert replayed == "ok: msg-1"  # the caller skips execution and hands this to the model
+    assert other is None  # a different call is a new action
+
+
 def test_a_crash_leaves_running_and_the_next_claim_interrupts_it(tmp_path) -> None:
     env, _inbound, tid = setup(tmp_path)
     writer = TurnSteps(env.agent).recorder(tid, "drafted")
@@ -154,12 +184,12 @@ def test_a_crash_leaves_running_and_the_next_claim_interrupts_it(tmp_path) -> No
     assert env.agent.turns.side_effect_done(tid) is True
 
     lookup = TurnSteps(env.agent).lookup(tid)
-    try:
-        lookup("send_message", {"chat": DM})
-    except SideEffectAlreadyRan:
-        pass
-    else:  # pragma: no cover - the guard must fire
-        raise AssertionError("an interrupted side-effecting tool was offered for replay")
+    refusal = lookup("send_message", {"chat": DM})
+    # The tool is never repeated, and the refusal reaches the model as one tool result instead
+    # of killing the turn the sender is waiting for.
+    assert refusal is not None
+    assert refusal.startswith("error:")
+    assert "not repeated" in refusal
 
 
 def test_scope_reconciliation_covers_chunk_and_tool_rows(tmp_path) -> None:

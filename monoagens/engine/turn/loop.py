@@ -44,7 +44,6 @@ from .reply import plan_chunks
 from .research_flow import ResearchFlow
 from .review import DECISION_LINE_CHARS, TurnReview
 from .state import TurnState, actor_of
-from .steps import SideEffectAlreadyRan
 
 log = logging.getLogger(__name__)
 
@@ -787,11 +786,6 @@ class TurnRunner(ApprovalFlow, ResearchFlow, TurnReview):
                 reason = self.coordinator.reason(turn_id)
                 await self.coordinator.interrupt(turn_id, reason)
                 raise
-            except SideEffectAlreadyRan as exc:
-                log.warning("turn %s interrupted: %s", turn_id, exc)
-                await self.coordinator.interrupt(turn_id, str(exc))
-                await self.delivery.notice_interrupted(turn_id, thread_id, gateway)
-                return actions
             finally:
                 ACTIVE_GENERATION.reset(token)
                 reset_origin(origin_token)

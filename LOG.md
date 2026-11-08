@@ -2,6 +2,11 @@
 
 Engineering log for MonoAgens. Short entries, newest first, decisions and behaviour only.
 
+## 2026-11-08 — A Repeated Side Effect Is a Tool Result, Not a Dead Turn
+- Live report: a WhatsApp turn ended with "Yang tadi belum selesai" because the model called `settings` twice and `turn/steps.py::lookup` raised `SideEffectAlreadyRan`, which `turn/loop.py` turned into an interrupted turn — the sender lost the answer to a repeat, not to a failure.
+- `lookup` now replays: a side-effecting call already `executed` in this turn returns its stored result (the client already treats a non-None lookup as `cached`, so nothing runs twice), and an `interrupted` side effect returns one refusal string the model can read. `SideEffectAlreadyRan` and its catch are gone; the real resume guards (shutdown, attempts exhausted, chunk-plan mismatch, send refused, completed side effect before drafting) stay.
+- Proof: `tests/test_delivery.py` — a recorded `send_message` step replays `ok: msg-1` for the same args and returns `None` for different args; an interrupted side effect yields an `error:` refusal instead of an exception. Gate: 1523 passed, ruff clean, pyright 0 errors, 10/10 ADRs.
+
 ## 2026-11-08 — A Plugin Change Is Restart-Only, and `/reload` Says So
 - Enabling a plugin and running `/reload` left `/tools` without the plugin's tool: `Agent.__init__` imports plugin code once, so `turn/reload.py` can never register it. The reload report now lists `plugins`/`plugin` among the restart-only fields (`RESTART_FIELDS`) and adds "plugin code loads at start: run `monoagens restart`, then `/tools`"; the old value keeps serving until then, like `gateways`.
 - `_merged` became table-driven over `RESTART_FIELDS` (the if-chain was at the complexity cap), so a new restart-only field is one tuple entry, not another branch.

@@ -15,10 +15,6 @@ from ..stores.turns import STEP_EXECUTED, STEP_INTERRUPTED, args_hash
 log = logging.getLogger(__name__)
 
 
-class SideEffectAlreadyRan(RuntimeError):
-    """A side-effecting tool already executed; the turn is interrupted, never repeated."""
-
-
 class StepWriter:
     """The step row of one tool loop: `begin` before the call, the instance itself after it."""
 
@@ -108,17 +104,18 @@ class TurnSteps:
             )
             if status == STEP_INTERRUPTED:
                 if side_effecting:
-                    # The tool was mid-call when the worker died; it may have sent already.
-                    raise SideEffectAlreadyRan(
-                        f"{tool} was running when the turn stopped; refusing to repeat it"
+                    # The tool was mid-call when the worker died; it may have sent already, so
+                    # it is never repeated. The refusal goes back to the model as one tool
+                    # result, never as a dead turn: the sender still gets an answer.
+                    return (
+                        f"error: {tool} was interrupted while running; it is not repeated. "
+                        "Do not claim it succeeded."
                     )
                 return None
             if status != STEP_EXECUTED:
                 return None
-            if side_effecting:
-                raise SideEffectAlreadyRan(
-                    f"{tool} already executed in this turn; refusing to repeat it"
-                )
+            # The same call already ran in this turn: hand back what it returned. A side effect
+            # is not repeated, and the turn continues instead of dying on a repeat.
             return str(found["result"] or "")
 
         return lookup
