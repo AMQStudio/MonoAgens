@@ -172,3 +172,24 @@ def test_the_loader_still_reads_what_the_writer_wrote(tmp_path, monkeypatch) -> 
 
     host, _paths = load_host(config)
     assert host.plugin.source == "/srv/plugins"
+
+
+def test_a_plugin_change_is_reported_as_restart_only(tmp_path, monkeypatch) -> None:
+    """A reload cannot import plugin code, so it must say the process has to restart."""
+    import asyncio
+
+    from support import make_runtime
+
+    env = make_runtime(tmp_path, monkeypatch, settings_approval=False)
+    config = env.paths.config
+    body = yaml.safe_load(config.read_text(encoding="utf-8"))
+    body["plugins"] = {"google": {"enabled": True, "digest": "sha256:" + "a" * 64}}
+    config.write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
+
+    summary = asyncio.run(env.agent.reload())
+
+    assert "plugins" in summary
+    assert "restart required" in summary
+    assert "monoagens restart" in summary
+    # The old value keeps serving: the tool list is built once, at agent construction.
+    assert "google" not in env.agent.config.plugins

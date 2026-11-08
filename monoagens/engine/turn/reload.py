@@ -16,6 +16,20 @@ from ..memory import memory_status
 
 log = logging.getLogger(__name__)
 
+# Config fields a running process cannot swap: the value on disk is reported, the old one keeps
+# serving until `monoagens restart`.
+RESTART_FIELDS = (
+    "workspace",
+    "database",
+    "paths",
+    "gateways",
+    "plugins",
+    "plugin",
+    "sandbox",
+    "web_search",
+    "mcp",
+)
+
 
 def restart_tokens(config: Config) -> dict[str, object]:
     """Values that a running process cannot swap without a restart."""
@@ -23,6 +37,10 @@ def restart_tokens(config: Config) -> dict[str, object]:
     return {
         "workspace": config.workspace,
         "gateways": config.gateways,
+        # Plugin code is imported once, when the agent is built: a new `enabled` flag or a new
+        # `plugin.source` cannot appear in the running process, so a reload must say so.
+        "plugins": config.plugins,
+        "plugin": config.plugin,
         "sandbox": config.sandbox,
         "web_search": config.web_search,
         "mcp": config.mcp,
@@ -42,20 +60,11 @@ def restart_tokens(config: Config) -> dict[str, object]:
 def _merged(agent, loaded: Config, changed: list[str]) -> Config:
     """Keep the old value for every restart-only field; swap everything else."""
     hot = loaded
-    if "workspace" in changed:
-        hot = replace(hot, workspace=agent.config.workspace)
-    if "database" in changed:
-        hot = replace(hot, database=agent.config.database)
-    if "paths" in changed:
-        hot = replace(hot, paths=agent.config.paths)
-    if "gateways" in changed:
-        hot = replace(hot, gateways=agent.config.gateways)
-    if "sandbox" in changed:
-        hot = replace(hot, sandbox=agent.config.sandbox)
-    if "web_search" in changed:
-        hot = replace(hot, web_search=agent.config.web_search)
-    if "mcp" in changed:
-        hot = replace(hot, mcp=agent.config.mcp)
+    kept = {
+        key: getattr(agent.config, key) for key in RESTART_FIELDS if key in changed
+    }
+    if kept:
+        hot = replace(hot, **kept)
     if "llm.api_key_env" in changed:
         hot = replace(hot, llm=agent.config.llm)
     if "memory.collection" in changed or "memory.extraction_model" in changed:
@@ -133,4 +142,8 @@ async def reload_runtime(agent) -> str:
     summary = "config/soul/roles reloaded"
     if changed:
         summary += "; restart required: " + ", ".join(changed)
+    if "plugins" in changed or "plugin" in changed:
+        summary += (
+            "; plugin code loads at start: run `monoagens restart`, then `/tools`"
+        )
     return summary

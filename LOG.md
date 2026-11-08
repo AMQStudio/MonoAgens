@@ -2,6 +2,11 @@
 
 Engineering log for MonoAgens. Short entries, newest first, decisions and behaviour only.
 
+## 2026-11-08 — A Plugin Change Is Restart-Only, and `/reload` Says So
+- Enabling a plugin and running `/reload` left `/tools` without the plugin's tool: `Agent.__init__` imports plugin code once, so `turn/reload.py` can never register it. The reload report now lists `plugins`/`plugin` among the restart-only fields (`RESTART_FIELDS`) and adds "plugin code loads at start: run `monoagens restart`, then `/tools`"; the old value keeps serving until then, like `gateways`.
+- `_merged` became table-driven over `RESTART_FIELDS` (the if-chain was at the complexity cap), so a new restart-only field is one tuple entry, not another branch.
+- Proof: `tests/test_config_write.py` — a `plugins.google.enabled: true` written to disk makes `agent.reload()` report `restart required: plugins` + the restart hint while `agent.config.plugins` keeps the old value. Gate: 1522 passed, ruff clean, pyright 0 errors, 10/10 ADRs.
+
 ## 2026-11-08 — One Writer for Bind-Mounted Host Files
 - `plugins enable` died on a compose deployment with `[Errno 16] Device or resource busy: '/app/config.yaml.tmp' -> '/app/config.yaml'`: `compose.yaml` mounts `config.yaml` as a single file, and `rename(2)` onto a mount point answers `EBUSY`. Four engine writers each rolled their own temp+`os.replace` (`plugins/install.py`, `commands/language.py` for `soul.yaml`, `stores/documents.py` for the mirror documents, `tools/settings.py` for the `settings` tool), so the same failure waited on three more operator paths.
 - One writer now: `monoagens/engine/config/write.py::write_text` — temp + `fsync` + `os.replace`, and on `EBUSY` an in-place rewrite of the same inode (mode preserved, temp always removed, a non-`EBUSY` error still raises and leaves the old file). `admin/yaml_io.write_text` keeps its validation and delegates the write, so the CLI and the engine cannot drift again.
