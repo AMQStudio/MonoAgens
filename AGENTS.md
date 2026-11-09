@@ -40,7 +40,10 @@ Timeless architectural principles, system boundaries, and high-level invariants 
   `1 Deployment = 1 Soul = 1 PostgreSQL Database = 1 Primary Process`.
 - **Single Primary Process (Lease Fencing):** A single primary process holds the database lease
   (`engine_lease`). Mutating stores verify the lease fence; instances without the lease remain in
-  standby and perform zero database writes.
+  standby and perform zero database writes to canonical stores. The one recorded exception is
+  inbound intake: the message archive, attachment handles, and the derived document cache may
+  still record what arrives while standby, so nothing is lost (`INTENTIONAL_UNFENCED` in
+  `tests/test_invariant_fencing.py` lists them; adding to it needs an ADR).
 - **Single System of Record:** PostgreSQL (with `pgvector` and `pg_trgm`) is the sole canonical
   data store. All schema changes go through the linear Alembic migration chain in `migrations/`.
 - **Authoritative Host Configuration:** Operator files on disk (`config.yaml`, `roles.yaml`,
