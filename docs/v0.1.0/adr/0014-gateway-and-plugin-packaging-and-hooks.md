@@ -121,32 +121,44 @@ The machinery stays in the core: the job engine behind `task`, `Agent.dispatch()
 the configuration writer behind `settings`, the MCP client behind MCP servers. A plugin provides
 the door, never its own copy of core machinery.
 
-#### Sandbox runtime of the `sandbox` tool
+#### Sandbox runtime of the `sandbox` tool: not yet decided
 
-The `sandbox` tool runs commands through Anthropic's sandbox-runtime (`srt`: bubblewrap,
-seccomp, and namespaces on Linux; Seatbelt on macOS) instead of Podman or Docker. There is no
-image and no daemon. Facts from its documentation, which the design depends on:
+The runtime behind the `sandbox` tool is an open decision; this ADR fixes only the contract the
+runtime must meet, so the choice can be made later without rewriting the rest. Today the tool
+uses Podman or Docker.
 
-- **Network is denied by default**; traffic can only leave through proxies on the host that
-  enforce a domain allowlist. This replaces the Podman egress proxy.
-- **Writes are allow-only**: the generated policy allows only the role's workspace path.
-- **Reads are allowed everywhere by default.** That is unsafe for a role that is not
-  protected (`.env`, `config.yaml`, other roles' workspaces would be readable), so MonoAgens
-  always generates a deny-then-allow policy: deny the deployment and home roots, re-allow only
-  the role's workspace and system paths. If the policy cannot be built, the tool is withheld
-  (fail closed). A test must prove that `.env` cannot be read from the sandbox.
-- **Per call, a generated settings file** is passed with `srt --settings`; the default
-  `~/.srt-settings.json` is never used. The process is started through the bounded executor or
-  asyncio subprocess, never blocking the event loop.
-- **Requirements**: Node.js with `@anthropic-ai/sandbox-runtime` installed (`npm install -g`),
-  plus `bwrap` and `socat` on Linux. `monoagens init` checks them; if any is missing only the
-  `sandbox` tool reports `needs configuration`. The package is pre-1.0, so the version is pinned
-  and recorded in the release.
-- **Limits accepted**: the kernel is shared with the host (weaker than a microVM), and the
-  Agent cannot install system packages, only things inside its workspace. A microVM backend
-  (for example microsandbox) can be added later behind the same tool through its own ADR.
-- `AGENTS.md` §5 ("rootless container isolation") is updated to "OS-level sandbox" when this is
-  implemented.
+Contract for any runtime:
+
+- Network denied by default; outbound traffic only through an allowlist (`sandbox_allowed_domains`).
+- Writes allowed only inside the role's workspace.
+- **Reads deny-by-default for everything outside the role's workspace and system paths**
+  (`.env`, `config.yaml`, other roles' workspaces must be unreadable). A test must prove it.
+- Resource limits (memory, processes, CPU, wall time) so a guest cannot exhaust the host.
+- Fails closed: if the policy cannot be built or the runtime is unavailable, only the `sandbox`
+  tool is withheld (`needs configuration`).
+- Runs without blocking the event loop (asyncio subprocess or the bounded executor).
+
+Candidates, with what was verified in their documentation:
+
+| Candidate | Isolation | Reads by default | Network | Limits | Requirements and risks |
+|---|---|---|---|---|---|
+| Podman or Docker (today) | container, shared kernel | only what is mounted | egress proxy built by us | container limits | needs the runtime installed |
+| Anthropic sandbox-runtime (`srt`) | bubblewrap, seccomp, namespaces (Linux); Seatbelt (macOS) | **open everywhere** unless denied; needs a generated deny-then-allow policy | domain allowlist through built-in proxies | none found in its documentation | Node.js and npm package (pre-1.0), `bwrap`, `socat`; needs unprivileged user namespaces |
+| nsjail | namespaces, seccomp-bpf, cgroups (Linux only) | only what is mounted | none; an allowlist would be our own proxy | memory, processes, CPU, wall time | C++ binary to build or install; needs unprivileged user namespaces |
+| Pyodide | WebAssembly VM, no host filesystem unless mounted | none | sockets off by default | VM memory, kill on timeout | Python only: no shell, no `subprocess`, `threading`, or `multiprocessing`; needs a JS runtime (Node or Deno); not a Linux computer |
+| microsandbox (microVM) | own kernel, hardware isolation | only what is mounted | network policy | VM resources | Python SDK without a daemon; needs hardware virtualization (not verified) |
+
+Open risks that apply to the choice:
+
+- `srt` and nsjail need **unprivileged user namespaces**, which a default Docker container
+  often blocks, so the sandbox may fail in the project's own Docker deployment. To be tested
+  before choosing.
+- `srt` reads host files by default; choosing it makes the generated deny-then-allow policy
+  and its test mandatory.
+- Pyodide does not replace a shell. It could be a separate tool (`computer/python`) for roles
+  that only compute, and would work inside Docker.
+- `AGENTS.md` §5 ("rootless container isolation") is updated with the chosen runtime when this
+  is implemented.
 
 #### MCP servers: the alternative to a plugin
 
@@ -276,8 +288,8 @@ staff:
 - **The sandbox reads host files by default.** Mitigation: the generated deny-then-allow read
   policy of §4.5 plus a test that `.env` is unreadable; the tool is withheld if the policy
   cannot be built.
-- **sandbox-runtime is pre-1.0 and adds Node.js as a dependency.** Mitigation: pinned version,
-  checked by `monoagens init`, only the `sandbox` tool depends on it.
+- **The sandbox runtime is undecided and some candidates need user namespaces.** Mitigation:
+  the contract of §4.5 is runtime-neutral; the choice is tested in the Docker deployment first.
 
 ## 9. Interaction with other ADRs
 
