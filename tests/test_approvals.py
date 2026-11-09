@@ -381,7 +381,9 @@ def test_default_tier_matrix() -> None:
     assert verdict(config, tool_request("shell", command="ls")) == "pending"
     assert verdict(config, tool_request("sandbox", command="ls")) == "pending"
     assert verdict(config, tool_request("memory", action="forget", query="x")) == "pending"
-    assert verdict(config, tool_request("settings", action="get")) == "pending"
+    # ADR-0013 §4.5: a settings read observes; a settings write still waits.
+    assert verdict(config, tool_request("settings", action="get")) == "allow"
+    assert verdict(config, tool_request("settings", action="set")) == "pending"
     assert verdict(config, tool_request("send", target="room", chat=DM)) == "allow"
     assert verdict(config, tool_request("send_to", target="room", chat=OTHER)) == "pending"
 
@@ -394,7 +396,8 @@ def test_yolo_tier_matrix() -> None:
     assert verdict(config, tool_request("shell", command="ls")) == "allow"
     assert verdict(config, tool_request("memory", action="forget")) == "allow"
     assert verdict(config, tool_request("shell", command="rm -rf x")) == "pending"
-    assert verdict(config, tool_request("settings", action="get")) == "pending"
+    assert verdict(config, tool_request("settings", action="get")) == "allow"
+    assert verdict(config, tool_request("settings", action="set")) == "pending"
     assert verdict(config, tool_request("send_to", target="room", chat=OTHER)) == "pending"
     assert verdict(config, tool_request("task", task="x")) == "pending"
 

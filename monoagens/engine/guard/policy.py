@@ -25,6 +25,9 @@ READ_ACTIONS = {
     "memory": frozenset({"search", "list"}),
     "recipe": frozenset({"list"}),
 }
+# ADR-0013 §4.5: `settings` reads observe and never write. Kept in sync by hand with
+# `tools/settings.py::_requires_approval` (guard never imports from tools).
+SETTINGS_READ_ACTIONS = frozenset({"get", "schema", "reload"})
 SEND_TOOLS = frozenset({"send", "send_to", "send_message", "send_file"})
 TASK_TOOLS = frozenset({"task", "tasks", "task_create", "delegate"})
 # ADR-0007 §4.8: reading a host secret is authorization, whatever the requester's role.
@@ -575,7 +578,11 @@ class ApprovalPolicy:
         )
         if command and scan_command(command, self.config.sensitive_commands):
             return SafetyDecision("pending", "the command is sensitive; needs /approve")
-        if request.tool == "settings" and self.config.settings:
+        if (
+            request.tool == "settings"
+            and self.config.settings
+            and _settings_action(request) not in SETTINGS_READ_ACTIONS
+        ):
             return SafetyDecision("pending", "changing settings needs /approve")
         crossing = (request.tool in SEND_TOOLS and crosses_scope(request)) or (
             request.door and request.declared_class == AUTHORIZATION
@@ -607,10 +614,19 @@ class ApprovalPolicy:
         )
 
 
+def _settings_action(request: ActionRequest) -> str:
+    """The action exactly as `tools/settings.py` normalizes it (missing means `schema`)."""
+    args = request.args if isinstance(request.args, dict) else {}
+    return str(args.get("action") or "schema").strip().lower()
+
+
 def read_only(request: ActionRequest) -> bool:
     """A tool that observes and never changes state (ADR-0006 §4.5)."""
     if request.declared_class == "none" or request.tool in READ_TOOLS:
         return True
+    if request.tool == "settings":
+        # ADR-0013 §4.5: `get`, `schema`, and `reload` observe; every write waits.
+        return _settings_action(request) in SETTINGS_READ_ACTIONS
     actions = READ_ACTIONS.get(request.tool)
     if not actions:
         return False

@@ -7,8 +7,8 @@ workspace, and a file merely *named* `shutdown.log` is not a `shutdown` call.
 
 from pathlib import Path
 
-from monoagens.engine.config import DEFAULT_SENSITIVE_COMMANDS
-from monoagens.engine.guard import screen
+from monoagens.engine.config import DEFAULT_SENSITIVE_COMMANDS, ApprovalConfig
+from monoagens.engine.guard import ActionRequest, ApprovalPolicy, screen
 from monoagens.engine.guard.policy import scan_command
 
 SENSITIVE = DEFAULT_SENSITIVE_COMMANDS
@@ -102,3 +102,47 @@ def test_squid_proxy_denies_private_ranges() -> None:
     ):
         assert f"acl internal dst {block}" in text
     assert text.index("http_access deny internal") < text.index("http_access allow all")
+
+
+# ------------------------------------------------ settings read-only actions
+
+
+def settings_request(action: str | None = None) -> ActionRequest:
+    """A `settings` tool call aimed at the engine document."""
+    args = {"file": "engine", "path": "llm.model"}
+    if action is not None:
+        args["action"] = action
+    return ActionRequest(
+        tool="settings",
+        args=args,
+        thread_id="c",
+        sender="s",
+        gateway="g",
+        roles=("administrator",),
+        declared_class="authorization",
+    )
+
+
+def settings_verdict(action: str | None = None, *, mode: str = "default") -> str:
+    config = ApprovalConfig(mode=mode, settings=True)
+    return ApprovalPolicy(config).check(settings_request(action)).verdict
+
+
+def test_settings_reads_never_wait_for_approval() -> None:
+    # The tool itself treats these as safe; the gate must not park them.
+    for action in ("get", "schema", "reload", None):
+        assert settings_verdict(action) != "pending", action
+
+
+def test_settings_writes_keep_waiting_for_approval() -> None:
+    for action in ("set", "unset", "write"):
+        assert settings_verdict(action) == "pending", action
+
+
+def test_strict_mode_still_gates_settings_reads() -> None:
+    assert settings_verdict("get", mode="strict") == "pending"
+
+
+def test_settings_action_is_normalized_like_the_tool() -> None:
+    assert settings_verdict(" GET ") != "pending"
+    assert settings_verdict(" SET ") == "pending"
