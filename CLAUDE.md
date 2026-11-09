@@ -17,9 +17,14 @@ primary implementer:
   importing gateways, blocking calls in `async def`, writes bypassing `MemoryStore`, outbound
   actions bypassing `Agent.dispatch()`, hardcoded chat strings or model IDs, RBAC fail-open paths,
   privacy/scope leaks, and missing lockfile/template/digest sync.
-- **Supervisor:** Split work into well-scoped tasks, delegate implementation to Orca workers (per
-  the global delegation scheme: `omp` + `deepseek-v4.1-flash`, effort `low`), monitor them, and
-  review every result before accepting it.
+- **Supervisor:** Split work into well-scoped tasks, delegate implementation to Orca workers,
+  monitor them, and review every result before accepting it. Every delegated coding task uses
+  exactly this worker (provider OpenCode Go; always keep the `opencode-go/` prefix):
+
+  ```
+  $ORCA_CLI_COMMAND orchestration worker-start --spec-file <spec> --worktree current \
+    --agent omp --model opencode-go/deepseek-v4.1-flash --effort low
+  ```
 - **Reviewer and Gatekeeper:** Nothing is reported as done until it passes the Verification Gate in
   `AGENTS.md` §7 and Claude has reviewed the diff.
 
