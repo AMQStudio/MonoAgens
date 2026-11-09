@@ -19,6 +19,7 @@ from ...engine.inbound import GatewayError
 log = logging.getLogger(__name__)
 
 INTENTS_MESSAGE = "message"
+INTERACTION_APPLICATION_COMMAND = 2
 INTERACTION_COMPONENT = 3
 
 
@@ -107,8 +108,9 @@ def message_payload(message: Any) -> Mapping:
 
 
 def interaction_payload(interaction: Any) -> Mapping | None:
-    """A component `Interaction` as the plain mapping `ingress.interaction_percept` reads."""
-    if int(getattr(interaction, "type", 0) or 0) != INTERACTION_COMPONENT:
+    """A component or slash `Interaction` as the mapping `ingress.interaction_percept` reads."""
+    kind = int(getattr(interaction, "type", 0) or 0)
+    if kind not in (INTERACTION_APPLICATION_COMMAND, INTERACTION_COMPONENT):
         return None
     data = getattr(interaction, "data", None) or {}
     message = getattr(interaction, "message", None)
@@ -135,6 +137,34 @@ def interaction_payload(interaction: Any) -> Mapping | None:
 def _write_bytes(target: Path, content: bytes) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(content)
+
+
+async def acknowledge(interaction: Any, *, ephemeral: bool = False) -> None:
+    """Answer the interaction inside Discord's 3-second budget; a failure is only a warning."""
+    try:
+        if ephemeral:
+            await interaction.response.defer(ephemeral=True)
+        else:
+            await interaction.response.defer()
+    except Exception as exc:  # already answered, expired, or transport failure
+        log.warning(
+            "discord interaction ack failed id=%s: %s", getattr(interaction, "id", ""), exc
+        )
+
+
+async def dispatch_interaction(interaction: Any, handlers: Handlers) -> None:
+    """One component click: acknowledge first, then hand the payload to the body.
+
+    discord.py fires `on_interaction` for slash commands too; those are answered by the slash
+    callback (ephemeral ack), so this path takes component clicks only.
+    """
+    if int(getattr(interaction, "type", 0) or 0) != INTERACTION_COMPONENT:
+        return
+    payload = interaction_payload(interaction)
+    if payload is None:
+        return
+    await acknowledge(interaction)
+    await handlers.interaction(payload)
 
 
 class DiscordPyTransport:
@@ -167,9 +197,7 @@ class DiscordPyTransport:
 
         @client.event
         async def on_interaction(interaction: Any) -> None:
-            payload = interaction_payload(interaction)
-            if payload is not None:
-                await handlers.interaction(payload)
+            await dispatch_interaction(interaction, handlers)
 
         await client.start(self.token)
 
@@ -278,13 +306,26 @@ class DiscordPyTransport:
         """One slash invocation becomes the same interaction payload a button produces."""
 
         async def callback(interaction: Any, argument: str = "") -> None:
-            payload = interaction_payload(interaction) or {}
-            command = f"/{name} {argument}".strip()
-            payload = {
-                **payload,
-                "data": {"custom_id": f"cmd:{command}", "values": []},
-                "message": {"id": str(getattr(interaction, "id", "") or "")},
-            }
-            await handlers.interaction(payload)
+            await acknowledge(interaction, ephemeral=True)
+            try:
+                payload = interaction_payload(interaction)
+                if payload is None:
+                    return
+                command = f"/{name} {argument}".strip()
+                payload = {
+                    **payload,
+                    "data": {"custom_id": f"cmd:{command}", "values": []},
+                    "message": {"id": str(getattr(interaction, "id", "") or "")},
+                }
+                await handlers.interaction(payload)
+            finally:
+                try:
+                    await interaction.delete_original_response()
+                except Exception as exc:
+                    log.debug(
+                        "discord thinking placeholder not removed id=%s: %s",
+                        getattr(interaction, "id", ""),
+                        exc,
+                    )
 
         return callback
