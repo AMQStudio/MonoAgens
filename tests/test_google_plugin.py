@@ -316,6 +316,7 @@ def test_tool_blocks_actions_without_an_identity(tmp_path, monkeypatch, google_t
         thread_id="chat",
         sender="p1",
         person_id="p1",
+        direct=True,
     )
 
     for action in ("list", "read", "write"):
@@ -341,6 +342,78 @@ def test_tool_login_in_group_is_rejected(tmp_path, monkeypatch, google_tool) -> 
     result = asyncio.run(google_tool._google({"action": "login"}, ctx))
 
     assert result == "error: Google login is only allowed in a direct message."
+
+
+def test_tool_file_actions_are_refused_in_a_group(
+    tmp_path, monkeypatch, google_tool
+) -> None:
+    calls: list[tuple] = []
+
+    class Fake:
+        def identity(self, person_id):
+            raise AssertionError("identity must not be consulted")
+
+        async def list_files(self, *args):
+            calls.append(("list", args))
+            return "listed"
+
+        async def read(self, *args):
+            calls.append(("read", args))
+            return "read"
+
+        async def write(self, *args):
+            calls.append(("write", args))
+            return "written"
+
+    monkeypatch.setattr(google_tool, "_service", lambda ctx: Fake())
+    config = build_config(
+        tmp_path, roles={"member": Role("member", tools=("google",))}
+    )
+    ctx = ToolContext(
+        config,
+        config.roles.default_role(),
+        ("google",),
+        thread_id="group",
+        sender="p1",
+        person_id="p1",
+        direct=False,
+    )
+
+    for args in (
+        {"action": "list"},
+        {"action": "read", "file_id": "f1", "range": "A1:B2"},
+        {"action": "write", "file_id": "f1", "range": "A1", "values": [["x"]]},
+    ):
+        result = asyncio.run(google_tool._google(args, ctx))
+        assert result.startswith("error:")
+        assert "direct message" in result
+    assert calls == []
+
+
+def test_tool_unknown_action_in_a_group_is_still_unknown(
+    tmp_path, monkeypatch, google_tool
+) -> None:
+    class Fake:
+        def identity(self, person_id):
+            raise AssertionError("identity must not be consulted")
+
+    monkeypatch.setattr(google_tool, "_service", lambda ctx: Fake())
+    config = build_config(
+        tmp_path, roles={"member": Role("member", tools=("google",))}
+    )
+    ctx = ToolContext(
+        config,
+        config.roles.default_role(),
+        ("google",),
+        thread_id="group",
+        sender="p1",
+        person_id="p1",
+        direct=False,
+    )
+
+    result = asyncio.run(google_tool._google({"action": "bogus"}, ctx))
+
+    assert result == "error: unknown action; use login, status, list, read, or write"
 
 
 def test_tool_routes_actions_with_a_linked_identity(tmp_path, monkeypatch, google_tool) -> None:
@@ -373,6 +446,7 @@ def test_tool_routes_actions_with_a_linked_identity(tmp_path, monkeypatch, googl
         thread_id="chat",
         sender="p1",
         person_id="p1",
+        direct=True,
     )
 
     assert asyncio.run(

@@ -61,6 +61,14 @@ def _record(ctx: ToolContext, action: str, file_id: str) -> None:
         log.exception("failed to log the google action chat=%s", ctx.thread_id)
 
 
+def _limit(args: dict) -> int:
+    """Requested list size; junk input falls back to 10 instead of failing the turn."""
+    try:
+        return int(args.get("limit") or 10)
+    except (TypeError, ValueError):
+        return 10
+
+
 async def _google(args: dict, ctx: ToolContext) -> str:
     vendor = _module()
     if vendor is None:
@@ -83,17 +91,18 @@ async def _dispatch(args: dict, ctx: ToolContext, vendor) -> str:
             return await service.status(person_id, direct=ctx.direct)
         if action not in {"list", "read", "write"}:
             return "error: unknown action; use login, status, list, read, or write"
+        if not ctx.direct:
+            return (
+                "error: Google file actions are only available in a direct message "
+                "until the group approval flow exists"
+            )
         identity = service.identity(person_id)
         if identity is None:
             return "error: Google account not connected; run action=login in a DM"
         email = str(identity["email"])
         if action == "list":
-            try:
-                limit = int(args.get("limit") or 10)
-            except (TypeError, ValueError):
-                limit = 10
             return await service.list_files(
-                email, ctx.trusted, str(args.get("query") or ""), limit
+                email, ctx.trusted, str(args.get("query") or ""), _limit(args)
             )
         if not file_id:
             return "error: file_id is required"
