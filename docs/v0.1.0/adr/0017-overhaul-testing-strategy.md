@@ -97,7 +97,11 @@ Live suites run on the owner's machine against dedicated test rooms, driven by O
 
 | Suite | Purpose | How |
 |---|---|---|
-| End-to-end and real usage | golden scenarios through real apps and accounts | `orca computer` script plays the human side |
+| End-to-end and real usage | every area of the coverage matrix (§4.8) through real apps and accounts, including cross-gateway | `orca computer` script plays the human side |
+| Long conversations | hundreds of turns and multi-day threads: context budget, salience, no repetition, no drift of identity or facts | `orca computer` script plus replay harness with recorded model |
+| Complex requests | multi-step work (research, write a document, send it to another room, schedule a follow-up), ambiguous and multi-person requests | `orca computer` script |
+| Complex automations | multi-step goals, conditional checks, chained and concurrent routines, failures and retries, quiet hours across days, missed runs | replay harness on a controlled clock plus live runs |
+| Real workload | a realistic mix of real tasks with the real model at modest volume: time, cost, and success per task | replay harness with the real provider; never through a messaging account |
 | Privacy | cross-room requests from members and non-members, consent, forgetting | `orca computer` script in two test rooms |
 | Vulnerability | prompt injection through fetched pages and files, approval abuse, role escalation, secrets in chat | `orca computer` script plus red-team exploration by a worker |
 | Memory | recall across rooms without tools, forgetting cascade, no re-learning | `orca computer` script over days, plus store inspection |
@@ -130,6 +134,39 @@ human read of the replies.
 A judge or review layer is removed only in a change that also adds or enables the scenarios
 and invariant tests covering its replacement, and the change states which tests replace it.
 
+### 4.8 Coverage matrix
+
+Scenarios are derived from the system, not from memory, so no capability ships untested:
+
+- **Dimensions:** capability (every registered tool, command, gateway, plugin, requirement
+  kind, and job, read from the registries the capability catalog already uses) × place (direct
+  chat, group, cross-room on one gateway, cross-gateway) × role (administrator, member, guest,
+  unknown) × condition (normal, refused, needs approval, failure of tool, provider, or database,
+  restart mid-turn).
+- **Mandatory areas:** conversation and addressing (mention, reply, tagging, plain chatter,
+  forwarded, edited, deleted, view-once); cross-room and cross-gateway (dispatch from CLI to a
+  group, Telegram to Discord, `relay`, `thread_history`, linked identities); sandbox and shell
+  (execution, escape attempts, egress proxy, per-role workspace mounts, administrator-only
+  shell); files and multimodal (`read`, `write`, `sed`, `grep`, `send_file`, images, PDF,
+  stickers, voice notes STT and TTS); research and web (`web_search` with citations, `fetch`,
+  injection); memory (capture, cross-room recall, L3 and L4 consent, veto, forgetting,
+  consolidation, skills); approvals and flows (approve, deny, expiry, wrong decider, reaction
+  and button decisions, `Connect`, `ExternalAction`, `OperatorConfig`); RBAC (every role against
+  every tool and command, room roles, escalation); plugins (Google option A, MCP servers,
+  enable, disable, reload, missing secrets); automations (`cron`, `at`, `goal`, quiet hours,
+  budgets, missed runs, complex and concurrent routines); long conversations; complex
+  requests; durability (crash without duplicate side effects, standby and lease takeover,
+  outbox); gateway lifecycle (pairing, disable, delete, reconnect, removed from a group,
+  members joining and leaving); operator flows (`init`, `update`, `reload`, `setting`,
+  `doctor`, `backup`, `restore`, curl install); language packs; load, soak, chaos, real
+  workload, static security.
+- **Coverage gate (CI):** a test lists every registered capability and every mandatory area
+  and fails when one has no scenario for its relevant places, roles, and conditions. A new tool
+  or command without scenarios fails CI.
+- **Every defect found live becomes a permanent scenario before it is fixed.**
+- **Before a release, the full matrix runs:** CI plus every live suite, and the results form the
+  release report.
+
 ## 5. Configuration
 
 - Test-only: `MONOAGENS_TEST_DATABASE_URL` (unchanged); `MONOAGENS_RECORD=1` re-records
@@ -152,6 +189,8 @@ and invariant tests covering its replacement, and the change states which tests 
   misbehaves.
 - No judge is removed without the gate of §4.
 - Every gateway has replay tests built from real recordings, not hand-built events.
+- The coverage gate of §4.8 passes: every registered capability and mandatory area has
+  scenarios for its relevant places, roles, and conditions.
 
 ## 8. Risks and mitigations
 
