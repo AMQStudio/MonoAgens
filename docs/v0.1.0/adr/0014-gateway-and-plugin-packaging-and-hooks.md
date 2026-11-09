@@ -44,15 +44,20 @@ Audit evidence (`.audit/05-tools-plugins.md`, `.audit/01-ingress-gateways.md`,
 
 ## 4. Decision
 
-### 4.1 Two concepts
+### 4.1 Two concepts and one alternative
 
 | Concept | Panel label | One sentence | Examples |
 |---|---|---|---|
 | Gateway | App | the Soul's application: where it lives and how it looks there | WhatsApp, Telegram, Discord, Slack, CLI |
-| Plugin | Plugin | everything the Soul can do beyond the core; it may bring tools (the model calls them), commands (a person types them), flows, hooks, and its own data | `files`, `research`, `google`, `expression` |
+| Plugin | Plugin | everything the Soul can do beyond the core; it may bring tools (the model calls them), commands (a person types them), flows, hooks, and its own data | `computer`, `research`, `google`, `expression` |
+| MCP server (alternative to a plugin) | MCP | the same kind of capability from outside, run out of process; it brings tools and commands but no hooks, flows, or own data | a GitHub or a calendar MCP server |
+
+An MCP server is not a plugin and not a third concept of the Soul: it is the other way to add
+capability. It has its own entry in the configuration, its own panel section, and its own CLI
+group, and it appears in roles exactly like a plugin does (§4.5, ADR-0020 §4).
 
 Terms: a **tool** is one instrument the model calls; a **command** is typed by a person; both
-come from plugins (or from the core, ADR-0011 §4).
+come from plugins, MCP servers, or the core (ADR-0011 §4).
 
 ### 4.2 Package skeleton
 
@@ -77,8 +82,8 @@ operator sees how deep a plugin reaches.
 ### 4.3 Shared internals, separate surfaces
 
 - One manifest parser, digest verifier, dependency installer, and migration runner serve both.
-- Separate contracts, CLI groups (`monoagens gateway ...`, `monoagens plugins ...`), and panel
-  sections (Apps, Plugins).
+- Separate contracts, CLI groups (`monoagens gateway ...`, `monoagens plugins ...`,
+  `monoagens mcp ...`), and panel sections (Apps, Plugins, MCP).
 - Each package owns its Alembic branch; `monoagens db upgrade` applies core then enabled
   packages. Runtime DDL is forbidden.
 - A package whose `secrets` are missing is listed as `needs configuration`; its tools are not
@@ -90,8 +95,8 @@ operator sees how deep a plugin reaches.
 
 Two independent switches, both shown in the panel:
 
-- **Deployment toggle:** a plugin is enabled or disabled; inside an enabled plugin each tool and
-  command can be switched off for everyone.
+- **Deployment toggle:** a plugin or an MCP server is enabled or disabled; inside an enabled one
+  each tool and command can be switched off for everyone.
 - **Role toggle:** `roles.yaml` lists which tools and commands each role may use, per tool or
   per whole plugin (vocabulary in ADR-0020 §4). The panel renders this as a matrix of roles
   against the tools and commands of enabled plugins.
@@ -103,18 +108,64 @@ switched off, and the sender's role allows it.
 
 | Plugin | Tools | Commands | Also | Default |
 |---|---|---|---|---|
-| `files` | `read`, `grep`, `write`, `sed`, `send_file` | `/send` | — | on in the Assistant preset |
-| `research` | `web_search`, `fetch` | — | — | on in the Assistant preset |
+| `computer` | `read`, `grep`, `write`, `sed`, `send_file`, `sandbox` | `/send` | the Agent's own computer: files in the workspace, and commands in an OS-level sandbox that cannot read the host's secrets or write outside the role's workspace (runtime below); safe to grant to any role; without the sandbox runtime's requirements only the `sandbox` tool is withheld (`needs configuration`) | on in the Assistant preset |
+| `research` | `web_search`, `fetch` | — | search the internet and open pages | on in the Assistant preset |
 | `messaging` | `send_message`, `relay` | `/relay` | — | on in the Assistant preset |
 | `automation` | `task`, `recipe` | `/task` | — | on in the Assistant preset |
-| `system` | `sandbox`, `shell` (protected role only), `settings` | — | — | off |
-| `mcp` | the tools of each configured MCP server, named `mcp:<server>/<tool>` | — | runs servers out of process | off |
 | `google` | `google` | — | own tables, linked Google accounts, the flow of ADR-0013 §4 | off |
+| `host` | `shell`, `settings` | — | the operator's machine: `shell` runs commands directly on the host, `settings` changes the Soul's own configuration from chat; protected role only | off |
 | `expression` | — | `/mood`, `/calmdown` | hooks: affect, mood, vibe, style, humanize, polish, ambient | off |
 
 The machinery stays in the core: the job engine behind `task`, `Agent.dispatch()` behind
 `send_message` and `relay`, the sandbox runtime and safety policy behind `sandbox` and `shell`,
-the MCP client behind `mcp`. A plugin provides the door, never its own copy of core machinery.
+the configuration writer behind `settings`, the MCP client behind MCP servers. A plugin provides
+the door, never its own copy of core machinery.
+
+#### Sandbox runtime of the `sandbox` tool
+
+The `sandbox` tool runs commands through Anthropic's sandbox-runtime (`srt`: bubblewrap,
+seccomp, and namespaces on Linux; Seatbelt on macOS) instead of Podman or Docker. There is no
+image and no daemon. Facts from its documentation, which the design depends on:
+
+- **Network is denied by default**; traffic can only leave through proxies on the host that
+  enforce a domain allowlist. This replaces the Podman egress proxy.
+- **Writes are allow-only**: the generated policy allows only the role's workspace path.
+- **Reads are allowed everywhere by default.** That is unsafe for a role that is not
+  protected (`.env`, `config.yaml`, other roles' workspaces would be readable), so MonoAgens
+  always generates a deny-then-allow policy: deny the deployment and home roots, re-allow only
+  the role's workspace and system paths. If the policy cannot be built, the tool is withheld
+  (fail closed). A test must prove that `.env` cannot be read from the sandbox.
+- **Per call, a generated settings file** is passed with `srt --settings`; the default
+  `~/.srt-settings.json` is never used. The process is started through the bounded executor or
+  asyncio subprocess, never blocking the event loop.
+- **Requirements**: Node.js with `@anthropic-ai/sandbox-runtime` installed (`npm install -g`),
+  plus `bwrap` and `socat` on Linux. `monoagens init` checks them; if any is missing only the
+  `sandbox` tool reports `needs configuration`. The package is pre-1.0, so the version is pinned
+  and recorded in the release.
+- **Limits accepted**: the kernel is shared with the host (weaker than a microVM), and the
+  Agent cannot install system packages, only things inside its workspace. A microVM backend
+  (for example microsandbox) can be added later behind the same tool through its own ADR.
+- `AGENTS.md` §5 ("rootless container isolation") is updated to "OS-level sandbox" when this is
+  implemented.
+
+#### MCP servers: the alternative to a plugin
+
+Third-party capability that cannot be reviewed and digest-verified arrives as an MCP server, run
+out of process (ADR-0011 trust tiers). The MCP specification defines tools (called by the model)
+and prompts (user-controlled templates that clients typically expose as slash commands), so an
+MCP server maps onto the two lists a role already has:
+
+| MCP primitive | Becomes | Role list | Name |
+|---|---|---|---|
+| Tool | a tool the model calls | `tools` | `mcp:<server>/<tool>` |
+| Prompt | a command a person types | `commands` | `mcp:<server>/<prompt>` |
+
+- Resources and sampling are not exposed in version 1.
+- An MCP server cannot use hooks, flows, or own tables; its output is `untrusted_content`
+  (ADR-0012 taint).
+- A server with missing secrets, or that fails to start, is listed as `needs configuration` and
+  offers nothing.
+- Both primitives pass the same tool or command door and RBAC as every other tool and command.
 
 ### 4.6 Typed hooks
 
@@ -135,7 +186,7 @@ is the fallback.
 Tools, commands, and flows are declared in `provides`, not as hooks. Version 1 ships the hooks
 without the "Later" prefix; a later hook is added when a plugin needs it. A plugin receives only
 the hooks it declares. In-process plugins are first-party only (ADR-0011 trust tiers);
-third-party capability arrives through the `mcp` plugin, out of process.
+third-party capability arrives as MCP servers, out of process.
 
 ### 4.7 First consumers
 
@@ -154,8 +205,19 @@ plugins:
     enabled: true            # Turn the whole plugin on or off for this deployment.
     disabled_tools: []       # Tools of this plugin switched off for everyone, e.g. [sed].
     disabled_commands: []    # Commands of this plugin switched off for everyone, e.g. [send].
-  system:
-    enabled: false           # sandbox, shell, settings. Off by default: these act on the host.
+  computer:
+    enabled: true            # The Agent's own computer: workspace files and an OS-level sandbox for commands.
+    sandbox_allowed_domains: []  # Domains the sandbox may reach. Empty = no network at all.
+  host:
+    enabled: false           # shell (commands on the host) and settings (change the Soul's config from chat).
+                             # Off by default; protected role only.
+mcp:
+  servers:
+    github:                  # An MCP server is not a plugin: it has its own entry here.
+      enabled: true          # Its tools and prompts appear in roles as mcp:github/<name>.
+      command: [npx, -y, "@modelcontextprotocol/server-github"]
+      disabled_tools: []     # Tools of this server switched off for everyone.
+      disabled_commands: []  # Prompts of this server switched off for everyone.
 gateways:
   whatsapp:
     enabled: true            # Run this app. Who may talk through it is set per role in roles.yaml.
@@ -211,6 +273,11 @@ staff:
   revision.
 - **Moving gateways breaks pairing state.** Mitigation: session files keep their paths; one
   gateway per change with its tests.
+- **The sandbox reads host files by default.** Mitigation: the generated deny-then-allow read
+  policy of §4.5 plus a test that `.env` is unreadable; the tool is withheld if the policy
+  cannot be built.
+- **sandbox-runtime is pre-1.0 and adds Node.js as a dependency.** Mitigation: pinned version,
+  checked by `monoagens init`, only the `sandbox` tool depends on it.
 
 ## 9. Interaction with other ADRs
 

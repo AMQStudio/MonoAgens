@@ -3,9 +3,9 @@
 - **Status:** proposed
 - **Date:** 2026-11-09
 - **Deciders:** Muqsith (owner)
-- **Context:** The overhaul (ADR-0011 to ADR-0016) removes LLM judges, moves privacy enforcement, and restructures the core. Today many tests pin the compensation layers instead of the behavior, invariants such as lease fencing and non-blocking async are not tested mechanically, and observed conversation failures have no regression tests. This ADR fixes the safety net that must exist before each removal.
+- **Context:** The overhaul (ADR-0011 to ADR-0016, ADR-0019, ADR-0020) removes LLM judges, moves privacy enforcement, and restructures the core. Today many tests pin the compensation layers instead of the behavior, invariants such as lease fencing and non-blocking async are not tested mechanically, and observed conversation failures have no regression tests. This ADR fixes the safety net that must exist before each removal.
 - **Supersedes:** in part ADR-0008 §4 (testing discipline of 4.5 is extended)
-- **Related:** ADR-0011 (boundaries), ADR-0012 (envelope), ADR-0013 (flows), ADR-0016 (memory)
+- **Related:** ADR-0011 (boundaries), ADR-0012 (envelope), ADR-0013 (flows), ADR-0016 (memory), ADR-0019 (grounding), ADR-0020 (presets and roles)
 - **Implementation:** draft
 
 ---
@@ -146,17 +146,19 @@ Scenarios are derived from the system, not from memory, so no capability ships u
   restart mid-turn).
 - **Mandatory areas:** conversation and addressing (mention, reply, tagging, plain chatter,
   forwarded, edited, deleted, view-once); cross-room and cross-gateway (dispatch from CLI to a
-  group, Telegram to Discord, `relay`, `thread_history`, linked identities); sandbox and shell
-  (execution, escape attempts, egress proxy, per-role workspace mounts, administrator-only
-  shell); files and multimodal (`read`, `write`, `sed`, `grep`, `send_file`, images, PDF,
+  group, Telegram to Discord, `relay`, `thread_history`, linked identities); the
+  agent's computer and the host (`sandbox`: execution, escape attempts, domain allowlist, reading
+  `.env` or other host files must fail, per-role workspace write paths, safe for non-protected roles; `shell` and `settings`: protected role only);
+  files and multimodal (`read`, `write`, `sed`, `grep`, `send_file`, images, PDF,
   stickers, voice notes STT and TTS); research and web (`web_search` with citations, `fetch`,
   injection); context and freshness (casual chat, recent news, knowledge boundary, grounding of
   numbers and dates, stale remembered facts); memory (capture, cross-room recall, L3 and L4 consent, veto, forgetting,
   consolidation, skills); approvals and flows (approve, deny, expiry, wrong decider, reaction
   and button decisions, `Connect`, `ExternalAction`, `OperatorConfig`); RBAC (every role against
   every tool and command, room roles, escalation, renamed roles); presets (Assistant and Blank
-  each pass their relevant scenarios); plugins (Google option A, MCP servers,
-  enable, disable, reload, missing secrets); automations (`cron`, `at`, `goal`, quiet hours,
+  each pass their relevant scenarios); plugins (Google option A,
+  enable, disable, reload, missing secrets); MCP servers (tools and prompts as roles' tools and
+  commands, server down, untrusted output); automations (`cron`, `at`, `goal`, quiet hours,
   budgets, missed runs, complex and concurrent routines); long conversations; complex
   requests; durability (crash without duplicate side effects, standby and lease takeover,
   outbox); gateway lifecycle (pairing, disable, delete, reconnect, removed from a group,
@@ -213,6 +215,8 @@ Scenarios are derived from the system, not from memory, so no capability ships u
 - ADR-0012: scenarios gate the retirement of the review chain.
 - ADR-0013, ADR-0016: flow and memory scenarios.
 - ADR-0011: architecture contracts implement its boundary enforcement.
+- ADR-0019: freshness and grounding scenarios join the coverage matrix.
+- ADR-0020: preset and custom-role scenarios join the coverage matrix.
 
 ## 10. Code references
 

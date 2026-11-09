@@ -232,7 +232,8 @@ engine:
 
 - Share of messages with `addressed_to` from transport or rule evidence (target above 90% in
   group rooms).
-- Top-level LLM calls per reply: one by default (two with the optional addressing tie-breaker).
+- Top-level LLM calls per reply: one in the normal case; a second call occurs only with the optional addressing tie-breaker or
+  the single grounding re-ask of ADR-0019 §4.3 (ungrounded specifics only).
 - Golden conversation scenarios pass on structure (labels, rendered speaker lines, events), not
   wording: archive summary with receipts, quote-reply to self, stale failure after a fix,
   cross-room request, approval mentioned in prose.

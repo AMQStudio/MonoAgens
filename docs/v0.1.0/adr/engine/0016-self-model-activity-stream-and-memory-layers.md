@@ -153,7 +153,8 @@ learned again from the next message, and episodes or activity rows that mention 
 - **Stream grows.** Mitigation: `keep_hours`, consolidation, and per-turn budget.
 - **Paraphrase escapes the exact-hash tombstone.** Mitigation: the keyed hash catches restated
   text; a semantic fingerprint (embedding kept in the tombstone) would catch paraphrases but
-  keeps a content-derived vector. Open decision for the owner; default is hash only.
+  keeps a content-derived vector. Decided by the owner (ADR-0018 §4.2): hash only, no semantic
+  fingerprint.
 - **Forgotten content resurfaces through consolidation.** Mitigation: consolidation reads
   tombstones first; a test covers forget, then consolidate, then recall.
 

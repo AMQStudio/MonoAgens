@@ -85,9 +85,10 @@ acts on the world is a plugin or gateway UX (ADR-0014):
   `/search` (archive search, no model call), `/forget`; `/status`, `/alerts`, `/reload`,
   `/freeze`, `/stop`, `/ping` (runtime); `/help`, `/tools`, `/language`; `/skill` (procedural
   memory).
-- Everything else moves to plugins (ADR-0014): `files`, `research`, `messaging`,
-  `automation`, `system` (`sandbox`, `shell`, `settings`), `mcp`, `google`, and `expression`
-  (with `/mood`, `/calmdown`); `/steps`, `/thinking` move to the gateway base.
+- Everything else moves to plugins (ADR-0014): `computer` (files and `sandbox`), `research`,
+  `messaging`, `automation`, `google`, `host` (`shell` and `settings`), and `expression`
+  (with `/mood`, `/calmdown`); `/steps`, `/thinking` move to the gateway base. Third-party
+  capability arrives as MCP servers, the out-of-process alternative to a plugin (ADR-0014).
 
 ### 4.2 Gateway responsibilities
 
@@ -187,7 +188,7 @@ overhaul, dated and only shrinking, and are empty at the end):
 | Errors | §4.9 holds; no silent `except` in the core (selfcheck) |
 | Async | zero synchronous store, database, NER, or embedding calls in `async def` (AST test) |
 | Configuration | every option is read by code and carries a generated comment; zero dead options |
-| Cost | one top-level LLM call per reply by default (today up to seven) |
+| Cost | one top-level LLM call per reply in the normal case (today up to seven); the only exceptions are the single grounding re-ask of ADR-0019 §4.3, raised only when a reply contains ungrounded specifics, and the optional addressing tie-breaker of ADR-0012 §4.7 |
 | Tests | every golden scenario of ADR-0017 passes, including its decision reasons |
 
 ## 7. Acceptance criteria

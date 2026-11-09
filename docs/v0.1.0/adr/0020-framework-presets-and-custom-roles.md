@@ -48,12 +48,12 @@ soul template (ADR-0014).
 
 ### 4.2 Presets
 
-A preset is plain configuration outside the core: a soul template, the enabled plugins
-and plugins, the roles, and the gateway policy. Version 1 ships two:
+A preset is plain configuration outside the core: a soul template, the enabled plugins,
+the roles, and the gateway policy. Version 1 ships two:
 
 | Preset | Content |
 |---|---|
-| Assistant | core + `files`, `research`, `messaging`, `automation` plugins; roles `owner` (protected) and `visitor` (default for unknown, chat only) |
+| Assistant | core + `computer`, `research`, `messaging`, `automation` plugins; roles `owner` (protected) and `visitor` (default for unknown, chat only) |
 | Blank | core only; roles `operator` (protected) and `visitor` (default for unknown, no tools); the starting point for other products |
 
 `monoagens init` asks for one preset and creates everything; the panel can change any part
@@ -64,7 +64,7 @@ deployment needs them, and anyone can write and share their own.
 
 - Role names are free. The code never refers to a role by name.
 - Exactly one role carries `protected: true`: the top role that cannot be deleted, demoted, or
-  locked out; it alone may hold `shell` and approve operator-level changes.
+  locked out; it alone may hold the `host` plugin (`shell`, `settings`) and approve operator-level changes.
 - Exactly one role carries `default_for_unknown: true`: the role of any sender not yet known;
   fail closed, it starts with no tools.
 - Validation refuses a roles file without exactly one of each.
@@ -74,12 +74,16 @@ deployment needs them, and anyone can write and share their own.
 ### 4.4 Permissions vocabulary
 
 A role has two allow lists, because they are called by different actors: `tools` (the Soul
-calls them while working for this person) and `commands` (the person types them). MCP has no
-list of its own: an MCP tool is a tool, passes the same door, and is named with its origin.
+calls them while working for this person) and `commands` (the person types them). An MCP server
+is not a plugin but sits in the same two lists: its tools go in `tools`, its prompts (which MCP
+defines as user-controlled commands) go in `commands`, both named with their origin and passing
+the same doors.
 
-- `<plugin>/<tool>` allows one tool; `<plugin>/*` allows every tool of a plugin;
-  `mcp:<server>/<tool>` and `mcp:<server>/*` allow MCP tools; `*` alone is reserved for the
-  protected role.
+- In `tools`: `<plugin>/<tool>` allows one tool; `<plugin>/*` allows every tool of a plugin;
+  `mcp:<server>/<tool>` and `mcp:<server>/*` allow MCP tools.
+- In `commands`: a bare name (`help`, `task`) allows a core or plugin command;
+  `mcp:<server>/<prompt>` and `mcp:<server>/*` allow MCP prompts.
+- `*` alone is reserved for the protected role.
 - Only what is listed, or covered by a plugin or server wildcard, is allowed. Today's implicit
   parent-to-child grants are removed.
 - Bare legacy names (`read`, `write`) are accepted during the transition and rewritten to their
@@ -88,7 +92,8 @@ list of its own: an MCP tool is a tool, passes the same door, and is named with 
 ### 4.5 What this changes elsewhere
 
 - ADR-0011 §4: core tools and commands are only those operating core mechanisms.
-- ADR-0014 §4: gateways and plugins are the two packaging concepts, with per-role toggles.
+- ADR-0014 §4: gateways and plugins are the two packaging concepts, with MCP servers as the
+  out-of-process alternative to a plugin, all with per-role toggles.
 - AGENTS.md §5 ("`administrator` is the protected top role") and the canonical term register
   are updated to the `protected` flag when this ADR is implemented.
 - README is repositioned from "assistant" to "framework plus presets" at the release rebaseline
@@ -103,7 +108,7 @@ roles:
   # Role names are yours to choose. Two roles are special and marked by a flag, not by name.
   owner:
     protected: true          # Exactly one role: the top role. Cannot be deleted or locked out.
-                             # Only this role may use shell and approve operator-level changes.
+                             # Only this role may use the host plugin (shell, settings) and approve operator-level changes.
     tools: ['*']
     commands: ['*']
   visitor:
@@ -115,12 +120,13 @@ roles:
     # What this role may use. Two lists: tools (the Soul calls them while working for this person)
     # and commands (this person types them, like /task). Anything not listed is denied.
     tools:
-      - files/*              # Every tool of the files plugin.
+      - computer/*           # Every tool of the computer plugin (files and sandbox).
       - research/web_search  # One tool from one plugin: <plugin>/<tool>.
       - mcp:github/*         # Every tool of the MCP server named "github" (configured in config.yaml).
     commands:
       - help
       - task                 # /task, brought by the automation plugin.
+      - mcp:github/review    # An MCP prompt of the "github" server, typed as a command.
 ```
 
 `config.yaml` records the preset it was created from (`preset: assistant`) for information

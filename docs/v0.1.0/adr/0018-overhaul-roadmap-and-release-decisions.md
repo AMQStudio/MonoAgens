@@ -3,9 +3,9 @@
 - **Status:** proposed
 - **Date:** 2026-11-09
 - **Deciders:** Muqsith (owner)
-- **Context:** ADR-0011 to ADR-0017 define the target architecture. This ADR records the order of work, the owner decisions that have no ADR of their own yet, the gaps deliberately deferred, and the release prerequisites, so the overhaul has one plan of record.
+- **Context:** ADR-0011 to ADR-0017, ADR-0019, and ADR-0020 define the target architecture. This ADR records the order of work, the owner decisions that have no ADR of their own yet, the gaps deliberately deferred, and the release prerequisites, so the overhaul has one plan of record.
 - **Supersedes:** in part ADR-0007 §4 (the installer becomes a real thin bootstrap with pinned, verified releases)
-- **Related:** ADR-0011, ADR-0012, ADR-0013, ADR-0014, ADR-0015, ADR-0016, ADR-0017
+- **Related:** ADR-0011, ADR-0012, ADR-0013, ADR-0014, ADR-0015, ADR-0016, ADR-0017, ADR-0019, ADR-0020
 - **Implementation:** draft
 
 ---
@@ -13,7 +13,7 @@
 ## 1. Context
 
 The audit of 2026-11-09 (184 findings, 42 tagged high) and the owner discussion that followed
-produced seven architecture ADRs and a set of decisions about install, language packs, phase
+produced the architecture ADRs (ADR-0011 to ADR-0017, ADR-0019, ADR-0020) and a set of decisions about install, language packs, phase
 order, and documentation. The product is not released, which allows breaking changes, a
 migration squash, and an ADR rebaseline before the first release.
 
@@ -40,8 +40,8 @@ migration squash, and an ADR rebaseline before the first release.
 | P0 | Invariant tests and architecture contracts; urgent fixes: subject veto, approval authority, `settings get` never parks, Google refused in groups until its flow exists, lease fences on unfenced stores, Discord interaction acknowledgement and payload, empty reply on content-filtered responses | ADR-0017, ADR-0013 |
 | P1 | Message envelope, speaker rendering, addressing version 1, secret redaction, taint, turn trace | ADR-0012 |
 | P2 | Flow protocol and runner, requirement kinds, core and gateway events, approvals rebuilt, `/link` versus account connection, identity merge carries approvals and grants | ADR-0013 |
-| P3 | Privacy by construction at context assembly; judges and review layers removed one at a time behind tests; activity stream and forgetting cascade | ADR-0012, ADR-0016 |
-| P4 | `monoagens.sdk`; gateway and plugin skeleton; core tools moved into the `files`, `research`, `messaging`, `automation`, `system`, `mcp`, and `google` plugins; per-role toggles; hooks version 1; expression plugin (disabled by default); presets Assistant and Blank; custom roles with `protected` and `default_for_unknown` | ADR-0014, ADR-0020 |
+| P3 | Privacy by construction at context assembly; judges and review layers removed one at a time behind tests; activity stream and forgetting cascade; grounding checks and temporal self-knowledge replace the decision call as search trigger | ADR-0012, ADR-0016, ADR-0019 |
+| P4 | `monoagens.sdk`; gateway and plugin skeleton; core tools moved into the `computer`, `research`, `messaging`, `automation`, `google`, and `host` plugins, with MCP servers as the alternative to a plugin; per-role toggles; hooks version 1; expression plugin (disabled by default); presets Assistant and Blank; custom roles with `protected` and `default_for_unknown` | ADR-0014, ADR-0020 |
 | P5 | String ownership and optional packs | ADR-0015 |
 | P6 | Gateways onto the shared skeleton and base; Discord readiness and direct-message labels | ADR-0014 |
 | P7 | Admin, CLI, configuration cleanup; thin installer and pinned releases (§4) | this ADR |
@@ -118,7 +118,7 @@ existing ones.
 ## 9. Interaction with other ADRs
 
 - ADR-0007: distribution stays; the installer and update source change per §4.
-- ADR-0011 to ADR-0017: this ADR orders their implementation.
+- ADR-0011 to ADR-0017, ADR-0019, ADR-0020: this ADR orders their implementation.
 
 ## 10. Code references
 
