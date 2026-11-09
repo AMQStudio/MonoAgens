@@ -1,6 +1,6 @@
 # ADR-0009: Language-Agnostic Intent, Secret Gate, and Semantic Privacy Routing — Retiring Per-Language Keyword Lists (`monoagens/library/`)
 
-- **Status:** accepted; superseded in part by ADR-0011 (§4: affect and vibe routing move to the expression plugin)
+- **Status:** accepted; superseded in part by ADR-0011 (§4: affect and vibe routing move to the expression plugin) and ADR-0019 (§4: search routing)
 - **Date:** 2026-11-06
 - **Deciders:** Muqsith (owner)
 - **Context:** Establishes an international, language-agnostic hybrid architecture for secret detection, privacy classification, turn-level intent/search routing, room vibe/style, and semantic memory maintenance, completely retiring and deleting the static per-language JSON keyword dictionaries under `monoagens/library/**`.

@@ -42,3 +42,4 @@ file's own path, and an `Implementation` line (`implemented`, `partial`, or `dra
 | [0016](adr/engine/0016-self-model-activity-stream-and-memory-layers.md) | Self-Model, Activity Stream, and Human-Like Memory Layers — Remember What I Just Did, Everywhere, Without Re-Reading Threads | engine | draft |
 | [0017](adr/0017-overhaul-testing-strategy.md) | Overhaul Testing Strategy — Invariant Tests, Architecture Contracts, and Golden Conversation Scenarios | root | draft |
 | [0018](adr/0018-overhaul-roadmap-and-release-decisions.md) | Overhaul Roadmap and Release Decisions — Phases, Owner Decisions, Deferred Gaps, and the Path to a Gold-Standard Core | root | draft |
+| [0019](adr/engine/0019-grounding-freshness-and-research.md) | Grounding, Freshness, and Research — Know What Time It Is, Know What You Do Not Know, Never Guess Current Facts | engine | draft |

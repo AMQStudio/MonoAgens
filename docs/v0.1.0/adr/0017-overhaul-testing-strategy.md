@@ -101,6 +101,7 @@ Live suites run on the owner's machine against dedicated test rooms, driven by O
 | Long conversations | hundreds of turns and multi-day threads: context budget, salience, no repetition, no drift of identity or facts | `orca computer` script plus replay harness with recorded model |
 | Complex requests | multi-step work (research, write a document, send it to another room, schedule a follow-up), ambiguous and multi-person requests | `orca computer` script |
 | Complex automations | multi-step goals, conditional checks, chained and concurrent routines, failures and retries, quiet hours across days, missed runs | replay harness on a controlled clock plus live runs |
+| Context and freshness | casual chat, questions about recent news and changing facts, asking beyond the model's knowledge boundary, remembered facts going stale | `orca computer` script daily; assertions on search, source dates, grounded specifics |
 | Real workload | a realistic mix of real tasks with the real model at modest volume: time, cost, and success per task | replay harness with the real provider; never through a messaging account |
 | Privacy | cross-room requests from members and non-members, consent, forgetting | `orca computer` script in two test rooms |
 | Vulnerability | prompt injection through fetched pages and files, approval abuse, role escalation, secrets in chat | `orca computer` script plus red-team exploration by a worker |
@@ -149,7 +150,8 @@ Scenarios are derived from the system, not from memory, so no capability ships u
   (execution, escape attempts, egress proxy, per-role workspace mounts, administrator-only
   shell); files and multimodal (`read`, `write`, `sed`, `grep`, `send_file`, images, PDF,
   stickers, voice notes STT and TTS); research and web (`web_search` with citations, `fetch`,
-  injection); memory (capture, cross-room recall, L3 and L4 consent, veto, forgetting,
+  injection); context and freshness (casual chat, recent news, knowledge boundary, grounding of
+  numbers and dates, stale remembered facts); memory (capture, cross-room recall, L3 and L4 consent, veto, forgetting,
   consolidation, skills); approvals and flows (approve, deny, expiry, wrong decider, reaction
   and button decisions, `Connect`, `ExternalAction`, `OperatorConfig`); RBAC (every role against
   every tool and command, room roles, escalation); plugins (Google option A, MCP servers,
