@@ -68,13 +68,64 @@ parsing of mechanism decisions.
   without access (one notice per window).
 - Re-recording a cassette is an explicit command and the diff is reviewed.
 
-### 4.4 Live evaluation set
+### 4.4 Test realism ladder and real transport recordings
+
+Current gateway tests build platform events by hand (`SimpleNamespace`, `FakeClient`), so they
+test our assumptions about a platform, not the platform; the dead Discord slash-command path
+passed that way. Fakes therefore sit only at the outermost boundary (network or SDK client),
+never inside our code, and fake data is a recording of the real platform:
+
+| Level | What | Where it runs |
+|---|---|---|
+| 1 | Invariant and contract tests (§4.1, §4.2) | CI |
+| 2 | Replay of real inbound transport payloads (neonize protobuf events, Telegram updates, Discord gateway payloads, Slack events) through the real gateway ingress code | CI |
+| 3 | Outbound assertions at the SDK client boundary, compared with recorded real calls | CI |
+| 4 | Recorded model responses (cassettes, §4.3) | CI |
+| 5 | Live suites against real accounts and real apps (§4.5) | on demand, not CI |
+
+- Each gateway gets a record mode (`MONOAGENS_RECORD_TRANSPORT=1`) that stores inbound events
+  and outbound SDK calls under `tests/data/transport/<gateway>/`.
+- Recordings are anonymized automatically before they enter the repository: numbers, names,
+  JIDs, ids, and message text are replaced by stable placeholders; structure is kept.
+- A real observed case becomes a test by recording it once (reply to the Soul that tags
+  someone, forwarded PDF, group mention, Discord slash command).
+- Hand-built platform events are replaced by recordings whenever a change touches that gateway.
+
+### 4.5 Live suites (not CI)
+
+Live suites run on the owner's machine against dedicated test rooms, driven by Orca:
+
+| Suite | Purpose | How |
+|---|---|---|
+| End-to-end and real usage | golden scenarios through real apps and accounts | `orca computer` script plays the human side |
+| Privacy | cross-room requests from members and non-members, consent, forgetting | `orca computer` script in two test rooms |
+| Vulnerability | prompt injection through fetched pages and files, approval abuse, role escalation, secrets in chat | `orca computer` script plus red-team exploration by a worker |
+| Memory | recall across rooms without tools, forgetting cascade, no re-learning | `orca computer` script over days, plus store inspection |
+| Load and stress | latency, queue depth, database connections under bursts | recorded payloads replayed at high rate through the real ingress code into a recording SDK sink; never through a real messaging account |
+| Soak and leaks | memory growth and stuck tasks over hours | the same replay harness run for hours, sampling RSS, tasks, pool |
+| Chaos | kill mid-turn, database restart, provider outage, lease takeover | replay harness plus process and container control |
+| Static security | dependency audit, secret scan, static analysis | tools in the shell |
+
+Rules:
+
+- GUI-driven suites are deterministic scripts calling `orca computer` (accessibility text
+  snapshots filtered with `--query`, no screenshots); a model drives the GUI only to explore a
+  new scenario or a failure, and that model is an Orca worker, not the supervisor.
+- Only dedicated test rooms are used, created by the owner; every session is approved by the
+  owner first; nobody is added to a test room without their knowledge.
+- Messaging accounts are never used for load: platforms ban automated volume. Load and stress
+  stay at the replay harness.
+- Each live run produces a short report (scenario, decision, reasons, pass or fail) plus new
+  anonymized recordings; the recordings feed level 2 and 3 tests.
+- A worker's `worker_done` includes the test commands it ran and their output.
+
+### 4.6 Live evaluation set
 
 A small set of the same scenarios runs against real models on demand (not in CI) before a
 release and after model or prompt changes, scored on the same structural assertions plus a
 human read of the replies.
 
-### 4.5 Removal gate
+### 4.7 Removal gate
 
 A judge or review layer is removed only in a change that also adds or enables the scenarios
 and invariant tests covering its replacement, and the change states which tests replace it.
@@ -82,13 +133,16 @@ and invariant tests covering its replacement, and the change states which tests 
 ## 5. Configuration
 
 - Test-only: `MONOAGENS_TEST_DATABASE_URL` (unchanged); `MONOAGENS_RECORD=1` re-records
-  cassettes; live evaluation needs provider keys in `.env`.
+  cassettes; `MONOAGENS_RECORD_TRANSPORT=1` records real transport payloads; live suites read
+  test-room addresses and test-account credentials from a separate `.env.test`, never `.env`.
 
 ## 6. Metrics and gates
 
 - Verification gate adds the import-linter run and the invariant tests of §4.
 - Every high-severity audit finding maps to at least one test before its fix is merged.
 - Scenario count and pass rate reported per phase.
+- Live suites run before each release and after any gateway change; load results record p50 and
+  p95 turn latency, queue depth, and pool use.
 
 ## 7. Acceptance criteria
 
@@ -97,6 +151,7 @@ and invariant tests covering its replacement, and the change states which tests 
 - Every seed scenario of §4 exists, initially marked expected-to-fail where the current code
   misbehaves.
 - No judge is removed without the gate of §4.
+- Every gateway has replay tests built from real recordings, not hand-built events.
 
 ## 8. Risks and mitigations
 
@@ -104,6 +159,10 @@ and invariant tests covering its replacement, and the change states which tests 
   wording changes; re-recording is cheap and reviewed.
 - **Fake gateway diverges from real ones.** Mitigation: it is built on the same SDK base class
   as real gateways; transport smoke tests per gateway stay.
+- **GUI automation is brittle.** Mitigation: scripts filter accessibility text by stable labels;
+  failures fall back to a worker exploring the window; CI never depends on it.
+- **Recordings leak personal data.** Mitigation: anonymization runs before writing, and a test
+  rejects recordings containing phone-number or JID patterns.
 - **Database requirement slows local runs.** Mitigation: unchanged throwaway pgvector container.
 
 ## 9. Interaction with other ADRs
