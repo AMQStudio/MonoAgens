@@ -175,7 +175,9 @@ class SkillStore(FencedStore):
         """One operator-visible ledger row for a ladder action; never a chat message."""
         from ..memory.ledger import ActionLedger
 
-        return ActionLedger(self.db).log_action(
+        ledger = ActionLedger(self.db)
+        ledger.bind_lease(self._lease)
+        return ledger.log_action(
             "skill", str(name or ""), "skill", str(summary or "")[:300]
         )
 

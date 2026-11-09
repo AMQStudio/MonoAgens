@@ -38,10 +38,6 @@ INTENTIONAL_UNFENCED = {
 # Dated 2026-11-09. This list may only shrink; owner: ADR-0018 P0 "lease fences on
 # unfenced stores". Delete an entry once the class subclasses FencedStore or disappears.
 KNOWN_UNFENCED = {
-    "monoagens/engine/memory/ledger.py::ActionLedger":
-        "ADR-0018 P0: unfenced INSERT/DELETE on `actions`; row generation not checked",
-    "monoagens/engine/memory/ledger.py::OutboundLedger":
-        "ADR-0018 P0: delivery ledger writes `outbound_messages` without the lease predicate",
     "monoagens/engine/stores/style.py::StyleStore":
         "ADR-0018 P0: moves to the expression plugin in P4, fenced there",
     "monoagens/engine/stores/vibe.py::VibeRunner":

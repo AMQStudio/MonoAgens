@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import event, select, text
+from sqlalchemy import event, func, select, text
 from support import database, make_agent
 
 from monoagens.engine.agent import Agent
@@ -411,6 +411,7 @@ def test_the_primary_worker_binds_every_store_to_the_lease(tmp_path) -> None:
     from support import build_config
 
     from monoagens.engine.jobs.automation_worker import AutomationWorker
+    from monoagens.engine.memory.ledger import OutboundLedger
     from monoagens.engine.memory.store import MemoryStore
     from monoagens.engine.stores.skills import SkillStore
     from monoagens.engine.stores.turns import TurnStore
@@ -428,6 +429,7 @@ def test_the_primary_worker_binds_every_store_to_the_lease(tmp_path) -> None:
         skills=SkillStore(db, config.skills),
         affect=None,
         approvals=None,
+        outbox=OutboundLedger(db),
     )
 
     AutomationWorker(agent)
@@ -435,7 +437,95 @@ def test_the_primary_worker_binds_every_store_to_the_lease(tmp_path) -> None:
     assert agent.memory.fence is not None
     assert agent.turns.fence is not None
     assert agent.skills.fence is not None
+    assert agent.outbox.fence is not None
     seed_turn(db)
     bump_generation(db)
     with pytest.raises(Superseded):
         agent.turns.checkpoint("turn-fence", "decided")
+
+
+def action_count(db) -> int:
+    return int(db.scalar(select(func.count()).select_from(actions)) or 0)
+
+
+def test_the_action_ledger_refuses_a_stale_generation(tmp_path) -> None:
+    """ADR-0018 P0: the action row rides the lease predicate, so a deposed store writes none."""
+    from monoagens.engine.memory.ledger import ActionLedger
+
+    db = database()
+    first = lease(db, "a")
+    assert first.acquire() is not None
+    ledger = ActionLedger(db)
+    ledger.bind_lease(held("a", first.generation))
+
+    assert ledger.log_action("source", "target", "note", "written live") > 0
+    before = action_count(db)
+
+    deposed = first.generation
+    assert bump_generation(db) != deposed
+    ledger.bind_lease(held("a", deposed))
+    with pytest.raises(Superseded):
+        ledger.log_action("source", "target", "note", "refused")
+    assert action_count(db) == before
+
+
+def test_the_action_ledger_still_writes_without_a_lease(tmp_path) -> None:
+    """CLI and admin construct the ledger with no lease: that path stays unfenced."""
+    from monoagens.engine.memory.ledger import ActionLedger
+
+    db = database()
+    ledger = ActionLedger(db)
+    assert ledger.fence is None
+    before = action_count(db)
+    assert ledger.log_action("source", "target", "note", "unbound") > 0
+    assert action_count(db) == before + 1
+
+
+def test_the_outbound_ledger_refuses_a_stale_generation(tmp_path) -> None:
+    """ADR-0018 P0: begin/mark_sent/forget carry the fence on `outbound_messages`."""
+    from monoagens.engine.memory.ledger import OutboundLedger
+
+    db = database()
+    first = lease(db, "a")
+    assert first.acquire() is not None
+    outbox = OutboundLedger(db)
+    outbox.bind_lease(held("a", first.generation))
+    assert outbox.begin("scope:x", 0, gateway="gw", thread_id="th") == "intent"
+    assert outbox.begin("scope:y", 0, gateway="gw", thread_id="th") == "intent"
+    outbox.mark_sent("scope:x", 0, "provider-1")
+    assert outbox.reference("scope:x", 0) == "provider-1"
+
+    deposed = first.generation
+    assert bump_generation(db) != deposed
+    outbox.bind_lease(held("a", deposed))
+    with pytest.raises(Superseded):
+        outbox.begin("scope:new", 0, gateway="gw", thread_id="th")
+    assert outbox.status("scope:new", 0) is None
+
+    with pytest.raises(Superseded):
+        outbox.mark_sent("scope:x", 0, "provider-2")
+    assert outbox.reference("scope:x", 0) == "provider-1"
+
+    with pytest.raises(Superseded):
+        outbox.forget("scope:y", 0)
+    assert outbox.status("scope:y", 0) == "intent"
+
+
+def test_the_outbound_ledger_writes_at_the_live_generation(tmp_path) -> None:
+    """A live fence keeps the delivery contract: intent first, then the stored status."""
+    from monoagens.engine.memory.ledger import OutboundLedger
+
+    db = database()
+    first = lease(db, "a")
+    assert first.acquire() is not None
+    outbox = OutboundLedger(db)
+    outbox.bind_lease(held("a", first.generation))
+
+    assert outbox.begin("scope:z", 0, gateway="gw", thread_id="th") == "intent"
+    assert outbox.begin("scope:z", 0, gateway="gw", thread_id="th") == "intent"
+    outbox.mark_sent("scope:z", 0, "provider-1")
+    assert outbox.begin("scope:z", 0, gateway="gw", thread_id="th") == "sent"
+    outbox.forget("scope:z", 0)  # a sent row is not an intent: nothing to forget
+    assert outbox.reference("scope:z", 0) == "provider-1"
+    outbox.retry("scope:z", 0)
+    assert outbox.status("scope:z", 0) is None

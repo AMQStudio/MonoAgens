@@ -4,11 +4,11 @@
 import time
 
 from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from .. import clock
 from ..db import Database
 from ..guard import SENSITIVE
+from ..jobs.lease import FencedStore, Superseded, fenced_insert
 from ..schema import actions, outbound_messages
 
 ACTION_ITEMS = 10
@@ -26,7 +26,7 @@ def _stamp(value: float, tz: str) -> str:
     return clock.stamp(float(value or 0), tz)
 
 
-class ActionLedger:
+class ActionLedger(FencedStore):
     def __init__(self, db: Database) -> None:
         self.db = db
 
@@ -56,17 +56,24 @@ class ActionLedger:
             "request": _clip(safe_request, ACTION_TEXT),
         }
         with self.db.connect() as conn:
-            result = conn.execute(actions.insert().values(row))
-            primary_key = result.inserted_primary_key
-            if primary_key is None:  # single-row INSERT: SQLAlchemy reports one or nothing
+            fence = self.fence_clause()
+            created = conn.execute(
+                fenced_insert(actions, row, fence).returning(actions.c.id)
+            ).first()
+            if created is None:
+                if fence is not None:
+                    raise Superseded("lease generation moved on: action write refused")
                 raise RuntimeError("the new action got no primary key")
-            new_id = int(primary_key[0])
+            new_id = int(created[0])
             keep = (
                 select(actions.c.id)
                 .order_by(actions.c.ts.desc(), actions.c.id.desc())
                 .limit(ACTION_KEEP)
             )
-            conn.execute(actions.delete().where(actions.c.id.not_in(keep)))
+            statement = actions.delete().where(actions.c.id.not_in(keep))
+            if fence is not None:
+                statement = statement.where(fence)
+            conn.execute(statement)
         return new_id
 
     def recent_actions(self, limit: int = ACTION_ITEMS) -> list[dict]:
@@ -105,7 +112,7 @@ class ActionLedger:
         """Shutdown compatibility hook; the Database is owned by the runtime."""
 
 
-class OutboundLedger:
+class OutboundLedger(FencedStore):
     """Delivery ledger (ADR-0001 §4.3): one row per chunk, `scope_key` covers automations.
 
     Status is `intent` before the transport call, `sent` with the provider id after it, and
@@ -115,6 +122,35 @@ class OutboundLedger:
 
     def __init__(self, db: Database) -> None:
         self.db = db
+
+    def _row_exists(
+        self, scope_key: str, chunk_index: int, *, status: str | None = None
+    ) -> bool:
+        """Whether the write's own row exists apart from the fence (refusal, not a no-op)."""
+        conditions = [
+            outbound_messages.c.scope_key == str(scope_key),
+            outbound_messages.c.chunk_index == int(chunk_index),
+        ]
+        if status is not None:
+            conditions.append(outbound_messages.c.status == status)
+        return (
+            self.db.fetch_one(select(outbound_messages.c.scope_key).where(*conditions))
+            is not None
+        )
+
+    def _refused(
+        self,
+        fence,
+        changed: int,
+        scope_key: str,
+        chunk_index: int,
+        *,
+        status: str | None = None,
+    ) -> None:
+        if fence is None or int(changed or 0):
+            return
+        if self._row_exists(scope_key, chunk_index, status=status):
+            raise Superseded("lease generation moved on: delivery write refused")
 
     @staticmethod
     def turn_scope(turn_id: str) -> str:
@@ -139,19 +175,22 @@ class OutboundLedger:
         generation: int = 0,
     ) -> str:
         """Write `intent` unless a row exists, then return the stored status."""
+        fence = self.fence_clause()
         with self.db.connect() as conn:
             conn.execute(
-                pg_insert(outbound_messages)
-                .values(
-                    scope_key=str(scope_key),
-                    chunk_index=int(chunk_index),
-                    gateway=str(gateway)[:40],
-                    thread_id=str(thread_id)[:120],
-                    provider_id="",
-                    status="intent",
-                    generation=int(generation),
-                )
-                .on_conflict_do_nothing(
+                fenced_insert(
+                    outbound_messages,
+                    {
+                        "scope_key": str(scope_key),
+                        "chunk_index": int(chunk_index),
+                        "gateway": str(gateway)[:40],
+                        "thread_id": str(thread_id)[:120],
+                        "provider_id": "",
+                        "status": "intent",
+                        "generation": int(generation),
+                    },
+                    fence,
+                ).on_conflict_do_nothing(
                     index_elements=["scope_key", "chunk_index"]
                 )
             )
@@ -161,6 +200,8 @@ class OutboundLedger:
                     outbound_messages.c.chunk_index == int(chunk_index),
                 )
             ).scalar()
+        if fence is not None and found is None:
+            raise Superseded("lease generation moved on: delivery intent refused")
         return str(found) if found is not None else "intent"
 
     def reference(self, scope_key: str, chunk_index: int = 0) -> str:
@@ -174,8 +215,9 @@ class OutboundLedger:
         return str(found["provider_id"] or "") if found else ""
 
     def mark_sent(self, scope_key: str, chunk_index: int, provider_id: str) -> None:
+        fence = self.fence_clause()
         with self.db.connect() as conn:
-            conn.execute(
+            statement = (
                 outbound_messages.update()
                 .where(
                     outbound_messages.c.scope_key == str(scope_key),
@@ -183,10 +225,15 @@ class OutboundLedger:
                 )
                 .values(status="sent", provider_id=str(provider_id or "")[:400])
             )
+            if fence is not None:
+                statement = statement.where(fence)
+            changed = conn.execute(statement).rowcount
+        self._refused(fence, changed, scope_key, chunk_index)
 
     def mark_unknown(self, scope_key: str, chunk_index: int) -> None:
+        fence = self.fence_clause()
         with self.db.connect() as conn:
-            conn.execute(
+            statement = (
                 outbound_messages.update()
                 .where(
                     outbound_messages.c.scope_key == str(scope_key),
@@ -194,27 +241,37 @@ class OutboundLedger:
                 )
                 .values(status="unknown")
             )
+            if fence is not None:
+                statement = statement.where(fence)
+            changed = conn.execute(statement).rowcount
+        self._refused(fence, changed, scope_key, chunk_index)
 
     def forget(self, scope_key: str, chunk_index: int) -> None:
         """A gate refusal means nothing left the process; the intent is not a delivery."""
+        fence = self.fence_clause()
         with self.db.connect() as conn:
-            conn.execute(
-                outbound_messages.delete().where(
-                    outbound_messages.c.scope_key == str(scope_key),
-                    outbound_messages.c.chunk_index == int(chunk_index),
-                    outbound_messages.c.status == "intent",
-                )
+            statement = outbound_messages.delete().where(
+                outbound_messages.c.scope_key == str(scope_key),
+                outbound_messages.c.chunk_index == int(chunk_index),
+                outbound_messages.c.status == "intent",
             )
+            if fence is not None:
+                statement = statement.where(fence)
+            changed = conn.execute(statement).rowcount
+        self._refused(fence, changed, scope_key, chunk_index, status="intent")
 
     def retry(self, scope_key: str, chunk_index: int = 0) -> None:
         """Clear one row for an explicit resend; only a policy that allows it calls this."""
+        fence = self.fence_clause()
         with self.db.connect() as conn:
-            conn.execute(
-                outbound_messages.delete().where(
-                    outbound_messages.c.scope_key == str(scope_key),
-                    outbound_messages.c.chunk_index == int(chunk_index),
-                )
+            statement = outbound_messages.delete().where(
+                outbound_messages.c.scope_key == str(scope_key),
+                outbound_messages.c.chunk_index == int(chunk_index),
             )
+            if fence is not None:
+                statement = statement.where(fence)
+            changed = conn.execute(statement).rowcount
+        self._refused(fence, changed, scope_key, chunk_index)
 
     def count_sent(self, scope_key: str) -> int:
         return int(

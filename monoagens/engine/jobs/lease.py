@@ -286,7 +286,15 @@ class Lease:
         `Superseded` instead of writing unfenced as a standby. Re-binding after a takeover
         is idempotent and keeps the same lease object, so the live generation is read anew.
         """
-        for name in ("memory", "turns", "skills", "affect", "approvals", "recipes"):
+        for name in (
+            "memory",
+            "turns",
+            "skills",
+            "affect",
+            "approvals",
+            "recipes",
+            "outbox",
+        ):
             bind = getattr(getattr(agent, name, None), "bind_lease", None)
             if callable(bind):
                 bind(self)

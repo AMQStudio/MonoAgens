@@ -417,7 +417,9 @@ def promote_soul_rules(store, *, now: float | None = None, tz: str) -> int:
                 moment=moment,
             )
         digest = _digest(body)[:16]
-        ActionLedger(store.db).log_action(
+        ledger = ActionLedger(store.db)
+        ledger.bind_lease(getattr(store, "_lease", None))
+        ledger.log_action(
             "memory", digest, "memory", f"rule promoted: {digest}"
         )
         promoted += 1
