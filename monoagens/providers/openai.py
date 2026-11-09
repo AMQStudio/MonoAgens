@@ -70,6 +70,7 @@ def normalize_response(response: object) -> ProviderResponse:
         usage=usage,
         finish_reason=finish,
         native_finish_reason=finish,
+        blocked=finish == "content_filter",
         message=message,
     )
 

@@ -60,6 +60,66 @@ def test_openai_reasoning_content_is_thinking_not_answer_text() -> None:
     assert found.thinking == "First I check the dates."
 
 
+def test_openai_content_filter_finish_is_blocked() -> None:
+    """A filtered answer arrives empty; the loop needs `blocked` to say why."""
+    response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=""),
+                finish_reason="content_filter",
+            )
+        ]
+    )
+
+    found = normalize_response(response)
+
+    assert found.blocked is True
+    assert found.text == ""
+    assert found.finish_reason == "content_filter"
+
+
+def test_openai_content_filter_with_text_is_still_blocked() -> None:
+    response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="A partial answer."),
+                finish_reason="content_filter",
+            )
+        ]
+    )
+
+    found = normalize_response(response)
+
+    assert found.blocked is True
+    assert found.text == "A partial answer."
+
+
+def test_openai_stop_finish_is_not_blocked() -> None:
+    response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="The answer."),
+                finish_reason="stop",
+            )
+        ]
+    )
+
+    assert normalize_response(response).blocked is False
+
+
+def test_openai_length_finish_is_not_blocked() -> None:
+    response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="Cut off"),
+                finish_reason="length",
+            )
+        ]
+    )
+
+    assert normalize_response(response).blocked is False
+
+
 def test_anthropic_thinking_blocks_are_separated_from_the_answer() -> None:
     """Claude's compatibility wire returns thinking as content blocks, never as text."""
     response = SimpleNamespace(
