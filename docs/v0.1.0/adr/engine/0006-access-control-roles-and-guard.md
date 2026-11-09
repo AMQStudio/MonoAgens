@@ -1,6 +1,6 @@
 # ADR-0006: Access Control, Role-Based Security, and Sandbox Guard — RBAC, Identity Linking, and Command Screening
 
-- **Status:** accepted; superseded in part by ADR-0013 (§4: approval routing of 4.5)
+- **Status:** accepted; superseded in part by ADR-0013 (§4: approval routing of 4.5) and ADR-0020 (§4: fixed role names of 4.1)
 - **Date:** 2026-11-05
 - **Deciders:** Muqsith (owner)
 - **Context:** Re-baselined for v0.1.0; consolidates capability authorization, the protected administrator role, relay consent, role models, identity linking, and sandbox command screening (pre-rebaseline 0007, 0022, 0023, 0036, 0046, 0049, 0052, 0053).

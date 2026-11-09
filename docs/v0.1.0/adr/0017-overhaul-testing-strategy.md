@@ -141,8 +141,8 @@ Scenarios are derived from the system, not from memory, so no capability ships u
 
 - **Dimensions:** capability (every registered tool, command, gateway, plugin, requirement
   kind, and job, read from the registries the capability catalog already uses) × place (direct
-  chat, group, cross-room on one gateway, cross-gateway) × role (administrator, member, guest,
-  unknown) × condition (normal, refused, needs approval, failure of tool, provider, or database,
+  chat, group, cross-room on one gateway, cross-gateway) × role (the protected role, the
+  default-for-unknown role, an operator-defined role, an unknown sender) × condition (normal, refused, needs approval, failure of tool, provider, or database,
   restart mid-turn).
 - **Mandatory areas:** conversation and addressing (mention, reply, tagging, plain chatter,
   forwarded, edited, deleted, view-once); cross-room and cross-gateway (dispatch from CLI to a
@@ -154,7 +154,8 @@ Scenarios are derived from the system, not from memory, so no capability ships u
   numbers and dates, stale remembered facts); memory (capture, cross-room recall, L3 and L4 consent, veto, forgetting,
   consolidation, skills); approvals and flows (approve, deny, expiry, wrong decider, reaction
   and button decisions, `Connect`, `ExternalAction`, `OperatorConfig`); RBAC (every role against
-  every tool and command, room roles, escalation); plugins (Google option A, MCP servers,
+  every tool and command, room roles, escalation, renamed roles); presets (Assistant and Blank
+  each pass their relevant scenarios); plugins (Google option A, MCP servers,
   enable, disable, reload, missing secrets); automations (`cron`, `at`, `goal`, quiet hours,
   budgets, missed runs, complex and concurrent routines); long conversations; complex
   requests; durability (crash without duplicate side effects, standby and lease takeover,

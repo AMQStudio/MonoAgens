@@ -51,7 +51,21 @@
 | Semantic memory | facts about people and the world | `memories` | long, retention policy | `MemoryStore` |
 | Procedural memory | skills | `skills` | long | ladder job |
 
-### 4.2 Activity stream
+### 4.2 Memory is automatic; two deliberate doors
+
+Storing and remembering need no tool call: capture happens at ingress and at turn end under the
+privacy labels of ADR-0012, retrieval and the activity block are rendered into every turn, and
+consolidation runs in the background. A person saying "remember this" only raises the salience
+of what is captured and marks it confirmed. The model has two deliberate doors:
+
+- `recall(query, scope)`: search deeper or older than the automatic working set, over facts,
+  conversations (the former `thread_history`), and activity, under the same scope and audience
+  rules; "what do you know about me" is `recall` with the sender's own scope.
+- `forget(target)`: a request, not an action. The core checks that the requester is the
+  subject (or the subject's consent flow of ADR-0013 approves), then runs the cascade of §4.
+  The free `add`, `list`, and `veto` actions of today's `memory` tool are removed.
+
+### 4.3 Activity stream
 
 One row per Soul turn and per mechanism event, across all rooms:
 
@@ -65,7 +79,7 @@ One row per Soul turn and per mechanism event, across all rooms:
   the Soul never claims another person's action.
 - The `actions` table is folded into the stream.
 
-### 4.3 Rendering per audience
+### 4.4 Rendering per audience
 
 Every turn renders a "What I have been doing" block, filtered by the same audience policy as
 ADR-0012:
@@ -80,7 +94,7 @@ ADR-0012:
 Open loops relevant to the current counterpart are always rendered (subject to the same rules).
 `thread_history` remains for details beyond the gist.
 
-### 4.4 Consolidation and forgetting
+### 4.5 Consolidation and forgetting
 
 - A periodic core job consolidates aged activity into episodes and, through `MemoryStore`, into
   semantic memories; consolidated rows decay out of the stream.
@@ -88,7 +102,7 @@ Open loops relevant to the current counterpart are always rendered (subject to t
   in the rendered block under its token budget.
 - Expression plugins may observe the stream (post-turn hook, ADR-0014) but never write to it.
 
-### 4.5 Forgetting: cascade, tombstone, and no re-learning
+### 4.6 Forgetting: cascade, tombstone, and no re-learning
 
 Today `memory_tombstones` (content-free: kind, level, scope, content hash, reason, time) is
 written on deletion, but nothing reads it: capture never checks it, so a forgotten fact can be

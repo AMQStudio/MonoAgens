@@ -66,17 +66,28 @@ The core (`monoagens/engine/`) owns five things and nothing else:
 | Soul | identity and the self-model: who it is, what it just did, who it is talking to (§4.5) |
 | Moral | behavioral rules from `soul.yaml`, `SafetyPolicy`, RBAC from `roles.yaml` |
 | Privacy | envelope labels (ADR-0012), audience filtering at context assembly, consent, subject veto |
-| Memory | `MemoryStore`, `memories_readable`, hybrid retrieval |
+| Memory | `MemoryStore`, `memories_readable`, automatic capture and retrieval, `recall`, `forget` |
 
 The core decides **what** happens: who may decide, what an audience may see, which tool runs.
 It never decides **how** something looks on a platform, never holds platform vocabulary
 (emoji, buttons, reaction hints), and never parses mechanism decisions out of chat text.
 
-Essential tools and commands stay in the core: `read`, `grep`, `fetch`, `web_search`,
-`thread_history`, `memory`, `write`, `sed`, `sandbox` (rootless container), `shell`
-(administrator), `send_message`, `send_file`, `relay`, `task`, `settings`, `mcp`, and the
-commands `/approve`, `/deny`, `/link`, `/unlink`, `/status`, `/whoami`, `/help`, `/reload`,
-`/language`. Anything else is a plugin.
+A tool or command stays in the core only when it operates a core mechanism; anything that
+acts on the world is a tool package, a plugin, or gateway UX (ADR-0014):
+
+- Memory is automatic and is not a tool: capture at ingress and turn end, retrieval in every
+  turn, consolidation in the background (ADR-0016). The model has two doors: `recall` (a
+  deliberate, deeper search over facts, conversations, and activity, which absorbs today's
+  `thread_history` and memory search) and `forget` (a request that the core validates against
+  the subject and executes as the forgetting cascade). `info` exposes self-knowledge.
+- Core commands: `/approve`, `/deny`, `/pending` (flows); `/link`, `/unlink`, `/whoami`
+  (identity); `/memory` (a person views and deletes their own memories, no model call),
+  `/search` (archive search, no model call), `/forget`; `/status`, `/alerts`, `/reload`,
+  `/freeze`, `/stop`, `/ping` (runtime); `/help`, `/tools`, `/language`; `/skill` (procedural
+  memory).
+- Everything else moves: file, research, messaging, and automation tools to the `assistant`
+  tool package; `sandbox`, `shell`, `settings`, MCP bridge to `power`; `/mood`, `/calmdown` to
+  the expression plugin; `/steps`, `/thinking` to the gateway base.
 
 ### 4.2 Gateway responsibilities
 
