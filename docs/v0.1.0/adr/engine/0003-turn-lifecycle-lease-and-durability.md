@@ -1,6 +1,6 @@
 # ADR-0003: Turn Lifecycle, Primary Lease, and Crash Safety — Atomic Fencing, Non-Blocking Loop, and Idempotent Resume
 
-- **Status:** accepted
+- **Status:** accepted; superseded in part by ADR-0012 (§4: post-draft review chain of 4.2)
 - **Date:** 2026-11-05
 - **Deciders:** Muqsith (owner)
 - **Context:** Re-baselined for v0.1.0; consolidates crash safety, lease management, turn lifecycle, prompt budgets, and async concurrency (pre-rebaseline 0011, 0012, 0013, 0017, 0037, 0045, 0049, 0053).

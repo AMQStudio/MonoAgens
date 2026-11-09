@@ -1,6 +1,6 @@
 # ADR-0001: Sovereign Agent and Core Invariants — One Soul, One Database, One Primary, and Hexagonal Seam
 
-- **Status:** accepted
+- **Status:** accepted; superseded in part by ADR-0011 (§4: core charter added to the appendage seam)
 - **Date:** 2026-11-05
 - **Deciders:** Muqsith (owner)
 - **Context:** Re-baselined for v0.1.0; consolidates foundational architectural invariants, intra-deployment namespace isolation, and configuration authority (pre-rebaseline 0000, 0035, 0040, 0048, 0053).

@@ -1,6 +1,6 @@
 # ADR-0005: Unified Job Engine and Extension Architecture — Workflows, Tasks, Plugins, and Provider Adapters
 
-- **Status:** accepted
+- **Status:** accepted; superseded in part by ADR-0014 (§4: gateway lifecycle of 4.2 and plugin loader of 4.3)
 - **Date:** 2026-11-05
 - **Deciders:** Muqsith (owner)
 - **Context:** Re-baselined for v0.1.0; unifies automations, durable tasks, recipes, gateway base classes, plugins, and provider wire adapters (pre-rebaseline 0014, 0028, 0044, 0047, 0049, 0053, 0054).

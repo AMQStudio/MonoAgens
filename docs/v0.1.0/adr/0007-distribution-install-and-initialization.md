@@ -1,6 +1,6 @@
 # ADR-0007: Distribution, Installation, and Initialization — Terminal Wizard, Thin Bootstrap, and Container Packaging
 
-- **Status:** accepted
+- **Status:** accepted; superseded in part by ADR-0018 (§4: thin bootstrap with pinned, verified releases)
 - **Date:** 2026-11-05
 - **Deciders:** Muqsith (owner)
 - **Context:** Re-baselined for v0.1.0; consolidates distribution, installation, terminal wizard interfaces, container packaging, and CLI administration (pre-rebaseline 0027, 0030, 0039, 0049, 0053, 0055).

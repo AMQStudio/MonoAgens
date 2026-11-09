@@ -1,6 +1,6 @@
 # ADR-0010: Deep Native Gateway Embodiment and Runtime Layer Architecture — Discord, Telegram, Slack, WhatsApp Completeness, and Layered Extensions
 
-- **Status:** accepted
+- **Status:** accepted; superseded in part by ADR-0011, ADR-0013, and ADR-0014 (§4: badge parsing of 4.1 and reserved layer contract of 4.6)
 - **Date:** 2026-11-07
 - **Deciders:** Muqsith (owner)
 - **Context:** Defines the full native capability contract for Discord, Telegram, Slack, and WhatsApp gateways—including interactive UI blocks (`Action.meta`), native `/` command menus, progressive streaming edits, threads, reactions, and media—and records the forward-compatible Runtime Layer Extension architecture (`layer` hooks) for future deep plugins without modifying core code.

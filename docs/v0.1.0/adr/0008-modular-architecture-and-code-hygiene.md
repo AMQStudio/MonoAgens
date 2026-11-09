@@ -1,6 +1,6 @@
 # ADR-0008: Modular Architecture, Code Hygiene, and Honest Budgets — ADR Home, Typed Pipeline, and Testing Discipline
 
-- **Status:** accepted
+- **Status:** accepted; superseded in part by ADR-0015 (§4: catalog parity of 4.4); testing discipline of 4.5 extended by ADR-0017
 - **Date:** 2026-11-05
 - **Deciders:** Muqsith (owner)
 - **Context:** Re-baselined for v0.1.0; consolidates the ADR home, engine structure, module budgets, repository slimming, config/language hygiene, and real-seam testing discipline (pre-rebaseline 0009, 0031, 0037, 0049, 0053, 0055).

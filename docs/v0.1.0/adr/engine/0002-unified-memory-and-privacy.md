@@ -1,6 +1,6 @@
 # ADR-0002: Unified Memory, Layered Privacy, and Detector Precision — Native PostgreSQL Hybrid Search and Word Boundaries
 
-- **Status:** accepted
+- **Status:** accepted; superseded in part by ADR-0012 (§4: privacy level labelled at ingress)
 - **Date:** 2026-11-05
 - **Deciders:** Muqsith (owner)
 - **Context:** Re-baselined for v0.1.0; unifies the memory pipeline, retention, integrity, privacy, reflection, native hybrid retrieval, and detector precision (pre-rebaseline 0001–0006, 0008, 0010, 0020, 0026, 0033, 0038, 0043, 0051, 0052, 0053).
