@@ -93,9 +93,24 @@ Timeless architectural principles, system boundaries, and high-level invariants 
 
 ## 7. Code Exploration, Sync Discipline, and Verification
 
-- **CodeGraph First:** Because implementation details evolve, do not rely on hardcoded file lists.
-  When `.codegraph/` is present, use `codegraph_explore` (MCP) or `codegraph explore "<query>"`
-  (CLI) first to inspect current symbol definitions, call paths, and blast radius in one call.
+- **Mandatory Tooling (Graphify, Serena, Context7):** Implementation details evolve, so never rely
+  on hardcoded file lists or memory of the code. Any agent that has these tools must use them:
+  - **Graphify (architecture and relationships):** Before designing, auditing, or reviewing,
+    query the knowledge graph (`graphify query "<question>"`, `graphify path "A" "B"`,
+    `graphify explain "<node>"`) for module boundaries, call paths, and blast radius. If
+    `graphify-out/graph.json` is missing, build it (`/graphify .`); after code changes, refresh it
+    with `/graphify . --update`.
+  - **Serena (symbol-level code work):** Read and edit code through Serena's symbolic tools (find
+    symbol, find referencing symbols, symbol overview, replace symbol body) instead of reading
+    whole files or doing blind text search. Call Serena's `initial_instructions` at the start of a
+    coding session.
+  - **Context7 (external APIs):** Before writing or reviewing code that depends on a library,
+    framework, SDK, CLI, or service (database drivers, Alembic, pgvector, HTTP clients,
+    transport SDKs, provider APIs, etc.), fetch current docs via
+    `resolve-library-id` then `query-docs`. Do not code from recalled API knowledge.
+  - **Agents without these tools** (for example, delegated workers) must rely on the paths, symbol
+    names, and API facts provided in their task spec. If the spec lacks a needed fact, ask or
+    escalate; never guess a library API or invent a file location.
 - **Lockfile, Template, and Plugin Digest Synchronization:**
   - Whenever `pyproject.toml` dependencies or `[project.optional-dependencies]` change, always run
     `uv lock` so `uv.lock` remains in sync (`uv sync --locked` in `install.sh` and `Dockerfile`

@@ -1,0 +1,11 @@
+# Conventions
+- English for code, comments, logs, errors, tests, ADRs; user chat text only via `t()` with keys in both `lang/en.yaml` and `lang/id.yaml`.
+- Every file under `monoagens/` <= 800 lines (selfcheck, empty allowlist): split into subpackages.
+- Pyright 0 errors on monoagens/scripts/plugins; optional deps imported via `importlib.import_module` at runtime.
+- No hardcoded model IDs/budgets in engine; from operator config.
+- Config mutations through `admin/yaml_io.py` + `admin/templates.py` (preserve operator comments).
+- Tools/commands: `TOOL`/`COMMAND = Handler(...)` with `family`, `approval_class` (none|consent|authorization), `path_arg`/`scan`; command `usage` omits leading `/<name>`; descriptions in `commands.catalog.<name>` in both lang files.
+- Gateway-specific tools/commands live inside `gateways/<name>/`.
+- Outbound side effects: via `Agent.dispatch()` with explicit `origin`, deterministic action IDs (outbox ledger).
+- Mutating stores check `engine_lease` fence.
+- Commits: Conventional Commits (`fix(scope): ...`). New third-party lib -> README Credits table.
