@@ -52,7 +52,7 @@ and plugins, the roles, and the gateway policy. Version 1 ships two:
 
 | Preset | Content |
 |---|---|
-| Assistant | core + `assistant` tool package; roles `owner` (protected) and `visitor` (default for unknown, chat only) |
+| Assistant | core + `files`, `research`, `messaging`, `automation` tool packages; roles `owner` (protected) and `visitor` (default for unknown, chat only) |
 | Blank | core only; roles `operator` (protected) and `visitor` (default for unknown, no tools); the starting point for other products |
 
 `monoagens init` asks for one preset and creates everything; the panel can change any part
@@ -70,7 +70,21 @@ deployment needs them, and anyone can write and share their own.
 - Every other role is defined by the operator: tools, commands, gateway policy (ADR-0014),
   rooms, memory administration.
 
-### 4.4 What this changes elsewhere
+### 4.4 Permissions vocabulary
+
+A role has two allow lists, because they are called by different actors: `tools` (the Soul
+calls them while working for this person) and `commands` (the person types them). MCP has no
+list of its own: an MCP tool is a tool, passes the same door, and is named with its origin.
+
+- `<package>/<tool>` allows one tool; `<package>/*` allows a whole package;
+  `mcp:<server>/<tool>` and `mcp:<server>/*` allow MCP tools; `*` alone is reserved for the
+  protected role.
+- Only what is listed, or covered by a package or server wildcard, is allowed. Today's implicit
+  parent-to-child grants are removed.
+- Bare legacy names (`read`, `write`) are accepted during the transition and rewritten to their
+  package form by the configuration writer.
+
+### 4.5 What this changes elsewhere
 
 - ADR-0011 §4: core tools and commands are only those operating core mechanisms.
 - ADR-0014 §4: gateways, tool packages, and plugins are the three packaging concepts.
@@ -97,7 +111,15 @@ roles:
     tools: []
     commands: [help, link, whoami]
   staff:                     # Any other role: name, tools, commands, and gateway policy are free.
-    tools: [read, web_search]
+    # What this role may use. Two lists: tools (the Soul calls them while working for this person)
+    # and commands (this person types them, like /task). Anything not listed is denied.
+    tools:
+      - files/*              # Every tool of the files package.
+      - research/web_search  # One tool from one package: <package>/<tool>.
+      - mcp:github/*         # Every tool of the MCP server named "github" (configured in config.yaml).
+    commands:
+      - help
+      - task                 # /task, brought by the automation package.
 ```
 
 `config.yaml` records the preset it was created from (`preset: assistant`) for information
@@ -107,7 +129,8 @@ only; nothing reads it at runtime.
 
 - No role name appears in core code, prompts, or tests outside fixtures (selfcheck).
 - Role validation tests: zero or two `protected` roles fail; zero or two
-  `default_for_unknown` roles fail.
+  `default_for_unknown` roles fail; `*` outside the protected role fails; an unknown package,
+  tool, or MCP server name fails.
 - `monoagens init` with each preset produces a deployment that passes the golden scenarios
   relevant to it.
 
@@ -115,7 +138,7 @@ only; nothing reads it at runtime.
 
 - Renaming every role in `roles.yaml` changes no behavior.
 - The Blank preset runs a Soul with only core tools and commands.
-- The Assistant preset reproduces today's assistant behavior through the `assistant` package.
+- The Assistant preset reproduces today's assistant behavior through its four tool packages.
 
 ## 8. Risks and mitigations
 

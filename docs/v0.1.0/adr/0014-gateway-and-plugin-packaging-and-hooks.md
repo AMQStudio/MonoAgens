@@ -48,7 +48,7 @@ Audit evidence (`.audit/05-tools-plugins.md`, `.audit/01-ingress-gateways.md`,
 | Concept | Panel label | One sentence | Examples |
 |---|---|---|---|
 | Gateway | App | the Soul's application: where it lives and how it looks there | WhatsApp, Telegram, Discord, Slack, CLI |
-| Tool | Tool | the Soul's instrument: something the model calls | `assistant` pack, `power` pack, `google`, any MCP server |
+| Tool | Tool | the Soul's instrument: something the model calls | `files`, `research`, `messaging`, `automation`, `system`, `google` packages, any MCP server |
 | Plugin | Plugin | an additional ability that changes how the Soul behaves; it may also bring tools and commands | `expression` (affect, humanize), a news follower |
 
 Rule of thumb: called by the model, it is a tool; changes how the Soul thinks or speaks, it is
@@ -92,14 +92,24 @@ out of process.
 
 ### 4.4 First-party tool packages
 
+Terms: a **tool package** is the packaging concept (panel section Tools); a **tool** is one
+instrument the model calls; a **command** is typed by a person. A tool package may carry both.
+
 | Package | Tools | Commands | Default |
 |---|---|---|---|
-| `assistant` | `read`, `grep`, `write`, `sed`, `send_file`, `web_search`, `fetch`, `send_message`, `relay`, `task`, `recipe` | `/send`, `/relay`, `/task` | on in the Assistant preset |
-| `power` | `sandbox`, `shell` (protected role only), `settings`, MCP client bridge | — | off |
+| `files` | `read`, `grep`, `write`, `sed`, `send_file` | `/send` | on in the Assistant preset |
+| `research` | `web_search`, `fetch` | — | on in the Assistant preset |
+| `messaging` | `send_message`, `relay` | `/relay` | on in the Assistant preset |
+| `automation` | `task`, `recipe` | `/task` | on in the Assistant preset |
+| `system` | `sandbox`, `shell` (protected role only), `settings` | — | off |
 | `google` | `google` with the flow of ADR-0013 §4 | — | off |
 
+MCP servers are not a package of their own: each configured server is a tool entry run out of
+process, and its tools are named `mcp:<server>/<tool>`.
+
 The machinery stays in the core: the job engine behind `task`, `Agent.dispatch()` behind
-`send_message` and `relay`, the sandbox runtime and safety policy behind `sandbox` and `shell`.
+`send_message` and `relay`, the sandbox runtime and safety policy behind `sandbox` and `shell`,
+the MCP client behind MCP servers.
 A package provides the door, never its own machinery.
 
 ### 4.5 Typed hooks for plugins
@@ -128,8 +138,8 @@ tiers); third-party capability arrives as MCP tools.
 
 - `plugins/expression/`: affect, mood, vibe, style, humanize, polish, ambient, voice sampling
   knobs, `mode`/`modes`, and the `/mood` and `/calmdown` commands; disabled by default.
-- `tools/assistant/`, `tools/power/`, `tools/google/`: moved out of `monoagens/engine/tools/`
-  and `plugins/google/`.
+- `tools/files/`, `tools/research/`, `tools/messaging/`, `tools/automation/`, `tools/system/`,
+  `tools/google/`: moved out of `monoagens/engine/tools/` and `plugins/google/`.
 - `gateways/whatsapp`, `telegram`, `discord`, `slack`, `cli`: moved to the skeleton one per
   change, sharing a common base in the SDK; `/steps`, `/thinking` move into that base.
 
@@ -171,7 +181,7 @@ member:
 
 ## 7. Acceptance criteria
 
-- The gateways, the three tool packages, and the expression plugin load through the shared
+- The gateways, the six tool packages, and the expression plugin load through the shared
   parser and verifier.
 - Persona and emotion run entirely from the expression plugin; disabling it removes their
   prompt parts, stores, and jobs without errors.

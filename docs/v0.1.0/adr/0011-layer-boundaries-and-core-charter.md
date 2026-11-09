@@ -85,8 +85,9 @@ acts on the world is a tool package, a plugin, or gateway UX (ADR-0014):
   `/search` (archive search, no model call), `/forget`; `/status`, `/alerts`, `/reload`,
   `/freeze`, `/stop`, `/ping` (runtime); `/help`, `/tools`, `/language`; `/skill` (procedural
   memory).
-- Everything else moves: file, research, messaging, and automation tools to the `assistant`
-  tool package; `sandbox`, `shell`, `settings`, MCP bridge to `power`; `/mood`, `/calmdown` to
+- Everything else moves to tool packages (ADR-0014): `files`, `research`, `messaging`,
+  `automation`, `system` (`sandbox`, `shell`, `settings`), `google`; MCP servers are tool
+  entries; `/mood`, `/calmdown` to
   the expression plugin; `/steps`, `/thinking` to the gateway base.
 
 ### 4.2 Gateway responsibilities
