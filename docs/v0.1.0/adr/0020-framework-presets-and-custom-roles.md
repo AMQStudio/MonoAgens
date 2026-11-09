@@ -3,7 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-11-09
 - **Deciders:** Muqsith (owner)
-- **Context:** Operators use the harness for different products: a personal assistant, an organization assistant, customer service, a personal trainer, and more. Today the core ships a generic-assistant toolset and hardcoded role names (`administrator`, `member`, `guest`). This ADR positions MonoAgens as a framework: the core is the Soul engine, and products are presets of gateways, tool packages, plugins, roles, and a soul template on top.
+- **Context:** Operators use the harness for different products: a personal assistant, an organization assistant, customer service, a personal trainer, and more. Today the core ships a generic-assistant toolset and hardcoded role names (`administrator`, `member`, `guest`). This ADR positions MonoAgens as a framework: the core is the Soul engine, and products are presets of gateways, plugins, roles, and a soul template on top.
 - **Supersedes:** in part ADR-0006 §4 (role seed of 4.1: fixed role names), ADR-0008 §4 (the `administrator` row of the canonical term register in 4.6 becomes the `protected` flag)
 - **Related:** ADR-0011 (charter), ADR-0014 (gateways, tools, plugins), ADR-0018 (roadmap)
 - **Implementation:** draft
@@ -42,17 +42,18 @@
 
 MonoAgens is a framework for persistent single-Soul agents: identity, memory, privacy, moral
 rules and RBAC, flows, durability, and many gateways. Products are built on top with gateways
-(the Soul's apps), tool packages (its instruments), plugins (added abilities), roles, and a
+(the Soul's apps), plugins (everything it can do beyond the core, each with tools and
+commands that can be toggled per role), roles, and a
 soul template (ADR-0014).
 
 ### 4.2 Presets
 
-A preset is plain configuration outside the core: a soul template, the enabled tool packages
+A preset is plain configuration outside the core: a soul template, the enabled plugins
 and plugins, the roles, and the gateway policy. Version 1 ships two:
 
 | Preset | Content |
 |---|---|
-| Assistant | core + `files`, `research`, `messaging`, `automation` tool packages; roles `owner` (protected) and `visitor` (default for unknown, chat only) |
+| Assistant | core + `files`, `research`, `messaging`, `automation` plugins; roles `owner` (protected) and `visitor` (default for unknown, chat only) |
 | Blank | core only; roles `operator` (protected) and `visitor` (default for unknown, no tools); the starting point for other products |
 
 `monoagens init` asks for one preset and creates everything; the panel can change any part
@@ -76,18 +77,18 @@ A role has two allow lists, because they are called by different actors: `tools`
 calls them while working for this person) and `commands` (the person types them). MCP has no
 list of its own: an MCP tool is a tool, passes the same door, and is named with its origin.
 
-- `<package>/<tool>` allows one tool; `<package>/*` allows a whole package;
+- `<plugin>/<tool>` allows one tool; `<plugin>/*` allows every tool of a plugin;
   `mcp:<server>/<tool>` and `mcp:<server>/*` allow MCP tools; `*` alone is reserved for the
   protected role.
-- Only what is listed, or covered by a package or server wildcard, is allowed. Today's implicit
+- Only what is listed, or covered by a plugin or server wildcard, is allowed. Today's implicit
   parent-to-child grants are removed.
 - Bare legacy names (`read`, `write`) are accepted during the transition and rewritten to their
-  package form by the configuration writer.
+  plugin form by the configuration writer.
 
 ### 4.5 What this changes elsewhere
 
 - ADR-0011 §4: core tools and commands are only those operating core mechanisms.
-- ADR-0014 §4: gateways, tool packages, and plugins are the three packaging concepts.
+- ADR-0014 §4: gateways and plugins are the two packaging concepts, with per-role toggles.
 - AGENTS.md §5 ("`administrator` is the protected top role") and the canonical term register
   are updated to the `protected` flag when this ADR is implemented.
 - README is repositioned from "assistant" to "framework plus presets" at the release rebaseline
@@ -114,12 +115,12 @@ roles:
     # What this role may use. Two lists: tools (the Soul calls them while working for this person)
     # and commands (this person types them, like /task). Anything not listed is denied.
     tools:
-      - files/*              # Every tool of the files package.
-      - research/web_search  # One tool from one package: <package>/<tool>.
+      - files/*              # Every tool of the files plugin.
+      - research/web_search  # One tool from one plugin: <plugin>/<tool>.
       - mcp:github/*         # Every tool of the MCP server named "github" (configured in config.yaml).
     commands:
       - help
-      - task                 # /task, brought by the automation package.
+      - task                 # /task, brought by the automation plugin.
 ```
 
 `config.yaml` records the preset it was created from (`preset: assistant`) for information
@@ -129,7 +130,7 @@ only; nothing reads it at runtime.
 
 - No role name appears in core code, prompts, or tests outside fixtures (selfcheck).
 - Role validation tests: zero or two `protected` roles fail; zero or two
-  `default_for_unknown` roles fail; `*` outside the protected role fails; an unknown package,
+  `default_for_unknown` roles fail; `*` outside the protected role fails; an unknown plugin,
   tool, or MCP server name fails.
 - `monoagens init` with each preset produces a deployment that passes the golden scenarios
   relevant to it.
@@ -138,7 +139,7 @@ only; nothing reads it at runtime.
 
 - Renaming every role in `roles.yaml` changes no behavior.
 - The Blank preset runs a Soul with only core tools and commands.
-- The Assistant preset reproduces today's assistant behavior through its four tool packages.
+- The Assistant preset reproduces today's assistant behavior through its four plugins.
 
 ## 8. Risks and mitigations
 
@@ -154,7 +155,7 @@ only; nothing reads it at runtime.
 - ADR-0006: RBAC stays in the core; fixed role names go.
 - ADR-0008: the register entry for `administrator` becomes the `protected` flag.
 - ADR-0011: the core charter is what every preset shares.
-- ADR-0014: presets enable gateways, tool packages, and plugins.
+- ADR-0014: presets enable gateways and plugins.
 - ADR-0018: presets and repositioning are part of the roadmap.
 
 ## 10. Code references

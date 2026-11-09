@@ -1,6 +1,6 @@
 # ADR-0004: Core Tools and Cross-Gateway Messaging — Universal Delivery, Origin Verification, and Tool Contracts
 
-- **Status:** accepted; superseded in part by ADR-0012 and ADR-0013 (§4: leak screening and approval routing of 4.2); core tools of 4.1 move to tool packages per ADR-0014
+- **Status:** accepted; superseded in part by ADR-0012 and ADR-0013 (§4: leak screening and approval routing of 4.2); core tools of 4.1 move to plugins per ADR-0014
 - **Date:** 2026-11-05
 - **Deciders:** Muqsith (owner)
 - **Context:** Re-baselined for v0.1.0; consolidates tool manifests, gateway contracts, input/output contracts, turn cost, and cross-gateway messaging (pre-rebaseline 0015, 0018, 0021, 0024, 0025, 0032, 0049, 0050, 0053).

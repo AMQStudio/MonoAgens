@@ -37,7 +37,7 @@ file's own path, and an `Implementation` line (`implemented`, `partial`, or `dra
 | [0011](adr/0011-layer-boundaries-and-core-charter.md) | Layer Boundaries and Core Charter — Core as Engine, Soul, Moral, Privacy, and Memory; Gateways as Body and UX; Plugins as Capability | root | draft |
 | [0012](adr/engine/0012-message-envelope-and-privacy-by-construction.md) | Message Envelope and Privacy by Construction — Label Once at Ingress, Render Speakers Explicitly, Filter Context by Audience | engine | draft |
 | [0013](adr/engine/0013-flow-protocol-requirements-and-approvals.md) | Flow Protocol, Requirements, and Generic Approvals — Plugins Declare Needs, the Core Runs Durable Flows, Gateways Render | engine | draft |
-| [0014](adr/0014-gateway-and-plugin-packaging-and-hooks.md) | Gateway, Tool, and Plugin Packaging and Hooks — Three Concepts, One Skeleton, Typed Deep Integration | root | draft |
+| [0014](adr/0014-gateway-and-plugin-packaging-and-hooks.md) | Gateway and Plugin Packaging and Hooks — Apps and Plugins, One Skeleton, Per-Role Toggles | root | draft |
 | [0015](adr/0015-string-ownership-and-optional-language-packs.md) | String Ownership and Optional Language Packs — English Mandatory, Every Owner Keeps Its Strings | root | draft |
 | [0016](adr/engine/0016-self-model-activity-stream-and-memory-layers.md) | Self-Model, Activity Stream, and Human-Like Memory Layers — Remember What I Just Did, Everywhere, Without Re-Reading Threads | engine | draft |
 | [0017](adr/0017-overhaul-testing-strategy.md) | Overhaul Testing Strategy — Invariant Tests, Architecture Contracts, and Golden Conversation Scenarios | root | draft |

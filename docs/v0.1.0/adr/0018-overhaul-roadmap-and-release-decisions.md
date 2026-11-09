@@ -41,7 +41,7 @@ migration squash, and an ADR rebaseline before the first release.
 | P1 | Message envelope, speaker rendering, addressing version 1, secret redaction, taint, turn trace | ADR-0012 |
 | P2 | Flow protocol and runner, requirement kinds, core and gateway events, approvals rebuilt, `/link` versus account connection, identity merge carries approvals and grants | ADR-0013 |
 | P3 | Privacy by construction at context assembly; judges and review layers removed one at a time behind tests; activity stream and forgetting cascade | ADR-0012, ADR-0016 |
-| P4 | `monoagens.sdk`; gateway, tool, and plugin skeleton; core tools moved into the `files`, `research`, `messaging`, `automation`, `system`, and `google` tool packages; hooks version 1; expression plugin (disabled by default); presets Assistant and Blank; custom roles with `protected` and `default_for_unknown` | ADR-0014, ADR-0020 |
+| P4 | `monoagens.sdk`; gateway and plugin skeleton; core tools moved into the `files`, `research`, `messaging`, `automation`, `system`, `mcp`, and `google` plugins; per-role toggles; hooks version 1; expression plugin (disabled by default); presets Assistant and Blank; custom roles with `protected` and `default_for_unknown` | ADR-0014, ADR-0020 |
 | P5 | String ownership and optional packs | ADR-0015 |
 | P6 | Gateways onto the shared skeleton and base; Discord readiness and direct-message labels | ADR-0014 |
 | P7 | Admin, CLI, configuration cleanup; thin installer and pinned releases (§4) | this ADR |

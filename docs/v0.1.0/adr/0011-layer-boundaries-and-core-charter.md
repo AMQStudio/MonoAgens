@@ -73,7 +73,7 @@ It never decides **how** something looks on a platform, never holds platform voc
 (emoji, buttons, reaction hints), and never parses mechanism decisions out of chat text.
 
 A tool or command stays in the core only when it operates a core mechanism; anything that
-acts on the world is a tool package, a plugin, or gateway UX (ADR-0014):
+acts on the world is a plugin or gateway UX (ADR-0014):
 
 - Memory is automatic and is not a tool: capture at ingress and turn end, retrieval in every
   turn, consolidation in the background (ADR-0016). The model has two doors: `recall` (a
@@ -85,10 +85,9 @@ acts on the world is a tool package, a plugin, or gateway UX (ADR-0014):
   `/search` (archive search, no model call), `/forget`; `/status`, `/alerts`, `/reload`,
   `/freeze`, `/stop`, `/ping` (runtime); `/help`, `/tools`, `/language`; `/skill` (procedural
   memory).
-- Everything else moves to tool packages (ADR-0014): `files`, `research`, `messaging`,
-  `automation`, `system` (`sandbox`, `shell`, `settings`), `google`; MCP servers are tool
-  entries; `/mood`, `/calmdown` to
-  the expression plugin; `/steps`, `/thinking` to the gateway base.
+- Everything else moves to plugins (ADR-0014): `files`, `research`, `messaging`,
+  `automation`, `system` (`sandbox`, `shell`, `settings`), `mcp`, `google`, and `expression`
+  (with `/mood`, `/calmdown`); `/steps`, `/thinking` move to the gateway base.
 
 ### 4.2 Gateway responsibilities
 
