@@ -41,7 +41,16 @@ def decision_refusal(approval, *, thread_id: str, sender: str, roles) -> str:
 
     ADR-0004 §4.2: the requester decides their own row from the origin room or the target
     room; anyone else needs the `approve` command *and* authority over the target.
+    A `privacy`/`disclosure` row is the person's own question: only that person answers it,
+    from one of its rooms, and no role stands in for them (ADR-0013 §4.5).
     """
+    if approval.kind in ("privacy", "disclosure"):
+        # ADR-0013 §4.5: the person the question is for decides it; no role stands in.
+        if str(thread_id or "") in _rooms(approval) and str(sender or "") == str(
+            approval.sender or ""
+        ):
+            return ""
+        return "foreign"
     if any(privileged(role) for role in roles):
         return ""
     if str(thread_id or "") not in _rooms(approval):

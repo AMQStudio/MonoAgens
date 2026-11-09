@@ -8,11 +8,13 @@ a staged action without the model deciding whether to run it.
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 from support import DirectoryFakeGateway, FakeLLM, inbound_message, make_agent, role
 
 from monoagens.engine.commands.approve import COMMAND as APPROVE
+from monoagens.engine.commands.approve import decision_refusal
 from monoagens.engine.config import ApprovalConfig
 from monoagens.engine.guard import ActionRequest, ApprovalPolicy
 from monoagens.engine.i18n import t
@@ -314,6 +316,50 @@ def test_an_approver_with_target_authority_may_decide_elsewhere(tmp_path) -> Non
         "command.approve.foreign", env.config.soul.language
     )
     assert env.agent.approvals.get(other.id).status == "pending"
+
+
+# ------------------------------------------------------- privacy decisions
+
+
+def privacy_row(kind: str = "privacy", *, sender: str = PERSON, thread: str = DM):
+    """A question about one person's memory: it names its room and the person to answer."""
+    return SimpleNamespace(
+        kind=kind, sender=sender, thread_id=thread, origin_thread="", tool=""
+    )
+
+
+def test_the_person_a_privacy_row_names_decides_it() -> None:
+    row = privacy_row()
+    assert decision_refusal(row, thread_id=DM, sender=PERSON, roles=()) == ""
+
+
+def test_no_privileged_role_answers_a_privacy_row_for_the_person() -> None:
+    row = privacy_row()
+    protected = role("owner", protected=True)
+    wildcard = role("admin", tools=("*",))
+    for stand_in in (protected, wildcard):
+        assert decision_refusal(
+            row, thread_id=DM, sender="628222", roles=(stand_in,)
+        ) == "foreign"
+
+
+def test_no_privileged_role_answers_a_disclosure_row_for_the_person() -> None:
+    row = privacy_row("disclosure")
+    owner = role("owner", protected=True)
+    assert decision_refusal(row, thread_id=DM, sender="628222", roles=(owner,)) == "foreign"
+
+
+def test_a_privacy_row_is_only_decided_from_its_own_rooms() -> None:
+    row = privacy_row()
+    assert decision_refusal(row, thread_id="stranger", sender=PERSON, roles=()) == "foreign"
+
+
+def test_a_privileged_role_still_decides_other_kinds_for_the_requester() -> None:
+    row = SimpleNamespace(
+        kind="send", sender=PERSON, thread_id=DM, origin_thread="", tool="send_to"
+    )
+    owner = role("owner", protected=True)
+    assert decision_refusal(row, thread_id=DM, sender="628222", roles=(owner,)) == ""
 
 
 def test_a_cross_room_payload_that_quotes_the_origin_is_refused(tmp_path) -> None:
