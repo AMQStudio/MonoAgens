@@ -93,6 +93,23 @@ messages = Table(
     Column("deleted_by", String(160), nullable=False, default="", server_default=""),
     Column("deleted_admin", Boolean, nullable=False, default=False, server_default=text("false")),
     Column("data", JSONB, nullable=False, default=dict),
+    # ADR-0012 §4.1/§4.2: the envelope labels, written once at ingress and read as stored.
+    Column("speaker", String(20), nullable=False, default="unknown", server_default="unknown"),
+    Column("actor", String(160), nullable=False, default="", server_default=""),
+    Column(
+        "addressed_to", String(160), nullable=False, default="unknown", server_default="unknown"
+    ),
+    Column(
+        "reply_to_self", Boolean, nullable=False, default=False, server_default=text("false")
+    ),
+    Column("kind", String(20), nullable=False, default="unknown", server_default="unknown"),
+    Column("trust", String(24), nullable=False, default="unknown", server_default="unknown"),
+    # Null means "always valid": the condition only applies to receipts and failures. The client
+    # default binds that NULL, so a row that names no condition still writes the label set whole.
+    Column("valid_until", JSONB, nullable=True, default=lambda: None),
+    Column(
+        "label_meta", JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    ),
     # ADR-0002 §4.1: one generated column, no application-side write path.
     Column(
         "text_tsv",
@@ -104,6 +121,18 @@ messages = Table(
     ),
     UniqueConstraint("thread_id", "msg_id", name="uq_messages_thread_msg"),
     CheckConstraint("visibility >= 0 AND visibility <= 4", name="ck_messages_visibility"),
+    CheckConstraint(
+        "speaker IN ('self','sender','other_person','system_receipt','unknown')",
+        name="ck_messages_speaker",
+    ),
+    CheckConstraint(
+        "kind IN ('chat','question','command','tool_result','notice','unknown')",
+        name="ck_messages_kind",
+    ),
+    CheckConstraint(
+        "trust IN ('owner','member','untrusted_content','unknown')",
+        name="ck_messages_trust",
+    ),
 )
 # Media blobs separated from the row (ADR-0002 §4.5); the message keeps its metadata in `data`.
 # `seq` numbers the attachments of one message, so a multi-attachment envelope keeps every

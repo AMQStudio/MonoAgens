@@ -7,6 +7,7 @@ import uuid
 import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import IntegrityError
 from support import test_dsn as _dsn
 
 from monoagens.engine.db import MIGRATIONS, SCHEMA_VERSION, Database, MigrationError
@@ -177,6 +178,104 @@ def test_revision_0017_and_0018_add_app_scope_and_privacy_evidence(fresh_databas
         db.dispose()
 
 
+_OLD_MESSAGE_INSERT = (
+    "INSERT INTO messages (thread_id, msg_id, ts, sender_id, sender_name, sender_address, "
+    "text, outgoing, author, visibility, deleted, deleted_by, deleted_admin, data) "
+    "VALUES (:thread_id, :msg_id, :ts, 'per_1', 'Ada', 'discord:1', 'hello', false, "
+    "'sender', 2, false, '', false, '{}'::jsonb)"
+)
+
+
+def _message_columns(db: Database) -> dict[str, dict]:
+    return {column["name"]: column for column in inspect(db.engine).get_columns("messages")}
+
+
+def _insert_envelope_message(db: Database, msg_id: str, **labels) -> None:
+    names = ", ".join(labels)
+    values = ", ".join(f":{name}" for name in labels)
+    with db.connect() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO messages (thread_id, msg_id, ts, sender_id, sender_name, "
+                f"sender_address, text, outgoing, data, {names}) "
+                "VALUES ('t1', :msg_id, 1.0, '', '', '', 'hello', false, '{}'::jsonb, "
+                f"{values})"
+            ),
+            {"msg_id": msg_id, **labels},
+        )
+
+
+def test_revision_0025_adds_the_message_envelope_columns(fresh_database) -> None:
+    """ADR-0012 §4.1/§4.2: eight label columns with the defaults an unlabelled row reads."""
+    db = Database(fresh_database)
+    try:
+        db.upgrade()
+        columns = _message_columns(db)
+        expected = {
+            "speaker": (False, "unknown"),
+            "actor": (False, ""),
+            "addressed_to": (False, "unknown"),
+            "reply_to_self": (False, "false"),
+            "kind": (False, "unknown"),
+            "trust": (False, "unknown"),
+            "valid_until": (True, None),
+            "label_meta": (False, "'{}'::jsonb"),
+        }
+        for name, (nullable, default) in expected.items():
+            assert name in columns, name
+            assert columns[name]["nullable"] is nullable, name
+            if default is not None:
+                assert default in str(columns[name]["default"]), name
+        # A condition is per-row data, never a default: an unlabelled row stays "always valid".
+        assert columns["valid_until"]["default"] is None
+        checks = {check["name"] for check in inspect(db.engine).get_check_constraints("messages")}
+        assert {"ck_messages_speaker", "ck_messages_kind", "ck_messages_trust"} <= checks
+        assert SCHEMA_VERSION >= 25
+    finally:
+        db.dispose()
+
+
+def test_revision_0025_keeps_the_old_write_path_working(fresh_database) -> None:
+    """Existing writers name no envelope column, so every one of them must read the defaults."""
+    db = Database(fresh_database)
+    try:
+        db.upgrade()
+        with db.connect() as conn:
+            conn.execute(
+                text(_OLD_MESSAGE_INSERT), {"thread_id": "t1", "msg_id": "m1", "ts": 1.0}
+            )
+        row = db.fetch_one(
+            text(
+                "SELECT speaker, actor, addressed_to, reply_to_self, kind, trust, "
+                "valid_until, label_meta FROM messages WHERE thread_id = 't1'"
+            )
+        )
+        assert row == {
+            "speaker": "unknown",
+            "actor": "",
+            "addressed_to": "unknown",
+            "reply_to_self": False,
+            "kind": "unknown",
+            "trust": "unknown",
+            "valid_until": None,
+            "label_meta": {},
+        }
+    finally:
+        db.dispose()
+
+
+def test_revision_0025_rejects_an_unknown_label_value(fresh_database) -> None:
+    """The checks keep a label inside its documented vocabulary, not just any string."""
+    db = Database(fresh_database)
+    try:
+        db.upgrade()
+        for column in ("speaker", "kind", "trust"):
+            with pytest.raises(IntegrityError):
+                _insert_envelope_message(db, f"bad-{column}", **{column: "bogus"})
+    finally:
+        db.dispose()
+
+
 def _run_alembic(db: Database, revision: str) -> None:
     """The dev rollback path; `Database` only exposes an upgrade, so drive Alembic directly."""
     from alembic import command
@@ -221,5 +320,37 @@ def test_downgrade_to_0012_then_upgrade_restores_the_readable_view(fresh_databas
         assert db.upgrade() == SCHEMA_VERSION
         columns = _view_columns(db)
         assert {"dispute_asked_at", "privacy_evidence", "privacy_policy"} <= columns
+    finally:
+        db.dispose()
+
+
+def test_downgrade_to_0024_then_upgrade_restores_the_envelope(fresh_database) -> None:
+    """The revision is reversible: the checks and columns drop together and come back."""
+    db = Database(fresh_database)
+    try:
+        db.upgrade()
+        _run_alembic(db, "0024")
+
+        columns = _message_columns(db)
+        for name in ("speaker", "actor", "addressed_to", "reply_to_self", "kind", "trust"):
+            assert name not in columns, name
+        assert "valid_until" not in columns
+        assert "label_meta" not in columns
+        checks = {check["name"] for check in inspect(db.engine).get_check_constraints("messages")}
+        assert not {"ck_messages_speaker", "ck_messages_kind", "ck_messages_trust"} & checks
+
+        assert db.upgrade() == SCHEMA_VERSION
+        columns = _message_columns(db)
+        for name in (
+            "speaker",
+            "actor",
+            "addressed_to",
+            "reply_to_self",
+            "kind",
+            "trust",
+            "valid_until",
+            "label_meta",
+        ):
+            assert name in columns, name
     finally:
         db.dispose()
