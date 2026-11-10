@@ -377,5 +377,45 @@ async def test_dm_gets_a_reply_through_the_telegram_body(aconn):
     assert await _kinds(aconn) == ["msg.in", "msg.out"]
 
 
+async def test_recent_includes_other_places_prefixed(aconn):
+    """<recent> lists this place first, then the same person's other places, prefixed."""
+    fake = FakeLLM()
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
+
+    await append_event(aconn, ts=START, kind="msg.in", who="person:owner", place=PLACE,
+                       body="telegram", payload={"text": "di sini"})
+    await append_event(aconn, ts=START, kind="msg.in", who="person:owner", place="space:cli",
+                       body="cli", payload={"text": "dari cli"})
+    await append_event(aconn, ts=START, kind="decision.silent", who="person:owner",
+                       place="space:cli", payload={"reason": "internal-elsewhere"})
+    await append_event(aconn, ts=START, kind="msg.in", who="person:alice", place="space:cli",
+                       body="cli", payload={"text": "bukan owner"})
+    await append_event(aconn, ts=START, kind="expectation.fired", who="person:owner",
+                       place="space:cli", body="cli", payload={"about": "minum air"})
+
+    await _feed(kernel, _msg("lanjut"))
+
+    volatile = fake.last_messages[2]["content"]
+    recent = volatile.split("<recent>", 1)[1].split("</recent>", 1)[0]
+    assert "15:00 owner: di sini" in recent
+    assert "[space:cli] 15:00 owner: dari cli" in recent
+    assert "[space:cli] 15:00 expectation: minum air" in recent
+    assert "bukan owner" not in recent
+    assert "internal-elsewhere" not in recent
+    assert f"[{PLACE}]" not in recent
+    assert recent.index("di sini") < recent.index("[space:cli] 15:00 owner: dari cli")
+
+
+async def test_recent_is_nothing_yet_when_both_parts_are_empty(aconn):
+    fake = FakeLLM()
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
+
+    await _feed(kernel, _msg("halo pertama"))
+
+    volatile = fake.last_messages[2]["content"]
+    recent = volatile.split("<recent>", 1)[1].split("</recent>", 1)[0]
+    assert recent == "\n(nothing yet)\n"
+
+
 async def test_tool_names_are_the_five_tools():
     assert TOOL_NAMES == {"say", "react", "stay_silent", "expect", "resolve"}

@@ -75,6 +75,7 @@ class PFCContext:
     expectations: Sequence[str] = ()
     memories: Sequence[str] = ()
     recent: Sequence[Event] = ()
+    recent_elsewhere: Sequence[Event] = ()
     trigger: Event | None = None
     last_interaction: datetime | None = None
 
@@ -167,6 +168,13 @@ class PFC:
             if text:
                 stamp = event.ts.astimezone(self.timezone)
                 lines.append(f"{stamp:%H:%M} {speaker}: {text}")
+        for event in context.recent_elsewhere:
+            if event.kind not in RECENT_KINDS:
+                continue
+            speaker, text = self._recent_parts(event)
+            if text:
+                stamp = event.ts.astimezone(self.timezone)
+                lines.append(f"[{event.place}] {stamp:%H:%M} {speaker}: {text}")
         return lines or ["(nothing yet)"]
 
     def _recent_parts(self, event: Event) -> tuple[str, Any]:

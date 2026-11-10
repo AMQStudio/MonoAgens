@@ -14,7 +14,7 @@ from monoagens.gate import Gate
 from monoagens.pfc import PFC, PFCContext, ToolCall
 from monoagens.store import (active_expectation_lines, append_event,
                              cursor as store_cursor, project_event, read_last_events,
-                             read_state)
+                             read_last_events_elsewhere, read_state)
 from monoagens.types import RECENT_KINDS, Action, Event
 
 
@@ -105,13 +105,21 @@ class Kernel:
         await self._think(event, verdict.reason, event.place or "")
 
     async def _think(self, event: Event, reason: str, place: str) -> None:
-        recent = await read_last_events(self.conn, place, limit=20, kinds=RECENT_KINDS)
+        memory_soul = self.soul.get("memory") or {}
+        recent_limit = int(memory_soul.get("recent_events", 20))
+        elsewhere_limit = int(memory_soul.get("recent_elsewhere", 10))
+        recent = await read_last_events(self.conn, place, limit=recent_limit,
+                                        kinds=RECENT_KINDS)
+        recent_elsewhere = await read_last_events_elsewhere(
+            self.conn, event.who, place, limit=elsewhere_limit, kinds=RECENT_KINDS
+        ) if event.who else []
         context = PFCContext(
             now=self.clock.now(), place=place,
             place_kind=str(event.payload.get("place_kind") or "direct"), reason=reason,
             core_memory=await self._core_memory(),
             expectations=await active_expectation_lines(self.conn, place),
             memories=await self._memories(event), recent=[e for e in recent if e.id != event.id],
+            recent_elsewhere=recent_elsewhere,
             trigger=event, last_interaction=await self._last_interaction(event))
         for call in await self.pfc.decide(context):
             await self._apply(event, call)

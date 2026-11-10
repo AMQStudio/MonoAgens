@@ -8,7 +8,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from monoagens.types import Event, StateEntry
+from monoagens.types import RECENT_KINDS, Event, StateEntry
 
 EXPECTATION_COLUMNS = (
     "id", "who", "place", "about", "cue_time", "cue_event", "expect", "intent", "weight",
@@ -55,6 +55,27 @@ async def read_last_events(conn, place, limit=20, *, chronological=True,
     """Return the last events for a place, optionally restricted to some kinds."""
     query = f"SELECT {_EVENT_COLS} FROM events WHERE place = %s"
     params: list[Any] = [place]
+    if kinds is not None:
+        query += " AND kind = ANY(%s)"
+        params.append(list(kinds))
+    query += " ORDER BY id DESC LIMIT %s"
+    params.append(limit)
+    cur = await conn.execute(query, params)
+    events = [_row_to_event(row) for row in await cur.fetchall()]
+    if chronological:
+        events.reverse()
+    return events
+
+
+async def read_last_events_elsewhere(conn, who, exclude_place, limit=10,
+                                     kinds: Sequence[str] | None = RECENT_KINDS,
+                                     chronological=True) -> list[Event]:
+    """Return one person's last events in places other than exclude_place."""
+    if not who:
+        return []
+    query = (f"SELECT {_EVENT_COLS} FROM events "
+             "WHERE who = %s AND (place IS NULL OR place != %s)")
+    params: list[Any] = [who, exclude_place]
     if kinds is not None:
         query += " AND kind = ANY(%s)"
         params.append(list(kinds))

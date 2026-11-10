@@ -10,6 +10,7 @@ from monoagens.store import (
     append_event,
     cursor,
     read_last_events,
+    read_last_events_elsewhere,
     read_state,
     read_state_entry,
     rebuild_state,
@@ -90,6 +91,38 @@ async def test_read_last_events_filters_by_kind(aconn):
     )
 
     assert [event.id for event in events] == [conversational.id]
+
+
+async def test_read_last_events_elsewhere(aconn):
+    """Elsewhere events belong to one person, skip this place, and keep only recent kinds."""
+    t = datetime(2026, 11, 10, 10, 0, 0, tzinfo=timezone.utc)
+    here = await append_event(aconn, ts=t, kind="msg.in", who="person:owner",
+                              place="space:here", payload={"text": "here"})
+    first = await append_event(aconn, ts=t, kind="msg.in", who="person:owner",
+                                place="space:other", payload={"text": "first"})
+    await append_event(aconn, ts=t, kind="decision.silent", who="person:owner",
+                       place="space:other", payload={"reason": "internal"})
+    second = await append_event(aconn, ts=t, kind="msg.out", who="person:owner",
+                                place="space:other", payload={"text": "second"})
+    await append_event(aconn, ts=t, kind="msg.in", who="person:alice",
+                       place="space:other", payload={"text": "stranger"})
+    homeless = await append_event(aconn, ts=t, kind="msg.in", who="person:owner",
+                                  place=None, payload={"text": "no place"})
+
+    events = await read_last_events_elsewhere(aconn, "person:owner", "space:here")
+
+    assert [event.id for event in events] == [first.id, second.id, homeless.id]
+    assert here.id not in [event.id for event in events]
+    assert events[0].payload == {"text": "first"}
+
+    newest = await read_last_events_elsewhere(
+        aconn, "person:owner", "space:here", limit=1, chronological=False
+    )
+    assert [event.id for event in newest] == [homeless.id]
+
+    assert await read_last_events_elsewhere(aconn, "person:owner", "space:here",
+                                            kinds=("msg.out",)) == [second]
+    assert await read_last_events_elsewhere(aconn, "", "space:here") == []
 
 
 async def test_cursor_tracking(aconn):
