@@ -182,7 +182,7 @@ After a communicative act in a group, or any world action, a `forward` Expectati
 the outcome (a reply within N minutes; "arrived within 30 s"). Its resolution writes
 `forward.outcome`.
 Learned values live in state (`cognition:weights`, `cognition:dispositions`); soul.yaml or the
-birth snapshot only gives the starting prior. Teachers: classifier verdicts (they move lo, and
+prior file (§11) only gives the starting values. Teachers: classifier verdicts (they move lo, and
 later hi, toward the observed boundary) and people's reactions (delta rule
 wₖ ← clamp(wₖ + α(r − P)sₖ)). Every value has bounds, the gray band a minimum width, every step
 is small, and every change is an event that can be rolled back. The exact update rule is open.
