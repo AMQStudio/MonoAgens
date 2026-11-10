@@ -30,7 +30,7 @@ from neonize.utils.jid import build_jid
 from ...engine.access.identity import IdentityStore
 from ...engine.config import Config, GatewaySettings, secure_db
 from ...engine.i18n import t
-from ...engine.inbound import Action, GatewayError, Percept
+from ...engine.inbound import Action, Decision, GatewayError, Percept
 from ...engine.registry import Handler, discover
 from ...engine.turn.context import Message, human_size
 from ...engine.turn.reply import FENCE, clean_prose, strip_blocks
@@ -449,13 +449,15 @@ class WhatsAppGateway(BaseGateway):
                     f"body '{self.name}' does not support '{action.capability}'"
                 )
 
-    def approval_command(self, emoji: str, message_id: str) -> str:
-        """The command a reaction stands for, when it lands on a pending approval prompt."""
+    def approval_decision(self, emoji: str, message_id: str) -> Decision | None:
+        """The decision a reaction stands for on a pending prompt; None for anything else."""
         approval_id = self.approvals_by_message.get(str(message_id or ""))
         if approval_id is None:
-            return ""
+            return None
         verb = ingress.reaction_verb(str(emoji or "").strip())
-        return f"/{verb} #{approval_id}" if verb else ""
+        if not verb:
+            return None
+        return Decision(approval_id, verb == "approve")
 
     def remember_approval(self, message_id: str, block) -> None:
         """Keep the prompt id a reaction must resolve to (bounded; the oldest entry leaves)."""

@@ -21,12 +21,13 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from ..engine import io
 from ..engine.i18n import t
-from ..engine.inbound import CoreDefaults, Percept
+from ..engine.inbound import DECISION, CoreDefaults, Decision, Percept
 from ..engine.turn.context import Message
 
 log = logging.getLogger(__name__)
@@ -130,7 +131,11 @@ def progress_text(capability: str, payload) -> str:
 
 
 def option_list(raw: object) -> list[dict]:
-    """Normalize a prompt's option list to `[{id, label, command, style}]`; junk is dropped."""
+    """Normalize a prompt's option list; junk is dropped.
+
+    Every option is `{id, label, command, style}` plus `decision` when the option is a gesture
+    on a pending approval (ADR-0013 §4.4).
+    """
     items = raw if isinstance(raw, (list, tuple)) else ()
     found: list[dict] = []
     for item in items:
@@ -140,14 +145,19 @@ def option_list(raw: object) -> list[dict]:
         label = str(item.get("label") or item.get("id") or "").strip()
         if not command or not label:
             continue
-        found.append(
-            {
-                "id": str(item.get("id") or command),
-                "label": label,
-                "command": command,
-                "style": str(item.get("style") or ""),
+        entry = {
+            "id": str(item.get("id") or command),
+            "label": label,
+            "command": command,
+            "style": str(item.get("style") or ""),
+        }
+        decision = item.get("decision")
+        if isinstance(decision, Mapping):
+            entry["decision"] = {
+                "approval_id": _as_id(decision.get("approval_id")),
+                "approve": bool(decision.get("approve")),
             }
-        )
+        found.append(entry)
     return found
 
 
@@ -160,6 +170,34 @@ def _as_id(value: object) -> int:
     except (TypeError, ValueError):
         return 0
     return number if number > 0 else 0
+
+
+# ADR-0013 §4.4: a native control names the decision, never a chat command. This one shape is
+# shared by every body (Telegram callback data, Discord custom id, Slack action id).
+DECISION_PREFIX = "decide:"
+
+
+def decision_token(decision: object) -> str:
+    """`decide:approve:<id>` / `decide:deny:<id>` for an option's `decision`; "" otherwise."""
+    if not isinstance(decision, Mapping):
+        return ""
+    number = _as_id(decision.get("approval_id"))
+    if not number:
+        return ""
+    verb = "approve" if decision.get("approve") else "deny"
+    return f"{DECISION_PREFIX}{verb}:{number}"
+
+
+def decision_of(data: object) -> Decision | None:
+    """The `Decision` a control id names; None for any other control (a `cmd:` stays a command)."""
+    text = str(data or "")
+    if not text.startswith(DECISION_PREFIX):
+        return None
+    verb, _, raw = text[len(DECISION_PREFIX) :].partition(":")
+    if verb not in ("approve", "deny"):
+        return None
+    number = _as_id(raw)
+    return Decision(number, verb == "approve") if number else None
 
 
 def safe_name(value: str, limit: int = 60) -> str:
@@ -404,12 +442,14 @@ class BaseGateway(CoreDefaults):
                 "label": t("approval.button_approve", language),
                 "command": f"/approve #{number}",
                 "style": "primary",
+                "decision": {"approval_id": number, "approve": True},
             },
             {
                 "id": f"deny:{number}",
                 "label": t("approval.button_deny", language),
                 "command": f"/deny #{number}",
                 "style": "danger",
+                "decision": {"approval_id": number, "approve": False},
             },
         ]
 
@@ -443,6 +483,43 @@ class BaseGateway(CoreDefaults):
     def prompt_options(self, action) -> list[dict]:
         """The pressable options of one outbound action (empty when there are none)."""
         return list(self.ui_of(action).get("buttons") or ())
+
+    def decision_percept(
+        self,
+        source: str,
+        thread: str,
+        actor: str,
+        name: str,
+        message_id: str,
+        decision: Decision,
+        hints: Mapping | None = None,
+        raw: object = None,
+    ) -> Percept:
+        """One gesture on a requirement as a `decision` percept (ADR-0013 §4.4).
+
+        A body never builds the chat command `/approve #N`: it names the approval and whether
+        this person approves. The core validates the decider, the room, and the row.
+        """
+        entry = Message(
+            id=str(message_id or f"decision-{time.time_ns()}"),
+            sender_name=str(name or ""),
+            sender_id=str(actor or ""),
+            when=datetime.now(UTC).astimezone().replace(microsecond=0),
+            text="",
+            sender_kind="person",
+        )
+        merged: dict[str, object] = {"interactive": True, "mention": True}
+        merged.update(dict(hints or {}))
+        merged["decision"] = decision
+        return Percept(
+            source=str(source or self.name),
+            thread=str(thread),
+            actor=str(actor),
+            kind=DECISION,
+            payload=entry,
+            hints=merged,
+            raw=raw,
+        )
 
     def progress_flags(self) -> dict[str, bool]:
         """Runtime overrides of the progress flags; empty until `/thinking` or `/steps` sets one."""

@@ -20,12 +20,19 @@ from monoagens.engine.i18n import t
 from monoagens.engine.inbound import DECISION, Action, Address, Decision, Percept
 from monoagens.engine.stores.turns import turn_identity
 from monoagens.engine.turn.context import Message
+from monoagens.gateways.base import BaseGateway
 
 DM = "chat"
 OTHER = "other"
 PERSON = "628111"
 STRANGER = "628999"
 ADMIN = "628777"
+
+
+class GestureGateway(DirectoryFakeGateway):
+    """The fixture body plus the shared gesture helper under test."""
+
+    decision_percept = BaseGateway.decision_percept
 
 
 def send_action(text: str = "ringkasan", *, action_id: str) -> Action:
@@ -42,7 +49,7 @@ def grant(env, name: str, person: str) -> None:
 
 
 def env_for(tmp_path, *, members=(PERSON, STRANGER, ADMIN)):
-    gateway = DirectoryFakeGateway(members=set(members))
+    gateway = GestureGateway(members=set(members))
     env = make_agent(
         tmp_path,
         gateway=gateway,
@@ -267,3 +274,42 @@ def test_a_standby_instance_refuses_a_decision(tmp_path) -> None:
 
     assert env.agent.approvals.get(row.id).status == "pending"
     assert texts(env) == []
+
+
+def test_a_body_gesture_becomes_a_decision_percept(tmp_path) -> None:
+    """A click/reaction uses the shared body helper; the core decides the row."""
+    env = env_for(tmp_path)
+    row = stage(env, "d-gesture-helper")
+
+    percept = env.gateway.decision_percept(
+        "fake",
+        DM,
+        PERSON,
+        "Budi",
+        "gesture-1",
+        Decision(row.id, True),
+        hints={"dm": True},
+    )
+
+    assert percept.kind == DECISION
+    assert percept.hints["decision"] == Decision(row.id, True)
+    assert percept.payload.text == ""
+
+    handle(env, percept)
+
+    assert env.agent.approvals.get(row.id).status == "approved"
+    assert [chat for chat, _text in texts(env)].count(OTHER) == 1
+
+
+def test_a_strangers_reaction_is_refused_and_runs_nothing(tmp_path) -> None:
+    env = env_for(tmp_path)
+    row = stage(env, "d-gesture-stranger")
+
+    percept = env.gateway.decision_percept(
+        "fake", DM, STRANGER, "Asing", "gesture-2", Decision(row.id, True), hints={"dm": True}
+    )
+    handle(env, percept)
+
+    assert env.agent.approvals.get(row.id).status == "pending"
+    assert (DM, t("command.approve.foreign", env.config.soul.language)) in texts(env)
+    assert OTHER not in [chat for chat, _text in texts(env)]

@@ -8,6 +8,8 @@ row, and a reply is split at Discord's 2000-character ceiling without cutting a 
 import re
 from collections.abc import Mapping
 
+from ..base import decision_token
+
 LIMIT = 2000
 COMPONENT_PREFIX = "cmd:"
 CUSTOM_ID_LIMIT = 100
@@ -53,7 +55,7 @@ def components(ui: object) -> list[dict]:
         label = str(item.get("label") or item.get("id") or "").strip()
         if not command or not label:
             continue
-        custom_id = f"{COMPONENT_PREFIX}{command}"
+        custom_id = decision_token(item.get("decision")) or f"{COMPONENT_PREFIX}{command}"
         if len(custom_id) > CUSTOM_ID_LIMIT:
             continue
         row.append(

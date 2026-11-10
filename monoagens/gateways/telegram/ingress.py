@@ -18,6 +18,7 @@ from ...engine.turn.context import (
     Media,
     Message,
 )
+from ..base import decision_of
 
 CALLBACK_PREFIX = "cmd:"
 MEDIA_FIELDS = {
@@ -225,4 +226,45 @@ def callback_percept(update: Mapping) -> tuple[Percept, str, Mapping] | None:
     )
     if percept is None:
         return None
+    return percept, str(query.get("id") or ""), message
+
+
+def decision_percept(update: Mapping, gateway) -> tuple[Percept, str, Mapping] | None:
+    """(decision percept, callback id, message) for an approval button; None otherwise."""
+    query = update.get("callback_query")
+    if not isinstance(query, Mapping):
+        return None
+    decision = decision_of(str(query.get("data") or ""))
+    if decision is None:
+        return None
+    message = query.get("message") or {}
+    chat = message.get("chat") if isinstance(message, Mapping) else None
+    sender = query.get("from")
+    if not isinstance(message, Mapping) or not isinstance(chat, Mapping):
+        return None
+    if not isinstance(sender, Mapping):
+        return None
+    actor = str(sender.get("id") or "")
+    if not actor:
+        return None
+    private = str(chat.get("type") or "") == "private"
+    name = " ".join(
+        part
+        for part in (str(sender.get("first_name") or ""), str(sender.get("last_name") or ""))
+        if part
+    ).strip() or str(sender.get("username") or "")
+    percept = gateway.decision_percept(
+        "telegram",
+        thread_of(chat, message),
+        actor,
+        name,
+        str(message.get("message_id") or ""),
+        decision,
+        hints={
+            "dm": private,
+            "group": not private,
+            "topic": bool(message.get("message_thread_id")),
+        },
+        raw=update,
+    )
     return percept, str(query.get("id") or ""), message

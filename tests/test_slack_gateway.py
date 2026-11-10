@@ -9,7 +9,7 @@ from support import build_config, database
 
 from monoagens.engine.commands import REGISTRY
 from monoagens.engine.config import GatewaySettings
-from monoagens.engine.inbound import Action, Address, GatewayError
+from monoagens.engine.inbound import DECISION, Action, Address, Decision, GatewayError
 from monoagens.engine.stores.history import HistoryStore
 from monoagens.engine.turn.context import WorkingMemory
 from monoagens.gateways.base import EditDebouncer
@@ -399,3 +399,54 @@ def test_run_installs_the_handlers_and_stop_closes_the_transport(tmp_path) -> No
 
     assert transport.handlers is not None
     assert transport.closed is True
+
+
+def action_body(action_id: str) -> dict:
+    return {
+        "actions": [{"action_id": action_id, "value": action_id}],
+        "user": {"id": "U222", "name": "Budi"},
+        "channel": {"id": "C1", "name": "ops"},
+        "container": {"message_ts": "1700000000.000100", "thread_ts": "1700000000.000001"},
+        "response_url": "https://hooks.slack/1",
+    }
+
+
+def test_an_approval_button_becomes_a_decision(tmp_path) -> None:
+    found = ingress.decision_action(
+        action_body("decide:approve:42"), make_slack(tmp_path)
+    )
+
+    assert found is not None
+    percept, response_url, message_ts = found
+    assert response_url == "https://hooks.slack/1"
+    assert message_ts == "1700000000.000100"
+    assert percept.kind == DECISION
+    assert percept.hints["decision"] == Decision(42, True)
+    assert percept.actor == "U222"
+
+
+def test_a_command_button_is_not_a_decision(tmp_path) -> None:
+    payload = action_body("cmd:/status")
+    payload["actions"][0]["value"] = "/status"
+
+    assert ingress.decision_action(payload, make_slack(tmp_path)) is None
+    assert ingress.action_percept(payload) is not None
+
+
+def test_an_approval_option_renders_a_decision_control() -> None:
+    blocks = render.approval_blocks(
+        {
+            "kind": "approval",
+            "approval_id": 42,
+            "buttons": [
+                {
+                    "label": "Deny",
+                    "command": "/deny #42",
+                    "decision": {"approval_id": 42, "approve": False},
+                }
+            ],
+        }
+    )
+
+    element = blocks[-1]["elements"][0]
+    assert element["action_id"] == "decide:deny:42"

@@ -46,6 +46,8 @@ def test_an_approval_block_becomes_the_localized_pair() -> None:
     approve, deny = block["buttons"]
     assert approve["label"] == t("approval.button_approve", "id")
     assert approve["command"] == "/approve #42"
+    assert approve["decision"] == {"approval_id": 42, "approve": True}
+    assert deny["decision"] == {"approval_id": 42, "approve": False}
     assert deny["label"] == t("approval.button_deny", "id")
     assert deny["command"] == "/deny #42"
 

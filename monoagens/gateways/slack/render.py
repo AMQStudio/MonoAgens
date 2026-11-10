@@ -8,6 +8,8 @@ a thinking line becomes a `context` block, and a long reply is split under Slack
 import re
 from collections.abc import Mapping
 
+from ..base import decision_token
+
 LIMIT = 39000
 COMPONENT_PREFIX = "cmd:"
 ACTION_ID_LIMIT = 255
@@ -48,7 +50,7 @@ def approval_blocks(ui: object) -> list[dict]:
         label = str(item.get("label") or item.get("id") or "").strip()
         if not command or not label:
             continue
-        action_id = f"{COMPONENT_PREFIX}{command}"
+        action_id = decision_token(item.get("decision")) or f"{COMPONENT_PREFIX}{command}"
         if len(action_id) > ACTION_ID_LIMIT:
             continue
         buttons.append(

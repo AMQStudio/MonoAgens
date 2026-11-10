@@ -12,6 +12,7 @@ from pathlib import Path
 
 from ...engine.inbound import Percept
 from ...engine.turn.context import AUTHOR_BOT, AUTHOR_UNKNOWN, Media, Message
+from ..base import decision_of
 
 COMPONENT_PREFIX = "cmd:"
 SUBTYPE_EDIT = "message_changed"
@@ -181,3 +182,41 @@ def action_percept(payload: Mapping) -> tuple[Percept, str, str] | None:
     )
     response_url = str(payload.get("response_url") or "")
     return percept, response_url, message_ts
+
+
+def decision_action(payload: Mapping, gateway) -> tuple[Percept, str, str] | None:
+    """(decision percept, response url, message ts) for an approval button; None otherwise."""
+    actions = payload.get("actions")
+    user = payload.get("user")
+    channel = payload.get("channel")
+    if not isinstance(actions, list) or not actions:
+        return None
+    if not isinstance(user, Mapping) or not isinstance(channel, Mapping):
+        return None
+    action = actions[0] if isinstance(actions[0], Mapping) else {}
+    decision = decision_of(str(action.get("action_id") or action.get("value") or ""))
+    if decision is None:
+        return None
+    channel_id = str(channel.get("id") or "")
+    channel_name = str(channel.get("name") or "")
+    container = mapping_of(payload.get("container"))
+    message_ts = str(container.get("message_ts") or "")
+    thread_ts = str(container.get("thread_ts") or "")
+    actor = str(user.get("id") or "")
+    if not actor:
+        return None
+    percept = gateway.decision_percept(
+        "slack",
+        thread_of({"channel": channel_id, "thread_ts": thread_ts}),
+        actor,
+        str(user.get("name") or user.get("username") or actor),
+        message_ts,
+        decision,
+        hints={
+            "dm": channel_name == "directmessage",
+            "group": channel_name != "directmessage",
+            "thread": bool(thread_ts),
+        },
+        raw=payload,
+    )
+    return percept, str(payload.get("response_url") or ""), message_ts

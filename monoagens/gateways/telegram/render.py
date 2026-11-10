@@ -10,6 +10,8 @@ import html
 import re
 from collections.abc import Mapping
 
+from ..base import decision_token
+
 LIMIT = 4096
 CALLBACK_PREFIX = "cmd:"
 CALLBACK_LIMIT = 64
@@ -40,7 +42,7 @@ def inline_keyboard(ui: object) -> dict | None:
         label = str(item.get("label") or item.get("id") or "").strip()
         if not command or not label:
             continue
-        data = f"{CALLBACK_PREFIX}{command}"
+        data = decision_token(item.get("decision")) or f"{CALLBACK_PREFIX}{command}"
         if len(data.encode("utf-8")) > CALLBACK_LIMIT:
             continue
         rows.append([{"text": label[:LABEL_LIMIT], "callback_data": data}])

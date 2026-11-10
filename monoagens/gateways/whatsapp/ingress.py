@@ -160,49 +160,37 @@ def _sender(ev, gateway) -> tuple[str, str, str]:
     return address, digits, name
 
 
-def _command_percept(ev, gateway, command: str) -> Percept | None:
-    """One reaction or click turned into the exact chat command the engine already reads."""
+def reaction_target(ev, gateway) -> Percept | None:
+    """A 👍/👎 reaction on a requirement's own message becomes a `Decision` (ADR-0013 §4.4).
+
+    Meta restricts native buttons on many accounts, so the reaction is the quick path; it binds
+    only to a message this body sent as the rendering of that requirement.
+    """
+    reaction = getattr(ev.Message, "reactionMessage", None)
+    if reaction is None or not reaction.ListFields():
+        return None
+    decision = gateway.approval_decision(
+        getattr(reaction, "text", ""), str(getattr(reaction.key, "ID", "") or "")
+    )
+    if decision is None:
+        return None
     source = ev.Info.MessageSource
     thread_id = f"{source.Chat.User}@{source.Chat.Server}"
     address, digits, name = _sender(ev, gateway)
     if not digits:
         return None
     known = directory.contact_name(gateway.db, address)
-    message = Message(
-        id=ev.Info.ID or f"event-{time.time_ns()}",
-        sender_name=known or name,
-        sender_id=digits,
-        when=event_time(ev.Info.Timestamp),
-        text=str(command),
-        sender_address=address,
-        sender_kind="person" if address.endswith(("@s.whatsapp.net", "@lid")) else "",
-        author=AUTHOR_UNKNOWN,
-    )
     group = is_group(thread_id)
-    return Percept(
-        source="whatsapp",
-        thread=thread_id,
-        actor=digits,
-        kind="message",
-        payload=message,
-        hints={"dm": not group, "group": group, "interactive": True},
+    return gateway.decision_percept(
+        "whatsapp",
+        thread_id,
+        digits,
+        known or name,
+        ev.Info.ID or "",
+        decision,
+        hints={"dm": not group, "group": group},
         raw=ev,
     )
-
-
-def reaction_target(ev, gateway) -> Percept | None:
-    """A 👍/👎 reaction on a pending prompt becomes `/approve #id` or `/deny #id`.
-
-    ADR-0010 §4.2: Meta restricts native buttons on many accounts, so the reaction is the
-    quick-confirm path, and it resolves to the same command the button would send.
-    """
-    reaction = getattr(ev.Message, "reactionMessage", None)
-    if reaction is None or not reaction.ListFields():
-        return None
-    command = gateway.approval_command(
-        getattr(reaction, "text", ""), str(getattr(reaction.key, "ID", "") or "")
-    )
-    return _command_percept(ev, gateway, command) if command else None
 
 
 def _edited_mention(edited, bots: set[str]) -> tuple[bool, bool]:

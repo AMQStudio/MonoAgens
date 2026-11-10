@@ -241,8 +241,10 @@ class TelegramGateway(BaseGateway):
     # ------------------------------------------------------------ ingress
 
     async def handle_update(self, update: Mapping, agent) -> None:
-        """One Bot API update: a click becomes a command, a message becomes a turn."""
+        """One Bot API update: a click becomes a decision, a message becomes a turn."""
         found = ingress.callback_percept(update)
+        if found is None:
+            found = ingress.decision_percept(update, self)
         if found is not None:
             percept, callback_id, message = found
             await self.answer_callback(callback_id, str(percept.payload.text))

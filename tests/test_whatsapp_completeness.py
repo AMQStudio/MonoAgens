@@ -11,7 +11,7 @@ from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import ProtocolMessage
 from test_whatsapp_gateway import BOT, make_gateway
 
 from monoagens.engine.i18n import t
-from monoagens.engine.inbound import Action, Address
+from monoagens.engine.inbound import DECISION, Action, Address, Decision
 from monoagens.engine.turn.context import Media, Message
 from monoagens.gateways.base import EditDebouncer
 from monoagens.gateways.whatsapp import ingress
@@ -222,9 +222,9 @@ def test_an_approval_prompt_gets_the_fallback_line_and_a_mapping(tmp_path) -> No
         )
     )
 
-    assert gateway.approval_command("\U0001f44d", message_id) == "/approve #42"
-    assert gateway.approval_command("\u274c", message_id) == "/deny #42"
-    assert gateway.approval_command("\U0001f44d", "unknown") == ""
+    assert gateway.approval_decision("\U0001f44d", message_id) == Decision(42, True)
+    assert gateway.approval_decision("\u274c", message_id) == Decision(42, False)
+    assert gateway.approval_decision("\U0001f44d", "unknown") is None
     sent = gateway.client.calls[0][1]
     assert "Approve?" in sent
     assert t("agent.approval_badge", language, id=42) in sent
@@ -237,7 +237,7 @@ def test_a_text_that_mentions_an_approval_is_not_a_prompt(tmp_path) -> None:
         gateway.dispatch(action("send_text", 'Approve?\n\n🕓 Waiting: /approve 42'))
     )
 
-    assert gateway.approval_command("\U0001f44d", message_id) == ""
+    assert gateway.approval_decision("\U0001f44d", message_id) is None
     sent = gateway.client.calls[0][1]
     assert "👍" not in sent
 
@@ -262,7 +262,7 @@ def test_an_explicit_ui_block_also_maps_the_prompt(tmp_path) -> None:
         )
     )
 
-    assert gateway.approval_command("\U0001f44d", message_id) == "/approve #7"
+    assert gateway.approval_decision("\U0001f44d", message_id) == Decision(7, True)
 
 
 def test_a_reaction_on_the_prompt_becomes_the_command(tmp_path) -> None:
@@ -275,7 +275,8 @@ def test_a_reaction_on_the_prompt_becomes_the_command(tmp_path) -> None:
     percept = ingress.reaction_target(ev, gateway)
 
     assert percept is not None
-    assert percept.payload.text == "/approve #42"
+    assert percept.kind == DECISION
+    assert percept.hints["decision"] == Decision(42, True)
     assert percept.hints["interactive"] is True
     assert percept.actor == "628222222222"
 

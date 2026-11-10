@@ -194,6 +194,8 @@ class DiscordGateway(BaseGateway):
     async def on_interaction(self, payload: Mapping, agent) -> None:
         found = ingress.interaction_percept(payload)
         if found is None:
+            found = ingress.decision_interaction(payload, self)
+        if found is None:
             return
         percept, _, message_id = found
         await self.mark_decision(percept.thread, message_id)

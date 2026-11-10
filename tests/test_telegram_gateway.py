@@ -10,7 +10,7 @@ from support import build_config, database
 
 from monoagens.engine.commands import REGISTRY
 from monoagens.engine.config import GatewaySettings
-from monoagens.engine.inbound import Action, Address
+from monoagens.engine.inbound import DECISION, Action, Address, Decision
 from monoagens.engine.stores.history import HistoryStore
 from monoagens.engine.turn.context import Message, WorkingMemory
 from monoagens.gateways.base import EditDebouncer
@@ -468,3 +468,63 @@ def test_start_with_a_deep_link_payload_or_mention_still_maps_to_help() -> None:
     assert ingress.normalize_start("/start@MonoAgens_bot") == "/help"
     assert ingress.normalize_start("/startx") == "/startx"
     assert ingress.normalize_start("halo /start") == "halo /start"
+
+
+
+def callback(data: str) -> dict:
+    return {
+        "callback_query": {
+            "id": "cb-2",
+            "from": {"id": 222, "first_name": "Budi"},
+            "data": data,
+            "message": {
+                "message_id": 11,
+                "chat": {"id": -1001, "type": "supergroup"},
+                "message_thread_id": 77,
+            },
+        }
+    }
+
+
+def test_an_approval_button_becomes_a_decision(tmp_path) -> None:
+    found = ingress.decision_percept(callback("decide:approve:42"), make_telegram(tmp_path))
+
+    assert found is not None
+    percept, callback_id, _message = found
+    assert callback_id == "cb-2"
+    assert percept.kind == DECISION
+    assert percept.hints["decision"] == Decision(42, True)
+    assert percept.thread == "-1001:77"
+    assert percept.actor == "222"
+
+
+def test_a_command_button_is_still_a_command_percept(tmp_path) -> None:
+    gateway = make_telegram(tmp_path)
+    assert ingress.callback_percept(callback("cmd:/status")) is not None
+    assert ingress.decision_percept(callback("cmd:/status"), gateway) is None
+
+
+def test_an_approval_block_renders_decision_controls() -> None:
+    markup = render.inline_keyboard(
+        {
+            "kind": "approval",
+            "approval_id": 42,
+            "buttons": [
+                {
+                    "label": "Approve",
+                    "command": "/approve #42",
+                    "decision": {"approval_id": 42, "approve": True},
+                },
+                {
+                    "label": "Deny",
+                    "command": "/deny #42",
+                    "decision": {"approval_id": 42, "approve": False},
+                },
+            ],
+        }
+    )
+
+    assert [row[0]["callback_data"] for row in markup["inline_keyboard"]] == [
+        "decide:approve:42",
+        "decide:deny:42",
+    ]

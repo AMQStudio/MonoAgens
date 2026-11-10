@@ -11,6 +11,7 @@ from pathlib import Path
 
 from ...engine.inbound import Percept
 from ...engine.turn.context import AUTHOR_BOT, AUTHOR_UNKNOWN, Media, Message
+from ..base import decision_of
 
 COMPONENT_PREFIX = "cmd:"
 ATTACHMENT_KINDS = {
@@ -169,6 +170,43 @@ def interaction_percept(payload: Mapping) -> tuple[Percept, str, str] | None:
             # The click is addressed to the bot by construction; RBAC still decides the row.
             "mention": True,
             "interactive": True,
+        },
+        raw=payload,
+    )
+    return percept, str(payload.get("id") or ""), str((message or {}).get("id") or "")
+
+
+def decision_interaction(payload: Mapping, gateway) -> tuple[Percept, str, str] | None:
+    """(decision percept, interaction id, message id) for an approval button; None otherwise."""
+    data = payload.get("data")
+    user = payload.get("user")
+    if not isinstance(data, Mapping) or not isinstance(user, Mapping):
+        return None
+    values = data.get("values")
+    if isinstance(values, list) and values:
+        custom_id = str(values[0])
+    else:
+        custom_id = str(data.get("custom_id") or "")
+    decision = decision_of(custom_id)
+    if decision is None:
+        return None
+    thread = thread_of(payload)
+    actor = str(user.get("id") or "")
+    if not thread or not actor:
+        return None
+    group = bool(payload.get("guild_id"))
+    message = payload.get("message") if isinstance(payload.get("message"), Mapping) else {}
+    percept = gateway.decision_percept(
+        "discord",
+        thread,
+        actor,
+        str(user.get("name") or ""),
+        str((message or {}).get("id") or payload.get("id") or ""),
+        decision,
+        hints={
+            "dm": not group,
+            "group": group,
+            "thread": bool(payload.get("thread_id")),
         },
         raw=payload,
     )

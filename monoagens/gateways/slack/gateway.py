@@ -14,7 +14,7 @@ from pathlib import Path
 
 from ...engine.access.identity import IdentityStore
 from ...engine.config import Config, GatewaySettings
-from ...engine.inbound import Action, GatewayError, Percept
+from ...engine.inbound import Action, Decision, GatewayError, Percept
 from ...engine.registry import Handler
 from ...engine.turn.context import Message
 from ..base import (
@@ -196,9 +196,16 @@ class SlackGateway(BaseGateway):
     async def on_action(self, body: Mapping, agent) -> None:
         found = ingress.action_percept(body)
         if found is None:
+            found = ingress.decision_action(body, self)
+        if found is None:
             return
         percept, _response_url, message_ts = found
-        await self.mark_decision(percept.thread, message_ts, str(percept.payload.text))
+        decision = percept.hints.get("decision")
+        label = str(percept.payload.text or "")
+        if not label and isinstance(decision, Decision):
+            verb = "approve" if decision.approve else "deny"
+            label = f"/{verb} #{decision.approval_id}"
+        await self.mark_decision(percept.thread, message_ts, label)
         await agent.handle(percept, self)
 
     async def mark_decision(self, thread: str, message_ts: str, command: str) -> None:

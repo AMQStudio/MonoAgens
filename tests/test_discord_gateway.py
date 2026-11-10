@@ -9,7 +9,7 @@ from support import build_config, database
 
 from monoagens.engine.commands import REGISTRY
 from monoagens.engine.config import GatewaySettings
-from monoagens.engine.inbound import Action, Address, GatewayError
+from monoagens.engine.inbound import DECISION, Action, Address, Decision, GatewayError
 from monoagens.engine.stores.history import HistoryStore
 from monoagens.engine.turn.context import WorkingMemory
 from monoagens.gateways.base import EditDebouncer
@@ -387,3 +387,56 @@ def test_settings_clean_the_token() -> None:
 
     settings = DiscordSettings.from_mapping(True, {}, {"DISCORD_BOT_TOKEN": " a b c "})
     assert settings.bot_token == "abc"
+
+
+def test_an_approval_component_becomes_a_decision(tmp_path) -> None:
+    found = ingress.decision_interaction(
+        {
+            "id": "i2",
+            "channel_id": "77",
+            "guild_id": "12",
+            "user": {"id": "222", "name": "Budi"},
+            "data": {"custom_id": "decide:deny:42", "values": []},
+            "message": {"id": "500"},
+        },
+        make_discord(tmp_path),
+    )
+
+    assert found is not None
+    percept, interaction_id, message_id = found
+    assert interaction_id == "i2"
+    assert message_id == "500"
+    assert percept.kind == DECISION
+    assert percept.hints["decision"] == Decision(42, False)
+    assert percept.actor == "222"
+
+
+def test_an_unrelated_component_is_not_a_decision(tmp_path) -> None:
+    payload = {
+        "id": "i3",
+        "channel_id": "77",
+        "user": {"id": "222"},
+        "data": {"custom_id": "cmd:/status", "values": []},
+        "message": {"id": "500"},
+    }
+
+    assert ingress.decision_interaction(payload, make_discord(tmp_path)) is None
+    assert ingress.interaction_percept(payload) is not None
+
+
+def test_an_approval_option_renders_a_decision_control() -> None:
+    row = render.components(
+        {
+            "kind": "approval",
+            "approval_id": 42,
+            "buttons": [
+                {
+                    "label": "Approve",
+                    "command": "/approve #42",
+                    "decision": {"approval_id": 42, "approve": True},
+                }
+            ],
+        }
+    )
+
+    assert row[0]["components"][0]["custom_id"] == "decide:approve:42"
