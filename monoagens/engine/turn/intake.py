@@ -24,6 +24,7 @@ from ..stores.history import RouteConflict
 from ..stores.turns import turn_identity
 from .addressing import Signals, score
 from .commands import command_body
+from .context import AUTHOR_BOT
 from .state import sender_of
 
 log = logging.getLogger(__name__)
@@ -110,7 +111,13 @@ class TurnIntake:
         window = self.runtime.windows.get(thread_id)
         last_self = None
         for index in range(len(window) - 1, -1, -1):
-            if window[index].speaker == "self":
+            entry = window[index]
+            # A fresh bot reply carries no stored label yet (the archive derives it on write),
+            # so the Soul's own words are the outgoing bot messages that are not receipts.
+            spoke = entry.speaker == "self" or (
+                entry.outgoing and entry.author == AUTHOR_BOT and entry.speaker != "system_receipt"
+            )
+            if spoke:
                 last_self = index
                 break
         if last_self is None:
@@ -288,7 +295,8 @@ class TurnIntake:
         # The quoted message may need a store read: keep it off the event loop (AGENTS.md §2).
         await io.run(self.label_reply, message, gateway, thread_id)
         pending = bool(await io.run(self._pending_request, thread_id, str(inbound.actor or "")))
-        self.label_addressing(inbound, thread_id, pending_request=pending)
+        # The continuity read may load the window from the store: keep it off the event loop.
+        await io.run(self.label_addressing, inbound, thread_id, pending_request=pending)
         message_id = str(message.id or "")
         if not message_id:
             log.warning("message without an id cannot become a turn chat=%s", thread_id)

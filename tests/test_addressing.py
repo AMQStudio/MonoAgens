@@ -43,14 +43,11 @@ def test_quoting_the_soul_to_tag_someone_else_never_answers() -> None:
         cfg(),
     )
 
-    # The tagging row replaces `reply_to_self` only; the mention of the person still applies.
-    assert result.score == -160
+    # The tagging row covers the reply AND the tag: the mention is not counted a second time.
+    assert result.score == -80
     assert result.decision == IGNORE
     assert result.addressed_to == "person:per_other"
-    assert result.reasons == [
-        ("reply_to_self_tagging_other", -80),
-        ("mention_other", -80),
-    ]
+    assert result.reasons == [("reply_to_self_tagging_other", -80)]
 
 
 def test_mentioning_another_person_points_at_that_person() -> None:
@@ -175,3 +172,18 @@ def test_thresholds_and_weights_are_read_as_ints() -> None:
     assert loaded.skepticism.strict == 30
     assert loaded.advanced.weights.mention_self == 120
     assert loaded.advanced.weights.mention_other == -80
+
+
+def test_a_message_naming_the_soul_and_another_person_still_answers() -> None:
+    """ADR-0012 §4.7: the mention of another person only counts when the Soul is not mentioned."""
+    result = score(Signals(mentions_self=True, mentions_other=True), AddressingConfig())
+
+    assert result.decision == "answer"
+    assert [name for name, _ in result.reasons] == ["mention_self"]
+
+
+def test_quoting_the_soul_to_tag_someone_is_counted_once() -> None:
+    result = score(Signals(reply_to_self=True, mentions_other=True), AddressingConfig())
+
+    assert result.reasons == [("reply_to_self_tagging_other", -80)]
+    assert result.decision == "ignore"

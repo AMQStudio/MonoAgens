@@ -52,13 +52,17 @@ def _points(signals: Signals, weights) -> list[tuple[str, int]]:
     found: list[tuple[str, int]] = []
     if signals.mentions_self:
         found.append(("mention_self", weights.mention_self))
+    # "Mention of another person, NOT the Soul": a message that names the Soul as well is still
+    # for the Soul (the mention passes alone), so the other person only counts without it.
+    tagging_other = signals.mentions_other and not signals.mentions_self
     if signals.reply_to_self:
-        # Quoting the Soul while tagging another person is a way to address that person.
-        if signals.mentions_other:
+        # Quoting the Soul to tag someone is the one row that covers both signals: the reply row
+        # replaces the mention row, so the same tag is never counted twice.
+        if tagging_other:
             found.append(("reply_to_self_tagging_other", weights.reply_to_self_tagging_other))
         else:
             found.append(("reply_to_self", weights.reply_to_self))
-    if signals.mentions_other:
+    elif tagging_other:
         found.append(("mention_other", weights.mention_other))
     if signals.reply_to_other:
         found.append(("reply_to_other", weights.reply_to_other))

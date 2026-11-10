@@ -75,8 +75,9 @@ def test_a_reply_to_the_soul_that_tags_someone_else_is_not_an_answer(tmp_path) -
     assert record["decision"] != "answer"
     assert entry.addressed_to == f"person:{OTHER}"
     names = [name for name, _points in record["reasons"]]
+    # The tag is part of the reply row: it is not counted a second time as a mention.
     assert "reply_to_self_tagging_other" in names
-    assert "mention_other" in names
+    assert "mention_other" not in names
 
 
 def test_plain_chatter_is_stored_as_ignored(tmp_path) -> None:
@@ -171,3 +172,32 @@ def test_an_unlabelled_message_renders_as_before(tmp_path) -> None:
 
     assert "addressing:" not in text
     assert ", to you" not in text
+
+
+def test_a_fresh_bot_reply_makes_the_next_message_a_continuation(tmp_path) -> None:
+    """A reply the Soul just sent carries no stored label yet; continuity must still see it."""
+    env = make_agent(tmp_path)
+    bot = Message(
+        id="bot-2",
+        sender_name="Soul",
+        sender_id=SELF_HANDLE,
+        when=datetime.now().astimezone(),
+        text="ada lagi?",
+        outgoing=True,
+        author=AUTHOR_BOT,
+    )
+    assert bot.speaker == "unknown"
+    env.windows.append(GROUP, bot, persist=False)
+
+    assert env.agent.intake._continuity(GROUP, "628222") is True
+    assert env.agent.intake._continuity(GROUP, "628222") is True
+
+    other = Message(
+        id="m9",
+        sender_name="Ani",
+        sender_id="999",
+        when=datetime.now().astimezone(),
+        text="eh",
+    )
+    env.windows.append(GROUP, other, persist=False)
+    assert env.agent.intake._continuity(GROUP, "628222") is False
