@@ -12,7 +12,7 @@ from `PLAN.md` or `ROADMAP.md`.
   invariants and the size budget) before committing and reporting.
 - The coordinator does not write implementation code itself. If the worker fails twice on
   the same step, stop and report to the owner instead of taking over.
-- Architecture and design documents (`DESIGN.md`, `PLAN.md`, `ROADMAP.md`, this file) are owned by the
+- Architecture and design documents (`DESIGN.md`, `DECISIONS.md`, `PLAN.md`, `ROADMAP.md`, this file) are owned by the
   architect. Workers may only tick steps in PLAN.md and never edit design decisions.
 
 ## Secrets (never break this)
