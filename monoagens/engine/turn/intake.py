@@ -160,8 +160,8 @@ class TurnIntake:
         """
         message = inbound.payload
         try:
-            result = score(self._signals(inbound, thread_id, pending_request=pending_request),
-                           self.runtime.config.addressing)
+            signals = self._signals(inbound, thread_id, pending_request=pending_request)
+            result = score(signals, self.runtime.config.addressing)
         except Exception:
             log.warning(
                 "addressing score failed chat=%s id=%s",
@@ -171,6 +171,16 @@ class TurnIntake:
             )
             self.runtime.facts.fail_envelope("addressing")
             return
+        if not signals.direct:
+            # ADR-0011 §4.9, ADR-0012 §4.8: one event per group message, names and points only.
+            log.info(
+                "addressing score=%d decision=%s addressed_to=%s reasons=%s",
+                result.score,
+                result.decision,
+                result.addressed_to,
+                ",".join(f"{name}{points:+d}" for name, points in result.reasons) or "-",
+                extra={"event": "turn.addressing"},
+            )
         message.addressed_to = result.addressed_to
         meta = dict(message.label_meta or {})
         meta["addressed_to"] = {
