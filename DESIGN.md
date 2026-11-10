@@ -108,6 +108,12 @@ source_events · created_at · last_accessed_at · use_count
 Sleep stores "Budi said X", not "X is true" (D6). A stranger's claim never supersedes an
 owner's fact.
 
+**Credence (D24).** Learned skills and lessons carry provenance (taught by, uses, successes) and
+a credence in [0, 1]. Start: by source trust (owner high, stranger low). Forward-model outcomes
+move it up or down in small bounded steps; each change is an event. Low-credence items sink in
+activation and stop surfacing. The PFC sees provenance and track record and decides how to use
+an item; there is no approval rule.
+
 ## 4. One turn of the loop
 1. Take one event from the queue.
 2. Record it and update state in one transaction; resolve the intake ack; embed text into
@@ -248,12 +254,15 @@ Order in every hook: `[owner policy — first] → [package middleware] → [own
 Package middleware is **shared** (all organs that opt in) or **organ-own** (only its organ).
 Name collisions fail at boot.
 
-**Default owner policy (active out of the box, D22):**
-- owner-only instructions as soon as the soul is in any group (D5);
-- learned skills whose source involves anyone but the owner wait for approval (an `approval`
-  Expectation); owner-sourced skills activate at once (D19);
-- daily model budget and quiet hours;
-- context privacy: direct-chat memories never enter group contexts.
+**Default owner policy (active out of the box, D22 as amended by D24).** It holds only:
+- **absolute line 1** — only the owner can change who the soul is: principles, settings, and
+  who may access the owner's data;
+- **absolute line 2** — content from a private conversation never enters another place's
+  context (enforced in the context hook, so it cannot leak even if the PFC is persuaded);
+- the daily model budget and quiet hours.
+Everything else is **weighed by the PFC**, not blocked: requests from other people are judged
+against the owner's interests and the principles; learned skills and lessons carry a credence
+(section 3) that the PFC sees and uses.
 
 Shared packages planned: **commands** (one registry; `/help` identical everywhere), **alias
 map** (D10: only the owner or a verification code links accounts; the soul may only ask),

@@ -40,7 +40,7 @@ a miss wakes the PFC.
 - Who may ask: the owner, or the person the data is about. Backups keep old data until they
   expire; this must be documented for users.
 
-**D5 — Owner-only instructions switch on automatically in any group.**
+**D5 — Owner-only instructions switch on automatically in any group.** *(Amended by D24: others' requests are weighed; only the two absolute lines are hard.)*
 Personal mode (no middleware) is only for a bot used purely by its owner. As soon as the bot is
 in a group, the owner-only policy middleware is active: others may talk to it, only the owner
 can instruct it, create promises on its behalf, or change settings.
@@ -87,7 +87,7 @@ Public documents describe MonoAgens only; they mention no hosted service.
   enter the prompt; the body is loaded when the PFC asks for it.
 - Learned skills: during sleep, a successful multi-step task may be distilled into a draft
   skill. A draft becomes active only after owner approval (an approval Expectation) or a
-  configured number of successful uses. **Amended by D19 and D22: drafts activate at once unless the default owner policy holds them.**
+  configured number of successful uses. **Amended by D19 and D24: drafts activate at once with a credence that follows their source and track record.**
 - Skills are versioned; a new version never silently overwrites the old one. Skill use counts
   feed the same ACT-R activation as memories.
 
@@ -182,7 +182,7 @@ filters: m < lo is ignored; every m ≥ lo goes to the classifier. The "clearly 
 disabled (hi = 1) and may open only when recorded classifier verdicts show that the band above
 the proposed hi contains no false resolutions. Opening it is a `disposition.updated` event.
 
-**D22 — The default owner policy ships with sensible brakes. Amends D19 and D20.**
+**D22 — The default owner policy ships with sensible brakes. Amends D19 and D20.** *(Amended by D24.)*
 The core still has no brakes of its own (D19). But a soul is installed with a default owner
 policy, active out of the box, so a non-technical owner is protected without configuring
 anything:
@@ -197,6 +197,28 @@ invariant 5.**
 No model call (PFC, classifier, sleep) happens per message or per tick by default. Each call is
 the result of a gate decision, is recorded as an event with its purpose and token usage, and
 counts toward the daily budget. The D15 classifier therefore needs no exception.
+
+**D24 — Weigh, don't block: trust grows from experience; only two absolute lines. Amends D5
+and D22.**
+People do not follow "advice from others needs permission". They weigh who said it, how
+plausible it is and what it costs if wrong, try it carefully, and trust it more when it works.
+- **Credence for skills and lessons.** Every skill and lesson carries its provenance (who
+  taught it, uses, successes). Starting credence follows the source's trust (owner high,
+  stranger low). Forward-model outcomes raise or lower it; a skill that keeps failing sinks and
+  stops being used. The PFC sees provenance and track record ("taught by Budi, used 3×, worked
+  1×") and decides: use it, try it carefully, or ask the owner. No approval rule.
+- **Requests from others are weighed, not refused.** Anyone may ask ("Mona, remind us at 7");
+  the PFC weighs the request against the owner's interests and its principles, like a good
+  assistant would.
+- **Only two absolute lines**, because LLM judgment can be talked into anything and these must
+  hold even then:
+  1. Only the owner can change who the soul is: principles, settings, and who may access the
+     owner's data.
+  2. Content from a private conversation never enters another place: it is never put into the
+     prompt there (context hook).
+- The default owner policy (D22) keeps only these two lines plus the budget and quiet hours.
+  Its former "skills from others wait for approval" and D5's "only the owner can instruct" are
+  replaced by weighing.
 
 ## Accepted in principle, details pending
 

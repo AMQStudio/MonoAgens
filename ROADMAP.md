@@ -50,11 +50,15 @@ Done when: all tests and replay pass; grep shows no platform name and no world a
 
 ## Phase 3 — Packages and the default owner policy
 - Loader for packages (organs + middleware + skills + dependencies), shared/organ-own scope.
-- Default owner policy, active out of the box (D22): owner-only in groups, approval for skills
-  sourced from others, budget, quiet hours, context privacy.
+- Default owner policy, active out of the box (D22, D24): the two absolute lines (only the owner
+  changes who the soul is; private content never enters another place), budget, quiet hours.
+  Everything else is weighed by the PFC.
+- Credence for skills and lessons (D24): provenance, track record, bounded updates.
 - Shared packages: **commands** (one registry, identical `/help`), **alias map** (D10),
   **skills** (installed SKILL.md, learned skills, versions, rollback; D11, D19).
-Done when: a DM fact is never visible or said in a group; a package cannot remove the policy;
+Done when: a DM fact is never visible or said in a group, even when someone tries to talk the
+soul into it; a reasonable request from a group member is helped; a package cannot remove the
+policy;
 `/help` is identical on Telegram and CLI.
 
 ## Phase 4 — First users (D13)
