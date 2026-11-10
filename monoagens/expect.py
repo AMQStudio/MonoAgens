@@ -108,8 +108,8 @@ async def create(conn, data, *, now, soul, source):
     """Validate and store an expectation, recording its creation event."""
     row = validate(data, now=now, soul=soul)
     limit = int(soul["expectations"]["max_active"])
-    query = "SELECT count(*) FROM expectations WHERE status = 'active'"
-    count = (await (await conn.execute(query)).fetchone())[0]
+    count = (await (await conn.execute(
+        "SELECT count(*) FROM expectations WHERE status = 'active'")).fetchone())[0]
     if count >= limit:
         raise ValueError("too many active expectations")
     who, place = row["who"] or source.who, row["place"] or source.place
@@ -204,15 +204,14 @@ async def recovery(conn, *, now):
     """Find fired expectations left unanswered, resolving answered ones."""
     wakes = []
     for row in await read_expectations(conn, "ex.status = 'fired'"):
-        query = ("SELECT id FROM events WHERE kind = 'expectation.fired' "
-                 "AND payload->>'expectation_id' = %s ORDER BY id DESC LIMIT 1")
-        hit = await (await conn.execute(query, (str(row["id"]),))).fetchone()
+        hit = await (await conn.execute(
+            "SELECT id FROM events WHERE kind = 'expectation.fired' "
+            "AND payload->>'expectation_id' = %s ORDER BY id DESC LIMIT 1",
+            (str(row["id"]),))).fetchone()
         fired_id = hit[0] if hit else None
-        answered = False
-        if fired_id is not None:
-            answered = await (await conn.execute(
-                "SELECT 1 FROM events WHERE kind = 'msg.out' AND caused_by = %s LIMIT 1",
-                (fired_id,))).fetchone() is not None
+        answered = fired_id is not None and await (await conn.execute(
+            "SELECT 1 FROM events WHERE kind = 'msg.out' AND caused_by = %s LIMIT 1",
+            (fired_id,))).fetchone() is not None
         if answered:
             await resolve_expectation(conn, {**row, "fired_event": fired_id}, now, "satisfied")
         else:

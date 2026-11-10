@@ -1,0 +1,80 @@
+"""CLI body: an in-process Unix socket; one msg.in per line typed by the owner."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
+from functools import partial
+
+from monoagens.types import Action, Event
+
+DEFAULT_SOCKET = "/tmp/monoagens.sock"
+Put = Callable[[Event], Awaitable[None]]
+
+
+def socket_path() -> str:
+    """Return CLI_SOCKET, falling back to the default socket path."""
+    return os.environ.get("CLI_SOCKET") or DEFAULT_SOCKET
+
+
+class CLIBody:
+    """Eyes and hands for the local terminal over a Unix socket."""
+
+    name = "cli"
+
+    def __init__(self, path: str | None = None) -> None:
+        """Store the socket path; the file is created when the server starts."""
+        self.path = path or socket_path()
+        self._writers: set[asyncio.StreamWriter] = set()
+
+    async def run(self, put: Put) -> None:
+        """Serve typed lines from local clients until the task is cancelled."""
+        self._unlink()
+        server = await asyncio.start_unix_server(partial(self._handle, put), path=self.path)
+        os.chmod(self.path, 0o600)
+        try:
+            async with server:
+                await server.serve_forever()
+        finally:
+            self._unlink()
+
+    async def _handle(self, put: Put, reader: asyncio.StreamReader,
+                      writer: asyncio.StreamWriter) -> None:
+        self._writers.add(writer)
+        try:
+            while raw := await reader.readline():
+                await put(self._event(raw.decode().rstrip("\r\n")))
+        except (ConnectionError, asyncio.CancelledError):
+            pass
+        finally:
+            self._writers.discard(writer)
+            writer.close()
+
+    async def act(self, action: Action) -> None:
+        """Write one rendered line to every connected client."""
+        if action.kind == "say":
+            line = f"{action.payload.get('text', '')}\n"
+        elif action.kind == "react":
+            line = f"[{action.payload.get('emoji', '')}]\n"
+        else:
+            raise ValueError(f"Unsupported action kind: {action.kind!r}")
+        for writer in list(self._writers):
+            try:
+                writer.write(line.encode())
+                await writer.drain()
+            except (ConnectionError, RuntimeError):
+                self._writers.discard(writer)
+                writer.close()
+
+    def _event(self, text: str) -> Event:
+        return Event(id=None, ts=datetime.now(timezone.utc), kind="msg.in",
+                     who="person:owner", place="space:cli", body=self.name,
+                     payload={"text": text, "addressed": True, "place_kind": "direct"})
+
+    def _unlink(self) -> None:
+        try:
+            os.unlink(self.path)
+        except FileNotFoundError:
+            pass

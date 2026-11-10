@@ -45,10 +45,8 @@ class FakeClock(Clock):
 
     def advance(self, seconds):
         """Advance by seconds or a timedelta and return the new time."""
-        if isinstance(seconds, (int, float)):
-            self._current_time += timedelta(seconds=seconds)
-        else:
-            self._current_time += seconds
+        step = seconds if isinstance(seconds, timedelta) else timedelta(seconds=seconds)
+        self._current_time += step
         return self._current_time
 
     async def tick(self, put) -> Event:

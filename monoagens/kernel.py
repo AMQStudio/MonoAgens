@@ -70,19 +70,16 @@ class Kernel:
 
     async def _settle(self, item: _Queued) -> Event:
         try:
-            if item.event.kind == "tick":
-                stored = item.event
-            else:
-                stored = await self._append(item.event, item.event.kind, item.event.payload,
-                                            caused_by=item.event.caused_by)
+            stored = item.event if item.event.kind == "tick" else await self._append(
+                item.event, item.event.kind, item.event.payload, caused_by=item.event.caused_by)
         except BaseException as exc:
             if item.ack is not None and not item.ack.done():
                 item.ack.set_exception(exc)
             self.queue.task_done()
             raise
+        if item.ack is not None and not item.ack.done():
+            item.ack.set_result(stored)
         try:
-            if item.ack is not None and not item.ack.done():
-                item.ack.set_result(stored)
             await self._wake(stored)
         except Exception as exc:
             await self._record_error(stored, exc)
@@ -94,8 +91,11 @@ class Kernel:
         fired = await expect.due(self.conn, event, now=self.clock.now(), soul=self.soul)
         for item in fired:
             await self._expect_wake(item)
-        if event.kind == "tick":
-            await self._maybe_sleep()
+        if event.kind == "tick" and self.pfc is not None and self.embedder is not None:
+            now = self.clock.now()
+            if await memory.sleep_due(self.conn, now, self.soul):
+                await memory.sleep(self.conn, pfc=self.pfc, embedder=self.embedder,
+                                   now=now, soul=self.soul)
         if fired or self.pfc is None or event.kind != "msg.in":
             return
         verdict = await self.gate.judge(self.conn, event, now=self.clock.now())
@@ -106,21 +106,27 @@ class Kernel:
 
     async def _think(self, event: Event, reason: str, place: str) -> None:
         memory_soul = self.soul.get("memory") or {}
-        recent_limit = int(memory_soul.get("recent_events", 20))
-        elsewhere_limit = int(memory_soul.get("recent_elsewhere", 10))
-        recent = await read_last_events(self.conn, place, limit=recent_limit,
+        recent = await read_last_events(self.conn, place,
+                                        limit=int(memory_soul.get("recent_events", 20)),
                                         kinds=RECENT_KINDS)
         recent_elsewhere = await read_last_events_elsewhere(
-            self.conn, event.who, place, limit=elsewhere_limit, kinds=RECENT_KINDS
-        ) if event.who else []
+            self.conn, event.who, place, limit=int(memory_soul.get("recent_elsewhere", 10)),
+            kinds=RECENT_KINDS) if event.who else []
+        core = await read_state(self.conn, "core_memory")
+        last = None
+        for key in (f"last_spoke:{place}", f"last_seen:{event.who}"):
+            value = await read_state(self.conn, key)
+            if value and value.get("ts"):
+                last = datetime.fromisoformat(value["ts"])
+                break
         context = PFCContext(
             now=self.clock.now(), place=place,
             place_kind=str(event.payload.get("place_kind") or "direct"), reason=reason,
-            core_memory=await self._core_memory(),
+            core_memory=str((core or {}).get("text") or ""),
             expectations=await active_expectation_lines(self.conn, place),
-            memories=await self._memories(event), recent=[e for e in recent if e.id != event.id],
-            recent_elsewhere=recent_elsewhere,
-            trigger=event, last_interaction=await self._last_interaction(event))
+            memories=await self._memories(event),
+            recent=[seen for seen in recent if seen.id != event.id],
+            recent_elsewhere=recent_elsewhere, trigger=event, last_interaction=last)
         for call in await self.pfc.decide(context):
             await self._apply(event, call)
 
@@ -131,14 +137,6 @@ class Kernel:
         k = int((self.soul.get("memory") or {}).get("retrieve_k", 5))
         return tuple(await memory.retrieve(self.conn, self.embedder, query, k=k,
                                            now=self.clock.now()))
-
-    async def _maybe_sleep(self) -> None:
-        if self.pfc is None or self.embedder is None:
-            return
-        now = self.clock.now()
-        if await memory.sleep_due(self.conn, now, self.soul):
-            await memory.sleep(self.conn, pfc=self.pfc, embedder=self.embedder, now=now,
-                               soul=self.soul)
 
     async def _expect_wake(self, item: dict[str, Any]) -> None:
         now = self.clock.now()
@@ -162,17 +160,6 @@ class Kernel:
         """Wake once more for expectations left fired across a restart."""
         for item in await expect.recovery(self.conn, now=self.clock.now()):
             await self._expect_wake(item)
-
-    async def _core_memory(self) -> str:
-        value = await read_state(self.conn, "core_memory")
-        return str(value.get("text") or "") if value else ""
-
-    async def _last_interaction(self, event: Event) -> datetime | None:
-        for key in (f"last_spoke:{event.place}", f"last_seen:{event.who}"):
-            value = await read_state(self.conn, key)
-            if value and value.get("ts"):
-                return datetime.fromisoformat(value["ts"])
-        return None
 
     async def _apply(self, event: Event, call: ToolCall) -> None:
         args = call.arguments
@@ -228,10 +215,6 @@ class Kernel:
         await self.recover()
         while not stop_event.is_set():
             try:
-                item = await asyncio.wait_for(self.queue.get(), timeout=0.1)
-            except asyncio.TimeoutError:
-                continue
-            try:
-                await self._settle(item)
+                await self._settle(await asyncio.wait_for(self.queue.get(), timeout=0.1))
             except Exception:
-                continue  # one broken event never kills the loop.
+                continue  # an empty queue or one broken event never kills the loop.

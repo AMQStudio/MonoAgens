@@ -1,4 +1,4 @@
-"""Entry point: wire the kernel, the clock, and the Telegram body."""
+"""Entry point: wire the kernel, the clock, and the bodies."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import os
 import psycopg
 from pgvector.psycopg import register_vector_async
 
+from monoagens.bodies.cli import CLIBody
 from monoagens.bodies.telegram import TelegramBody
 from monoagens.clock import Clock
 from monoagens.config import load_clock_tick_seconds, load_llm_config, load_owner_ids
@@ -17,7 +18,7 @@ from monoagens.pfc import PFC
 
 
 async def main() -> None:
-    """Run the kernel with the clock and the Telegram body until stopped."""
+    """Run the kernel with the clock and both bodies until stopped."""
     llm = load_llm_config()
     if not llm["base_url"] or not llm["model"]:
         raise RuntimeError(
@@ -28,17 +29,15 @@ async def main() -> None:
         await register_vector_async(conn)
         clock = Clock(tick_seconds=load_clock_tick_seconds())
         kernel = Kernel(conn, clock=clock, pfc=pfc, embedder=FastEmbedder())
-        body = TelegramBody(
-            os.environ["TELEGRAM_BOT_TOKEN"],
-            owner_ids=load_owner_ids(),
-            get_cursor=lambda: kernel.cursor("telegram"),
-        )
+        telegram = TelegramBody(os.environ["TELEGRAM_BOT_TOKEN"], owner_ids=load_owner_ids(),
+                                get_cursor=lambda: kernel.cursor("telegram"))
+        cli = CLIBody()
+        for body in (telegram, cli):
+            kernel.register_body(body)
         stop = asyncio.Event()
-        tasks = [
-            asyncio.create_task(kernel.run(stop)),
-            asyncio.create_task(body.run(kernel.put)),
-            asyncio.create_task(kernel.clock.run(kernel.put, stop)),
-        ]
+        tasks = [asyncio.create_task(coro) for coro in (
+            kernel.run(stop), telegram.run(kernel.put), cli.run(kernel.put),
+            kernel.clock.run(kernel.put, stop))]
         try:
             await asyncio.gather(*tasks)
         finally:

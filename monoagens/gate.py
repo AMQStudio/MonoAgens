@@ -110,5 +110,3 @@ class Gate:
 def _clamp(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
 
-
-__all__ = ["CROWD_FULL_MESSAGES", "Gate", "GateConfig", "Verdict"]

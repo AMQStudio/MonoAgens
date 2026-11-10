@@ -109,11 +109,10 @@ class PFC:
                    tool_choice: str = "required") -> list[ToolCall]:
         """Make one chat completion call and return its tool calls."""
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        response = await self._http().post(
-            f"{self.base_url}/chat/completions",
-            json={"model": self.model, "messages": messages, "tools": tools,
-                  "tool_choice": tool_choice},
-            headers=headers)
+        body = {"model": self.model, "messages": messages, "tools": tools,
+                "tool_choice": tool_choice}
+        response = await self._http().post(f"{self.base_url}/chat/completions",
+                                           json=body, headers=headers)
         response.raise_for_status()
         try:
             raw_calls = response.json()["choices"][0]["message"].get("tool_calls") or []
@@ -160,22 +159,17 @@ class PFC:
         return "\n".join(sections)
 
     def _recent_lines(self, context: PFCContext) -> list[str]:
-        lines: list[str] = []
-        for event in context.recent:
-            if event.kind not in RECENT_KINDS:
-                continue
-            speaker, text = self._recent_parts(event)
-            if text:
-                stamp = event.ts.astimezone(self.timezone)
-                lines.append(f"{stamp:%H:%M} {speaker}: {text}")
-        for event in context.recent_elsewhere:
-            if event.kind not in RECENT_KINDS:
-                continue
-            speaker, text = self._recent_parts(event)
-            if text:
-                stamp = event.ts.astimezone(self.timezone)
-                lines.append(f"[{event.place}] {stamp:%H:%M} {speaker}: {text}")
-        return lines or ["(nothing yet)"]
+        lines = [self._recent_line(event) for event in context.recent]
+        lines += [self._recent_line(event, f"[{event.place}] ")
+                  for event in context.recent_elsewhere]
+        return [line for line in lines if line] or ["(nothing yet)"]
+
+    def _recent_line(self, event: Event, prefix: str = "") -> str:
+        if event.kind not in RECENT_KINDS:
+            return ""
+        speaker, text = self._recent_parts(event)
+        return (f"{prefix}{event.ts.astimezone(self.timezone):%H:%M} "
+                f"{speaker}: {text}") if text else ""
 
     def _recent_parts(self, event: Event) -> tuple[str, Any]:
         if event.kind == "msg.out":
@@ -208,5 +202,3 @@ def _duration(now: datetime, then: datetime | None) -> str:
         return f"{days}d {hours}h"
     return f"{hours}h {mins}m" if hours else f"{mins}m"
 
-
-__all__ = ["PFC", "PFCContext", "TOOLS", "TOOL_NAMES", "ToolCall"]

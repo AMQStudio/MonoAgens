@@ -11,11 +11,8 @@ import yaml
 DEFAULT_SOUL_PATH = pathlib.Path(__file__).resolve().parent.parent / "soul.yaml"
 DEFAULT_ENV_PATH = pathlib.Path(__file__).resolve().parent.parent / ".env"
 DEFAULT_TICK_SECONDS = 30.0
-_LLM_KEYS = (
-    ("base_url", "LLM_BASE_URL"),
-    ("api_key", "LLM_API_KEY"),
-    ("model", "LLM_MODEL"),
-)
+_LLM_KEYS = (("base_url", "LLM_BASE_URL"), ("api_key", "LLM_API_KEY"),
+             ("model", "LLM_MODEL"))
 
 
 def load_soul(path=DEFAULT_SOUL_PATH) -> dict[str, Any]:
@@ -38,23 +35,17 @@ def load_clock_tick_seconds(path=DEFAULT_SOUL_PATH) -> float:
 
 def load_env_file(path=DEFAULT_ENV_PATH) -> dict[str, str]:
     """Read a simple KEY=VALUE .env file into a dict."""
-    values: dict[str, str] = {}
     env_path = pathlib.Path(path)
     if not env_path.is_file():
-        return values
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key.strip()] = value.strip().strip("'\"")
-    return values
+        return {}
+    lines = (line.strip() for line in env_path.read_text(encoding="utf-8").splitlines())
+    return {key.strip(): value.strip().strip("'\"") for key, value in
+            (line.split("=", 1) for line in lines
+             if line and not line.startswith("#") and "=" in line)}
 
 
 def load_llm_config(env_path=DEFAULT_ENV_PATH) -> dict[str, str]:
     """Resolve the LLM settings from the environment, then the .env file."""
     file_values = load_env_file(env_path)
-    return {
-        name: os.environ.get(key) or file_values.get(key) or ""
-        for name, key in _LLM_KEYS
-    }
+    return {name: os.environ.get(key) or file_values.get(key) or ""
+            for name, key in _LLM_KEYS}

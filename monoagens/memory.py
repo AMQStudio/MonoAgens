@@ -13,13 +13,8 @@ from zoneinfo import ZoneInfo
 import psycopg
 from pgvector import Vector
 
-from monoagens.store import (
-    append_event,
-    read_expectations,
-    read_state,
-    resolve_expectation,
-    write_state,
-)
+from monoagens.store import (append_event, read_expectations, read_state,
+                             resolve_expectation, write_state)
 from monoagens.types import Event
 
 DIM = 384
@@ -91,17 +86,14 @@ class FastEmbedder:
         self.model_name = model_name
         self._model: Any = None
 
-    def _load(self) -> Any:
-        from fastembed import TextEmbedding
-
-        self._model = TextEmbedding(model_name=self.model_name)
-        return self._model
-
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         """Return one embedding per text, computed in a worker thread."""
-        model = self._model or await asyncio.to_thread(self._load)
+        if self._model is None:
+            from fastembed import TextEmbedding
+
+            self._model = await asyncio.to_thread(TextEmbedding, model_name=self.model_name)
         return await asyncio.to_thread(
-            lambda: [[float(x) for x in v] for v in model.embed(list(texts))])
+            lambda: [[float(x) for x in v] for v in self._model.embed(list(texts))])
 
 
 async def retrieve(conn: psycopg.AsyncConnection[Any], embedder: Any, query: str, *,
@@ -137,24 +129,22 @@ async def sleep_due(conn: psycopg.AsyncConnection[Any], now: datetime,
     """Return whether the self should sleep now."""
     config, zone = soul.get("sleep") or {}, ZoneInfo(str(soul.get("timezone") or "UTC"))
     last_id = int((await read_state(conn, "sleep:last_event") or {}).get("id") or 0)
-    cur = await conn.execute("SELECT max(id) FROM events WHERE kind IN ('msg.in', 'msg.out')")
-    newest = (await cur.fetchone())[0]
+    cur = await conn.execute(
+        "SELECT max(id) FILTER (WHERE kind IN ('msg.in', 'msg.out')), "
+        "max(ts) FILTER (WHERE kind = 'sleep.failed'), "
+        "max(ts) FILTER (WHERE kind IN ('msg.in', 'msg.out')), "
+        "max(ts) FILTER (WHERE kind = 'sleep.done') FROM events")
+    newest, last_failed, idle_since, slept = await cur.fetchone()
     if newest is None or int(newest) <= last_id:
         return False
-    cur = await conn.execute("SELECT max(ts) FROM events WHERE kind = 'sleep.failed'")
-    last_failed = (await cur.fetchone())[0]
     retry = float(config.get("retry_minutes", 30)) * 60.0
     if last_failed and (now - last_failed).total_seconds() < retry:
         return False
-    cur = await conn.execute("SELECT max(ts) FROM events WHERE kind IN ('msg.in', 'msg.out')")
-    idle_since = (await cur.fetchone())[0]
     idle_limit = float(config.get("idle_minutes", 30)) * 60
     if idle_since and (now - idle_since).total_seconds() >= idle_limit:
         return True
     if now.astimezone(zone).hour != int(config.get("hour", 2)):
         return False
-    cur = await conn.execute("SELECT max(ts) FROM events WHERE kind = 'sleep.done'")
-    slept = (await cur.fetchone())[0]
     return not (slept and slept.astimezone(zone).date() == now.astimezone(zone).date())
 
 
@@ -187,14 +177,10 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
         {"role": "user", "content": f"<core_memory>{old_core}</core_memory>\n<events>\n"
                                     + "\n".join(lines) + "\n</events>"}]
     calls = await pfc.call(messages, [STORE_MEMORIES])
-    call = next((c for c in calls if c.name == "store_memories"), None)
-    args = (call.arguments if call else {})
-    raw_items = args.get("items") or []
-    items = [item for item in raw_items if isinstance(item, dict) and item.get("text")]
-    if items:
-        vectors = await embedder.embed([str(item["text"]) for item in items])
-    else:
-        vectors = []
+    args = next((call.arguments for call in calls if call.name == "store_memories"), {})
+    items = [item for item in args.get("items") or []
+             if isinstance(item, dict) and item.get("text")]
+    vectors = await embedder.embed([str(item["text"]) for item in items]) if items else []
     core = str(args.get("core_memory") or old_core)
     payload = {"core_memory": core, "last_event_id": int(rows[-1][0]), "memories": len(items)}
     async with conn.transaction():
@@ -214,6 +200,3 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
     await write_state(conn, "sleep:last_event", {"id": payload["last_event_id"]}, done.id)
     return done
 
-
-__all__ = ["DECAY", "DIM", "Embedder", "FakeEmbedder", "FastEmbedder", "MODEL", "STORE_MEMORIES",
-           "cosine", "retrieve", "sleep", "sleep_due"]

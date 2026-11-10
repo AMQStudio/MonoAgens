@@ -15,11 +15,9 @@ EXPECTATION_COLUMNS = (
     "policy", "status", "next_check_at", "last_fired_at", "fire_count", "source_event",
     "expires_at", "source_body",
 )
-_EXPECTATIONS = (
-    "SELECT " + ", ".join("ex." + column for column in EXPECTATION_COLUMNS[:-1])
-    + ", s.body AS source_body FROM expectations ex"
-    " LEFT JOIN events s ON s.id = ex.source_event"
-)
+_EXPECTATIONS = ("SELECT " + ", ".join("ex." + column for column in EXPECTATION_COLUMNS[:-1])
+                 + ", s.body AS source_body FROM expectations ex"
+                 " LEFT JOIN events s ON s.id = ex.source_event")
 _INSERT_EXPECTATION = (
     "INSERT INTO expectations (who, place, about, cue_time, cue_event, expect, intent, weight, "
     "policy, status, next_check_at, source_event, expires_at) VALUES (%s, %s, %s, %s, %s, %s, "
@@ -33,38 +31,32 @@ def _row_to_event(row):
     return Event(row[0], row[1], row[2], row[3], row[4], row[5], payload, row[7])
 
 
-async def append_event(conn, event=None, *, ts=None, kind=None, who=None, place=None,
-                       body=None, payload=None, caused_by=None) -> Event:
+async def append_event(conn, *, ts, kind, who=None, place=None, body=None, payload=None,
+                       caused_by=None) -> Event:
     """Append one event to the immutable Log."""
-    if event is not None:
-        ts, kind, who, place, body = event.ts, event.kind, event.who, event.place, event.body
-        payload, caused_by = event.payload, event.caused_by
     if ts is None or kind is None:
         raise ValueError("ts and kind must be explicitly provided")
     query = ("INSERT INTO events (ts, kind, who, place, body, payload, caused_by) VALUES "
              f"(%s, %s, %s, %s, %s, %s, %s) RETURNING {_EVENT_COLS}")
     cur = await conn.execute(query, (ts, kind, who, place, body, Jsonb(payload or {}), caused_by))
-    row = await cur.fetchone()
-    if row is None:
-        raise RuntimeError("Failed to insert event")
-    return _row_to_event(row)
+    return _row_to_event(await cur.fetchone())
+
+
+async def _recent(conn, where: str, params: list[Any], limit: int,
+                  chronological: bool) -> list[Event]:
+    query = f"SELECT {_EVENT_COLS} FROM events WHERE {where} ORDER BY id DESC LIMIT %s"
+    cur = await conn.execute(query, [*params, limit])
+    events = [_row_to_event(row) for row in await cur.fetchall()]
+    return list(reversed(events)) if chronological else events
 
 
 async def read_last_events(conn, place, limit=20, *, chronological=True,
                            kinds: Sequence[str] | None = None) -> list[Event]:
     """Return the last events for a place, optionally restricted to some kinds."""
-    query = f"SELECT {_EVENT_COLS} FROM events WHERE place = %s"
-    params: list[Any] = [place]
+    where, params = "place = %s", [place]
     if kinds is not None:
-        query += " AND kind = ANY(%s)"
-        params.append(list(kinds))
-    query += " ORDER BY id DESC LIMIT %s"
-    params.append(limit)
-    cur = await conn.execute(query, params)
-    events = [_row_to_event(row) for row in await cur.fetchall()]
-    if chronological:
-        events.reverse()
-    return events
+        where, params = f"{where} AND kind = ANY(%s)", [place, list(kinds)]
+    return await _recent(conn, where, params, limit, chronological)
 
 
 async def read_last_events_elsewhere(conn, who, exclude_place, limit=10,
@@ -73,19 +65,10 @@ async def read_last_events_elsewhere(conn, who, exclude_place, limit=10,
     """Return one person's last events in places other than exclude_place."""
     if not who:
         return []
-    query = (f"SELECT {_EVENT_COLS} FROM events "
-             "WHERE who = %s AND (place IS NULL OR place != %s)")
-    params: list[Any] = [who, exclude_place]
+    where, params = "who = %s AND (place IS NULL OR place != %s)", [who, exclude_place]
     if kinds is not None:
-        query += " AND kind = ANY(%s)"
-        params.append(list(kinds))
-    query += " ORDER BY id DESC LIMIT %s"
-    params.append(limit)
-    cur = await conn.execute(query, params)
-    events = [_row_to_event(row) for row in await cur.fetchall()]
-    if chronological:
-        events.reverse()
-    return events
+        where, params = f"{where} AND kind = ANY(%s)", [who, exclude_place, list(kinds)]
+    return await _recent(conn, where, params, limit, chronological)
 
 
 async def count_recent_events(conn, place, *, kind, since) -> int:
@@ -100,11 +83,8 @@ async def count_recent_events(conn, place, *, kind, since) -> int:
 
 async def cursor(conn, body) -> Any | None:
     """Return the last cursor payload recorded by a body, if any."""
-    cur = await conn.execute(
-        "SELECT payload->'cursor' FROM events WHERE body = %s AND payload ? 'cursor' "
-        "ORDER BY id DESC LIMIT 1",
-        (body,),
-    )
+    cur = await conn.execute("SELECT payload->'cursor' FROM events WHERE body = %s "
+                             "AND payload ? 'cursor' ORDER BY id DESC LIMIT 1", (body,))
     row = await cur.fetchone()
     return row[0] if row else None
 
@@ -167,10 +147,7 @@ async def read_expectations(conn, where="TRUE", params=()) -> list[dict[str, Any
 async def insert_expectation(conn, values) -> int:
     """Insert one expectation row and return its id."""
     cur = await conn.execute(_INSERT_EXPECTATION, values)
-    row = await cur.fetchone()
-    if row is None:
-        raise RuntimeError("Failed to insert expectation")
-    return int(row[0])
+    return int((await cur.fetchone())[0])
 
 
 async def resolve_expectation(conn, row, now: datetime, status: str) -> Event:

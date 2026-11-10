@@ -20,17 +20,10 @@ class TelegramBody:
 
     name = "telegram"
 
-    def __init__(
-        self,
-        token: str,
-        *,
-        owner_ids: set[int] | frozenset[int] = frozenset(),
-        get_cursor: GetCursor | None = None,
-        poll_timeout: float = 30.0,
-        transport: httpx.AsyncBaseTransport | None = None,
-        api_base: str = "https://api.telegram.org",
-        retry_base: float = 1.0,
-    ) -> None:
+    def __init__(self, token: str, *, owner_ids: set[int] | frozenset[int] = frozenset(),
+                 get_cursor: GetCursor | None = None, poll_timeout: float = 30.0,
+                 transport: httpx.AsyncBaseTransport | None = None,
+                 api_base: str = "https://api.telegram.org", retry_base: float = 1.0) -> None:
         """Store the token, the owner ids, and the polling settings."""
         self._token = token
         self._owner_ids = set(owner_ids)
@@ -103,16 +96,11 @@ class TelegramBody:
         """Perform one say or react action in a Telegram chat."""
         chat_id = action.place.removeprefix("space:tg:")
         if action.kind == "say":
-            await self._call(
-                "sendMessage", chat_id=chat_id, text=action.payload["text"]
-            )
+            await self._call("sendMessage", chat_id=chat_id, text=action.payload["text"])
         elif action.kind == "react":
-            await self._call(
-                "setMessageReaction",
-                chat_id=chat_id,
-                message_id=action.payload["message_id"],
-                reaction=[{"type": "emoji", "emoji": action.payload["emoji"]}],
-            )
+            await self._call("setMessageReaction", chat_id=chat_id,
+                             message_id=action.payload["message_id"],
+                             reaction=[{"type": "emoji", "emoji": action.payload["emoji"]}])
         else:
             raise ValueError(f"Unsupported action kind: {action.kind!r}")
 
@@ -120,21 +108,12 @@ class TelegramBody:
         chat = message["chat"]
         sender_id = (message.get("from") or {}).get("id")
         who = "person:owner" if sender_id in self._owner_ids else f"person:tg:{sender_id}"
-        return Event(
-            id=None,
-            ts=datetime.now(timezone.utc),
-            kind="msg.in",
-            who=who,
-            place=f"space:tg:{chat['id']}",
-            body=self.name,
-            payload={
-                "cursor": update_id,
-                "message_id": message["message_id"],
-                "text": text,
-                "addressed": self._addressed(chat, message, text),
-                "place_kind": "direct" if chat.get("type") == "private" else "group",
-            },
-        )
+        place_kind = "direct" if chat.get("type") == "private" else "group"
+        return Event(id=None, ts=datetime.now(timezone.utc), kind="msg.in", who=who,
+                     place=f"space:tg:{chat['id']}", body=self.name,
+                     payload={"cursor": update_id, "message_id": message["message_id"],
+                              "text": text, "place_kind": place_kind,
+                              "addressed": self._addressed(chat, message, text)})
 
     def _addressed(self, chat: dict[str, Any], message: dict[str, Any], text: str) -> bool:
         if chat.get("type") == "private":
