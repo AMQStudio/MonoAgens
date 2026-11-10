@@ -146,3 +146,32 @@ def test_the_weights_come_from_the_config() -> None:
 
     assert result.score == 5
     assert result.decision == IGNORE
+
+
+def test_a_band_order_that_cannot_work_is_refused() -> None:
+    from monoagens.engine.config import ConfigError
+    from monoagens.engine.config.sections import _addressing_config
+
+    with pytest.raises(ConfigError):
+        _addressing_config({"addressing": {"answer_at": 10, "ignore_below": 90}})
+
+
+def test_thresholds_and_weights_are_read_as_ints() -> None:
+    from monoagens.engine.config.sections import _addressing_config
+
+    loaded = _addressing_config(
+        {
+            "addressing": {
+                "answer_at": "70",
+                "ignore_below": "20",
+                "skepticism": {"strict": "30"},
+                "advanced": {"weights": {"mention_self": "120", "mention_other": "junk"}},
+            }
+        }
+    )
+
+    assert loaded.answer_at == 70
+    assert loaded.ignore_below == 20
+    assert loaded.skepticism.strict == 30
+    assert loaded.advanced.weights.mention_self == 120
+    assert loaded.advanced.weights.mention_other == -80
