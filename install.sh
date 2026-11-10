@@ -62,7 +62,6 @@ websearch=""
 websearch_url=""
 websearch_key_env=""
 approval_mode=""
-natural_confirm=""
 tools=""
 gateways=()
 voice_parts=""
@@ -145,8 +144,6 @@ Usage: bash install.sh [options]
   --websearch-url URL    SearXNG base URL
   --websearch-key-env V  env variable that will hold the search key in .env
   --approval-mode MODE   default, yolo, or strict (the wizard asks when omitted)
-  --natural-confirm      a plain chat reply may confirm an approval (default)
-  --no-natural-confirm   only /approve and /deny decide
   --gateway NAME         enable a discovered gateway (repeatable; catalog: gateway_index())
   --voice-parts LIST     comma-separated voice parts from VoiceConfig (affect, style, ...)
   --voice LIST           alias of --voice-parts
@@ -265,8 +262,6 @@ parse_args() {
             --websearch-url) [[ $# -ge 2 ]] || usage 2 "missing value for --websearch-url"; websearch_url="$2"; shift 2 ;;
             --websearch-key-env) [[ $# -ge 2 ]] || usage 2 "missing value for --websearch-key-env"; websearch_key_env="$2"; shift 2 ;;
             --approval-mode) [[ $# -ge 2 ]] || usage 2 "missing value for --approval-mode"; approval_mode="$2"; shift 2 ;;
-            --natural-confirm) natural_confirm="true"; shift ;;
-            --no-natural-confirm) natural_confirm="false"; shift ;;
             --tools) [[ $# -ge 2 ]] || usage 2 "missing value for --tools"; tools="$2"; shift 2 ;;
             --voice-layer | --voice-layer=*)
                 usage 2 "--voice-layer was retired; each voice part governs itself, so pass --voice-parts affect,style,character,humanize"
@@ -1185,8 +1180,8 @@ run_init() {
         done
         planned="${shown[*]}"
         detail "would run: uv run python -m monoagens $planned"
-        if [[ -n "$approval_mode" || -n "$natural_confirm" || -n "$websearch_key_env" ]]; then
-            detail "would then apply: ${approval_mode:+engine.approval.mode=$approval_mode }${natural_confirm:+engine.approval.natural_confirm=$natural_confirm }${websearch_key_env:+web_search.api_key_env=$websearch_key_env}"
+        if [[ -n "$approval_mode" || -n "$websearch_key_env" ]]; then
+            detail "would then apply: ${approval_mode:+engine.approval.mode=$approval_mode }${websearch_key_env:+web_search.api_key_env=$websearch_key_env}"
         fi
         return 0
     fi
@@ -1225,9 +1220,6 @@ apply_setting() {
 run_post_init_settings() {
     if [[ -n "$approval_mode" ]]; then
         apply_setting engine.approval.mode "$approval_mode"
-    fi
-    if [[ -n "$natural_confirm" ]]; then
-        apply_setting engine.approval.natural_confirm "$natural_confirm"
     fi
     if [[ -n "$websearch_key_env" ]]; then
         apply_setting web_search.api_key_env "$websearch_key_env"

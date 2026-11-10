@@ -54,7 +54,6 @@ class Answers:
     websearch_key: str = ""
     websearch_engine_id: str = ""
     approval_mode: str = ""
-    natural_confirm: bool = True
     tools: tuple[str, ...] | None = None
     gateways: tuple[str, ...] | None = None
 
@@ -286,7 +285,6 @@ def build(  # noqa: C901, PLR0912, PLR0915
     websearch_engine_id: str = "",
     websearch_key_env: str = "",
     approval_mode: str = "",
-    natural_confirm: bool = True,
     tools: tuple[str, ...] | None = None,
     gateways: tuple[str, ...] | None = None,
     base_url: str = "",
@@ -346,7 +344,6 @@ def build(  # noqa: C901, PLR0912, PLR0915
     config = yaml.safe_load(contents["config.yaml"])
     approval = config.setdefault("engine", {}).setdefault("approval", {})
     approval["mode"] = str(approval_mode or "").strip() or "default"
-    approval["natural_confirm"] = bool(natural_confirm)
     search = config["web_search"]
     if key_env:
         search["api_key_env"] = key_env
@@ -539,7 +536,6 @@ def init(
     websearch_engine_id: str = "",
     websearch_key_env: str = "",
     approval_mode: str = "",
-    natural_confirm: bool = True,
     tools: tuple[str, ...] | None = None,
     gateways: tuple[str, ...] | None = None,
     base_url: str = "",
@@ -565,7 +561,6 @@ def init(
         websearch_engine_id=websearch_engine_id,
         websearch_key_env=websearch_key_env,
         approval_mode=approval_mode,
-        natural_confirm=natural_confirm,
         tools=tools,
         gateways=gateways,
         base_url=base_url,

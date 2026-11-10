@@ -5,7 +5,7 @@ messages:
   agent.api_error: "Maaf, model sedang error. Coba lagi sebentar."
   agent.budget_notice: "Aku berhenti di batas panggilan untuk giliran ini. Ini yang sudah kudapat; minta lanjut kalau perlu."
   agent.command_denied: "🔒 Command /{name} tidak diizinkan untuk role {roles}."
-  agent.approval_badge: "🕓 Menunggu: /approve {id} (atau balas saja \"oke, kirim\")."
+  agent.approval_badge: "🕓 Menunggu: /approve {id}."
   agent.cross_chat_blocked: "Aku nggak bisa kutip isi room lain. Kalau perlu, aku ringkas tanpa detail."
   agent.cross_room_blocked: "Aku nggak akan menyalin isi itu ke room lain; itu kutipan percakapan di sini. Ringkas dulu tanpa detail."
   agent.empty_reply: "(kosong)"

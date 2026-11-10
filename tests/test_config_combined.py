@@ -248,3 +248,19 @@ def test_speech_provider_names_are_validated_at_load(tmp_path, monkeypatch) -> N
 
     with pytest.raises(ConfigError, match=r"engine\.speech\.tts\.provider 'acme'"):
         load_config(tmp_path / "config.yaml", require_key=False)
+
+
+def test_a_removed_approval_key_is_ignored_with_one_warning(tmp_path, monkeypatch, caplog) -> None:
+    """ADR-0013 §4.5: an older operator file may still carry the keyword-confirmation switch."""
+    monkeypatch.setenv("MONOAGENS_TEST_KEY", "x")
+    body = yaml.safe_load(yaml.safe_dump(BASE))
+    body["engine"]["approval"] = {"mode": "strict", "natural_confirm": True}
+    write_folder(tmp_path, config=body)
+
+    with caplog.at_level("WARNING", logger="monoagens.engine.config.load_config"):
+        config = load_config(tmp_path / "config.yaml", require_key=False)
+
+    assert config.approval.mode == "strict"
+    assert not hasattr(config.approval, "natural_confirm")
+    warnings = [item for item in caplog.records if "natural_confirm" in item.message]
+    assert len(warnings) == 1

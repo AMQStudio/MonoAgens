@@ -1,8 +1,8 @@
-"""Approval contract: origin-tracked exit door, three tiers, and natural confirmation.
+"""Approval contract: origin-tracked exit door, three tiers, and structured decisions.
 
 ADR-0004 §4.2 / ADR-0006 §4.5: every outbound action names the room it was asked in, the
-approval rows carry that origin plus their action/batch ids, and a plain chat reply can confirm
-a staged action without the model deciding whether to run it.
+approval rows carry that origin plus their action/batch ids, and only a control or a typed
+command decides a staged action.
 """
 
 
@@ -20,7 +20,6 @@ from monoagens.engine.guard import ActionRequest, ApprovalPolicy
 from monoagens.engine.i18n import t
 from monoagens.engine.inbound import Action, Address, SendRefused
 from monoagens.engine.registry import Handler
-from monoagens.engine.stores.turns import turn_identity
 from monoagens.engine.tools import REGISTRY as TOOLS
 from monoagens.engine.tools import execute
 from monoagens.engine.turn.delivery import bind_origin, reset_origin
@@ -488,40 +487,26 @@ def test_strict_mode_allows_an_origin_reply_and_parks_a_tool_call(tmp_path) -> N
     assert env.agent.approvals.count_pending() == 1
 
 
-# -------------------------------------------------- natural confirmation
+# ------------------------------------------------ no keyword confirmation
 
 
-def test_natural_confirmation_runs_the_parked_action_and_completes(tmp_path) -> None:
+def test_a_short_yes_does_not_decide_a_pending_row(tmp_path) -> None:
     llm = SendToolLLM()
     env = send_env(tmp_path, llm=llm)
 
     handle(env, inbound_message("kirim ringkasan ke grup lain", thread=DM, message_id="t1"))
-
-    rows = env.agent.approvals.pending(DM, person_of(env))
-    assert len(rows) == 1
-    row = rows[0]
-    assert row.status == "pending"
-    assert row.tool == "send_to"
-    assert row.origin_thread == DM
-    assert [chat for chat, _text, _reply in env.gateway.sent] == [DM]
-    assert "pending approval" in llm.tool_results[0]
+    row = env.agent.approvals.pending(DM, person_of(env))[0]
 
     handle(env, inbound_message("Ok, send it", thread=DM, message_id="t2"))
 
-    assert env.agent.approvals.get(row.id).status == "approved"
-    delivered = [(chat, text) for chat, text, _ in env.gateway.sent]
-    assert (OTHER, "ringkasan") in delivered
-    assert (
-        env.agent.turns.get(turn_identity(env.gateway.name, DM, "t2"))["status"]
-        == "delivered"
-    )
+    assert env.agent.approvals.get(row.id).status == "pending"
+    assert all(chat != OTHER for chat, _text, _reply in env.gateway.sent)
     block = str(llm.contents[-1])
     assert '"type": "pending_approval"' in block
-    assert '"status": "approved"' in block
-    assert "Sudah kukirim, beres." in env.gateway.sent[-1][1]
+    assert '"status": "waiting"' in block
 
 
-def test_natural_confirmation_cancels_on_reject(tmp_path) -> None:
+def test_a_reject_word_does_not_cancel_a_pending_row(tmp_path) -> None:
     llm = SendToolLLM()
     env = send_env(tmp_path, llm=llm)
 
@@ -530,63 +515,7 @@ def test_natural_confirmation_cancels_on_reject(tmp_path) -> None:
 
     handle(env, inbound_message("cancel it", thread=DM, message_id="r2"))
 
-    assert env.agent.approvals.get(row.id).status == "denied"
-    assert all(chat != OTHER for chat, _text, _reply in env.gateway.sent)
-    assert '"status": "cancelled"' in str(llm.contents[-1])
-
-
-def test_natural_modification_supersedes_and_stages_the_update(tmp_path) -> None:
-    llm = SendToolLLM()
-    env = send_env(tmp_path, llm=llm)
-
-    handle(env, inbound_message("kirim ringkasan ke grup lain", thread=DM, message_id="m1"))
-    old = env.agent.approvals.pending(DM, person_of(env))[0]
-
-    handle(
-        env,
-        inbound_message("change the message to the short version", thread=DM, message_id="m2"),
-    )
-
-    assert env.agent.approvals.get(old.id).status == "superseded"
-    pending = env.agent.approvals.pending(DM, person_of(env))
-    assert len(pending) == 1
-    replacement = pending[0]
-    assert replacement.id != old.id
-    assert replacement.status == "pending"
-    assert replacement.scope_proof
-    assert replacement.batch_id != old.batch_id
-    assert replacement.args["text"] == "versi pendek"
-    assert all(text != "ringkasan" for _chat, text, _reply in env.gateway.sent)
-
-
-def test_two_staged_sends_share_a_batch_and_both_run_on_confirm(tmp_path) -> None:
-    env = send_env(tmp_path, llm=FakeLLM())
-    sender = person_of(env)
-    for index, text in enumerate(("satu", "dua")):
-        asyncio.run(
-            env.agent.dispatch(
-                sender,
-                Address("fake", OTHER),
-                send_action(text, action_id=f"batch-{index}"),
-                origin=Address("fake", DM),
-                reason="kirim",
-            )
-        )
-    one = env.agent.approvals.find_action("batch-0")
-    two = env.agent.approvals.find_action("batch-1")
-    assert one is not None
-    assert two is not None
-    assert one.batch_id == two.batch_id
-    assert [row.id for row in env.agent.approvals.pending(DM, sender)] == [one.id, two.id]
-
-    handle(env, inbound_message("yes, go ahead", thread=DM, message_id="b2"))
-
-    assert env.agent.approvals.get(one.id).status == "approved"
-    assert env.agent.approvals.get(two.id).status == "approved"
-    assert [(chat, text) for chat, text, _ in env.gateway.sent if chat == OTHER] == [
-        (OTHER, "satu"),
-        (OTHER, "dua"),
-    ]
+    assert env.agent.approvals.get(row.id).status == "pending"
 
 
 def test_an_unrelated_message_leaves_the_staged_send_waiting(tmp_path) -> None:
@@ -605,15 +534,15 @@ def test_an_unrelated_message_leaves_the_staged_send_waiting(tmp_path) -> None:
     )
 
 
-def test_pending_badge_lists_the_new_approval(tmp_path) -> None:
+def test_the_parked_approval_rides_the_reply_as_data(tmp_path) -> None:
     llm = SendToolLLM()
     env = send_env(tmp_path, llm=llm)
 
     handle(env, inbound_message("kirim ringkasan ke grup lain", thread=DM, message_id="g1"))
 
     row = env.agent.approvals.pending(DM, person_of(env))[0]
-    text = env.gateway.sent[-1][1]
-    assert f"/approve {row.id}" in text
+    reply = [action for action in env.gateway.dispatched if action.capability == "send_text"][-1]
+    assert reply.meta["ui"] == {"kind": "approval", "approval_id": row.id}
 
 
 def test_a_modified_action_is_not_json_serialized_twice(tmp_path) -> None:
@@ -622,38 +551,9 @@ def test_a_modified_action_is_not_json_serialized_twice(tmp_path) -> None:
     env = send_env(tmp_path, llm=llm)
 
     handle(env, inbound_message("kirim ringkasan ke grup lain", thread=DM, message_id="j1"))
-    handle(env, inbound_message("yes", thread=DM, message_id="j2"))
+    handle(env, inbound_message("nanti aku cek sendiri ya", thread=DM, message_id="j2"))
 
     block = str(llm.contents[-1]).split("## Tool result: pending_approval\n", 1)[-1]
     payload = json.loads(block.split("\n\nThread ", 1)[0])
     assert payload["type"] == "pending_approval"
-    assert payload["status"] == "approved"
-
-
-def test_confirmation_classifier_reads_only_short_answers() -> None:
-    from monoagens.engine.turn.confirmations import confirmation_intent
-
-    assert confirmation_intent("Ok, send it", "id") == "confirm"
-    assert confirmation_intent("yes", "id") == "confirm"
-    assert confirmation_intent("go ahead", "id") == "confirm"
-    assert confirmation_intent("continue", "id") == "confirm"
-    assert confirmation_intent("cancel", "id") == "reject"
-    assert confirmation_intent("do not send", "id") == ""
-    assert confirmation_intent("Change the message to the short version", "id") == "modify"
-    assert confirmation_intent("I will check later", "id") == ""
-    assert confirmation_intent("please explain the project architecture", "id") == ""
-    assert confirmation_intent("", "id") == ""
-
-
-def test_confirmation_cues_are_english_and_cover_short_answers() -> None:
-    from monoagens.engine.turn.confirmations import _cues, confirmation_intent
-
-    confirm, reject, modify, filler = _cues("id")
-
-    assert "yes" in confirm
-    assert "no" in reject
-    assert "change" in modify
-    assert "go" in filler
-    assert confirmation_intent("yes", "id") == "confirm"
-    assert confirmation_intent("no", "id") == "reject"
-    assert confirmation_intent("change it", "id") == "modify"
+    assert payload["status"] == "waiting"

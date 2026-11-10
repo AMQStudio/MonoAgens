@@ -154,6 +154,18 @@ def load_config(
         raise ConfigError(
             "engine.llm.temperature moved to soul.voice.sampling (daily/professional)"
         )
+    if "natural_confirm" in _section(engine, "approval"):
+        # ADR-0013 §4.5: keyword confirmation is gone; an operator file may still carry the key.
+        log.warning(
+            "engine.approval.natural_confirm was removed and is ignored: only controls and "
+            "typed commands decide"
+        )
+        engine = dict(engine)
+        engine["approval"] = {
+            key: value
+            for key, value in _section(engine, "approval").items()
+            if key != "natural_confirm"
+        }
     _unknown_keys(engine, ENGINE_SCHEMA, "engine", paths.config)
     llm = _llm_config(
         _section(engine, "llm"), require_key=require_key, require_model=require_model
@@ -279,7 +291,6 @@ def load_config(
             consent_max_per_hour=_clamped(
                 approval_raw.get("consent_max_per_hour"), 20, 0, 1000
             ),
-            natural_confirm=_bool(approval_raw.get("natural_confirm"), True),
             confirm_cross_gateway=_bool(approval_raw.get("confirm_cross_gateway"), True),
             confirm_tasks=_bool(approval_raw.get("confirm_tasks"), True),
         ),

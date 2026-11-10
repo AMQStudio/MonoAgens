@@ -5,7 +5,7 @@ messages:
   agent.api_error: "Sorry, the model is erroring. Try again in a moment."
   agent.budget_notice: "I stopped at the call limit for this turn. Here is what I have so far; ask me to continue if you need more."
   agent.command_denied: "🔒 Command /{name} is not allowed for role {roles}."
-  agent.approval_badge: "🕓 Waiting: /approve {id} (or just reply \"ok, send\")."
+  agent.approval_badge: "🕓 Waiting: /approve {id}."
   agent.cross_chat_blocked: "I can't quote another room. I can summarize without details."
   agent.cross_room_blocked: "I won't copy that content into another room; it quotes the conversation here. Rewrite it as a summary first."
   agent.empty_reply: "(empty)"

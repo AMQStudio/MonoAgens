@@ -851,12 +851,12 @@ def test_the_voice_and_web_search_aliases_reach_init(tmp_path):
 MONOAGENS_INSTALL_SOURCED=1
 source "$1/install.sh"
 set -- --voice affect,style --web-search brave --approval-mode strict \
-    --natural-confirm --websearch-key-env BRAVE_TOKEN --gateway whatsapp
+    --websearch-key-env BRAVE_TOKEN --gateway whatsapp
 parse_args "$@"
 build_init_args
 printf '%s\n' "${INIT_ARGS[@]}"
-printf 'approval=%s natural=%s\\n' "$approval_mode" "$natural_confirm"
-printf 'key-env=%s\\n' "$websearch_key_env"
+printf 'approval=%s\n' "$approval_mode"
+printf 'key-env=%s\n' "$websearch_key_env"
 """
     result = subprocess.run(
         ["bash", "-c", code, "_", str(ROOT)],
@@ -869,7 +869,7 @@ printf 'key-env=%s\\n' "$websearch_key_env"
 
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
-    assert lines[-2:] == ["approval=strict natural=true", "key-env=BRAVE_TOKEN"]
+    assert lines[-2:] == ["approval=strict", "key-env=BRAVE_TOKEN"]
     assert lines[lines.index("--websearch") + 1] == "brave"
     assert lines[lines.index("--voice-parts") + 1] == "affect,style"
     assert lines[lines.index("--gateway") + 1] == "whatsapp"

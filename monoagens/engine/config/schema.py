@@ -171,7 +171,6 @@ ENGINE_SCHEMA: dict[str, object] = {
         "settings": None,
         "ttl_seconds": None,
         "consent_max_per_hour": None,
-        "natural_confirm": None,
         "confirm_cross_gateway": None,
         "confirm_tasks": None,
     },

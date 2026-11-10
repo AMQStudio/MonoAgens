@@ -1,62 +1,29 @@
-"""Natural confirmation for staged actions (ADR-0006 §4.5), kept out of the state machine."""
+"""Staged approvals as a structured tool result and a requirement block (ADR-0013 §4.4-4.5)."""
 
 from typing import TYPE_CHECKING
 
 from .. import io
-from .confirmations import confirmation_intent, pending_result
+from .confirmations import pending_result
 
 if TYPE_CHECKING:
     from .runtime import TurnRuntime
     from .state import TurnState
 
 class ApprovalFlow:
-    """Confirm, reject, or supersede staged actions before the model decides."""
+    """Report staged approvals as data; a reply word never decides one."""
 
     runtime: TurnRuntime
 
-    async def _resume_approvals(self, state: TurnState) -> str:
-        """Natural confirmation before the decision (ADR-0006 §4.5).
+    async def _pending_block(self, state: TurnState) -> str:
+        """The structured `pending_approval` block while rows wait for this person.
 
-        The reply is classified, then the staged rows are decided in Python: a confirm
-        re-verifies `scope_proof` and RBAC and runs them, a reject cancels them, and a modify
-        supersedes them so the model stages the updated action in this same turn.
+        ADR-0013 §4.5: the model reads the state and asks the person to use the control; it
+        never decides the row, and no reply word stands in for the control.
         """
-        runtime = self.runtime
-        if not runtime.config.approval.natural_confirm:
-            return ""
-        sender = state.sender_id
-        rows = await io.run(runtime.approvals.pending, state.thread_id, sender)
-        if not rows:
-            return ""
-        intent = confirmation_intent(
-            state.message.text, self.runtime.soul.language
+        rows = await io.run(
+            self.runtime.approvals.pending, state.thread_id, state.sender_id
         )
-        if not intent:
-            return pending_result(rows, "waiting")
-        selected = await io.run(runtime.approvals.batch, state.thread_id, sender) or rows
-        if intent == "reject":
-            for row in selected:
-                await io.run(runtime.approvals.mark, row.id, "denied", sender, "natural reject")
-            return pending_result(selected, "cancelled")
-        if intent == "modify":
-            await io.run(
-                runtime.approvals.supersede,
-                [row.id for row in selected],
-                sender,
-                "natural modify",
-            )
-            return pending_result(selected, "superseded")
-        receipts: dict[int, str] = {}
-        for row in selected:
-            text, _ran = await runtime.approve(
-                row,
-                sender=sender,
-                roles=state.role_policy,
-                gateway=state.gateway,
-                thread_id=state.thread_id,
-            )
-            receipts[row.id] = text
-        return pending_result(selected, "approved", receipts)
+        return pending_result(rows, "waiting") if rows else ""
 
     async def _parked_ui(
         self, thread_id: str, sender: str, since: float

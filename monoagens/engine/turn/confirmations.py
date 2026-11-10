@@ -1,54 +1,14 @@
-"""Confirmation vocabulary and the staged-approval payload helpers (ADR-0006 §4.5)."""
+"""The staged-approval payload the model reads (ADR-0013 §4.5).
+
+Keyword confirmation is gone: a pending row is reported with status `waiting` so the model can
+tell the person to use the control, and only a control or a typed command decides it.
+"""
 
 
 import json
 from collections.abc import Mapping
 
-from ..character import lexicon
-from .words import words
-
 PENDING_HEADER = "## Tool result: pending_approval"
-CONFIRM_MAX_WORDS = 12
-CONFIRM_MAX_CHARS = 160
-
-
-def _cues(
-    language: str,
-) -> tuple[frozenset[str], frozenset[str], frozenset[str], frozenset[str]]:
-    """The pack's confirmation vocabulary plus the universal English safety net."""
-    pack = lexicon.load(language)
-    english = lexicon.load("en")
-    return (
-        frozenset(pack.confirm) | frozenset(english.confirm),
-        frozenset(pack.reject) | frozenset(english.reject),
-        frozenset(pack.modify) | frozenset(english.modify),
-        frozenset(pack.filler) | frozenset(english.filler),
-    )
-
-
-def confirmation_intent(text: object, language: str = "") -> str:
-    """`confirm`, `reject`, `modify`, or "" for a short reply to a staged action.
-
-    ADR-0006 §4.5: the classifier only reads a short answer whose first word (or whose whole
-    body) is a confirmation cue; a longer message is a new request, not a decision. The cues
-    are language data from the pack, never a literal in this module.
-    """
-    body = " ".join(str(text or "").strip().split())
-    if not body or len(body) > CONFIRM_MAX_CHARS:
-        return ""
-    tokens = words(body)
-    if not tokens or len(tokens) > CONFIRM_MAX_WORDS:
-        return ""
-    confirm, reject, modify, filler = _cues(language)
-    if tokens[0] in reject:
-        return "reject"
-    if tokens[0] in modify:
-        return "modify"
-    if all(word in confirm | filler for word in tokens):
-        return "confirm"
-    if tokens[0] in confirm:
-        return "confirm"
-    return ""
 
 
 def pending_result(

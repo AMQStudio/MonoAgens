@@ -791,7 +791,6 @@ COMMENTS: dict[str, str] = {
     "engine.memory.retention.purge.batch": "Rows removed per run. Default: 500.",
     "engine.approval": "Approval policy for sensitive commands and settings.",
     "engine.approval.mode": "default, yolo, or strict. Default: yolo.",
-    "engine.approval.natural_confirm": "Ask in chat and accept a natural yes/no. Default: true.",
     "engine.approval.confirm_cross_gateway": (
         "Ask before a cross-room or cross-gateway send. Default: true."
     ),

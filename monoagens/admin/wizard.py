@@ -388,22 +388,6 @@ def _ask_approval(state: Answers, stdin: TextIO, stdout: TextIO, color: bool = F
         plain=not color,
     )
     state.approval_mode = modes[picked].value
-    natural = terminal.choose(
-        stdin=stdin,
-        stdout=stdout,
-        title="accept a plain chat reply as the confirmation?",
-        choices=[
-            terminal.Choice("yes", "a natural yes/no stands in for /approve", "yes"),
-            terminal.Choice("no", "only /approve and /deny decide", "no"),
-        ],
-        default=0 if state.natural_confirm else 1,
-        header=_menu_header(STEP_INDEX["approval"], color),
-        searchable=False,
-        allow_back=True,
-        color=color,
-        plain=not color,
-    )
-    state.natural_confirm = natural == 0
 
 
 def _ask_voice(state: Answers, stdin: TextIO, stdout: TextIO, color: bool = False) -> None:
@@ -518,8 +502,6 @@ def review_lines(
                     f"      web_search.api_key_env  "
                     f"{config['web_search']['api_key_env'] or '(no key)'}",
                     f"      engine.approval.mode    {config['engine']['approval']['mode']}",
-                    "      engine.approval.natural_confirm  "
-                    f"{config['engine']['approval']['natural_confirm']}",
                     f"      engine.research.mode    {config['engine']['research']['mode']}",
                     f"      gateways                {', '.join(config['gateways']) or '(none)'}",
                     f"      engine.default_role     {config['engine']['default_role']}",
@@ -680,7 +662,6 @@ def _interactive(  # noqa: C901
                 websearch_key=answers.websearch_key,
                 websearch_engine_id=answers.websearch_engine_id,
                 approval_mode=answers.approval_mode,
-                natural_confirm=answers.natural_confirm,
                 tools=answers.tools,
                 gateways=answers.gateways,
             )
@@ -720,7 +701,6 @@ def wizard(
     websearch_key: str | None = None,
     websearch_engine_id: str | None = None,
     approval_mode: str | None = None,
-    natural_confirm: bool | None = None,
     tools: tuple[str, ...] | None = None,
     gateways: tuple[str, ...] | None = None,
     voice_parts: tuple[str, ...] | None = None,
@@ -751,7 +731,6 @@ def wizard(
         websearch_key=websearch_key or "",
         websearch_engine_id=websearch_engine_id or "",
         approval_mode=approval_mode or "",
-        natural_confirm=True if natural_confirm is None else natural_confirm,
         tools=tools,
         gateways=gateways,
         voice_parts=voice_parts,
@@ -771,7 +750,7 @@ def wizard(
         locked.add(STEP_INDEX["identity"])
     if websearch is not None:
         locked.add(STEP_INDEX["web search"])
-    if approval_mode is not None or natural_confirm is not None:
+    if approval_mode is not None:
         locked.add(STEP_INDEX["approval"])
     if voice_layer is not None or voice_parts is not None:
         answers.voice_parts = voice_selection(voice_layer, voice_parts)

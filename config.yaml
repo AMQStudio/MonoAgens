@@ -442,8 +442,6 @@ engine:
     ttl_seconds: 900
     # Self-confirmation anti-spam cap. Default: 20.
     consent_max_per_hour: 20
-    # Ask in chat and accept a natural yes/no. Default: true.
-    natural_confirm: true
     # Ask before a cross-room or cross-gateway send. Default: true.
     confirm_cross_gateway: true
     # Ask before creating a durable task. Default: true.

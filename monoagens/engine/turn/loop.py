@@ -184,7 +184,7 @@ class TurnRunner(ApprovalFlow, ResearchFlow, TurnReview):
                     return actions
                 approval_block = ""
                 if not is_command and not resuming:
-                    approval_block = await self._resume_approvals(state)
+                    approval_block = await self._pending_block(state)
                 head_word, _, rest = body[1:].partition(" ") if is_command else ("", "", "")
                 name = command_name(head_word)
                 direct = (

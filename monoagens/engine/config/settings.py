@@ -169,7 +169,6 @@ APPROVAL_MODES = ("default", "yolo", "strict")
 class ApprovalConfig:
     """Tiered approval gate; `default` pauses state changes, `yolo` trusts ordinary tools.
 
-    `natural_confirm` lets a plain chat reply ("oke, kirim") stand in for `/approve <id>`;
     `confirm_cross_gateway` and `confirm_tasks` keep the two wide-reaching actions staged even
     when the tier would otherwise run them.
     """
@@ -179,7 +178,6 @@ class ApprovalConfig:
     settings: bool = True
     ttl_seconds: int = 900
     consent_max_per_hour: int = 20  # self-confirmation anti-spam, not a permission grant
-    natural_confirm: bool = True
     confirm_cross_gateway: bool = True
     confirm_tasks: bool = True
 

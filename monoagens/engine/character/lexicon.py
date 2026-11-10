@@ -30,8 +30,7 @@ LIST_KEYS = (
     "research_high_stakes",
     "research_challenge",
 )
-# ADR-0006 §4.5: the conversational confirmation vocabulary is data, never a literal.
-OPTIONAL_LIST_KEYS = ("confirm", "reject", "modify", "filler", "possessives")
+OPTIONAL_LIST_KEYS = ("possessives",)
 
 # English-only universal baseline. A custom pack may override these lists for one code.
 _BASELINE: dict[str, object] = {
@@ -180,10 +179,6 @@ _BASELINE: dict[str, object] = {
         "address",
         "contact",
     ),
-    "confirm": ("yes", "ok", "okay", "send", "proceed", "go", "sure", "continue", "approve"),
-    "reject": ("no", "cancel", "stop", "nope", "abort", "deny"),
-    "modify": ("change", "edit", "instead", "revise", "correct"),
-    "filler": ("please", "now", "just", "then", "go", "ahead"),
     "possessives": (),
 }
 
@@ -205,10 +200,6 @@ class Lexicon:
     research_source: frozenset[str] = frozenset()
     research_high_stakes: frozenset[str] = frozenset()
     research_challenge: frozenset[str] = frozenset()
-    confirm: frozenset[str] = frozenset()
-    reject: frozenset[str] = frozenset()
-    modify: frozenset[str] = frozenset()
-    filler: frozenset[str] = frozenset()
     possessives: frozenset[str] = frozenset()
     privacy_levels: Mapping[str, int] = field(default_factory=dict)
     ok: bool = True
@@ -292,10 +283,6 @@ def _baseline(code: str) -> Lexicon:
         research_source=lists["research_source"],
         research_high_stakes=lists["research_high_stakes"],
         research_challenge=lists["research_challenge"],
-        confirm=extra["confirm"],
-        reject=extra["reject"],
-        modify=extra["modify"],
-        filler=extra["filler"],
         possessives=extra["possessives"],
         privacy_levels=_levels(_BASELINE.get("privacy_levels")),
     )
@@ -325,10 +312,6 @@ def _pack(code: str, body: object) -> Lexicon:
         research_source=lists["research_source"],
         research_high_stakes=lists["research_high_stakes"],
         research_challenge=lists["research_challenge"],
-        confirm=extra["confirm"],
-        reject=extra["reject"],
-        modify=extra["modify"],
-        filler=extra["filler"],
         possessives=extra["possessives"],
         privacy_levels=levels,
     )

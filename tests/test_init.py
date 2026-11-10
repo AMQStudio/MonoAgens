@@ -62,7 +62,6 @@ def scripted(
     search_url: str = "",
     search_engine: str = "",
     approval: str = "default",
-    natural: str = "yes",
     voice: str = "1 2",
     gateways: str = "",
     tools: str = "",
@@ -76,7 +75,7 @@ def scripted(
         lines.append(search_key)
         if websearch == "google":
             lines.append(search_engine)
-    lines.extend([approval, natural, voice, gateways, tools, review])
+    lines.extend([approval, voice, gateways, tools, review])
     return "\n".join(lines) + "\n"
 
 
@@ -214,7 +213,6 @@ def test_a_non_interactive_cli_run_writes_into_dir_with_every_flag(tmp_path, cap
     assert "affect" not in config["engine"]
     assert "character" not in config["engine"]
     assert config["engine"]["approval"]["mode"] == "default"
-    assert config["engine"]["approval"]["natural_confirm"] is True
     soul = yaml.safe_load((tmp_path / "soul.yaml").read_text(encoding="utf-8"))
     assert "enabled" not in soul["voice"]
     assert soul["voice"]["affect"]["enabled"] is True
@@ -234,7 +232,6 @@ def test_the_wizard_shows_the_rail_and_the_review_then_writes(tmp_path, monkeypa
         websearch="tavily",
         search_key="tvly-SEARCH",
         approval="strict",
-        natural="no",
         gateways=str(rail.index("whatsapp") + 1),
     )
     stdin = Tty(answer)
@@ -264,7 +261,6 @@ def test_the_wizard_shows_the_rail_and_the_review_then_writes(tmp_path, monkeypa
     assert config["web_search"]["provider"] == "tavily"
     assert config["web_search"]["api_key_env"] == "TAVILY_API_KEY"
     assert config["engine"]["approval"]["mode"] == "strict"
-    assert config["engine"]["approval"]["natural_confirm"] is False
     assert config["gateways"]["whatsapp"]["enabled"] is True
     soul = yaml.safe_load((tmp_path / "soul.yaml").read_text(encoding="utf-8"))
     assert "enabled" not in soul["voice"]
@@ -534,7 +530,6 @@ def test_the_review_comes_from_the_templates_plus_answers():
         database_url="postgresql+psycopg://u:secret@h/db",
         voice_parts=("affect",),
         approval_mode="yolo",
-        natural_confirm=False,
     )
 
     assert set(contents) == set(
@@ -544,7 +539,6 @@ def test_the_review_comes_from_the_templates_plus_answers():
     assert "character" not in config["engine"]
     assert "affect" not in config["engine"]
     assert config["engine"]["approval"]["mode"] == "yolo"
-    assert config["engine"]["approval"]["natural_confirm"] is False
     soul = yaml.safe_load(contents["soul.yaml"])
     assert "enabled" not in soul["voice"]
     assert soul["voice"]["affect"]["enabled"] is True
