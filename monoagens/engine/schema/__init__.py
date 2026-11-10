@@ -33,6 +33,9 @@ from .cognition import EPISODE_SIGNALS as EPISODE_SIGNALS
 from .cognition import EPISODE_STATUSES as EPISODE_STATUSES
 from .cognition import cognition_jobs as cognition_jobs
 from .cognition import episodes as episodes
+from .flows import FLOW_STATUSES as FLOW_STATUSES
+from .flows import FLOW_TERMINAL as FLOW_TERMINAL
+from .flows import flows as flows
 from .memory import READABLE_VIEW as READABLE_VIEW
 from .memory import READABLE_VIEW_SQL as READABLE_VIEW_SQL
 from .memory import memories as memories
@@ -72,6 +75,8 @@ __all__ = [
     "COGNITION_STATUSES",
     "EPISODE_SIGNALS",
     "EPISODE_STATUSES",
+    "FLOW_STATUSES",
+    "FLOW_TERMINAL",
     "MEMORY_DIM",
     "MEMORY_TSV",
     "READABLE_VIEW",
@@ -94,6 +99,7 @@ __all__ = [
     "engine_control",
     "engine_lease",
     "episodes",
+    "flows",
     "llm_calls",
     "memories",
     "memories_readable",

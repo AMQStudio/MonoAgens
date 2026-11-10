@@ -354,3 +354,76 @@ def test_downgrade_to_0024_then_upgrade_restores_the_envelope(fresh_database) ->
             assert name in columns, name
     finally:
         db.dispose()
+
+
+def test_revision_0026_creates_the_flows_table(fresh_database) -> None:
+    """ADR-0013 §4.3: one row per flow, with the claim columns the runner needs."""
+    db = Database(fresh_database)
+    try:
+        db.upgrade()
+        columns = {
+            column["name"]: column for column in inspect(db.engine).get_columns("flows")
+        }
+        expected = {
+            "owner": (False, None),
+            "name": (False, None),
+            "requester": (False, None),
+            "thread_id": (False, "''"),
+            "gateway": (False, "''"),
+            "step": (False, "''"),
+            "state": (False, "'{}'::jsonb"),
+            "awaiting": (True, None),
+            "deciders": (False, "'[]'::jsonb"),
+            "status": (False, "'running'"),
+            "result": (False, "''"),
+            "expires_at": (True, None),
+            "claimed_by": (False, "''"),
+            "lease_until": (False, "0"),
+            "generation": (False, "0"),
+            "attempts": (False, "0"),
+        }
+        for name, (nullable, default) in expected.items():
+            assert name in columns, name
+            assert columns[name]["nullable"] is nullable, name
+            if default is not None:
+                assert default in str(columns[name]["default"]), name
+        assert columns["expires_at"]["default"] is None
+        checks = {check["name"] for check in inspect(db.engine).get_check_constraints("flows")}
+        assert "ck_flows_status" in checks
+        indexes = {index["name"] for index in inspect(db.engine).get_indexes("flows")}
+        assert {"ix_flows_claim", "ix_flows_person"} <= indexes
+        assert SCHEMA_VERSION >= 26
+    finally:
+        db.dispose()
+
+
+def test_revision_0026_rejects_an_unknown_flow_status(fresh_database) -> None:
+    db = Database(fresh_database)
+    try:
+        db.upgrade()
+        with db.connect() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO flows (owner, name, requester, status, created_at, updated_at) "
+                    "VALUES ('core', 'core/demo', 'p1', 'bogus', 1.0, 1.0)"
+                )
+            )
+    except IntegrityError:
+        pass
+    else:  # pragma: no cover - the check must refuse the row
+        raise AssertionError("an unknown flow status must violate the check")
+    finally:
+        db.dispose()
+
+
+def test_downgrade_to_0025_then_upgrade_restores_the_flows_table(fresh_database) -> None:
+    db = Database(fresh_database)
+    try:
+        db.upgrade()
+        _run_alembic(db, "0025")
+        assert "flows" not in inspect(db.engine).get_table_names()
+
+        assert db.upgrade() == SCHEMA_VERSION
+        assert "flows" in inspect(db.engine).get_table_names()
+    finally:
+        db.dispose()

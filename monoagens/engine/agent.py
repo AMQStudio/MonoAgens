@@ -27,6 +27,7 @@ from .commands import REGISTRY as CORE_COMMANDS
 from .commands import CommandContext
 from .commands.approve import run_approval
 from .config import Config
+from .flows.store import FlowStore
 from .guard import SafetyDecision, SafetyPolicy, SandboxGuard, build_safety
 from .guard.policy import (
     ActionRequest,
@@ -128,6 +129,8 @@ class Agent(DeliveryFacade, CrossRoomGuard):
         self.documents = documents
         self.identity = identity or IdentityStore(db, roles=self.config.roles)
         self.approvals = approvals or ApprovalStore(db, config.approval)
+        # ADR-0013 §4.3: the flow runner's own table; fenced exactly like the other stores.
+        self.flows_store = FlowStore(db)
         self.access_notices = AccessNoticeLimiter(config.access.access_notice_hours)
         self.safety = safety or build_safety(config.approval)
         self.sandbox_guard = SandboxGuard(

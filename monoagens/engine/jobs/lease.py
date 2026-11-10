@@ -294,6 +294,9 @@ class Lease:
             "approvals",
             "recipes",
             "outbox",
+            # ADR-0013 §4.3: the flow runner and its store share one fence.
+            "flows",
+            "flows_store",
         ):
             bind = getattr(getattr(agent, name, None), "bind_lease", None)
             if callable(bind):
