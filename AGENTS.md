@@ -15,6 +15,14 @@ from `PLAN.md`.
 - Architecture and design documents (`DESIGN.md`, `PLAN.md`, this file) are owned by the
   architect. Workers may only tick steps in PLAN.md and never edit design decisions.
 
+## Secrets (never break this)
+- Never read, print, cat, grep, copy, or summarize `.env` or any file holding secrets.
+  This applies to the coordinator and to every worker.
+- To learn which variables exist, read `.env.example`. To check that a variable is set,
+  test for its presence only (e.g. `test -n "$LLM_API_KEY"`), never print its value.
+- Never put a secret in a command line, a log, a test, a commit, a report, or a prompt.
+- If a secret is exposed anyway, stop and tell the owner which one, so it can be rotated.
+
 ## How to work
 - One session = one PLAN.md step = one commit.
 - Do not start the next step. Do not add features that were not asked for.
