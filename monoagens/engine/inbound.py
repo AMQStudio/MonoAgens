@@ -16,6 +16,8 @@ a hint the body cannot supply. The known keys:
 
 * `dm` — the thread is a direct conversation.
 * `mention` — this turn was addressed by an explicit mention.
+* `mentions` — the person ids the message mentions, other than the Soul (ADR-0012 §4.7); absent
+  or empty when the body cannot parse ids.
 * `reply` — this turn replies to one of the body's own messages.
 * `group` — the thread has more than two participants.
 * `presence` — the body observed activity without a message.

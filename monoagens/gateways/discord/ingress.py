@@ -65,6 +65,18 @@ def _mentions_bot(payload: Mapping, self_id: str) -> bool:
     return False
 
 
+def _mentioned_persons(payload: Mapping, self_id: str) -> list[str]:
+    """The person ids the payload mentions, other than the Soul (ADR-0012 §4.7)."""
+    found: list[str] = []
+    for item in payload.get("mentions") or ():
+        if not isinstance(item, Mapping):
+            continue
+        person = str(item.get("id") or "")
+        if person and person != str(self_id) and person not in found:
+            found.append(person)
+    return found
+
+
 def _reply(payload: Mapping, self_id: str) -> tuple[bool, str]:
     """(replies to the bot, quoted message id) from the reference the transport flattened."""
     reference = payload.get("reference")
@@ -108,6 +120,7 @@ def message_percept(payload: Mapping, *, self_id: str = "") -> Percept | None:
             "group": group,
             "thread": bool(payload.get("thread_id")),
             "mention": _mentions_bot(payload, self_id),
+            "mentions": _mentioned_persons(payload, self_id),
             "reply": replied,
             "self": bool(author.get("bot")),
             "quote": quote_id,

@@ -5,6 +5,7 @@ here, so this module never imports `slack_bolt` and its rules are testable witho
 """
 
 
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,6 +15,8 @@ from ...engine.turn.context import AUTHOR_BOT, AUTHOR_UNKNOWN, Media, Message
 
 COMPONENT_PREFIX = "cmd:"
 SUBTYPE_EDIT = "message_changed"
+# The transport's user mention token: `<@U123>` or `<@U123|name>`.
+USER_TOKEN = re.compile(r"<@([A-Za-z0-9]+)(?:\|[^>]*)?>")
 
 
 def mapping_of(value: object) -> Mapping:
@@ -72,6 +75,18 @@ def _mentions(event: Mapping, self_id: str) -> bool:
     return False
 
 
+def _mentioned_persons(event: Mapping, self_id: str) -> list[str]:
+    """The person ids the text and blocks mention, other than the Soul (ADR-0012 §4.7)."""
+    texts = [str(event.get("text") or "")]
+    texts.extend(str(item) for item in event.get("blocks") or ())
+    found: list[str] = []
+    for text in texts:
+        for person in USER_TOKEN.findall(text):
+            if person != str(self_id) and person not in found:
+                found.append(person)
+    return found
+
+
 def message_percept(event: Mapping, *, self_id: str = "") -> Percept | None:
     """One Slack message event as a `Percept`; None when it carries nothing to read."""
     body = event.get("message") if event.get("subtype") == SUBTYPE_EDIT else event
@@ -109,6 +124,7 @@ def message_percept(event: Mapping, *, self_id: str = "") -> Percept | None:
             "group": str(event.get("channel_type") or "") != "im",
             "thread": bool(thread_ts),
             "mention": _mentions(event, self_id),
+            "mentions": _mentioned_persons(event, self_id),
             "reply": bool(self_id) and str(event.get("parent_user_id") or "") == self_id,
             "self": bot,
         },

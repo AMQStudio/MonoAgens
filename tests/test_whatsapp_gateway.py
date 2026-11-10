@@ -122,6 +122,20 @@ def test_mention_and_reply_flags_come_from_payload(tmp_path) -> None:
     assert reply.hints.get("reply") is True
 
 
+def test_mentions_report_the_other_person_and_never_the_soul(tmp_path) -> None:
+    gateway = make_gateway(tmp_path)
+
+    other = ingress.event_to_inbound(
+        group_event("pagi", mentioned=("628444444444@s.whatsapp.net",)), gateway
+    )
+    bot = ingress.event_to_inbound(
+        group_event("pagi", mentioned=(f"{BOT}@s.whatsapp.net",)), gateway
+    )
+
+    assert other.hints.get("mentions") == ["628444444444"]
+    assert bot.hints.get("mentions") == []
+
+
 def test_lid_sender_maps_to_the_pn_address(tmp_path) -> None:
     gateway = make_gateway(tmp_path)
     directory.set_lid(gateway.db, "999@lid", "628999999999@s.whatsapp.net")

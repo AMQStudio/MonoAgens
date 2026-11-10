@@ -190,6 +190,18 @@ def test_a_direct_message_is_private() -> None:
     assert percept.thread == "C1"
 
 
+def test_mentions_report_the_other_person_and_never_the_soul() -> None:
+    other = ingress.message_percept(
+        message_event("hey <@U333> <@U999|mono>"), self_id="U999"
+    )
+    bot = ingress.message_percept(message_event("hey <@U999>"), self_id="U999")
+
+    assert other is not None
+    assert other.hints["mentions"] == ["U333"]
+    assert bot is not None
+    assert bot.hints["mentions"] == []
+
+
 def test_a_mention_and_files_are_carried() -> None:
     percept = ingress.message_percept(
         message_event(

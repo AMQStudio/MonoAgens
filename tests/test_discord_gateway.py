@@ -200,6 +200,20 @@ def test_attachments_and_a_mention_are_carried() -> None:
     assert kinds == {"image", "document"}
 
 
+def test_mentions_report_the_other_person_and_never_the_soul() -> None:
+    other = ingress.message_percept(
+        message_payload("pagi", mentions=[{"id": "333"}]), self_id="999"
+    )
+    bot = ingress.message_percept(
+        message_payload("pagi", mentions=[{"id": "999"}]), self_id="999"
+    )
+
+    assert other is not None
+    assert other.hints["mentions"] == ["333"]
+    assert bot is not None
+    assert bot.hints["mentions"] == []
+
+
 def test_an_interaction_becomes_the_command() -> None:
     found = ingress.interaction_percept(
         {

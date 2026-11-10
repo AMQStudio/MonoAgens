@@ -57,6 +57,17 @@ def mentioned(ev, bots: set[str]) -> bool:
     )
 
 
+def mentioned_persons(payload, bots: set[str]) -> list[str]:
+    """The person ids a payload mentions, other than the Soul (ADR-0012 §4.7)."""
+    found: list[str] = []
+    for context in contexts(payload):
+        for jid in context.mentionedJID:
+            person = normalize_jid(jid)
+            if person and person not in bots and person not in found:
+                found.append(person)
+    return found
+
+
 def replies_to_bot(ev, bots: set[str]) -> bool:
     return any(
         normalize_jid(context.participant) in bots
@@ -242,6 +253,7 @@ def edit_to_inbound(ev, gateway, target_id: str, text: str) -> Percept | None:
             "dm": not group,
             "group": group,
             "mention": mentioned_bot,
+            "mentions": mentioned_persons(edited, bots),
             "reply": replied,
             "edit": True,
         },
@@ -340,6 +352,7 @@ def event_to_inbound(ev, gateway) -> Percept | None:
             "dm": not is_group(thread_id),
             "group": is_group(thread_id),
             "mention": mentioned(ev, bots),
+            "mentions": mentioned_persons(ev.Message, bots),
             "reply": replies_to_bot(ev, bots),
             "self": bool(sender_digits and sender_digits in bots and not outgoing),
         },
