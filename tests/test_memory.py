@@ -23,8 +23,11 @@ SOUL = {
     "name": "Mona",
     "language": "id",
     "timezone": "Asia/Jakarta",
-    "gate": {"weights": {"addressed": 1.0, "surprise": 0.8, "cooldown_penalty": -0.3, "crowd_penalty": -0.2},
-             "band": {"silent": 0.3, "wake": 0.6}, "cooldown_minutes": 3, "crowd_window_minutes": 5},
+    "cognition": {
+        "seed": 1,
+        "weights": {"name_mentioned": 0.5, "info_gap": 0.35, "feeling_of_knowing": 0.35,
+                    "relevance": 0.2, "social_cost": -0.4},
+    },
     "sleep": {"idle_minutes": 30, "retry_minutes": 30, "hour": 2},
     "memory": {"retrieve_k": 5},
     "expectations": {"default_expires_days": 30, "max_active": 200},

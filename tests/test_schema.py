@@ -5,7 +5,7 @@ from __future__ import annotations
 import psycopg
 import pytest
 
-TABLES = {"events", "state", "expectations", "memories"}
+TABLES = {"events", "event_vectors", "state", "expectations", "memories"}
 
 
 def test_extensions_installed(conn):
@@ -69,3 +69,29 @@ def test_delete_event_is_rejected(conn):
     ).fetchone()[0]
     with pytest.raises(psycopg.Error, match="events table is append-only"):
         conn.execute("DELETE FROM events WHERE id = %s", (event_id,))
+
+
+def test_event_vectors_are_append_only(conn):
+    event_id = conn.execute(
+        "INSERT INTO events (kind) VALUES ('msg.in') RETURNING id"
+    ).fetchone()[0]
+    conn.execute("INSERT INTO event_vectors (event_id, embedding) VALUES (%s, %s)",
+                 (event_id, [0.0] * 384))
+    with pytest.raises(psycopg.Error, match="events table is append-only"):
+        conn.execute("UPDATE event_vectors SET embedding = %s WHERE event_id = %s",
+                     ([1.0] * 384, event_id))
+    with pytest.raises(psycopg.Error, match="events table is append-only"):
+        conn.execute("DELETE FROM event_vectors WHERE event_id = %s", (event_id,))
+
+
+def test_new_cognition_columns_exist(conn):
+    expectations = {row[0] for row in conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'expectations'").fetchall()}
+    memories = {row[0] for row in conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'memories'").fetchall()}
+    assert "origin" in expectations
+    assert "use_count" in memories
+    assert conn.execute("SELECT origin FROM expectations LIMIT 0").description is not None
+    assert conn.execute("SELECT use_count FROM memories LIMIT 0").description is not None

@@ -2,23 +2,23 @@
 
 A tiny kernel for one persistent AI self that lives in many bodies. The kernel records
 everything it sees, holds Expectations about the world, and only thinks hard (calls the LLM)
-when the gate decides an event matters.
+when the cognition layer's appraisal decides an event matters.
 
 - `DESIGN.md` — the design (read this first).
 - `PLAN.md` — the build steps.
 - `AGENTS.md` — working rules and invariants.
-- `scripts/replay.py` — scenario replay for tuning the gate.
+- `scripts/replay.py` — scenario replay for tuning the cognition layer.
 
 ## Tuning with replay
 
 The replay tool feeds written scenarios through the real kernel on a throwaway database, so
-gate weights and bands in `soul.yaml` can be tuned without a week of manual chatting.
+the cognition settings in `soul.yaml` can be tuned without a week of manual chatting.
 
 ```sh
 # Real LLM: spends tokens, prints the token report at the end.
 uv run python scripts/replay.py
 
-# Fake LLM and fake embeddings: free, only checks gate decisions.
+# Fake LLM and fake embeddings: free, only checks appraisal decisions.
 uv run python scripts/replay.py --fake
 
 # One scenario only.
@@ -31,18 +31,17 @@ touch the production database. Real mode reads `LLM_BASE_URL`, `LLM_API_KEY`, an
 from `.env` (or the environment).
 
 Every run writes `reports/replay-<YYYYMMDD-HHMMSS>.md`. Each report has, per scenario, the
-step-by-step inputs with the gate decision and its score breakdown (`addressed`, `surprise`,
-`cooldown_penalty`, `crowd_penalty`, `score`), the emitted replies, the PASS/FAIL list for the
-scenario's expectations, a summary table for all scenarios, and the total LLM calls with the
-prompt, cached, completion, and total token counts. Compare reports before and after a
-`soul.yaml` change to see which decisions moved.
+step-by-step inputs with the appraisal decision and its numbers (`reflex`, `s`, `theta`, `p`,
+`u`, `reason`), the emitted replies, the PASS/FAIL list for the scenario's expectations, a
+summary table for all scenarios, and the total LLM calls with the prompt, cached, completion,
+and total token counts. Compare reports before and after a `soul.yaml` change to see which
+decisions moved.
 
 `--fake` never creates Expectations (it always answers `say("ok")` when woken), so reminder
-and recall scenarios are expected to FAIL there. It is for checking the gate for free.
+and recall scenarios are expected to FAIL there. It is for checking appraisal for free.
 
-Tuning guide for `soul.yaml`:
-
-- Bot is too quiet: lower `gate.band.wake` (e.g. 0.6 → 0.45), decrease the
-  `cooldown_penalty` weight, or decrease `cooldown_minutes`.
-- Bot is too chatty: raise `gate.band.wake`, increase the `crowd_penalty` weight
-  (e.g. -0.2 → -0.4), or raise `gate.band.silent`.
+Tuning guide for `soul.yaml`: in this foundation the decision is reflex-driven (addressed
+messages and fired promises wake the PFC) and the signal weights are placeholders, so the
+report's `s`, `theta`, `p`, and `u` columns stay at their reflex values. As signals and the
+dynamic threshold land, tune `cognition.weights` and `cognition.threshold`; the seed in
+`cognition.seed` keeps every draw reproducible in replay.

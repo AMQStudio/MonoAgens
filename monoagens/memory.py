@@ -13,8 +13,9 @@ from zoneinfo import ZoneInfo
 import psycopg
 from pgvector import Vector
 
-from monoagens.store import (append_event, read_expectations, read_state,
-                             resolve_expectation, write_state)
+from monoagens.store import (add_budget_usage, append_event, read_event_vector,
+                             read_expectations, read_state, resolve_expectation,
+                             write_state)
 from monoagens.types import Event
 
 DIM = 384
@@ -97,12 +98,15 @@ class FastEmbedder:
 
 
 async def retrieve(conn: psycopg.AsyncConnection[Any], embedder: Any, query: str, *,
-                   k: int = 5, now: datetime | None = None) -> list[str]:
+                   k: int = 5, now: datetime | None = None,
+                   event_id: int | None = None) -> list[str]:
     """Retrieve up to k memories by hybrid RRF search with importance and decay."""
     if not query.strip():
         return []
     now = now or datetime.now(timezone.utc)
-    vector = (await embedder.embed([query]))[0]
+    vector = await read_event_vector(conn, event_id) if event_id is not None else None
+    if vector is None:
+        vector = (await embedder.embed([query]))[0]
     vec_rows = await (await conn.execute(_VECTOR_SQL, (Vector(vector),))).fetchall()
     txt_rows = await (await conn.execute(_TEXT_SQL, (query, query, query))).fetchall()
     vec = {row[0]: row for row in vec_rows}
@@ -198,5 +202,9 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
                                   caused_by=payload["last_event_id"])
     await write_state(conn, "core_memory", {"text": core}, done.id)
     await write_state(conn, "sleep:last_event", {"id": payload["last_event_id"]}, done.id)
+    usage = getattr(pfc, "last_usage", None)
+    if usage and any(usage.values()):
+        await add_budget_usage(conn, now=now, timezone=str(soul.get("timezone") or "UTC"),
+                               usage=usage, updated_by_event=done.id)
     return done
 

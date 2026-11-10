@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay YAML scenarios through the real kernel to tune the gate.
+"""Replay YAML scenarios through the real kernel to tune the cognition layer.
 
 Usage:
     uv run python scripts/replay.py                  # every scenarios/*.yaml
@@ -7,8 +7,8 @@ Usage:
     uv run python scripts/replay.py scenarios/04_group_mention.yaml
 
 Real mode talks to the OpenAI-compatible endpoint in .env and spends tokens;
-it prints a token report at the end. Fake mode is free and only checks gate
-decisions, so reminder/recall expectations usually fail there by design.
+it prints a token report at the end. Fake mode is free and only checks
+appraisal decisions, so reminder/recall expectations usually fail there by design.
 
 The replay database must end with "_replay"; its schema is rebuilt for every
 scenario, so nothing here can touch the production database.
@@ -36,10 +36,10 @@ from pgvector.psycopg import register_vector_async
 import yaml
 
 from monoagens.clock import FakeClock
+from monoagens.cognition import Appraisal
 from monoagens.config import (DEFAULT_ENV_PATH, load_env_file, load_llm_config,
                               load_soul)
 from monoagens.expect import parse_duration
-from monoagens.gate import Gate, Verdict
 from monoagens.kernel import Kernel
 from monoagens.memory import FastEmbedder, FakeEmbedder
 from monoagens.pfc import PFC, PFCContext, ToolCall
@@ -247,20 +247,19 @@ class FakeBody:
         self.actions.append(action)
 
 
-class RecordingGate(Gate):
-    """A gate that keeps the verdicts of the step being executed."""
+class RecordingKernel(Kernel):
+    """A kernel that keeps the appraisals of the step being executed."""
 
-    def __init__(self, config) -> None:
-        """Wrap the standard gate configuration."""
-        super().__init__(config)
-        self.verdicts: list[Verdict] = []
+    def __init__(self, *args, **kwargs) -> None:
+        """Start with an empty appraisal list."""
+        super().__init__(*args, **kwargs)
+        self.appraisals: list[Appraisal] = []
 
-    async def judge(self, conn, event: Event, *, now: datetime,
-                    surprise: float = 0.0) -> Verdict:
-        """Judge as usual and remember the verdict for the report."""
-        verdict = await super().judge(conn, event, now=now, surprise=surprise)
-        self.verdicts.append(verdict)
-        return verdict
+    async def _appraise(self, event: Event) -> Appraisal:
+        """Appraise as usual and remember the decision for the report."""
+        appraisal = await super()._appraise(event)
+        self.appraisals.append(appraisal)
+        return appraisal
 
 
 # ------------------------------------------------------------------ scenario
@@ -289,7 +288,7 @@ class StepRecord:
     place: str
     text: str
     addressed: bool
-    verdicts: list[Verdict]
+    appraisals: list[Appraisal]
     replies: list[tuple[str, str]]
     events: list[dict[str, Any]]
 
@@ -383,8 +382,7 @@ class ReplayRunner:
         self.embedder: Any = FakeEmbedder() if fake else FastEmbedder()
         self.clock = FakeClock()
         self.conn: psycopg.AsyncConnection[Any] | None = None
-        self.kernel: Kernel | None = None
-        self.gate: RecordingGate | None = None
+        self.kernel: RecordingKernel | None = None
         self._last_id = 0
         self._message_id = 0
 
@@ -398,14 +396,13 @@ class ReplayRunner:
                    self.settings["model"], soul=self.soul, client=client, timeout=90.0)
 
     def _make_kernel(self) -> Kernel:
-        """Build a fresh kernel with a fresh recording gate."""
-        gate = RecordingGate.from_soul(self.soul)
+        """Build a fresh kernel that records its appraisals."""
         pfc = self._make_pfc()
-        kernel = Kernel(self.conn, clock=self.clock, pfc=pfc, gate=gate, soul=self.soul,
-                        embedder=self.embedder)
+        kernel = RecordingKernel(self.conn, clock=self.clock, pfc=pfc, soul=self.soul,
+                                 embedder=self.embedder)
         kernel.register_body(FakeBody(BODY_NAME))
         kernel.register_body(FakeBody(CLI_BODY))
-        self.gate, self.kernel = gate, kernel
+        self.kernel = kernel
         return kernel
 
     async def run(self, scenario: Scenario) -> ScenarioResult:
@@ -443,9 +440,9 @@ class ReplayRunner:
         return DEFAULT_START
 
     async def _run_step(self, index: int, raw: dict[str, Any]) -> StepRecord:
-        """Execute one step and collect its verdicts, events, and replies."""
+        """Execute one step and collect its appraisals, events, and replies."""
         self.tracker.step_index = index
-        self.gate.verdicts.clear()
+        self.kernel.appraisals.clear()
         if raw.get("at"):
             self.clock.set_time(parse_at(raw["at"], self.clock, self.zone))
         start_id = await self._max_id()
@@ -476,7 +473,8 @@ class ReplayRunner:
             label = "restart"
         events = await self._new_events(start_id)
         return StepRecord(index=index, kind=kind, at=self.clock.now(), who=who, place=place,
-                          text=label, addressed=addressed, verdicts=list(self.gate.verdicts),
+                          text=label, addressed=addressed,
+                          appraisals=list(self.kernel.appraisals),
                           replies=[(event["place"] or "", str(event["text"]))
                                    for event in events if event["kind"] == "msg.out"],
                           events=events)
@@ -709,9 +707,9 @@ def _fmt_time(stamp: datetime, zone: ZoneInfo) -> str:
     return stamp.astimezone(zone).strftime("%Y-%m-%d %H:%M")
 
 
-def _verdict_summary(step: StepRecord) -> tuple[str, Verdict | None]:
-    """Pick the strongest verdict and an aggregate decision label."""
-    decisions = [verdict.decision for verdict in step.verdicts]
+def _decision_summary(step: StepRecord) -> tuple[str, Appraisal | None]:
+    """Pick the strongest appraisal and an aggregate decision label."""
+    decisions = [appraisal.decision for appraisal in step.appraisals]
     if "wake" in decisions:
         decision = "wake"
     elif "note" in decisions:
@@ -724,24 +722,25 @@ def _verdict_summary(step: StepRecord) -> tuple[str, Verdict | None]:
         decision = "restart"
     else:
         decision = "-"
-    preferred = next((v for v in step.verdicts if v.decision == decision), None)
+    preferred = next((a for a in step.appraisals if a.decision == decision), None)
     return decision, preferred
 
 
 def _step_row(step: StepRecord, zone: ZoneInfo) -> str:
     """Render one step as a markdown table row."""
-    decision, verdict = _verdict_summary(step)
-    breakdown = (verdict.breakdown if verdict else {}) or {}
+    decision, appraisal = _decision_summary(step)
     reply = " / ".join(text for _, text in step.replies) or "-"
     event_kinds = ", ".join(dict.fromkeys(event["kind"] for event in step.events)) or "-"
     cells = [
         step.index, _fmt_time(step.at, zone), step.who if step.kind == "message" else "-",
         step.place if step.kind == "message" else "-",
         step.text if step.kind == "message" else step.kind, decision,
-        f"{breakdown.get('score', 0):.2f}" if verdict else "-",
-        f"{breakdown.get('addressed', 0):.1f}", f"{breakdown.get('surprise', 0):.2f}",
-        f"{breakdown.get('cooldown_penalty', 0):.2f}",
-        f"{breakdown.get('crowd_penalty', 0):.2f}", reply, event_kinds,
+        appraisal.reflex if appraisal and appraisal.reflex else "-",
+        f"{appraisal.s:.2f}" if appraisal else "-",
+        f"{appraisal.theta:.2f}" if appraisal else "-",
+        f"{appraisal.p:.2f}" if appraisal else "-",
+        f"{appraisal.u:.2f}" if appraisal else "-",
+        appraisal.reason if appraisal else "-", reply, event_kinds,
     ]
     return "| " + " | ".join(_cell(cell) for cell in cells) + " |"
 
@@ -754,9 +753,9 @@ def _scenario_section(result: ScenarioResult, zone: ZoneInfo) -> list[str]:
     lines = [f"## {scenario.name}", ""]
     if scenario.description:
         lines += [scenario.description, ""]
-    lines += ["| # | Time | Who | Place | Input | Decision | Score | Addr | Surprise | "
-              "Cooldown | Crowd | Reply | Events |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    lines += ["| # | Time | Who | Place | Input | Decision | Reflex | S | Theta | P | u "
+              "| Reason | Reply | Events |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     lines += [_step_row(step, zone) for step in result.steps]
     lines += ["", f"**Expectations: {status}**", ""]
     if not result.checks:
@@ -789,12 +788,13 @@ def render_report(results: Sequence[ScenarioResult], usage: Usage, mode: str,
              f"- Mode: **{mode}**", f"- Model: `{model}`", f"- Timezone: `{zone.key}`",
              f"- Scenarios: {len(results)}", f"- Report generated: {when:%Y-%m-%d %H:%M:%S}",
              ""]
-    gate = soul.get("gate") or {}
-    lines += ["## Gate configuration", "",
-              f"- Weights: `{json.dumps(gate.get('weights') or {}, sort_keys=True)}`",
-              f"- Bands: `{json.dumps(gate.get('band') or {}, sort_keys=True)}`",
-              f"- cooldown_minutes: `{gate.get('cooldown_minutes')}`",
-              f"- crowd_window_minutes: `{gate.get('crowd_window_minutes')}`", ""]
+    cognition = soul.get("cognition") or {}
+    lines += ["## Cognition configuration", "",
+              f"- Weights: `{json.dumps(cognition.get('weights') or {}, sort_keys=True)}`",
+              f"- Seed: `{cognition.get('seed', 1)}`",
+              f"- Band: `{json.dumps(cognition.get('band') or {}, sort_keys=True)}`",
+              f"- Threshold: `{json.dumps(cognition.get('threshold') or {}, sort_keys=True)}`",
+              ""]
     for result in results:
         lines += _scenario_section(result, zone)
     lines += ["## Summary", "",
@@ -854,7 +854,7 @@ async def run_all(paths: Sequence[pathlib.Path], fake: bool, url: str,
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse arguments, replay scenarios, and write the report."""
-    parser = argparse.ArgumentParser(description="Replay MonoAgens scenarios to tune the gate.")
+    parser = argparse.ArgumentParser(description="Replay MonoAgens scenarios to tune cognition.")
     parser.add_argument("scenarios", nargs="*", help="scenario YAML files (default: all)")
     parser.add_argument("--fake", action="store_true",
                         help="use a scripted FakeLLM and FakeEmbedder (free)")

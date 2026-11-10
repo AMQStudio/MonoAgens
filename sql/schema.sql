@@ -32,6 +32,18 @@ CREATE TRIGGER events_no_update_delete
     FOR EACH ROW
     EXECUTE FUNCTION events_immutable();
 
+-- event_vectors: one embedding per message, written once (append-only).
+CREATE TABLE IF NOT EXISTS event_vectors (
+    event_id  bigint PRIMARY KEY REFERENCES events (id),
+    embedding vector(384) NOT NULL
+);
+
+DROP TRIGGER IF EXISTS event_vectors_no_update_delete ON event_vectors;
+CREATE TRIGGER event_vectors_no_update_delete
+    BEFORE UPDATE OR DELETE ON event_vectors
+    FOR EACH ROW
+    EXECUTE FUNCTION events_immutable();
+
 -- state: the Status Board (a projection; may be dropped and rebuilt).
 CREATE TABLE IF NOT EXISTS state (
     key             text PRIMARY KEY,
@@ -57,8 +69,11 @@ CREATE TABLE IF NOT EXISTS expectations (
     fire_count    integer NOT NULL DEFAULT 0,
     source_event  bigint REFERENCES events (id),
     expires_at    timestamptz NOT NULL,
-    created_at    timestamptz NOT NULL DEFAULT now()
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    origin        text NOT NULL DEFAULT 'pfc'
 );
+
+ALTER TABLE expectations ADD COLUMN IF NOT EXISTS origin text NOT NULL DEFAULT 'pfc';
 
 CREATE INDEX IF NOT EXISTS idx_expectations_next_check_at
     ON expectations (next_check_at);
@@ -77,5 +92,8 @@ CREATE TABLE IF NOT EXISTS memories (
     superseded_by    bigint REFERENCES memories (id),
     source_events    bigint[] NOT NULL DEFAULT '{}',
     created_at       timestamptz NOT NULL DEFAULT now(),
-    last_accessed_at timestamptz NOT NULL DEFAULT now()
+    last_accessed_at timestamptz NOT NULL DEFAULT now(),
+    use_count        integer NOT NULL DEFAULT 0
 );
+
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS use_count integer NOT NULL DEFAULT 0;

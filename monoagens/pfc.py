@@ -1,4 +1,4 @@
-"""The PFC: the LLM side of the self, reached only through the gate."""
+"""The PFC: the LLM side of the self, reached only through appraisal."""
 
 from __future__ import annotations
 
@@ -92,6 +92,7 @@ class PFC:
         self.soul = soul if soul is not None else load_soul()
         self.timezone = ZoneInfo(str(self.soul.get("timezone") or "UTC"))
         self.name = str(self.soul.get("name") or "Mona")
+        self.last_usage: dict[str, int] = {}
         self._transport, self._client, self._timeout = transport, client, timeout
 
     def _http(self) -> httpx.AsyncClient:
@@ -115,9 +116,11 @@ class PFC:
                                            json=body, headers=headers)
         response.raise_for_status()
         try:
-            raw_calls = response.json()["choices"][0]["message"].get("tool_calls") or []
+            payload = response.json()
+            raw_calls = payload["choices"][0]["message"].get("tool_calls") or []
         except (KeyError, IndexError, TypeError) as exc:
             raise ValueError(f"Malformed chat completion response: {exc}") from exc
+        self.last_usage = _usage(payload.get("usage") or {})
         return [
             ToolCall(call["function"]["name"], json.loads(call["function"]["arguments"] or "{}"))
             for call in raw_calls
@@ -184,6 +187,19 @@ class PFC:
         text = event.payload.get("text")
         who = str(event.who or "?").removeprefix("person:")
         return f"{who}: {text}" if text else f"[{event.kind}]"
+
+
+def _usage(raw: dict[str, Any]) -> dict[str, int]:
+    """Normalize one response's token usage into the four tracked counters."""
+    details = raw.get("prompt_tokens_details") or {}
+    prompt = int(raw.get("prompt_tokens") or 0)
+    completion = int(raw.get("completion_tokens") or 0)
+    return {
+        "prompt_tokens": prompt,
+        "cached_tokens": int(details.get("cached_tokens") or 0),
+        "completion_tokens": completion,
+        "total_tokens": int(raw.get("total_tokens") or prompt + completion),
+    }
 
 
 def _listed(items: Sequence[str]) -> str:

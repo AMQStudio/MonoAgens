@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
+from pgvector import Vector
 from psycopg.types.json import Jsonb
 
 from monoagens.types import RECENT_KINDS, Event, StateEntry
@@ -40,6 +42,26 @@ async def append_event(conn, *, ts, kind, who=None, place=None, body=None, paylo
              f"(%s, %s, %s, %s, %s, %s, %s) RETURNING {_EVENT_COLS}")
     cur = await conn.execute(query, (ts, kind, who, place, body, Jsonb(payload or {}), caused_by))
     return _row_to_event(await cur.fetchone())
+
+
+async def insert_event_vector(conn, event_id: int, embedding: Sequence[float]) -> None:
+    """Write the one embedding of an event; never overwrite an existing one."""
+    await conn.execute(
+        "INSERT INTO event_vectors (event_id, embedding) VALUES (%s, %s) "
+        "ON CONFLICT (event_id) DO NOTHING",
+        (event_id, Vector(list(embedding))),
+    )
+
+
+async def read_event_vector(conn, event_id: int) -> list[float] | None:
+    """Return the embedding already stored for an event, if any."""
+    cur = await conn.execute("SELECT embedding FROM event_vectors WHERE event_id = %s",
+                            (event_id,))
+    row = await cur.fetchone()
+    if row is None:
+        return None
+    vector = row[0]
+    return [float(x) for x in (vector.to_list() if hasattr(vector, "to_list") else vector)]
 
 
 async def _recent(conn, where: str, params: list[Any], limit: int,
@@ -111,6 +133,17 @@ async def write_state(conn, key, value, updated_by_event) -> None:
              "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "
              "updated_by_event = EXCLUDED.updated_by_event")
     await conn.execute(query, (key, Jsonb(value), updated_by_event))
+
+
+async def add_budget_usage(conn, *, now: datetime, timezone: str, usage: dict[str, int],
+                           updated_by_event: int) -> None:
+    """Add one LLM call's token usage to the budget state key of its local date."""
+    key = f"budget:{now.astimezone(ZoneInfo(timezone)).date().isoformat()}"
+    current = await read_state(conn, key) or {}
+    totals = {name: int(current.get(name) or 0) + int(usage.get(name) or 0)
+              for name in ("prompt_tokens", "cached_tokens", "completion_tokens",
+                           "total_tokens")}
+    await write_state(conn, key, totals, updated_by_event)
 
 
 async def project_event(conn, event: Event) -> None:

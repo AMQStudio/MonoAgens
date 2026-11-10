@@ -22,11 +22,10 @@ SOUL = {
     "timezone": "Asia/Jakarta",
     "persona": "Calm and honest.",
     "principles": ["Never lie."],
-    "gate": {
-        "weights": {"addressed": 1.0, "surprise": 0.8, "cooldown_penalty": -0.3, "crowd_penalty": -0.2},
-        "band": {"silent": 0.3, "wake": 0.6},
-        "cooldown_minutes": 3,
-        "crowd_window_minutes": 5,
+    "cognition": {
+        "seed": 1,
+        "weights": {"name_mentioned": 0.5, "info_gap": 0.35, "feeling_of_knowing": 0.35,
+                    "relevance": 0.2, "social_cost": -0.4},
     },
     "expectations": {"default_expires_days": 30, "max_active": 200},
 }
@@ -287,7 +286,7 @@ async def test_time_path_met_event_seen_resolves_without_firing(aconn):
 
 
 async def test_low_weight_fired_expectation_still_wakes_the_pfc_once(aconn):
-    """A missed expectation below the silent band fires the PFC anyway (DESIGN "The gate")."""
+    """A missed expectation below the silent band fires the PFC anyway (DESIGN appraisal)."""
     exp_id, _ = await _create(aconn, weight=0.3)
     clock = FakeClock(START)
     fake = FakeLLM([[("say", {"text": "sudah jam 7"})]])

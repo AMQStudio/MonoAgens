@@ -9,12 +9,13 @@ from typing import Any
 
 from monoagens import expect, memory
 from monoagens.clock import Clock
+from monoagens.cognition import Appraisal, appraise, validate_signals
 from monoagens.config import load_soul
-from monoagens.gate import Gate
+from monoagens.middleware import Middleware, run_hooks
 from monoagens.pfc import PFC, PFCContext, ToolCall
-from monoagens.store import (active_expectation_lines, append_event,
-                             cursor as store_cursor, project_event, read_last_events,
-                             read_last_events_elsewhere, read_state)
+from monoagens.store import (active_expectation_lines, add_budget_usage, append_event,
+                             cursor as store_cursor, insert_event_vector, project_event,
+                             read_last_events, read_last_events_elsewhere, read_state)
 from monoagens.types import RECENT_KINDS, Action, Event
 
 
@@ -28,15 +29,18 @@ class Kernel:
     """The one loop that records events, wakes the PFC, and acts through bodies."""
 
     def __init__(self, conn, clock: Clock | None = None, pfc: PFC | None = None,
-                 gate: Gate | None = None, soul: dict[str, Any] | None = None,
-                 embedder: Any = None) -> None:
+                 soul: dict[str, Any] | None = None, embedder: Any = None) -> None:
         """Wire the kernel to its database connection and collaborators."""
         self.conn, self.clock, self.pfc = conn, clock or Clock(), pfc
         self.soul = dict(soul) if soul is not None else load_soul()
-        self.gate = gate or Gate.from_soul(self.soul)
         self.embedder = embedder
         self.queue: asyncio.Queue[_Queued] = asyncio.Queue()
         self.bodies: dict[str, Any] = {}
+        self.hooks_inbound: list[Middleware] = []
+        self.hooks_context: list[Middleware] = []
+        self.hooks_tool: list[Middleware] = []
+        self.hooks_outbound: list[Middleware] = []
+        validate_signals((self.soul.get("cognition") or {}).get("weights") or {})
 
     async def put(self, event: Event) -> None:
         """Accept one event from a body or the clock (ticks are not acknowledged)."""
@@ -68,6 +72,14 @@ class Kernel:
                 await project_event(self.conn, stored)
         return stored
 
+    async def _encode(self, event: Event) -> None:
+        """Embed an event's text once and store the vector next to the Log."""
+        text = str(event.payload.get("text") or "")
+        if self.embedder is None or event.id is None or not text.strip():
+            return
+        vector = (await self.embedder.embed([text]))[0]
+        await insert_event_vector(self.conn, event.id, vector)
+
     async def _settle(self, item: _Queued) -> Event:
         try:
             stored = item.event if item.event.kind == "tick" else await self._append(
@@ -80,12 +92,43 @@ class Kernel:
         if item.ack is not None and not item.ack.done():
             item.ack.set_result(stored)
         try:
+            await self._encode(stored)
+            if stored.kind != "tick":
+                ctx = {"conn": self.conn, "now": self.clock.now()}
+                stored = await self._run_hooks("inbound", self.hooks_inbound, stored, ctx, stored)
+                if stored is None:
+                    return item.event
             await self._wake(stored)
         except Exception as exc:
             await self._record_error(stored, exc)
         finally:
             self.queue.task_done()
         return stored
+
+    async def _run_hooks(self, name: str, hooks: list[Middleware], item: Any, ctx: Any,
+                         trigger: Event) -> Any | None:
+        """Run one hook list; return the final item, or None when it stopped."""
+        async def stopped(reason: str) -> None:
+            await self._emit(trigger, "guard.stopped", {"hook": name, "reason": reason})
+
+        async def failed(exc: Exception) -> None:
+            await self._record_error(trigger, exc)
+            await stopped(str(exc))
+
+        return await run_hooks(hooks, item, ctx, on_stop=stopped, on_error=failed)
+
+    async def _appraise(self, event: Event) -> Appraisal:
+        """Ask the cognition layer for one decision (no LLM)."""
+        return await appraise(event, conn=self.conn, now=self.clock.now(), soul=self.soul)
+
+    async def _track_usage(self, event: Event) -> None:
+        """Add the last LLM call's usage to today's budget state key."""
+        usage = getattr(self.pfc, "last_usage", None)
+        if not usage or not any(usage.values()) or event.id is None:
+            return
+        await add_budget_usage(self.conn, now=self.clock.now(),
+                               timezone=str(self.soul.get("timezone") or "UTC"),
+                               usage=usage, updated_by_event=event.id)
 
     async def _wake(self, event: Event) -> None:
         fired = await expect.due(self.conn, event, now=self.clock.now(), soul=self.soul)
@@ -98,11 +141,11 @@ class Kernel:
                                    now=now, soul=self.soul)
         if fired or self.pfc is None or event.kind != "msg.in":
             return
-        verdict = await self.gate.judge(self.conn, event, now=self.clock.now())
-        if verdict.decision != "wake":
-            await self._emit(event, f"decision.{verdict.decision}", verdict.payload())
+        appraisal = await self._appraise(event)
+        if appraisal.decision != "wake":
+            await self._emit(event, f"decision.{appraisal.decision}", appraisal.payload())
             return
-        await self._think(event, verdict.reason, event.place or "")
+        await self._think(event, appraisal.reason, event.place or "")
 
     async def _think(self, event: Event, reason: str, place: str) -> None:
         memory_soul = self.soul.get("memory") or {}
@@ -127,7 +170,13 @@ class Kernel:
             memories=await self._memories(event),
             recent=[seen for seen in recent if seen.id != event.id],
             recent_elsewhere=recent_elsewhere, trigger=event, last_interaction=last)
-        for call in await self.pfc.decide(context):
+        ctx = {"conn": self.conn, "event": event, "now": self.clock.now()}
+        context = await self._run_hooks("context", self.hooks_context, context, ctx, event)
+        if context is None:
+            return
+        calls = await self.pfc.decide(context)
+        await self._track_usage(event)
+        for call in calls:
             await self._apply(event, call)
 
     async def _memories(self, event: Event) -> tuple[str, ...]:
@@ -136,7 +185,7 @@ class Kernel:
             return ()
         k = int((self.soul.get("memory") or {}).get("retrieve_k", 5))
         return tuple(await memory.retrieve(self.conn, self.embedder, query, k=k,
-                                           now=self.clock.now()))
+                                           now=self.clock.now(), event_id=event.id))
 
     async def _expect_wake(self, item: dict[str, Any]) -> None:
         now = self.clock.now()
@@ -146,13 +195,12 @@ class Kernel:
             payload={"expectation_id": item["id"], "about": item["about"]})
         if self.pfc is None:
             return
-        verdict = await self.gate.judge(self.conn, trigger, now=now,
-                                        surprise=float(item["weight"]))
-        if verdict.decision != "wake":
-            await self._emit(trigger, f"decision.{verdict.decision}", verdict.payload())
+        appraisal = await self._appraise(trigger)
+        if appraisal.decision != "wake":
+            await self._emit(trigger, f"decision.{appraisal.decision}", appraisal.payload())
         else:
             reason = (f"expectation missed: {item['about']} "
-                      f"(intent: {item['intent'] or 'none'}); {verdict.reason}")
+                      f"(intent: {item['intent'] or 'none'}); {appraisal.reason}")
             await self._think(trigger, reason, trigger.place or "")
         await expect.settle(self.conn, item["id"], now=now, soul=self.soul)
 
@@ -162,14 +210,19 @@ class Kernel:
             await self._expect_wake(item)
 
     async def _apply(self, event: Event, call: ToolCall) -> None:
+        ctx = {"conn": self.conn, "event": event, "now": self.clock.now()}
+        call = await self._run_hooks("tool", self.hooks_tool, call, ctx, event)
+        if call is None:
+            return
         args = call.arguments
         if call.name == "say" and isinstance(args.get("text"), str):
-            await self._emit(event, "msg.out", {"text": args["text"]})
-            await self._act(event, "say", {"text": args["text"]})
+            stored = await self._emit(event, "msg.out", {"text": args["text"]})
+            await self._encode(stored)
+            await self._act_out(event, "say", {"text": args["text"]})
         elif call.name == "react" and isinstance(args.get("emoji"), str):
             payload = {"emoji": args["emoji"], "message_id": event.payload.get("message_id")}
-            await self._emit(event, "react.out", payload)
-            await self._act(event, "react", payload)
+            stored = await self._emit(event, "react.out", payload)
+            await self._act_out(event, "react", payload)
         elif call.name == "stay_silent":
             await self._emit(event, "decision.silent", {"reason": str(args.get("reason", ""))})
         elif call.name == "expect":
@@ -183,6 +236,13 @@ class Kernel:
 
     async def _emit(self, trigger: Event, kind: str, payload: dict[str, Any]) -> Event:
         return await self._append(trigger, kind, payload, caused_by=trigger.id)
+
+    async def _act_out(self, event: Event, kind: str, payload: dict[str, Any]) -> None:
+        """Pass one say/react payload through the outbound hook, then act."""
+        ctx = {"conn": self.conn, "event": event, "now": self.clock.now()}
+        payload = await self._run_hooks("outbound", self.hooks_outbound, payload, ctx, event)
+        if payload is not None:
+            await self._act(event, kind, payload)
 
     async def _act(self, event: Event, kind: str, payload: dict[str, Any]) -> None:
         body = self.bodies.get(event.body or "")

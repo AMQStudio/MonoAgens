@@ -1,7 +1,7 @@
 """MVP acceptance: tests (a)-(d) from PLAN.md Step 8, end to end.
 
-Each test runs the real kernel, the real Postgres Log, and the real gate. Only
-the LLM (scripted httpx.MockTransport), HTTP, the clock (FakeClock), and the
+Each test runs the real kernel, the real Postgres Log, and the real cognition layer.
+Only the LLM (scripted httpx.MockTransport), HTTP, the clock (FakeClock), and the
 embedder (FakeEmbedder) are fake.
 """
 
@@ -27,11 +27,10 @@ SOUL = {
     "timezone": "Asia/Jakarta",
     "persona": "Calm and honest.",
     "principles": ["Never lie.", "Silence is better than interrupting."],
-    "gate": {
-        "weights": {"addressed": 1.0, "surprise": 0.8, "cooldown_penalty": -0.3, "crowd_penalty": -0.2},
-        "band": {"silent": 0.3, "wake": 0.6},
-        "cooldown_minutes": 3,
-        "crowd_window_minutes": 5,
+    "cognition": {
+        "seed": 1,
+        "weights": {"name_mentioned": 0.5, "info_gap": 0.35, "feeling_of_knowing": 0.35,
+                    "relevance": 0.2, "social_cost": -0.4},
     },
     "sleep": {"idle_minutes": 30, "hour": 2},
     "memory": {"retrieve_k": 5},
@@ -144,7 +143,7 @@ async def test_mvp_a_restart_preserves_conversation_context(aconn):
     assert (await _kinds(aconn)).count("msg.out") == 2
 
 
-async def test_mvp_b_gate_silence_and_mention(aconn):
+async def test_mvp_b_silence_and_mention(aconn):
     """MVP (b): 20 ordinary group messages stay silent; a mention gets a reply."""
     fake = FakeLLM([[("say", {"text": "iya, ada apa?"})]])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
@@ -164,11 +163,14 @@ async def test_mvp_b_gate_silence_and_mention(aconn):
     payloads = [row[0] for row in await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'decision.silent' ORDER BY id")).fetchall()]
     for payload in payloads:
-        assert payload["score"] == 0.0
+        assert set(payload) == {"decision", "reason", "reflex", "signals", "s", "theta", "p", "u"}
+        assert payload["decision"] == "silent"
         assert payload["reason"] == "gate score below silent threshold"
-        assert payload["breakdown"]["addressed"] == 0.0
-        assert set(payload["breakdown"]) == {
-            "addressed", "surprise", "cooldown_penalty", "crowd_penalty", "contributions", "score",
+        assert payload["reflex"] is None
+        assert payload["s"] == 0.0 and payload["theta"] == 0.0 and payload["p"] == 0.0
+        assert 0.0 <= payload["u"] < 1.0
+        assert set(payload["signals"]) == {
+            "name_mentioned", "info_gap", "feeling_of_knowing", "relevance", "social_cost",
         }
 
     await _feed(kernel, _msg("mona, halo?", message_id=99, place=GROUP, place_kind="group",

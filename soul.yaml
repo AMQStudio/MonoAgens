@@ -18,18 +18,6 @@ principles:
   - Silence is better than interrupting.
   - Keep the expectations it holds, or say plainly when it cannot.
 
-gate:
-  weights:
-    addressed: 1.0
-    surprise: 0.8
-    cooldown_penalty: -0.3
-    crowd_penalty: -0.2
-  band:
-    silent: 0.3     # below this: stay silent
-    wake: 0.6       # at or above this: wake the PFC
-  cooldown_minutes: 3
-  crowd_window_minutes: 5
-
 clock:
   tick_seconds: 30
 

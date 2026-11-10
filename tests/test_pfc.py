@@ -21,6 +21,11 @@ SOUL = {
     "timezone": "Asia/Jakarta",
     "persona": "Calm and honest.",
     "principles": ["Never lie."],
+    "cognition": {
+        "seed": 1,
+        "weights": {"name_mentioned": 0.5, "info_gap": 0.35, "feeling_of_knowing": 0.35,
+                    "relevance": 0.2, "social_cost": -0.4},
+    },
 }
 PLACE = "space:tg:1"
 START = datetime(2026, 11, 10, 8, 0, tzinfo=timezone.utc)  # 15:00 in Jakarta
