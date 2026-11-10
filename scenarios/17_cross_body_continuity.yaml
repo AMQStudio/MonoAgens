@@ -1,0 +1,17 @@
+name: 17_cross_body_continuity
+description: >-
+  Topik dimulai di Telegram, lalu owner melanjutkannya lewat body CLI. Kernel
+  harus membawa konteks lintas body sehingga jawabannya masih membahas Rust.
+expectations:
+  - reply mentions rust
+steps:
+  - at: "2026-11-10T10:00:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Mona, aku lagi belajar bahasa pemrograman Rust untuk bikin tool CLI."
+    addressed: true
+  - at: "2026-11-10T10:02:00+07:00"
+    who: person:owner
+    place: space:cli
+    text: "lanjut yang tadi, apa fitur paling penting yang perlu kupahami dulu?"
+    addressed: true

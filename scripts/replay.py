@@ -53,7 +53,9 @@ DEFAULT_BASE_URL = "https://api.deepinfra.com/v1/openai"
 DEFAULT_MODEL = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
 DEFAULT_START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 BODY_NAME = "telegram"
+CLI_BODY = "cli"
 OWNER = "person:owner"
+OWNER_DM = "space:tg:1001"
 TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?$")
 
 
@@ -235,10 +237,9 @@ class FakePFC:
 class FakeBody:
     """A body that records every Action dispatched to it."""
 
-    name = BODY_NAME
-
-    def __init__(self) -> None:
-        """Start with an empty action list."""
+    def __init__(self, name: str = BODY_NAME) -> None:
+        """Start with an empty action list and the given body name."""
+        self.name = name
         self.actions: list[Action] = []
 
     async def act(self, action: Action) -> None:
@@ -380,7 +381,6 @@ class ReplayRunner:
         self.settings = settings
         self.zone = ZoneInfo(str(soul.get("timezone") or "UTC"))
         self.embedder: Any = FakeEmbedder() if fake else FastEmbedder()
-        self.body = FakeBody()
         self.clock = FakeClock()
         self.conn: psycopg.AsyncConnection[Any] | None = None
         self.kernel: Kernel | None = None
@@ -403,7 +403,8 @@ class ReplayRunner:
         pfc = self._make_pfc()
         kernel = Kernel(self.conn, clock=self.clock, pfc=pfc, gate=gate, soul=self.soul,
                         embedder=self.embedder)
-        kernel.register_body(self.body)
+        kernel.register_body(FakeBody(BODY_NAME))
+        kernel.register_body(FakeBody(CLI_BODY))
         self.gate, self.kernel = gate, kernel
         return kernel
 
@@ -452,9 +453,10 @@ class ReplayRunner:
         who = str(raw.get("who") or OWNER)
         place = str(raw.get("place") or "space:tg:1001")
         text = str(raw.get("text") or "")
+        body = str(raw.get("body") or "") or None
         addressed = bool(raw.get("addressed", False))
         if kind == "message":
-            await self._feed(who=who, place=place, text=text, addressed=addressed)
+            await self._feed(who=who, place=place, text=text, addressed=addressed, body=body)
         elif kind == "advance":
             self.clock.advance(parse_duration(raw["advance"]))
             await self.clock.tick(self.kernel.put)
@@ -479,13 +481,15 @@ class ReplayRunner:
                                    for event in events if event["kind"] == "msg.out"],
                           events=events)
 
-    async def _feed(self, *, who: str, place: str, text: str, addressed: bool) -> None:
+    async def _feed(self, *, who: str, place: str, text: str, addressed: bool,
+                    body: str | None = None) -> None:
         """Put one msg.in and let the single consumer process it to completion."""
         self._message_id += 1
+        name = CLI_BODY if body == CLI_BODY or place.startswith("space:cli") else BODY_NAME
+        kind = "direct" if name == CLI_BODY else place_kind(place)
         event = Event(id=None, ts=self.clock.now(), kind="msg.in", who=who, place=place,
-                      body=BODY_NAME, payload={"text": text, "message_id": self._message_id,
-                                               "addressed": addressed,
-                                               "place_kind": place_kind(place)})
+                      body=name, payload={"text": text, "message_id": self._message_id,
+                                          "addressed": addressed, "place_kind": kind})
         task = asyncio.create_task(self.kernel.put(event))
         await asyncio.sleep(0)
         await self.kernel.step()
@@ -518,9 +522,23 @@ class ReplayRunner:
 # ------------------------------------------------------------------- checks
 
 
+def _target_place(text: str) -> str:
+    """Resolve a reply target name into a place id."""
+    target = text.strip().strip("\"'").strip()
+    if target.lower().startswith("space:"):
+        return target
+    if "owner" in target.lower() or " dm" in target.lower() or target.lower().startswith("dm"):
+        return OWNER_DM
+    return target
+
+
 def _string_spec(text: str) -> dict[str, Any]:
     """Turn a plain-language expectation into a check dictionary."""
     lower = text.lower().strip()
+    if lower.startswith("exactly one message to "):
+        target = text.strip()[len("exactly one message to "):]
+        return {"type": "reply_in", "place": _target_place(target), "count": 1,
+                "label": text}
     for prefix in ("exactly one reminder at ", "remind at "):
         if lower.startswith(prefix):
             return {"type": "remind_at", "at": text.strip()[len(prefix):].strip(" \"'"),
@@ -551,7 +569,11 @@ def evaluate_all(result: ScenarioResult) -> list[CheckResult]:
 
 
 def _scoped_replies(spec: dict[str, Any], result: ScenarioResult) -> list[Reply]:
-    """Filter replies to one step when the check names a step."""
+    """Filter replies to the steps the check names."""
+    steps = spec.get("steps")
+    if steps is not None:
+        wanted = {int(step) for step in steps}
+        return [reply for reply in result.replies if reply.step in wanted]
     step = spec.get("step")
     if step is None:
         return result.replies
@@ -618,7 +640,13 @@ def _check_reply_in(spec: dict[str, Any], result: ScenarioResult) -> CheckResult
     place = str(spec.get("place") or "")
     replies = _scoped_replies(spec, result)
     hits = [reply for reply in replies if reply.place == place]
-    return CheckResult(str(spec["label"]), bool(hits), _detail(hits) if hits else _detail(replies))
+    count = spec.get("count")
+    if count is None:
+        return CheckResult(str(spec["label"]), bool(hits),
+                           _detail(hits) if hits else _detail(replies))
+    want = int(count)
+    return CheckResult(str(spec["label"]), len(hits) == want,
+                       f"{len(hits)} == {want}: {_detail(hits) if hits else _detail(replies)}")
 
 
 def _check_prompt_contains(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:

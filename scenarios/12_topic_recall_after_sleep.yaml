@@ -1,7 +1,9 @@
 name: 12_topic_recall_after_sleep
 description: >-
-  Setelah tidur mengonsolidasikan preferensi kopi, pertanyaan berikutnya harus
-  dijawab dengan mengingat kopi (retrieval memori masuk ke prompt).
+  Fakta preferensi kopi sengaja dikubur di bawah 25 pesan lain di DM, jauh di
+  luar recent_events (20) dan recent_elsewhere (10). Setelah tidur
+  mengonsolidasikan memori, pertanyaan dari body lain harus tetap dijawab
+  dengan mengingat kopi.
 expectations:
   - type: sleep_done
     label: sleep.done recorded
@@ -12,10 +14,110 @@ steps:
     place: space:tg:1001
     text: "Mona, aku paling suka kopi susu tanpa gula, bukan teh."
     addressed: true
-  - at: "2026-11-10T20:00:00+07:00"
+  - at: "2026-11-10T20:01:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Tadi pagi macet banget di Sudirman."
+  - at: "2026-11-10T20:02:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Rapat sprint-nya mundur jadi jam sepuluh."
+  - at: "2026-11-10T20:03:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Aku masih belum sempat baca dokumen arsitektur."
+  - at: "2026-11-10T20:04:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Laptop kantor minta update sistem lagi."
+  - at: "2026-11-10T20:05:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Parkiran basement penuh, jadi aku parkir di luar."
+  - at: "2026-11-10T20:06:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Besok ada demo ke klien jam dua siang."
+  - at: "2026-11-10T20:07:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Aku harus siapin slide presentasi dulu."
+  - at: "2026-11-10T20:08:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Tim desain minta waktu review wireframe."
+  - at: "2026-11-10T20:09:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Kabel charger ku ketinggalan di meja rapat."
+  - at: "2026-11-10T20:10:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Siang tadi makan nasi padang di kantin."
+  - at: "2026-11-10T20:11:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Antreannya panjang banget tapi rasanya lumayan."
+  - at: "2026-11-10T20:12:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Sepatu baruku masih belum nyaman dipakai."
+  - at: "2026-11-10T20:13:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Nanti sore aku mau olahraga sebentar."
+  - at: "2026-11-10T20:14:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Gym dekat rumah tutup lebih awal hari ini."
+  - at: "2026-11-10T20:15:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Jadi mungkin aku lari keliling kompleks saja."
+  - at: "2026-11-10T20:16:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Aku perlu beli tali sepatu baru nanti."
+  - at: "2026-11-10T20:17:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Laporan bulanan harus dikirim Jumat."
+  - at: "2026-11-10T20:18:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Angka penjualannya naik sedikit dari bulan lalu."
+  - at: "2026-11-10T20:19:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Masih perlu cek ulang data region timur."
+  - at: "2026-11-10T20:20:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Rekan baru di tim mulai minggu depan."
+  - at: "2026-11-10T20:21:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Kamu belum perlu kenalan sekarang, santai saja."
+  - at: "2026-11-10T20:22:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Ruang meeting baru namanya belum dipasang papan."
+  - at: "2026-11-10T20:23:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Aku dengar kantor mau ganti vendor kebersihan."
+  - at: "2026-11-10T20:24:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Vending machine di lantai tiga rusak lagi."
+  - at: "2026-11-10T20:25:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Oke, segitu dulu update-nya malam ini."
+  - at: "2026-11-10T20:25:00+07:00"
     advance: "35m"
   - at: "2026-11-10T21:00:00+07:00"
     who: person:owner
-    place: space:tg:1001
+    place: space:cli
     text: "Mona, aku suka minum apa ya? Masih ingat nggak?"
     addressed: true

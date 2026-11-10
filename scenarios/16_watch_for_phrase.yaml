@@ -1,0 +1,33 @@
+name: 16_watch_for_phrase
+description: >-
+  Owner minta dikabari kalau ada yang menyebut "server down" di grup. Obrolan
+  grup biasa harus diabaikan, tetapi begitu Charlie menyebut frasa itu di grup
+  yang sama, Mona harus mengirim tepat satu pesan ke DM owner.
+expectations:
+  - type: no_reply
+    steps: [2, 3]
+    label: ordinary group chatter ignored
+  - type: reply_in
+    place: space:tg:1001
+    step: 4
+    count: 1
+    label: exactly one message to the owner's DM
+  - reply mentions down
+steps:
+  - at: "2026-11-10T08:00:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "kabari aku kalau ada yang bilang server down di grup"
+    addressed: true
+  - at: "2026-11-10T08:05:00+07:00"
+    who: person:tg:6001
+    place: space:tg:-10099
+    text: "selamat pagi semuanya"
+  - at: "2026-11-10T08:06:00+07:00"
+    who: person:tg:6002
+    place: space:tg:-10099
+    text: "deploy staging aman"
+  - at: "2026-11-10T08:20:00+07:00"
+    who: person:tg:6003
+    place: space:tg:-10099
+    text: "server down lagi nih guys"
