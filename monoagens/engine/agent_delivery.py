@@ -43,9 +43,16 @@ class DeliveryFacade:
         subject: str = "",
         origin: Address | None = None,
         reason: str = "",
+        ui: dict | None = None,
     ) -> str:
         return await self.delivery.send_text(
-            thread_id, text, gateway=gateway, subject=subject, origin=origin, reason=reason
+            thread_id,
+            text,
+            gateway=gateway,
+            subject=subject,
+            origin=origin,
+            reason=reason,
+            ui=ui,
         )
 
     async def send_file(

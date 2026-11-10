@@ -503,7 +503,7 @@ def test_natural_confirmation_runs_the_parked_action_and_completes(tmp_path) -> 
     assert row.status == "pending"
     assert row.tool == "send_to"
     assert row.origin_thread == DM
-    assert [chat for chat, _text, _reply in env.gateway.sent] == [DM, DM]
+    assert [chat for chat, _text, _reply in env.gateway.sent] == [DM]
     assert "pending approval" in llm.tool_results[0]
 
     handle(env, inbound_message("Ok, send it", thread=DM, message_id="t2"))

@@ -3,7 +3,6 @@
 from typing import TYPE_CHECKING
 
 from .. import io
-from ..i18n import t
 from .confirmations import confirmation_intent, pending_result
 
 if TYPE_CHECKING:
@@ -59,15 +58,15 @@ class ApprovalFlow:
             receipts[row.id] = text
         return pending_result(selected, "approved", receipts)
 
-    async def _approval_badge(
-        self, reply: str, thread_id: str, sender: str, since: float
-    ) -> str:
-        """The short `/approve <id>` badge under the reply that parked an action."""
-        if not self.runtime.config.approval.natural_confirm:
-            return reply
+    async def _parked_ui(
+        self, thread_id: str, sender: str, since: float
+    ) -> dict:
+        """The requirement block of a reply that just parked an action (ADR-0013 §4.4).
+
+        The core names the approval; the body decides how a person gestures on it.
+        """
         rows = await io.run(self.runtime.approvals.pending, thread_id, sender)
         fresh = [row for row in rows if float(row.created_at) >= since - 2.0]
         if not fresh:
-            return reply
-        badge = t("agent.approval_badge", self.runtime.soul.language, id=fresh[-1].id)
-        return f"{reply}\n\n{badge}" if reply.strip() else badge
+            return {}
+        return {"kind": "approval", "approval_id": int(fresh[-1].id)}

@@ -690,11 +690,14 @@ class TurnRunner(ApprovalFlow, ResearchFlow, TurnReview):
                         if reply is None:
                             await self.coordinator.finish(turn_id)
                             return actions
-                        reply = await self._approval_badge(
-                            reply, thread_id, state.sender_id, state.started_at
-                        )
                         state.draft = reply or ""
                         await self._checkpoint(state, "reviewed", reviewed_text=state.draft)
+
+                    approval_ui: dict = {}
+                    if not is_command and reply is not None:
+                        approval_ui = await self._parked_ui(
+                            thread_id, state.sender_id, state.started_at
+                        )
 
                     professional = bool(
                         decision is not None and decision.mode == "professional"
@@ -732,6 +735,7 @@ class TurnRunner(ApprovalFlow, ResearchFlow, TurnReview):
                         partial=str(runtime.config.turns.partial_delivery or "skip"),
                         humanize=humanize,
                         receipt_actor=(inbound.actor or "") if is_command else "",
+                        ui=approval_ui or None,
                     )
                     actions.extend(sent_actions)
                     if stop.startswith("refused:"):

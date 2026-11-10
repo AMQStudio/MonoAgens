@@ -533,10 +533,16 @@ class WhatsAppGateway(BaseGateway):
         body, mentions = self._resolve_mentions(str(text or ""), thread)
         block = self.ui_of(action)
         if block.get("kind") == "approval":
-            # ADR-0010 §4.2: Meta restricts native buttons on many accounts, so the prompt
-            # carries a readable quick-reply line and a reaction decides it.
-            hint = t("approval.reaction_hint", self.config.soul.language)
-            body = f"{body}\n{hint}" if body else hint
+            # ADR-0013 §4.4: no native buttons here, so the body renders the readable fallback
+            # from the block it was given, plus its own reaction hint.
+            language = self.config.soul.language
+            badge = (
+                t("agent.approval_badge", language, id=block.get("approval_id"))
+                if block.get("approval_id")
+                else ""
+            )
+            hint = t("approval.reaction_hint", language)
+            body = "\n".join(piece for piece in (body, badge, hint) if piece)
         payload = (
             ExtendedTextMessage(text=body, contextInfo=ContextInfo(mentionedJID=mentions))
             if mentions

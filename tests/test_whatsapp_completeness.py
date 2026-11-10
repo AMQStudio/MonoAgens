@@ -10,6 +10,7 @@ from neonize.proto.Neonize_pb2 import Message as ProtoMessage
 from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import ProtocolMessage
 from test_whatsapp_gateway import BOT, make_gateway
 
+from monoagens.engine.i18n import t
 from monoagens.engine.inbound import Action, Address
 from monoagens.engine.turn.context import Media, Message
 from monoagens.gateways.base import EditDebouncer
@@ -208,14 +209,15 @@ def test_a_step_bubble_renders_the_tool_and_status(tmp_path) -> None:
     assert gateway.client.calls[0][1] == "🔧 read -> executed"
 
 
-def test_an_approval_prompt_gets_the_reaction_hint_and_a_mapping(tmp_path) -> None:
+def test_an_approval_prompt_gets_the_fallback_line_and_a_mapping(tmp_path) -> None:
     gateway = gateway_with_client(tmp_path)
-    # The engine appends its readable badge; the body turns that into the decision pair.
+    language = gateway.config.soul.language
     message_id = asyncio.run(
         gateway.dispatch(
             action(
                 "send_text",
-                'Approve?\n\n🕓 Waiting: /approve 42 (or just reply "ok, send").',
+                "Approve?",
+                meta={"ui": {"kind": "approval", "approval_id": 42}},
             )
         )
     )
@@ -225,7 +227,19 @@ def test_an_approval_prompt_gets_the_reaction_hint_and_a_mapping(tmp_path) -> No
     assert gateway.approval_command("\U0001f44d", "unknown") == ""
     sent = gateway.client.calls[0][1]
     assert "Approve?" in sent
+    assert t("agent.approval_badge", language, id=42) in sent
     assert "👍" in sent
+
+
+def test_a_text_that_mentions_an_approval_is_not_a_prompt(tmp_path) -> None:
+    gateway = gateway_with_client(tmp_path)
+    message_id = asyncio.run(
+        gateway.dispatch(action("send_text", 'Approve?\n\n🕓 Waiting: /approve 42'))
+    )
+
+    assert gateway.approval_command("\U0001f44d", message_id) == ""
+    sent = gateway.client.calls[0][1]
+    assert "👍" not in sent
 
 
 def test_an_explicit_ui_block_also_maps_the_prompt(tmp_path) -> None:

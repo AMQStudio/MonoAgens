@@ -35,10 +35,6 @@ NAME = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
 ATTACHMENT_ROOT = "attachments"
 
-# ADR-0010 §4.1: the engine emits the readable badge `/approve #42`; the body turns that into
-# buttons at its own boundary, so the core never learns a UI vocabulary.
-APPROVAL_BADGE = re.compile(r"/approve\s*#?(\d+)")
-
 # ADR-0010 §4.1: the progress streams every body understands; the default is off.
 PROGRESS_FLAGS = ("show_thinking", "show_steps", "interim_updates")
 # ADR-0010 §8: one in-place edit per thread per window, so a chatty model never trips a
@@ -398,13 +394,6 @@ class BaseGateway(CoreDefaults):
         soul = getattr(self.config, "soul", None)
         return str(getattr(soul, "language", "") or "en")
 
-    def approval_id(self, action) -> int:
-        """The approval an outbound text asks to decide, read from the engine's own badge."""
-        if action is None or str(getattr(action, "capability", "")) != "send_text":
-            return 0
-        found = APPROVAL_BADGE.search(str(getattr(action, "payload", "") or ""))
-        return int(found.group(1)) if found else 0
-
     def approval_options(self, approval_id: int) -> list[dict]:
         """The localized Approve/Deny pair for one pending approval (ADR-0010 §4.1)."""
         number = int(approval_id)
@@ -428,8 +417,8 @@ class BaseGateway(CoreDefaults):
         """The prompt block of one outbound action, transport-neutral.
 
         The shape is `{"kind", "approval_id", "title", "summary", "buttons"}`. An explicit
-        `meta["ui"]` (or a bare `meta["options"]`) wins; otherwise the engine's own
-        `/approve #<id>` badge becomes the Approve/Deny pair here, at the body's boundary.
+        `meta["ui"]` (or a bare `meta["options"]`) is the whole source; text the core sent is
+        never parsed back into a prompt.
         """
         raw_meta = action.meta if action is not None else {}
         meta = raw_meta if isinstance(raw_meta, Mapping) else {}
@@ -438,7 +427,7 @@ class BaseGateway(CoreDefaults):
         options = option_list(
             meta.get("options") or block.get("buttons") or block.get("choices")
         )
-        number = self.approval_id(action) or _as_id(block.get("approval_id"))
+        number = _as_id(block.get("approval_id"))
         if not options and number:
             options = self.approval_options(number)
         if not options and not block:

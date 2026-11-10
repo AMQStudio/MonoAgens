@@ -445,7 +445,8 @@ def test_every_shipped_body_meets_the_core_contract_and_resolves_prompts(tmp_pat
     badge = Action(
         address=Address("body", "chat"),
         capability="send_text",
-        payload='done\n\n🕓 Waiting: /approve 42 (or just reply "ok, send").',
+        payload="done",
+        meta={"ui": {"kind": "approval", "approval_id": 42}},
     )
 
     for body in bodies:

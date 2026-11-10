@@ -196,6 +196,7 @@ class Delivery:
         reason: str = "",
         action_id: str = "",
         receipt_actor: str = "",
+        ui: dict | None = None,
     ) -> str:
         address = Address(str(gateway.name), str(thread_id))
         found = action_id or str(self._action_id().get("id") or "")
@@ -204,6 +205,7 @@ class Delivery:
             capability="send_text",
             payload=str(text or ""),
             id=found or uuid4().hex,
+            meta={"ui": dict(ui)} if ui else {},
         )
         receipt = await self._door(
             action, subject=subject, origin=origin_for(origin), reason=reason
@@ -337,6 +339,7 @@ class Delivery:
         subject: str = "",
         origin: Address | None = None,
         reason: str = "",
+        ui: dict | None = None,
     ) -> str:
         """Tool-facing: render the gateway dialect, split, send, return ok:/error:."""
         if gateway is None:
@@ -348,7 +351,7 @@ class Delivery:
         if not chunks:
             return "error: empty text"
         try:
-            for chunk in chunks:
+            for index, chunk in enumerate(chunks):
                 await self.text(
                     thread_id,
                     chunk,
@@ -356,6 +359,7 @@ class Delivery:
                     subject=subject,
                     origin=origin,
                     reason=reason,
+                    ui=ui if index == len(chunks) - 1 else None,
                 )
         except StandbyError:
             return "error: delivery refused"
@@ -416,9 +420,12 @@ class Delivery:
         partial: str,
         humanize,
         receipt_actor: str = "",
+        ui: dict | None = None,
     ) -> tuple[list[str], list[Action], str]:
         """Send the planned chunks of one turn.
 
+        `ui` is the requirement block of a reply that parked an action; it rides the last
+        chunk as `meta["ui"]` so a body renders its own control and the core composes no text.
         `stop` is "", "failed:<reason>", or "refused:<reason>"; the caller decides what a stop
         means for the turn, never the delivery path.
         """
@@ -431,6 +438,7 @@ class Delivery:
                 capability="send_text",
                 payload=chunk,
                 id=f"turn:{turn_id}:{index}",
+                meta={"ui": dict(ui)} if ui and index == len(chunks) - 1 else {},
             )
             state = self.runtime.outbox.status(action.id, 0) or ""
             if state == "sent":

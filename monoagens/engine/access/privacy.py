@@ -302,15 +302,15 @@ class PrivacyService:
             summary=text,
         )
         log.info("privacy pending thread=%s approval=%s", thread_id, approval.id)
-        # ADR-0010 §4.1: the readable badge is the whole contract; a body renders its own
-        # buttons from it, so this path carries no UI block and no transport vocabulary.
-        badge = t("agent.approval_badge", self._lang, id=approval.id)
+        # ADR-0013 §4.4: the requirement travels as data; a body renders its own control and
+        # the core composes no `/approve` text.
         await agent.send_text(
             thread_id,
-            f"{text}\n\n{badge}",
+            text,
             gateway=body,
             subject=person_id,
             origin=Address(str(getattr(body, "name", "") or ""), str(thread_id)),
+            ui={"kind": "approval", "approval_id": int(approval.id)},
         )
 
     # ------------------------------------------------------------- pending
