@@ -13,7 +13,7 @@ One step = one agent session = one commit. Tick a step only when its tests pass.
 Done when: `uv run pytest` passes with one test proving the schema is installed and an
 UPDATE on events is rejected.
 
-## [ ] 1. The Log
+## [x] 1. The Log
 store: append an event, read the last N events for a place, cursor(body), read/write state.
 Done when: tests for ordering, cursor, and rebuilding state from events pass.
 

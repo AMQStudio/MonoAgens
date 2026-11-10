@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import pathlib
 
+from pgvector.psycopg import register_vector_async
 import psycopg
 import pytest
 
@@ -57,3 +58,12 @@ def conn(database_url: str):
     with psycopg.connect(database_url) as connection:
         yield connection
         connection.rollback()
+
+
+@pytest.fixture
+async def aconn(database_url: str):
+    """An async connection whose work is rolled back after each test."""
+    async with await psycopg.AsyncConnection.connect(database_url) as connection:
+        await register_vector_async(connection)
+        yield connection
+        await connection.rollback()

@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS events (
     caused_by bigint REFERENCES events (id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_events_place_id ON events (place, id);
+
 -- The Log is immutable: reject UPDATE and DELETE.
 CREATE OR REPLACE FUNCTION events_immutable() RETURNS trigger
 LANGUAGE plpgsql AS $$

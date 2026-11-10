@@ -36,6 +36,14 @@ def test_expectations_next_check_at_index_exists(conn):
     assert exists is not None
 
 
+def test_events_place_id_index_exists(conn):
+    exists = conn.execute(
+        "SELECT 1 FROM pg_indexes WHERE schemaname = current_schema()"
+        " AND indexname = 'idx_events_place_id'"
+    ).fetchone()
+    assert exists is not None
+
+
 def test_insert_event_succeeds(conn):
     row = conn.execute(
         "INSERT INTO events (kind, who, place, body) VALUES ('msg.in', 'person:owner', 'space:cli', 'hello')"
