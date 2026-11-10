@@ -87,7 +87,7 @@ Public documents describe MonoAgens only; they mention no hosted service.
   enter the prompt; the body is loaded when the PFC asks for it.
 - Learned skills: during sleep, a successful multi-step task may be distilled into a draft
   skill. A draft becomes active only after owner approval (an approval Expectation) or a
-  configured number of successful uses.
+  configured number of successful uses. **Amended by D19: drafts now activate at once.**
 - Skills are versioned; a new version never silently overwrites the old one. Skill use counts
   feed the same ACT-R activation as memories.
 
@@ -121,6 +121,60 @@ activation threshold adapts to a storage budget set by the owner, like the other
 Retention is adaptive but deterministic: same data and same rules give the same result; no
 randomness. Backups are compressed daily with an owner-set retention period.
 
+**D15 — Waking is not thinking.**
+When an Expectation comes due, or an event might answer it, the kernel first runs a cheap gate
+with no PFC call:
+- *Still relevant?* If the completion condition is already met, the Expectation is resolved
+  and nobody is woken.
+- *Stale?* Past its expiry, it is dropped.
+- *Allowed now?* Quiet hours, daily budget and nudge caps are checked.
+Only what survives wakes the PFC. A woken PFC re-judges the situation; it never replays an old
+promise blindly.
+An Expectation's completion condition may be free text ("Muqsith answered about the
+schedule"). It is judged by meaning: a match score from vector similarity, in three bands:
+clearly no (ignore), clearly yes (resolve), gray (one call to a small classifier model, whose
+verdict is recorded as an event). Optional hints (who, place) only narrow the search.
+
+**D16 — Dispositions are learned, not configured.**
+No tuning panel. The numbers that shape behavior (the band edges of D15, the speak/silent
+threshold θ, decay rates, general talkativeness) start from an innate prior (D18, or soul.yaml
+defaults) and move by small, bounded steps from experience. Every change is an event, so it can
+be audited and rolled back. Main teacher: the classifier's verdicts on gray cases; they become
+labelled examples that slowly narrow the gray band, so the gate gets cheaper over time.
+Corrector: how people react (answered, ignored, told to stop). Learning is slow and bounded;
+one bad day must not change the character. This extends the delta-rule learning already in
+DESIGN.md.
+
+**D17 — Three layers of learned state.**
+1. *Dispositions* — the numbers of D16.
+2. *Skills* — how to solve things, lessons from failures (what went wrong and why), and general
+   social intuition ("when someone says 'whatever', they often want me to choose").
+3. *Episodic memory* — conversations, facts about people, relationships.
+Test for layers 1–2: "would this still make sense for another soul that does not know who
+these people are?" If not, it belongs to layer 3. Tuning that concerns one relationship
+("chatty with A, quiet with B") is layer 3. Lessons from P1 enter layer 2 only after being
+generalised.
+
+**D18 — Birth snapshot.**
+Layers 1–2 can be exported as a snapshot; layer 3 never is. A snapshot is *generic* (names,
+places and personal details removed), *reproducible* (it carries replay scenarios that prove
+each item still works) and records the embedder and LLM models it was learned with (learned
+numbers do not transfer across models). A new soul is born from a snapshot with empty memory
+and keeps learning from its own users. Inheritance gate: an item is passed on only if it passes
+replay on a fresh soul, no previously passing scenario regresses, and, at first, the owner
+approves it as curator. Public documents say "snapshot" and nothing about hosting (D8).
+
+**D19 — Autonomy lives in the core; brakes live in the owner policy. Amends D11.**
+Learned skills become active immediately, are versioned, and can be rolled back. Requiring
+approval before activation is no longer a core rule; an owner may still add it as an
+owner-policy setting (D9). The same holds for every other brake: the core has none of its own.
+
+**D20 — Product stance: out of the box.**
+The target is non-technical people. A good first experience needs no configuration: the soul is
+born with an innate prior (D18) and adapts. The core aims at human cognitive *functions*
+(perception, attention, memory, judgement, learning, restraint), not emotions. Roles such as
+assistant, customer service or sysadmin come from packages (D9), never from the core.
+
 ## Accepted in principle, details pending
 
 **P1 — Self-correction (track H).** A `revise` act: when corrected, the old memory gets
@@ -133,4 +187,10 @@ edits its own principles or persona; that stays with the owner.
 - Track H (P1) details.
 - Whether the agent may suggest installing a package when asked for something it cannot do.
 - Optional deeper research on memory consolidation and forgetting formulas (D14).
+- Whether the classifier call of D15 fits invariant 5 ("the LLM is only called through the
+  gate") or the invariant needs wording that lets the gate use a small classifier.
+- The update rule for band edges and dispositions (step size, bounds, minimum gray width).
+- How scrubbing for D18 is done and checked. Automatic scrubbing is unreliable; owner curation
+  is the backstop at first.
+- Snapshot format and versioning.
 - Rewrite DESIGN.md and ROADMAP.md from these decisions, then write prompts for the tracks.

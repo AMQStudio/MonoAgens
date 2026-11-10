@@ -34,6 +34,11 @@ scenario-specific code. There is no amygdala: no emotions, moods, or simulated f
 
 Never describe this as consciousness. These are engineering metaphors.
 
+Scope (D20): the core targets human cognitive *functions* (perception, attention, memory,
+judgement, learning, restraint), not emotions. Roles such as assistant, customer service or
+sysadmin come from packages, never from the core. A new soul must work well out of the box
+without configuration.
+
 ## The books (tables)
 
 ### events — the Log (append-only, the source of truth)
@@ -121,8 +126,10 @@ in the cognition package, never in kernel.py.
 
 ### Reflexes (always wake, no draw)
 - addressed events (DM, mention, reply to the bot);
-- fired `pfc` expectations (promises).
-Spam from promises is prevented by the expectation's policy, not by the gate.
+- fired `pfc` expectations (promises), once they have passed the wake gate (see "Waking,
+  learning and the birth snapshot").
+Spam from promises is prevented by the expectation's policy and the wake gate, not by the
+draw.
 
 ### Signals
 A signal is a **pure function** `(Situation) -> float in [0, 1]`. It reads, never writes.
@@ -188,6 +195,74 @@ For proactive messages only, weights learn by a delta rule:
 wₖ ← clamp(wₖ + α·(r − P)·sₖ), r = 1 if responded, 0 if ignored, α = `cognition.learning_rate`.
 Each change is a `weights.updated` event, so learning can be audited and rolled back.
 Learning can be switched off with α = 0.
+
+## Waking, learning and the birth snapshot
+Added from D15–D20 (2026-11-10). The rest of this file predates D1–D14 and is pending a
+rewrite; where they differ, DECISIONS.md wins.
+
+### The wake gate (D15)
+Waking is not thinking. When an Expectation comes due (time path) or an incoming event might
+answer it (event path), the kernel runs a gate that makes no PFC call:
+1. **Still relevant?** If the completion condition is already met, resolve the Expectation.
+   Nobody is woken.
+2. **Stale?** Past `expires_at`, drop it.
+3. **Allowed now?** Quiet hours, the daily budget (`budget_used`) and nudge caps. These reuse
+   the drives that already shape θ; there is no separate schedule panel.
+Only an Expectation that passes all three wakes the PFC. The wake reason tells the PFC how old
+the promise is and what changed since, so it re-judges instead of replaying.
+
+### Free-text completion condition
+An Expectation may carry a completion condition written as a plain sentence, next to the three
+existing operators (`none`, `event_seen`, `state`), which stay as exact fast paths. Optional
+hints (`who`, `place`) use the same event-pattern fields as `event_seen` and only narrow the
+candidates. The sentence is embedded once, when the Expectation is created.
+
+For each incoming event in scope, the match score m ∈ [0, 1] is the cosine between the event's
+vector (already in `event_vectors`) and the sentence's vector. Two band edges, lo < hi:
+- m < lo — clearly no: ignore, the Expectation keeps waiting.
+- m ≥ hi — clearly yes: resolve it.
+- lo ≤ m < hi — gray: one call to a small classifier model ("does this message answer what is
+  being waited for?"). The verdict is written as an event with m, so it is auditable and
+  replayable.
+This is the only LLM call outside a PFC wake; see the open question on invariant 5 in
+DECISIONS.md.
+
+### Learned dispositions (D16, D17)
+The values that shape behavior live in state under `cognition:dispositions`: lo, hi, the
+speak/silent base θ, decay rates, general talkativeness. soul.yaml and the birth snapshot only
+provide the starting prior.
+- Teacher: gray-case verdicts are labelled examples (m, verdict). They move lo and hi toward the
+  observed boundary by a small step, so the gray band narrows and gray calls become rarer.
+- Corrector: how people react to proactive messages (the `forward.outcome` already recorded:
+  responded | ignored), plus explicit "stop" style feedback, using the delta rule already
+  described under "Forward model and learning".
+- Bounds: every value has a floor and a ceiling, the gray band has a minimum width, and each
+  step is small. One day of unusual behavior must not change the character.
+- Each change is a `disposition.updated` event (same audit and rollback story as
+  `weights.updated`). Same events + same seed + same prior → same dispositions.
+The exact update rule is open.
+
+### Three layers of learned state (D17)
+| Layer | Holds | Exportable |
+|---|---|---|
+| 1 Dispositions | thresholds, band edges, decay, talkativeness | yes |
+| 2 Skills | how-to steps, lessons from failures, general social intuition | yes, if generic |
+| 3 Episodic memory | conversations, facts about people, relationships, per-person tuning | never |
+A learned skill has two parts: the steps that worked, and the lessons (what failed and why).
+Skills are versioned and active at once (D19); a bad version is rolled back by activating the
+previous one. Use counts feed the same ACT-R activation as memories.
+
+### Birth snapshot (D18)
+A snapshot is layers 1–2 only. It is:
+- **generic** — names, places and personal details are removed; what remains is the pattern;
+- **reproducible** — each item carries the replay scenarios (`scripts/replay.py` format) that
+  show it still works;
+- **model-aware** — it records the embedder and LLM it was learned with, because band edges
+  and θ do not transfer across models.
+A new soul starts from a snapshot with empty layer 3 and keeps learning from its own users.
+Inheritance gate: an item is included only if it passes replay on a fresh soul, no previously
+passing scenario regresses, and (at first) the owner approves it as curator. The owner's review
+is also the privacy backstop while automatic scrubbing is unproven.
 
 ## Middleware hooks
 The kernel exposes four hook points. Each holds an ordered list of middleware; in personal mode
