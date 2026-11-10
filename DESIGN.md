@@ -51,8 +51,8 @@ both a sense and an organ (Telegram hears and speaks).
 skill documents and dependencies on other packages. The **owner policy** (section 10) wraps all
 package middleware and cannot be removed by a package.
 
-**Thought acts** are the only acts in the core: `think`, `stay_silent`, `expect`, `resolve`
-(and `revise`, pending P1). Every act on the world, including speaking, is an organ capability.
+**Thought acts** are the only acts in the core: `think`, `stay_silent`, `expect`, `resolve`,
+and `revise` (self-correction, D27). The core stays within the complexity budget of D26. Every act on the world, including speaking, is an organ capability.
 The brain decides intent and content; the organ decides how to carry it out.
 
 ## 3. The books (tables)
@@ -185,7 +185,8 @@ Learned values live in state (`cognition:weights`, `cognition:dispositions`); so
 prior file (§11) only gives the starting values. Teachers: classifier verdicts (they move lo, and
 later hi, toward the observed boundary) and people's reactions (delta rule
 wₖ ← clamp(wₖ + α(r − P)sₖ)). Every value has bounds, the gray band a minimum width, every step
-is small, and every change is an event that can be rolled back. The exact update rule is open.
+is small, and every change is an event that can be rolled back. Update rule: D29 (evidence
+minimum, daily cap, band rules, rollback by recomputing from the log).
 
 ## 6. Organs and capabilities (D2, D3)
 An organ declares its capabilities: name, JSON schema, description, `communicative` (bool),
@@ -226,6 +227,8 @@ Prompt layers (for caching):
 - Memories are attributed ("Budi said yesterday …"), never stated as plain fact.
 - Low confidence → ask back or say "I don't know".
 - Never claim a capability not in `<self>`. `/help` and "what can you do?" share one source.
+- When asked for something it cannot do, the soul may tell the owner (only) that a package in
+  the local catalog would add it, rarely and never installing anything itself (D28).
 
 ## 9. Memory, sleep, retention and forgetting (D4, D6, D14, D17)
 - **Activation (ACT-R)**: B = ln(n/(1−d)) − d·ln(L hours); A = B + w_ctx·cos(context, memory) +
@@ -238,6 +241,9 @@ Prompt layers (for caching):
   recency, importance, links to promises and active memories). Low activation drops the vector;
   the gist stays in memories; the raw event stays in the log. The threshold adapts to an
   owner-set storage budget. Deterministic.
+- **Self-correction (D27)**: `revise` supersedes a memory without deleting it; guarded facts
+  are passive Expectations whose contradictions are queued for the next sleep; sleep distills
+  lessons (generic → layer 2 with credence, person-specific → layer 3).
 - **Soft forgetting**: related memories get `valid_to`; events are excluded from retrieval and
   `<recent>`; `forget.soft`.
 - **Hard forgetting**: payloads replaced by `{"forgotten": true}`, vectors, derived memories and
@@ -279,7 +285,7 @@ A soul is born from a **prior**: a local file of layer 1–2 values, loaded once
 default prior ships with the repository. The prior records the embedder and LLM it was learned
 with, because band edges and θ do not transfer across models. After birth the soul learns only
 from its own experience. This repository has no export or sharing of learned state; it only
-loads a prior.
+loads a prior. Format and loading rules: D30.
 
 ## 12. Guarantees (prototype)
 - Input never lost or duplicated; output at most once.
@@ -289,4 +295,4 @@ loads a prior.
 
 ## 13. Not here yet
 World tools beyond the first organs · bodies beyond Telegram and CLI · images and voice ·
-multiple processes · learned gate classifier · prior file format · track H details (P1).
+multiple processes · learned gate classifier.

@@ -231,18 +231,58 @@ plausible it is and what it costs if wrong, try it carefully, and trust it more 
   project outside this repository; public documents do not describe it (D8).
 - Because the prior is only a file format, the core stays unaware of where a prior came from.
 
+**D26 — Complexity budget for the core.**
+The core holds at most: 4 books (events, state, expectations, memories; event_vectors is the
+index of events), 4 thought acts (think, stay_silent, expect, resolve; `revise` replaces
+nothing and is counted as part of resolve's family, see D27), 4 hooks, 10 signals, 3 drives,
+one gate formula. A new idea that needs another core primitive must replace an existing one or
+be refused. Everything else lives in organs, packages or the owner policy.
+
+**D27 — Self-correction (details of P1).**
+- *Direct correction*: the PFC is already awake when someone replies to the soul. It uses the
+  thought act `revise(old memory, new text, reason)`: the old memory gets `valid_to` and points
+  to its replacement; nothing is deleted. Trust still applies: a stranger's correction of an
+  owner fact is stored as a conflicting claim, and the soul may ask the owner.
+- *Guarded facts*: during sleep, important facts about people from trusted sources become
+  passive Expectations ("this should still be true", origin `guarded_fact`). Possible
+  contradictions are found by the wake gate (cosine filter, then classifier; D21) and are
+  **queued for the next sleep**, not woken live — unless the fact is relevant to the current
+  conversation, in which case the PFC uses the newest information at once.
+- *Lessons*: during sleep, forward outcomes, corrections and failed actions are distilled into
+  lessons. Generic ones go to layer 2 with credence (D24); person-specific ones to layer 3.
+- The soul never revises its own principles or persona.
+
+**D28 — The soul may suggest a package, politely and rarely.**
+Only to the owner; only if the package is in the local catalog of installable packages (never
+invented); at most once per missing capability per habituation window; it can never install
+anything itself (absolute line 1, D24).
+
+**D29 — How dispositions learn.**
+Character may change slowly; one strange day must not change it.
+- Every value has a prior, a floor, a ceiling and a small step size.
+- A value moves only after enough consistent evidence (minimum count, e.g. 10 events).
+- Daily cap: a value moves at most a small share of its range per day (start: 5%).
+- Wake-gate band: `lo` moves toward the lowest m at which the classifier said "yes", minus a
+  margin; `hi` stays 1 until at least 50 verdicts above a proposed hi contain no "no" (D21);
+  the gray band keeps a minimum width.
+- Rollback: "go back to how you were yesterday" recomputes the values from the log up to that
+  date.
+Starting numbers are provisional and are tuned with replay when the tracks are built.
+
+**D30 — Prior file format (D25).**
+A plain folder: `manifest.yaml` (format version, date, embedder model, LLM family, language),
+`dispositions.yaml` (values with bounds), `skills/<name>/SKILL.md` (standard format plus
+credence and version), `lessons.yaml` (with credence), `scenarios/*.yaml` (replay proof).
+Loading rules: different embedder → vector-dependent values (band edges, FOK threshold) fall
+back to defaults; different LLM family → load, but lower skill and lesson credence slightly
+until proven again; unknown major format version → refuse with a clear message.
+
 ## Accepted in principle, details pending
 
-**P1 — Self-correction (track H).** A `revise` act: when corrected, the old memory gets
-`valid_to` and a new one supersedes it. Important facts about people become passive
-Expectations ("Budi lives in Bandung"); a contradicting event is a miss that triggers revision.
-Sleep distills forward-model outcomes and corrections into `lesson` memories. The agent never
-edits its own principles or persona; that stays with the owner.
+(None. P1 was detailed as D27.)
 
 ## Still open
-- Track H (P1) details.
-- Whether the agent may suggest installing a package when asked for something it cannot do.
-- Optional deeper research on memory consolidation and forgetting formulas (D14).
-- The update rule for band edges and dispositions (step size, bounds, minimum gray width).
-- Prior file format and versioning (D25), including the models it was learned with.
+- Deferred: deeper research on memory consolidation and forgetting formulas (D14), to be done
+  once real usage data exists.
+- Best-practice research before implementation resumes (owner request, 2026-11-10).
 - Worker prompts for Track A2 and Phase 2 tracks (after the owner resumes implementation).

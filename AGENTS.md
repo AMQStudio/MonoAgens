@@ -61,6 +61,10 @@ from `PLAN.md` or `ROADMAP.md`.
 10. **Decisions are reproducible.** Random draws come only from the seeded generator described
    in DESIGN; never from `random` or the clock directly.
 
+11. **Complexity budget** (D26). The core holds at most 4 books, the thought acts of D26/D27,
+   4 hooks, 10 signals, 3 drives and one gate formula. A change that needs another core
+   primitive stops and goes to the architect.
+
 ## Stack and versions
 - Python 3.13+, managed with `uv` (commit `uv.lock`).
 - PostgreSQL 17 with the pgvector extension ≥ 0.8.1 (iterative index scans need ≥ 0.8.0)
