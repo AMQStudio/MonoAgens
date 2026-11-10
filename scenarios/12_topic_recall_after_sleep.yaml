@@ -1,0 +1,21 @@
+name: 12_topic_recall_after_sleep
+description: >-
+  Setelah tidur mengonsolidasikan preferensi kopi, pertanyaan berikutnya harus
+  dijawab dengan mengingat kopi (retrieval memori masuk ke prompt).
+expectations:
+  - type: sleep_done
+    label: sleep.done recorded
+  - reply mentions kopi
+steps:
+  - at: "2026-11-10T20:00:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Mona, aku paling suka kopi susu tanpa gula, bukan teh."
+    addressed: true
+  - at: "2026-11-10T20:00:00+07:00"
+    advance: "35m"
+  - at: "2026-11-10T21:00:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Mona, aku suka minum apa ya? Masih ingat nggak?"
+    addressed: true

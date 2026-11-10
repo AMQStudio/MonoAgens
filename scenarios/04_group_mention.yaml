@@ -1,0 +1,11 @@
+name: 04_group_mention
+description: >-
+  Mona disebut langsung di grup; pesan addressed harus membangunkan PFC dan dibalas.
+expectations:
+  - reply
+steps:
+  - at: "2026-11-10T09:15:00+07:00"
+    who: person:tg:2004
+    place: space:tg:-1001
+    text: "@Mona tolong bantu cek ini, dokumennya nggak kebuka."
+    addressed: true

@@ -1,0 +1,31 @@
+name: 13_fired_reminder_different_place
+description: >-
+  Pengingat dibuat di DM, lalu owner aktif di grup saat jamnya tiba. Pengingat
+  harus dikirim ke DM asal, bukan ke grup yang sedang ramai.
+expectations:
+  - type: reply_in
+    place: space:tg:1001
+    step: 4
+    label: reminder delivered to the original DM place
+  - type: no_reply
+    step: 2
+    label: unrelated group chatter ignored
+  - type: no_reply
+    step: 3
+    label: unrelated group reply ignored
+steps:
+  - at: "2026-11-10T09:00:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Mona, ingetin aku telepon ibu jam 10 pagi ya."
+    addressed: true
+  - at: "2026-11-10T09:30:00+07:00"
+    who: person:tg:3001
+    place: space:tg:-1001
+    text: "Rapat mulai jam 10 ya semua, jangan telat."
+  - at: "2026-11-10T09:31:00+07:00"
+    who: person:tg:3002
+    place: space:tg:-1001
+    text: "Siap."
+  - at: "2026-11-10T09:31:00+07:00"
+    advance: "30m"

@@ -1,0 +1,22 @@
+name: 11_sleep_memory_consolidation
+description: >-
+  Dua pesan percakapan lalu idle 35 menit. Tick harus memicu tidur: memori
+  tersimpan dan event sleep.done tercatat.
+expectations:
+  - type: sleep_done
+    label: sleep.done recorded
+  - type: memories_stored
+    label: memories stored
+steps:
+  - at: "2026-11-10T20:00:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Mona, aku suka banget kopi susu tanpa gula."
+    addressed: true
+  - at: "2026-11-10T20:02:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Besok aku harus bangun jam 5 pagi buat olahraga."
+    addressed: true
+  - at: "2026-11-10T20:02:00+07:00"
+    advance: "35m"

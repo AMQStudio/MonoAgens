@@ -1,0 +1,10 @@
+name: 03_group_chitchat_weather
+description: >-
+  Keluhan macet di grup. Bukan urusan Mona, jadi tidak ada balasan.
+expectations:
+  - no reply
+steps:
+  - at: "2026-11-10T13:05:00+07:00"
+    who: person:tg:2003
+    place: space:tg:-1001
+    text: "Macet banget jalanan hari ini, aku terjebak di Sudirman."

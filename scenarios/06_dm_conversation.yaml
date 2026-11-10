@@ -1,0 +1,11 @@
+name: 06_dm_conversation
+description: >-
+  Obrolan langsung dengan owner. Pesan DM selalu addressed dan harus dibalas.
+expectations:
+  - reply
+steps:
+  - at: "2026-11-10T08:00:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Halo Mona, apa kabar?"
+    addressed: true

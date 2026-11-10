@@ -1,0 +1,11 @@
+name: 15_urgent_unaddressed_group
+description: >-
+  Pesan darurat di grup yang tidak ditujukan ke Mona. Gate tidak boleh ikut
+  panik: tanpa addressed, surprise, atau fired expectation, keputusannya diam.
+expectations:
+  - no reply
+steps:
+  - at: "2026-11-10T14:00:00+07:00"
+    who: person:tg:5001
+    place: space:tg:-1001
+    text: "Gawat darurat server down tolong!"

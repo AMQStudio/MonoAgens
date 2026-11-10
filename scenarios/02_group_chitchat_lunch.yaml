@@ -1,0 +1,10 @@
+name: 02_group_chitchat_lunch
+description: >-
+  Grup membahas makan siang tanpa melibatkan Mona; gate harus tetap diam.
+expectations:
+  - no reply
+steps:
+  - at: "2026-11-10T12:10:00+07:00"
+    who: person:tg:2002
+    place: space:tg:-1001
+    text: "Makan siang di mana nih? Aku bingung mau makan apa."

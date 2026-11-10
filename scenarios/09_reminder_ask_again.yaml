@@ -1,0 +1,14 @@
+name: 09_reminder_ask_again
+description: >-
+  "Tanya lagi kalau aku belum jawab dalam 1 jam": Expectation dengan cue satu jam
+  kemudian harus terpicu sekali bila owner tetap diam.
+expectations:
+  - exactly one reminder at 11:00
+steps:
+  - at: "2026-11-10T10:00:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Mona, tanya lagi ya kalau aku belum jawab dalam 1 jam soal proposal itu."
+    addressed: true
+  - at: "2026-11-10T10:00:00+07:00"
+    advance: "1h"

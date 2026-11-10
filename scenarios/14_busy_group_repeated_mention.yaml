@@ -1,0 +1,62 @@
+name: 14_busy_group_repeated_mention
+description: >-
+  Grup ramai (crowd penalty penuh) lalu Mona disebut dua kali berturut-turut.
+  Pesan addressed melewati skor gate, jadi keduanya harus dibalas.
+expectations:
+  - type: min_replies
+    count: 2
+    label: answers both mentions despite crowd
+  - type: reply
+    step: 12
+    label: second mention answered
+steps:
+  - at: "2026-11-10T12:00:00+07:00"
+    who: person:tg:4001
+    place: space:tg:-1002
+    text: "Ada yang sudah baca dokumen baru?"
+  - at: "2026-11-10T12:00:00+07:00"
+    who: person:tg:4002
+    place: space:tg:-1002
+    text: "Belum, nanti siang aku buka."
+  - at: "2026-11-10T12:01:00+07:00"
+    who: person:tg:4003
+    place: space:tg:-1002
+    text: "Rapatnya jadi jam berapa?"
+  - at: "2026-11-10T12:01:00+07:00"
+    who: person:tg:4004
+    place: space:tg:-1002
+    text: "Jam dua kayaknya."
+  - at: "2026-11-10T12:02:00+07:00"
+    who: person:tg:4005
+    place: space:tg:-1002
+    text: "Aku telat sedikit ya."
+  - at: "2026-11-10T12:02:00+07:00"
+    who: person:tg:4006
+    place: space:tg:-1002
+    text: "Oke, dicatat."
+  - at: "2026-11-10T12:03:00+07:00"
+    who: person:tg:4007
+    place: space:tg:-1002
+    text: "Menu makan siang apa hari ini?"
+  - at: "2026-11-10T12:03:00+07:00"
+    who: person:tg:4008
+    place: space:tg:-1002
+    text: "Nasi padang lagi deh."
+  - at: "2026-11-10T12:04:00+07:00"
+    who: person:tg:4009
+    place: space:tg:-1002
+    text: "Wkwk klasik."
+  - at: "2026-11-10T12:04:00+07:00"
+    who: person:tg:4010
+    place: space:tg:-1002
+    text: "Nanti sore ada yang ikut futsal?"
+  - at: "2026-11-10T12:05:00+07:00"
+    who: person:tg:4011
+    place: space:tg:-1002
+    text: "Mona, tolong rangkum diskusi tadi dong."
+    addressed: true
+  - at: "2026-11-10T12:06:00+07:00"
+    who: person:tg:4012
+    place: space:tg:-1002
+    text: "Mona? Kok diem aja?"
+    addressed: true

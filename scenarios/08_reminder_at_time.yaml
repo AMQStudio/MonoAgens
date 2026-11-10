@@ -1,0 +1,14 @@
+name: 08_reminder_at_time
+description: >-
+  Owner minta diingatkan setor pajak jam 3 sore. PFC harus membuat Expectation,
+  lalu tick pada jam itu memicunya tepat satu kali.
+expectations:
+  - exactly one reminder at 15:00
+steps:
+  - at: "2026-11-10T09:00:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Mona, ingetin aku setor pajak jam 3 sore ya."
+    addressed: true
+  - at: "2026-11-10T09:00:00+07:00"
+    advance: "6h"

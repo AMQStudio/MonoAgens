@@ -1,0 +1,16 @@
+name: 05_group_reply_to_bot
+description: >-
+  Seseorang membalas pesan Mona di grup. Balasan langsung ke bot adalah addressed.
+expectations:
+  - reply
+steps:
+  - at: "2026-11-10T09:00:00+07:00"
+    who: person:owner
+    place: space:tg:-1001
+    text: "Mona, tolong catat ya besok rapat jam 9 pagi."
+    addressed: true
+  - at: "2026-11-10T09:03:00+07:00"
+    who: person:tg:2005
+    place: space:tg:-1001
+    text: "Mona, itu rapatnya jam berapa tadi?"
+    addressed: true
