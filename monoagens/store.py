@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
@@ -49,12 +50,17 @@ async def append_event(conn, event=None, *, ts=None, kind=None, who=None, place=
     return _row_to_event(row)
 
 
-async def read_last_events(conn, place, limit=20, *, chronological=True) -> list[Event]:
-    """Return the last events for a place, oldest first by default."""
-    cur = await conn.execute(
-        f"SELECT {_EVENT_COLS} FROM events WHERE place = %s ORDER BY id DESC LIMIT %s",
-        (place, limit),
-    )
+async def read_last_events(conn, place, limit=20, *, chronological=True,
+                           kinds: Sequence[str] | None = None) -> list[Event]:
+    """Return the last events for a place, optionally restricted to some kinds."""
+    query = f"SELECT {_EVENT_COLS} FROM events WHERE place = %s"
+    params: list[Any] = [place]
+    if kinds is not None:
+        query += " AND kind = ANY(%s)"
+        params.append(list(kinds))
+    query += " ORDER BY id DESC LIMIT %s"
+    params.append(limit)
+    cur = await conn.execute(query, params)
     events = [_row_to_event(row) for row in await cur.fetchall()]
     if chronological:
         events.reverse()

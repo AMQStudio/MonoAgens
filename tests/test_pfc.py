@@ -169,6 +169,39 @@ async def test_layered_prompt_structure(aconn):
     assert "<event>owner: lagi?</event>" in volatile
 
 
+async def test_recent_shows_only_conversational_events(aconn):
+    """<recent> carries msg.in, msg.out, and fired expectations, never bookkeeping."""
+    fake = FakeLLM()
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
+
+    await append_event(aconn, ts=START, kind="msg.in", who="person:owner", place=PLACE,
+                       body="telegram", payload={"text": "halo pagi"})
+    await append_event(aconn, ts=START, kind="decision.silent", place=PLACE,
+                       payload={"reason": "internal-silence"})
+    await append_event(aconn, ts=START, kind="error", place=PLACE,
+                       payload={"error": "internal-error"})
+    await append_event(aconn, ts=START, kind="sleep.done", place=PLACE,
+                       payload={"text": "internal-sleep"})
+    await append_event(aconn, ts=START, kind="expectation.created", place=PLACE,
+                       payload={"about": "internal-expectation"})
+    await append_event(aconn, ts=START, kind="expectation.fired", who="person:owner",
+                       place=PLACE, body="telegram", payload={"about": "minum air"})
+    await append_event(aconn, ts=START, kind="msg.out", who="person:owner", place=PLACE,
+                       body="telegram", payload={"text": "pagi juga"})
+
+    await _feed(kernel, _msg("masih di sana?"))
+
+    volatile = fake.last_messages[2]["content"]
+    recent = volatile.split("<recent>", 1)[1].split("</recent>", 1)[0]
+    assert "15:00 owner: halo pagi" in recent
+    assert "15:00 Mona: pagi juga" in recent
+    assert "15:00 expectation: minum air" in recent
+    for internal in ("internal-silence", "internal-error", "internal-sleep",
+                     "internal-expectation"):
+        assert internal not in recent
+    assert "<event>owner: masih di sana?</event>" in volatile
+
+
 async def test_say_is_recorded_before_the_body_acts(aconn):
     fake = FakeLLM([[("say", {"text": "halo juga"})]])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))

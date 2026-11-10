@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from monoagens.config import load_soul
-from monoagens.types import Event
+from monoagens.types import RECENT_KINDS, Event
 
 SYSTEM_TAIL = "You act only through the tools. Staying silent is a valid choice."
 
@@ -161,13 +161,20 @@ class PFC:
     def _recent_lines(self, context: PFCContext) -> list[str]:
         lines: list[str] = []
         for event in context.recent:
-            text = event.payload.get("text")
-            if not text:
+            if event.kind not in RECENT_KINDS:
                 continue
-            speaker = self.name if event.kind == "msg.out" else (
-                str(event.who or "?").removeprefix("person:"))
-            lines.append(f"{event.ts.astimezone(self.timezone):%H:%M} {speaker}: {text}")
+            speaker, text = self._recent_parts(event)
+            if text:
+                stamp = event.ts.astimezone(self.timezone)
+                lines.append(f"{stamp:%H:%M} {speaker}: {text}")
         return lines or ["(nothing yet)"]
+
+    def _recent_parts(self, event: Event) -> tuple[str, Any]:
+        if event.kind == "msg.out":
+            return self.name, event.payload.get("text")
+        if event.kind == "expectation.fired":
+            return "expectation", (event.payload.get("text") or event.payload.get("about"))
+        return str(event.who or "?").removeprefix("person:"), event.payload.get("text")
 
     def _event_text(self, event: Event | None) -> str:
         if event is None:

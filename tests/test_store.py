@@ -75,6 +75,23 @@ async def test_events_ordering(aconn):
     assert other == []
 
 
+async def test_read_last_events_filters_by_kind(aconn):
+    """A kinds filter keeps internal events from displacing conversational ones."""
+    t = datetime(2026, 11, 10, 10, 0, 0, tzinfo=timezone.utc)
+    conversational = await append_event(
+        aconn, ts=t, kind="msg.in", who="person:owner", place="space:alpha",
+        payload={"text": "first"},
+    )
+    for _ in range(25):
+        await append_event(aconn, ts=t, kind="decision.silent", place="space:alpha")
+
+    events = await read_last_events(
+        aconn, "space:alpha", limit=5, kinds=("msg.in", "msg.out", "expectation.fired")
+    )
+
+    assert [event.id for event in events] == [conversational.id]
+
+
 async def test_cursor_tracking(aconn):
     t = datetime(2026, 11, 10, 12, 0, 0, tzinfo=timezone.utc)
 

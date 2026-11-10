@@ -15,7 +15,7 @@ from monoagens.pfc import PFC, PFCContext, ToolCall
 from monoagens.store import (active_expectation_lines, append_event,
                              cursor as store_cursor, project_event, read_last_events,
                              read_state)
-from monoagens.types import Action, Event
+from monoagens.types import RECENT_KINDS, Action, Event
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,7 +105,7 @@ class Kernel:
         await self._think(event, verdict.reason, event.place or "")
 
     async def _think(self, event: Event, reason: str, place: str) -> None:
-        recent = await read_last_events(self.conn, place, limit=20)
+        recent = await read_last_events(self.conn, place, limit=20, kinds=RECENT_KINDS)
         context = PFCContext(
             now=self.clock.now(), place=place,
             place_kind=str(event.payload.get("place_kind") or "direct"), reason=reason,

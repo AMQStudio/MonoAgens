@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+# The only kinds the PFC's <recent> section may show; internal bookkeeping stays out.
+RECENT_KINDS = ("msg.in", "msg.out", "expectation.fired")
+
 
 @dataclass(frozen=True, slots=True)
 class Event:
