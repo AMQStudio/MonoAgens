@@ -87,7 +87,7 @@ Public documents describe MonoAgens only; they mention no hosted service.
   enter the prompt; the body is loaded when the PFC asks for it.
 - Learned skills: during sleep, a successful multi-step task may be distilled into a draft
   skill. A draft becomes active only after owner approval (an approval Expectation) or a
-  configured number of successful uses. **Amended by D19: drafts now activate at once.**
+  configured number of successful uses. **Amended by D19 and D22: drafts activate at once unless the default owner policy holds them.**
 - Skills are versioned; a new version never silently overwrites the old one. Skill use counts
   feed the same ACT-R activation as memories.
 
@@ -175,6 +175,29 @@ born with an innate prior (D18) and adapts. The core aims at human cognitive *fu
 (perception, attention, memory, judgement, learning, restraint), not emotions. Roles such as
 assistant, customer service or sysadmin come from packages (D9), never from the core.
 
+**D21 — Cosine is only a filter, never a judge. Amends D15.**
+Vector similarity measures "about the same thing", not "answers it": a question on the same
+topic scores as high as its answer. So for free-text completion conditions the cosine only
+filters: m < lo is ignored; every m ≥ lo goes to the classifier. The "clearly yes" band starts
+disabled (hi = 1) and may open only when recorded classifier verdicts show that the band above
+the proposed hi contains no false resolutions. Opening it is a `disposition.updated` event.
+
+**D22 — The default owner policy ships with sensible brakes. Amends D19 and D20.**
+The core still has no brakes of its own (D19). But a soul is installed with a default owner
+policy, active out of the box, so a non-technical owner is protected without configuring
+anything:
+- skills learned from work with the owner activate at once; skills whose source involves
+  anyone else wait for owner approval (an approval Expectation);
+- owner-only instructions in groups (D5);
+- the daily model budget and quiet hours.
+The owner may loosen or tighten these; packages cannot remove them (D9).
+
+**D23 — Every model call goes through a gate and is accounted for. Replaces the old wording of
+invariant 5.**
+No model call (PFC, classifier, sleep) happens per message or per tick by default. Each call is
+the result of a gate decision, is recorded as an event with its purpose and token usage, and
+counts toward the daily budget. The D15 classifier therefore needs no exception.
+
 ## Accepted in principle, details pending
 
 **P1 — Self-correction (track H).** A `revise` act: when corrected, the old memory gets
@@ -187,8 +210,6 @@ edits its own principles or persona; that stays with the owner.
 - Track H (P1) details.
 - Whether the agent may suggest installing a package when asked for something it cannot do.
 - Optional deeper research on memory consolidation and forgetting formulas (D14).
-- Whether the classifier call of D15 fits invariant 5 ("the LLM is only called through the
-  gate") or the invariant needs wording that lets the gate use a small classifier.
 - The update rule for band edges and dispositions (step size, bounds, minimum gray width).
 - How scrubbing for D18 is done and checked. Automatic scrubbing is unreliable; owner curation
   is the backstop at first.

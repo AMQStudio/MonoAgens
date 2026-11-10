@@ -43,7 +43,9 @@ from `PLAN.md` or `ROADMAP.md`.
    Only the kernel loop processes events, one at a time, in order.
 4. **Record first, then act.** Incoming events are written to `events` before they are
    processed. Decisions to stay silent are written too.
-5. **The LLM is only called through the gate.** No LLM call per message or per tick.
+5. **Every model call goes through a gate and is accounted for** (D23). No model call per
+   message or per tick by default; each call is a gate decision, is recorded as an event with
+   its purpose and token usage, and counts toward the daily budget.
 6. **No scenario features.** No "reminder", "monitor", or "habit tracker" modules. All of them
    are Expectations (see DESIGN.md). If an idea cannot be an Expectation, a state key, or a body
    adapter, it does not go in.
