@@ -17,6 +17,7 @@ from functools import partial
 from . import io, plugins
 from .access.approvals import ApprovalStore
 from .access.identity import IdentityStore
+from .access.notices import AccessNoticeLimiter
 from .access.permissions import tool_patterns, tools_for
 from .access.privacy import PrivacyService
 from .access.roles import Role
@@ -127,6 +128,7 @@ class Agent(DeliveryFacade, CrossRoomGuard):
         self.documents = documents
         self.identity = identity or IdentityStore(db, roles=self.config.roles)
         self.approvals = approvals or ApprovalStore(db, config.approval)
+        self.access_notices = AccessNoticeLimiter(config.access.access_notice_hours)
         self.safety = safety or build_safety(config.approval)
         self.sandbox_guard = SandboxGuard(
             config.guard, config.approval.sensitive_commands, self.llm

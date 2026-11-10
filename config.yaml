@@ -264,6 +264,12 @@ engine:
         # The Soul's name written as plain text, without a mention. Default: 15.
         name_in_text: 15
 
+  # --- engine.access: ACCESS NOTICES ---
+  # Access notices for people the gateway policy refuses.
+  access:
+    # In a private chat, a person without access is told so at most once in this many hours. Groups never receive access refusals. Default: 24.
+    access_notice_hours: 24
+
   # --- engine.worker: BACKGROUND WORKER ---
   # Background worker retry and reaper.
   worker:

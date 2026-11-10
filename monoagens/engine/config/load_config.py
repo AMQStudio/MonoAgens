@@ -45,6 +45,7 @@ from .models import (
 )
 from .schema import DEFAULT_SENSITIVE_COMMANDS, ENGINE_SCHEMA, ConfigError
 from .sections import (
+    _access_config,
     _addressing_config,
     _bool,
     _clamped,
@@ -364,6 +365,7 @@ def load_config(
         language=language,
         turns=turns,
         addressing=_addressing_config(engine),
+        access=_access_config(engine),
         worker=_worker_config(_section(engine, "worker")),
         io=IOConfig(workers=max(1, int(_num(_section(engine, "io").get("workers"), 8)))),
         concurrency=ConcurrencyConfig(

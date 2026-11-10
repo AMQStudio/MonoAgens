@@ -468,3 +468,78 @@ def test_every_shipped_body_meets_the_core_contract_and_resolves_prompts(tmp_pat
     for body in bodies[1:]:
         with pytest.raises(ValueError, match="role policy needs"):
             body.validate_role_policy({"dm": True})
+
+
+class FakeClock:
+    """A movable clock for the access-notice window."""
+
+    def __init__(self, now: float = 1_000_000.0) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_a_direct_chat_hears_one_refusal_per_window(tmp_path) -> None:
+    from monoagens.engine.access.notices import AccessNoticeLimiter
+    from monoagens.engine.i18n import t
+
+    gateway = RefusingGateway(name="fake")
+    env = make_agent(tmp_path, gateway=gateway)
+    clock = FakeClock()
+    env.agent.access_notices = AccessNoticeLimiter(24, clock=clock)
+    notice = t("agent.access_refused", env.config.soul.language)
+
+    for message_id in ("w1", "w2"):
+        asyncio.run(
+            env.agent.handle(
+                inbound_message("halo", message_id=message_id, sender="628111"), gateway
+            )
+        )
+
+    assert gateway.sent == [("chat", notice, None)]
+
+    clock.now += 24 * 3600 + 1
+    asyncio.run(
+        env.agent.handle(inbound_message("halo", message_id="w3", sender="628111"), gateway)
+    )
+
+    assert gateway.sent == [("chat", notice, None), ("chat", notice, None)]
+
+
+def test_a_second_person_gets_its_own_window(tmp_path) -> None:
+    from monoagens.engine.access.notices import AccessNoticeLimiter
+
+    gateway = RefusingGateway(name="fake")
+    env = make_agent(tmp_path, gateway=gateway)
+    env.agent.access_notices = AccessNoticeLimiter(24, clock=FakeClock())
+
+    for message_id, sender in (("p1", "628111"), ("p2", "628222")):
+        asyncio.run(
+            env.agent.handle(
+                inbound_message("halo", message_id=message_id, sender=sender, person_id=sender),
+                gateway,
+            )
+        )
+
+    assert len(gateway.sent) == 2
+
+
+def test_a_shared_room_never_gets_a_notice_even_within_the_window(tmp_path) -> None:
+    from monoagens.engine.access.notices import AccessNoticeLimiter
+
+    gateway = RefusingGateway(name="fake")
+    env = make_agent(tmp_path, gateway=gateway)
+    env.agent.access_notices = AccessNoticeLimiter(24, clock=FakeClock())
+
+    for message_id in ("g1", "g2"):
+        asyncio.run(
+            env.agent.handle(
+                inbound_message(
+                    "halo", message_id=message_id, thread="111@g.us", dm=False
+                ),
+                gateway,
+            )
+        )
+
+    assert gateway.sent == []

@@ -22,6 +22,7 @@ from ..engine.access.roles import Role
 from ..engine.config import (
     ENGINE_SCHEMA,
     WEB_SEARCH_PROVIDERS,
+    AccessConfig,
     AddressingConfig,
     AlertsConfig,
     AmbientConfig,
@@ -238,6 +239,7 @@ def engine_defaults() -> dict:
         "alerts": _section_defaults(AlertsConfig(), ENGINE_SCHEMA["alerts"]),
         "turns": _section_defaults(TurnConfig(), ENGINE_SCHEMA["turns"]),
         "addressing": _section_defaults(AddressingConfig(), ENGINE_SCHEMA["addressing"]),
+        "access": _section_defaults(AccessConfig(), ENGINE_SCHEMA["access"]),
         "worker": _section_defaults(WorkerConfig(), ENGINE_SCHEMA["worker"]),
         "io": _section_defaults(IOConfig(), ENGINE_SCHEMA["io"]),
         "concurrency": _section_defaults(ConcurrencyConfig(), ENGINE_SCHEMA["concurrency"]),
@@ -789,6 +791,11 @@ COMMENTS: dict[str, str] = {
     "engine.memory.retention.purge": "Daily purge limits.",
     "engine.memory.retention.purge.grace_days": "Grace window before purge. Default: 1.",
     "engine.memory.retention.purge.batch": "Rows removed per run. Default: 500.",
+    "engine.access": "Access notices for people the gateway policy refuses.",
+    "engine.access.access_notice_hours": (
+        "In a private chat, a person without access is told so at most once in this many hours. "
+        "Groups never receive access refusals. Default: 24."
+    ),
     "engine.approval": "Approval policy for sensitive commands and settings.",
     "engine.approval.mode": "default, yolo, or strict. Default: yolo.",
     "engine.approval.confirm_cross_gateway": (
@@ -1060,6 +1067,7 @@ ENGINE_TITLES: dict[str, str] = {
     "alerts": "OUT-OF-BAND ALERTING",
     "turns": "TURN LIFECYCLE & SHUTDOWN",
     "addressing": "GROUP ADDRESSING",
+    "access": "ACCESS NOTICES",
     "worker": "BACKGROUND WORKER",
     "io": "BLOCKING I/O",
     "concurrency": "CONCURRENCY",

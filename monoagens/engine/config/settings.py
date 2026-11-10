@@ -195,6 +195,21 @@ class ApprovalConfig:
         )
 
 @dataclass(frozen=True)
+class AccessConfig:
+    """ADR-0013 §4.4: access notices are rate-limited per person in a direct chat.
+
+    `access_notice_hours` is the minimum gap between two refusal notices for one person on one
+    body; a shared room never receives one at all, whatever this value is.
+    """
+
+    access_notice_hours: float = 24.0
+
+    def __post_init__(self) -> None:
+        if float(self.access_notice_hours) <= 0:
+            raise ConfigError("access.access_notice_hours must be a positive number of hours")
+
+
+@dataclass(frozen=True)
 class SkillsConfig:
     """ADR-0001 §5: procedures are retrieved, never indexed; unused ones decay."""
 

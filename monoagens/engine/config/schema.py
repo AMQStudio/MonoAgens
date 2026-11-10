@@ -116,6 +116,7 @@ ENGINE_SCHEMA: dict[str, object] = {
             }
         },
     },
+    "access": {"access_notice_hours": None},
     "worker": {
         "retry": {"attempts": None, "backoff_seconds": None, "dead_letter_after": None},
         "reaper": {"every_seconds": None, "batch": None},

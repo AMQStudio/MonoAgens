@@ -25,6 +25,7 @@ from .models import (
 )
 from .schema import ConfigError
 from .settings import (
+    AccessConfig,
     IntentConfig,
     MCPServerConfig,
     PluginConfig,
@@ -287,6 +288,18 @@ def _shell_config(raw: Mapping) -> ShellConfig:
     if "*" in names:
         raise ConfigError("engine.shell.env must name variables; the wildcard '*' is refused")
     return ShellConfig(env=names)
+
+def _access_config(raw: Mapping) -> AccessConfig:
+    """`engine.access` (ADR-0013 §4.4): the private-chat notice window."""
+    body = _section(raw, "access")
+    default = 24.0
+    hours = _num(body.get("access_notice_hours"), default)
+    if hours <= 0:
+        raise ConfigError(
+            "engine.access.access_notice_hours must be a positive number of hours"
+        )
+    return AccessConfig(access_notice_hours=hours)
+
 
 def _addressing_config(raw: Mapping) -> AddressingConfig:
     """`engine.addressing` (ADR-0012 §4.7): bands, the continuity window, and the weights."""

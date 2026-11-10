@@ -70,6 +70,7 @@ from .schema import ENGINE_SCHEMA as ENGINE_SCHEMA
 from .schema import ConfigError as ConfigError
 from .sections import REDACT_MODES as REDACT_MODES
 from .settings import APPROVAL_MODES as APPROVAL_MODES
+from .settings import AccessConfig as AccessConfig
 from .settings import AmbientConfig as AmbientConfig
 from .settings import ApprovalConfig as ApprovalConfig
 from .settings import CaptureConfig as CaptureConfig
@@ -107,6 +108,7 @@ __all__ = [
     "SPEECH_TIMEOUT_DEFAULT",
     "SPEECH_TIMEOUT_HARD_LIMIT",
     "WEB_SEARCH_PROVIDERS",
+    "AccessConfig",
     "AddressingAdvancedConfig",
     "AddressingConfig",
     "AddressingSkepticismConfig",

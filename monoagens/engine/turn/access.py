@@ -47,6 +47,17 @@ def command_permitted(agent, inbound: Percept, gateway: GatewayCore) -> bool:
     return bool(recipe is not None and {role.name for role in roles} & set(recipe.roles))
 
 
+def _person(agent, inbound: Percept, gateway: GatewayCore) -> str:
+    """The canonical person for the notice window; the transport id when identity fails."""
+    source = str(inbound.source or gateway.name)
+    raw = str(inbound.actor or "") or agent._sender(inbound)
+    try:
+        return str(agent.identity.resolve(source, raw) or raw)
+    except Exception:
+        log.debug("access notice identity failed source=%s", source, exc_info=True)
+        return raw
+
+
 async def refused(
     agent, inbound: Percept, gateway: GatewayCore, *, claimed: dict | None
 ) -> bool:
@@ -73,6 +84,10 @@ async def refused(
     if not bool(inbound.hints.get("dm")):
         # A shared room never hears a refusal; the gate keeps its conversation silent.
         agent.intake.observe_group(inbound, gateway, reason)
+        return True
+    person = _person(agent, inbound, gateway)
+    if not agent.access_notices.claim(str(getattr(gateway, "name", "") or ""), person):
+        # Inside the window the turn stays refused; only the notice is withheld.
         return True
     try:
         await agent.delivery.text(

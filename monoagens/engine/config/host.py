@@ -30,6 +30,7 @@ from .models import (
     WorkerConfig,
 )
 from .settings import (
+    AccessConfig,
     AmbientConfig,
     ApprovalConfig,
     GatewaySettings,
@@ -92,6 +93,7 @@ class Config:
     language: LanguageConfig = field(default_factory=LanguageConfig)
     turns: TurnConfig = field(default_factory=TurnConfig)
     addressing: AddressingConfig = field(default_factory=AddressingConfig)
+    access: AccessConfig = field(default_factory=AccessConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     io: IOConfig = field(default_factory=IOConfig)
     concurrency: ConcurrencyConfig = field(default_factory=ConcurrencyConfig)
