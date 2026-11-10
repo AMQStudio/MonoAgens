@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from .. import io
 from ..access.permissions import normalize
 from ..character import lexicon
-from ..envelope import merge_labels
+from ..envelope import SPEAKER_RECEIPT, merge_labels
 from .words import words
 
 if TYPE_CHECKING:
@@ -83,6 +83,10 @@ def clamp_visibility(value: object, default: int = DEFAULT_VISIBILITY) -> int:
 
 def entry_tag(entry: Message) -> str:
     tag = f"role={entry.author} vis=L{entry.visibility}"
+    if entry.speaker == SPEAKER_RECEIPT:
+        tag += ", system receipt"
+        if entry.actor:
+            tag += f", run by {entry.actor}"
     if entry.view_once:
         tag += ", view-once"
     if entry.unreadable and not (entry.text or "").strip() and not entry.attachments:
@@ -552,16 +556,18 @@ def fallback_content(config: Config, message: Message) -> str:
 
 
 def _quote_lines(
-    config: Config, thread_id: str, quote: Quote, *, persist: bool = True
+    config: Config, thread_id: str, quote: Quote, *, persist: bool = True, to_self: bool = False
 ) -> list[str]:
     stamp = f"[{quote.when:%Y-%m-%d %H:%M}] " if quote.when else ""
     name = _flatten(quote.sender_name, NAME_LIMIT) or "-"
     ident = quote.sender_id if quote.sender_id and quote.sender_id != quote.sender_name else ""
     who = f"{name} ({ident})" if ident else name
+    # ADR-0018 P1: the quote is the Soul's own earlier message, so the addressee is the Soul.
+    target = f"YOU (your own earlier message) {stamp}".rstrip() if to_self else f"{stamp}{who}"
     body = quote.text.rstrip()
     if body.strip():
         preview, remaining = _clip(body)
-        lines = [f'  ↳ replying to {stamp}{who}: "{_flatten(preview)}"']
+        lines = [f'  ↳ replying to {target}: "{_flatten(preview)}"']
         if remaining:
             quote_id = quote.id or f"quote-{time.time_ns()}"
             path = (
@@ -572,21 +578,25 @@ def _quote_lines(
             lines.append(_clip_marker(remaining, path))
         return lines
     if quote.media is not None:
-        return [f'  ↳ replying to {stamp}{who}: "(attachment)"']
-    return [f'  ↳ replying to {stamp}{who}: "(content not available)"']
+        return [f'  ↳ replying to {target}: "(attachment)"']
+    return [f'  ↳ replying to {target}: "(content not available)"']
 
 
 def prompt_entry(entry: Message, bot_name: str, limit: int = 300) -> str:
     """One context line for the gate/appraisal: author, name, text, media, and short quotes."""
-    who = (
-        f"you ({bot_name})"
-        if entry.author == AUTHOR_BOT
-        else (
-            f"{_flatten(entry.sender_name, NAME_LIMIT) or '-'} (manual owner)"
-            if entry.author == AUTHOR_MANUAL
-            else (entry.sender_name or entry.sender_id or "-")
+    if entry.speaker == SPEAKER_RECEIPT:
+        # The harness answered the command; the Soul never spoke these words.
+        who = f"system (run by {entry.actor})" if entry.actor else "system"
+    else:
+        who = (
+            f"you ({bot_name})"
+            if entry.author == AUTHOR_BOT
+            else (
+                f"{_flatten(entry.sender_name, NAME_LIMIT) or '-'} (manual owner)"
+                if entry.author == AUTHOR_MANUAL
+                else (entry.sender_name or entry.sender_id or "-")
+            )
         )
-    )
     note = body_note(entry)
     body = note or _flatten(entry.text, limit)
     notes: list[str] = []
@@ -594,7 +604,9 @@ def prompt_entry(entry: Message, bot_name: str, limit: int = 300) -> str:
         kind = MEDIA_LABELS.get(media.kind, media.kind)
         notes.append(f"[{kind}, animated]" if media.animated else f"[{kind}]")
     if entry.quote is not None and not entry.deleted:
-        qwho = _flatten(entry.quote.sender_name, NAME_LIMIT) or "-"
+        qwho = (
+            "you" if entry.reply_to_self else (_flatten(entry.quote.sender_name, NAME_LIMIT) or "-")
+        )
         qtext = _flatten(entry.quote.text, 120)
         if qtext:
             notes.append(f'replying to {qwho}: "{qtext}"')
@@ -672,13 +684,17 @@ def _message_lines(
     tag = entry_tag(entry)
     if entry.author != AUTHOR_BOT and entry.sender_id and entry.sender_kind == "person":
         tag = f"{tag}, mention=@{entry.sender_id}"
-    if entry.author == AUTHOR_BOT:
+    receipt = entry.speaker == SPEAKER_RECEIPT
+    if receipt:
+        # ADR-0018 P1: a receipt is the harness speaking, with its actor named in the tag.
+        name = "system"
+    elif entry.author == AUTHOR_BOT:
         name = _flatten(entry.sender_name or config.soul.name, NAME_LIMIT) or "-"
     else:
         name = _flatten(entry.sender_name, NAME_LIMIT) or "-"
     ident = entry.sender_id if entry.sender_id and entry.sender_id != entry.sender_name else ""
-    who = f"{name} ({ident})" if ident else name
-    suffix = f"{tag}, you" if entry.author == AUTHOR_BOT else tag
+    who = name if receipt else (f"{name} ({ident})" if ident else name)
+    suffix = f"{tag}, you" if entry.author == AUTHOR_BOT and not receipt else tag
     head = f"{stamp} {who} [{suffix}]:"
     lines = [head]
     note = body_note(entry)
@@ -689,7 +705,11 @@ def _message_lines(
     elif entry.attachments:
         lines.append("  (no text)")
     if entry.quote is not None and not entry.deleted:
-        lines.extend(_quote_lines(config, thread_id, entry.quote, persist=persist))
+        lines.extend(
+            _quote_lines(
+                config, thread_id, entry.quote, persist=persist, to_self=entry.reply_to_self
+            )
+        )
         if entry.quote.media is not None:
             media = entry.quote.media
             number = numbers.get(_media_key(config, media), 0)

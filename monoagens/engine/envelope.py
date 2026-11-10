@@ -10,7 +10,8 @@ import re
 from .access.permissions import normalize
 
 # The allowed value sets, mirroring `ck_messages_speaker`, `ck_messages_kind`, `ck_messages_trust`.
-SPEAKERS = frozenset({"self", "sender", "other_person", "system_receipt", "unknown"})
+SPEAKER_RECEIPT = "system_receipt"  # the harness answered the command, not the Soul
+SPEAKERS = frozenset({"self", "sender", "other_person", SPEAKER_RECEIPT, "unknown"})
 KINDS = frozenset({"chat", "question", "command", "tool_result", "notice", "unknown"})
 TRUSTS = frozenset({"owner", "member", "untrusted_content", "unknown"})
 

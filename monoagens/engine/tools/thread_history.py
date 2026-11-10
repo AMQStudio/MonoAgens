@@ -8,6 +8,7 @@ is marked so the cross-room leak guard sees what left its own room.
 
 from datetime import datetime, timedelta
 
+from ..envelope import SPEAKER_RECEIPT
 from ..inbound import refusal
 from ..registry import Handler
 from ..stores import rooms
@@ -49,6 +50,9 @@ def _body(entry) -> str:
 
 
 def _who(entry) -> str:
+    if getattr(entry, "speaker", "") == SPEAKER_RECEIPT:
+        actor = getattr(entry, "actor", "")
+        return f"system (run by {actor})" if actor else "system"
     ident = entry.sender_id if entry.sender_id and entry.sender_id != entry.sender_name else ""
     if ident:
         return f"{entry.sender_name or '-'} ({ident})"
@@ -171,7 +175,12 @@ def _lines(
         if entry.quote is not None:
             quote = " ".join((entry.quote.text or "").split())
             if quote:
-                lines.append(f"  ↳ replying to {entry.quote.sender_name or '-'}: {quote[:300]}")
+                qwho = (
+                    "you (the Soul)"
+                    if getattr(entry, "reply_to_self", False)
+                    else (entry.quote.sender_name or "-")
+                )
+                lines.append(f"  ↳ replying to {qwho}: {quote[:300]}")
         handles = _handles(ctx, thread_id, entry)
         if handles:
             lines.append(f"  ↳ attachments: {', '.join(handles)}")
