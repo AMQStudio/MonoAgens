@@ -91,6 +91,23 @@ Public documents describe MonoAgens only; they mention no hosted service.
 - Skills are versioned; a new version never silently overwrites the old one. Skill use counts
   feed the same ACT-R activation as memories.
 
+**D12 — Self-model: the PFC always knows who, when, where, what and how.**
+Assembled by the kernel on every wake from data that already exists; the LLM only reads it.
+- Stable prompt: *who I am* (soul.yaml), *how I work* (a short fixed self-description: I have
+  memories that can be incomplete, I can be wrong, I act only through organs), *honesty rules*
+  (below), and *my knowledge cutoff* (from model configuration).
+- Semi-stable: `<self>` — what I can do, assembled from the registries of present organs,
+  commands and skills, including a short "cannot do" list for commonly asked things; person
+  cards. `/help` and "what can you do?" come from the same source.
+- Volatile: `<now>` (local time, timezone, time since the last interaction), `<doing>` (my own
+  last actions across places, running tasks), `<next>` (promises due soon).
+- Honesty rules: (1) facts that change (office holders, prices, news, versions, schedules):
+  use a search organ if one is present; otherwise answer as "as of my knowledge in <cutoff>,
+  ... this may have changed". (2) Retrieved memories carry their source and age, and the PFC
+  attributes them ("Budi said yesterday ...") instead of stating them as facts. (3) Low
+  confidence from `think` means ask back or say "I don't know". Never claim a capability that is
+  not in `<self>`.
+
 ## Accepted in principle, details pending
 
 **P1 — Self-correction (track H).** A `revise` act: when corrected, the old memory gets
@@ -100,7 +117,5 @@ Sleep distills forward-model outcomes and corrections into `lesson` memories. Th
 edits its own principles or persona; that stays with the owner.
 
 ## Still open
-- Self-knowledge ("what can you do?") — answer assembled from the registries of present
-  organs, commands and skills.
 - Data growth: backups, database size, how far back retrieval looks.
 - First users: the owner only, a specific community group, or other developers.
