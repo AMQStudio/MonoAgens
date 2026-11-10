@@ -1,9 +1,9 @@
 # DECISIONS.md — Concept Decisions (design freeze)
 
-Status: **concept maturation in progress; implementation is paused.**
-These decisions are agreed between the owner and the architect. Where they conflict with
-DESIGN.md or ROADMAP.md, **this file wins** until those documents are rewritten to match.
-Workers must not start new work based on this file until DESIGN.md and ROADMAP.md are updated.
+Status: **DESIGN.md and ROADMAP.md were rewritten from D1–D23 on 2026-11-10.**
+These decisions are agreed between the owner and the architect. If DESIGN.md or ROADMAP.md
+ever disagree with this file, this file wins and the other document is a bug.
+Implementation resumes only when the owner says so, starting with ROADMAP Phase 1 (Track A2).
 
 ## Locked
 
@@ -214,4 +214,4 @@ edits its own principles or persona; that stays with the owner.
 - How scrubbing for D18 is done and checked. Automatic scrubbing is unreliable; owner curation
   is the backstop at first.
 - Snapshot format and versioning.
-- Rewrite DESIGN.md and ROADMAP.md from these decisions, then write prompts for the tracks.
+- Worker prompts for Track A2 and Phase 2 tracks (after the owner resumes implementation).

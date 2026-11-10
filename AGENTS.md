@@ -34,11 +34,14 @@ from `PLAN.md` or `ROADMAP.md`.
 - Persona text in `soul.yaml` may be in any language.
 
 ## Invariants (never break these)
-1. **The kernel is body-blind.** `monoagens/kernel.py`, `store.py`, `expect.py`, `memory.py`,
-   `pfc.py` and everything in `monoagens/cognition/` must not import anything from
-   `monoagens/bodies/` or mention "telegram", "cli", etc.
-2. **The log is immutable.** The `events` table is INSERT-only. No UPDATE, no DELETE.
-   Enforced by a database trigger.
+1. **The core is only a brain** (D1, D2). `monoagens/kernel.py`, `store.py`, `expect.py`,
+   `memory.py`, `pfc.py` and `monoagens/cognition/` know only senses, organs, hooks and thought
+   acts. They never import from `monoagens/bodies/` or packages, never mention a platform, and
+   never hard-code a world action (speaking included) — those are organ capabilities.
+2. **The log is immutable.** The `events` table is INSERT-only, enforced by a trigger. The only
+   exception is hard forgetting (DESIGN §9), through one dedicated function that the trigger
+   recognizes. `event_vectors` rows are deleted only by retention or hard forgetting, each
+   through its own dedicated path that writes an event.
 3. **One queue, one consumer.** Every source (bodies, clock) only `put`s into the queue.
    Only the kernel loop processes events, one at a time, in order.
 4. **Record first, then act.** Incoming events are written to `events` before they are
@@ -84,8 +87,8 @@ Going over budget means the design is wrong. Stop and report; do not force it.
 
 ## Parallel tracks
 - A track touches only the files its ROADMAP row names. Shared files (`kernel.py`,
-  `store.py`, `sql/schema.sql`, `soul.yaml`) are changed only by Track A, or by a track that
-  says so explicitly; other tracks that need a change there stop and report.
+  `store.py`, `sql/schema.sql`, `soul.yaml`) are changed only by the alignment track (A2), or by a
+  track whose ROADMAP row says so explicitly; other tracks that need a change there stop and report.
 - Always `git pull --rebase` before starting and before pushing.
 
 ## Tests

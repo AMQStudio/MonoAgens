@@ -1,102 +1,98 @@
 # ROADMAP.md — From MVP to the Final Goal
 
 The final goal: **one persistent self that lives in many bodies, behaves like a thoughtful
-person in groups (mostly quiet, helpful when it matters), talks to many people safely, runs on
-any model, grows through plugins, and installs with one command.**
+person (mostly quiet, helpful when it matters, honest about what it knows), learns from
+experience, talks to many people safely, runs on any model the owner brings, grows through
+packages, and works out of the box for non-technical people.**
 
 LLMs are a prefrontal cortex without the rest of the brain. MonoAgens is the rest of the brain.
 
 ## Rules for every phase
-1. A phase is done only when its "done when" checks pass **and** every earlier test and the
-   replay suite still pass.
-2. **The kernel does not grow to make a feature fit.** New behavior arrives as a signal, an
-   Expectation, a state key, a body, a tool, or middleware. If a phase seems to need kernel
-   changes beyond the ones listed here, stop and bring it to the architect.
-3. Contracts first, code second. Parallel work starts only after the contract it depends on is
-   merged.
+1. Done only when its checks pass **and** every earlier test and the replay suite still pass.
+2. **The core does not grow to make a feature fit.** New behavior is a signal, an Expectation,
+   a state key, an organ, or middleware in a package. Anything else goes to the architect first.
+3. Contracts first, code second. Parallel tracks start only after their contract is merged.
 4. Every behavior change ships with at least one replay scenario that shows it.
+5. Public documents mention no hosted service (D8).
 
 ## Done
-- **MVP**: Telegram body, the four books, the gate, the PFC, Expectations, memory and sleep;
-  tests (a)–(d).
-- **Fix-up pass**: readable code, fired expectations always wake, sleep retry guard,
-  clean `<recent>`.
-- **Replay tool** with a real LLM and 17 scenarios.
-- **CLI body** (in-process socket) and `<recent>` across places.
+- MVP: Telegram, the four books, gate, PFC, Expectations, memory and sleep; tests (a)–(d).
+- Fix-up pass; replay tool with a real LLM (17 scenarios); CLI organ; `<recent>` across places.
+- Track A foundation: cognition package, `event_vectors`, seeded generator, decision
+  breakdowns, hook lists, token budget.
 
-## Phase 1 — Cognition layer (parallel tracks)
-See DESIGN "Cognition layer". Track A goes first and alone; B–G run in parallel after A is
-merged, each in its own module.
+## Phase 1 — Align the code with DESIGN (one track, first)
+**Track A2** — bring the merged Track A in line with D1–D23:
+- `say` / `react` move out of `pfc.py` into the Telegram and CLI organs as declared
+  capabilities (with the `communicative` flag); the PFC tool list is assembled from organs.
+- `act.out` / `act.result` replace `msg.out` / `react.out` (with a migration of old kinds in
+  replay and tests).
+- `event_vectors`: replace the no-delete trigger with the two dedicated delete paths
+  (retention, hard forgetting) — paths may be stubs that only write their events for now.
+- Hooks: four hooks named inbound / context / action / outbound; owner-policy slots first and
+  last; shared vs organ-own scope; collision check at boot.
+- `model.call` events for every model call (D23).
+Done when: all tests and replay pass; grep shows no platform name and no world action in the core.
 
+## Phase 2 — Cognition and memory (parallel tracks after A2)
 | Track | Work | Done when |
 |---|---|---|
-| **A. Foundation** | `event_vectors` table and encode-once; `monoagens/cognition/` package with `Situation`, the `Signal` contract and registry, `appraise()` called by the kernel (reflexes only at first, same behavior as today); decision events carry S, θ, P, u, signals; token usage into `budget:<date>`; `origin` column on expectations; `use_count` on memories | All existing tests and replay pass unchanged; every decision event has the full breakdown |
-| **B. Memory activation** | ACT-R activation replaces 0.995^hours; FOK helper | Unit tests on the activation curve; frequently used memories outrank newer unused ones |
-| **C. Signals + habituation** | name_mentioned, info_gap, feeling_of_knowing, relevance, social_cost; habituation state | "lupa nama tempatnya apa ya" scores high when the answer is in memory, low when it is not; 10 repeated stickers fade |
-| **D. Threshold + go/no-go** | dynamic θ (talk rate, budget, promise debt), seeded draw, decision outcomes | Same events + seed → identical decisions; its talk rate stays at or below 1/n in a busy-group scenario |
-| **E. Patience** | patience Expectations, `not_who` in patterns | Someone else answers within the window → silent; nobody answers → one reply |
-| **F. Inner thought** | `think` tool, motivation/confidence gate, constitution prompt, person cards in sleep and in `<people>` | Proactive replies always have a recorded thought; low motivation → silent with the thought logged |
-| **G. Forward model + learning** | forward Expectations, `forward.outcome`, delta rule, `weights.updated` | Ignored proactive messages lower the weights that caused them; α = 0 disables learning |
-| **R. Replay scenarios** (any time) | forgotten place name; question already answered by someone; repeated stickers; being corrected; quiet group for days; owner's promise during a busy chat | Each new scenario fails before its track lands and passes after |
+| B | ACT-R activation, `use_count`, FOK helper | frequently used memories outrank newer unused ones |
+| C | signals + habituation | "lupa nama tempatnya apa ya" scores high only when the answer is known; repeated stickers fade |
+| D | dynamic θ, go/no-go, decision outcomes | same events + seed → same decisions; talk rate ≤ 1/n in a busy group |
+| E | patience Expectations, `not_who` | someone else answers → silent; nobody → one reply |
+| F | `think`, motivation/confidence gate, principles, person cards, self-model (D12) | proactive replies always have a recorded thought; "what can you do?" matches `<self>` |
+| G | forward model, delta rule, dispositions with bounds (D16) | ignored proactive messages lower their causes; α = 0 disables learning |
+| H | self-correction (P1): `revise`, guarded facts, lessons | a correction supersedes the old memory; a contradicted fact triggers revision |
+| I | wake gate (D15, D21): relevance, staleness, allowed-now; free-text completion with cosine filter + classifier | a promise already fulfilled wakes no one; a question on the same topic never resolves a promise |
+| J | memory source and trust (D6); retention by activation (D14); soft and hard forgetting (D4) | a stranger cannot override an owner fact; hard forget leaves only `{"forgotten": true}` |
+| R | replay scenarios for B–J (any time) | each new scenario fails before its track lands and passes after |
 
-## Phase 2 — Middleware hooks
-- The four hooks (inbound, context, tool, outbound) with the Continue / Replace / Stop
-  contract, `guard.stopped` events, fail-closed on exceptions.
-- First middleware: **commands** (`/status`, `/pause`, `/forget`), and **owner-only
-  instructions** (others may talk to it; only the owner can make it create promises for them
-  or change settings).
-- **Context privacy**: memories and recent lines from DMs never enter group contexts.
-- Done when: personal mode (no middleware) behaves exactly as before; with the guard installed,
-  a replay scenario proves a DM fact is never visible or said in a group.
+## Phase 3 — Packages and the default owner policy
+- Loader for packages (organs + middleware + skills + dependencies), shared/organ-own scope.
+- Default owner policy, active out of the box (D22): owner-only in groups, approval for skills
+  sourced from others, budget, quiet hours, context privacy.
+- Shared packages: **commands** (one registry, identical `/help`), **alias map** (D10),
+  **skills** (installed SKILL.md, learned skills, versions, rollback; D11, D19).
+Done when: a DM fact is never visible or said in a group; a package cannot remove the policy;
+`/help` is identical on Telegram and CLI.
 
-## Phase 3 — Launch
-- Installer: one script for Postgres (compose), schema, `.env` from `.env.example`, `soul.yaml`.
-- README: what it is, the brain table, install, talk to it, tune with replay. No claims of
-  consciousness or "% human".
-- Done when: a clean machine goes from clone to a talking bot with one command, and a new user
-  can install it without asking anyone.
+## Phase 4 — First users (D13)
+- **The owner alone** for a few days with replay checks after each change.
+- **One real group** the owner knows well, with the owner policy on.
+- Installer (one command from clone to a talking soul) and README (brain table, install, talk,
+  tune with replay; no claims of consciousness or "% human").
 
-## Phase 4 — Honest human-likeness evaluation
-- Human-Parity Index per behavior: reply timing distribution, messages per hour vs 1/n,
-  when-to-speak precision/recall against human annotation, silence on moments it should speak,
-  interruptions on moments it should be quiet, promise keeping, recall after 1/7/30 days,
-  blind "which one is the bot" test (target ≈ 50%).
-- Always against a human baseline in the same group. Pre-register metrics and thresholds.
-- Done when: a per-metric report exists; any public claim is phrased as "≥ X% of human
-  baseline on these N behaviors".
+## Phase 5 — Honest human-likeness evaluation
+Per-behavior parity against a human baseline in the same group: reply timing, messages per hour
+vs 1/n, when-to-speak precision/recall against human annotation, silence where it should speak,
+interruptions where it should be quiet, promise keeping, recall after 1/7/30 days, blind
+"which one is the bot" (target ≈ 50%). Pre-registered metrics. Public claims phrased as
+"≥ X% of human baseline on these N behaviors".
 
-## Phase 5 — Plugins and world tools
-- One plugin mechanism for bodies, PFC tools and middleware; the kernel only sees registries.
-- First tools: web search/fetch, file read. Introduces think → tool → think with a hard limit
-  on rounds per wake. Tool calls go through hook 3.
-- Done when: a plugin installed without touching `monoagens/` adds a working tool.
+## Phase 6 — World organs and multi-step work
+First world organs: web search/fetch, file read. Long-running actions report through
+`act.result`; limits on steps per task. Freshness rules (D12) use the search organ.
+Done when: "who is the president now?" triggers a search when a search organ exists, and an
+honest "as of my knowledge" answer when it does not.
 
-## Phase 6 — Full guard post
-- Roles, approvals as Expectations, per-place privacy policies, all on the hooks from Phase 2.
-- Done when: one soul serves the owner fully in a DM and safely in a public group.
+## Phase 7 — Birth snapshot (D17, D18)
+Export layers 1–2, generic and replay-backed; inheritance gate with owner curation.
+Done when: a fresh soul born from a snapshot passes the replay suite with empty memory.
 
-## Phase 7 — More bodies
-- WhatsApp, Discord, voice (STT/TTS), and the first non-chat body (IoT device or robot sim)
-  whose sensors arrive as events and whose actuators are actions.
-- Done when: one conversation continues across three bodies, and a non-chat body senses and
-  acts through the same two ports.
+## Phase 8 — More bodies, more models
+WhatsApp, Discord, voice (STT/TTS), the first non-chat organ (IoT device or robot sim);
+native provider adapters; optional separate models for sleep and the classifier.
+Done when: one conversation continues across three bodies and a non-chat organ senses and acts
+through the same ports; switching provider is a `.env` change.
 
-## Phase 8 — Native providers and model split
-- Native adapters next to the OpenAI-compatible one; optional `SLEEP_MODEL`; optional small
-  model for inner thoughts.
-- Done when: switching provider is a `.env` change and replay results stay within tolerance.
-
-## Phase 9 — Product layer
-- Operator CLI (start/stop/status/logs/doctor), presets ("apps": personal assistant,
-  community bot, sysadmin = a soul + bodies + middleware), schema upgrades.
+## Phase 9 — Developers (D13)
+Stable, versioned contracts for organs, packages and middleware; examples; contribution guide.
+Starts only after the contracts have not changed for a while.
 
 ## Later ideas (not scheduled)
-- A small learned classifier for the gate, trained on recorded decisions (only after > 10k
-  labeled decisions).
-- Skills: reusable procedures learned from repeated work.
+- A small learned classifier for the gate from recorded decisions (> 10k labeled).
 - Multi-process deployment (inbox table with `FOR UPDATE SKIP LOCKED`).
 
-## Open decisions for the owner
-- Open source publicly, or keep private for AMQStudio first?
-- Who are the first users: the owner only, a specific community group, or other developers
-  building on MonoAgens?
+## Open questions
+See "Still open" in DECISIONS.md.
