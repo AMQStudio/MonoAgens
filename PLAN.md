@@ -17,7 +17,7 @@ UPDATE on events is rejected.
 store: append an event, read the last N events for a place, cursor(body), read/write state.
 Done when: tests for ordering, cursor, and rebuilding state from events pass.
 
-## [ ] 2. The kernel loop
+## [x] 2. The kernel loop
 Event/Action types, the queue, a single consumer, the clock (tick every clock.tick_seconds,
 fakeable), the last_seen projection. Fake bodies for tests.
 Done when: 100 events from two fake bodies are recorded in order; ticks are not stored.

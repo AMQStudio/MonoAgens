@@ -101,15 +101,15 @@ async def test_cursor_tracking(aconn):
     )
     assert await cursor(aconn, "body:stream") == 102
 
-    # Support update_id key as cursor
+    # A subsequent msg.out for the same body WITHOUT a cursor must NOT clobber the cursor
     await append_event(
         aconn,
         ts=t,
-        kind="msg.in",
-        body="body:poller",
-        payload={"update_id": 5001},
+        kind="msg.out",
+        body="body:stream",
+        payload={"text": "outgoing response without cursor"},
     )
-    assert await cursor(aconn, "body:poller") == 5001
+    assert await cursor(aconn, "body:stream") == 102
 
 
 async def test_read_write_state(aconn):

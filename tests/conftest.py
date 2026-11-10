@@ -54,16 +54,18 @@ def _install_schema(database_url: str):
 
 @pytest.fixture
 def conn(database_url: str):
-    """A connection whose work is rolled back after each test."""
-    with psycopg.connect(database_url) as connection:
+    """A connection with clean tables for test isolation."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        connection.execute("TRUNCATE TABLE events, state, expectations, memories CASCADE")
         yield connection
-        connection.rollback()
+        connection.execute("TRUNCATE TABLE events, state, expectations, memories CASCADE")
 
 
 @pytest.fixture
 async def aconn(database_url: str):
-    """An async connection whose work is rolled back after each test."""
-    async with await psycopg.AsyncConnection.connect(database_url) as connection:
+    """An async connection with clean tables for test isolation."""
+    async with await psycopg.AsyncConnection.connect(database_url, autocommit=True) as connection:
         await register_vector_async(connection)
+        await connection.execute("TRUNCATE TABLE events, state, expectations, memories CASCADE")
         yield connection
-        await connection.rollback()
+        await connection.execute("TRUNCATE TABLE events, state, expectations, memories CASCADE")

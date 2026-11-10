@@ -66,32 +66,19 @@ async def read_last_events(
     return events
 
 
-read_events = read_last_events
-
-
 async def cursor(
     conn: psycopg.AsyncConnection[Any],
     body: str,
-    *,
-    key: str | None = None,
 ) -> Any | None:
     """Read the last recorded cursor for an input body from events."""
-    if key is not None:
-        cur = await conn.execute(
-            "SELECT payload->%s FROM events WHERE body = %s AND payload ? %s ORDER BY id DESC LIMIT 1",
-            (key, body, key),
-        )
-        row = await cur.fetchone()
-        return row[0] if row else None
-
     cur = await conn.execute(
-        "SELECT payload FROM events WHERE body = %s ORDER BY id DESC LIMIT 1",
+        "SELECT payload->'cursor' FROM events "
+        "WHERE body = %s AND payload ? 'cursor' "
+        "ORDER BY id DESC LIMIT 1",
         (body,),
     )
     row = await cur.fetchone()
-    if row and isinstance(row[0], dict):
-        return row[0].get("cursor", row[0].get("update_id"))
-    return None
+    return row[0] if row else None
 
 
 async def read_state(conn: psycopg.AsyncConnection[Any], key: str) -> dict[str, Any] | None:
