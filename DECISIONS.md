@@ -233,8 +233,7 @@ plausible it is and what it costs if wrong, try it carefully, and trust it more 
 
 **D26 — Complexity budget for the core.**
 The core holds at most: 4 books (events, state, expectations, memories; event_vectors is the
-index of events), 4 thought acts (think, stay_silent, expect, resolve; `revise` replaces
-nothing and is counted as part of resolve's family, see D27), 4 hooks, 10 signals, 3 drives,
+index of events), 5 thought acts (think, stay_silent, expect, resolve, revise — D27), 4 hooks, 10 signals, 3 drives,
 one gate formula. A new idea that needs another core primitive must replace an existing one or
 be refused. Everything else lives in organs, packages or the owner policy.
 
