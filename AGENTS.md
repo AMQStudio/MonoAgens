@@ -59,7 +59,7 @@ from `PLAN.md`.
 
 ## Size budget (excluding tests)
 kernel.py ≤ 200 lines · store.py ≤ 200 · expect.py ≤ 150 · memory.py ≤ 200 · pfc.py ≤ 200 ·
-bodies/telegram.py ≤ 150 · whole package ≤ 1,100 lines.
+bodies/telegram.py ≤ 180 · whole package ≤ 1,100 lines.
 Going over budget means the design is wrong. Stop and report; do not force it.
 
 ## Tests

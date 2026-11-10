@@ -95,6 +95,35 @@ Prompt order (for prompt caching):
    expectations for this who/place, ≤ 5 retrieved memories, ≤ 20 recent events in this place,
    the triggering event.
 
+### PFC payload
+Request (chat completions):
+- messages[0] system — stable: "You are <name>." + persona + principles + the language to use
+  + "You act only through the tools. Staying silent is a valid choice."
+- messages[1] system — semi-stable: `<core_memory>…</core_memory>` (empty until the first sleep).
+- messages[2] user — volatile, tagged sections in this fixed order:
+  `<now>` local time, weekday, timezone, time since the last interaction ·
+  `<place>` place id and kind (direct/group) · `<why_awake>` reason and gate score ·
+  `<expectations>` active ones for this who/place · `<memories>` retrieved items ·
+  `<recent>` last events in this place as "HH:MM name: text" · `<event>` the trigger, last.
+- tools: the five tools as full JSON Schema. `tool_choice: "required"` — the model must
+  choose an action; silence is the `stay_silent` tool, so the reason is recorded.
+
+Response: one or more tool calls. For each call the kernel validates the arguments, writes an
+event (msg.out, react.out, decision.silent, expectation.created, expectation.resolved), and
+only then hands say/react to the body. Invalid calls become `error` events.
+
+One wake = one LLM call. Tools are actions, not questions, so there is no
+think → tool → think loop. That loop is only added later, for world tools whose results must
+be read.
+
+Configuration from `.env`: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`.
+
+### Failure handling
+- The kernel loop never dies because of one event. Any exception while processing an event is
+  recorded as an `error` event (with the failing event id) and the loop continues.
+- An LLM failure (timeout, HTTP error, invalid JSON) → `error` event, no reply.
+- A body whose connection fails retries with backoff and never crashes the process.
+
 ## Memory and sleep
 - Embeddings: fastembed `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` (384d),
   run via asyncio.to_thread. Validate quality for the owner's language before locking it in.
@@ -110,6 +139,9 @@ Prompt order (for prompt caching):
 A body has exactly two ports:
 - `run(put)`: listen to the world, turn input into Events, call put.
 - `act(action)`: perform an action (say/react) in a place it owns.
+Each body has a name (`telegram`, `cli`). Actions carry the target body name and place; the
+kernel keeps a name → body map and calls `act` on the matching body. Replies go to the body and
+place of the triggering event unless the PFC names another place.
 On start, a body asks the kernel for `cursor(body)` (e.g. the last recorded update_id), so a
 restart neither loses nor duplicates input.
 
