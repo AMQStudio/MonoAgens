@@ -22,6 +22,7 @@ from ..engine.access.roles import Role
 from ..engine.config import (
     ENGINE_SCHEMA,
     WEB_SEARCH_PROVIDERS,
+    AddressingConfig,
     AlertsConfig,
     AmbientConfig,
     ApprovalConfig,
@@ -236,6 +237,7 @@ def engine_defaults() -> dict:
         "llm": _section_defaults(LLMConfig(), ENGINE_SCHEMA["llm"]),
         "alerts": _section_defaults(AlertsConfig(), ENGINE_SCHEMA["alerts"]),
         "turns": _section_defaults(TurnConfig(), ENGINE_SCHEMA["turns"]),
+        "addressing": _section_defaults(AddressingConfig(), ENGINE_SCHEMA["addressing"]),
         "worker": _section_defaults(WorkerConfig(), ENGINE_SCHEMA["worker"]),
         "io": _section_defaults(IOConfig(), ENGINE_SCHEMA["io"]),
         "concurrency": _section_defaults(ConcurrencyConfig(), ENGINE_SCHEMA["concurrency"]),
@@ -663,6 +665,59 @@ COMMENTS: dict[str, str] = {
     "engine.turns.claim_guard.max_retries": (
         "Extra model calls per turn when the draft still claims an inability. Default: 1."
     ),
+    "engine.addressing": (
+        "How the Soul decides whether a group message is meant for it.\n"
+        "Every message gets a score from transport signals (mention, reply, ...) and from the\n"
+        "conversation itself. Mention is the only signal strong enough on its own."
+    ),
+    "engine.addressing.answer_at": "Score at or above this: the Soul answers. Default: 60.",
+    "engine.addressing.ignore_below": (
+        "Score below this: the Soul stays silent (the message is still kept as context).\n"
+        'Scores between ignore_below and answer_at are "unsure": silent by default. Default: 30.'
+    ),
+    "engine.addressing.continuity_seconds": (
+        "A message within this time after the Soul spoke to the same person, with nobody else\n"
+        "in between, counts as continuing that conversation. Default: 120."
+    ),
+    "engine.addressing.skepticism": (
+        "Shift applied to both thresholds per level (set per role and room)."
+    ),
+    "engine.addressing.skepticism.strict": (
+        "Practically only mentions and very clear continuations. Default: 20."
+    ),
+    "engine.addressing.skepticism.normal": "Default: 0.",
+    "engine.addressing.skepticism.lenient": (
+        "A reply to the Soul without tagging anyone else is enough. Default: -20."
+    ),
+    "engine.addressing.advanced": (
+        'Rarely changed. Points per signal; negative means "meant for someone else".'
+    ),
+    "engine.addressing.advanced.weights": "Points per signal.",
+    "engine.addressing.advanced.weights.mention_self": (
+        "@mention of the Soul. Passes alone. Default: 100."
+    ),
+    "engine.addressing.advanced.weights.reply_to_self": (
+        "Reply to one of the Soul's messages. Default: 50."
+    ),
+    "engine.addressing.advanced.weights.reply_to_self_tagging_other": (
+        "Reply to the Soul that also @mentions another person: the Soul is only quoted to tag\n"
+        "someone. Default: -80."
+    ),
+    "engine.addressing.advanced.weights.mention_other": (
+        "@mention of another person and not of the Soul. Default: -80."
+    ),
+    "engine.addressing.advanced.weights.reply_to_other": (
+        "Reply to another person's message. Default: -50."
+    ),
+    "engine.addressing.advanced.weights.continuity": (
+        "Continues a conversation the Soul just had with this sender. Default: 40."
+    ),
+    "engine.addressing.advanced.weights.pending_request": (
+        "This sender has an approval or other request waiting on the Soul. Default: 40."
+    ),
+    "engine.addressing.advanced.weights.name_in_text": (
+        "The Soul's name written as plain text, without a mention. Default: 15."
+    ),
     "engine.worker": "Background worker retry and reaper.",
     "engine.worker.retry": "Background job retry budget.",
     "engine.worker.retry.attempts": "Attempts before dead-letter. Default: 5.",
@@ -1005,6 +1060,7 @@ ENGINE_TITLES: dict[str, str] = {
     "llm": "PROVIDER & MODEL",
     "alerts": "OUT-OF-BAND ALERTING",
     "turns": "TURN LIFECYCLE & SHUTDOWN",
+    "addressing": "GROUP ADDRESSING",
     "worker": "BACKGROUND WORKER",
     "io": "BLOCKING I/O",
     "concurrency": "CONCURRENCY",

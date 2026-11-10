@@ -25,6 +25,10 @@ from .models import QUIET_POLICIES as QUIET_POLICIES
 from .models import SPEECH_TIMEOUT_DEFAULT as SPEECH_TIMEOUT_DEFAULT
 from .models import SPEECH_TIMEOUT_HARD_LIMIT as SPEECH_TIMEOUT_HARD_LIMIT
 from .models import WEB_SEARCH_PROVIDERS as WEB_SEARCH_PROVIDERS
+from .models import AddressingAdvancedConfig as AddressingAdvancedConfig
+from .models import AddressingConfig as AddressingConfig
+from .models import AddressingSkepticismConfig as AddressingSkepticismConfig
+from .models import AddressingWeightsConfig as AddressingWeightsConfig
 from .models import AlertsConfig as AlertsConfig
 from .models import AlertSourcesConfig as AlertSourcesConfig
 from .models import AutomationConditionConfig as AutomationConditionConfig
@@ -103,6 +107,10 @@ __all__ = [
     "SPEECH_TIMEOUT_DEFAULT",
     "SPEECH_TIMEOUT_HARD_LIMIT",
     "WEB_SEARCH_PROVIDERS",
+    "AddressingAdvancedConfig",
+    "AddressingConfig",
+    "AddressingSkepticismConfig",
+    "AddressingWeightsConfig",
     "AlertSourcesConfig",
     "AlertsConfig",
     "AmbientConfig",

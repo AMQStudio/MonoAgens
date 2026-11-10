@@ -9,6 +9,7 @@ from ..access.roles import RoleRegistry
 from ..soul import Soul
 from .environment import resolve_database_url
 from .models import (
+    AddressingConfig,
     AlertsConfig,
     AutomationConfig,
     ConcurrencyConfig,
@@ -90,6 +91,7 @@ class Config:
     guard: GuardConfig = field(default_factory=GuardConfig)
     language: LanguageConfig = field(default_factory=LanguageConfig)
     turns: TurnConfig = field(default_factory=TurnConfig)
+    addressing: AddressingConfig = field(default_factory=AddressingConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     io: IOConfig = field(default_factory=IOConfig)
     concurrency: ConcurrencyConfig = field(default_factory=ConcurrencyConfig)

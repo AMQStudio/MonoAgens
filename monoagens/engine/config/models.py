@@ -82,6 +82,45 @@ class TurnConfig:
     claim_guard: ClaimGuardConfig = field(default_factory=ClaimGuardConfig)
 
 @dataclass(frozen=True)
+class AddressingWeightsConfig:
+    """Points per signal; a negative weight means "meant for someone else" (ADR-0012 §4.7)."""
+
+    mention_self: int = 100
+    reply_to_self: int = 50
+    reply_to_self_tagging_other: int = -80
+    mention_other: int = -80
+    reply_to_other: int = -50
+    continuity: int = 40
+    pending_request: int = 40
+    name_in_text: int = 15
+
+
+@dataclass(frozen=True)
+class AddressingAdvancedConfig:
+    weights: AddressingWeightsConfig = field(default_factory=AddressingWeightsConfig)
+
+
+@dataclass(frozen=True)
+class AddressingSkepticismConfig:
+    """Shift applied to both bands per level; `strict` asks for more evidence."""
+
+    strict: int = 20
+    normal: int = 0
+    lenient: int = -20
+
+
+@dataclass(frozen=True)
+class AddressingConfig:
+    """How the Soul decides whether a group message is meant for it (ADR-0012 §4.7)."""
+
+    answer_at: int = 60
+    ignore_below: int = 30
+    continuity_seconds: int = 120
+    skepticism: AddressingSkepticismConfig = field(default_factory=AddressingSkepticismConfig)
+    advanced: AddressingAdvancedConfig = field(default_factory=AddressingAdvancedConfig)
+
+
+@dataclass(frozen=True)
 class WorkerRetryConfig:
     attempts: int = 5
     backoff_seconds: float = 2.0

@@ -221,6 +221,49 @@ engine:
       # Extra model calls per turn when the draft still claims an inability. Default: 1.
       max_retries: 1
 
+  # --- engine.addressing: GROUP ADDRESSING ---
+  # How the Soul decides whether a group message is meant for it.
+  # Every message gets a score from transport signals (mention, reply, ...) and from the
+  # conversation itself. Mention is the only signal strong enough on its own.
+  addressing:
+    # Score at or above this: the Soul answers. Default: 60.
+    answer_at: 60
+    # Score below this: the Soul stays silent (the message is still kept as context).
+    # Scores between ignore_below and answer_at are "unsure": silent by default. Default: 30.
+    ignore_below: 30
+    # A message within this time after the Soul spoke to the same person, with nobody else
+    # in between, counts as continuing that conversation. Default: 120.
+    continuity_seconds: 120
+    # Shift applied to both thresholds per level (set per role and room).
+    skepticism:
+      # Practically only mentions and very clear continuations. Default: 20.
+      strict: 20
+      # Default: 0.
+      normal: 0
+      # A reply to the Soul without tagging anyone else is enough. Default: -20.
+      lenient: -20
+    # Rarely changed. Points per signal; negative means "meant for someone else".
+    advanced:
+      # Points per signal.
+      weights:
+        # @mention of the Soul. Passes alone. Default: 100.
+        mention_self: 100
+        # Reply to one of the Soul's messages. Default: 50.
+        reply_to_self: 50
+        # Reply to the Soul that also @mentions another person: the Soul is only quoted to tag
+        # someone. Default: -80.
+        reply_to_self_tagging_other: -80
+        # @mention of another person and not of the Soul. Default: -80.
+        mention_other: -80
+        # Reply to another person's message. Default: -50.
+        reply_to_other: -50
+        # Continues a conversation the Soul just had with this sender. Default: 40.
+        continuity: 40
+        # This sender has an approval or other request waiting on the Soul. Default: 40.
+        pending_request: 40
+        # The Soul's name written as plain text, without a mention. Default: 15.
+        name_in_text: 15
+
   # --- engine.worker: BACKGROUND WORKER ---
   # Background worker retry and reaper.
   worker:

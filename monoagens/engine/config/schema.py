@@ -98,6 +98,24 @@ ENGINE_SCHEMA: dict[str, object] = {
             "stop_grace_period": None,
         },
     },
+    "addressing": {
+        "answer_at": None,
+        "ignore_below": None,
+        "continuity_seconds": None,
+        "skepticism": {"strict": None, "normal": None, "lenient": None},
+        "advanced": {
+            "weights": {
+                "mention_self": None,
+                "reply_to_self": None,
+                "reply_to_self_tagging_other": None,
+                "mention_other": None,
+                "reply_to_other": None,
+                "continuity": None,
+                "pending_request": None,
+                "name_in_text": None,
+            }
+        },
+    },
     "worker": {
         "retry": {"attempts": None, "backoff_seconds": None, "dead_letter_after": None},
         "reaper": {"every_seconds": None, "batch": None},

@@ -8,6 +8,10 @@ import yaml
 
 from .models import (
     WEB_SEARCH_PROVIDERS,
+    AddressingAdvancedConfig,
+    AddressingConfig,
+    AddressingSkepticismConfig,
+    AddressingWeightsConfig,
     DatabaseConfig,
     FetchConfig,
     GrepConfig,
@@ -283,6 +287,61 @@ def _shell_config(raw: Mapping) -> ShellConfig:
     if "*" in names:
         raise ConfigError("engine.shell.env must name variables; the wildcard '*' is refused")
     return ShellConfig(env=names)
+
+def _addressing_config(raw: Mapping) -> AddressingConfig:
+    """`engine.addressing` (ADR-0012 §4.7): bands, the continuity window, and the weights."""
+    body = _section(raw, "addressing")
+    defaults = AddressingConfig()
+    answer_at = int(_num(body.get("answer_at"), float(defaults.answer_at)))
+    ignore_below = int(_num(body.get("ignore_below"), float(defaults.ignore_below)))
+    if ignore_below > answer_at:
+        raise ConfigError(
+            "engine.addressing.ignore_below must not exceed answer_at "
+            f"({ignore_below} > {answer_at})"
+        )
+    skepticism_raw = _section(body, "skepticism")
+    weights_raw = _section(_section(body, "advanced"), "weights")
+    base = defaults.advanced.weights
+    return AddressingConfig(
+        answer_at=answer_at,
+        ignore_below=ignore_below,
+        continuity_seconds=int(
+            _num(body.get("continuity_seconds"), float(defaults.continuity_seconds))
+        ),
+        skepticism=AddressingSkepticismConfig(
+            strict=int(_num(skepticism_raw.get("strict"), float(defaults.skepticism.strict))),
+            normal=int(_num(skepticism_raw.get("normal"), float(defaults.skepticism.normal))),
+            lenient=int(
+                _num(skepticism_raw.get("lenient"), float(defaults.skepticism.lenient))
+            ),
+        ),
+        advanced=AddressingAdvancedConfig(
+            weights=AddressingWeightsConfig(
+                mention_self=_weight(weights_raw, "mention_self", base.mention_self),
+                reply_to_self=_weight(weights_raw, "reply_to_self", base.reply_to_self),
+                reply_to_self_tagging_other=_weight(
+                    weights_raw, "reply_to_self_tagging_other", base.reply_to_self_tagging_other
+                ),
+                mention_other=_weight(weights_raw, "mention_other", base.mention_other),
+                reply_to_other=_weight(weights_raw, "reply_to_other", base.reply_to_other),
+                continuity=_weight(weights_raw, "continuity", base.continuity),
+                pending_request=_weight(
+                    weights_raw, "pending_request", base.pending_request
+                ),
+                name_in_text=_weight(weights_raw, "name_in_text", base.name_in_text),
+            )
+        ),
+    )
+
+
+def _weight(raw: Mapping, name: str, default: int) -> int:
+    """One signal weight; a value that is not a whole number falls back to the default."""
+    if isinstance(raw.get(name), bool) or not isinstance(
+        raw.get(name), (str, bytes, int, float)
+    ):
+        return default
+    return int(_num(raw.get(name), float(default)))
+
 
 def _search_config(raw: Mapping) -> SearchConfig:
     """`engine.search` (ADR-0002 §5)."""
