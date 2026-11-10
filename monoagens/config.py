@@ -12,9 +12,9 @@ DEFAULT_SOUL_PATH = pathlib.Path(__file__).resolve().parent.parent / "soul.yaml"
 DEFAULT_ENV_PATH = pathlib.Path(__file__).resolve().parent.parent / ".env"
 DEFAULT_TICK_SECONDS = 30.0
 _LLM_KEYS = (
-    ("base_url", "LLM_BASE_URL", "PFC_BASE_URL"),
-    ("api_key", "LLM_API_KEY", "PFC_API_KEY"),
-    ("model", "LLM_MODEL", "PFC_MODEL"),
+    ("base_url", "LLM_BASE_URL"),
+    ("api_key", "LLM_API_KEY"),
+    ("model", "LLM_MODEL"),
 )
 
 
@@ -55,12 +55,6 @@ def load_llm_config(env_path=DEFAULT_ENV_PATH) -> dict[str, str]:
     """Resolve the LLM settings from the environment, then the .env file."""
     file_values = load_env_file(env_path)
     return {
-        name: (
-            os.environ.get(primary)
-            or file_values.get(primary)
-            or os.environ.get(alias)
-            or file_values.get(alias)
-            or ""
-        )
-        for name, primary, alias in _LLM_KEYS
+        name: os.environ.get(key) or file_values.get(key) or ""
+        for name, key in _LLM_KEYS
     }
