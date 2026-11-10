@@ -286,6 +286,23 @@ async def test_time_path_met_event_seen_resolves_without_firing(aconn):
 # --- policies ----------------------------------------------------------------
 
 
+async def test_low_weight_fired_expectation_still_wakes_the_pfc_once(aconn):
+    """A missed expectation below the silent band fires the PFC anyway (DESIGN "The gate")."""
+    exp_id, _ = await _create(aconn, weight=0.3)
+    clock = FakeClock(START)
+    fake = FakeLLM([[("say", {"text": "sudah jam 7"})]])
+    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), soul=SOUL)
+    kernel.register_body(RecordingBody())
+
+    await _tick(kernel, clock)
+
+    kinds = await _kinds(aconn)
+    assert kinds.count("expectation.fired") == 1
+    assert kinds.count("msg.out") == 1
+    assert len(fake.requests) == 1
+    assert await _status(aconn, exp_id) == "satisfied"
+
+
 async def test_policy_once_is_satisfied_after_the_turn(aconn):
     exp_id, _ = await _create(aconn)
     clock = FakeClock(START)

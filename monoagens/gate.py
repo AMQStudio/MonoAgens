@@ -72,6 +72,10 @@ class Gate:
             breakdown = {"addressed": 1.0, "surprise": 0.0, "cooldown_penalty": 0.0,
                          "crowd_penalty": 0.0, "score": 1.0}
             return Verdict("wake", 1.0, breakdown, "addressed message")
+        if event.kind == "expectation.fired":
+            breakdown = {"addressed": 0.0, "surprise": _clamp(surprise),
+                         "cooldown_penalty": 0.0, "crowd_penalty": 0.0, "score": 1.0}
+            return Verdict("wake", 1.0, breakdown, "fired expectation")
         features = {"surprise": _clamp(surprise),
                     "cooldown_penalty": await self._cooldown(conn, event, now),
                     "crowd_penalty": await self._crowd(conn, event, now)}
