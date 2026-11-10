@@ -134,6 +134,7 @@ async def test_private_message_from_owner():
     assert event.payload["message_id"] == 11
     assert event.payload["text"] == "halo"
     assert event.payload["addressed"] is True
+    assert event.payload["place_kind"] == "direct"
 
 
 async def test_group_chat_mention_and_non_mention():
@@ -165,6 +166,7 @@ async def test_group_chat_mention_and_non_mention():
 
     plain, mentioned = events
     assert plain.payload["addressed"] is False
+    assert plain.payload["place_kind"] == "group"
     assert plain.who == "person:tg:999"
     assert mentioned.payload["addressed"] is True
     assert mentioned.payload["cursor"] == 601
@@ -221,6 +223,31 @@ async def test_non_text_update_is_skipped_but_advances_offset():
     polls = fake.calls_of("getUpdates")
     assert "offset" not in polls[0]
     assert polls[1]["offset"] == 6
+
+
+async def test_get_updates_retries_with_backoff():
+    """A network error on a poll is retried; the body never crashes."""
+    update = {"update_id": 800, "message": _message(message_id=50, text="retry")}
+    fake = FakeTelegram([update])
+    respond = fake.handler
+    failures = {"left": 1}
+
+    def flaky(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/getUpdates") and failures["left"]:
+            failures["left"] -= 1
+            raise httpx.ConnectError("network down", request=request)
+        return respond(request)
+
+    body = TelegramBody(
+        "test-token",
+        owner_ids={OWNER_ID},
+        transport=httpx.MockTransport(flaky),
+        retry_base=0.001,
+    )
+    events = await _drive(body, fake, expected=1, polls=1)
+
+    assert [e.payload["text"] for e in events] == ["retry"]
+    assert failures["left"] == 0
 
 
 async def test_act_say_sends_message():

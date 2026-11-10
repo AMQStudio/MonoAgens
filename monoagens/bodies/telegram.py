@@ -1,8 +1,4 @@
-"""Telegram body: long polling over httpx.
-
-Two ports: run(put) turns updates into Events, act(action) performs say/react.
-Neutral ids only: who = person:owner | person:tg:<id>, place = space:tg:<chat_id>.
-"""
+"""Telegram body: long polling over httpx; neutral ids only (who/place)."""
 
 from __future__ import annotations
 
@@ -22,15 +18,16 @@ GetCursor = Callable[[], Awaitable[Any | None]]
 class TelegramBody:
     """Long-polling Telegram body. Advanced only after put() acknowledges."""
 
+    name = "telegram"
+
     def __init__(
         self,
         token: str,
         *,
         owner_ids: set[int] | frozenset[int] = frozenset(),
-        get_cursor: GetCursor | None = None,
-        poll_timeout: float = 30.0,
+        get_cursor: GetCursor | None = None, poll_timeout: float = 30.0,
         transport: httpx.AsyncBaseTransport | None = None,
-        api_base: str = "https://api.telegram.org",
+        api_base: str = "https://api.telegram.org", retry_base: float = 1.0,
     ) -> None:
         self._token = token
         self._owner_ids = set(owner_ids)
@@ -38,20 +35,19 @@ class TelegramBody:
         self._poll_timeout = poll_timeout
         self._transport = transport
         self._api_base = api_base.rstrip("/")
+        self._retry_base = retry_base
         self._client: httpx.AsyncClient | None = None
         self.bot_id: int | None = None
         self.bot_username: str | None = None
 
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
-            # HTTP timeout must outlive the long poll.
-            self._client = httpx.AsyncClient(
+            self._client = httpx.AsyncClient(  # the timeout must outlive the long poll
                 transport=self._transport, timeout=self._poll_timeout + 10.0
             )
         return self._client
 
     async def aclose(self) -> None:
-        """Close the HTTP client, if one was opened."""
         if self._client is not None:
             await self._client.aclose()
             self._client = None
@@ -74,12 +70,20 @@ class TelegramBody:
 
             cursor = await self._get_cursor() if self._get_cursor is not None else None
             offset = cursor + 1 if cursor is not None else None
+            backoff = self._retry_base
 
             while True:
                 params: dict[str, Any] = {"timeout": self._poll_timeout}
-                if offset is not None:
-                    params["offset"] = offset
-                for update in await self._call("getUpdates", **params):
+                params.update({"offset": offset} if offset is not None else {})
+                try:
+                    updates = await self._call("getUpdates", **params)
+                except (httpx.HTTPError, RuntimeError):
+                    # A flaky network or a Telegram hiccup never kills the body.
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 30.0)
+                    continue
+                backoff = self._retry_base
+                for update in updates:
                     update_id = update["update_id"]
                     message = update.get("message")
                     text = message.get("text") if message else None
@@ -112,8 +116,7 @@ class TelegramBody:
 
     def _event(self, update_id: int, message: dict[str, Any], text: str) -> Event:
         chat = message["chat"]
-        sender = message.get("from") or {}
-        sender_id = sender.get("id")
+        sender_id = (message.get("from") or {}).get("id")
         who = "person:owner" if sender_id in self._owner_ids else f"person:tg:{sender_id}"
         return Event(
             id=None,
@@ -121,12 +124,13 @@ class TelegramBody:
             kind="msg.in",
             who=who,
             place=f"space:tg:{chat['id']}",
-            body="telegram",
+            body=self.name,
             payload={
                 "cursor": update_id,
                 "message_id": message["message_id"],
                 "text": text,
                 "addressed": self._addressed(chat, message, text),
+                "place_kind": "direct" if chat.get("type") == "private" else "group",
             },
         )
 
@@ -139,10 +143,8 @@ class TelegramBody:
         if not self.bot_username:
             return False
         handle = f"@{self.bot_username}".lower()
-        for entity in message.get("entities") or []:
-            if entity.get("type") != "mention":
-                continue
-            start, length = entity["offset"], entity["length"]
-            if text[start : start + length].lower() == handle:
-                return True
-        return False
+        return any(
+            entity.get("type") == "mention"
+            and text[entity["offset"] : entity["offset"] + entity["length"]].lower() == handle
+            for entity in message.get("entities") or []
+        )

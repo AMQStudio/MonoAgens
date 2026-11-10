@@ -28,7 +28,7 @@ say/react actions → sendMessage/setMessageReaction, offset from cursor.
 Done when: a test with httpx.MockTransport shows a duplicate update is recorded once;
 manual check: an incoming message is recorded.
 
-## [ ] 4. The PFC
+## [x] 4. The PFC
 Config from .env, layered prompt (stable → core_memory → volatile), tool calling, actions
 written as events then handed to the body. For now every DM wakes the PFC.
 Done when: FakeLLM tests pass; manual check: a DM gets a reply; MVP TEST (a): restart in the

@@ -24,6 +24,7 @@ class Action:
     kind: str
     place: str
     payload: dict[str, Any] = field(default_factory=dict)
+    body: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
