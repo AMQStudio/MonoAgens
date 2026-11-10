@@ -53,6 +53,6 @@ Add `scripts/embed_check` with 25 sentence pairs in the owner's language (simila
 Done when: MVP TEST (d): after sleep there are new memories, events are untouched, and a
 question phrased with different words finds the right memory.
 
-## [ ] 8. MVP acceptance
+## [x] 8. MVP acceptance
 Combine tests (a)–(d) into `tests/test_mvp.py`. The owner uses the bot for a week, notes the
 "why so quiet?" and "why did it butt in?" moments, then tunes the weights in soul.yaml.
