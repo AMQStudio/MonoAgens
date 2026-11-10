@@ -146,6 +146,10 @@ Configuration from `.env`: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`.
   LLM cannot cause a call on every tick.
 - The `<recent>` prompt section shows only conversational events (msg.in, msg.out) and fired
   expectations, never internal bookkeeping events.
+- `<recent>` has two parts: the last events in this place, then the owner's (or this person's)
+  last events in **other places**, each line prefixed with its place, so a conversation that
+  moves from one body to another continues. Limits from soul.yaml: memory.recent_events
+  (this place) and memory.recent_elsewhere (other places).
 
 ## Bodies
 A body has exactly two ports:
@@ -156,6 +160,13 @@ kernel keeps a name → body map and calls `act` on the matching body. Replies g
 place of the triggering event unless the PFC names another place.
 On start, a body asks the kernel for `cursor(body)` (e.g. the last recorded update_id), so a
 restart neither loses nor duplicates input.
+
+CLI: the CLI body lives **inside the main process** as a local Unix socket server
+(path from `.env` `CLI_SOCKET`, file mode 0600, owner only). `python -m monoagens.cli` is a thin
+client: it connects to the socket, sends each typed line, and prints what comes back. It never
+touches the database or the kernel, so there is still exactly one consumer (invariant 3).
+Every CLI line is `msg.in` with who = `person:owner`, place = `space:cli`, addressed = true.
+If the main process is not running, the client says so and exits.
 
 Telegram: long polling with getUpdates. Offset = cursor + 1, advanced ONLY after the event is
 stored. The owner is recognized by `owner.telegram_ids` in soul.yaml → `person:owner`.

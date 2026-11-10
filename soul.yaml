@@ -42,6 +42,7 @@ memory:
   core_memory_tokens: 800
   retrieve_k: 5
   recent_events: 20
+  recent_elsewhere: 10
 
 expectations:
   default_expires_days: 30
