@@ -6,7 +6,7 @@
 - **Context:** Approvals are detected by a regex over outgoing text, a reaction can bind any bot message to any pending approval, settings reads are parked as approvals, privileged roles can decide another person's consent, and plugin preconditions (login, file sharing, consent) have no home. This ADR gives every layer one protocol for "what I need before I can continue" and one durable runner for it.
 - **Supersedes:** in part ADR-0006 §4 (approval routing of 4.5), ADR-0010 §4 (the `/approve #N` badge of 4.1), ADR-0004 §4 (approval routing of 4.2)
 - **Related:** ADR-0011 (charter), ADR-0012 (receipts), ADR-0014 (plugins and gateways), ADR-0003 (durability)
-- **Implementation:** draft
+- **Implementation:** partial — P2a (2026-11-10): decisions are data (`Decision` percept shared by `/approve`, `/deny`, buttons and reactions), the badge regex and the keyword confirmation are removed, the access notice is limited to one per person per window. Still open: the outcome protocol, the durable flow runner and flow table, the `Connect`/`ExternalAction`/`OperatorConfig` requirement kinds, the Google flow, `/link` versus account connection, and identity merge carrying approvals (phase P2b).
 
 ---
 
