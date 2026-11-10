@@ -1,7 +1,4 @@
-"""Entry point: wire the kernel, the clock, and the Telegram body.
-
-Only this module knows both the kernel and a concrete body (Invariant 1).
-"""
+"""Entry point: wire the kernel, the clock, and the Telegram body."""
 
 from __future__ import annotations
 
@@ -21,27 +18,16 @@ from monoagens.pfc import PFC
 async def main() -> None:
     llm = load_llm_config()
     if not llm["base_url"] or not llm["model"]:
-        raise RuntimeError(
-            "PFC is not configured: set LLM_BASE_URL and LLM_MODEL (and LLM_API_KEY) in .env"
-        )
+        raise RuntimeError("PFC is not configured: set LLM_BASE_URL and LLM_MODEL (and LLM_API_KEY) in .env")
     pfc = PFC(llm["base_url"], llm["api_key"], llm["model"])
-
     async with await psycopg.AsyncConnection.connect(os.environ["DATABASE_URL"]) as conn:
         await register_vector_async(conn)
-        clock = Clock(tick_seconds=load_clock_tick_seconds())
-        kernel = Kernel(conn, clock=clock, pfc=pfc)
-        body = TelegramBody(
-            os.environ["TELEGRAM_BOT_TOKEN"],
-            owner_ids=load_owner_ids(),
-            get_cursor=lambda: kernel.cursor("telegram"),
-        )
-
+        kernel = Kernel(conn, clock=Clock(tick_seconds=load_clock_tick_seconds()), pfc=pfc)
+        body = TelegramBody(os.environ["TELEGRAM_BOT_TOKEN"], owner_ids=load_owner_ids(),
+                            get_cursor=lambda: kernel.cursor("telegram"))
         stop = asyncio.Event()
-        tasks = [
-            asyncio.create_task(kernel.run(stop)),
-            asyncio.create_task(body.run(kernel.put)),
-            asyncio.create_task(clock.run(kernel.put, stop)),
-        ]
+        tasks = [asyncio.create_task(kernel.run(stop)), asyncio.create_task(body.run(kernel.put)),
+                 asyncio.create_task(kernel.clock.run(kernel.put, stop))]
         try:
             await asyncio.gather(*tasks)
         finally:

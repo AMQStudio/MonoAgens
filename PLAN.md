@@ -41,7 +41,7 @@ receives all group messages.
 Done when: MVP TEST (b): 20 ordinary group messages → 0 msg.out and 20 decision.silent;
 a mention gets a reply.
 
-## [ ] 6. Expectations
+## [x] 6. Expectations
 expect/resolve tools, time path (tick) and event path, the three operators, once/cooldown/
 max_fires policies, required expires_at, recovery of fired expectations at startup.
 Done when: MVP TEST (c): "remind me at 7" → exactly one message at 7 with a fake clock,

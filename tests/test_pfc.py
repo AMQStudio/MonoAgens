@@ -141,7 +141,8 @@ async def test_layered_prompt_structure(aconn):
     request = fake.requests[0]
     assert request["model"] == "fake-model"
     assert request["tool_choice"] == "required"
-    assert {tool["function"]["name"] for tool in request["tools"]} == {"say", "react", "stay_silent"}
+    assert {tool["function"]["name"] for tool in request["tools"]} == {
+        "say", "react", "stay_silent", "expect", "resolve"}
     assert fake.headers[0]["authorization"] == "Bearer test-key"
 
     messages = fake.last_messages
@@ -343,5 +344,5 @@ async def test_dm_gets_a_reply_through_the_telegram_body(aconn):
     assert await _kinds(aconn) == ["msg.in", "msg.out"]
 
 
-async def test_tool_names_are_the_three_step_four_tools():
-    assert TOOL_NAMES == {"say", "react", "stay_silent"}
+async def test_tool_names_are_the_five_tools():
+    assert TOOL_NAMES == {"say", "react", "stay_silent", "expect", "resolve"}

@@ -1,8 +1,4 @@
-"""The PFC: the LLM side of the self, reached only through the gate.
-
-One wake = one chat completion with tool calling. The prompt is layered
-(stable identity -> core_memory -> volatile context) so it can be cached.
-"""
+"""The PFC: the LLM side of the self, reached only through the gate."""
 
 from __future__ import annotations
 
@@ -19,27 +15,36 @@ from monoagens.types import Event
 
 SYSTEM_TAIL = "You act only through the tools. Staying silent is a valid choice."
 
-def _tool(name: str, description: str, argument: str, argument_description: str) -> dict[str, Any]:
-    """One function tool whose single string argument is required."""
-    return {
-        "type": "function",
-        "function": {
-            "name": name,
-            "description": description,
-            "parameters": {
-                "type": "object",
-                "properties": {argument: {"type": "string", "description": argument_description}},
-                "required": [argument],
-                "additionalProperties": False,
-            },
-        },
-    }
+
+def _tool(name: str, description: str, properties: dict[str, Any],
+          required: Sequence[str] = ()) -> dict[str, Any]:
+    return {"type": "function", "function": {
+        "name": name, "description": description,
+        "parameters": {"type": "object", "properties": properties, "required": list(required),
+                       "additionalProperties": False}}}
+
+
+def _text(description: str) -> dict[str, Any]:
+    return {"type": "string", "description": description}
 
 
 TOOLS: list[dict[str, Any]] = [
-    _tool("say", "Say something in the current place.", "text", "What to say."),
-    _tool("react", "React with an emoji to the message that woke you.", "emoji", "One emoji."),
-    _tool("stay_silent", "Deliberately do not respond.", "reason", "Why silence."),
+    _tool("say", "Say something in the current place.", {"text": _text("What to say.")}, ["text"]),
+    _tool("react", "React with an emoji to the message that woke you.", {"emoji": _text("One emoji.")}, ["emoji"]),
+    _tool("stay_silent", "Deliberately do not respond.", {"reason": _text("Why silence.")}, ["reason"]),
+    _tool("expect", "Hold an expectation about the future; you are woken if it is missed.",
+          {"about": _text("One sentence: what is expected."),
+           "cue_time": {"type": "object", "description": '{"at": ISO}, {"every": "2d"} or {"daily": "07:00"}.'},
+           "cue_event": {"type": "object", "description": "Pattern: kind, who, place, text_like."},
+           "expect": {"type": "object", "description": '{"none": true}, {"event_seen": pattern, "within": "2d"} '
+                                                       'or {"state": key, "op": "eq|gt|lt", "value": x}.'},
+           "intent": _text("What to do if it is missed."),
+           "weight": {"type": "number", "description": "Importance 0..1."},
+           "policy": {"type": "object", "description": '{"once": true} or {"cooldown": "6h", "max_fires": 3}.'},
+           "expires_at": _text("ISO time after which it is void.")}, ["about", "expect"]),
+    _tool("resolve", "Close an expectation.", {"id": {"type": "integer"},
+                                              "status": {"type": "string", "enum": ["satisfied", "dropped"]}},
+          ["id", "status"]),
 ]
 
 TOOL_NAMES = frozenset(tool["function"]["name"] for tool in TOOLS)
@@ -72,17 +77,9 @@ class PFCContext:
 class PFC:
     """OpenAI-compatible chat completions client with tool calling."""
 
-    def __init__(
-        self,
-        base_url: str,
-        api_key: str,
-        model: str,
-        *,
-        soul: dict[str, Any] | None = None,
-        transport: httpx.AsyncBaseTransport | None = None,
-        client: httpx.AsyncClient | None = None,
-        timeout: float = 30.0,
-    ) -> None:
+    def __init__(self, base_url: str, api_key: str, model: str, *, soul: dict[str, Any] | None = None,
+                 transport: httpx.AsyncBaseTransport | None = None, client: httpx.AsyncClient | None = None,
+                 timeout: float = 30.0) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
@@ -99,37 +96,25 @@ class PFC:
         return self._client
 
     async def aclose(self) -> None:
-        """Close the HTTP client, if one was opened."""
         if self._client is not None:
             await self._client.aclose()
             self._client = None
 
     async def decide(self, context: PFCContext) -> list[ToolCall]:
-        """Ask the PFC what to do; returns the tool calls it chose."""
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         response = await self._http().post(
             f"{self.base_url}/chat/completions",
-            json={
-                "model": self.model,
-                "messages": self.build_messages(context),
-                "tools": TOOLS,
-                "tool_choice": "required",
-            },
-            headers=headers,
-        )
+            json={"model": self.model, "messages": self.build_messages(context), "tools": TOOLS,
+                  "tool_choice": "required"}, headers=headers)
         response.raise_for_status()
         try:
-            message = response.json()["choices"][0]["message"]
-            raw_calls = message.get("tool_calls") or []
+            raw_calls = response.json()["choices"][0]["message"].get("tool_calls") or []
         except (KeyError, IndexError, TypeError) as exc:
             raise ValueError(f"Malformed chat completion response: {exc}") from exc
-        return [
-            ToolCall(call["function"]["name"], json.loads(call["function"]["arguments"] or "{}"))
-            for call in raw_calls
-        ]
+        return [ToolCall(call["function"]["name"], json.loads(call["function"]["arguments"] or "{}"))
+                for call in raw_calls]
 
     def build_messages(self, context: PFCContext) -> list[dict[str, Any]]:
-        """The three prompt layers: stable, core_memory, volatile."""
         return [
             {"role": "system", "content": self._stable_prompt()},
             {"role": "system", "content": f"<core_memory>{context.core_memory}</core_memory>"},
@@ -147,7 +132,6 @@ class PFC:
 
     def _volatile_prompt(self, context: PFCContext) -> str:
         local_now = context.now.astimezone(self.timezone)
-        recent = self._recent_lines(context)
         sections = [
             f"<now>{local_now:%Y-%m-%d %H:%M}, {local_now:%A}, {self.timezone.key}, "
             f"time since last interaction: {_duration(context.now, context.last_interaction)}</now>",
@@ -155,7 +139,7 @@ class PFC:
             f"<why_awake>{context.reason}</why_awake>",
             f"<expectations>{_listed(context.expectations)}</expectations>",
             f"<memories>{_listed(context.memories)}</memories>",
-            f"<recent>\n{chr(10).join(recent)}\n</recent>",
+            f"<recent>\n{chr(10).join(self._recent_lines(context))}\n</recent>",
             f"<event>{self._event_text(context.trigger)}</event>",
         ]
         return "\n".join(sections)
@@ -167,8 +151,7 @@ class PFC:
             if not text:
                 continue
             speaker = self.name if event.kind == "msg.out" else str(event.who or "?").removeprefix("person:")
-            stamp = event.ts.astimezone(self.timezone)
-            lines.append(f"{stamp:%H:%M} {speaker}: {text}")
+            lines.append(f"{event.ts.astimezone(self.timezone):%H:%M} {speaker}: {text}")
         return lines or ["(nothing yet)"]
 
     def _event_text(self, event: Event | None) -> str:
@@ -186,15 +169,14 @@ def _listed(items: Sequence[str]) -> str:
 def _duration(now: datetime, then: datetime | None) -> str:
     if then is None:
         return "first interaction"
-    seconds = int((now - then).total_seconds())
-    if seconds < 60:
+    minutes = int((now - then).total_seconds() // 60)
+    if minutes < 1:
         return "less than a minute"
-    minutes, seconds = divmod(seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    days, hours = divmod(hours, 24)
+    days, rest = divmod(minutes, 1440)
+    hours, mins = divmod(rest, 60)
     if days:
         return f"{days}d {hours}h"
-    return f"{hours}h {minutes}m" if hours else f"{minutes}m"
+    return f"{hours}h {mins}m" if hours else f"{mins}m"
 
 
 __all__ = ["PFC", "PFCContext", "TOOLS", "TOOL_NAMES", "ToolCall"]

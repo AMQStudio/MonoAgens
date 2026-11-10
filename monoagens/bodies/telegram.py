@@ -20,15 +20,10 @@ class TelegramBody:
 
     name = "telegram"
 
-    def __init__(
-        self,
-        token: str,
-        *,
-        owner_ids: set[int] | frozenset[int] = frozenset(),
-        get_cursor: GetCursor | None = None, poll_timeout: float = 30.0,
-        transport: httpx.AsyncBaseTransport | None = None,
-        api_base: str = "https://api.telegram.org", retry_base: float = 1.0,
-    ) -> None:
+    def __init__(self, token: str, *, owner_ids: set[int] | frozenset[int] = frozenset(),
+                 get_cursor: GetCursor | None = None, poll_timeout: float = 30.0,
+                 transport: httpx.AsyncBaseTransport | None = None,
+                 api_base: str = "https://api.telegram.org", retry_base: float = 1.0) -> None:
         self._token = token
         self._owner_ids = set(owner_ids)
         self._get_cursor = get_cursor
@@ -43,8 +38,7 @@ class TelegramBody:
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(  # the timeout must outlive the long poll
-                transport=self._transport, timeout=self._poll_timeout + 10.0
-            )
+                transport=self._transport, timeout=self._poll_timeout + 10.0)
         return self._client
 
     async def aclose(self) -> None:
@@ -53,8 +47,7 @@ class TelegramBody:
             self._client = None
 
     async def _call(self, method: str, **params: Any) -> Any:
-        url = f"{self._api_base}/bot{self._token}/{method}"
-        response = await self._http().post(url, json=params)
+        response = await self._http().post(f"{self._api_base}/bot{self._token}/{method}", json=params)
         response.raise_for_status()
         data = response.json()
         if not data.get("ok"):
@@ -65,13 +58,10 @@ class TelegramBody:
         """Port 1: long-poll getUpdates, put one Event per text message."""
         try:
             me = await self._call("getMe")
-            self.bot_id = me["id"]
-            self.bot_username = me.get("username")
-
+            self.bot_id, self.bot_username = me["id"], me.get("username")
             cursor = await self._get_cursor() if self._get_cursor is not None else None
             offset = cursor + 1 if cursor is not None else None
             backoff = self._retry_base
-
             while True:
                 params: dict[str, Any] = {"timeout": self._poll_timeout}
                 params.update({"offset": offset} if offset is not None else {})
@@ -87,15 +77,11 @@ class TelegramBody:
                     update_id = update["update_id"]
                     message = update.get("message")
                     text = message.get("text") if message else None
-                    if not text:
-                        # Non-text updates create no event but must not be re-read.
-                        offset = update_id + 1
-                        continue
-                    await put(self._event(update_id, message, text))
+                    if text:
+                        await put(self._event(update_id, message, text))
                     # Advance only after the event is safely recorded.
                     offset = update_id + 1
-                # Never spin hot when a poll returns without yielding.
-                await asyncio.sleep(0)
+                await asyncio.sleep(0)  # never spin hot when a poll returns without yielding
         finally:
             await self.aclose()
 
@@ -105,12 +91,8 @@ class TelegramBody:
         if action.kind == "say":
             await self._call("sendMessage", chat_id=chat_id, text=action.payload["text"])
         elif action.kind == "react":
-            await self._call(
-                "setMessageReaction",
-                chat_id=chat_id,
-                message_id=action.payload["message_id"],
-                reaction=[{"type": "emoji", "emoji": action.payload["emoji"]}],
-            )
+            await self._call("setMessageReaction", chat_id=chat_id, message_id=action.payload["message_id"],
+                             reaction=[{"type": "emoji", "emoji": action.payload["emoji"]}])
         else:
             raise ValueError(f"Unsupported action kind: {action.kind!r}")
 
@@ -118,21 +100,11 @@ class TelegramBody:
         chat = message["chat"]
         sender_id = (message.get("from") or {}).get("id")
         who = "person:owner" if sender_id in self._owner_ids else f"person:tg:{sender_id}"
-        return Event(
-            id=None,
-            ts=datetime.now(timezone.utc),
-            kind="msg.in",
-            who=who,
-            place=f"space:tg:{chat['id']}",
-            body=self.name,
-            payload={
-                "cursor": update_id,
-                "message_id": message["message_id"],
-                "text": text,
-                "addressed": self._addressed(chat, message, text),
-                "place_kind": "direct" if chat.get("type") == "private" else "group",
-            },
-        )
+        return Event(id=None, ts=datetime.now(timezone.utc), kind="msg.in", who=who,
+                     place=f"space:tg:{chat['id']}", body=self.name,
+                     payload={"cursor": update_id, "message_id": message["message_id"], "text": text,
+                              "addressed": self._addressed(chat, message, text),
+                              "place_kind": "direct" if chat.get("type") == "private" else "group"})
 
     def _addressed(self, chat: dict[str, Any], message: dict[str, Any], text: str) -> bool:
         if chat.get("type") == "private":
@@ -143,8 +115,5 @@ class TelegramBody:
         if not self.bot_username:
             return False
         handle = f"@{self.bot_username}".lower()
-        return any(
-            entity.get("type") == "mention"
-            and text[entity["offset"] : entity["offset"] + entity["length"]].lower() == handle
-            for entity in message.get("entities") or []
-        )
+        return any(entity.get("type") == "mention" and text[entity["offset"]:entity["offset"] + entity["length"]].lower() == handle
+                   for entity in message.get("entities") or [])

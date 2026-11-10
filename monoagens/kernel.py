@@ -1,5 +1,4 @@
 """The kernel loop: one queue, one consumer, one event at a time."""
-
 from __future__ import annotations
 
 import asyncio
@@ -9,13 +8,14 @@ from typing import Any
 
 import psycopg
 
+from monoagens import expect
 from monoagens.clock import Clock
+from monoagens.config import load_soul
 from monoagens.gate import Gate
 from monoagens.pfc import PFC, PFCContext, ToolCall
-from monoagens.store import append_event, cursor as store_cursor
-from monoagens.store import project_event, read_last_events, read_state
+from monoagens.store import (active_expectation_lines, append_event, cursor as store_cursor, project_event,
+                             read_last_events, read_state)
 from monoagens.types import Action, Event
-
 
 @dataclass(frozen=True, slots=True)
 class _Queued:
@@ -24,29 +24,20 @@ class _Queued:
 
 
 class Kernel:
-    """The central loop of MonoAgens.
+    """The single consumer. Body-blind; records first, then acts."""
 
-    Invariant 1: Body-blind. Never imports or references specific bodies.
-    Invariant 3: One queue, one consumer.
-    Invariant 4: Record first, then act.
-    """
-
-    def __init__(self, conn: psycopg.AsyncConnection[Any], clock: Clock | None = None,
-                 pfc: PFC | None = None, gate: Gate | None = None) -> None:
+    def __init__(self, conn, clock: Clock | None = None, pfc: PFC | None = None, gate: Gate | None = None,
+                 soul: dict[str, Any] | None = None) -> None:
         self.conn = conn
         self.clock = clock or Clock()
         self.pfc = pfc
-        self.gate = gate or Gate.from_soul()
+        self.soul = dict(soul) if soul is not None else load_soul()
+        self.gate = gate or Gate.from_soul(self.soul)
         self.queue: asyncio.Queue[_Queued] = asyncio.Queue()
         self.bodies: dict[str, Any] = {}
 
     async def put(self, event: Event) -> None:
-        """Enqueue an event from any source (bodies, clock).
-
-        Non-tick events return only after they are committed to the Log and
-        projected onto the Status Board (intake acknowledgement). Ticks are
-        fire-and-forget: they are never persisted.
-        """
+        """Enqueue; non-tick events return only once committed and projected."""
         if event.kind == "tick":
             await self.queue.put(_Queued(event, None))
             return
@@ -55,11 +46,9 @@ class Kernel:
         await ack
 
     async def cursor(self, body: str) -> Any | None:
-        """Query the last recorded cursor for a body adapter."""
         return await store_cursor(self.conn, body)
 
     def register_body(self, body: Any) -> None:
-        """Register a body adapter under its `name`."""
         name = getattr(body, "name", None)
         if not name:
             raise ValueError("A body must expose a name")
@@ -67,32 +56,19 @@ class Kernel:
 
     async def _append(self, event: Event, kind: str, payload: dict[str, Any], *,
                       caused_by: int | None = None, project: bool = True) -> Event:
-        """Append one event and, unless it is a diagnostic, project it."""
         async with self.conn.transaction():
-            stored = await append_event(
-                self.conn,
-                ts=self.clock.now(),
-                kind=kind,
-                who=event.who,
-                place=event.place,
-                body=event.body,
-                payload=payload,
-                caused_by=caused_by,
-            )
+            stored = await append_event(self.conn, ts=self.clock.now(), kind=kind, who=event.who,
+                                        place=event.place, body=event.body, payload=payload, caused_by=caused_by)
             if project:
                 await project_event(self.conn, stored)
         return stored
 
-    async def _process(self, event: Event) -> Event:
-        """Record one event, stamped with the kernel clock (single time source)."""
-        if event.kind == "tick":
-            return event
-        return await self._append(event, event.kind, event.payload, caused_by=event.caused_by)
-
     async def _settle(self, item: _Queued) -> Event:
-        """Record, acknowledge the source, then let the PFC act."""
+        """Record, acknowledge the source, then let expectations and the gate decide."""
         try:
-            stored = await self._process(item.event)
+            stored = (item.event if item.event.kind == "tick" else
+                      await self._append(item.event, item.event.kind, item.event.payload,
+                                         caused_by=item.event.caused_by))
         except BaseException as exc:
             if item.ack is not None and not item.ack.done():
                 item.ack.set_exception(exc)
@@ -109,26 +85,50 @@ class Kernel:
         return stored
 
     async def _wake(self, event: Event) -> None:
-        """Let the gate decide; only a wake reaches the PFC."""
-        if self.pfc is None or event.kind != "msg.in":
+        """Fire due expectations first; a plain message reaches the gate only after."""
+        fired = await expect.due(self.conn, event, now=self.clock.now(), soul=self.soul)
+        for item in fired:
+            await self._expect_wake(item)
+        if fired or self.pfc is None or event.kind != "msg.in":
             return
         verdict = await self.gate.judge(self.conn, event, now=self.clock.now())
         if verdict.decision != "wake":
             await self._emit(event, f"decision.{verdict.decision}", verdict.payload())
             return
-        recent = await read_last_events(self.conn, event.place or "", limit=20)
+        await self._think(event, verdict.reason, event.place or "")
+
+    async def _think(self, event: Event, reason: str, place: str) -> None:
+        recent = await read_last_events(self.conn, place, limit=20)
         context = PFCContext(
-            now=self.clock.now(),
-            place=event.place or "",
-            place_kind=str(event.payload.get("place_kind") or "direct"),
-            reason=verdict.reason,
-            core_memory=await self._core_memory(),
-            recent=[e for e in recent if e.id != event.id],
-            trigger=event,
-            last_interaction=await self._last_interaction(event),
-        )
+            now=self.clock.now(), place=place, place_kind=str(event.payload.get("place_kind") or "direct"),
+            reason=reason, core_memory=await self._core_memory(),
+            expectations=await active_expectation_lines(self.conn, place),
+            recent=[e for e in recent if e.id != event.id], trigger=event,
+            last_interaction=await self._last_interaction(event))
         for call in await self.pfc.decide(context):
             await self._apply(event, call)
+
+    async def _expect_wake(self, item: dict[str, Any]) -> None:
+        """Wake the PFC once for one fired expectation, then settle it."""
+        now = self.clock.now()
+        trigger = item.get("trigger") or Event(
+            id=item["fired_event"], ts=now, kind="expectation.fired", who=item["who"], place=item["place"],
+            body=item["source_body"], payload={"expectation_id": item["id"], "about": item["about"]})
+        if self.pfc is None:
+            return
+        verdict = await self.gate.judge(self.conn, trigger, now=now, surprise=float(item["weight"]))
+        if verdict.decision != "wake":
+            await self._emit(trigger, f"decision.{verdict.decision}", verdict.payload())
+        else:
+            reason = (f"expectation missed: {item['about']} "
+                      f"(intent: {item['intent'] or 'none'}); {verdict.reason}")
+            await self._think(trigger, reason, trigger.place or "")
+        await expect.settle(self.conn, item["id"], now=now, soul=self.soul)
+
+    async def recover(self) -> None:
+        """Startup: resolve answered fired expectations, wake the PFC once for the rest."""
+        for item in await expect.recovery(self.conn, now=self.clock.now()):
+            await self._expect_wake(item)
 
     async def _core_memory(self) -> str:
         value = await read_state(self.conn, "core_memory")
@@ -153,6 +153,10 @@ class Kernel:
             await self._act(event, "react", payload)
         elif call.name == "stay_silent":
             await self._emit(event, "decision.silent", {"reason": str(args.get("reason", ""))})
+        elif call.name == "expect":
+            await expect.create(self.conn, args, now=self.clock.now(), soul=self.soul, source=event)
+        elif call.name == "resolve":
+            await expect.resolve(self.conn, int(args["id"]), str(args["status"]), now=self.clock.now())
         else:
             await self._record_error(event, f"invalid tool call: {call.name} {args}")
 
@@ -163,23 +167,19 @@ class Kernel:
         body = self.bodies.get(event.body or "")
         if body is None:
             raise RuntimeError(f"No body registered for {event.body!r}")
-        action = Action(kind=kind, place=event.place or "", payload=payload, body=event.body)
-        await body.act(action)
+        await body.act(Action(kind=kind, place=event.place or "", payload=payload, body=event.body))
 
     async def _record_error(self, event: Event, exc: BaseException | str) -> None:
         try:
-            payload = {"error": str(exc), "event_id": event.id}
-            await self._append(event, "error", payload, caused_by=event.id, project=False)
+            await self._append(event, "error", {"error": str(exc), "event_id": event.id},
+                               caused_by=event.id, project=False)
         except Exception:
             pass  # the Log itself is unreachable; nothing left to record.
 
     async def step(self) -> Event:
-        """Process one event from the queue."""
-        item = await self.queue.get()
-        return await self._settle(item)
+        return await self._settle(await self.queue.get())
 
     async def run_until_idle(self) -> int:
-        """Process all queued events until the queue is empty."""
         count = 0
         while not self.queue.empty():
             await self.step()
@@ -188,6 +188,7 @@ class Kernel:
 
     async def run(self, stop_event: asyncio.Event) -> None:
         """Run the single consumer loop until stopped."""
+        await self.recover()
         while not stop_event.is_set():
             try:
                 item = await asyncio.wait_for(self.queue.get(), timeout=0.1)
