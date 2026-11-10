@@ -84,6 +84,12 @@ Features (all 0..1, weights in soul.yaml):
 score = Σ weight·feature, clamped to 0..1. The breakdown is always stored in the decision
 payload so thresholds can be tuned from data.
 
+Two kinds of events skip the score and always wake the PFC:
+- addressed events (someone spoke to it);
+- fired expectations (it deliberately promised to check something). Their `weight` only orders
+  several fired expectations; spam is prevented by the expectation's policy (once, cooldown,
+  max_fires), not by the gate. Penalties apply only to the remaining, non-addressed events.
+
 ## The PFC (LLM)
 OpenAI-compatible endpoint (chat completions + tool calling) over httpx.
 Tools: `say(text)`, `react(emoji)`, `stay_silent(reason)`, `expect(...)`, `resolve(id, status)`.
@@ -134,6 +140,12 @@ Configuration from `.env`: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`.
 - Sleep: take events since sleep:last_event → the LLM summarizes them per place into memory
   items (text, importance, who, place) → embed → store → refresh core_memory → expectations
   past expires_at become dropped → sleep.done event. Raw events are never touched.
+- Sleep is due only when there are new conversational events (msg.in, msg.out) since
+  sleep:last_event; internal events (decisions, errors) never make sleep due. A failed sleep
+  writes `sleep.failed` and the next attempt waits at least sleep.retry_minutes, so a broken
+  LLM cannot cause a call on every tick.
+- The `<recent>` prompt section shows only conversational events (msg.in, msg.out) and fired
+  expectations, never internal bookkeeping events.
 
 ## Bodies
 A body has exactly two ports:

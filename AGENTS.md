@@ -58,8 +58,11 @@ from `PLAN.md`.
 - No new dependency, ORM, agent framework, or platform SDK without the owner's approval.
 
 ## Size budget (excluding tests)
-kernel.py ≤ 200 lines · store.py ≤ 200 · expect.py ≤ 150 · memory.py ≤ 200 · pfc.py ≤ 200 ·
-bodies/telegram.py ≤ 180 · whole package ≤ 1,100 lines.
+kernel.py ≤ 280 lines · store.py ≤ 220 · expect.py ≤ 220 · memory.py ≤ 240 · pfc.py ≤ 240 ·
+gate.py ≤ 120 · bodies/telegram.py ≤ 180 · whole package ≤ 1,600 lines.
+Counted on readable code: lines ≤ 100 characters, one statement per line, blank lines between
+functions and classes, docstrings on public functions. Compressing code to fit the budget is a
+violation, not a fix.
 Going over budget means the design is wrong. Stop and report; do not force it.
 
 ## Tests
