@@ -145,7 +145,7 @@ def option_list(raw: object) -> list[dict]:
         label = str(item.get("label") or item.get("id") or "").strip()
         if not command or not label:
             continue
-        entry = {
+        entry: dict[str, object] = {
             "id": str(item.get("id") or command),
             "label": label,
             "command": command,

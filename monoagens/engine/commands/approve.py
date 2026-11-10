@@ -276,8 +276,8 @@ async def run_approval(
 ) -> tuple[str, bool]:
     """Decide one pending row deterministically: `(chat text, did it run)`.
 
-    Shared by `/approve` and the natural-confirmation path, so both re-check the stored scope
-    proof and the current RBAC instead of trusting the conversation.
+    Shared by `/approve`, `/deny`, and every gateway gesture, so all of them re-check the
+    stored scope proof and the current RBAC instead of trusting the conversation.
     """
     lang = str(agent.soul.language)
     if approval.kind in ("privacy", "disclosure"):
