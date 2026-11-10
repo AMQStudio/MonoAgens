@@ -6,7 +6,7 @@
 - **Context:** The overhaul (ADR-0011 to ADR-0016, ADR-0019, ADR-0020) removes LLM judges, moves privacy enforcement, and restructures the core. Today many tests pin the compensation layers instead of the behavior, invariants such as lease fencing and non-blocking async are not tested mechanically, and observed conversation failures have no regression tests. This ADR fixes the safety net that must exist before each removal.
 - **Supersedes:** in part ADR-0008 §4 (testing discipline of 4.5 is extended)
 - **Related:** ADR-0011 (boundaries), ADR-0012 (envelope), ADR-0013 (flows), ADR-0016 (memory), ADR-0019 (grounding), ADR-0020 (presets and roles)
-- **Implementation:** draft
+- **Implementation:** partial — P0 (2026-11-10): the fencing and async invariant tests exist with dated, shrinking exception lists; structural tests cover the envelope, addressing, taint, and the P0 fixes. Still open: import-linter contracts, golden conversation scenarios with recorded model responses, transport recordings, live suites, and the coverage gate.
 
 ---
 

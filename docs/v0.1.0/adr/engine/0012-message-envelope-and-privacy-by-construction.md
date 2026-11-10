@@ -6,7 +6,7 @@
 - **Context:** Speaker, addressee, privacy, and kind are not stored with a message. Command receipts are stored as the bot's own words, a reply to the bot renders as "replying to Mono", the privacy level is back-filled minutes later, and privacy plus refusal honesty are enforced by LLM reviewers after drafting. This ADR labels every message once, persists the labels, renders them explicitly, and moves privacy enforcement to context assembly.
 - **Supersedes:** in part ADR-0003 §4 (the post-draft review chain of 4.2), ADR-0002 §4 (privacy level assigned after storage), ADR-0004 §4 (verbatim leak screening of 4.2)
 - **Related:** ADR-0011 (charter), ADR-0013 (receipts and requirements), ADR-0002 (memory), ADR-0003 (turn lifecycle)
-- **Implementation:** draft
+- **Implementation:** partial — P1 (2026-11-10): envelope columns and labels (speaker, kind, actor, reply_to_self) written at storage, command replies stored as system receipts, the transcript rendered from the labels, addressing v1 (score and reasons stored and rendered, not yet deciding who answers), the redaction marker, the taint gate, and the turn trace. Still open: privacy level at ingress, `trust` and `valid_until` writers, the facts block, retirement of the post-draft judges, and the "Later" addressing rows (phase P3).
 
 ---
 
