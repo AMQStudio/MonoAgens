@@ -137,9 +137,14 @@ async def sleep_due(conn: psycopg.AsyncConnection[Any], now: datetime,
     """Return whether the self should sleep now."""
     config, zone = soul.get("sleep") or {}, ZoneInfo(str(soul.get("timezone") or "UTC"))
     last_id = int((await read_state(conn, "sleep:last_event") or {}).get("id") or 0)
-    cur = await conn.execute("SELECT max(id) FROM events WHERE kind NOT IN ('sleep.done', 'tick')")
+    cur = await conn.execute("SELECT max(id) FROM events WHERE kind IN ('msg.in', 'msg.out')")
     newest = (await cur.fetchone())[0]
     if newest is None or int(newest) <= last_id:
+        return False
+    cur = await conn.execute("SELECT max(ts) FROM events WHERE kind = 'sleep.failed'")
+    last_failed = (await cur.fetchone())[0]
+    retry = float(config.get("retry_minutes", 30)) * 60.0
+    if last_failed and (now - last_failed).total_seconds() < retry:
         return False
     cur = await conn.execute("SELECT max(ts) FROM events WHERE kind IN ('msg.in', 'msg.out')")
     idle_since = (await cur.fetchone())[0]
@@ -155,6 +160,15 @@ async def sleep_due(conn: psycopg.AsyncConnection[Any], now: datetime,
 
 async def sleep(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder: Any, now: datetime,
                 soul: dict[str, Any]) -> Event | None:
+    """Summarize new events into memories, or record sleep.failed and wait to retry."""
+    try:
+        return await _consolidate(conn, pfc=pfc, embedder=embedder, now=now, soul=soul)
+    except Exception as exc:
+        return await append_event(conn, ts=now, kind="sleep.failed", payload={"error": str(exc)})
+
+
+async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder: Any,
+                       now: datetime, soul: dict[str, Any]) -> Event | None:
     """Summarize new events into memories, refresh core_memory, record sleep.done."""
     last_id = int((await read_state(conn, "sleep:last_event") or {}).get("id") or 0)
     cur = await conn.execute("SELECT id, ts, kind, who, place, payload FROM events WHERE id > %s "

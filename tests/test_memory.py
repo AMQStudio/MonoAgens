@@ -25,7 +25,7 @@ SOUL = {
     "timezone": "Asia/Jakarta",
     "gate": {"weights": {"addressed": 1.0, "surprise": 0.8, "cooldown_penalty": -0.3, "crowd_penalty": -0.2},
              "band": {"silent": 0.3, "wake": 0.6}, "cooldown_minutes": 3, "crowd_window_minutes": 5},
-    "sleep": {"idle_minutes": 30, "hour": 2},
+    "sleep": {"idle_minutes": 30, "retry_minutes": 30, "hour": 2},
     "memory": {"retrieve_k": 5},
     "expectations": {"default_expires_days": 30, "max_active": 200},
 }
@@ -50,6 +50,17 @@ class FakePFC:
     async def call(self, messages, tools, *, tool_choice="required"):
         self.requests.append((messages, tools))
         return [ToolCall("store_memories", self.arguments)]
+
+
+class FailingPFC:
+    """A PFC whose every call fails, like a broken LLM endpoint."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def call(self, messages, tools, *, tool_choice="required"):
+        self.calls += 1
+        raise RuntimeError("llm down")
 
 
 class FakeLLM:
@@ -240,6 +251,46 @@ async def test_sleep_due_runs_at_the_configured_hour_once_per_day(aconn):
     await append_event(aconn, ts=tomorrow - timedelta(minutes=1), kind="msg.in", who="person:owner",
                        place=PLACE, body="telegram", payload={"text": "begadang lagi"})
     assert await memory.sleep_due(aconn, tomorrow, SOUL) is True
+
+
+async def test_failing_sleep_retries_at_most_once_per_retry_window(aconn):
+    await _seed_events(aconn)
+    clock = FakeClock(START + timedelta(minutes=31))
+    pfc = FailingPFC()
+    kernel = Kernel(aconn, clock=clock, pfc=pfc, soul=SOUL, embedder=FakeEmbedder())
+
+    for _ in range(20):  # 20 ticks, 30 seconds apart: 10 minutes in total.
+        await kernel.put(Event(id=None, ts=clock.now(), kind="tick"))
+        await kernel.step()
+        clock.advance(30)
+
+    assert pfc.calls == 1
+    rows = await (await aconn.execute(
+        "SELECT ts, payload FROM events WHERE kind = 'sleep.failed'")).fetchall()
+    assert len(rows) == 1 and "llm down" in rows[0][1]["error"]
+    assert await read_state(aconn, "sleep:last_event") is None  # nothing consolidated
+
+    clock.set_time(rows[0][0] + timedelta(minutes=31))  # the retry window has passed
+    await kernel.put(Event(id=None, ts=clock.now(), kind="tick"))
+    await kernel.step()
+    assert pfc.calls == 2
+
+
+async def test_internal_events_never_make_sleep_due(aconn):
+    await _seed_events(aconn)
+    await memory.sleep(aconn, pfc=FakePFC(SLEEP_ARGS), embedder=FakeEmbedder(),
+                       now=START + timedelta(hours=1), soul=SOUL)
+    for offset, kind in enumerate(("decision.silent", "error", "expectation.fired")):
+        await append_event(aconn, ts=START + timedelta(hours=2, minutes=offset), kind=kind,
+                           who="person:owner", place=PLACE, body="telegram",
+                           payload={"reason": "quiet"})
+
+    # Idle long enough, but only bookkeeping happened since sleep: not due.
+    assert await memory.sleep_due(aconn, START + timedelta(hours=3), SOUL) is False
+
+    await append_event(aconn, ts=START + timedelta(hours=3), kind="msg.in", who="person:owner",
+                       place=PLACE, body="telegram", payload={"text": "halo"})
+    assert await memory.sleep_due(aconn, START + timedelta(hours=3, minutes=31), SOUL) is True
 
 
 async def test_retrieval_ignores_an_empty_query(aconn):
