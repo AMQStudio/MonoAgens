@@ -106,8 +106,21 @@ class Delivery:
         """The bodies a drain captured, for the shutdown notices of the same epoch."""
         return self._shutdown_gateways
 
-    def remember(self, thread_id: str, text: str, *, gateway, message_id: str) -> None:
-        """The bot's own message joins the window: the next turn reads what it just said."""
+    def remember(
+        self,
+        thread_id: str,
+        text: str,
+        *,
+        gateway,
+        message_id: str,
+        receipt_actor: str = "",
+    ) -> None:
+        """The bot's own message joins the window: the next turn reads what it just said.
+
+        A command receipt is stored as what it is — a notice the user's command produced, with
+        the person who ran it — so a later turn never reports the Soul did that action itself.
+        """
+        receipt = bool(receipt_actor)
         self.runtime.windows.append(
             thread_id,
             Message(
@@ -118,6 +131,17 @@ class Delivery:
                 text=text,
                 outgoing=True,
                 author=AUTHOR_BOT,
+                speaker="system_receipt" if receipt else "unknown",
+                actor=receipt_actor if receipt else "",
+                kind="notice" if receipt else "unknown",
+                label_meta=(
+                    {
+                        "speaker": {"source": "rule", "version": 1},
+                        "actor": {"source": "transport", "version": 1},
+                    }
+                    if receipt
+                    else {}
+                ),
             ),
         )
 
@@ -384,6 +408,7 @@ class Delivery:
         generation: int,
         partial: str,
         humanize,
+        receipt_actor: str = "",
     ) -> tuple[list[str], list[Action], str]:
         """Send the planned chunks of one turn.
 
@@ -426,7 +451,13 @@ class Delivery:
             if receipt.state != "sent":
                 return sent_ids, actions, f"refused:{receipt.reason or receipt.state}"
             self.runtime.turns.chunk_sent(turn_id)
-            self.remember(thread_id, chunk, gateway=gateway, message_id=receipt.reference)
+            self.remember(
+                thread_id,
+                chunk,
+                gateway=gateway,
+                message_id=receipt.reference,
+                receipt_actor=receipt_actor,
+            )
             sent_ids.append(receipt.reference)
             actions.append(action)
             if pace and index < len(chunks) - 1:

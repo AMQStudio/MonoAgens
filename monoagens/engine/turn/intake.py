@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import replace
 
 from .. import io
+from ..envelope import replies_to_self
 from ..inbound import Action, GatewayCore, Percept, awaiting_address
 from ..llm import DeadlineExceeded
 from ..memory import intent
@@ -55,6 +56,23 @@ class TurnIntake:
             log.exception("identity resolve failed source=%s", source)
             return replace(inbound, actor=inbound.actor or raw)
 
+    def label_reply(self, message, gateway: GatewayCore, thread_id: str) -> None:
+        """ADR-0012 §4.1: mark a reply to the Soul's own message; never block intake."""
+        try:
+            quote = message.quote
+            found = None
+            if quote is not None and quote.id:
+                found = self.runtime.windows.find(thread_id, quote.id)
+            message.reply_to_self = replies_to_self(message, gateway.self_handles(), found)
+        except Exception:
+            log.warning(
+                "reply-to-self lookup failed chat=%s id=%s",
+                thread_id,
+                getattr(message, "id", ""),
+                exc_info=True,
+            )
+            message.reply_to_self = False
+
     def observe_group(self, inbound: Percept, gateway: GatewayCore, reason: str) -> bool:
         """Archive a shared-room message the policy gate rejected; never reply to it.
 
@@ -66,6 +84,7 @@ class TurnIntake:
             return False
         message = inbound.payload
         thread_id = inbound.thread
+        self.label_reply(message, gateway, thread_id)
         try:
             rooms.ensure_thread(
                 self.runtime.history.db,
@@ -143,6 +162,9 @@ class TurnIntake:
             )
             return []
         inbound = self.identify(inbound, gateway)
+        message = inbound.payload
+        # The quoted message may need a store read: keep it off the event loop (AGENTS.md §2).
+        await io.run(self.label_reply, message, gateway, thread_id)
         message_id = str(message.id or "")
         if not message_id:
             log.warning("message without an id cannot become a turn chat=%s", thread_id)

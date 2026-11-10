@@ -730,6 +730,7 @@ class TurnRunner(ApprovalFlow, ResearchFlow, TurnReview):
                         generation=generation,
                         partial=str(runtime.config.turns.partial_delivery or "skip"),
                         humanize=humanize,
+                        receipt_actor=(inbound.actor or "") if is_command else "",
                     )
                     actions.extend(sent_actions)
                     if stop.startswith("refused:"):

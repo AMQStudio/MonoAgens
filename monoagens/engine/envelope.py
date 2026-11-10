@@ -7,6 +7,8 @@ on `messages` (migration `0025`): a label outside its set must never reach the r
 
 import re
 
+from .access.permissions import normalize
+
 # The allowed value sets, mirroring `ck_messages_speaker`, `ck_messages_kind`, `ck_messages_trust`.
 SPEAKERS = frozenset({"self", "sender", "other_person", "system_receipt", "unknown"})
 KINDS = frozenset({"chat", "question", "command", "tool_result", "notice", "unknown"})
@@ -51,6 +53,44 @@ def stored_labels(message) -> dict:
             "label_meta": message.label_meta,
         }
     return label_message(message)
+
+
+def replies_to_self(message, handles, found) -> bool:
+    """Whether the message quotes one of the Soul's own earlier messages.
+
+    `handles` is the body's `self_handles()` set; `found` is the stored message named by the
+    quote, when the caller could look it up. A body that reports the quote author is trusted
+    first; only then does the stored author decide.
+    """
+    quote = getattr(message, "quote", None)
+    if quote is None:
+        return False
+    target = normalize(getattr(quote, "sender_id", "") or "")
+    if target and target in {normalize(h) for h in (handles or ()) if h}:
+        return True
+    if not getattr(quote, "id", "") or found is None:
+        return False
+    from .turn.context import AUTHOR_BOT
+
+    return getattr(found, "author", "") == AUTHOR_BOT
+
+
+def merge_labels(old, new) -> dict:
+    """The envelope labels to keep when two rows of the same message merge.
+
+    A label is sticky: a re-delivered duplicate that carries no signal never downgrades one
+    already stored.
+    """
+    return {
+        "speaker": new.speaker if new.speaker != UNKNOWN else old.speaker,
+        "kind": new.kind if new.kind != UNKNOWN else old.kind,
+        "trust": new.trust if new.trust != UNKNOWN else old.trust,
+        "addressed_to": new.addressed_to if new.addressed_to != UNKNOWN else old.addressed_to,
+        "actor": new.actor or old.actor,
+        "reply_to_self": bool(new.reply_to_self or old.reply_to_self),
+        "valid_until": new.valid_until or old.valid_until,
+        "label_meta": new.label_meta if new.speaker != UNKNOWN else old.label_meta,
+    }
 
 
 def label_message(message) -> dict:

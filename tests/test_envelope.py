@@ -8,9 +8,11 @@ from monoagens.engine.envelope import (
     TRUSTS,
     label_message,
     label_value,
+    merge_labels,
+    replies_to_self,
     stored_labels,
 )
-from monoagens.engine.turn.context import AUTHOR_BOT, Message
+from monoagens.engine.turn.context import AUTHOR_BOT, Message, Quote
 
 
 def message(text: str = "", *, outgoing: bool = False, author: str = "unknown", notice: str = ""):
@@ -141,3 +143,117 @@ def test_the_souls_own_text_that_looks_like_a_command_stays_chat() -> None:
 
     assert labels["speaker"] == "self"
     assert labels["kind"] == "chat"
+
+
+def quoted(sender_id: str, *, quote_id: str = "q1") -> Message:
+    found = message("halo")
+    found.quote = Quote(
+        id=quote_id,
+        sender_name="Soul",
+        sender_id=sender_id,
+        text="siap",
+        when=datetime(2026, 1, 1, 9),
+    )
+    return found
+
+
+def test_a_quote_of_a_self_handle_replies_to_self() -> None:
+    assert replies_to_self(quoted("628567770837"), {"628567770837"}, None) is True
+
+
+def test_the_quote_author_is_compared_in_normalised_form() -> None:
+    assert replies_to_self(quoted("628111@S.WHATSAPP.NET"), {"628111@s.whatsapp.net"}, None)
+
+
+def test_a_quote_of_a_stored_bot_message_replies_to_self() -> None:
+    found = message("siap, kak", outgoing=True, author=AUTHOR_BOT)
+
+    assert replies_to_self(quoted("628222", quote_id="m1"), set(), found) is True
+
+
+def test_a_quote_of_another_person_is_not_a_reply_to_self() -> None:
+    found = message("halo")
+
+    assert replies_to_self(quoted("628222", quote_id="m1"), {"628567770837"}, found) is False
+
+
+def test_a_message_without_a_quote_is_not_a_reply_to_self() -> None:
+    assert replies_to_self(message("halo"), {"628567770837"}, None) is False
+
+
+def test_no_handle_and_no_found_message_is_not_a_reply_to_self() -> None:
+    assert replies_to_self(quoted("628222"), set(), None) is False
+    assert replies_to_self(quoted(""), {""}, None) is False
+
+
+def test_merge_labels_never_downgrades_a_stored_label() -> None:
+    old = message("halo")
+    old.speaker = "other_person"
+    old.kind = "question"
+    old.trust = "member"
+    old.addressed_to = "self"
+    old.actor = "per_1"
+    old.reply_to_self = True
+    old.valid_until = {"at": 10}
+    old.label_meta = {"speaker": {"source": "gateway", "version": 1}}
+
+    merged = merge_labels(old, message("halo"))
+
+    assert merged == {
+        "speaker": "other_person",
+        "kind": "question",
+        "trust": "member",
+        "addressed_to": "self",
+        "actor": "per_1",
+        "reply_to_self": True,
+        "valid_until": {"at": 10},
+        "label_meta": {"speaker": {"source": "gateway", "version": 1}},
+    }
+
+
+def test_merge_labels_prefers_the_signal_the_new_row_carries() -> None:
+    old = message("halo")
+    old.speaker = "sender"
+    old.actor = "per_1"
+    old.label_meta = {"speaker": {"source": "rule", "version": 1}}
+    fresh = message("halo")
+    fresh.speaker = "system_receipt"
+    fresh.actor = "per_2"
+    fresh.kind = "notice"
+    fresh.label_meta = {"speaker": {"source": "transport", "version": 1}}
+
+    merged = merge_labels(old, fresh)
+
+    assert merged["speaker"] == "system_receipt"
+    assert merged["kind"] == "notice"
+    assert merged["actor"] == "per_2"
+    assert merged["label_meta"] == {"speaker": {"source": "transport", "version": 1}}
+
+
+def test_a_sticky_actor_survives_a_duplicate_without_one() -> None:
+    old = message("halo")
+    old.actor = "per_1"
+    old.reply_to_self = True
+
+    merged = merge_labels(old, message("halo"))
+
+    assert merged["actor"] == "per_1"
+    assert merged["reply_to_self"] is True
+
+
+def test_a_duplicate_with_unknown_labels_keeps_the_window_labels() -> None:
+    from monoagens.engine.turn.context import WorkingMemory
+
+    window = WorkingMemory()
+    first = message("halo")
+    first.speaker = "system_receipt"
+    first.kind = "notice"
+    first.actor = "per_1"
+    window.append("chat", first, persist=False)
+    window.append("chat", message("halo"), persist=False)
+
+    kept = window.get("chat")[0]
+
+    assert kept.speaker == "system_receipt"
+    assert kept.kind == "notice"
+    assert kept.actor == "per_1"

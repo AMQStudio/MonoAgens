@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from .. import io
 from ..access.permissions import normalize
 from ..character import lexicon
+from ..envelope import merge_labels
 from .words import words
 
 if TYPE_CHECKING:
@@ -240,6 +241,8 @@ class WorkingMemory:
             text=chosen.text or old.text,
             view_once=old.view_once or new.view_once,
             unreadable=old.unreadable and not (new.text or new.attachments),
+            # ADR-0012 §4.1: a duplicate never resets the labels the first copy carried.
+            **merge_labels(old, new),
         )
 
     def append(self, thread_id: str, message: Message, *, persist: bool = True) -> None:
