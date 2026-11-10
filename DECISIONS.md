@@ -108,6 +108,19 @@ Assembled by the kernel on every wake from data that already exists; the LLM onl
   confidence from `think` means ask back or say "I don't know". Never claim a capability that is
   not in `<self>`.
 
+**D13 — Order of users.**
+First the owner alone, then one real group the owner knows well (which is also where the honest
+human-likeness evaluation happens), then other developers once the contracts are stable.
+
+**D14 — Retention by activation, not by age.**
+No fixed day limits. During sleep every detail trace (per-message vector) is scored with the
+same ACT-R activation as memories (use, recency, importance, links to promises and to active
+memories). High activation keeps the detail; low activation drops the vector so only the gist in
+memories remains. Raw events always stay in the log (subject to D4 hard forgetting). The
+activation threshold adapts to a storage budget set by the owner, like the other drives.
+Retention is adaptive but deterministic: same data and same rules give the same result; no
+randomness. Backups are compressed daily with an owner-set retention period.
+
 ## Accepted in principle, details pending
 
 **P1 — Self-correction (track H).** A `revise` act: when corrected, the old memory gets
@@ -117,5 +130,7 @@ Sleep distills forward-model outcomes and corrections into `lesson` memories. Th
 edits its own principles or persona; that stays with the owner.
 
 ## Still open
-- Data growth: backups, database size, how far back retrieval looks.
-- First users: the owner only, a specific community group, or other developers.
+- Track H (P1) details.
+- Whether the agent may suggest installing a package when asked for something it cannot do.
+- Optional deeper research on memory consolidation and forgetting formulas (D14).
+- Rewrite DESIGN.md and ROADMAP.md from these decisions, then write prompts for the tracks.
