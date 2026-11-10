@@ -38,6 +38,9 @@ class Handler:
     path_arg: str = ""  # the argument that names a filesystem target
     scan: tuple[str, ...] = ()  # arguments a credential/injection scan must read
     max_output_chars: int = 20_000  # ADR-0003 §4.1: per tool, cut by `execute`
+    # ADR-0012 §4.5: the result is content from outside the deployment (web, MCP), so a turn
+    # that reads it is tainted and its external side effects wait for an approval.
+    untrusted_output: bool = False
 
 
 def allows(patterns: tuple[str, ...], name: str) -> bool:

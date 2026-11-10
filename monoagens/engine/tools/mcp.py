@@ -8,6 +8,7 @@ TOOL = Handler(
     target="process",
     approval_class="authorization",
     family="mcp",
+    untrusted_output=True,
     description="Tools exposed by MCP servers (one family, names mcp__<server>__<tool>).",
     pattern="mcp__*",
     hidden=True,

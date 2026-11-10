@@ -29,6 +29,8 @@ READ_ACTIONS = {
 # `tools/settings.py::_requires_approval` (guard never imports from tools).
 SETTINGS_READ_ACTIONS = frozenset({"get", "schema", "reload"})
 SEND_TOOLS = frozenset({"send", "send_to", "send_message", "send_file"})
+# Bookkeeping that never leaves the deployment: a tainted turn may still remember and schedule.
+TAINT_INTERNAL_TOOLS = frozenset({"memory", "task", "recipe"})
 TASK_TOOLS = frozenset({"task", "tasks", "task_create", "delegate"})
 # ADR-0007 §4.8: reading a host secret is authorization, whatever the requester's role.
 CREDENTIAL_PATTERNS = (
@@ -186,6 +188,15 @@ class ActionRequest:
     roots: tuple[str, ...] = ()
     paths: tuple[str, ...] = ()  # already resolved by the caller, never re-derived here
     door: bool = False  # a delivery through `Agent.dispatch`, never a tool call
+    tainted: bool = False  # this turn already read untrusted content (ADR-0012 §4.5)
+
+
+# ADR-0012 §4.5: the one reason a tainted turn parks an external side effect with.
+TAINT_REASON = "untrusted content was read this turn; needs /approve"
+# Tools whose whole purpose is to leave the deployment; `write`/`sed` decide by their path.
+EXTERNAL_WRITE_TOOLS = frozenset({"relay", "send_file"})
+PATH_WRITE_TOOLS = frozenset({"write", "sed"})
+PROCESS_TOOLS = frozenset({"shell", "sandbox"})
 
 
 @dataclass(frozen=True)
@@ -567,7 +578,9 @@ class ApprovalPolicy:
         )
 
     def _shared_gate(self, request: ActionRequest) -> SafetyDecision | None:
-        """The gates both trusting tiers keep: secrets, settings, crossings, and tasks."""
+        """The gates both trusting tiers keep: secrets, settings, crossings, tasks, and taint."""
+        if request.tainted and tainted_side_effect(request):
+            return SafetyDecision("pending", TAINT_REASON)
         command = next(
             (
                 str(request.args.get(name) or "")
@@ -612,6 +625,37 @@ class ApprovalPolicy:
         return SafetyDecision(
             "pending", f"{request.tool} changes state; it needs /approve"
         )
+
+
+def _in_scratch(request: ActionRequest, path: str) -> bool:
+    """A path inside the workspace's scratch area: the only place a tainted turn may write."""
+    if not path:
+        return False
+    return _inside(path, (str(Path(request.workspace) / "scratch"),))
+
+
+def tainted_side_effect(request: ActionRequest) -> bool:
+    """ADR-0012 §4.5: does this call leave the deployment with content it read?
+
+    A reply in the origin room is not a side effect (the content returns to whoever asked for
+    it), and neither is a read. Every other declared write leaves the deployment, including a
+    plugin action the guard cannot classify, which fails closed.
+    """
+    if read_only(request):
+        return False
+    if request.tool in SEND_TOOLS or request.tool in EXTERNAL_WRITE_TOOLS:
+        # The origin room is where the requester already is; a file, a relay, or another room
+        # carries the content somewhere else.
+        if request.tool in EXTERNAL_WRITE_TOOLS:
+            return True
+        return crosses_scope(request)
+    if request.tool == "settings":
+        return _settings_action(request) not in SETTINGS_READ_ACTIONS
+    if request.tool in PROCESS_TOOLS or request.target == "process":
+        return True
+    if request.tool in PATH_WRITE_TOOLS:
+        return any(not _in_scratch(request, value) for value in request.paths)
+    return request.tool not in TAINT_INTERNAL_TOOLS
 
 
 def _settings_action(request: ActionRequest) -> str:

@@ -23,6 +23,7 @@ from .patterns import (
 from .policy import (
     AUTHORIZATION,
     CONSENT,
+    TAINT_REASON,
     ActionRequest,
     AllowAllSafety,
     ApprovalPolicy,
@@ -36,6 +37,7 @@ from .policy import (
     recheck_scope,
     scan_command,
     scope_proof,
+    tainted_side_effect,
 )
 from .sandbox import BLOCKED, GUARD_SYSTEM, SAFE_HEADS, SandboxGuard, screen
 
@@ -47,6 +49,7 @@ __all__ = [
     "GUARD_SYSTEM",
     "SAFE_HEADS",
     "SENSITIVE",
+    "TAINT_REASON",
     "ActionRequest",
     "AllowAllSafety",
     "ApprovalPolicy",
@@ -75,4 +78,5 @@ __all__ = [
     "scan_command",
     "scope_proof",
     "screen",
+    "tainted_side_effect",
 ]

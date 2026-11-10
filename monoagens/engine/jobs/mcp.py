@@ -60,6 +60,7 @@ class Hub:
                 self._handlers[exposed] = Handler(
                     name=exposed,
                     family="mcp",
+                    untrusted_output=True,
                     description=f"[{name}] {tool.description or tool.name}",
                     fn=partial(self.call, exposed),
                     parameters=tool.input_schema or {"type": "object", "properties": {}},

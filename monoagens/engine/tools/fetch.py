@@ -304,6 +304,7 @@ TOOL = Handler(
     approval_class="none",
     scan=("url",),
     family="web_search",
+    untrusted_output=True,
     description=(
         "Fetch one public http(s) page and return its text. Only http/https, only ports "
         "80/443, never a private/loopback/link-local address (the SSRF rule cannot be "

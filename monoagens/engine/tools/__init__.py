@@ -10,7 +10,14 @@ from typing import Any
 from ..access.permissions import command_allowed
 from ..access.roles import Role
 from ..config import Config
-from ..guard import CONSENT, ActionRequest, approval_summary, scope_proof
+from ..guard import (
+    CONSENT,
+    TAINT_REASON,
+    ActionRequest,
+    approval_summary,
+    scope_proof,
+    tainted_side_effect,
+)
 from ..inbound import Address, Directory
 from ..jobs.lease import Superseded
 from ..registry import Handler, Registry, allows, discover
@@ -92,6 +99,9 @@ class ToolContext:
         self.memory_hits: list = []
         self.research_cards: list = []
         self.activated: set[str] = set()
+        # ADR-0012 §4.5: set once a tool returned content from outside the deployment, and it
+        # stays set for the rest of the turn; the safety gate reads it through `ActionRequest`.
+        self.tainted = False
 
     @property
     def role(self) -> Role | None:
@@ -474,6 +484,91 @@ def resolve_spec(specs: dict[str, Handler], name: str) -> Handler | None:
     return next((item for item in specs.values() if name in item.aliases), None)
 
 
+async def _approval_door(spec: Handler, args: dict, ctx: ToolContext) -> str:
+    """The approval tier before a tool runs: "" when it may run, else the reply text."""
+    resolved: tuple[str, ...] = ()
+    raw_path = args.get(spec.path_arg) if spec.path_arg and isinstance(args, dict) else None
+    if isinstance(raw_path, str) and raw_path.strip():
+        try:
+            resolved = (str(_resolve(ctx, raw_path)),)
+        except PermissionError:
+            resolved = ()
+    request = ActionRequest(
+        tool=spec.name,
+        args=dict(args),
+        thread_id=ctx.thread_id,
+        sender=ctx.sender,
+        gateway=getattr(ctx.gateway, "name", "") or "",
+        roles=tuple(role.name for role in ctx.roles),
+        workspace=str(ctx.config.workspace),
+        roots=tuple(str(root) for root in ctx.roots),
+        paths=resolved,
+        target=spec.target,
+        declared_class=spec.approval_class,
+        destructive=spec.destructive,
+        path_arg=spec.path_arg,
+        scan=spec.scan,
+        tainted=ctx.tainted,
+    )
+    decision = ctx.agent.safety.check(request)
+    if "command" in spec.scan and decision.verdict == "allow":
+        guard = getattr(ctx.agent, "sandbox_guard", None)
+        if guard is not None:
+            decision = await guard.check(
+                str(args.get("command") or ""),
+                can_approve=command_allowed(ctx.roles, "approve"),
+                thread_id=ctx.thread_id,
+            )
+    if decision.verdict == "deny":
+        return f"error: {decision.reason or 'action denied by safety policy'}"
+    if (
+        decision.verdict == "pending"
+        and decision.reason == TAINT_REASON
+        and tainted_side_effect(request)
+    ):
+        # ADR-0012 §4.5, ADR-0011 §4.9: the trace keeps the tool and the reason key only.
+        log.warning(
+            "taint gate parked tool=%s reason=taint",
+            spec.name,
+            extra={"event": "turn.taint.gated"},
+        )
+    if decision.verdict == "pending":
+        proof = scope_proof(request, extra=ctx.config.guard.credential_patterns)
+        if proof["class"] == CONSENT and not ctx.agent.approvals.consent_allowed(
+            ctx.sender
+        ):
+            return (
+                "error: too many consent approvals in the last hour; "
+                "wait or ask the approver"
+            )
+        approval = await ctx.agent.approvals.create(
+            kind="tool",
+            thread_id=ctx.thread_id,
+            sender=ctx.sender,
+            gateway=getattr(ctx.gateway, "name", "") or "",
+            tool=spec.name,
+            args=dict(args),
+            summary=approval_summary(spec.name, request, proof),
+            roles=tuple(role.name for role in ctx.roles),
+            approval_class=str(proof["class"]),
+            scope_proof=proof,
+            batch_id=ctx.approval_batch,
+        )
+        ctx.approval_id = str(approval.id)
+        if approval.batch_id and not ctx.approval_batch:
+            ctx.approval_batch = approval.batch_id
+        if ctx.approval_id not in ctx.approvals:
+            ctx.approvals.append(ctx.approval_id)
+        waiting = ", ".join(f"#{item}" for item in ctx.approvals)
+        return (
+            f"pending approval #{approval.id}: {approval.summary}. "
+            f"Tell the sender to run /approve {approval.id}"
+            + (f" (staged in this turn: {waiting})" if len(ctx.approvals) > 1 else "")
+            + "."
+        )
+    return ""
+
+
 async def execute(specs: dict[str, Handler], name: str, args: dict, ctx: ToolContext) -> str:
     """Single entry point: name, permission, arguments, safety/approval, run, cap output."""
     spec = resolve_spec(specs, name)
@@ -487,74 +582,9 @@ async def execute(specs: dict[str, Handler], name: str, args: dict, ctx: ToolCon
     if errors:
         return invalid_arguments(spec.name, errors)
     if ctx.agent is not None and not ctx.approved:
-        resolved: tuple[str, ...] = ()
-        raw_path = args.get(spec.path_arg) if spec.path_arg and isinstance(args, dict) else None
-        if isinstance(raw_path, str) and raw_path.strip():
-            try:
-                resolved = (str(_resolve(ctx, raw_path)),)
-            except PermissionError:
-                resolved = ()
-        request = ActionRequest(
-            tool=spec.name,
-            args=dict(args),
-            thread_id=ctx.thread_id,
-            sender=ctx.sender,
-            gateway=getattr(ctx.gateway, "name", "") or "",
-            roles=tuple(role.name for role in ctx.roles),
-            workspace=str(ctx.config.workspace),
-            roots=tuple(str(root) for root in ctx.roots),
-            paths=resolved,
-            target=spec.target,
-            declared_class=spec.approval_class,
-            destructive=spec.destructive,
-            path_arg=spec.path_arg,
-            scan=spec.scan,
-        )
-        decision = ctx.agent.safety.check(request)
-        if "command" in spec.scan and decision.verdict == "allow":
-            guard = getattr(ctx.agent, "sandbox_guard", None)
-            if guard is not None:
-                decision = await guard.check(
-                    str(args.get("command") or ""),
-                    can_approve=command_allowed(ctx.roles, "approve"),
-                    thread_id=ctx.thread_id,
-                )
-        if decision.verdict == "deny":
-            return f"error: {decision.reason or 'action denied by safety policy'}"
-        if decision.verdict == "pending":
-            proof = scope_proof(request, extra=ctx.config.guard.credential_patterns)
-            if proof["class"] == CONSENT and not ctx.agent.approvals.consent_allowed(
-                ctx.sender
-            ):
-                return (
-                    "error: too many consent approvals in the last hour; "
-                    "wait or ask the approver"
-                )
-            approval = await ctx.agent.approvals.create(
-                kind="tool",
-                thread_id=ctx.thread_id,
-                sender=ctx.sender,
-                gateway=getattr(ctx.gateway, "name", "") or "",
-                tool=spec.name,
-                args=dict(args),
-                summary=approval_summary(spec.name, request, proof),
-                roles=tuple(role.name for role in ctx.roles),
-                approval_class=str(proof["class"]),
-                scope_proof=proof,
-                batch_id=ctx.approval_batch,
-            )
-            ctx.approval_id = str(approval.id)
-            if approval.batch_id and not ctx.approval_batch:
-                ctx.approval_batch = approval.batch_id
-            if ctx.approval_id not in ctx.approvals:
-                ctx.approvals.append(ctx.approval_id)
-            waiting = ", ".join(f"#{item}" for item in ctx.approvals)
-            return (
-                f"pending approval #{approval.id}: {approval.summary}. "
-                f"Tell the sender to run /approve {approval.id}"
-                + (f" (staged in this turn: {waiting})" if len(ctx.approvals) > 1 else "")
-                + "."
-            )
+        refusal = await _approval_door(spec, args, ctx)
+        if refusal:
+            return refusal
     if side_effecting(spec):
         refusal = lease_refusal(ctx, spec.name)
         if refusal:
@@ -570,6 +600,10 @@ async def execute(specs: dict[str, Handler], name: str, args: dict, ctx: ToolCon
     text = truncate(str(result), spec.max_output_chars)
     if text.startswith(REFUSAL_PREFIXES):
         ctx.refused.append(spec.name)
+    elif spec.untrusted_output and not ctx.tainted:
+        # ADR-0012 §4.5: from here on every external side effect of this turn needs approval.
+        ctx.tainted = True
+        log.info("taint tool=%s", spec.name, extra={"event": "turn.taint"})
     return text
 
 

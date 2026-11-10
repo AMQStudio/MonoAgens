@@ -604,6 +604,7 @@ TOOL = Handler(
     target="",
     approval_class="none",
     family="web_search",
+    untrusted_output=True,
     description="Search the web and return titles, URLs, and snippets.",
     fn=_web_search,
     aliases=("search",),
