@@ -170,11 +170,56 @@ async def test_atomic_transaction_per_event(aconn):
         place="space:test",
         body="tester",
     )
-    await kernel.put(event)
+    # put() now waits for the intake acknowledgement, so a consumer must run
+    # concurrently with it.
+    put_task = asyncio.create_task(kernel.put(event))
+    await asyncio.sleep(0)
     processed = await kernel.step()
+    await asyncio.wait_for(put_task, 1.0)
     assert processed.id is not None
 
     # State was projected and committed together with the event
     entry = await read_state_entry(aconn, "last_seen:person:atomic")
     assert entry is not None
     assert entry.updated_by_event == processed.id
+
+
+async def test_put_returns_only_after_event_is_committed(aconn):
+    """Intake acknowledgement: put() returns after the event is in the Log.
+
+    The event must already be queryable from `events` and projected into
+    `state` when `await kernel.put(event)` returns.
+    """
+    clock = FakeClock(initial_time=datetime(2026, 11, 10, 12, 0, 0, tzinfo=timezone.utc))
+    kernel = Kernel(aconn, clock=clock)
+    event = Event(
+        id=None,
+        ts=datetime(2020, 1, 1, tzinfo=timezone.utc),  # overridden by the kernel clock
+        kind="msg.in",
+        who="person:ack",
+        place="space:ack",
+        body="tester",
+    )
+    observed: list[object] = []
+
+    async def source() -> None:
+        await kernel.put(event)
+        cur = await aconn.execute("SELECT id, ts, who FROM events ORDER BY id")
+        observed.append(await cur.fetchall())
+        observed.append(await read_state_entry(aconn, "last_seen:person:ack"))
+
+    put_task = asyncio.create_task(source())
+    await asyncio.sleep(0)
+    assert not put_task.done(), "put() must not return before the event is processed"
+
+    await kernel.step()
+    await asyncio.wait_for(put_task, 1.0)
+
+    rows, entry = observed
+    assert len(rows) == 1
+    event_id, stored_ts, who = rows[0]
+    assert who == "person:ack"
+    # Single time source: the kernel stamp wins over the source-supplied ts.
+    assert stored_ts == clock.now()
+    assert entry is not None
+    assert entry.updated_by_event == event_id

@@ -1,7 +1,8 @@
 """Shared test fixtures: a real Postgres, no mocks.
 
-The suite connects to TEST_DATABASE_URL, then DATABASE_URL, then the local
-development default (port 5433). sql/schema.sql is applied once per session.
+The suite runs ONLY against TEST_DATABASE_URL, and only if that database name
+ends with '_test'. Anything else refuses to run. sql/schema.sql is applied
+once per session.
 """
 
 from __future__ import annotations
@@ -15,7 +16,10 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCHEMA_PATH = ROOT / "sql" / "schema.sql"
-DEFAULT_DATABASE_URL = "postgresql://monoagens:monoagens@localhost:5433/monoagens_test"
+REFUSAL = (
+    "Refusing to run tests: TEST_DATABASE_URL is required and database name "
+    "must end with '_test'"
+)
 
 
 def _load_env_file() -> None:
@@ -31,17 +35,23 @@ def _load_env_file() -> None:
 
 
 def _database_url() -> str:
+    """Read TEST_DATABASE_URL and refuse anything that is not a *_test database."""
     _load_env_file()
-    return (
-        os.environ.get("TEST_DATABASE_URL")
-        or os.environ.get("DATABASE_URL")
-        or DEFAULT_DATABASE_URL
-    )
+    url = os.environ.get("TEST_DATABASE_URL")
+    if not url:
+        raise RuntimeError(REFUSAL)
+    dbname = psycopg.conninfo.conninfo_to_dict(url).get("dbname") or ""
+    if not dbname.endswith("_test"):
+        raise RuntimeError(REFUSAL)
+    return url
+
+
+DATABASE_URL = _database_url()
 
 
 @pytest.fixture(scope="session")
 def database_url() -> str:
-    return _database_url()
+    return DATABASE_URL
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -22,7 +22,7 @@ Event/Action types, the queue, a single consumer, the clock (tick every clock.ti
 fakeable), the last_seen projection. Fake bodies for tests.
 Done when: 100 events from two fake bodies are recorded in order; ticks are not stored.
 
-## [ ] 3. Telegram body
+## [x] 3. Telegram body
 Long polling over httpx, update → Event (addressed flag for DM/mention/reply-to-bot),
 say/react actions → sendMessage/setMessageReaction, offset from cursor.
 Done when: a test with httpx.MockTransport shows a duplicate update is recorded once;
