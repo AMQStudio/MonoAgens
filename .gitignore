@@ -32,6 +32,4 @@ note.md
 
 
 # Local agent tooling
-.serena/cache/
-.serena/project.local.yml
 graphify-out/

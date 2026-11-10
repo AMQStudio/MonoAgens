@@ -32,25 +32,24 @@ Claude may implement directly when a change is small, urgent, or cheaper to do t
 
 ## 2. Mandatory Tooling
 
-Using **Graphify**, **Serena**, and **Context7** is required, not optional:
+Using **Graphify** and **Context7** is required, not optional:
 
 | Phase | Required tool | Use |
 | --- | --- | --- |
 | Understand / design | Graphify | `graphify query`, `path`, `explain` for structure, dependencies, blast radius |
-| Read / edit code | Serena | Symbol overview, find symbol, find references, symbolic edits |
 | Any library/SDK/API | Context7 | `resolve-library-id` → `query-docs` before writing or reviewing the code |
 | After changes | Graphify | `/graphify . --update` so the graph stays current |
 
-- Start each coding session by calling Serena's `initial_instructions`.
+- Code reading, symbol lookup, and edits use Claude Code's built-in tools (Read, Grep, Glob, LSP, Edit).
 - If `graphify-out/graph.json` is missing or stale, build or update it before architectural work.
 - Fall back to `grep`/`Read` only when a tool is unavailable or clearly cannot answer, and say so.
 
 ## 3. Delegation Specs
 
-Workers (`omp`) have **no** Graphify, Serena, or Context7. Claude runs those tools first and puts
+Workers (`omp`) have **no** Graphify or Context7. Claude runs those tools first and puts
 the results into the worker spec:
 
-- Exact file paths and symbol names to touch (from Serena/Graphify), and what must not be touched.
+- Exact file paths and symbol names to touch (from Graphify/LSP/grep), and what must not be touched.
 - The invariants from `AGENTS.md` that the change is at risk of breaking.
 - Library API facts with versions, copied from Context7 results.
 - Acceptance criteria, including which Verification Gate commands must pass.
@@ -59,7 +58,7 @@ the results into the worker spec:
 
 1. Diff respects `AGENTS.md` §2–§5 boundaries and invariants.
 2. Library usage matches Context7 docs for the pinned version.
-3. Serena reference search shows no missed callers of changed symbols.
+3. LSP/grep reference search shows no missed callers of changed symbols.
 4. Sync rules applied (`uv lock`, regenerated root YAMLs, plugin digests).
 5. Verification Gate passes; failures are reported with output, never hidden.
 6. Graph refreshed (`/graphify . --update`).

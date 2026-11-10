@@ -96,17 +96,15 @@ Timeless architectural principles, system boundaries, and high-level invariants 
 
 ## 7. Code Exploration, Sync Discipline, and Verification
 
-- **Mandatory Tooling (Graphify, Serena, Context7):** Implementation details evolve, so never rely
+- **Mandatory Tooling (Graphify, Context7):** Implementation details evolve, so never rely
   on hardcoded file lists or memory of the code. Any agent that has these tools must use them:
   - **Graphify (architecture and relationships):** Before designing, auditing, or reviewing,
     query the knowledge graph (`graphify query "<question>"`, `graphify path "A" "B"`,
     `graphify explain "<node>"`) for module boundaries, call paths, and blast radius. If
     `graphify-out/graph.json` is missing, build it (`/graphify .`); after code changes, refresh it
     with `/graphify . --update`.
-  - **Serena (symbol-level code work):** Read and edit code through Serena's symbolic tools (find
-    symbol, find referencing symbols, symbol overview, replace symbol body) instead of reading
-    whole files or doing blind text search. Call Serena's `initial_instructions` at the start of a
-    coding session.
+  - **Symbol-level code work:** Use the LSP and search tools (find definition, find references,
+    grep) instead of reading whole files, and check for missed callers before changing a symbol.
   - **Context7 (external APIs):** Before writing or reviewing code that depends on a library,
     framework, SDK, CLI, or service (database drivers, Alembic, pgvector, HTTP clients,
     transport SDKs, provider APIs, etc.), fetch current docs via

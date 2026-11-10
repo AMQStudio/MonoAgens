@@ -1,7 +1,6 @@
 # Superseded pre-rebaseline ADRs: stale for architecture queries
 docs/archive/
 # Local tool state and binary assets
-.serena/
 .codegraph/
 assets/
 # Scratch working notes
