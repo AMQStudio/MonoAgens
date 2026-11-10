@@ -335,7 +335,6 @@ engine:
 
   approval:
     mode: default                 # default (ask on writes) | yolo (auto-run safe writes) | strict (ask all)
-    natural_confirm: true         # Allow natural conversational confirmation ("Yes, send it")
     confirm_cross_gateway: true   # Require confirmation before messaging another room/gateway
     confirm_tasks: true           # Require confirmation before scheduling recurring tasks
 
@@ -395,7 +394,7 @@ MonoAgens enforces defense-in-depth across three independent layers:
    - **`default`:** Read-only inspections (`read`, `web_search`, `thread_history`, `memory` recall) execute immediately; state mutations, file writes, shell/sandbox execution, task creation, and cross-gateway messages pause for confirmation.
    - **`yolo`:** Normal writes and sandbox commands execute automatically; destructive command patterns, settings changes, and cross-gateway deliveries still require confirmation.
    - **`strict`:** Every tool invocation requires explicit confirmation.
-   - With `natural_confirm: true`, the agent asks naturally in conversation and verifies cryptographic `scope_proof` and RBAC permissions in Python before executing the approved action.
+   - A paused action is decided by a person, never by the model: the gateway offers native controls (buttons or a reaction), and `/approve` and `/deny` work everywhere. Every decision is data that the core re-checks (who may decide, the stored `scope_proof`, RBAC, expiry) before anything runs; a chat reply such as "yes" does not approve anything.
 2. **Two-Stage Command Guard (`SafetyPolicy`):**
    - **Stage 1 (Deterministic):** Blocks destructive host patterns, privilege escalation, namespace/kernel tampering, raw device writes, and fetch-to-shell pipes before any model call.
    - **Stage 2 (Classifier):** Evaluates ambiguous commands for exfiltration or infrastructure risk, failing closed on timeout or uncertainty.
