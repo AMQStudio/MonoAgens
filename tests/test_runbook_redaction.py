@@ -1,10 +1,13 @@
 """Runbook 1.1: L5 material never reaches the persisted transcript."""
 
+import json
 from datetime import datetime
 
+from sqlalchemy import select
 from support import database
 
 from monoagens.engine.guard.patterns import is_sensitive, redact_credentials
+from monoagens.engine.schema import memories, memory_events, messages
 from monoagens.engine.stores.history import HistoryStore
 from monoagens.engine.turn.context import Message, Quote
 
@@ -83,3 +86,65 @@ def test_notice_text_is_redacted() -> None:
     stored = store.find("runbook-redact-notice", "n1")
     assert stored is not None
     assert RANDOM not in stored.text
+
+
+def test_a_redacted_row_keeps_a_marker_and_nothing_else(tmp_path) -> None:
+    store = HistoryStore(database())
+    body = f"{PEM}\nnik {NIK}\nkey {RANDOM}\nordinary prose stays"
+    store.add("runbook-redact-marker", message("m1", body))
+
+    stored = store.find("runbook-redact-marker", "m1")
+    assert stored is not None
+    marker = stored.label_meta["redaction"]
+    assert marker["count"] >= 3
+    assert set(marker["kinds"]) <= {"credential", "entropy"}
+    # The marker never carries the secret, a prefix of it, or a hash of it.
+    assert PEM not in json.dumps(stored.label_meta)
+    assert NIK not in json.dumps(stored.label_meta)
+    assert RANDOM not in json.dumps(stored.label_meta)
+
+
+def test_a_clean_row_carries_no_redaction_marker() -> None:
+    store = HistoryStore(database())
+    store.add("runbook-redact-clean", message("c1", "ordinary prose stays"))
+
+    stored = store.find("runbook-redact-clean", "c1")
+    assert stored is not None
+    assert "redaction" not in stored.label_meta
+
+
+def test_the_stored_data_copy_and_a_memory_candidate_are_redacted() -> None:
+    store = HistoryStore(database())
+    thread = "runbook-redact-data"
+    quote = Quote(
+        id="q9",
+        sender_name="Budi",
+        sender_id="628222",
+        text=f"my key is {RANDOM}",
+        when=datetime(2026, 1, 1, 9),
+    )
+    store.intake(
+        thread,
+        message("d1", f"terus ini {RANDOM}", quote=quote),
+        "per_reader",
+        language="en",
+    )
+
+    raw = store.db.fetch_one(
+        select(messages.c.data).where(messages.c.msg_id == "d1", messages.c.thread_id == thread)
+    )
+    assert raw is not None
+    assert RANDOM not in json.dumps(raw["data"], default=str)
+    bodies = [
+        str(row["body"])
+        for row in store.db.fetch_all(
+            select(memory_events.c.content).where(memory_events.c.thread_id == thread)
+        )
+    ]
+    candidates = [
+        str(row["body"])
+        for row in store.db.fetch_all(
+            select(memories.c.text).where(memories.c.thread_id == thread)
+        )
+    ]
+    assert all(RANDOM not in body for body in bodies + candidates)
