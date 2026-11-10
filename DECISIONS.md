@@ -155,7 +155,7 @@ these people are?" If not, it belongs to layer 3. Tuning that concerns one relat
 ("chatty with A, quiet with B") is layer 3. Lessons from P1 enter layer 2 only after being
 generalised.
 
-**D18 — Birth snapshot.**
+**D18 — Birth snapshot.** *(Amended by D25: inside this repository only loading a prior exists; building and sharing snapshots is out of scope.)*
 Layers 1–2 can be exported as a snapshot; layer 3 never is. A snapshot is *generic* (names,
 places and personal details removed), *reproducible* (it carries replay scenarios that prove
 each item still works) and records the embedder and LLM models it was learned with (learned
@@ -220,6 +220,17 @@ plausible it is and what it costs if wrong, try it carefully, and trust it more 
   Its former "skills from others wait for approval" and D5's "only the owner can instruct" are
   replaced by weighing.
 
+**D25 — The open-source core is for using and learning on your own. Amends D18.**
+- The open-source repository contains everything a soul needs to live and to learn from its
+  own owner and people: all three layers of learned state, stored in its own database, with
+  layers 1–2 kept clearly separate from layer 3.
+- It can **start from a prior**: a local file of layer 1–2 values (dispositions, generic skills
+  and lessons) that is loaded at birth. A default prior ships with the repository.
+- It contains **no export, upload, sharing, aggregation or curation** of learned state. Building
+  snapshots from many souls, filtering them and grouping them per model family is a separate
+  project outside this repository; public documents do not describe it (D8).
+- Because the prior is only a file format, the core stays unaware of where a prior came from.
+
 ## Accepted in principle, details pending
 
 **P1 — Self-correction (track H).** A `revise` act: when corrected, the old memory gets
@@ -233,7 +244,5 @@ edits its own principles or persona; that stays with the owner.
 - Whether the agent may suggest installing a package when asked for something it cannot do.
 - Optional deeper research on memory consolidation and forgetting formulas (D14).
 - The update rule for band edges and dispositions (step size, bounds, minimum gray width).
-- How scrubbing for D18 is done and checked. Automatic scrubbing is unreliable; owner curation
-  is the backstop at first.
-- Snapshot format and versioning.
+- Prior file format and versioning (D25), including the models it was learned with.
 - Worker prompts for Track A2 and Phase 2 tracks (after the owner resumes implementation).

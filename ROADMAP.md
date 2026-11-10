@@ -80,9 +80,10 @@ First world organs: web search/fetch, file read. Long-running actions report thr
 Done when: "who is the president now?" triggers a search when a search organ exists, and an
 honest "as of my knowledge" answer when it does not.
 
-## Phase 7 — Birth snapshot (D17, D18)
-Export layers 1–2, generic and replay-backed; inheritance gate with owner curation.
-Done when: a fresh soul born from a snapshot passes the replay suite with empty memory.
+## Phase 7 — Born from a prior (D17, D25)
+A versioned prior file format for layers 1–2 (dispositions, generic skills and lessons, the
+models they were learned with); loading it at birth; a default prior in the repository.
+Done when: a fresh soul born from the default prior passes the replay suite with empty memory.
 
 ## Phase 8 — More bodies, more models
 WhatsApp, Discord, voice (STT/TTS), the first non-chat organ (IoT device or robot sim);

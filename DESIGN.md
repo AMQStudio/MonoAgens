@@ -269,15 +269,17 @@ map** (D10: only the owner or a verification code links accounts; the soul may o
 **skills** (injects names and descriptions of relevant skills through the context hook; loads a
 body on request; versions, rollback).
 
-## 11. Learned state and the birth snapshot (D17, D18)
-| Layer | Holds | Exportable |
+## 11. Learned state and the prior (D17, D25)
+| Layer | Holds | In the prior file |
 |---|---|---|
 | 1 Dispositions | weights, thresholds, band edges, decay, talkativeness | yes |
-| 2 Skills | how-to steps, lessons from failures, general social intuition | yes, if generic |
+| 2 Skills | how-to steps, lessons from failures, general social intuition (with credence) | yes, generic only |
 | 3 Episodic memory | conversations, facts about people, per-person tuning | never |
-A snapshot holds layers 1–2, generic (no names, places, personal details), reproducible
-(replay scenarios per item), model-aware (embedder and LLM recorded). Inheritance gate: passes
-replay on a fresh soul, no regressions, owner approval as curator at first.
+A soul is born from a **prior**: a local file of layer 1–2 values, loaded once at birth; a
+default prior ships with the repository. The prior records the embedder and LLM it was learned
+with, because band edges and θ do not transfer across models. After birth the soul learns only
+from its own experience. This repository has no export or sharing of learned state; it only
+loads a prior.
 
 ## 12. Guarantees (prototype)
 - Input never lost or duplicated; output at most once.
@@ -287,4 +289,4 @@ replay on a fresh soul, no regressions, owner approval as curator at first.
 
 ## 13. Not here yet
 World tools beyond the first organs · bodies beyond Telegram and CLI · images and voice ·
-multiple processes · learned gate classifier · snapshot format · track H details (P1).
+multiple processes · learned gate classifier · prior file format · track H details (P1).
