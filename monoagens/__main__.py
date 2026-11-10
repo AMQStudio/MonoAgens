@@ -1,19 +1,15 @@
 """Entry point: wire the kernel, the clock, and the Telegram body."""
-
 from __future__ import annotations
-
 import asyncio
 import os
-
 import psycopg
 from pgvector.psycopg import register_vector_async
-
 from monoagens.bodies.telegram import TelegramBody
 from monoagens.clock import Clock
 from monoagens.config import load_clock_tick_seconds, load_llm_config, load_owner_ids
 from monoagens.kernel import Kernel
+from monoagens.memory import FastEmbedder
 from monoagens.pfc import PFC
-
 
 async def main() -> None:
     llm = load_llm_config()
@@ -22,7 +18,8 @@ async def main() -> None:
     pfc = PFC(llm["base_url"], llm["api_key"], llm["model"])
     async with await psycopg.AsyncConnection.connect(os.environ["DATABASE_URL"]) as conn:
         await register_vector_async(conn)
-        kernel = Kernel(conn, clock=Clock(tick_seconds=load_clock_tick_seconds()), pfc=pfc)
+        kernel = Kernel(conn, clock=Clock(tick_seconds=load_clock_tick_seconds()), pfc=pfc,
+                        embedder=FastEmbedder())
         body = TelegramBody(os.environ["TELEGRAM_BOT_TOKEN"], owner_ids=load_owner_ids(),
                             get_cursor=lambda: kernel.cursor("telegram"))
         stop = asyncio.Event()
@@ -36,7 +33,6 @@ async def main() -> None:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             await pfc.aclose()
-
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -46,13 +46,11 @@ TOOLS: list[dict[str, Any]] = [
                                               "status": {"type": "string", "enum": ["satisfied", "dropped"]}},
           ["id", "status"]),
 ]
-
 TOOL_NAMES = frozenset(tool["function"]["name"] for tool in TOOLS)
 
 
 @dataclass(frozen=True, slots=True)
 class ToolCall:
-    """One parsed tool call: an action the PFC chose."""
 
     name: str
     arguments: dict[str, Any]
@@ -60,7 +58,6 @@ class ToolCall:
 
 @dataclass(frozen=True, slots=True)
 class PFCContext:
-    """Everything volatile about one wake; the PFC turns it into a prompt."""
 
     now: datetime
     place: str
@@ -75,37 +72,29 @@ class PFCContext:
 
 
 class PFC:
-    """OpenAI-compatible chat completions client with tool calling."""
-
     def __init__(self, base_url: str, api_key: str, model: str, *, soul: dict[str, Any] | None = None,
                  transport: httpx.AsyncBaseTransport | None = None, client: httpx.AsyncClient | None = None,
                  timeout: float = 30.0) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
-        self.model = model
+        self.base_url, self.api_key, self.model = base_url.rstrip("/"), api_key, model
         self.soul = soul if soul is not None else load_soul()
         self.timezone = ZoneInfo(str(self.soul.get("timezone") or "UTC"))
         self.name = str(self.soul.get("name") or "Mona")
-        self._transport = transport
-        self._client = client
-        self._timeout = timeout
-
+        self._transport, self._client, self._timeout = transport, client, timeout
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(transport=self._transport, timeout=self._timeout)
         return self._client
-
     async def aclose(self) -> None:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
-
-    async def decide(self, context: PFCContext) -> list[ToolCall]:
+    async def call(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], *,
+                   tool_choice: str = "required") -> list[ToolCall]:
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         response = await self._http().post(
             f"{self.base_url}/chat/completions",
-            json={"model": self.model, "messages": self.build_messages(context), "tools": TOOLS,
-                  "tool_choice": "required"}, headers=headers)
+            json={"model": self.model, "messages": messages, "tools": tools, "tool_choice": tool_choice},
+            headers=headers)
         response.raise_for_status()
         try:
             raw_calls = response.json()["choices"][0]["message"].get("tool_calls") or []
@@ -113,23 +102,21 @@ class PFC:
             raise ValueError(f"Malformed chat completion response: {exc}") from exc
         return [ToolCall(call["function"]["name"], json.loads(call["function"]["arguments"] or "{}"))
                 for call in raw_calls]
-
+    async def decide(self, context: PFCContext) -> list[ToolCall]:
+        return await self.call(self.build_messages(context), TOOLS)
     def build_messages(self, context: PFCContext) -> list[dict[str, Any]]:
         return [
             {"role": "system", "content": self._stable_prompt()},
             {"role": "system", "content": f"<core_memory>{context.core_memory}</core_memory>"},
             {"role": "user", "content": self._volatile_prompt(context)},
         ]
-
     def _stable_prompt(self) -> str:
         parts = [f"You are {self.name}.", str(self.soul.get("persona") or "").strip()]
         principles = [str(p) for p in self.soul.get("principles") or []]
         if principles:
             parts.append("Principles:\n" + "\n".join(f"- {p}" for p in principles))
-        parts.append(f"Language: {self.soul.get('language') or 'en'}.")
-        parts.append(SYSTEM_TAIL)
+        parts += [f"Language: {self.soul.get('language') or 'en'}.", SYSTEM_TAIL]
         return "\n\n".join(part for part in parts if part)
-
     def _volatile_prompt(self, context: PFCContext) -> str:
         local_now = context.now.astimezone(self.timezone)
         sections = [
@@ -143,7 +130,6 @@ class PFC:
             f"<event>{self._event_text(context.trigger)}</event>",
         ]
         return "\n".join(sections)
-
     def _recent_lines(self, context: PFCContext) -> list[str]:
         lines: list[str] = []
         for event in context.recent:
@@ -153,7 +139,6 @@ class PFC:
             speaker = self.name if event.kind == "msg.out" else str(event.who or "?").removeprefix("person:")
             lines.append(f"{event.ts.astimezone(self.timezone):%H:%M} {speaker}: {text}")
         return lines or ["(nothing yet)"]
-
     def _event_text(self, event: Event | None) -> str:
         if event is None:
             return "(no trigger event)"

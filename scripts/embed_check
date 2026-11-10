@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""Check embedding quality for the owner's language (Indonesian).
+
+A script, not a test: it loads the real fastembed model and prints the cosine
+similarity of 25 sentence pairs (15 similar, 10 dissimilar).
+
+Usage:
+    uv run python scripts/embed_check
+"""
+from __future__ import annotations
+
+import asyncio
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
+from monoagens.memory import FastEmbedder, cosine  # noqa: E402
+
+PAIRS: list[tuple[str, str, bool]] = [
+    ("Saya suka minum kopi di pagi hari.", "Pagi-pagi saya selalu minum kopi.", True),
+    ("Besok saya akan pergi ke Bandung.", "Rencananya besok saya berangkat ke Bandung.", True),
+    ("Kucing saya sangat suka makan ikan.", "Ikan adalah makanan kesukaan kucingku.", True),
+    ("Tolong ingatkan saya rapat jam tujuh.", "Jangan lupa, rapatnya pukul tujuh ya.", True),
+    ("Dia sedang belajar bahasa Indonesia.", "Orang itu lagi mempelajari bahasa Indonesia.", True),
+    ("HP saya baterainya habis.", "Baterai ponselku sudah kosong.", True),
+    ("Kasih tahu saya kalau hujan turun.", "Beri tahu aku kalau sudah mulai hujan.", True),
+    ("Saya tidak bisa datang karena sakit.", "Aku berhalangan hadir karena sedang sakit.", True),
+    ("Harga tiket pesawat naik terus.", "Biaya penerbangan makin mahal.", True),
+    ("Dia lupa membawa dompetnya.", "Dompetnya tertinggal di rumah.", True),
+    ("Makan malamnya enak sekali.", "Santapan malam itu lezat.", True),
+    ("Saya tinggal di Jakarta Selatan.", "Tempat tinggalku di Jakarta bagian selatan.", True),
+    ("Kapan kamu pulang dari kantor?", "Jam berapa kamu sampai rumah dari kerja?", True),
+    ("Anjing itu mengejar bola di taman.", "Di taman, si anjing berlari mengejar bola.", True),
+    ("Saya perlu tidur lebih awal malam ini.", "Malam ini aku mau tidur cepat.", True),
+    ("Saya suka minum kopi di pagi hari.", "Baterai ponselku sudah kosong.", False),
+    ("Besok saya akan pergi ke Bandung.", "Kucing saya sangat suka makan ikan.", False),
+    ("Tolong ingatkan saya rapat jam tujuh.", "Harga tiket pesawat naik terus.", False),
+    ("Dia sedang belajar bahasa Indonesia.", "Anjing itu mengejar bola di taman.", False),
+    ("Kasih tahu saya kalau hujan turun.", "Saya perlu tidur lebih awal malam ini.", False),
+    ("Saya tidak bisa datang karena sakit.", "Makan malamnya enak sekali.", False),
+    ("HP saya baterainya habis.", "Dia lupa membawa dompetnya.", False),
+    ("Saya tinggal di Jakarta Selatan.", "Kapan kamu pulang dari kantor?", False),
+    ("Harga tiket pesawat naik terus.", "Saya suka minum kopi di pagi hari.", False),
+    ("Anjing itu mengejar bola di taman.", "Baterai ponselku sudah kosong.", False),
+]
+
+
+async def main() -> int:
+    embedder = FastEmbedder()
+    texts = [text for pair in PAIRS for text in pair[:2]]
+    vectors = await embedder.embed(texts)
+    print(f"model: {embedder.model_name}")
+    print(f"{'#':>3} {'label':<10} {'cos':>7}  sentence A / sentence B")
+    similar, dissimilar = [], []
+    for i, (a, b, same) in enumerate(PAIRS):
+        score = cosine(vectors[2 * i], vectors[2 * i + 1])
+        (similar if same else dissimilar).append(score)
+        print(f"{i + 1:>3} {'SIMILAR' if same else 'BEDA':<10} {score:>7.3f}  {a} / {b}")
+    print(f"\nsimilar   n={len(similar)} mean={sum(similar) / len(similar):.3f} "
+          f"min={min(similar):.3f} max={max(similar):.3f}")
+    print(f"dissimilar n={len(dissimilar)} mean={sum(dissimilar) / len(dissimilar):.3f} "
+          f"min={min(dissimilar):.3f} max={max(dissimilar):.3f}")
+    ok = sum(similar) / len(similar) > sum(dissimilar) / len(dissimilar)
+    print(f"\nquality: {'OK' if ok else 'WEAK'} — similar pairs should score higher than dissimilar ones")
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(asyncio.run(main()))

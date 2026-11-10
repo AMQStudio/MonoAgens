@@ -3,9 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-
 from psycopg.types.json import Jsonb
-
 from monoagens.store import (append_event, fire_expectation, insert_expectation, read_expectations, read_state,
                              resolve_expectation)
 
@@ -13,8 +11,7 @@ _UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 _RE = re.compile(r"^(\d+(?:\.\d+)?)\s*([smhd])$")
 _OPS = ("eq", "gt", "lt")
 
-def tz(soul):
-    return ZoneInfo(str(soul.get("timezone") or "UTC"))
+def tz(soul): return ZoneInfo(str(soul.get("timezone") or "UTC"))
 
 def parse_duration(value):
     m = _RE.match(str(value).strip().lower())
@@ -75,8 +72,8 @@ def validate(data, *, now, soul):
 async def create(conn, data, *, now, soul, source):
     row = validate(data, now=now, soul=soul)
     limit = int(soul["expectations"]["max_active"])
-    if (await (await conn.execute("SELECT count(*) FROM expectations WHERE status = 'active'")).fetchone())[0] >= limit:
-        raise ValueError("too many active expectations")
+    count = (await (await conn.execute("SELECT count(*) FROM expectations WHERE status = 'active'")).fetchone())[0]
+    if count >= limit: raise ValueError("too many active expectations")
     who, place = row["who"] or source.who, row["place"] or source.place
     async with conn.transaction():
         values = (who, place, row["about"], Jsonb(row["cue_time"]), Jsonb(row["cue_event"]), Jsonb(row["expect"]),
@@ -89,8 +86,7 @@ async def create(conn, data, *, now, soul, source):
 
 async def resolve(conn, exp_id, status, *, now):
     row = (await read_expectations(conn, "ex.id = %s", (exp_id,)) or [None])[0]
-    if row is None or status not in ("satisfied", "dropped"):
-        raise ValueError(f"invalid resolve: {exp_id} {status!r}")
+    if row is None or status not in ("satisfied", "dropped"): raise ValueError(f"invalid resolve: {exp_id} {status!r}")
     await resolve_expectation(conn, {**row, "fired_event": None}, now, status)
 
 async def is_met(conn, condition, now):
@@ -121,8 +117,9 @@ async def due(conn, event, *, now, soul):
         if event.kind != "tick" and not matches_cue(row["cue_event"], event): continue
         if not await is_met(conn, row["expect"], now): fired.append(await fire_expectation(conn, row, now))
         elif (row["policy"] or {}).get("once") is True: await resolve_expectation(conn, row, now, "satisfied")
-        else: await conn.execute("UPDATE expectations SET next_check_at = %s WHERE id = %s",
-                                 (next_check(row["cue_time"], now, tz(soul)), row["id"]))
+        else:
+            await conn.execute("UPDATE expectations SET next_check_at = %s WHERE id = %s",
+                               (next_check(row["cue_time"], now, tz(soul)), row["id"]))
     return fired
 
 async def settle(conn, exp_id, *, now, soul):

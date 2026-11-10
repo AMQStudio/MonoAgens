@@ -1,37 +1,28 @@
 """Configuration: soul.yaml, the tiny .env loader, and LLM settings."""
-
 from __future__ import annotations
-
 import os
 import pathlib
 from typing import Any
-
 import yaml
 
 DEFAULT_SOUL_PATH = pathlib.Path(__file__).resolve().parent.parent / "soul.yaml"
 DEFAULT_ENV_PATH = pathlib.Path(__file__).resolve().parent.parent / ".env"
 DEFAULT_TICK_SECONDS = 30.0
-# (config name, primary env key, legacy alias)
 _LLM_KEYS = (("base_url", "LLM_BASE_URL", "PFC_BASE_URL"), ("api_key", "LLM_API_KEY", "PFC_API_KEY"),
              ("model", "LLM_MODEL", "PFC_MODEL"))
 
-
-def load_soul(path: str | pathlib.Path = DEFAULT_SOUL_PATH) -> dict[str, Any]:
+def load_soul(path=DEFAULT_SOUL_PATH) -> dict[str, Any]:
     with open(path, encoding="utf-8") as handle:
         return yaml.safe_load(handle) or {}
 
-
-def load_owner_ids(path: str | pathlib.Path = DEFAULT_SOUL_PATH) -> set[int]:
+def load_owner_ids(path=DEFAULT_SOUL_PATH) -> set[int]:
     owner = load_soul(path).get("owner") or {}
     return {int(tid) for tid in owner.get("telegram_ids") or []}
 
-
-def load_clock_tick_seconds(path: str | pathlib.Path = DEFAULT_SOUL_PATH) -> float:
+def load_clock_tick_seconds(path=DEFAULT_SOUL_PATH) -> float:
     return float((load_soul(path).get("clock") or {}).get("tick_seconds", DEFAULT_TICK_SECONDS))
 
-
-def load_env_file(path: str | pathlib.Path = DEFAULT_ENV_PATH) -> dict[str, str]:
-    """Parse a .env file into a dict; a missing file yields an empty dict."""
+def load_env_file(path=DEFAULT_ENV_PATH) -> dict[str, str]:
     values: dict[str, str] = {}
     env_path = pathlib.Path(path)
     if not env_path.is_file():
@@ -44,9 +35,7 @@ def load_env_file(path: str | pathlib.Path = DEFAULT_ENV_PATH) -> dict[str, str]
         values[key.strip()] = value.strip().strip("'\"")
     return values
 
-
-def load_llm_config(env_path: str | pathlib.Path = DEFAULT_ENV_PATH) -> dict[str, str]:
-    """Resolve the PFC endpoint: the environment wins over the .env file."""
+def load_llm_config(env_path=DEFAULT_ENV_PATH) -> dict[str, str]:
     file_values = load_env_file(env_path)
     return {name: os.environ.get(primary) or file_values.get(primary) or os.environ.get(alias)
             or file_values.get(alias) or "" for name, primary, alias in _LLM_KEYS}

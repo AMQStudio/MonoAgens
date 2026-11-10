@@ -47,7 +47,7 @@ max_fires policies, required expires_at, recovery of fired expectations at start
 Done when: MVP TEST (c): "remind me at 7" → exactly one message at 7 with a fake clock,
 including a restart around 7; an event_seen expectation that is met never fires.
 
-## [ ] 7. Memory and sleep
+## [x] 7. Memory and sleep
 Embeddings, hybrid retrieval, sleep, core_memory, memories in the prompt.
 Add `scripts/embed_check` with 25 sentence pairs in the owner's language (similar/dissimilar).
 Done when: MVP TEST (d): after sleep there are new memories, events are untouched, and a

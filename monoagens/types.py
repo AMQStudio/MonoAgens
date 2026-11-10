@@ -1,11 +1,8 @@
 """Core types: Event, Action, and StateEntry."""
-
 from __future__ import annotations
-
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
-
 
 @dataclass(frozen=True, slots=True)
 class Event:
@@ -18,14 +15,12 @@ class Event:
     payload: dict[str, Any] = field(default_factory=dict)
     caused_by: int | None = None
 
-
 @dataclass(frozen=True, slots=True)
 class Action:
     kind: str
     place: str
     payload: dict[str, Any] = field(default_factory=dict)
     body: str | None = None
-
 
 @dataclass(frozen=True, slots=True)
 class StateEntry:
