@@ -4,6 +4,17 @@ This project is **MonoAgens**: a tiny kernel for one persistent AI self that liv
 Status: prototype. Read `DESIGN.md` before touching code. Work ONLY on the step you were given
 from `PLAN.md`.
 
+## Who writes code
+- All implementation work is delegated to an **Orca Orchestration** worker running
+  agent `omp` with model **`opencode-go/deepseek-v4.1-flash`**, effort **low**, on OpenCode Go.
+- The session that receives a PLAN.md step acts only as **coordinator**: it hands the step
+  to the worker, then verifies the result (reads the diff, runs `uv run pytest`, checks the
+  invariants and the size budget) before committing and reporting.
+- The coordinator does not write implementation code itself. If the worker fails twice on
+  the same step, stop and report to the owner instead of taking over.
+- Architecture and design documents (`DESIGN.md`, `PLAN.md`, this file) are owned by the
+  architect. Workers may only tick steps in PLAN.md and never edit design decisions.
+
 ## How to work
 - One session = one PLAN.md step = one commit.
 - Do not start the next step. Do not add features that were not asked for.
