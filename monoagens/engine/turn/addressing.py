@@ -8,7 +8,7 @@ costs more than a missed one, so the band between the two thresholds stays silen
 
 from dataclasses import dataclass, field
 
-from .config import AddressingConfig
+from ..config import AddressingConfig
 
 ANSWER = "answer"
 IGNORE = "ignore"
@@ -90,9 +90,7 @@ def _addressed_to(signals: Signals, decision: str) -> str:
     return UNKNOWN if signals.direct else GROUP
 
 
-def score(
-    signals: Signals, cfg: AddressingConfig, *, skepticism: str = "normal"
-) -> Result:
+def score(signals: Signals, cfg: AddressingConfig, *, skepticism: str = "normal") -> Result:
     """Score one message and explain it; never raises on a value the config carries."""
     if signals.direct:
         return Result(DIRECT_POINTS, ANSWER, SELF, [("direct", DIRECT_POINTS)])

@@ -80,7 +80,8 @@ def merge_labels(old, new) -> dict:
     """The envelope labels to keep when two rows of the same message merge.
 
     A label is sticky: a re-delivered duplicate that carries no signal never downgrades one
-    already stored.
+    already stored. Provenance merges key by key, so a duplicate that carries no addressing
+    entry never drops the one the first copy recorded.
     """
     return {
         "speaker": new.speaker if new.speaker != UNKNOWN else old.speaker,
@@ -90,8 +91,34 @@ def merge_labels(old, new) -> dict:
         "actor": new.actor or old.actor,
         "reply_to_self": bool(new.reply_to_self or old.reply_to_self),
         "valid_until": new.valid_until or old.valid_until,
-        "label_meta": new.label_meta if new.speaker != UNKNOWN else old.label_meta,
+        "label_meta": merge_meta(old.label_meta, new.label_meta),
     }
+
+
+def addressing_reason(meta: object) -> str:
+    """ADR-0012 §4.8: the decision and its signals with points, as one model-facing phrase.
+
+    Empty for a row without an addressing record, so an unlabelled message renders as before.
+    """
+    record = meta.get("addressed_to") if isinstance(meta, dict) else None
+    if not isinstance(record, dict):
+        return ""
+    decision = str(record.get("decision") or "").strip()
+    if not decision:
+        return ""
+    reasons = [
+        f"{name} {int(points):+d}"
+        for name, points in (record.get("reasons") or ())
+        if str(name).strip()
+    ]
+    return f"{decision} ({', '.join(reasons) or 'no signal'})"
+
+
+def merge_meta(old: dict | None, new: dict | None) -> dict:
+    """Two provenance dicts, key by key; the incoming value wins for a key it carries."""
+    merged = dict(old or {})
+    merged.update(new or {})
+    return merged
 
 
 def label_message(message) -> dict:
@@ -99,12 +126,16 @@ def label_message(message) -> dict:
 
     `addressed_to`, `reply_to_self`, `trust` and `actor` need gateway signals or RBAC evidence, so
     they are left to the caller and the table defaults. `label_meta` records provenance only for
-    the labels this function actually set.
+    the labels this function actually set, and keeps whatever the caller already wrote there
+    (the addressing decision, for instance).
     """
     from .turn.context import AUTHOR_BOT
 
     speaker = _speaker(message, AUTHOR_BOT)
     kind = _kind(message)
     labels = {"speaker": speaker, "kind": kind}
-    meta = {name: dict(_RULE) for name, value in labels.items() if value != UNKNOWN}
+    meta = dict(message.label_meta or {})
+    for name, value in labels.items():
+        if value != UNKNOWN:
+            meta.setdefault(name, dict(_RULE))
     return {"speaker": speaker, "kind": kind, "label_meta": meta}

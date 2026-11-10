@@ -217,6 +217,7 @@ messages:
   command.status.capabilities.rich_missing: "• Permukaan rich tidak ada: {count}"
   command.status.capabilities.directory_missing: "• Direktori tidak ada: {count}"
   command.status.capabilities.participants_unknown: "• Peserta tidak diketahui: {count}"
+  command.status.capabilities.envelope_failed: "• Label envelope gagal: {count}"
   command.steps.current: "🔧 Langkah tool {state} di {gateway}."
   command.steps.denied: "Hanya administrator yang bisa mengubah aliran langkah tool."
   command.steps.description: "🔧 Tampilkan atau ubah aliran langkah tool gateway ini (administrator)."

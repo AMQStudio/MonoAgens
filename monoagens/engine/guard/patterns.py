@@ -409,24 +409,32 @@ def is_injection(text: str, language: str) -> bool:
     return bool(pattern and pattern.search(str(text or "")))
 
 
-def redact_credentials(text: str, language: str = "") -> str:
-    """Replace credential and entropy spans with a neutral marker.
+def redact_spans(text: str, language: str = "") -> tuple[str, dict]:
+    """(redacted text, report) with the count of replaced spans and the kinds that matched.
 
     The spans are merged first: an entropy hit inside a PEM block would otherwise shift the
-    offsets of every later span and cut the wrong text.
+    offsets of every later span and cut the wrong text. The report never carries the value, a
+    prefix of it, or a hash of it (ADR-0012 §4.6); `kinds` names the detector, not the secret.
     """
     body = str(text or "")
-    spans = [match.span() for match in _SHAPES.finditer(body)]
-    spans.extend(entropy_secret(body))
-    merged: list[tuple[int, int]] = []
-    for start, end in sorted(spans):
+    found: list[tuple[tuple[int, int], str]] = [
+        (match.span(), "credential") for match in _SHAPES.finditer(body)
+    ]
+    found.extend((span, "entropy") for span in entropy_secret(body))
+    merged: list[tuple[int, int, str]] = []
+    for (start, end), kind in sorted(found):
         if merged and start <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end), merged[-1][2])
             continue
-        merged.append((start, end))
-    for start, end in reversed(merged):
+        merged.append((start, end, kind))
+    for start, end, _kind in reversed(merged):
         body = body[:start] + "[redacted]" + body[end:]
-    return body
+    return body, {"count": len(merged), "kinds": sorted({kind for _s, _e, kind in merged})}
+
+
+def redact_credentials(text: str, language: str = "") -> str:
+    """Replace credential and entropy spans with a neutral marker."""
+    return redact_spans(text, language)[0]
 
 
 def safe_text(text: str, limit: int = 400, *, language: str) -> str:

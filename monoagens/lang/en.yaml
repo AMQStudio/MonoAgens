@@ -217,6 +217,7 @@ messages:
   command.status.capabilities.rich_missing: "• Rich surface missing: {count}"
   command.status.capabilities.directory_missing: "• Directory missing: {count}"
   command.status.capabilities.participants_unknown: "• Participants unknown: {count}"
+  command.status.capabilities.envelope_failed: "• Envelope labels failed: {count}"
   command.steps.current: "🔧 Tool steps are {state} on {gateway}."
   command.steps.denied: "Only an administrator can switch the tool-step stream."
   command.steps.description: "🔧 Show or switch the tool-step stream of this gateway (administrator)."

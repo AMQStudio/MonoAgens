@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from .. import io
 from ..access.permissions import normalize
 from ..character import lexicon
-from ..envelope import SPEAKER_RECEIPT, merge_labels
+from ..envelope import SPEAKER_RECEIPT, addressing_reason, merge_labels
 from .words import words
 
 if TYPE_CHECKING:
@@ -69,6 +69,7 @@ AUTHOR_BOT = "bot"
 AUTHOR_MANUAL = "manual_owner"
 AUTHOR_SYSTEM = "system"
 AUTHOR_UNKNOWN = "unknown"
+ADDRESSED_SELF = "self"
 AUTHOR_RANK = {"unknown": 0, "system": 1, "manual_owner": 2, "bot": 3}
 AUTHORS = frozenset(AUTHOR_RANK)
 
@@ -671,19 +672,15 @@ def _plan_images(
     return numbers, planned
 
 
-def _message_lines(
-    config: Config,
-    thread_id: str,
-    entry: Message,
-    numbers: dict[str, int],
-    current: Message,
-    *,
-    persist: bool = True,
-) -> list[str]:
+def _entry_head(entry: Message, config: Config, *, group: bool) -> str:
+    """The header line: stamp, speaker name, and the labels the reader must not guess."""
     stamp = f"[{entry.when:%Y-%m-%d %H:%M}]"
     tag = entry_tag(entry)
     if entry.author != AUTHOR_BOT and entry.sender_id and entry.sender_kind == "person":
         tag = f"{tag}, mention=@{entry.sender_id}"
+    if group and entry.addressed_to == ADDRESSED_SELF and entry.author != AUTHOR_BOT:
+        # ADR-0012 §4.3/§4.8: a group message the score addressed to the Soul says so.
+        tag = f"{tag}, to you"
     receipt = entry.speaker == SPEAKER_RECEIPT
     if receipt:
         # ADR-0018 P1: a receipt is the harness speaking, with its actor named in the tag.
@@ -695,8 +692,23 @@ def _message_lines(
     ident = entry.sender_id if entry.sender_id and entry.sender_id != entry.sender_name else ""
     who = name if receipt else (f"{name} ({ident})" if ident else name)
     suffix = f"{tag}, you" if entry.author == AUTHOR_BOT and not receipt else tag
-    head = f"{stamp} {who} [{suffix}]:"
-    lines = [head]
+    return f"{stamp} {who} [{suffix}]:"
+
+
+def _message_lines(
+    config: Config,
+    thread_id: str,
+    entry: Message,
+    numbers: dict[str, int],
+    current: Message,
+    *,
+    persist: bool = True,
+    group: bool = False,
+) -> list[str]:
+    lines = [_entry_head(entry, config, group=group)]
+    reason = addressing_reason(entry.label_meta) if entry is current else ""
+    if reason:
+        lines.append(f"  addressing: {reason}")
     note = body_note(entry)
     if note:
         lines.append(f"  {note}")
@@ -731,6 +743,8 @@ async def build_user_content(
     messages: list[Message],
     current: Message,
     chat_name: str = "",
+    *,
+    group: bool = False,
 ) -> str | list[dict]:
     """Assemble the payload: context header, then each message (name, number, time, text, quote)."""
     order = _render_order(messages)
@@ -758,7 +772,7 @@ async def build_user_content(
     lines = [f"Thread{label} ({len(messages)} messages, oldest → newest; local time):"]
     for entry in messages:
         lines.append("")
-        lines.extend(_message_lines(config, thread_id, entry, numbers, current))
+        lines.extend(_message_lines(config, thread_id, entry, numbers, current, group=group))
     for media, failure in failures:
         lines.append(f"Image {media.filename} could not be attached ({failure})")
 

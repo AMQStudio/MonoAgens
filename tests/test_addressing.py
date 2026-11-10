@@ -2,7 +2,12 @@
 
 import pytest
 
-from monoagens.engine.addressing import (
+from monoagens.engine.config import (
+    AddressingAdvancedConfig,
+    AddressingConfig,
+    AddressingWeightsConfig,
+)
+from monoagens.engine.turn.addressing import (
     ANSWER,
     GROUP,
     IGNORE,
@@ -11,11 +16,6 @@ from monoagens.engine.addressing import (
     Result,
     Signals,
     score,
-)
-from monoagens.engine.config import (
-    AddressingAdvancedConfig,
-    AddressingConfig,
-    AddressingWeightsConfig,
 )
 
 

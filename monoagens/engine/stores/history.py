@@ -7,14 +7,12 @@ import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
-from sqlalchemy import Text, and_, case, cast, func, literal, or_, select
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ..config import SearchConfig
 from ..db import Database
-from ..envelope import KINDS, SPEAKERS, TRUSTS, UNKNOWN, label_value, stored_labels
-from ..guard.patterns import redact_credentials
+from ..envelope import KINDS, SPEAKERS, TRUSTS, UNKNOWN, label_value
 from ..memory import CaptureJobSink
 from ..memory.store import MemoryStore
 from ..schema import memories_readable, message_media, messages, threads, turns
@@ -28,12 +26,11 @@ from ..turn.context import (
 )
 from .attachments import AttachmentStore
 from .history_codec import (
-    FACT_KEYS,
-    _data,
     _like_terms,
     _media_from,
     _media_rows,
 )
+from .history_rows import merge_update, message_row
 from .turns import turn_identity
 
 log = logging.getLogger(__name__)
@@ -73,98 +70,6 @@ class HistoryStore:
 
     # ------------------------------------------------------------ write
 
-    def _row(self, thread_id: str, message: Message) -> dict:
-        labels = stored_labels(message)
-        return {
-            "thread_id": thread_id,
-            "msg_id": message.id or f"tmp-{time.time_ns()}",
-            "ts": message.when.timestamp(),
-            "sender_id": message.sender_id or "",
-            "sender_name": message.sender_name or "",
-            "sender_address": message.sender_address or "",
-            # L5 material is never persisted: the archive keeps the redacted shape, the live
-            # turn keeps the raw text in its in-memory window.
-            "text": redact_credentials(message.text or ""),
-            "outgoing": bool(message.outgoing),
-            "author": message.author,
-            "visibility": clamp_visibility(message.visibility),
-            "deleted": bool(message.deleted),
-            "deleted_by": message.deleted_by or "",
-            "deleted_admin": bool(message.deleted_admin),
-            "data": _data(message),
-            # ADR-0012 §4.1: the envelope labels, written once here; defaults never vary.
-            "speaker": label_value(labels["speaker"], SPEAKERS),
-            "actor": str(message.actor or ""),
-            "addressed_to": str(message.addressed_to or UNKNOWN) or UNKNOWN,
-            "reply_to_self": bool(message.reply_to_self),
-            "kind": label_value(labels["kind"], KINDS),
-            "trust": label_value(message.trust, TRUSTS),
-            "valid_until": message.valid_until,
-            "label_meta": dict(labels["label_meta"] or {}),
-        }
-
-    @staticmethod
-    def _content_data(excluded):
-        """The incoming `data` without its fact keys; NULL when the row carries no content."""
-        stripped = cast(excluded.data, JSONB)
-        for key in FACT_KEYS:
-            stripped = stripped.op("-")(cast(literal(key), Text))
-        return func.nullif(cast(stripped, Text), "{}")
-
-    @staticmethod
-    def _merge(stmt) -> dict:
-        table = messages
-        excluded = stmt.excluded
-        data = case(
-            (HistoryStore._content_data(excluded).is_(None), table.c.data),
-            else_=excluded.data,
-        )
-        new_rank = case(AUTHOR_RANK, value=excluded.author, else_=0)
-        old_rank = case(AUTHOR_RANK, value=table.c.author, else_=0)
-        keep_new = new_rank >= old_rank
-        removed = excluded.deleted.is_(True)
-        return {
-            "sender_name": case(
-                (
-                    keep_new,
-                    func.coalesce(func.nullif(excluded.sender_name, ""), table.c.sender_name),
-                ),
-                else_=table.c.sender_name,
-            ),
-            "sender_id": case(
-                (keep_new, func.coalesce(func.nullif(excluded.sender_id, ""), table.c.sender_id)),
-                else_=table.c.sender_id,
-            ),
-            "sender_address": case(
-                (
-                    keep_new,
-                    func.coalesce(func.nullif(excluded.sender_address, ""), table.c.sender_address),
-                ),
-                else_=table.c.sender_address,
-            ),
-            "author": case((keep_new, excluded.author), else_=table.c.author),
-            "visibility": case(
-                (excluded.visibility > table.c.visibility, excluded.visibility),
-                else_=table.c.visibility,
-            ),
-            "text": func.coalesce(func.nullif(excluded.text, ""), table.c.text),
-            "deleted": or_(table.c.deleted, excluded.deleted),
-            "deleted_by": case((removed, excluded.deleted_by), else_=table.c.deleted_by),
-            "deleted_admin": case((removed, excluded.deleted_admin), else_=table.c.deleted_admin),
-            "data": data,
-            # ADR-0012 §4.2: a re-delivered or edited message never downgrades a label.
-            **{
-                name: case((excluded[name] != UNKNOWN, excluded[name]), else_=table.c[name])
-                for name in ("speaker", "kind", "trust", "addressed_to")
-            },
-            "actor": func.coalesce(func.nullif(excluded.actor, ""), table.c.actor),
-            "reply_to_self": or_(table.c.reply_to_self, excluded.reply_to_self),
-            "valid_until": func.coalesce(excluded.valid_until, table.c.valid_until),
-            "label_meta": case(
-                (excluded.speaker != UNKNOWN, excluded.label_meta), else_=table.c.label_meta
-            ),
-        }
-
     def add(self, thread_id: str, message: Message) -> None:
         self.add_many([(thread_id, message)])
 
@@ -183,7 +88,7 @@ class HistoryStore:
             messages,
             rows,
             ["thread_id", "msg_id"],
-            update=self._merge,
+            update=merge_update,
         )
         return len(rows)
 
@@ -201,7 +106,7 @@ class HistoryStore:
         items = self._unique(
             items, lambda item: (str(item[0]), str(item[1].id or ""))
         )
-        rows = [self._row(thread_id, message) for thread_id, message in items]
+        rows = [message_row(thread_id, message) for thread_id, message in items]
         if not rows:
             return 0
         with self.db.connect() as conn:
@@ -280,7 +185,7 @@ class HistoryStore:
         the turn row so a resumed turn reconstructs the same `Percept` (ADR-0001/ADR-0003).
         """
         now = time.time()
-        row = self._row(thread_id, message)
+        row = message_row(thread_id, message)
         message_id = str(message.id or row["msg_id"])
         # ADR-0001 §4.3: the turn is keyed by the namespaced identity, so two bodies that happen
         # to use the same message id never own the same turn; the raw id is kept beside it.
@@ -399,7 +304,7 @@ class HistoryStore:
             speaker="self",
             kind="notice",
         )
-        row = self._row(thread_id, message)
+        row = message_row(thread_id, message)
         row["data"] = {**(row["data"] or {}), "kind": str(kind)}
         with self.db.connect() as conn:
             self._upsert_messages(conn, [row])

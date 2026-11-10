@@ -504,6 +504,7 @@ class TurnRunner(ApprovalFlow, ResearchFlow, TurnReview):
                                 messages,
                                 message,
                                 chat_name=gateway.chat_name(thread_id),
+                                group=not bool(inbound.hints.get("dm")),
                             )
                         except Exception:
                             log.exception(

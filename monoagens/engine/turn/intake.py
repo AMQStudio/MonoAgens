@@ -9,6 +9,7 @@ injected with the `TurnRuntime`, the `TurnCoordinator`, the runner, and the deli
 import asyncio
 import contextlib
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import replace
@@ -21,12 +22,22 @@ from ..memory import intent
 from ..stores import rooms
 from ..stores.history import RouteConflict
 from ..stores.turns import turn_identity
+from .addressing import Signals, score
 from .commands import command_body
 from .state import sender_of
 
 log = logging.getLogger(__name__)
 
 TERMINAL_TURN = frozenset({"delivered", "interrupted", "expired"})
+ADDRESSING_VERSION = 1
+
+
+def name_in_text(text: str, name: str) -> bool:
+    """The Soul's name written as plain words, case-folded, never a substring of a word."""
+    wanted = " ".join(str(name or "").split()).casefold()
+    if not wanted:
+        return False
+    return re.search(rf"(?<!\w){re.escape(wanted)}(?!\w)", str(text or "").casefold()) is not None
 
 
 class TurnIntake:
@@ -71,7 +82,105 @@ class TurnIntake:
                 getattr(message, "id", ""),
                 exc_info=True,
             )
+            self.runtime.facts.fail_envelope("reply_to_self")
             message.reply_to_self = False
+
+    def _pending_request(self, thread_id: str, sender: str) -> bool:
+        """Whether this sender has an approval waiting on the Soul (ADR-0012 §4.7).
+
+        A synchronous store read: the caller runs it through `io`, and a failure counts as "no
+        pending request" rather than stopping the message.
+        """
+        if not sender:
+            return False
+        try:
+            return bool(self.runtime.approvals.pending(thread_id, sender))
+        except Exception:
+            log.warning(
+                "pending-request lookup failed chat=%s sender=%s",
+                thread_id,
+                sender,
+                exc_info=True,
+            )
+            self.runtime.facts.fail_envelope("pending_request")
+            return False
+
+    def _continuity(self, thread_id: str, sender: str) -> bool:
+        """The Soul spoke to this sender recently and nobody else spoke since (ADR-0012 §4.7)."""
+        window = self.runtime.windows.get(thread_id)
+        last_self = None
+        for index in range(len(window) - 1, -1, -1):
+            if window[index].speaker == "self":
+                last_self = index
+                break
+        if last_self is None:
+            return False
+        spoke = window[last_self].when.timestamp()
+        seconds = float(self.runtime.config.addressing.continuity_seconds or 0)
+        if time.time() - spoke > seconds:
+            return False
+        return all(entry.sender_id == sender for entry in window[last_self + 1 :])
+
+    def _signals(
+        self, inbound: Percept, thread_id: str, *, pending_request: bool
+    ) -> Signals:
+        """The scored signals of one message: transport hints plus state the core alone knows."""
+        hints = inbound.hints or {}
+        message = inbound.payload
+        raw_mentions = hints.get("mentions")
+        mentions = (
+            [str(item) for item in raw_mentions if str(item)]
+            if isinstance(raw_mentions, (list, tuple))
+            else []
+        )
+        quote = message.quote
+        reply_to_other = quote is not None and not message.reply_to_self
+        other = mentions[0] if mentions else ""
+        if not other and reply_to_other and quote is not None:
+            other = str(quote.sender_id or "")
+        return Signals(
+            direct=bool(hints.get("dm")),
+            mentions_self=bool(hints.get("mention")),
+            mentions_other=bool(mentions),
+            reply_to_self=bool(message.reply_to_self),
+            reply_to_other=reply_to_other,
+            continuity=self._continuity(thread_id, str(message.sender_id or "")),
+            pending_request=pending_request,
+            name_in_text=name_in_text(str(message.text or ""), self.runtime.soul.name),
+            other_target=other,
+        )
+
+    def label_addressing(
+        self, inbound: Percept, thread_id: str, *, pending_request: bool = False
+    ) -> None:
+        """ADR-0012 §4.7: store the addressing decision with its reasons; never block intake.
+
+        The score does not decide who answers yet (phase P3); it is recorded and rendered so
+        the model knows why it is speaking and the decision can be tested.
+        """
+        message = inbound.payload
+        try:
+            result = score(self._signals(inbound, thread_id, pending_request=pending_request),
+                           self.runtime.config.addressing)
+        except Exception:
+            log.warning(
+                "addressing score failed chat=%s id=%s",
+                thread_id,
+                getattr(message, "id", ""),
+                exc_info=True,
+            )
+            self.runtime.facts.fail_envelope("addressing")
+            return
+        message.addressed_to = result.addressed_to
+        meta = dict(message.label_meta or {})
+        meta["addressed_to"] = {
+            "source": "rule",
+            "version": ADDRESSING_VERSION,
+            "score": result.score,
+            "decision": result.decision,
+            "reasons": [[name, points] for name, points in result.reasons],
+        }
+        message.label_meta = meta
 
     def observe_group(self, inbound: Percept, gateway: GatewayCore, reason: str) -> bool:
         """Archive a shared-room message the policy gate rejected; never reply to it.
@@ -85,6 +194,9 @@ class TurnIntake:
         message = inbound.payload
         thread_id = inbound.thread
         self.label_reply(message, gateway, thread_id)
+        # This path is synchronous and has no sender approval read: a pending request would
+        # need a store call on the event loop, so the observed copy scores it as absent.
+        self.label_addressing(inbound, thread_id)
         try:
             rooms.ensure_thread(
                 self.runtime.history.db,
@@ -165,6 +277,8 @@ class TurnIntake:
         message = inbound.payload
         # The quoted message may need a store read: keep it off the event loop (AGENTS.md §2).
         await io.run(self.label_reply, message, gateway, thread_id)
+        pending = bool(await io.run(self._pending_request, thread_id, str(inbound.actor or "")))
+        self.label_addressing(inbound, thread_id, pending_request=pending)
         message_id = str(message.id or "")
         if not message_id:
             log.warning("message without an id cannot become a turn chat=%s", thread_id)
