@@ -4,6 +4,7 @@
 from datetime import datetime
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy import text as sql_text
 from sqlalchemy.exc import IntegrityError
 from support import database
@@ -317,3 +318,124 @@ def test_a_second_body_cannot_claim_an_owned_thread(tmp_path) -> None:
     )
     assert [row["msg_id"] for row in found] == ["m1"]
     assert store.gateway_of("chat") == "a"
+
+
+def test_stored_human_message_is_labelled_from_the_rules(tmp_path) -> None:
+    store = HistoryStore(database())
+    store.add("chat", message("m1", "halo"))
+
+    row = store.db.fetch_one(
+        select(messages).where(messages.c.thread_id == "chat", messages.c.msg_id == "m1")
+    )
+
+    assert row["speaker"] == "sender"
+    assert row["kind"] == "chat"
+    assert row["label_meta"]["speaker"] == {"source": "rule", "version": 1}
+    assert row["label_meta"]["kind"] == {"source": "rule", "version": 1}
+
+
+def test_a_slash_command_is_stored_as_a_command(tmp_path) -> None:
+    store = HistoryStore(database())
+    store.add("chat", message("m1", "/approve #5"))
+
+    found = store.find("chat", "m1")
+
+    assert found is not None
+    assert found.speaker == "sender"
+    assert found.kind == "command"
+
+
+def test_a_notice_is_stored_as_a_self_notice(tmp_path) -> None:
+    store = HistoryStore(database())
+    store.add_notice("chat", "timeout", kind="notice:timeout", message_id="n1")
+
+    found = store.find("chat", "n1")
+
+    assert found is not None
+    assert found.speaker == "self"
+    assert found.kind == "notice"
+
+
+def test_a_relabelled_message_never_downgrades_the_stored_labels(tmp_path) -> None:
+    store = HistoryStore(database())
+    store.add("chat", message("m1", "halo"))
+    before = store.find("chat", "m1")
+    assert before is not None
+    assert before.speaker == "sender"
+    assert before.kind == "chat"
+
+    # An inbound bot line with no text labels to `unknown` on both columns.
+    store.add(
+        "chat",
+        Message(
+            id="m1",
+            sender_name="",
+            sender_id="",
+            when=datetime(2026, 1, 1, 11),
+            text="",
+            author="bot",
+        ),
+    )
+
+    found = store.find("chat", "m1")
+    assert found is not None
+    assert found.speaker == "sender"
+    assert found.kind == "chat"
+    assert found.label_meta["speaker"] == {"source": "rule", "version": 1}
+
+
+def test_a_caller_supplied_label_outside_the_set_is_stored_as_unknown(tmp_path) -> None:
+    store = HistoryStore(database())
+    store.add(
+        "chat",
+        Message(
+            id="m1",
+            sender_name="Budi",
+            sender_id="628222",
+            when=datetime(2026, 1, 1, 10),
+            text="halo",
+            speaker="bogus",
+            kind="chat",
+        )
+    )
+
+    row = store.db.fetch_one(
+        select(messages).where(messages.c.thread_id == "chat", messages.c.msg_id == "m1")
+    )
+
+    assert row["speaker"] == "unknown"
+    assert row["kind"] == "chat"
+
+
+def test_the_envelope_labels_roundtrip_through_decode(tmp_path) -> None:
+    store = HistoryStore(database())
+    store.add(
+        "chat",
+        Message(
+            id="m1",
+            sender_name="Budi",
+            sender_id="628222",
+            when=datetime(2026, 1, 1, 10),
+            text="halo",
+            speaker="other_person",
+            actor="person:628222",
+            addressed_to="self",
+            reply_to_self=True,
+            kind="question",
+            trust="member",
+            valid_until={"kind": "receipt"},
+            label_meta={"speaker": {"source": "gateway", "version": 1}},
+        ),
+    )
+
+    found = store.find("chat", "m1")
+
+    assert found is not None
+    assert found.speaker == "other_person"
+    assert found.actor == "person:628222"
+    assert found.addressed_to == "self"
+    assert found.reply_to_self is True
+    assert found.kind == "question"
+    assert found.trust == "member"
+    assert found.valid_until == {"kind": "receipt"}
+    assert found.label_meta == {"speaker": {"source": "gateway", "version": 1}}

@@ -13,6 +13,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ..config import SearchConfig
 from ..db import Database
+from ..envelope import KINDS, SPEAKERS, TRUSTS, UNKNOWN, label_value, stored_labels
 from ..guard.patterns import redact_credentials
 from ..memory import CaptureJobSink
 from ..memory.store import MemoryStore
@@ -26,7 +27,13 @@ from ..turn.context import (
     clamp_visibility,
 )
 from .attachments import AttachmentStore
-from .history_codec import FACT_KEYS, _blob, _data, _like_terms, _media_from
+from .history_codec import (
+    FACT_KEYS,
+    _data,
+    _like_terms,
+    _media_from,
+    _media_rows,
+)
 from .turns import turn_identity
 
 log = logging.getLogger(__name__)
@@ -67,6 +74,7 @@ class HistoryStore:
     # ------------------------------------------------------------ write
 
     def _row(self, thread_id: str, message: Message) -> dict:
+        labels = stored_labels(message)
         return {
             "thread_id": thread_id,
             "msg_id": message.id or f"tmp-{time.time_ns()}",
@@ -84,45 +92,16 @@ class HistoryStore:
             "deleted_by": message.deleted_by or "",
             "deleted_admin": bool(message.deleted_admin),
             "data": _data(message),
+            # ADR-0012 §4.1: the envelope labels, written once here; defaults never vary.
+            "speaker": label_value(labels["speaker"], SPEAKERS),
+            "actor": str(message.actor or ""),
+            "addressed_to": str(message.addressed_to or UNKNOWN) or UNKNOWN,
+            "reply_to_self": bool(message.reply_to_self),
+            "kind": label_value(labels["kind"], KINDS),
+            "trust": label_value(message.trust, TRUSTS),
+            "valid_until": message.valid_until,
+            "label_meta": dict(labels["label_meta"] or {}),
         }
-
-    @staticmethod
-    def _media_rows(thread_id: str, message: Message) -> list[dict]:
-        """The bytes that no longer live on the row (ADR-0002 §4.5), numbered per message.
-
-        Every attachment gets a row even when the body carried no bytes, so the row set mirrors
-        the envelope and `seq` is the attachment's place in it. A quote's bytes use the next
-        free number: `kind` says what the row is, `seq` is the identity.
-        """
-        rows: list[dict] = []
-        for seq, media in enumerate(message.attachments):
-            if media is None:
-                continue
-            rows.append(
-                {
-                    "thread_id": thread_id,
-                    "message_id": message.id,
-                    "seq": seq,
-                    "kind": "media",
-                    "mime": str(media.mimetype or ""),
-                    "bytes_ref": _blob(media),
-                }
-            )
-        quote = message.quote
-        quote_media = quote.media if quote is not None else None
-        blob = _blob(quote_media)
-        if blob is not None:
-            rows.append(
-                {
-                    "thread_id": thread_id,
-                    "message_id": message.id,
-                    "seq": len(message.attachments),
-                    "kind": "quote",
-                    "mime": str(getattr(quote_media, "mimetype", "") or ""),
-                    "bytes_ref": blob,
-                }
-            )
-        return rows
 
     @staticmethod
     def _content_data(excluded):
@@ -173,6 +152,17 @@ class HistoryStore:
             "deleted_by": case((removed, excluded.deleted_by), else_=table.c.deleted_by),
             "deleted_admin": case((removed, excluded.deleted_admin), else_=table.c.deleted_admin),
             "data": data,
+            # ADR-0012 §4.2: a re-delivered or edited message never downgrades a label.
+            **{
+                name: case((excluded[name] != UNKNOWN, excluded[name]), else_=table.c[name])
+                for name in ("speaker", "kind", "trust", "addressed_to")
+            },
+            "actor": func.coalesce(func.nullif(excluded.actor, ""), table.c.actor),
+            "reply_to_self": or_(table.c.reply_to_self, excluded.reply_to_self),
+            "valid_until": func.coalesce(excluded.valid_until, table.c.valid_until),
+            "label_meta": case(
+                (excluded.speaker != UNKNOWN, excluded.label_meta), else_=table.c.label_meta
+            ),
         }
 
     def add(self, thread_id: str, message: Message) -> None:
@@ -221,7 +211,7 @@ class HistoryStore:
         return len(rows)
 
     def _upsert_media(self, conn, items: list[tuple[str, Message]]) -> None:
-        rows = [row for thread_id, message in items for row in self._media_rows(thread_id, message)]
+        rows = [row for thread_id, message in items for row in _media_rows(thread_id, message)]
         rows = self._unique(
             rows,
             lambda row: (str(row["thread_id"]), str(row["message_id"]), int(row["seq"])),
@@ -406,6 +396,8 @@ class HistoryStore:
             text=str(text or ""),
             outgoing=True,
             author="bot",
+            speaker="self",
+            kind="notice",
         )
         row = self._row(thread_id, message)
         row["data"] = {**(row["data"] or {}), "kind": str(kind)}
@@ -551,6 +543,14 @@ class HistoryStore:
             deleted_by=str(row.get("deleted_by")),
             deleted_admin=bool(row.get("deleted_admin")),
             notice=notice,
+            speaker=label_value(row.get("speaker"), SPEAKERS),
+            actor=str(row.get("actor") or ""),
+            addressed_to=str(row.get("addressed_to") or UNKNOWN) or UNKNOWN,
+            reply_to_self=bool(row.get("reply_to_self")),
+            kind=label_value(row.get("kind"), KINDS),
+            trust=label_value(row.get("trust"), TRUSTS),
+            valid_until=row.get("valid_until"),
+            label_meta=dict(row.get("label_meta") or {}),
         )
 
     @staticmethod

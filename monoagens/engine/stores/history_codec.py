@@ -65,6 +65,44 @@ def _data(message: Message) -> dict:
     return data
 
 
+def _media_rows(thread_id: str, message: Message) -> list[dict]:
+    """The bytes that no longer live on the row (ADR-0002 §4.5), numbered per message.
+
+    Every attachment gets a row even when the body carried no bytes, so the row set mirrors the
+    envelope and `seq` is the attachment's place in it. A quote's bytes use the next free number:
+    `kind` says what the row is, `seq` is the identity.
+    """
+    rows: list[dict] = []
+    for seq, media in enumerate(message.attachments):
+        if media is None:
+            continue
+        rows.append(
+            {
+                "thread_id": thread_id,
+                "message_id": message.id,
+                "seq": seq,
+                "kind": "media",
+                "mime": str(media.mimetype or ""),
+                "bytes_ref": _blob(media),
+            }
+        )
+    quote = message.quote
+    quote_media = quote.media if quote is not None else None
+    blob = _blob(quote_media)
+    if blob is not None:
+        rows.append(
+            {
+                "thread_id": thread_id,
+                "message_id": message.id,
+                "seq": len(message.attachments),
+                "kind": "quote",
+                "mime": str(getattr(quote_media, "mimetype", "") or ""),
+                "bytes_ref": blob,
+            }
+        )
+    return rows
+
+
 def _blob(media: Media | None) -> bytes | None:
     if media is None:
         return None

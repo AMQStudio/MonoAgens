@@ -149,6 +149,15 @@ class Message:
     deleted_by: str = ""
     deleted_admin: bool = False
     notice: str = ""
+    # ADR-0012 §4.1: the stored envelope labels; the archive writes them at ingress.
+    speaker: str = "unknown"
+    actor: str = ""
+    addressed_to: str = "unknown"
+    reply_to_self: bool = False
+    kind: str = "unknown"
+    trust: str = "unknown"
+    valid_until: dict | None = None
+    label_meta: dict = field(default_factory=dict)
 
     def __post_init__(self, media: Media | None) -> None:
         if media is not None and not self.attachments:
