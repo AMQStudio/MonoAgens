@@ -34,7 +34,7 @@ written as events then handed to the body. For now every DM wakes the PFC.
 Done when: FakeLLM tests pass; manual check: a DM gets a reply; MVP TEST (a): restart in the
 middle of a conversation and the next reply continues the topic.
 
-## [ ] 5. The gate
+## [x] 5. The gate
 Features + weights + bands from soul.yaml, decision.silent / decision.note with the score
 breakdown. Note: disable the bot's privacy mode in BotFather (/setprivacy → Disable) so it
 receives all group messages.

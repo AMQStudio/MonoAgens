@@ -230,7 +230,7 @@ async def test_unaddressed_message_does_not_wake_the_pfc(aconn):
     await _feed(kernel, _msg("group chatter", addressed=False))
 
     assert fake.requests == []
-    assert await _kinds(aconn) == ["msg.in"]
+    assert await _kinds(aconn) == ["msg.in", "decision.silent"]
 
 
 async def test_invalid_tool_call_becomes_an_error_event_and_the_loop_lives(aconn):
@@ -263,7 +263,7 @@ async def test_llm_failure_becomes_an_error_event_and_the_loop_lives(aconn):
 
     # A later, unaddressed event is still processed: the loop never died.
     await _feed(kernel, _msg("later", addressed=False, message_id=2))
-    assert (await _kinds(aconn))[-1] == "msg.in"
+    assert (await _kinds(aconn))[-1] == "decision.silent"
 
 
 async def test_mvp_a_restart_keeps_the_conversation_context(aconn):

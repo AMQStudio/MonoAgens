@@ -66,6 +66,22 @@ async def read_last_events(
     return events
 
 
+async def count_recent_events(
+    conn: psycopg.AsyncConnection[Any],
+    place: str,
+    *,
+    kind: str,
+    since: datetime,
+) -> int:
+    """Count events of one kind in a place from `since` onwards (inclusive)."""
+    cur = await conn.execute(
+        "SELECT count(*) FROM events WHERE place = %s AND kind = %s AND ts >= %s",
+        (place, kind, since),
+    )
+    row = await cur.fetchone()
+    return int(row[0]) if row else 0
+
+
 async def cursor(
     conn: psycopg.AsyncConnection[Any],
     body: str,

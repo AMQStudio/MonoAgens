@@ -10,12 +10,11 @@ from typing import Any
 import psycopg
 
 from monoagens.clock import Clock
+from monoagens.gate import Gate
 from monoagens.pfc import PFC, PFCContext, ToolCall
 from monoagens.store import append_event, cursor as store_cursor
 from monoagens.store import project_event, read_last_events, read_state
 from monoagens.types import Action, Event
-
-WAKE_REASON = "a message addressed to you"
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,10 +32,11 @@ class Kernel:
     """
 
     def __init__(self, conn: psycopg.AsyncConnection[Any], clock: Clock | None = None,
-                 pfc: PFC | None = None) -> None:
+                 pfc: PFC | None = None, gate: Gate | None = None) -> None:
         self.conn = conn
         self.clock = clock or Clock()
         self.pfc = pfc
+        self.gate = gate or Gate.from_soul()
         self.queue: asyncio.Queue[_Queued] = asyncio.Queue()
         self.bodies: dict[str, Any] = {}
 
@@ -64,11 +64,6 @@ class Kernel:
         if not name:
             raise ValueError("A body must expose a name")
         self.bodies[name] = body
-
-    async def start_body(self, body: Any) -> asyncio.Task[None]:
-        """Start a body adapter listening and putting events into the queue."""
-        self.register_body(body)
-        return asyncio.create_task(body.run(self.put))
 
     async def _append(self, event: Event, kind: str, payload: dict[str, Any], *,
                       caused_by: int | None = None, project: bool = True) -> Event:
@@ -114,15 +109,19 @@ class Kernel:
         return stored
 
     async def _wake(self, event: Event) -> None:
-        """Wake the PFC for an addressed message (the gate arrives in Step 5)."""
-        if self.pfc is None or event.kind != "msg.in" or not event.payload.get("addressed"):
+        """Let the gate decide; only a wake reaches the PFC."""
+        if self.pfc is None or event.kind != "msg.in":
+            return
+        verdict = await self.gate.judge(self.conn, event, now=self.clock.now())
+        if verdict.decision != "wake":
+            await self._emit(event, f"decision.{verdict.decision}", verdict.payload())
             return
         recent = await read_last_events(self.conn, event.place or "", limit=20)
         context = PFCContext(
             now=self.clock.now(),
             place=event.place or "",
             place_kind=str(event.payload.get("place_kind") or "direct"),
-            reason=WAKE_REASON,
+            reason=verdict.reason,
             core_memory=await self._core_memory(),
             recent=[e for e in recent if e.id != event.id],
             trigger=event,
