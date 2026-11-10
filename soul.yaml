@@ -43,7 +43,37 @@ memory:
   retrieve_k: 5
   recent_events: 20
   recent_elsewhere: 10
+  decay: 0.5              # ACT-R base-level decay d
+  context_weight: 1.0     # weight of cosine(context, memory) in activation
+  importance_weight: 0.5
 
 expectations:
   default_expires_days: 30
   max_active: 200
+
+# Cognition layer (DESIGN "Cognition layer"). Starting values; tune with scripts/replay.py.
+cognition:
+  seed: 1
+  weights:                 # initial signal weights; learning updates the copy in state
+    name_mentioned: 0.5
+    info_gap: 0.35
+    feeling_of_knowing: 0.35
+    relevance: 0.2
+    social_cost: -0.4
+  info_gap_references:     # what an open question / forgotten thing sounds like
+    - "aku lupa, apa ya namanya?"
+    - "ada yang tahu nggak?"
+    - "itu yang kemarin apa ya?"
+    - "siapa yang ingat?"
+  fok: {threshold: 0.0, scale: 1.0}
+  habituation: {gamma_per_minute: 0.95}
+  threshold: {base: 0.55, talk_rate: 0.3, budget: 0.3, promise_debt: 0.1}
+  temperature: 0.08        # tau: lower = more decisive, higher = more spontaneous
+  band: {note: 0.2}        # P below this is recorded as silent, otherwise as note
+  patience_seconds: 90
+  motivation_min: 4        # 1..5
+  confidence_min: 0.5
+  forward_window_minutes: 30
+  learning_rate: 0.02      # 0 disables learning
+  daily_token_budget: 300000
+

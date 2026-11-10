@@ -1,5 +1,7 @@
 # PLAN.md — Prototype Steps
 
+> MVP steps are complete. New work is tracked as phases and tracks in `ROADMAP.md`.
+
 One step = one agent session = one commit. Tick a step only when its tests pass.
 
 ## [x] 0. Foundation

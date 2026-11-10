@@ -1,8 +1,8 @@
 # AGENTS.md — Standing Rules for Coding Agents
 
 This project is **MonoAgens**: a tiny kernel for one persistent AI self that lives in many bodies.
-Status: prototype. Read `DESIGN.md` before touching code. Work ONLY on the step you were given
-from `PLAN.md`.
+Status: prototype. Read `DESIGN.md` before touching code. Work ONLY on the step or track you were given
+from `PLAN.md` or `ROADMAP.md`.
 
 ## Who writes code
 - All implementation work is delegated to an **Orca Orchestration** worker running
@@ -35,7 +35,8 @@ from `PLAN.md`.
 
 ## Invariants (never break these)
 1. **The kernel is body-blind.** `monoagens/kernel.py`, `store.py`, `expect.py`, `memory.py`,
-   `pfc.py` must not import anything from `monoagens/bodies/` or mention "telegram", "cli", etc.
+   `pfc.py` and everything in `monoagens/cognition/` must not import anything from
+   `monoagens/bodies/` or mention "telegram", "cli", etc.
 2. **The log is immutable.** The `events` table is INSERT-only. No UPDATE, no DELETE.
    Enforced by a database trigger.
 3. **One queue, one consumer.** Every source (bodies, clock) only `put`s into the queue.
@@ -50,6 +51,10 @@ from `PLAN.md`.
    `asyncio.to_thread`.
 8. **Configuration lives outside code.** Models, keys, URLs come from `.env`. Weights,
    thresholds, persona come from `soul.yaml`. No magic numbers in code.
+9. **Signals are pure.** A cognition signal only reads its `Situation` and returns a number in
+   [0, 1]. No writes, no LLM calls, no I/O beyond what `Situation` already holds.
+10. **Decisions are reproducible.** Random draws come only from the seeded generator described
+   in DESIGN; never from `random` or the clock directly.
 
 ## Stack and versions
 - Python 3.13+, managed with `uv` (commit `uv.lock`).
@@ -66,12 +71,20 @@ from `PLAN.md`.
 - No new dependency, ORM, agent framework, or platform SDK without the owner's approval.
 
 ## Size budget (excluding tests)
-kernel.py ≤ 280 lines · store.py ≤ 220 · expect.py ≤ 220 · memory.py ≤ 240 · pfc.py ≤ 240 ·
-gate.py ≤ 120 · bodies/telegram.py ≤ 180 · whole package ≤ 1,600 lines.
+kernel.py ≤ 280 lines · store.py ≤ 240 · expect.py ≤ 240 · memory.py ≤ 260 · pfc.py ≤ 280 ·
+gate.py ≤ 120 (removed once cognition replaces it) · bodies/telegram.py ≤ 180 ·
+bodies/cli.py ≤ 120 · cli.py ≤ 60 · cognition/ ≤ 600 in total, each file ≤ 160 ·
+middleware.py ≤ 150 · whole package ≤ 2,600 lines.
 Counted on readable code: lines ≤ 100 characters, one statement per line, blank lines between
 functions and classes, docstrings on public functions. Compressing code to fit the budget is a
 violation, not a fix.
 Going over budget means the design is wrong. Stop and report; do not force it.
+
+## Parallel tracks
+- A track touches only the files its ROADMAP row names. Shared files (`kernel.py`,
+  `store.py`, `sql/schema.sql`, `soul.yaml`) are changed only by Track A, or by a track that
+  says so explicitly; other tracks that need a change there stop and report.
+- Always `git pull --rebase` before starting and before pushing.
 
 ## Tests
 - Tests use a real Postgres (the container from `compose.yaml`), never a mocked database.
