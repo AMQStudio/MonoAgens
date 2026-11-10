@@ -2,7 +2,6 @@
 
 
 import contextlib
-import time
 
 from ..access.permissions import command_allowed, tool_allowed
 from ..access.relay import MODES, RelayRefused, RelayStore
@@ -62,19 +61,17 @@ def decision_refusal(approval, *, thread_id: str, sender: str, roles) -> str:
     return "foreign"
 
 
-def _relay_decision(ctx: CommandContext, approval, extra: str) -> str:
+async def relay_decision(agent, approval, *, extra: str, sender: str, lang: str) -> str:
     """ADR-0004: the owner's chosen mode becomes the grant; the question itself is the consent."""
-    agent = ctx.agent
-    lang = ctx.lang
-    mode = extra.lower()
+    mode = str(extra or "").lower()
     if mode not in MODES:
         return t("command.approve.relay_mode", lang, modes=", ".join(MODES))
     try:
-        grant = RelayStore(agent.db).decide(approval=approval, mode=mode, by=ctx.sender)
+        grant = RelayStore(agent.db).decide(approval=approval, mode=mode, by=sender)
     except (RelayRefused, ValueError) as exc:
         return f"error: {exc}"
     agent.approvals.mark(
-        approval.id, "approved", ctx.sender, f"relay {grant.id} mode={grant.mode}"
+        approval.id, "approved", sender, f"relay {grant.id} mode={grant.mode}"
     )
     return t("command.approve.relay_done", lang, id=approval.id, mode=grant.mode)
 
@@ -301,6 +298,8 @@ async def run_approval(
 
 
 async def _approve(ctx: CommandContext) -> str:
+    from ..turn.decisions import decide
+
     agent = ctx.agent
     lang = ctx.lang
     parts = ctx.args.strip().lstrip("#").split()
@@ -311,29 +310,19 @@ async def _approve(ctx: CommandContext) -> str:
         approval = agent.approvals.get(raw)
         if approval is None:
             return t("command.approve.not_found", lang, id=raw)
-        if decision_refusal(
-            approval, thread_id=ctx.thread_id, sender=ctx.sender, roles=ctx.roles
-        ):
-            return t("command.approve.foreign", lang)
-        if approval.status != "pending":
-            return t("command.approve.already", lang, id=approval.id, status=approval.status)
     else:
         approval = agent.approvals.latest(ctx.thread_id, ctx.sender)
         if approval is None:
             return t("command.approve.none", lang)
-    if approval.expires_at < time.time():
-        agent.approvals.mark(approval.id, "expired", ctx.sender)
-        return t("command.approve.expired", lang, id=approval.id)
-
-    if approval.tool == "relay":
-        return _relay_decision(ctx, approval, extra)
-    text, _ran = await run_approval(
+    text, _ran = await decide(
         agent,
         approval,
+        True,
         sender=ctx.sender,
         roles=ctx.roles,
         gateway=ctx.gateway,
         thread_id=ctx.thread_id,
+        mode=extra,
     )
     return text
 

@@ -23,6 +23,7 @@ a hint the body cannot supply. The known keys:
 * `presence` — the body observed activity without a message.
 * `self` — the message came from the body's own account (never a turn).
 * `app` — the application this message belongs to (ADR-0005); optional.
+* `decision` — a `Decision` on one pending approval (kind `decision`, ADR-0013 §4.4).
 
 Minimal body::
 
@@ -50,7 +51,9 @@ from uuid import uuid4
 from .registry import Handler
 from .turn.context import Message
 
-HINT_KEYS = frozenset({"dm", "mention", "reply", "group", "presence", "self", "app"})
+HINT_KEYS = frozenset(
+    {"dm", "mention", "reply", "group", "presence", "self", "app", "decision"}
+)
 
 CONSENT = "consent"
 AUTHORIZATION = "authorization"
@@ -58,6 +61,7 @@ APPROVAL_CLASSES = frozenset({CONSENT, AUTHORIZATION})
 
 MESSAGE = "message"
 TASK = "task"
+DECISION = "decision"
 
 
 class GatewayError(RuntimeError):
@@ -117,6 +121,14 @@ class Percept:
     payload: Message
     hints: Mapping[str, object] = field(default_factory=dict)
     raw: object = None  # transport event, used by the gateway for quotes
+
+
+@dataclass(frozen=True, slots=True)
+class Decision:
+    """One person's gesture on one pending approval (ADR-0013 §4.4)."""
+
+    approval_id: int
+    approve: bool
 
 
 @dataclass(frozen=True, slots=True)

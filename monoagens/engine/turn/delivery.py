@@ -195,6 +195,7 @@ class Delivery:
         origin: Address | None = None,
         reason: str = "",
         action_id: str = "",
+        receipt_actor: str = "",
     ) -> str:
         address = Address(str(gateway.name), str(thread_id))
         found = action_id or str(self._action_id().get("id") or "")
@@ -208,7 +209,13 @@ class Delivery:
             action, subject=subject, origin=origin_for(origin), reason=reason
         )
         message_id = self._reference(receipt)
-        self.remember(thread_id, text, gateway=gateway, message_id=message_id)
+        self.remember(
+            thread_id,
+            text,
+            gateway=gateway,
+            message_id=message_id,
+            receipt_actor=receipt_actor,
+        )
         if kind:
             with contextlib.suppress(Exception):
                 self.runtime.history.add_notice(thread_id, text, kind=kind, message_id=message_id)

@@ -17,7 +17,7 @@ from functools import partial
 from . import io, plugins
 from .access.approvals import ApprovalStore
 from .access.identity import IdentityStore
-from .access.permissions import command_allowed, tool_patterns, tools_for
+from .access.permissions import tool_patterns, tools_for
 from .access.privacy import PrivacyService
 from .access.roles import Role
 from .agent_delivery import DeliveryFacade
@@ -33,10 +33,10 @@ from .guard.policy import (
     scope_granted,
     scope_proof,
 )
-from .i18n import t
 from .inbound import (
     AUTHORIZATION,
     CONSENT,
+    DECISION,
     Action,
     Address,
     Directory,
@@ -61,10 +61,11 @@ from .runtime import ACTIVE_GENERATION, RuntimeFacts
 from .stores.turns import TurnStore, turn_identity
 from .tools import REGISTRY as CORE_TOOLS
 from .tools import ToolContext, ToolIndex
-from .turn import observability
-from .turn.commands import TurnCommands, command_body
+from .turn import access, observability
+from .turn.commands import TurnCommands
 from .turn.context import WorkingMemory
 from .turn.coordinator import TurnCoordinator
+from .turn.decisions import Decisions
 from .turn.delivery import Delivery
 from .turn.intake import TurnIntake
 from .turn.loop import TurnRunner
@@ -225,6 +226,7 @@ class Agent(DeliveryFacade, CrossRoomGuard):
             self.turn_runtime, self.coordinator, self.turn_runner, self.delivery
         )
         self.command_dispatch = TurnCommands(self)
+        self.decisions = Decisions(self)
 
     # ------------------------------------------------------------- util
 
@@ -659,89 +661,15 @@ class Agent(DeliveryFacade, CrossRoomGuard):
             thread_id=inbound.thread,
             gateway=getattr(gateway, "name", "") or "",
         ):
-            if await self._access_refused(inbound, gateway, claimed=claimed):
+            if inbound.kind == DECISION:
+                # ADR-0013 §4.4: a decision is data; it never becomes a turn. A standby
+                # instance refuses it without a side effect, like any intake.
+                if self._accepting():
+                    await self.decisions.receive(inbound, gateway)
+                return []
+            if await access.refused(self, inbound, gateway, claimed=claimed):
                 return []
             return await self.intake.receive(inbound, gateway, claimed=claimed)
-
-    def _command_permitted(self, inbound: Percept, gateway: GatewayCore) -> bool:
-        """A command the sender's role may run skips the gateway's conversation policy."""
-        body = command_body(
-            str(getattr(inbound.payload, "text", "") or ""),
-            self.soul.name,
-            gateway.self_handles(),
-        )
-        if not body.startswith("/"):
-            return False
-        name = body[1:].partition(" ")[0].strip().lower()
-        if not name:
-            return False
-        try:
-            person = self.identity.resolve(
-                inbound.source or gateway.name,
-                inbound.actor or self._sender(inbound),
-            )
-        except Exception:
-            log.exception(
-                "identity resolve failed source=%s", inbound.source or gateway.name
-            )
-            return False
-        roles = self.config.roles.for_person(
-            person,
-            room=f"{inbound.source or gateway.name}:{inbound.thread}",
-            participants=self._room_participants,
-        )
-        handler = self.commands.get(name)
-        if handler is not None and command_allowed(roles, handler.name):
-            return True
-        recipe = self.recipes.get(name) if self.recipes is not None else None
-        return bool(recipe is not None and {role.name for role in roles} & set(recipe.roles))
-
-    async def _access_refused(
-        self,
-        inbound: Percept,
-        gateway: GatewayCore,
-        *,
-        claimed: dict | None,
-    ) -> bool:
-        """One refusal for every body: the gateway decides, the core sends the same reply."""
-        check = getattr(gateway, "access_refusal", None)
-        if claimed is not None or not callable(check):
-            return False
-        message = inbound.payload
-        if getattr(message, "outgoing", False) or bool(inbound.hints.get("self")):
-            return False
-        if self._command_permitted(inbound, gateway):
-            return False
-        try:
-            reason = str(check(inbound) or "")
-        except Exception:
-            log.exception(
-                "access check failed gateway=%s chat=%s; refusing",
-                getattr(gateway, "name", ""),
-                inbound.thread,
-            )
-            reason = "check_failed"
-        if not reason:
-            return False
-        if not bool(inbound.hints.get("dm")):
-            # A shared room never hears a refusal; the gate keeps its conversation silent.
-            self.intake.observe_group(inbound, gateway, reason)
-            return True
-        try:
-            await self.delivery.text(
-                inbound.thread,
-                t("agent.access_refused", self.soul.language),
-                gateway=gateway,
-                origin=Address(str(getattr(gateway, "name", "") or ""), str(inbound.thread)),
-            )
-        except Exception:
-            log.warning(
-                "access refusal notice failed gateway=%s chat=%s",
-                getattr(gateway, "name", ""),
-                inbound.thread,
-                exc_info=True,
-            )
-        return True
 
     async def _command(
         self,
