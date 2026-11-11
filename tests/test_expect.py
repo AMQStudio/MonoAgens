@@ -545,3 +545,132 @@ async def test_guard_never_fires_when_its_cue_event_arrives(aconn):
 
     assert await _status(aconn, exp_id) == "active"
     assert "expectation.fired" not in await _kinds(aconn)
+
+
+# --- turn-taking and patience (Task 2 Part 6) --------------------------------
+
+PATIENCE = settings(knobs={"patience_seconds": 90})
+GROUP = "space:tg:-1002"
+OTHER = "person:tg:4002"
+
+
+def _group_msg(text: str, *, who: str = OTHER, addressed: bool = False) -> Event:
+    return Event(id=None, ts=START, kind="percept", who=who, place=GROUP, body="telegram",
+                 payload={"description": text, "addressed": addressed,
+                          "place_kind": "group"})
+
+
+def _say(text: str) -> list[tuple[str, dict]]:
+    return [("act", {"capability": "telegram.say", "arguments": {"text": text}})]
+
+
+async def test_a_go_on_a_turn_not_allocated_creates_a_wait_from_patience(aconn):
+    source = await append_event(aconn, ts=START, kind="percept", who=WHO, place=GROUP,
+                                body="telegram", payload={"text": "obrolan biasa"})
+
+    created = await expect.create_wait(aconn, source, now=START, settings=PATIENCE)
+
+    cur = await aconn.execute(
+        "SELECT kind, who, place, cue_time, cue_event, next_check_at, status "
+        "FROM expectations WHERE id = %s", (created.payload["expectation_id"],))
+    kind, who, place, cue_time, cue_event, next_at, status = await cur.fetchone()
+    assert (kind, who, place, status) == ("wait", WHO, GROUP, "active")
+    assert cue_time == {"at": (START + timedelta(seconds=90)).isoformat()}
+    assert next_at == START + timedelta(seconds=90)
+    assert cue_event == {"kind": "percept", "place": GROUP, "not_who": WHO}
+    assert created.kind == "expectation.created"
+    assert created.payload["kind"] == "wait"
+
+
+async def test_a_go_on_an_addressed_turn_creates_no_wait(aconn):
+    source = await append_event(aconn, ts=START, kind="percept", who=WHO, place=GROUP,
+                                body="telegram", payload={"text": "Mona, halo",
+                                                          "addressed": True})
+    quiet = await append_event(aconn, ts=START, kind="percept", who=WHO, body="telegram",
+                               payload={"text": "tanpa tempat"})
+
+    assert await expect.create_wait(aconn, source, now=START, settings=PATIENCE) is None
+    assert await expect.create_wait(aconn, quiet, now=START, settings=PATIENCE) is None
+    cur = await aconn.execute("SELECT count(*) FROM expectations")
+    assert (await cur.fetchone())[0] == 0
+
+
+def test_not_who_cue_matches_everyone_but_the_sender():
+    cue = {"kind": "percept", "place": GROUP, "not_who": WHO}
+
+    assert expect.matches_cue(cue, _group_msg("halo", who=OTHER)) is True
+    assert expect.matches_cue(cue, _group_msg("halo", who=WHO)) is False
+    assert expect.matches_cue({"kind": "percept", "who": WHO, "not_who": OTHER},
+                              _group_msg("halo", who=WHO)) is True
+
+
+async def test_another_person_taking_the_floor_ends_the_wait_silently(aconn):
+    fake = FakeLLM()
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=PATIENCE)
+    source = await append_event(aconn, ts=START, kind="percept", who=WHO, place=GROUP,
+                                body="telegram", payload={"text": "obrolan biasa"})
+    created = await expect.create_wait(aconn, source, now=START, settings=PATIENCE)
+
+    await _feed(kernel, _group_msg("aku jawab ya, bagian dua aman"))
+
+    exp_id = int(created.payload["expectation_id"])
+    assert await _status(aconn, exp_id) == "satisfied"
+    assert "expectation.fired" not in await _kinds(aconn)
+    assert "act.out" not in await _kinds(aconn)
+    assert fake.requests == []
+
+
+async def test_the_senders_own_follow_up_does_not_end_the_wait(aconn):
+    fake = FakeLLM()
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=PATIENCE)
+    source = await append_event(aconn, ts=START, kind="percept", who=WHO, place=GROUP,
+                                body="telegram", payload={"text": "obrolan biasa"})
+    created = await expect.create_wait(aconn, source, now=START, settings=PATIENCE)
+
+    await _feed(kernel, _group_msg("maksudku bagian dua", who=WHO))
+
+    exp_id = int(created.payload["expectation_id"])
+    assert await _status(aconn, exp_id) == "active"
+    assert fake.requests == []
+
+
+async def test_patience_fires_exactly_one_reply_when_nobody_takes_the_floor(aconn):
+    fake = FakeLLM([_say("bagian dua soal alur data")])
+    clock = FakeClock(START)
+    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), settings=PATIENCE)
+    kernel.register_body(RecordingBody())
+    source = await append_event(aconn, ts=START, kind="percept", who=WHO, place=GROUP,
+                                body="telegram", payload={"text": "obrolan biasa"})
+    created = await expect.create_wait(aconn, source, now=START, settings=PATIENCE)
+
+    clock.advance(timedelta(seconds=89))
+    await _tick(kernel, clock)
+    assert await _status(aconn, int(created.payload["expectation_id"])) == "active"
+    assert "act.out" not in await _kinds(aconn)
+
+    clock.advance(timedelta(seconds=1))
+    await _tick(kernel, clock)
+    assert "expectation.fired" in await _kinds(aconn)
+    assert await _status(aconn, int(created.payload["expectation_id"])) == "satisfied"
+
+    clock.advance(timedelta(minutes=5))
+    await _tick(kernel, clock)
+    cur = await aconn.execute("SELECT place, payload FROM events WHERE kind = 'act.out'")
+    replies = await cur.fetchall()
+    assert [place for place, _ in replies] == [GROUP]
+    assert "bagian dua soal alur data" in json.dumps(replies[0][1])
+    assert len(fake.requests) == 1
+
+
+async def test_an_addressed_turn_is_answered_without_a_wait(aconn):
+    fake = FakeLLM([_say("bagian dua soal alur data")])
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=PATIENCE)
+    kernel.register_body(RecordingBody())
+
+    await _feed(kernel, _group_msg("Mona, jelaskan bagian dua ya", addressed=True))
+
+    kinds = await _kinds(aconn)
+    assert kinds.count("act.out") == 1
+    assert "expectation.created" not in kinds
+    cur = await aconn.execute("SELECT place FROM events WHERE kind = 'act.out'")
+    assert await cur.fetchall() == [(GROUP,)]

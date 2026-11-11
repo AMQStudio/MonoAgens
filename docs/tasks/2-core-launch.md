@@ -72,10 +72,10 @@ May touch: `monoagens/cognition/signals.py`, `monoagens/cognition/situation.py`,
 Read first: [core.md](../core.md) §5–6, [core-math.md](../core-math.md) §4, §15
 May touch: `monoagens/expect.py`, `tests/test_expect.py`, `scenarios/`
 
-- [ ] 6.1 `wait` Expectation created on a go for a turn not allocated to the soul, window from `patience_seconds`.
-- [ ] 6.2 `not_who` cue: someone other than the sender takes the floor → silent.
-- [ ] 6.3 Addressed → no wait.
-- [ ] 6.4 Check: not addressed — someone else answers → silent, nobody → one reply; addressed → answers without waiting.
+- [x] 6.1 `wait` Expectation created on a go for a turn not allocated to the soul, window from `patience_seconds`.
+- [x] 6.2 `not_who` cue: someone other than the sender takes the floor → silent.
+- [x] 6.3 Addressed → no wait.
+- [x] 6.4 Check: not addressed — someone else answers → silent, nobody → one reply; addressed → answers without waiting.
 
 ## Part 7 — The desk and recall
 Read first: [core.md](../core.md) §4, §8, §9.4 (desk constants)
@@ -225,3 +225,25 @@ Part 5 notes (worker):
   when its vector is already stored, which saturates FOK. In the kernel flow the cue vector
   lands after appraisal, so candidates dominate there; the threshold still needs calibration
   with the real embedder before the gate uses FOK.
+
+Part 6 notes (worker):
+- `expect.create_wait(conn, event, *, now, settings, source=None)` is the go path's helper:
+  a turn not allocated to the soul (`addressed` false, a place) creates a `wait` row whose
+  `cue_time` is `now + patience_seconds` (the prior knob, read from `settings["knobs"]`) and
+  whose `cue_event` is `{kind: percept, place, not_who: event.who}`. An addressed turn or an
+  event without a place creates nothing (6.3). Nothing calls it yet: the gate that produces a
+  "go" lands in Part 8 (8.1–8.3), so 6.1's creation is pinned by tests and the helper waits for
+  its caller; `kernel.py` is outside this part's May-touch list.
+- `matches_cue` honours `not_who` (an event from that speaker does not match). `due` settles a
+  `wait` whose cue has `not_who` as `satisfied` when that cue event arrives — the floor was
+  taken, so the soul stays silent (6.2) — and only the `cue_time` tick fires it, which wakes
+  the PFC for one reply (6.4). Waits without `not_who` (e.g. scenario 18's "Budi menjawab")
+  keep the old semantics and still fire, so nothing already recorded changes meaning.
+- Scenario `scenarios/turn-taking/22_patience_turn_taking.yaml` failed 3/7 before the code and
+  passes 7/7 after: the sender's follow-up does not cancel the wait, another person's answer
+  settles it silently, an expired window produces exactly one reply. The scenario writes the
+  wait's `cue_time` by hand because the fake replay cannot call `create_wait` (no gate yet);
+  the window is 90 s to mirror `patience_seconds`.
+- `expect.py` is at 240 lines (budget 240); room came from removing single-use constants
+  (`_KINDS`, `_OPS`), a duplicated `row["policy"]` read in `settle`, a redundant rows/row dance
+  in `resolve`, and a temp in `_operator`. `uv run pytest`: 216 passed. Fake replay: 75/75.

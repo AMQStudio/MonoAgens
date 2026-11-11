@@ -14,8 +14,6 @@ from monoagens.store import (append_event, fire_expectation, insert_expectation,
 
 _UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 _RE = re.compile(r"^(\d+(?:\.\d+)?)\s*([smhd])$")
-_OPS = ("eq", "gt", "lt")
-_KINDS = ("promise", "wait", "predict", "guard")
 
 
 def tz(settings):
@@ -25,8 +23,7 @@ def tz(settings):
 
 def parse_duration(value):
     """Parse a duration like "2d", "6h", "30m", or "45s" into a timedelta."""
-    m = _RE.match(str(value).strip().lower())
-    if m is None:
+    if (m := _RE.match(str(value).strip().lower())) is None:
         raise ValueError(f"invalid duration: {value!r}")
     return timedelta(seconds=float(m[1]) * _UNITS[m[2]])
 
@@ -54,6 +51,8 @@ def matches_cue(pattern, event):
     fields = ("kind", "who", "place")
     if any(pattern.get(f) is not None and pattern[f] != getattr(event, f) for f in fields):
         return False
+    if pattern.get("not_who") is not None and pattern["not_who"] == event.who:
+        return False
     needle = pattern.get("text_like")
     haystack = str(event.payload.get("description") or event.payload.get("text") or "").lower()
     return needle is None or str(needle).lower() in haystack
@@ -64,8 +63,8 @@ def _operator(expect):
         return {"none": True}
     if "event_seen" in expect:
         seen = expect["event_seen"] if isinstance(expect["event_seen"], dict) else {}
-        source = dict(seen.get("pattern") or seen)
-        pattern = {key: value for key, value in source.items() if key != "within"}
+        pattern = {key: value for key, value in dict(seen.get("pattern") or seen).items()
+                   if key != "within"}
         within = expect.get("within") or seen.get("within")
         if not pattern or not within:
             raise ValueError("event_seen needs a pattern and a within window")
@@ -73,7 +72,7 @@ def _operator(expect):
         return {"event_seen": pattern, "within": str(within)}
     if "state" in expect or "key" in expect:
         key, op = expect.get("state") or expect.get("key"), expect.get("op")
-        if not isinstance(key, str) or op not in _OPS or "value" not in expect:
+        if not isinstance(key, str) or op not in ("eq", "gt", "lt") or "value" not in expect:
             raise ValueError("state needs a key, an op in eq|gt|lt and a value")
         return {"state": key, "op": str(op), "value": expect["value"]}
     raise ValueError(f"unknown expect operator: {expect!r}")
@@ -85,7 +84,7 @@ def validate(data, *, now, settings):
     if not about or not isinstance(raw, dict) or not raw:
         raise ValueError("expect needs about and a condition")
     kind = str(data.get("kind") or "promise")
-    if kind not in _KINDS:
+    if kind not in ("promise", "wait", "predict", "guard"):
         raise ValueError(f"unknown expectation kind: {kind!r}")
     weight, policy = float(data.get("weight", 0.5)), data.get("policy") or {"once": True}
     if not 0.0 <= weight <= 1.0:
@@ -113,10 +112,8 @@ def validate(data, *, now, settings):
 async def create(conn, data, *, now, settings, source):
     """Validate and store an expectation, recording its creation event."""
     row = validate(data, now=now, settings=settings)
-    limit = int(constants(settings)["max_active"])
-    count = (await (await conn.execute(
-        "SELECT count(*) FROM expectations WHERE status = 'active'")).fetchone())[0]
-    if count >= limit:
+    cur = await conn.execute("SELECT count(*) FROM expectations WHERE status = 'active'")
+    if (await cur.fetchone())[0] >= int(constants(settings)["max_active"]):
         raise ValueError("too many active expectations")
     who, place = row["who"] or source.who, row["place"] or source.place
     async with conn.transaction():
@@ -133,13 +130,24 @@ async def create(conn, data, *, now, settings, source):
                                   caused_by=source.id)
 
 
+async def create_wait(conn, event, *, now, settings, source=None):
+    """Create the patience Expectation for a go on a turn not allocated to the soul."""
+    if event.payload.get("addressed") is True or not event.place:
+        return None
+    seconds = float(settings.get("knobs", {})["patience_seconds"])
+    data = {"kind": "wait", "about": "waiting for someone else to take the floor",
+            "cue_time": {"at": (now + timedelta(seconds=seconds)).isoformat()},
+            "cue_event": {"kind": "percept", "place": event.place, "not_who": event.who},
+            "expect": {"none": True}}
+    return await create(conn, data, now=now, settings=settings, source=source or event)
+
+
 async def resolve(conn, exp_id, status, *, now):
     """Resolve an expectation by id as satisfied or dropped."""
-    rows = await read_expectations(conn, "ex.id = %s", (exp_id,))
-    row = rows[0] if rows else None
-    if row is None or status not in ("satisfied", "dropped"):
+    found = await read_expectations(conn, "ex.id = %s", (exp_id,))
+    if not found or status not in ("satisfied", "dropped"):
         raise ValueError(f"invalid resolve: {exp_id} {status!r}")
-    await resolve_expectation(conn, {**row, "fired_event": None}, now, status)
+    await resolve_expectation(conn, {**found[0], "fired_event": None}, now, status)
 
 
 async def is_met(conn, condition, now):
@@ -179,9 +187,11 @@ async def due(conn, event, *, now, settings):
         where, params = "ex.status = 'active' AND ex.cue_event IS NOT NULL", ()
     fired = []
     for row in await read_expectations(conn, where, params):
-        if row["kind"] == "guard":
+        if row["kind"] == "guard" or (event.kind != "tick"
+                                      and not matches_cue(row["cue_event"], event)):
             continue
-        if event.kind != "tick" and not matches_cue(row["cue_event"], event):
+        if event.kind != "tick" and row["kind"] == "wait" and row["cue_event"].get("not_who"):
+            await resolve_expectation(conn, row, now, "satisfied")  # patience held
             continue
         if not await is_met(conn, row["condition"], now):
             fired.append(await fire_expectation(conn, row, now))
@@ -200,7 +210,7 @@ async def settle(conn, exp_id, *, now, settings):
     if row is None or row["status"] != "fired":
         return
     policy = row["policy"] or {}
-    max_fires = (row["policy"] or {}).get("max_fires")
+    max_fires = policy.get("max_fires")
     maxed = max_fires is not None and row["fire_count"] >= int(max_fires)
     if policy.get("once") is True or maxed:
         status = "satisfied" if policy.get("once") is True else "dropped"
