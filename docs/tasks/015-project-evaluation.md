@@ -1,6 +1,6 @@
 # 015 — Project: honest human-likeness evaluation
 Status: todo | Wave: 5 | Depends on: 014
-Read first: [project.md](../project.md) §3
+Read first: [project.md](../project.md) §4
 May touch: `docs/` results file (new), `scripts/`
 
 ## Goal

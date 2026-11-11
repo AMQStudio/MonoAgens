@@ -21,7 +21,35 @@ and may change without a new decision. Nothing here may change the core
 - **Draft**: installer (one command from clone to a talking soul); README with the brain table,
   install, talk, tune with replay; compressed daily backups with an owner-set retention (D14).
 
-## 2. Documents (D32.14)
+## 2. Deployment files
+Four files, each with one job; none holds what belongs to another (D7, D35, D36).
+
+| File | Holds | Read | Changed by |
+|---|---|---|---|
+| `.env` | secrets and endpoints: model keys and URLs, bot tokens, database URL | every start | owner or technician |
+| `config.yaml` | this deployment's non-secret settings: timezone, owner settings, runtime, bodies and plugins | every start | owner; owner settings also in chat |
+| `soul.yaml` | the birth certificate: name, language, persona, principles ([core.md §9.3](core.md)) | once, at birth | nobody afterwards; identity changes in chat |
+| `prior/` | instincts: knobs, calibration, constants ([core.md §9.4](core.md)) | once, at birth | developers, with replay |
+
+**`config.yaml`** (format version 1, **Draft**):
+
+```yaml
+timezone: Asia/Jakarta              # where the soul lives; used for <now>
+owner_settings:                     # initial values; changes made in chat are events and win
+  daily_token_budget: 300000
+  quiet_hours: { from: "22:00", to: "06:00" }
+runtime:
+  tick_seconds: 30
+  sleep: { idle_minutes: 30, retry_minutes: 30, hour: 2 }
+bodies:                             # non-secret options only; tokens stay in .env
+  telegram: { enabled: true }
+  cli: { enabled: true }
+plugins: []                         # installed plugins, e.g. [work-modes]
+```
+
+The rule for every setting: the file gives the starting value; what the soul's books say wins.
+
+## 3. Documents (D32.14)
 | File | For | Holds |
 |---|---|---|
 | `README.md` (root) | people | what it is, install, run, tune with replay |
@@ -31,19 +59,20 @@ and may change without a new decision. Nothing here may change the core
 | `docs/core-math.md` | scientists | every formula, why it was chosen, sources |
 | `docs/middleware.md`, `bodies.md`, `plugins.md`, `project.md` | everyone | one specification per layer |
 | `prior/` (root) | developers | default prior values: data, tuned with replay |
+| `config.yaml`, `soul.yaml`, `.env.example` (root) | owners | deployment files (§2) |
 | `docs/tasks/` | workers | one file per work package, in order |
 
 Rules for documents: one layer = one file, split only when a file grows too long; rulings and
 design live together, each rule tagged with its Dxx; formats live in the layer that owns them;
 history lives in git, not in the documents.
 
-## 3. Evaluation (later)
+## 4. Evaluation (later)
 Per-behavior parity against a human baseline in the same group: reply timing, messages per hour
 vs 1/n, when-to-speak precision/recall against human annotation, silence where it should speak,
 interruptions where it should be quiet, promise keeping, recall after 1/7/30 days, blind "which
 one is the bot" (target ≈ 50%). Pre-registered metrics. Public claims phrased as "≥ X% of human
 baseline on these N behaviors".
 
-## 4. Later ideas (not scheduled)
+## 5. Later ideas (not scheduled)
 - A small learned classifier for the gate from recorded decisions (> 10k labeled).
 - Multi-process deployment (inbox table with `FOR UPDATE SKIP LOCKED`).

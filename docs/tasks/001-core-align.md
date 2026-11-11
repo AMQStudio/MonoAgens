@@ -1,7 +1,7 @@
 # 001 — Core: align the code with the core spec (Track A2)
 Status: todo | Wave: 1 | Depends on: —
-Read first: [core.md](../core.md) §3–§9, §9.3–9.4
-May touch: `monoagens/` (all), `sql/`, `soul.yaml`, `scripts/replay.py`, `scenarios/`, `tests/`, `prior/`
+Read first: [core.md](../core.md) §3–§9, [project.md](../project.md) §2
+May touch: `monoagens/` (all), `sql/`, `soul.yaml`, `config.yaml` (new), `scripts/replay.py`, `scenarios/`, `tests/`, `prior/`
 
 ## Goal
 Bring the merged Track A code in line with the frozen core spec. This is the only task allowed to change the shared files (`kernel.py`, `store.py`, `sql/schema.sql`, `soul.yaml`).
@@ -16,7 +16,7 @@ Bring the merged Track A code in line with the frozen core spec. This is the onl
 - [ ] T7 Injected clock everywhere (no `datetime.now()` in the core); replay uses event times.
 - [ ] T8 Slow work off the loop: PFC, classifier, embedding and sleep as background jobs whose results return as events; one PFC job per place; re-wake once if a new event arrived meanwhile.
 - [ ] T9 Numbered SQL migrations with a version table and a backup before migrating; pairing code for the first owner.
-- [ ] T10 Identity as birth content: `soul.yaml` becomes the birth certificate; cognition numbers move to the default prior in `prior/` as knobs / calibration / constants (core.md §9.4); everything else leaves `soul.yaml` (owner by pairing, body settings to `.env`); identity stored in `state: identity` after birth; an `identity_changing` capability for owner changes.
+- [ ] T10 Identity as birth content: `soul.yaml` becomes the birth certificate; cognition numbers move to the default prior in `prior/` as knobs / calibration / constants (core.md §9.4); the rest of today's `soul.yaml` splits by project.md §2: `timezone`, sleep, clock, budget and enabled bodies go to a new `config.yaml`; memory and expectation numbers go to the prior's constants; owner ids are replaced by pairing; secrets stay in `.env`; identity stored in `state: identity` after birth; an `identity_changing` capability for owner changes.
 
 ## Done when
 All tests and replay pass; grep shows no platform name, no world action and no direct clock or random call in the core.

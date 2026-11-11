@@ -32,7 +32,8 @@ language plus raw data; like a motor cortex, it turns an intention into native a
   one age-discounted percept; an addressed message still trips the circuit breaker (D37, D40).
 - Own retries, rate limits, reconnects and platform quirks; errors become events, never crashes
   of the loop.
-- Tokens and URLs come from `.env`; nothing about a body lives in the core or in `soul.yaml`.
+- Tokens and URLs come from `.env`; non-secret options (enabled or not, …) from `config.yaml`;
+  nothing about a body lives in the core or in `soul.yaml`.
 
 ## 3. Present and planned bodies
 | Body | Status | Notes |

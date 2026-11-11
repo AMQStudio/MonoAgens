@@ -58,8 +58,8 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
    adapter, it does not go in.
 7. **Pure async.** No blocking calls inside `async def`. CPU work (embedding) goes through
    `asyncio.to_thread`.
-8. **Configuration lives outside code.** Models, keys, URLs come from `.env`. Identity comes
-   from the birth certificate (`soul.yaml`); weights and thresholds from the prior in `prior/` (D35).
+8. **Configuration lives outside code.** Models, keys, URLs come from `.env`; deployment settings
+   from `config.yaml`. Identity comes from the birth certificate (`soul.yaml`); weights and thresholds from the prior in `prior/` (D35).
    No magic numbers in code.
 9. **Signals are pure.** A cognition signal only reads its `Situation` and returns a number in
    [0, 1]. No writes, no LLM calls, no I/O beyond what `Situation` already holds.

@@ -58,7 +58,8 @@ The one middleware that is always present.
   `origin_actor` in the action hook, and the private-content filter in the context hook
   (D24, D32.3–4).
 - **Default owner policy**, active out of the box: the two absolute lines, the daily model
-  budget, quiet hours. Budget and quiet hours are owner settings the owner may tighten or loosen;
+  budget, quiet hours. Budget and quiet hours are owner settings (starting values in `config.yaml`, later changes in
+  chat as events) the owner may tighten or loosen;
   plugins may add rules inside the policy, never remove it (D22, D24, D36).
 
 ## 4. Commands & tools
@@ -82,6 +83,7 @@ The one middleware that is always present.
 - Plugins are trusted code installed by the owner and run in-process (the Home Assistant model).
   The owner policy holds against plugins that follow the contract; it is not a sandbox against
   malicious code, and the docs say so (D32.11).
+- The installed plugins are listed in `config.yaml` ([project.md §2](project.md)).
 - Uninstalling removes a plugin's organs, middleware, rules and knob offsets; its events stay in
   the log as history.
 - **Draft**: installed by the owner through the one-command installer or a command; a local

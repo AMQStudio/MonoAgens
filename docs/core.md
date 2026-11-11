@@ -419,7 +419,6 @@ ship one, used only at birth.
 ```yaml
 name: Mona
 language: id                # the language it speaks with the owner
-timezone: Asia/Jakarta
 persona: |                  # any language
   Calm, honest, straight to the point. Speaks only as much as needed.
 principles:
@@ -427,8 +426,9 @@ principles:
   - Keep the owner's private matters private; never bring them up in other places.
 ```
 
-Nothing else belongs in it: the owner is found by pairing (§8), body settings live in `.env`,
-and every number lives in the prior.
+Nothing else belongs in it (D35): the owner is found by pairing (§8); secrets live in `.env`;
+deployment settings — timezone, budget, quiet hours, bodies, plugins — live in `config.yaml`
+([project.md §2](project.md)); every behavioral number lives in the prior.
 
 ### 9.4 Prior (format version 1)
 A soul's instincts: a plain folder with layers 1–2 of learned state, loaded at birth (D25, D30,
