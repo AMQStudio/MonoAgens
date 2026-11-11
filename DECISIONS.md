@@ -342,6 +342,30 @@ Refines D6 and D24.**
 Status of amended decisions: D2 act list, D26 counts → replaced by D32.1–2. D5, D22 → superseded
 by D24. D18 → superseded by D25. D14 wording "forget" → "fade" (D32.5).
 
+**D33 — Running for years: slow work off the loop, newcomer shyness, migrations, pairing.**
+1. *Slow work runs beside the loop; its results come back as events.* The single consumer only
+   records and decides (milliseconds). PFC calls, classifier calls, embedding and sleep run as
+   background jobs whose results enter the queue as events, like `act.result`. At most one PFC
+   job is in flight per place, so a conversation stays in order; other places proceed. If a new
+   message arrived in that place while the PFC was thinking, the result is applied and the PFC
+   is woken once more with the newest context. Sleep is just another slow job, so it never
+   blocks incoming messages. Invariant 3 is unchanged: one consumer decides.
+2. *Newcomer shyness.* In a new place θ starts slightly higher and relaxes toward the normal
+   value as interactions in that place accumulate (one extra term in the existing θ formula).
+3. *Where tuning comes from.* The soul's general character (dispositions) learns from the owner
+   and the classifier (D32.7). How it behaves **in a given place or with a given person** adapts
+   from that place's and those people's suggestions, criticism and reactions, stored as layer 3
+   (per-place and per-person tuning). Like people: you adapt to a group without changing who you
+   are.
+4. *Schema migrations.* Numbered SQL files and a small version table, applied automatically at
+   start, with an automatic backup before any migration. No migration framework.
+5. *Becoming the owner without technical steps.* On first start the soul shows a short pairing
+   code; the first person who sends that code from any organ becomes the owner. Later owner
+   changes need the current owner (absolute line 1).
+6. *Release gate.* Before any release: end-to-end tests with a real model, a real database, long
+   multi-day conversations and real people. Replay also produces a per-model report (scenarios
+   passed, too chatty / too quiet), from which recommended models are listed for users.
+
 ## Accepted in principle, details pending
 
 (None. P1 was detailed as D27.)
