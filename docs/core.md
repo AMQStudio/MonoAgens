@@ -205,9 +205,11 @@ the prompt cache holds (D2, D32, D46). The soul can act in any body from any bod
 - `communicative` capabilities count as speaking for the talk-rate drive and the forward model.
 
 **Reaching a person** (D46). A communicative act may name a person instead of a place
-(`to: person`). The core resolves it to that person's direct place from the log and the alias
-map — by default the body where the person was last active — before the action hook; a
-middleware hint may suggest another route (lever 2). No known direct place → the act fails with
+(`to: person`, optionally `via: body`). The core resolves it to that person's direct place from
+the log and the alias map — on the named body, or by default the body where the person was last
+active — before the action hook; a middleware hint may suggest another route (lever 2). When
+several places fit an instruction ("send it to the group"), the soul asks which one instead of
+guessing, because a message sent to the wrong place cannot be taken back. No known direct place → the act fails with
 an honest `act.result` ("no way to reach Budi yet"). A communicative act aimed at a place other
 than the current one is drafted with a desk built for the target place's audience (§8, absolute
 line 2), never with the current desk, so what the soul says to Budi is written as it would be
@@ -224,7 +226,7 @@ non-communicative capability, `recall(query | event_id, place?, from?, to?)`: a 
 the soul's own log and memories — by time range (no query lists the episodes in that range),
 along `derived_from` to the original events, and by text search over event payloads, so faded or
 unsummarized messages are still found. It obeys absolute line 2 and reports what it searched and
-found, "nothing" included. Its second capability, `share(item | episode, to: person)` (D46), records
+found, "nothing" included. Its second capability, `share(item | episode, to: person | place)` (D46; a place means everyone present there), records
 consent to show private content to someone new (§8, absolute line 2); it passes the action hook
 only when the chain's `origin_actor` is part of that content's audience.
 

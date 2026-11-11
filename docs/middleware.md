@@ -68,7 +68,7 @@ The one middleware that is always present.
   never let private content reach someone the core would refuse. It may also ask for more than
   consent before sharing (confirm before forwarding any file; internal documents never go
   outside the organization) (D46).
-- **Routes to a person** (D46): a hint via lever 2 when the default (the body where the person
+- **Routes to a person** (D46): a hint via lever 2, used only when the owner did not name a body, when the default (the body where the person
   was last active) is wrong, such as email for work, WhatsApp in the evening.
 - **Default owner policy**, active out of the box: the two absolute lines, the daily model
   budget, quiet hours. Budget and quiet hours are owner settings (starting values in `config.yaml`, later changes in
