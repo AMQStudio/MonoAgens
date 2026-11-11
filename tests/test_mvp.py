@@ -278,7 +278,7 @@ async def test_mvp_d_sleep_consolidation_and_retrieval(aconn):
     clock.set_time(START + timedelta(minutes=45))
     await _tick(kernel, clock)
 
-    memories = await (await aconn.execute("SELECT text, embedding, source_events "
+    memories = await (await aconn.execute("SELECT text, embedding, derived_from "
                                           "FROM memories ORDER BY id")).fetchall()
     assert [row[0] for row in memories] == [item["text"] for item in SLEEP_ARGS["items"]]
     assert all(len(row[1].to_list()) == 384 for row in memories)

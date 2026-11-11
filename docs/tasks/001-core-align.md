@@ -10,7 +10,7 @@ Bring the merged Track A code in line with the frozen core spec. This is the onl
 - [x] T1 Thought acts `think, act, expect, resolve, revise`; `say`/`react` become Telegram and CLI capabilities (core.md §9.1); silence = a wake without `act`; `msg.in` becomes `percept` with a description and optional data (§9.2); `act.out`/`act.result` replace `msg.out`/`react.out` in code, tests and replay.
 - [x] T2 Three hooks (inbound, context, action) with owner-policy slots first and last, shared vs organ-own scope, collision check at boot.
 - [x] T3 Provenance and privacy: `origin_actor` on events (inherited along `caused_by`), `identity_changing` check in the action hook; `place` + `private` on memories and the context-hook filter.
-- [ ] T4 Lineage: `derived_from` on memories, expectations and vectors; replace the `event_vectors` no-delete trigger with the two dedicated paths (fade, hard forget) — stubs that write their events are fine.
+- [x] T4 Lineage: `derived_from` on memories, expectations and vectors; replace the `event_vectors` no-delete trigger with the two dedicated paths (fade, hard forget) — stubs that write their events are fine.
 - [ ] T5 Budget: `model.call` for every model call; the budget term in θ and `budget.exhausted` (no thrift mode).
 - [ ] T6 Expectation schema with the four kinds (`promise`, `wait`, `predict`, `guard`).
 - [ ] T7 Injected clock everywhere (no `datetime.now()` in the core); replay uses event times.
@@ -42,3 +42,12 @@ All tests and replay pass; grep shows no platform name, no world action and no d
   `PFCContext.memories`: a private `MemoryHit` stays only in its own place or an owner direct
   chat. Sleep accepts `place` and `private`; retrieval returns `MemoryHit` (a `str` with
   `place` and `private`).
+- T4: `derived_from bigint[]` replaces `memories.source_events` (old databases are migrated and
+  the column dropped); expectations record `derived_from = {source.id}`; event vectors record
+  their own event id. `event_vectors` UPDATE is still rejected; DELETE is allowed only while
+  `monoagens.allowed_vector_delete` is `on`, which only `fade()` and `forget_hard()` set.
+  `events` UPDATE is allowed only with `monoagens.forgetting` set, only when the payload becomes
+  `{"forgotten": true}` and no metadata changes. `forget_hard()` scrubs payloads and deletes the
+  `derived_from` lineage (vectors, memories, expectations), then writes `forget.hard`; `fade()`
+  releases vectors older than a caller-given cutoff that no memory or expectation derives from
+  and writes `fade.done` (nothing eligible → no event).

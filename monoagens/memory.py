@@ -210,7 +210,7 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
         for item, vector in zip(items, vectors):
             await conn.execute(
                 "INSERT INTO memories (who, place, text, embedding, importance, private, "
-                "valid_from, last_accessed_at, source_events) "
+                "valid_from, last_accessed_at, derived_from) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (item.get("who") or None, item.get("place") or None, str(item["text"]),
                  Vector(vector), float(item.get("importance", 0.5)),

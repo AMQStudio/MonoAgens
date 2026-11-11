@@ -116,7 +116,7 @@ async def create(conn, data, *, now, soul, source):
     async with conn.transaction():
         values = (who, place, row["about"], Jsonb(row["cue_time"]), Jsonb(row["cue_event"]),
                   Jsonb(row["expect"]), row["intent"], row["weight"], Jsonb(row["policy"]),
-                  row["next_check_at"], source.id, row["expires_at"])
+                  row["next_check_at"], source.id, [source.id], row["expires_at"])
         exp_id = await insert_expectation(conn, values)
         payload = {"expectation_id": exp_id, "about": row["about"], "weight": row["weight"],
                    "policy": row["policy"], "expires_at": row["expires_at"].isoformat()}

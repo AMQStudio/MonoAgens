@@ -71,17 +71,45 @@ def test_delete_event_is_rejected(conn):
         conn.execute("DELETE FROM events WHERE id = %s", (event_id,))
 
 
-def test_event_vectors_are_append_only(conn):
+def test_event_vectors_are_write_once(conn):
     event_id = conn.execute(
         "INSERT INTO events (kind) VALUES ('percept') RETURNING id"
     ).fetchone()[0]
     conn.execute("INSERT INTO event_vectors (event_id, embedding) VALUES (%s, %s)",
                  (event_id, [0.0] * 384))
-    with pytest.raises(psycopg.Error, match="events table is append-only"):
+    with pytest.raises(psycopg.Error, match="event vectors are write-once"):
         conn.execute("UPDATE event_vectors SET embedding = %s WHERE event_id = %s",
                      ([1.0] * 384, event_id))
-    with pytest.raises(psycopg.Error, match="events table is append-only"):
+
+
+def test_direct_vector_delete_is_rejected(conn):
+    event_id = conn.execute(
+        "INSERT INTO events (kind) VALUES ('percept') RETURNING id"
+    ).fetchone()[0]
+    conn.execute("INSERT INTO event_vectors (event_id, embedding) VALUES (%s, %s)",
+                 (event_id, [0.0] * 384))
+    with pytest.raises(psycopg.Error,
+                       match="event vectors leave only by fading or hard forgetting"):
         conn.execute("DELETE FROM event_vectors WHERE event_id = %s", (event_id,))
+
+
+def test_lineage_columns_exist(conn):
+    expectations = {row[0] for row in conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'expectations'").fetchall()}
+    memories = {row[0] for row in conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'memories'").fetchall()}
+    vectors = {row[0] for row in conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'event_vectors'").fetchall()}
+    assert "derived_from" in expectations
+    assert "derived_from" in memories
+    assert "derived_from" in vectors
+    assert "source_events" not in memories
+    assert conn.execute("SELECT derived_from FROM memories LIMIT 0").description is not None
+    assert conn.execute("SELECT derived_from FROM expectations LIMIT 0").description is not None
+    assert conn.execute("SELECT derived_from FROM event_vectors LIMIT 0").description is not None
 
 
 def test_new_cognition_columns_exist(conn):

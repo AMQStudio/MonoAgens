@@ -21,10 +21,22 @@ ALTER TABLE events ADD COLUMN IF NOT EXISTS origin_actor text;
 
 CREATE INDEX IF NOT EXISTS idx_events_place_id ON events (place, id);
 
--- The Log is immutable: reject UPDATE and DELETE.
+-- The Log is immutable: reject INSERT-after-the-fact rewrites, UPDATE and DELETE.
+-- The one UPDATE exception is hard forgetting: a dedicated function sets
+-- monoagens.forgetting and replaces the payload with {"forgotten": true} only.
 CREATE OR REPLACE FUNCTION events_immutable() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
+    IF TG_OP = 'UPDATE'
+       AND current_setting('monoagens.forgetting', true) = 'on'
+       AND NEW.payload = '{"forgotten": true}'::jsonb
+       AND (NEW.id, NEW.ts, NEW.kind, NEW.who, NEW.place, NEW.body, NEW.caused_by,
+            NEW.origin_actor)
+           IS NOT DISTINCT FROM
+           (OLD.id, OLD.ts, OLD.kind, OLD.who, OLD.place, OLD.body, OLD.caused_by,
+            OLD.origin_actor) THEN
+        RETURN NEW;
+    END IF;
     RAISE EXCEPTION 'events table is append-only';
 END;
 $$;
@@ -35,17 +47,45 @@ CREATE TRIGGER events_no_update_delete
     FOR EACH ROW
     EXECUTE FUNCTION events_immutable();
 
--- event_vectors: one embedding per message, written once (append-only).
+-- event_vectors: one embedding per event, written once. Rows leave only by fading
+-- or hard forgetting, each through one dedicated path that writes an event.
 CREATE TABLE IF NOT EXISTS event_vectors (
-    event_id  bigint PRIMARY KEY REFERENCES events (id),
-    embedding vector(384) NOT NULL
+    event_id     bigint PRIMARY KEY REFERENCES events (id),
+    embedding    vector(384) NOT NULL,
+    derived_from bigint[] NOT NULL DEFAULT '{}'
 );
 
+ALTER TABLE event_vectors ADD COLUMN IF NOT EXISTS derived_from bigint[] NOT NULL DEFAULT '{}';
+
+CREATE OR REPLACE FUNCTION event_vectors_write_once() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'event vectors are write-once';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION event_vectors_guarded_delete() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF current_setting('monoagens.allowed_vector_delete', true) = 'on' THEN
+        RETURN OLD;
+    END IF;
+    RAISE EXCEPTION 'event vectors leave only by fading or hard forgetting';
+END;
+$$;
+
 DROP TRIGGER IF EXISTS event_vectors_no_update_delete ON event_vectors;
-CREATE TRIGGER event_vectors_no_update_delete
-    BEFORE UPDATE OR DELETE ON event_vectors
+DROP TRIGGER IF EXISTS event_vectors_no_update ON event_vectors;
+CREATE TRIGGER event_vectors_no_update
+    BEFORE UPDATE ON event_vectors
     FOR EACH ROW
-    EXECUTE FUNCTION events_immutable();
+    EXECUTE FUNCTION event_vectors_write_once();
+
+DROP TRIGGER IF EXISTS event_vectors_guarded_delete ON event_vectors;
+CREATE TRIGGER event_vectors_guarded_delete
+    BEFORE DELETE ON event_vectors
+    FOR EACH ROW
+    EXECUTE FUNCTION event_vectors_guarded_delete();
 
 -- state: the Status Board (a projection; may be dropped and rebuilt).
 CREATE TABLE IF NOT EXISTS state (
@@ -71,12 +111,15 @@ CREATE TABLE IF NOT EXISTS expectations (
     last_fired_at timestamptz,
     fire_count    integer NOT NULL DEFAULT 0,
     source_event  bigint REFERENCES events (id),
+    derived_from  bigint[] NOT NULL DEFAULT '{}',
     expires_at    timestamptz NOT NULL,
     created_at    timestamptz NOT NULL DEFAULT now(),
     origin        text NOT NULL DEFAULT 'pfc'
 );
 
 ALTER TABLE expectations ADD COLUMN IF NOT EXISTS origin text NOT NULL DEFAULT 'pfc';
+ALTER TABLE expectations
+    ADD COLUMN IF NOT EXISTS derived_from bigint[] NOT NULL DEFAULT '{}';
 
 CREATE INDEX IF NOT EXISTS idx_expectations_next_check_at
     ON expectations (next_check_at);
@@ -94,7 +137,7 @@ CREATE TABLE IF NOT EXISTS memories (
     valid_from       timestamptz NOT NULL DEFAULT now(),
     valid_to         timestamptz,
     superseded_by    bigint REFERENCES memories (id),
-    source_events    bigint[] NOT NULL DEFAULT '{}',
+    derived_from     bigint[] NOT NULL DEFAULT '{}',
     created_at       timestamptz NOT NULL DEFAULT now(),
     last_accessed_at timestamptz NOT NULL DEFAULT now(),
     use_count        integer NOT NULL DEFAULT 0
@@ -102,3 +145,15 @@ CREATE TABLE IF NOT EXISTS memories (
 
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS use_count integer NOT NULL DEFAULT 0;
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS private boolean NOT NULL DEFAULT false;
+
+-- Lineage was named source_events before T4; keep old databases idempotent.
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS derived_from bigint[] NOT NULL DEFAULT '{}';
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name = 'memories' AND column_name = 'source_events') THEN
+        EXECUTE 'UPDATE memories SET derived_from = derived_from || source_events';
+        EXECUTE 'ALTER TABLE memories DROP COLUMN source_events';
+    END IF;
+END;
+$$;

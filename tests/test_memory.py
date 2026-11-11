@@ -162,7 +162,7 @@ async def test_sleep_writes_memories_core_memory_and_never_touches_raw_events(ac
     assert done.payload["last_event_id"] == max_before
 
     rows = await (await aconn.execute(
-        "SELECT text, embedding, importance, source_events FROM memories ORDER BY id")).fetchall()
+        "SELECT text, embedding, importance, derived_from FROM memories ORDER BY id")).fetchall()
     assert [row[0] for row in rows] == [item["text"] for item in SLEEP_ARGS["items"]]
     assert all(len(row[1].to_list()) == 384 for row in rows)
     assert all(max_before in row[3] for row in rows)
