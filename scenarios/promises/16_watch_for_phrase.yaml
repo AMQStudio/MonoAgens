@@ -31,3 +31,23 @@ steps:
     who: person:tg:6003
     place: space:tg:-10099
     text: "server down lagi nih guys"
+model_answers:
+  - step: 1
+    tool: decide
+    calls:
+      - name: expect
+        arguments:
+          about: kabari owner kalau ada yang menyebut server down
+          kind: promise
+          cue_event: {kind: percept, text_like: "server down"}
+          expect: {none: true}
+          intent: beri tahu owner bahwa server down disebut di grup
+          weight: 0.8
+          policy: {once: true}
+  - step: 4
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: telegram.say
+          arguments: {text: "Ada yang bilang server down di grup barusan."}

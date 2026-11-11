@@ -2,13 +2,14 @@
 """Replay YAML scenarios through the real kernel to tune the cognition layer.
 
 Usage:
-    uv run python scripts/replay.py                  # every scenarios/*.yaml
+    uv run python scripts/replay.py                  # every scenarios/<function>/*.yaml
     uv run python scripts/replay.py --fake           # no LLM, no embeddings
-    uv run python scripts/replay.py scenarios/04_group_mention.yaml
+    uv run python scripts/replay.py scenarios/turn-taking/04_group_mention.yaml
 
 Real mode talks to the OpenAI-compatible endpoint in .env and spends tokens;
-it prints a token report at the end. Fake mode is free and only checks
-appraisal decisions, so reminder/recall expectations usually fail there by design.
+it prints a token report at the end. Fake mode is free: each scenario carries
+recorded model answers (`model_answers`) that the scripted PFC replays, so the
+reminder and recall behaviors are deterministic without an LLM.
 
 The replay database must end with "_replay"; its schema is rebuilt for every
 scenario, so nothing here can touch the production database.
@@ -149,6 +150,7 @@ class Tracker:
     usage: Usage = field(default_factory=Usage)
     prompts: list[tuple[int, str]] = field(default_factory=list)
     step_index: int = 0
+    answers_used: dict[tuple[int, str], int] = field(default_factory=dict)
 
     def record_prompt(self, content: str) -> None:
         """Store one prompt with the step that produced it."""
@@ -210,23 +212,41 @@ def _fake_sleep_arguments(messages: Sequence[dict[str, Any]]) -> dict[str, Any]:
 
 
 class FakePFC:
-    """A scripted PFC: always say "ok" when woken, keep one memory on sleep."""
+    """A scripted PFC: replay recorded answers, else say "ok" and keep one memory."""
 
-    def __init__(self, tracker: Tracker) -> None:
-        """Share the tracker so fake calls are counted."""
+    def __init__(self, tracker: Tracker,
+                 answers: dict[tuple[int, str], list[list[ToolCall]]] | None = None) -> None:
+        """Share the tracker and the scenario's recorded answers."""
         self._tracker = tracker
+        self._answers = answers or {}
+
+    def _recorded(self, tool: str) -> list[ToolCall] | None:
+        """Return the next recorded call list for this step, or None when none is due."""
+        key = (self._tracker.step_index, tool)
+        queue = self._answers.get(key)
+        if not queue:
+            return None
+        used = self._tracker.answers_used.get(key, 0)
+        self._tracker.answers_used[key] = used + 1
+        return list(queue[used]) if used < len(queue) else None
 
     async def decide(self, context: PFCContext) -> list[ToolCall]:
-        """Always answer with say(text="ok")."""
+        """Return the recorded answer for this step, else say(text="ok")."""
         self._tracker.usage.calls += 1
         self._tracker.record_prompt(_fake_context_text(context))
+        recorded = self._recorded("decide")
+        if recorded is not None:
+            return recorded
         return [ToolCall("act", {"capability": "telegram.say", "arguments": {"text": "ok"}})]
 
     async def call(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], *,
                    tool_choice: str = "required") -> list[ToolCall]:
-        """Answer sleep with store_memories and everything else with say("ok")."""
+        """Return the recorded answer for this step, else store one sleep memory."""
         self._tracker.usage.calls += 1
         self._tracker.record_prompt(str(messages[-1].get("content") or ""))
+        recorded = self._recorded("call")
+        if recorded is not None:
+            return recorded
         names = {tool["function"]["name"] for tool in tools}
         if "store_memories" in names:
             return [ToolCall("store_memories", _fake_sleep_arguments(messages))]
@@ -285,6 +305,7 @@ class Scenario:
     description: str
     steps: list[dict[str, Any]]
     expectations: list[Any]
+    answers: dict[tuple[int, str], list[list[ToolCall]]]
     zone: ZoneInfo
 
 
@@ -350,7 +371,22 @@ def load_scenario(path: pathlib.Path, zone: ZoneInfo) -> Scenario:
             raise ValueError(f"{path}: step {index} needs text, advance, or restart")
     return Scenario(path=path, name=str(data.get("name") or path.stem),
                     description=str(data.get("description") or ""), steps=steps,
-                    expectations=list(data.get("expectations") or []), zone=zone)
+                    expectations=list(data.get("expectations") or []),
+                    answers=load_answers(path, data), zone=zone)
+
+
+def load_answers(path: pathlib.Path,
+                 data: dict[str, Any]) -> dict[tuple[int, str], list[list[ToolCall]]]:
+    """Read the recorded model answers, keyed by step and tool (`decide` or `call`)."""
+    answers: dict[tuple[int, str], list[list[ToolCall]]] = {}
+    for index, entry in enumerate(data.get("model_answers") or [], 1):
+        if not isinstance(entry, dict):
+            raise ValueError(f"{path}: model_answers[{index}] must be a mapping")
+        step, tool = int(entry.get("step") or 0), str(entry.get("tool") or "decide")
+        calls = [ToolCall(str(raw["name"]), dict(raw.get("arguments") or {}))
+                 for raw in entry.get("calls") or []]
+        answers.setdefault((step, tool), []).append(calls)
+    return answers
 
 
 def parse_at(value: Any, clock: FakeClock, zone: ZoneInfo) -> datetime:
@@ -398,13 +434,14 @@ class ReplayRunner:
         self.clock = FakeClock()
         self.conn: psycopg.AsyncConnection[Any] | None = None
         self.kernel: RecordingKernel | None = None
+        self.answers: dict[tuple[int, str], list[list[ToolCall]]] = {}
         self._last_id = 0
         self._message_id = 0
 
     def _make_pfc(self) -> Any:
-        """Build a fake PFC or a real HTTP-tracked PFC."""
+        """Build a fake PFC with the scenario's answers, or a real HTTP-tracked PFC."""
         if self.fake:
-            return FakePFC(self.tracker)
+            return FakePFC(self.tracker, self.answers)
         client = httpx.AsyncClient(
             transport=UsageTransport(httpx.AsyncHTTPTransport(), self.tracker), timeout=90.0)
         return PFC(self.llm["base_url"], self.llm["api_key"], self.llm["model"],
@@ -424,6 +461,8 @@ class ReplayRunner:
         """Reset the schema and replay one scenario from the first step."""
         start_usage = Usage(**vars(self.tracker.usage))
         self.tracker.prompts.clear()
+        self.tracker.answers_used.clear()
+        self.answers = scenario.answers
         self._last_id = 0
         self._message_id = 0
         self.clock = FakeClock(initial_time=self._initial_time(scenario))
@@ -837,14 +876,14 @@ def write_report(text: str, when: datetime) -> pathlib.Path:
 
 
 def scenario_paths(args: Sequence[str]) -> list[pathlib.Path]:
-    """Resolve explicit scenario paths or every scenarios/*.yaml in order."""
+    """Resolve explicit scenario paths or every scenarios/<function>/*.yaml in order."""
     if args:
         paths = [pathlib.Path(item) for item in args]
         missing = [str(path) for path in paths if not path.is_file()]
         if missing:
             raise RuntimeError(f"scenario not found: {', '.join(missing)}")
         return paths
-    paths = sorted(SCENARIO_DIR.glob("*.yaml"))
+    paths = sorted(SCENARIO_DIR.rglob("*.yaml"))
     if not paths:
         raise RuntimeError(f"no scenarios found in {SCENARIO_DIR}")
     return paths

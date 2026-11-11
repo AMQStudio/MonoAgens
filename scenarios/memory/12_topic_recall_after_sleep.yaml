@@ -121,3 +121,27 @@ steps:
     place: space:cli
     text: "Mona, aku suka minum apa ya? Masih ingat nggak?"
     addressed: true
+model_answers:
+  - step: 1
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: telegram.say
+          arguments: {text: "Siap, aku ingat."}
+  - step: 27
+    tool: call
+    calls:
+      - name: store_memories
+        arguments:
+          items:
+            - text: "Owner paling suka kopi susu tanpa gula, bukan teh."
+              importance: 0.8
+          core_memory: "Owner suka kopi susu tanpa gula."
+  - step: 28
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: cli.say
+          arguments: {text: "Masih ingat: kamu suka kopi susu tanpa gula, bukan teh."}

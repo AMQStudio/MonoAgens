@@ -26,9 +26,9 @@ May touch: `monoagens/jobs.py`, `monoagens/config.py`, `tests/`
 Read first: [core-math.md](../core-math.md) §13
 May touch: `scenarios/`, `scripts/replay.py`, `tests/`
 
-- [ ] 2.1 Bring the fake replay to 25/25: the 8 scenarios failing since before Task 1 (reminders and `recall` with the scripted FakeLLM) are fixed by recording the model answers they need, not by changing the core.
-- [ ] 2.2 Folder layout by brain function: `scenarios/<function>/` (memory, silence, turn-taking, promises, privacy, cross-body, learning, honesty); one scenario tests one behavior; model answers recorded so a fake replay is deterministic.
-- [ ] 2.3 From here on, every part below adds its scenarios here, written to fail before the part lands.
+- [x] 2.1 Bring the fake replay to 25/25: the 8 scenarios failing since before Task 1 (reminders and `recall` with the scripted FakeLLM) are fixed by recording the model answers they need, not by changing the core.
+- [x] 2.2 Folder layout by brain function: `scenarios/<function>/` (memory, silence, turn-taking, promises, privacy, cross-body, learning, honesty); one scenario tests one behavior; model answers recorded so a fake replay is deterministic.
+- [x] 2.3 From here on, every part below adds its scenarios here, written to fail before the part lands.
 
 ## Part 3 — Privacy follows people, sharing, reaching a person, task threads (D45–D47)
 Read first: [core.md](../core.md) §8 (absolute line 2), §4 (reaching a person, `self.share`, task threads), §7 (memories: who, place, private)
@@ -111,3 +111,11 @@ real-model replay and live session are reported with the missed-help rate; absol
 violations are 0; every file is within its size budget.
 
 **Notes.**
+
+Part 2 notes (worker): `scenarios/` now has `memory/`, `silence/`, `turn-taking/`,
+`promises/`, `privacy/`, `cross-body/`, `learning/`, `honesty/` (the last three reserved with
+`.gitkeep`). `scripts/replay.py` discovers `scenarios/**/*.yaml` and replays each scenario's
+`model_answers` (keyed by step and tool `decide`/`call`). Seven scenarios, eight failing checks,
+were fixed by recording answers (the task text says eight scenarios): 08, 09, 10, 12, 13, 16, 17.
+Fake replay: 25/25. `uv run pytest`: 184 passed. `README.md` line 45 still names the old flat
+path `scenarios/01_group_chitchat_greeting.yaml`; README is outside this part's May-touch list.

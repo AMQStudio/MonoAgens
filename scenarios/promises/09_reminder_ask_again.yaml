@@ -1,0 +1,34 @@
+name: 09_reminder_ask_again
+description: >-
+  "Tanya lagi kalau aku belum jawab dalam 1 jam": Expectation dengan cue satu jam
+  kemudian harus terpicu sekali bila owner tetap diam.
+expectations:
+  - exactly one reminder at 11:00
+steps:
+  - at: "2026-11-10T10:00:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Mona, tanya lagi ya kalau aku belum jawab dalam 1 jam soal proposal itu."
+    addressed: true
+  - at: "2026-11-10T10:00:00+07:00"
+    advance: "1h"
+model_answers:
+  - step: 1
+    tool: decide
+    calls:
+      - name: expect
+        arguments:
+          about: owner belum menjawab soal proposal
+          kind: promise
+          cue_time: {at: "2026-11-10T11:00:00+07:00"}
+          expect: {none: true}
+          intent: tanya lagi soal proposal
+          weight: 0.6
+          policy: {once: true}
+  - step: 2
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: telegram.say
+          arguments: {text: "Sudah sempat lihat proposalnya? Aku tunggu jawabanmu ya."}

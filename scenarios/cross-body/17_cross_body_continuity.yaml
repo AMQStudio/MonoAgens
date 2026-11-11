@@ -15,3 +15,18 @@ steps:
     place: space:cli
     text: "lanjut yang tadi, apa fitur paling penting yang perlu kupahami dulu?"
     addressed: true
+model_answers:
+  - step: 1
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: telegram.say
+          arguments: {text: "Rust memang pas untuk tool CLI, kita bahas sama-sama."}
+  - step: 2
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: cli.say
+          arguments: {text: "Mulai dari ownership dan borrow checker di Rust dulu."}
