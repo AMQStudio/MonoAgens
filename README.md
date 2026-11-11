@@ -9,6 +9,7 @@ when the cognition layer's appraisal decides an event matters.
 - `ROADMAP.md` — what is done and what comes next.
 - `AGENTS.md` — rules and invariants for coding agents.
 - `docs/FORMATS.md` — capability, prior and skill formats.
+- `docs/MATH.md` — every formula, why it was chosen, and its sources.
 - `scripts/replay.py` — scenario replay for tuning the cognition layer.
 
 ## Tuning with replay

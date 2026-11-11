@@ -1,7 +1,7 @@
 # DESIGN.md — MonoAgens
 
 The current design, in eight sections. Reasons and history live in DECISIONS.md (cited as Dxx);
-file formats in docs/FORMATS.md; steps in ROADMAP.md; rules for coding agents in AGENTS.md.
+file formats in docs/FORMATS.md; formulas and their sources in docs/MATH.md; steps in ROADMAP.md; rules for coding agents in AGENTS.md.
 If this file and DECISIONS.md disagree, DECISIONS.md wins and this file has a bug.
 
 ---

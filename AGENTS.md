@@ -12,7 +12,7 @@ Status: prototype. Read `DESIGN.md` before touching code. Work ONLY on the track
   invariants and the size budget) before committing and reporting.
 - The coordinator does not write implementation code itself. If the worker fails twice on
   the same step, stop and report to the owner instead of taking over.
-- Architecture and design documents (`DESIGN.md`, `DECISIONS.md`, `ROADMAP.md`, `docs/FORMATS.md`, this file) are owned by the
+- Architecture and design documents (`DESIGN.md`, `DECISIONS.md`, `ROADMAP.md`, `docs/FORMATS.md`, `docs/MATH.md`, this file) are owned by the
   architect. Workers may only tick tracks in ROADMAP.md and never edit design decisions.
 
 ## Secrets (never break this)
