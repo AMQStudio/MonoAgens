@@ -20,7 +20,7 @@ LLMs are a prefrontal cortex without the rest of the brain. MonoAgens is the res
 - Fix-up pass; replay tool with a real LLM (17 scenarios); CLI organ; `<recent>` across places.
 - Track A foundation: cognition package, `event_vectors`, seeded generator, decision
   breakdowns, hook lists, token budget.
-- Concept freeze: DECISIONS D1–D32, DESIGN.md finalized in eight sections.
+- Concept freeze: DECISIONS D1–D37, DESIGN.md finalized in eight sections.
 
 ## Phase 1 — Align the code with DESIGN (one track, first)
 **Track A2** — bring the merged Track A in line with DESIGN (D32). Sub-steps, one commit each:
@@ -59,6 +59,7 @@ direct clock or random call in the core.
 | H | `revise`, `guard` facts checked in sleep, lessons and procedures with credence (α/β) | a correction supersedes the old memory; a contradicted fact is revised at the next sleep |
 | I | wake gate; free-text conditions with cosine filter + classifier; `lo` learning | a fulfilled promise wakes no one; a question on the same topic never resolves a promise |
 | J | attribution and reliability (α/β) per domain; fade with a fixed threshold; soft and hard forgetting | a stranger cannot override an owner fact; hard forget leaves only `{"forgotten": true}` and metadata |
+| K | the desk (D37): section token budgets, work thread in `<doing>` with pointers, the `self` organ with `recall`, back-fill handling and `catch_up` wakes | a 15-step task keeps a flat prompt size; "what did we say last month about X?" is answered via recall; 40 unread messages produce one catch-up wake |
 | R | replay scenarios for B–J, plus report metrics: false-speak rate, missed-help rate, tokens per simulated day, absolute-line violations (must be 0), honesty-rule compliance | each new scenario fails before its track lands and passes after |
 
 **Deferred until weeks of real logs exist (D32.9):** learned signal weights, learned
@@ -70,6 +71,8 @@ dispositions (D16, D29), adaptive fade threshold (D14), social standing (D31), i
 - Default owner policy, active out of the box (D22, D24): the two absolute lines (only the owner
   changes who the soul is; private content never enters another place), budget, quiet hours.
   Everything else is weighed by the PFC.
+- **memory-view** package (D37): list what the soul remembers about the asker or this place,
+  corrections through `revise`, owner-only Markdown export.
 - Shared packages: **commands** (one registry, identical `/help`) and **skills** (installed
   SKILL.md only; static; D34). The alias map waits for a second chat app.
 Done when: a DM fact is never visible or said in a group, even when someone tries to talk the
@@ -103,7 +106,7 @@ Loading a prior (docs/FORMATS.md) at birth; a default prior in the repository.
 Done when: a fresh soul born from the default prior passes the replay suite with empty memory.
 
 ## Phase 8 — More bodies, more models
-WhatsApp, Discord, voice (STT/TTS), the first non-chat organ (IoT device or robot sim);
+WhatsApp (with `history` and back-fill on connect, D37), Discord, voice (STT/TTS), the first non-chat organ (IoT device or robot sim);
 native provider adapters; optional separate models for sleep and the classifier.
 Done when: one conversation continues across three bodies and a non-chat organ senses and acts
 through the same ports; switching provider is a `.env` change.

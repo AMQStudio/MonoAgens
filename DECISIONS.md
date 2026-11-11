@@ -408,6 +408,31 @@ decision). One function maps knobs to the gate's internal values (θ, τ, γ, we
 moves knobs, so every learned change is readable. End users never see the prior; developers tune
 it with replay reports. Budget and quiet hours are owner settings, not knobs.
 
+**D37 — The prompt is a desk, not the memory; recall and catching up.**
+The soul's memory is its books. The context window is a desk that is cleared and laid out again
+from the books at every wake, so nothing is ever compacted and no detail is lost to a summary.
+1. **Work thread.** During a multi-step chain, `<doing>` carries the goal, one line per finished
+   step and the latest result verbatim. Older results appear as pointers (event id, what it is,
+   its size) and are re-read on demand.
+2. **Recall ("let me think, I know this").** The core ships one internal organ, `self`, with a
+   non-communicative capability `recall(query | event_id, place?, before?)` that searches the
+   soul's own log and memories deeper than the automatic candidates. It obeys absolute line 2
+   and returns as `act.result`. No new thought act: it is used through `act`.
+3. **Scrolling up and catching up.** The soul's own log is its first "scroll up": everything
+   since it joined a place is recorded. A body *may* add a capability `history(place, before,
+   limit)` for messages the log lacks (before joining, while offline). When a body connects, it
+   back-fills what it missed as `msg.in` with `backfill: true` and `sent_at` (the platform's
+   time; `ts` stays the recording time). Back-filled events are recorded and indexed but never
+   gated one by one. Back-filled messages newer than the soul's last activity in that place and
+   younger than `catch_up_hours` produce one `catch_up` wake per place, like a person opening
+   unread chats; older ones are only remembered.
+4. **Seeing what it remembers.** Showing and correcting memories is a package (`memory-view`),
+   not core: a command lists what the soul remembers about the asker or this place, corrections
+   go through `revise` with the asker as `origin_actor`, and an owner-only Markdown export is a
+   *view*, never the source of truth. Both absolute lines and attribution rules (D24) apply.
+5. **Desk budgets** are constants of the prior (not knobs): recent messages, memory candidates,
+   the verbatim result in a thread, the whole volatile part, and the catch-up window.
+
 ## Accepted in principle, details pending
 
 (None. P1 was detailed as D27.)

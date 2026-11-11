@@ -123,6 +123,16 @@ the organs present now, listed in a fixed order so the prompt cache holds.
 Present organs: Telegram (long polling; owner via `owner.telegram_ids`) and CLI (Unix socket
 inside the main process, thin client).
 
+**The `self` organ** (D37) is built into the core and offers one capability, `recall`
+(non-communicative): a deeper search of the soul's own log and memories by query or event id,
+under absolute line 2. It is how the soul "thinks harder" to remember.
+
+**History and catching up** (D37). A body may offer `history(place, before, limit)` for messages
+the log lacks. On connect it back-fills what it missed as `msg.in` with `backfill: true` and
+`sent_at`. Back-filled events are recorded and indexed, never gated one by one; unread ones
+(newer than the soul's last activity there, younger than `catch_up_hours`) produce one
+`catch_up` wake per place.
+
 ## 5. Expectations
 
 One schema for every promise and prediction:
@@ -264,6 +274,10 @@ that domain. Standing never buys dishonesty.
 - *Volatile, last*: `<now>` (date and time), `<place>`, `<why_awake>`, `<doing>`, `<next>`,
   `<memories>` with source and age, `<recent>`, `<event>`. Messages from non-owners are delimited
   as quoted data.
+The prompt is a desk, not the memory (D37): it is rebuilt from the books at every wake and never
+compacted. Each volatile section has a token budget (prior constants). In a multi-step chain
+`<doing>` holds the goal, one line per step and the latest result verbatim; older results are
+pointers the soul can `recall`.
 Rules: changing facts → use a search organ, or answer "as of my knowledge in <cutoff>" ·
 attribute memories · low confidence → ask or say "I don't know" · never claim a capability not in
 `<self>`.

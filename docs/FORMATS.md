@@ -62,6 +62,15 @@ constants:        # stable engineering values; change only with a decision
   context_weight: 1.0
   importance_weight: 0.5
   learning_rate: 0.02
+  # the desk (D37): what one wake's prompt may hold
+  recent_messages: 20          # roughly one phone screen; older lines via recall
+  recent_tokens: 2000
+  memory_candidates: 8
+  memory_tokens: 1500
+  thread_result_tokens: 3000   # latest result shown verbatim in <doing>
+  volatile_tokens_max: 8000    # whole volatile part; trimmed oldest-first within each section
+  recall_results: 10
+  catch_up_hours: 6
 ```
 
 Every knob is in [0, 1] unless stated, has a floor and a ceiling, and is what learning moves
