@@ -165,6 +165,10 @@ async def test_layered_prompt_structure(aconn):
                     if tool["function"]["name"] == "act")
     capability = act_tool["function"]["parameters"]["properties"]["capability"]
     assert capability["enum"] == ["telegram.say", "telegram.react"]
+    expect_tool = next(tool for tool in request["tools"]
+                       if tool["function"]["name"] == "expect")
+    kind = expect_tool["function"]["parameters"]["properties"]["kind"]
+    assert kind["enum"] == ["promise", "wait", "predict", "guard"]
     assert fake.headers[0]["authorization"] == "Bearer test-key"
 
     messages = fake.last_messages

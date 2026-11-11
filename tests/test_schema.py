@@ -136,3 +136,28 @@ def test_provenance_and_privacy_columns_exist(conn):
     assert "private" in memories
     assert conn.execute("SELECT origin_actor FROM events LIMIT 0").description is not None
     assert conn.execute("SELECT private FROM memories LIMIT 0").description is not None
+
+
+def test_expectation_kind_schema(conn):
+    columns = {row[0] for row in conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'expectations'").fetchall()}
+    assert {"kind", "condition", "condition_text", "condition_vector",
+            "origin_actor"} <= columns
+    assert "expect" not in columns
+    for column in ("kind", "condition", "condition_text", "condition_vector", "origin_actor"):
+        assert conn.execute(f"SELECT {column} FROM expectations LIMIT 0").description is not None
+    assert conn.execute(
+        "SELECT column_default FROM information_schema.columns "
+        "WHERE table_name = 'expectations' AND column_name = 'kind'").fetchone()[0] == "'promise'::text"
+
+
+def test_expectation_kind_check_rejects_unknown_kinds(conn):
+    event_id = conn.execute("INSERT INTO events (kind) VALUES ('percept') RETURNING id").fetchone()[0]
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO expectations (kind, about, expires_at) "
+            "VALUES ('wish', 'x', now() + interval '1 day')")
+    conn.execute(
+        "INSERT INTO expectations (kind, about, expires_at, source_event) "
+        "VALUES ('guard', 'x', now() + interval '1 day', %s)", (event_id,))

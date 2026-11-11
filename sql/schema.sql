@@ -95,14 +95,19 @@ CREATE TABLE IF NOT EXISTS state (
 );
 
 -- expectations: the Expectation Book, one primitive for every scenario.
+-- kind: promise, wait, predict or guard (core.md §5).
 CREATE TABLE IF NOT EXISTS expectations (
     id            bigserial PRIMARY KEY,
+    kind          text NOT NULL DEFAULT 'promise'
+                  CHECK (kind IN ('promise', 'wait', 'predict', 'guard')),
     who           text,
     place         text,
     about         text NOT NULL,
     cue_time      jsonb,
     cue_event     jsonb,
-    expect        jsonb NOT NULL,
+    condition     jsonb,
+    condition_text text,
+    condition_vector vector(384),
     intent        text,
     weight        real NOT NULL DEFAULT 0.5 CHECK (weight >= 0.0 AND weight <= 1.0),
     policy        jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -112,6 +117,7 @@ CREATE TABLE IF NOT EXISTS expectations (
     fire_count    integer NOT NULL DEFAULT 0,
     source_event  bigint REFERENCES events (id),
     derived_from  bigint[] NOT NULL DEFAULT '{}',
+    origin_actor  text,
     expires_at    timestamptz NOT NULL,
     created_at    timestamptz NOT NULL DEFAULT now(),
     origin        text NOT NULL DEFAULT 'pfc'
@@ -120,6 +126,29 @@ CREATE TABLE IF NOT EXISTS expectations (
 ALTER TABLE expectations ADD COLUMN IF NOT EXISTS origin text NOT NULL DEFAULT 'pfc';
 ALTER TABLE expectations
     ADD COLUMN IF NOT EXISTS derived_from bigint[] NOT NULL DEFAULT '{}';
+ALTER TABLE expectations ADD COLUMN IF NOT EXISTS origin_actor text;
+ALTER TABLE expectations ADD COLUMN IF NOT EXISTS condition jsonb;
+ALTER TABLE expectations ADD COLUMN IF NOT EXISTS condition_text text;
+ALTER TABLE expectations ADD COLUMN IF NOT EXISTS condition_vector vector(384);
+ALTER TABLE expectations
+    ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'promise';
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conname = 'expectations_kind_check'
+                     AND conrelid = 'expectations'::regclass) THEN
+        ALTER TABLE expectations ADD CONSTRAINT expectations_kind_check
+            CHECK (kind IN ('promise', 'wait', 'predict', 'guard'));
+    END IF;
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema = current_schema() AND table_name = 'expectations'
+                 AND column_name = 'expect') THEN
+        EXECUTE 'UPDATE expectations SET condition = COALESCE(condition, expect)';
+        EXECUTE 'ALTER TABLE expectations DROP COLUMN expect';
+    END IF;
+END;
+$$;
 
 CREATE INDEX IF NOT EXISTS idx_expectations_next_check_at
     ON expectations (next_check_at);

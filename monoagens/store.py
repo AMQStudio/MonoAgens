@@ -13,17 +13,19 @@ from psycopg.types.json import Jsonb
 from monoagens.types import RECENT_KINDS, Event, StateEntry
 
 EXPECTATION_COLUMNS = (
-    "id", "who", "place", "about", "cue_time", "cue_event", "expect", "intent", "weight",
-    "policy", "status", "next_check_at", "last_fired_at", "fire_count", "source_event",
-    "derived_from", "expires_at", "source_body",
+    "id", "kind", "who", "place", "about", "cue_time", "cue_event", "condition",
+    "condition_text", "intent", "weight", "policy", "status", "next_check_at",
+    "last_fired_at", "fire_count", "source_event", "derived_from", "origin_actor",
+    "expires_at", "source_body",
 )
 _EXPECTATIONS = ("SELECT " + ", ".join("ex." + column for column in EXPECTATION_COLUMNS[:-1])
                  + ", s.body AS source_body FROM expectations ex"
                  " LEFT JOIN events s ON s.id = ex.source_event")
 _INSERT_EXPECTATION = (
-    "INSERT INTO expectations (who, place, about, cue_time, cue_event, expect, intent, weight, "
-    "policy, status, next_check_at, source_event, derived_from, expires_at) VALUES "
-    "(%s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s) RETURNING id"
+    "INSERT INTO expectations (kind, who, place, about, cue_time, cue_event, condition, intent, "
+    "weight, policy, status, next_check_at, source_event, derived_from, origin_actor, "
+    "expires_at) VALUES "
+    "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s, %s) RETURNING id"
 )
 _EVENT_COLS = "id, ts, kind, who, place, body, payload, caused_by, origin_actor"
 

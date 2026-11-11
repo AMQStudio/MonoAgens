@@ -14,6 +14,7 @@ from monoagens.store import (append_event, fire_expectation, insert_expectation,
 _UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 _RE = re.compile(r"^(\d+(?:\.\d+)?)\s*([smhd])$")
 _OPS = ("eq", "gt", "lt")
+_KINDS = ("promise", "wait", "predict", "guard")
 
 
 def tz(soul):
@@ -79,9 +80,12 @@ def _operator(expect):
 
 def validate(data, *, now, soul):
     """Validate one `expect` tool call and return the row values to insert."""
-    about, raw = str(data.get("about") or "").strip(), data.get("expect")
+    about, raw = str(data.get("about") or "").strip(), data.get("condition", data.get("expect"))
     if not about or not isinstance(raw, dict) or not raw:
         raise ValueError("expect needs about and a condition")
+    kind = str(data.get("kind") or "promise")
+    if kind not in _KINDS:
+        raise ValueError(f"unknown expectation kind: {kind!r}")
     weight, policy = float(data.get("weight", 0.5)), data.get("policy") or {"once": True}
     if not 0.0 <= weight <= 1.0:
         raise ValueError(f"weight out of range: {weight}")
@@ -95,8 +99,8 @@ def validate(data, *, now, soul):
         raise ValueError("expect needs cue_time or cue_event")
     days, zone = float(soul["expectations"]["default_expires_days"]), tz(soul)
     return {
-        "who": data.get("who"), "place": data.get("place"), "about": about,
-        "cue_time": cue_time, "cue_event": cue_event, "expect": _operator(raw),
+        "kind": kind, "who": data.get("who"), "place": data.get("place"), "about": about,
+        "cue_time": cue_time, "cue_event": cue_event, "condition": _operator(raw),
         "intent": data.get("intent"), "weight": weight, "policy": dict(policy),
         "next_check_at": next_check(cue_time, now, zone),
         "expires_at": next_check({"at": str(expires)}, now, zone) if expires
@@ -114,12 +118,14 @@ async def create(conn, data, *, now, soul, source):
         raise ValueError("too many active expectations")
     who, place = row["who"] or source.who, row["place"] or source.place
     async with conn.transaction():
-        values = (who, place, row["about"], Jsonb(row["cue_time"]), Jsonb(row["cue_event"]),
-                  Jsonb(row["expect"]), row["intent"], row["weight"], Jsonb(row["policy"]),
-                  row["next_check_at"], source.id, [source.id], row["expires_at"])
+        values = (row["kind"], who, place, row["about"], Jsonb(row["cue_time"]),
+                  Jsonb(row["cue_event"]), Jsonb(row["condition"]), row["intent"], row["weight"],
+                  Jsonb(row["policy"]), row["next_check_at"], source.id, [source.id],
+                  source.origin_actor or who, row["expires_at"])
         exp_id = await insert_expectation(conn, values)
-        payload = {"expectation_id": exp_id, "about": row["about"], "weight": row["weight"],
-                   "policy": row["policy"], "expires_at": row["expires_at"].isoformat()}
+        payload = {"expectation_id": exp_id, "kind": row["kind"], "about": row["about"],
+                   "weight": row["weight"], "policy": row["policy"],
+                   "expires_at": row["expires_at"].isoformat()}
         return await append_event(conn, ts=now, kind="expectation.created", who=who,
                                   place=place, body=source.body, payload=payload,
                                   caused_by=source.id)
@@ -136,7 +142,7 @@ async def resolve(conn, exp_id, status, *, now):
 
 async def is_met(conn, condition, now):
     """Return whether an `expect` condition currently holds."""
-    if "none" in condition:
+    if not condition or "none" in condition:
         return False
     if "event_seen" in condition:
         pattern = condition["event_seen"]
@@ -171,9 +177,11 @@ async def due(conn, event, *, now, soul):
         where, params = "ex.status = 'active' AND ex.cue_event IS NOT NULL", ()
     fired = []
     for row in await read_expectations(conn, where, params):
+        if row["kind"] == "guard":
+            continue
         if event.kind != "tick" and not matches_cue(row["cue_event"], event):
             continue
-        if not await is_met(conn, row["expect"], now):
+        if not await is_met(conn, row["condition"], now):
             fired.append(await fire_expectation(conn, row, now))
         elif (row["policy"] or {}).get("once") is True:
             await resolve_expectation(conn, row, now, "satisfied")

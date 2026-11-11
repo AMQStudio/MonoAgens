@@ -29,7 +29,7 @@ async def _memory(conn, event_id):
 
 async def _expectation(conn, event_id):
     await conn.execute(
-        "INSERT INTO expectations (about, expect, source_event, derived_from, expires_at) "
+        "INSERT INTO expectations (about, condition, source_event, derived_from, expires_at) "
         "VALUES ('a promise', %s, %s, %s, %s)",
         (Jsonb({}), event_id, [event_id], START + timedelta(days=1)))
 

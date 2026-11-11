@@ -42,6 +42,8 @@ TOOLS: list[dict[str, Any]] = [
           ["capability", "arguments"]),
     _tool("expect", "Hold an expectation about the future; you are woken if it is missed.",
           {"about": _text("One sentence: what is expected."),
+           "kind": {"type": "string", "enum": ["promise", "wait", "predict", "guard"],
+                    "description": "promise, patience, prediction or guard (default promise)."},
            "cue_time": {"type": "object",
                         "description": '{"at": ISO}, {"every": "2d"} or {"daily": "07:00"}.'},
            "cue_event": {"type": "object", "description": "Pattern: kind, who, place, text_like."},

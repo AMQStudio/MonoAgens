@@ -12,7 +12,7 @@ Bring the merged Track A code in line with the frozen core spec. This is the onl
 - [x] T3 Provenance and privacy: `origin_actor` on events (inherited along `caused_by`), `identity_changing` check in the action hook; `place` + `private` on memories and the context-hook filter.
 - [x] T4 Lineage: `derived_from` on memories, expectations and vectors; replace the `event_vectors` no-delete trigger with the two dedicated paths (fade, hard forget) — stubs that write their events are fine.
 - [x] T5 Budget: `model.call` for every model call; the budget term in θ and `budget.exhausted` (no thrift mode).
-- [ ] T6 Expectation schema with the four kinds (`promise`, `wait`, `predict`, `guard`).
+- [x] T6 Expectation schema with the four kinds (`promise`, `wait`, `predict`, `guard`).
 - [ ] T7 Injected clock everywhere (no `datetime.now()` in the core); replay uses event times.
 - [ ] T8 Slow work off the loop: PFC, classifier, embedding and sleep as background jobs whose results return as events; one PFC job per place; re-wake once if a new event arrived meanwhile.
 - [ ] T9 Numbered SQL migrations with a version table and a backup before migrating; pairing code for the first owner.
@@ -59,3 +59,7 @@ All tests and replay pass; grep shows no platform name, no world action and no d
   `theta = threshold.budget * min(1, total_tokens / daily_token_budget)`; `daily_token_budget`
   comes from the cognition config, so no budget means no term. Sleep's input query now ignores
   `model.call`/`budget.exhausted` bookkeeping events.
+- T6: `expectations.kind` is `promise|wait|predict|guard` (default `promise`, CHECK enforced);
+  `expect` was renamed to `condition` and old databases are migrated in place. Expectations
+  record `origin_actor` from the source event. `guard` rows are skipped by `due()`, so they never
+  fire or wake the PFC. The `expect` tool schema exposes `kind` with the four-value enum.

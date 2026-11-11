@@ -492,3 +492,58 @@ async def test_recovery_does_not_touch_active_expectations(aconn):
 
     assert fake.requests == []
     assert await _status(aconn, exp_id) == "active"
+
+
+# --- kinds ------------------------------------------------------------------
+
+KINDS = ("promise", "wait", "predict", "guard")
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_validation_accepts_every_kind(kind):
+    row = expect.validate({"about": "x", "kind": kind, "cue_time": {"every": "1d"},
+                           "expect": {"none": True}}, now=START, soul=SOUL)
+    assert row["kind"] == kind
+    assert row["condition"] == {"none": True}
+
+
+def test_validation_defaults_to_promise_and_rejects_unknown_kinds():
+    row = expect.validate({"about": "x", "cue_time": {"every": "1d"},
+                           "expect": {"none": True}}, now=START, soul=SOUL)
+    assert row["kind"] == "promise"
+    with pytest.raises(ValueError, match="unknown expectation kind"):
+        expect.validate({"about": "x", "kind": "wish", "cue_time": {"every": "1d"},
+                         "expect": {"none": True}}, now=START, soul=SOUL)
+
+
+async def test_create_stores_kind_origin_actor_and_lineage(aconn):
+    exp_id, created = await _create(aconn, kind="predict")
+    cur = await aconn.execute(
+        "SELECT kind, origin_actor, derived_from, condition FROM expectations WHERE id = %s",
+        (exp_id,))
+    assert await cur.fetchone() == ("predict", WHO, [created.caused_by], {"none": True})
+
+
+async def test_guard_never_fires_or_wakes_the_pfc_on_a_tick(aconn):
+    exp_id, _ = await _create(aconn, kind="guard", weight=1.0)
+    fake = FakeLLM()
+    clock = FakeClock(START)
+    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), soul=SOUL)
+
+    await _tick(kernel, clock)
+
+    assert await _status(aconn, exp_id) == "active"
+    assert "expectation.fired" not in await _kinds(aconn)
+    assert fake.requests == []
+
+
+async def test_guard_never_fires_when_its_cue_event_arrives(aconn):
+    exp_id, _ = await _create(aconn, kind="guard", cue_time=None,
+                              cue_event={"kind": "percept", "who": WHO,
+                                         "text_like": "workout"})
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=None, soul=SOUL)
+
+    await _feed(kernel, _msg("saya sudah WORKOUT"))
+
+    assert await _status(aconn, exp_id) == "active"
+    assert "expectation.fired" not in await _kinds(aconn)
