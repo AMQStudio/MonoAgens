@@ -117,7 +117,7 @@ Found in the architect's review of Parts 1–9.
 - [x] 10.3 Split `identity.py`: `self.recall` and the task desk move to a new `recall.py` (≤ 160); `identity.py` ≤ 120; whole package ≤ 3,800.
 - [x] 10.4 Wire the circuit breaker's "goal continued" arm (`act.result`) in the kernel loop.
 - [x] 10.5 Feeling-of-knowing: the cue's own vector is never one of its candidates.
-- [ ] 10.6 Unaddressed help: at least five scenarios where an unaddressed group line should be answered because the soul knows something useful ("lupa nama tempatnya apa ya" with the answer in memory), and five where it should stay silent. If the gate misses them, tune prior values only, and write the evidence under Notes.
+- [x] 10.6 Unaddressed help: at least five scenarios where an unaddressed group line should be answered because the soul knows something useful ("lupa nama tempatnya apa ya" with the answer in memory), and five where it should stay silent. If the gate misses them, tune prior values only, and write the evidence under Notes.
 - [ ] 10.7 Every scenario gets `capability:` (one line: what it proves) and its brain function. Checks test behavior — spoke or stayed silent, in which place, which events and capabilities — never the model's exact wording. Every changed check is listed under Notes with its reason; a check that catches a real failure is never loosened.
 - [ ] 10.8 Classify each of the 35 real-model failures from 9.3 as (a) check too strict → rewritten per 10.7, or (b) the soul behaved wrongly → fixed by brain function, never by a rule for that case. List all 35 under Notes.
 - [ ] 10.9 `scripts/replay.py` writes `scenarios/README.md`, the capability record: per brain function, each capability with its fake result and its real-model result (passes over runs, model, date). Generated, never hand-edited.
@@ -476,3 +476,41 @@ Part 10 notes (worker, 10.5):
   original candidate/message assertions unchanged.
 - `uv run pytest`: 243 passed. Fake replay: 86/86 checks, absolute-line violations 0, honesty
   51/51, missed-help rate 0.0%.
+
+Part 10 notes (worker, 10.6):
+- Five helpful scenarios, all in `scenarios/memory/`, all with the helpful cue marked
+  `should: answer`: `25_help_place_name` (cafe name, group fact), `26_help_meeting_time`
+  (time said in the owner's DM, asked in a group), `27_help_wifi_password` (group fact),
+  `28_help_package_location` (owner DM, asked in a housemate group),
+  `29_help_clinic_hours` (group fact). Each: the fact is said once, an `advance` of 35 min
+  triggers sleep (`store_memories`, importance 1.0), an unaddressed question from a speaker new
+  to that place arrives, the gate wakes, `expect.create_wait` writes the patience wait, the next
+  `advance` of 2 min fires it, and exactly one answer naming the stored fact is written in that
+  group. Pinned by `sleep.done`, `expectation.created {kind: wait}`, `reply_in` (count 1) and
+  `mentions` (the fact's key words, never the exact sentence): 4 checks each.
+- Silent side: `scenarios/silence/01`, `02`, `03`, `15` and `scenarios/turn-taking/24` now carry
+  explicit `should: silent` on every unaddressed line (01/02/03/15 one each, 24 steps 1–6, 8, 9;
+  24 step 10 keeps `should: answer`). No expectation was loosened.
+- Prior tuning in `prior/dispositions.yaml` (values only, no code):
+  `talkativeness 0.45 → 1.0`, `spontaneity 0.2 → 0.0`, `feeling_of_knowing_weight 0.35 → 1.0`,
+  `calibration.fok_threshold 0.0 → 1.5`, `calibration.fok_scale 1.0 → 0.3`.
+- Evidence. FOK baseline: with no memory A* = 0, so FOK = σ((0 − 1.5)/0.3) = 0.007 and the
+  signal is effectively off (S ≈ 0.01 in 01/02/03/15/24: P = 0.00, decision silent). With the
+  stored fact five minutes old, A* = base_level(0, 0.083 h, 0.5) + importance_weight·1.0
+  = 1.94 + 0.50 = 2.44, so FOK = σ((2.44 − 1.5)/0.3) = 0.958; the measured cue salience is
+  S = 1.00 (weight 1.0 saturates the clamp).
+- Why `talkativeness` had to move to 1.0: habituation starts at h = 1 for a speaker's first
+  line in a place, so S_eff = S/(1+h) ≤ 0.5 for any unaddressed cue, while θ0 spans 0.85..0.35.
+  At 0.9 (θ ≈ 0.45) the cue still woke in 25 (P = 0.93) but two cues with u = 0.96 were missed;
+  at 1.0 (θ ≈ 0.35–0.40) P = 0.99–1.00. `spontaneity` 0.0 (τ = 0.02) is the deliberate end of
+  the knob and is what keeps an own-name-only line silent: 21 scores S = 0.51, θ = 0.35,
+  P = 0.01.
+- Observed limits, for the architect: FOK is memory-presence-driven, not relevance-driven —
+  `retrieve`'s vector query has no similarity floor, so every memory is a candidate and FOK is
+  high on any unaddressed line once the store is non-empty. The five silent scenarios have no
+  memories at all, so the separation is clean here, but a soul with memories would offer them
+  unprompted; `info_gap` and `relevance` cannot compensate because the cue's vector is stored
+  only after the appraisal (`kernel._settle` encodes after `_wake`), so both signals are 0 at
+  decision time.
+- `uv run pytest`: 243 passed. Fake replay: 29 scenarios, 106/106 checks, missed-help 0/59
+  (0.0%), false-speak 0/66 (0.0%), absolute-line violations 0, honesty 58/58.

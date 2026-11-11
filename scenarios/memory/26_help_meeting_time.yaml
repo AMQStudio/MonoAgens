@@ -1,0 +1,61 @@
+name: 26_help_meeting_time
+description: >-
+  Unaddressed help, case two: the owner tells Mona the meeting time in a direct
+  chat, sleep stores it, and a group member who was not there asks when the
+  meeting is. Nobody addresses Mona; feeling-of-knowing must open the gate, the
+  patience wait must expire, and the answer must carry the time from memory.
+expectations:
+  - type: sleep_done
+    label: sleep.done recorded
+  - type: event_seen
+    kind: expectation.created
+    step: 3
+    payload: {kind: wait}
+    label: the unaddressed helpful cue holds a patience wait
+  - type: reply_in
+    place: space:tg:-1006
+    step: 4
+    count: 1
+    label: exactly one answer in the group
+  - type: mentions
+    text: "sembilan"
+    step: 4
+    label: the answer gives the meeting time from memory
+steps:
+  - at: "2026-11-10T07:00:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    addressed: true
+    text: "Mona, rapat tim besok jam sembilan pagi di ruang rapat lantai tiga."
+  - at: "2026-11-10T07:00:00+07:00"
+    advance: "35m"
+  - at: "2026-11-10T07:36:00+07:00"
+    who: person:tg:8101
+    place: space:tg:-1006
+    text: "Rapat tim besok jam berapa ya? Aku lupa."
+    should: answer
+  - advance: "2m"
+model_answers:
+  - step: 1
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: telegram.say
+          arguments: {text: "Siap, kucatat: besok jam sembilan pagi."}
+  - step: 2
+    tool: call
+    calls:
+      - name: store_memories
+        arguments:
+          items:
+            - text: "Rapat tim besok jam sembilan pagi di ruang rapat lantai tiga"
+              importance: 1.0
+          core_memory: "Rapat tim: besok jam sembilan pagi, ruang rapat lantai tiga."
+  - step: 4
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: telegram.say
+          arguments: {text: "Rapatnya jam sembilan pagi, di ruang rapat lantai tiga."}

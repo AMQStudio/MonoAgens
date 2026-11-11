@@ -1,0 +1,61 @@
+name: 28_help_package_location
+description: >-
+  Unaddressed help, case four: the owner leaves a package in the front cabinet
+  and tells Mona in a direct chat; a housemate group then asks where it went
+  without addressing anyone. The soul knows the place from memory, so the gate
+  must wake, wait out patience, and answer once.
+expectations:
+  - type: sleep_done
+    label: sleep.done recorded
+  - type: event_seen
+    kind: expectation.created
+    step: 3
+    payload: {kind: wait}
+    label: the unaddressed helpful cue holds a patience wait
+  - type: reply_in
+    place: space:tg:-1008
+    step: 4
+    count: 1
+    label: exactly one answer in the group
+  - type: mentions
+    text: "lemari depan"
+    step: 4
+    label: the answer gives the package's place from memory
+steps:
+  - at: "2026-11-10T17:00:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    addressed: true
+    text: "Mona, paketku sudah kutaruh di lemari depan, yang dekat pintu."
+  - at: "2026-11-10T17:00:00+07:00"
+    advance: "35m"
+  - at: "2026-11-10T17:36:00+07:00"
+    who: person:tg:8301
+    place: space:tg:-1008
+    text: "Paket tadi ditaruh di mana ya? Aku cari di meja tidak ada."
+    should: answer
+  - advance: "2m"
+model_answers:
+  - step: 1
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: telegram.say
+          arguments: {text: "Baik, kucatat di lemari depan."}
+  - step: 2
+    tool: call
+    calls:
+      - name: store_memories
+        arguments:
+          items:
+            - text: "Paket owner ditaruh di lemari depan dekat pintu"
+              importance: 1.0
+          core_memory: "Paket owner: lemari depan dekat pintu."
+  - step: 4
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: telegram.say
+          arguments: {text: "Paketnya di lemari depan, dekat pintu."}

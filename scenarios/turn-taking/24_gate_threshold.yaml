@@ -48,26 +48,32 @@ steps:
     who: person:tg:7001
     place: space:tg:-1004
     text: "Pagi semua."
+    should: silent
   - at: "2026-11-10T13:00:30+07:00"
     who: person:tg:7002
     place: space:tg:-1004
     text: "Pagi juga."
+    should: silent
   - at: "2026-11-10T13:01:00+07:00"
     who: person:tg:7003
     place: space:tg:-1004
     text: "Ada agenda hari ini?"
+    should: silent
   - at: "2026-11-10T13:01:30+07:00"
     who: person:tg:7004
     place: space:tg:-1004
     text: "Rapat jam sepuluh."
+    should: silent
   - at: "2026-11-10T13:02:00+07:00"
     who: person:tg:7005
     place: space:tg:-1004
     text: "Oke siap."
+    should: silent
   - at: "2026-11-10T13:02:30+07:00"
     who: person:tg:7006
     place: space:tg:-1004
     text: "Aku ikut rapat."
+    should: silent
   - at: "2026-11-10T13:03:00+07:00"
     who: person:tg:7001
     place: space:tg:-1004
@@ -77,10 +83,12 @@ steps:
     who: person:tg:7002
     place: space:tg:-1004
     text: "Dokumennya masih di review."
+    should: silent
   - at: "2026-11-10T13:04:30+07:00"
     who: person:tg:7003
     place: space:tg:-1004
     text: "Nanti sore selesai."
+    should: silent
   - at: "2026-11-10T13:05:00+07:00"
     who: person:tg:7004
     place: space:tg:-1004

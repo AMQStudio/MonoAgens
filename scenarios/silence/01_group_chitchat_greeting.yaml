@@ -8,3 +8,4 @@ steps:
     who: person:tg:2001
     place: space:tg:-1001
     text: "Pagi semua, sarapan apa?"
+    should: silent

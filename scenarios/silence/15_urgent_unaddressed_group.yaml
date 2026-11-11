@@ -9,3 +9,4 @@ steps:
     who: person:tg:5001
     place: space:tg:-1001
     text: "Gawat darurat server down tolong!"
+    should: silent

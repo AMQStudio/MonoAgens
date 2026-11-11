@@ -2,9 +2,9 @@
 # tuned with replay without changing the core design. Meaning of each key: docs/core.md §9.4.
 
 knobs:            # behavior, in plain words; the only values a developer normally changes
-  talkativeness: 0.45
+  talkativeness: 1.0
   restraint_after_speaking: 0.5
-  spontaneity: 0.2
+  spontaneity: 0.0
   helpfulness: 0.6
   boredom_with_repeats: 0.5
   patience_seconds: 90
@@ -14,8 +14,8 @@ knobs:            # behavior, in plain words; the only values a developer normal
   memory_persistence: 0.5
 
 calibration:      # measured per embedder/model by tools; never set by hand
-  fok_threshold: 0.0
-  fok_scale: 1.0
+  fok_threshold: 1.5
+  fok_scale: 0.3
   wake_gate_lo: 0.35
   wake_gate_hi: 1.0          # 1.0 = "clearly yes" band off
 
@@ -29,7 +29,7 @@ constants:        # engineering values; change only with replay evidence
   # signal weights
   own_name_weight: 0.5
   info_gap_weight: 0.35
-  feeling_of_knowing_weight: 0.35
+  feeling_of_knowing_weight: 1.0
   relevance_weight: 0.2
   social_cost_weight: -0.4
   # weights and windows

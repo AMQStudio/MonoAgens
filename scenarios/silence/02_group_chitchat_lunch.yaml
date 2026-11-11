@@ -8,3 +8,4 @@ steps:
     who: person:tg:2002
     place: space:tg:-1001
     text: "Makan siang di mana nih? Aku bingung mau makan apa."
+    should: silent

@@ -8,3 +8,4 @@ steps:
     who: person:tg:2003
     place: space:tg:-1001
     text: "Macet banget jalanan hari ini, aku terjebak di Sudirman."
+    should: silent

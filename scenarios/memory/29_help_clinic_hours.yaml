@@ -1,0 +1,53 @@
+name: 29_help_clinic_hours
+description: >-
+  Unaddressed help, case five: a clinic's opening hours are said once in a
+  neighborhood group, sleep keeps them, and a different member later asks the
+  hours without addressing Mona. The soul must answer from memory after the
+  patience window expires.
+expectations:
+  - type: sleep_done
+    label: sleep.done recorded
+  - type: event_seen
+    kind: expectation.created
+    step: 3
+    payload: {kind: wait}
+    label: the unaddressed helpful cue holds a patience wait
+  - type: reply_in
+    place: space:tg:-1009
+    step: 4
+    count: 1
+    label: exactly one answer in the group
+  - type: mentions
+    text: "empat sore"
+    step: 4
+    label: the answer gives the clinic hours from memory
+steps:
+  - at: "2026-11-10T11:00:00+07:00"
+    who: person:tg:8400
+    place: space:tg:-1009
+    text: "Klinik gigi dekat pasar buka jam empat sore sampai jam delapan malam."
+  - at: "2026-11-10T11:00:00+07:00"
+    advance: "35m"
+  - at: "2026-11-10T11:36:00+07:00"
+    who: person:tg:8401
+    place: space:tg:-1009
+    text: "Jam berapa klinik gigi buka ya? Aku lupa."
+    should: answer
+  - advance: "2m"
+model_answers:
+  - step: 2
+    tool: call
+    calls:
+      - name: store_memories
+        arguments:
+          items:
+            - text: "Klinik gigi dekat pasar buka jam empat sore sampai jam delapan malam"
+              importance: 1.0
+          core_memory: "Klinik gigi: jam empat sore sampai delapan malam."
+  - step: 4
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: telegram.say
+          arguments: {text: "Klinik gigi buka jam empat sore sampai jam delapan malam."}

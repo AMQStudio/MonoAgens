@@ -1,0 +1,54 @@
+name: 25_help_place_name
+description: >-
+  Unaddressed help, case one: the group mentions the new cafe's name, sleep
+  consolidates it into memory, and minutes later a newcomer asks "lupa nama
+  tempat baru itu apa ya?" without naming Mona. The cue is not addressed, so
+  the gate must wake on feeling-of-knowing alone, hold a patience wait, and
+  the expired window must produce exactly one helpful answer with the name.
+expectations:
+  - type: sleep_done
+    label: sleep.done recorded
+  - type: event_seen
+    kind: expectation.created
+    step: 3
+    payload: {kind: wait}
+    label: an unaddressed helpful cue holds a patience wait
+  - type: reply_in
+    place: space:tg:-1005
+    step: 4
+    count: 1
+    label: the expired patience window produces one reply in the group
+  - type: mentions
+    text: "Kopi Senja"
+    step: 4
+    label: the answer names the cafe from memory
+steps:
+  - at: "2026-11-10T09:00:00+07:00"
+    who: person:tg:8001
+    place: space:tg:-1005
+    text: "Kafe baru dekat stasiun namanya Kopi Senja, ramai banget."
+  - at: "2026-11-10T09:00:00+07:00"
+    advance: "35m"
+  - at: "2026-11-10T09:36:00+07:00"
+    who: person:tg:8002
+    place: space:tg:-1005
+    text: "Eh lupa nama tempat baru itu apa ya? Aku mau ke sana."
+    should: answer
+  - advance: "2m"
+model_answers:
+  - step: 2
+    tool: call
+    calls:
+      - name: store_memories
+        arguments:
+          items:
+            - text: "Nama tempat baru dekat stasiun itu Kopi Senja"
+              importance: 1.0
+          core_memory: "Tempat baru dekat stasiun: Kopi Senja."
+  - step: 4
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: telegram.say
+          arguments: {text: "Kopi Senja, kafe baru dekat stasiun itu."}
