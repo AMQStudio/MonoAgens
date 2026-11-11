@@ -36,19 +36,20 @@ def used_fraction(value: Mapping[str, Any] | None, limit: float) -> float:
 
 
 async def record_call(conn, trigger_id: int | None, pfc: Any, *, purpose: str,
-                      now: datetime, soul: Mapping[str, Any]) -> Event | None:
+                      now: datetime, soul: Mapping[str, Any],
+                      usage: Mapping[str, Any] | None = None) -> Event | None:
     """Record one model call with its purpose and tokens, then count it for today."""
     if trigger_id is None:
         return None
-    raw = getattr(pfc, "last_usage", None) or {}
-    usage = {name: int(raw.get(name) or 0) for name in COUNTERS}
+    raw = usage if usage is not None else getattr(pfc, "last_usage", None) or {}
+    totals_usage = {name: int(raw.get(name) or 0) for name in COUNTERS}
     call = await append_event(
         conn, ts=now, kind="model.call", caused_by=trigger_id,
         payload={"purpose": purpose, "model": str(getattr(pfc, "model", "") or ""),
-                 "usage": usage})
+                 "usage": totals_usage})
     totals = await add_budget_usage(
         conn, now=now, timezone=str(soul.get("timezone") or "UTC"),
-        usage=usage, updated_by_event=call.id)
+        usage=totals_usage, updated_by_event=call.id)
     await _record_exhausted(conn, now, soul, totals, call.id)
     return call
 

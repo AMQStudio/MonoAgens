@@ -14,10 +14,12 @@ import psycopg
 from pgvector import Vector
 
 from monoagens import budget
-from monoagens.store import (append_event, read_event_vector,
-                             read_expectations, read_state, resolve_expectation,
-                             write_state)
-from monoagens.types import Event
+from monoagens.pfc import PFCContext
+from monoagens.store import (active_expectation_lines, append_event,
+                             read_event_vector, read_expectations, read_last_events,
+                             read_last_events_elsewhere, read_state,
+                             resolve_expectation, write_state)
+from monoagens.types import RECENT_KINDS, Event
 
 DIM = 384
 MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
@@ -147,6 +149,34 @@ async def retrieve(conn: psycopg.AsyncConnection[Any], embedder: Any, query: str
                       place=row[3], private=bool(row[6])) for row in chosen]
 
 
+async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place: str,
+                        reason: str, *, now: datetime, soul: dict[str, Any],
+                        memories: Sequence[str], capabilities: Sequence[dict[str, Any]],
+                        ) -> PFCContext:
+    """Lay out the desk for one wake: recent events, memories, state and expectations."""
+    memory_soul = soul.get("memory") or {}
+    recent = await read_last_events(conn, place,
+                                    limit=int(memory_soul.get("recent_events", 20)),
+                                    kinds=RECENT_KINDS)
+    recent_elsewhere = await read_last_events_elsewhere(
+        conn, event.who, place, limit=int(memory_soul.get("recent_elsewhere", 10)),
+        kinds=RECENT_KINDS) if event.who else []
+    core = await read_state(conn, "core_memory")
+    last = None
+    for key in (f"last_spoke:{place}", f"last_seen:{event.who}"):
+        value = await read_state(conn, key)
+        if value and value.get("ts"):
+            last = datetime.fromisoformat(value["ts"])
+            break
+    return PFCContext(
+        now=now, place=place, place_kind=str(event.payload.get("place_kind") or "direct"),
+        reason=reason, core_memory=str((core or {}).get("text") or ""),
+        expectations=await active_expectation_lines(conn, place), memories=memories,
+        recent=[seen for seen in recent if seen.id != event.id],
+        recent_elsewhere=recent_elsewhere, trigger=event, last_interaction=last,
+        capabilities=capabilities)
+
+
 async def sleep_due(conn: psycopg.AsyncConnection[Any], now: datetime,
                     soul: dict[str, Any]) -> bool:
     """Return whether the self should sleep now."""
@@ -186,7 +216,8 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
     last_id = int((await read_state(conn, "sleep:last_event") or {}).get("id") or 0)
     cur = await conn.execute("SELECT id, ts, kind, who, place, payload FROM events WHERE id > %s "
                              "AND kind NOT IN ('sleep.done', 'tick', 'model.call', "
-                             "'budget.exhausted') ORDER BY id", (last_id,))
+                             "'budget.exhausted', 'job.started', 'job.result') "
+                             "ORDER BY id", (last_id,))
     rows = await cur.fetchall()
     if not rows:
         return None

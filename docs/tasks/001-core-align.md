@@ -14,7 +14,7 @@ Bring the merged Track A code in line with the frozen core spec. This is the onl
 - [x] T5 Budget: `model.call` for every model call; the budget term in θ and `budget.exhausted` (no thrift mode).
 - [x] T6 Expectation schema with the four kinds (`promise`, `wait`, `predict`, `guard`).
 - [x] T7 Injected clock everywhere (no `datetime.now()` in the core); replay uses event times.
-- [ ] T8 Slow work off the loop: PFC, classifier, embedding and sleep as background jobs whose results return as events; one PFC job per place; re-wake once if a new event arrived meanwhile.
+- [x] T8 Slow work off the loop: PFC, classifier, embedding and sleep as background jobs whose results return as events; one PFC job per place; re-wake once if a new event arrived meanwhile.
 - [ ] T9 Numbered SQL migrations with a version table and a backup before migrating; pairing code for the first owner.
 - [ ] T10 Identity as birth content: `soul.yaml` becomes the birth certificate; cognition numbers move to the default prior in `prior/` as knobs / calibration / constants (core.md §9.4); the rest of today's `soul.yaml` splits by project.md §2: `timezone`, sleep, clock, budget and enabled bodies go to a new `config.yaml`; memory and expectation numbers go to the prior's constants; owner ids are replaced by pairing; secrets stay in `.env`; identity stored in `state: identity` after birth; an `identity_changing` capability for owner changes.
 - [ ] T11 Stability contract: `schema_version` on every event with upcasting on read; plugin event kinds under `<plugin>.<kind>`; readers ignore unknown fields (core.md §3).
@@ -68,3 +68,15 @@ All tests and replay pass; grep shows no platform name, no world action and no d
   to `event.ts`, and `CLIBody`/`TelegramBody` accept an optional `Clock` for their percept
   timestamps. `RecordingKernel.put` pins the replay `FakeClock` to each event's `ts`, so
   appraisal, situation assembly, expectations and memory lookups use event times.
+- T8: `monoagens/jobs.py` (`JobRunner`) owns the background tasks under
+  `jobs.timeout_seconds` (or `job_timeout_seconds`, default 60 s). PFC, embedding and sleep
+  start through it; each writes `job.started` and, when done, enqueues `job.result` (with the
+  job name, key and a log-safe result — an embedding vector is not logged). The kernel applies a
+  result in the loop (`_finish_job`): PFC calls are applied and `model.call` is recorded with the
+  job's captured usage, an embedding is stored, a failed sleep is recorded as `sleep.failed`.
+  `job.result` and `job.started` skip the inbound hook. PFC jobs are keyed by place (only one in
+  flight); a wake that arrives meanwhile is kept as one pending re-wake with the newest trigger
+  and fires after the result is applied. Sleep runs on a private connection (DSN rebuilt from
+  `conn.info`, password included) so the shared async connection is never used concurrently.
+  `put` now returns the stored event; `run_until_idle` also drains in-flight jobs. Retrieval in
+  a wake that races its intake encoding embeds its query once more (test updated).

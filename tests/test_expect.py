@@ -89,6 +89,7 @@ async def _feed(kernel: Kernel, event: Event) -> Event:
     put_task = asyncio.create_task(kernel.put(event))
     await asyncio.sleep(0)
     stored = await kernel.step()
+    await kernel.run_until_idle()
     await asyncio.wait_for(put_task, 1.0)
     return stored
 
@@ -96,10 +97,13 @@ async def _feed(kernel: Kernel, event: Event) -> Event:
 async def _tick(kernel: Kernel, clock: FakeClock) -> None:
     await clock.tick(kernel.put)
     await kernel.step()
+    await kernel.run_until_idle()
 
 
 async def _kinds(conn) -> list[str]:
-    return [row[0] for row in await (await conn.execute("SELECT kind FROM events ORDER BY id")).fetchall()]
+    return [row[0] for row in await (await conn.execute(
+        "SELECT kind FROM events WHERE kind NOT IN ('job.started', 'job.result') "
+        "ORDER BY id")).fetchall()]
 
 
 async def _status(conn, exp_id: int) -> str:
@@ -431,6 +435,7 @@ async def test_mvp_c_remind_me_at_seven_exactly_once_across_a_restart(aconn):
     restarted = Kernel(aconn, clock=clock, pfc=_pfc(restarted_fake), soul=SOUL)
     restarted.register_body(RecordingBody())
     await restarted.recover()
+    await restarted.run_until_idle()
     clock.advance(600)
     await _tick(restarted, clock)
     assert restarted_fake.requests == []
@@ -452,6 +457,7 @@ async def test_recovery_wakes_once_for_a_fired_expectation_without_a_reply(aconn
     kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), soul=SOUL)
     kernel.register_body(RecordingBody())
     await kernel.recover()
+    await kernel.run_until_idle()
 
     assert len(fake.requests) == 1
     assert (await _kinds(aconn)).count("act.out") == 1
@@ -461,6 +467,7 @@ async def test_recovery_wakes_once_for_a_fired_expectation_without_a_reply(aconn
     again_fake = FakeLLM()
     again = Kernel(aconn, clock=clock, pfc=_pfc(again_fake), soul=SOUL)
     await again.recover()
+    await again.run_until_idle()
     assert again_fake.requests == []
 
 
@@ -478,6 +485,7 @@ async def test_recovery_only_resolves_when_the_reply_already_exists(aconn):
     fake = FakeLLM()
     kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), soul=SOUL)
     await kernel.recover()
+    await kernel.run_until_idle()
 
     assert fake.requests == []
     assert await _status(aconn, exp_id) == "satisfied"
@@ -489,6 +497,7 @@ async def test_recovery_does_not_touch_active_expectations(aconn):
     fake = FakeLLM()
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
     await kernel.recover()
+    await kernel.run_until_idle()
 
     assert fake.requests == []
     assert await _status(aconn, exp_id) == "active"

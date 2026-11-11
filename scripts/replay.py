@@ -435,6 +435,7 @@ class ReplayRunner:
             await register_vector_async(conn)
             self._make_kernel()
             await self.kernel.recover()
+            await self.kernel.run_until_idle()
             steps = [await self._run_step(index, raw)
                      for index, raw in enumerate(scenario.steps, 1)]
             result = ScenarioResult(
@@ -480,6 +481,7 @@ class ReplayRunner:
                 await pfc.aclose()
             self._make_kernel()
             await self.kernel.recover()
+            await self.kernel.run_until_idle()
         if kind == "message":
             label = text
         elif kind == "advance":

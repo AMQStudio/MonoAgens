@@ -111,13 +111,15 @@ async def _feed(kernel: Kernel, event: Event) -> Event:
     put_task = asyncio.create_task(kernel.put(event))
     await asyncio.sleep(0)
     stored = await kernel.step()
+    await kernel.run_until_idle()
     await asyncio.wait_for(put_task, 1.0)
     return stored
 
 
 async def _kinds(conn) -> list[str]:
     return [row[0] for row in await (await conn.execute(
-        "SELECT kind FROM events ORDER BY id")).fetchall()]
+        "SELECT kind FROM events WHERE kind NOT IN ('job.started', 'job.result') "
+        "ORDER BY id")).fetchall()]
 
 
 async def _payload(conn, kind: str) -> dict:
@@ -252,7 +254,10 @@ async def test_kernel_encodes_the_reply_once_too(aconn):
 
     await _feed(kernel, _msg("halo"))
 
-    assert embedder.calls == 2  # the incoming message and the reply; retrieval reused the first
+    # The incoming message and the reply are encoded by background jobs; the wake
+    # that decides the reply runs before the intake vector lands, so retrieval
+    # embeds its query once more.
+    assert embedder.calls == 3
     rows = await (await aconn.execute(
         "SELECT event_id FROM event_vectors ORDER BY event_id")).fetchall()
     assert len(rows) == 2

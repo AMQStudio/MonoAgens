@@ -4,20 +4,19 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime
+from functools import partial
 from typing import Any
 
-from monoagens import budget, expect, memory
+from monoagens import budget, expect, jobs, memory
 from monoagens.clock import Clock
 from monoagens.cognition import Appraisal, appraise, validate_signals
 from monoagens.config import load_soul
 from monoagens.middleware import HookRegistry, owner_policy
 from monoagens.organs import OrganRegistry
-from monoagens.pfc import PFC, PFCContext, ToolCall
-from monoagens.store import (active_expectation_lines, append_event,
-                             cursor as store_cursor, insert_event_vector, project_event,
-                             read_last_events, read_last_events_elsewhere, read_state)
-from monoagens.types import RECENT_KINDS, Event
+from monoagens.pfc import PFC, ToolCall
+from monoagens.store import (append_event, cursor as store_cursor, insert_event_vector,
+                             project_event)
+from monoagens.types import Event
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,24 +35,26 @@ class Kernel:
         self.soul = dict(soul) if soul is not None else load_soul()
         self.embedder = embedder
         self.queue: asyncio.Queue[_Queued] = asyncio.Queue()
+        self.jobs = jobs.JobRunner(self)
         self.organs = OrganRegistry()
         self.hooks = HookRegistry()
         for pipeline in self.hooks:
             pipeline.set_policy(owner_policy(pipeline.name))
         validate_signals((self.soul.get("cognition") or {}).get("weights") or {})
 
-    async def put(self, event: Event) -> None:
+    async def put(self, event: Event) -> Event | None:
         """Accept one event from a body or the clock (ticks are not acknowledged)."""
-        if event.kind == "tick":
-            await self.queue.put(_Queued(event, None))
-            return
-        ack: asyncio.Future[Event] = asyncio.get_running_loop().create_future()
+        ack = None if event.kind == "tick" else asyncio.get_running_loop().create_future()
         await self.queue.put(_Queued(event, ack))
-        await ack
+        return await ack if ack is not None else None
 
     async def cursor(self, body: str) -> Any | None:
         """Return the last recorded cursor for a body."""
         return await store_cursor(self.conn, body)
+
+    def enqueue(self, event: Event) -> None:
+        """Queue an internal event without waiting for an intake acknowledgement."""
+        self.queue.put_nowait(_Queued(event, None))
 
     def register_body(self, body: Any) -> None:
         """Register a body and the capabilities it declares."""
@@ -73,8 +74,9 @@ class Kernel:
         text = text or str(event.payload.get("description") or event.payload.get("text") or "")
         if self.embedder is None or event.id is None or not text.strip():
             return
-        vector = (await self.embedder.embed([text]))[0]
-        await insert_event_vector(self.conn, event.id, vector)
+        await self.jobs.start("encode", f"encode:{event.id}", event,
+                              partial(jobs.encode, self.embedder, event.id, text),
+                              place=event.place or "")
 
     async def _settle(self, item: _Queued) -> Event:
         try:
@@ -89,7 +91,7 @@ class Kernel:
             item.ack.set_result(stored)
         try:
             await self._encode(stored)
-            if stored.kind != "tick":
+            if stored.kind != "tick" and stored.kind not in jobs.INTERNAL_KINDS:
                 ctx = {"conn": self.conn, "now": self.clock.now()}
                 stored = await self._run_hooks("inbound", stored, ctx, stored,
                                                organ=stored.body)
@@ -115,18 +117,20 @@ class Kernel:
                                               on_error=failed)
 
     async def _appraise(self, event: Event) -> Appraisal:
-        """Ask the cognition layer for one decision (no LLM)."""
         return await appraise(event, conn=self.conn, now=self.clock.now(), soul=self.soul)
 
     async def _wake(self, event: Event) -> None:
+        if event.kind == "job.result":
+            await self._finish_job(event)
+            return
         fired = await expect.due(self.conn, event, now=self.clock.now(), soul=self.soul)
         for item in fired:
             await self._expect_wake(item)
         if event.kind == "tick" and self.pfc is not None and self.embedder is not None:
             now = self.clock.now()
             if await memory.sleep_due(self.conn, now, self.soul):
-                await memory.sleep(self.conn, pfc=self.pfc, embedder=self.embedder,
-                                   now=now, soul=self.soul)
+                await self.jobs.start("sleep", "sleep", event,
+                                      partial(self.jobs.sleep, now))
         if fired or self.pfc is None or event.kind != "percept":
             return
         appraisal = await self._appraise(event)
@@ -136,43 +140,38 @@ class Kernel:
         await self._think(event, appraisal.reason, event.place or "")
 
     async def _think(self, event: Event, reason: str, place: str) -> None:
-        memory_soul = self.soul.get("memory") or {}
-        recent = await read_last_events(self.conn, place,
-                                        limit=int(memory_soul.get("recent_events", 20)),
-                                        kinds=RECENT_KINDS)
-        recent_elsewhere = await read_last_events_elsewhere(
-            self.conn, event.who, place, limit=int(memory_soul.get("recent_elsewhere", 10)),
-            kinds=RECENT_KINDS) if event.who else []
-        core = await read_state(self.conn, "core_memory")
-        last = None
-        for key in (f"last_spoke:{place}", f"last_seen:{event.who}"):
-            value = await read_state(self.conn, key)
-            if value and value.get("ts"):
-                last = datetime.fromisoformat(value["ts"])
-                break
-        context = PFCContext(
-            now=self.clock.now(), place=place,
-            place_kind=str(event.payload.get("place_kind") or "direct"), reason=reason,
-            core_memory=str((core or {}).get("text") or ""),
-            expectations=await active_expectation_lines(self.conn, place),
-            memories=await self._memories(event),
-            recent=[seen for seen in recent if seen.id != event.id],
-            recent_elsewhere=recent_elsewhere, trigger=event, last_interaction=last,
-            capabilities=self.organs.descriptors())
+        """Lay out the desk, pass the context hook, start one PFC job per place."""
+        context = await memory.build_context(
+            self.conn, event, place, reason, now=self.clock.now(), soul=self.soul,
+            memories=await self._memories(event), capabilities=self.organs.descriptors())
         ctx = {"conn": self.conn, "event": event, "now": self.clock.now()}
         context = await self._run_hooks("context", context, ctx, event, organ=event.body)
         if context is None:
             return
-        calls = await self.pfc.decide(context)
-        await budget.record_call(self.conn, event.id, self.pfc, purpose="pfc.decide",
-                                 now=self.clock.now(), soul=self.soul)
-        acted, thought = False, ""
-        for call in calls:
-            acted = await self._apply(event, call) or acted
-            if call.name == "think":
-                thought = str(call.arguments.get("thought") or "")
-        if not acted:
-            await self._emit(event, "decision.silent", {"reason": thought or "no act"})
+        key = f"pfc:{place}"
+        if not await self.jobs.start("pfc", key, event,
+                                     partial(jobs.decide, self.pfc, context), place=place):
+            self.jobs.ask_re_wake(key, event, reason, place)
+
+    async def _finish_job(self, event: Event) -> None:
+        """Apply one job result, then re-wake a place that asked while it ran."""
+        job = self.jobs.finish(event)
+        if job is None:
+            return
+        result = job.outcome.get("result") or {}
+        if "error" in job.outcome:
+            await self._record_error(job.trigger, str(job.outcome["error"]))
+            if job.name == "sleep":
+                await self._emit(job.trigger, "sleep.failed", {"error": str(job.outcome["error"])})
+        elif job.name == "pfc":
+            await budget.record_call(self.conn, job.trigger.id, self.pfc,
+                                     purpose="pfc.decide", now=self.clock.now(),
+                                     soul=self.soul, usage=result.get("usage"))
+            await jobs.apply_calls(self, job.trigger, result.get("calls") or [])
+        elif job.name == "encode" and isinstance(result.get("vector"), list):
+            await insert_event_vector(self.conn, int(result["event_id"]), result["vector"])
+        if job.re_wake is not None:
+            await self._think(*job.re_wake)
 
     async def _memories(self, event: Event) -> tuple[str, ...]:
         query = str(event.payload.get("description") or event.payload.get("text")
@@ -260,12 +259,16 @@ class Kernel:
         return await self._settle(await self.queue.get())
 
     async def run_until_idle(self) -> int:
-        """Process every queued event and return how many were handled."""
+        """Process every queued event and every in-flight background job."""
         count = 0
-        while not self.queue.empty():
-            await self.step()
-            count += 1
-        return count
+        while True:
+            while not self.queue.empty():
+                await self.step()
+                count += 1
+            if not self.jobs.in_flight:
+                return count
+            pending = [task for task in self.jobs.tasks if not task.done()]
+            await (asyncio.wait(pending) if pending else asyncio.sleep(0))
 
     async def run(self, stop_event: asyncio.Event) -> None:
         """Run the consumer loop until the stop event is set."""

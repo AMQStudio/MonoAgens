@@ -111,6 +111,7 @@ async def _feed(kernel: Kernel, event: Event) -> Event:
     put_task = asyncio.create_task(kernel.put(event))
     await asyncio.sleep(0)
     stored = await kernel.step()
+    await kernel.run_until_idle()
     await asyncio.wait_for(put_task, 1.0)
     return stored
 
@@ -226,6 +227,7 @@ async def test_mvp_d_sleep_then_a_differently_worded_question_finds_the_memory(a
     clock.set_time(START + timedelta(minutes=45))
     await kernel.put(Event(id=None, ts=clock.now(), kind="tick"))
     await kernel.step()
+    await kernel.run_until_idle()
 
     memories = await (await aconn.execute("SELECT text FROM memories ORDER BY id")).fetchall()
     assert len(memories) == 2
@@ -276,6 +278,7 @@ async def test_failing_sleep_retries_at_most_once_per_retry_window(aconn):
     for _ in range(20):  # 20 ticks, 30 seconds apart: 10 minutes in total.
         await kernel.put(Event(id=None, ts=clock.now(), kind="tick"))
         await kernel.step()
+        await kernel.run_until_idle()
         clock.advance(30)
 
     assert pfc.calls == 1
@@ -287,6 +290,7 @@ async def test_failing_sleep_retries_at_most_once_per_retry_window(aconn):
     clock.set_time(rows[0][0] + timedelta(minutes=31))  # the retry window has passed
     await kernel.put(Event(id=None, ts=clock.now(), kind="tick"))
     await kernel.step()
+    await kernel.run_until_idle()
     assert pfc.calls == 2
 
 

@@ -94,7 +94,9 @@ class RecordingBody:
 
     async def act(self, action: Action) -> None:
         if self.conn is not None:
-            cur = await self.conn.execute("SELECT kind FROM events ORDER BY id")
+            cur = await self.conn.execute(
+                "SELECT kind FROM events WHERE kind NOT IN ('job.started', 'job.result') "
+                "ORDER BY id")
             self.log_at_act.append([row[0] for row in await cur.fetchall()])
         self.actions.append(action)
 
@@ -129,12 +131,14 @@ async def _feed(kernel: Kernel, event: Event) -> Event:
     put_task = asyncio.create_task(kernel.put(event))
     await asyncio.sleep(0)
     stored = await kernel.step()
+    await kernel.run_until_idle()
     await asyncio.wait_for(put_task, 1.0)
     return stored
 
 
 async def _kinds(conn) -> list[str]:
-    cur = await conn.execute("SELECT kind FROM events ORDER BY id")
+    cur = await conn.execute("SELECT kind FROM events WHERE kind NOT IN "
+                             "('job.started', 'job.result') ORDER BY id")
     return [row[0] for row in await cur.fetchall()]
 
 

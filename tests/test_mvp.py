@@ -99,6 +99,7 @@ async def _feed(kernel: Kernel, event: Event) -> Event:
     put_task = asyncio.create_task(kernel.put(event))
     await asyncio.sleep(0)
     stored = await kernel.step()
+    await kernel.run_until_idle()
     await asyncio.wait_for(put_task, 1.0)
     return stored
 
@@ -106,10 +107,13 @@ async def _feed(kernel: Kernel, event: Event) -> Event:
 async def _tick(kernel: Kernel, clock: FakeClock) -> None:
     await clock.tick(kernel.put)
     await kernel.step()
+    await kernel.run_until_idle()
 
 
 async def _kinds(conn) -> list[str]:
-    return [row[0] for row in await (await conn.execute("SELECT kind FROM events ORDER BY id")).fetchall()]
+    return [row[0] for row in await (await conn.execute(
+        "SELECT kind FROM events WHERE kind NOT IN ('job.started', 'job.result') "
+        "ORDER BY id")).fetchall()]
 
 
 def _volatile(fake: FakeLLM) -> str:
@@ -224,6 +228,7 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
     restarted = Kernel(aconn, clock=clock, pfc=_pfc(restarted_fake), soul=SOUL)
     restarted.register_body(RecordingBody())
     await restarted.recover()
+    await restarted.run_until_idle()
     clock.advance(600)
     await _tick(restarted, clock)
     assert restarted_fake.requests == []
