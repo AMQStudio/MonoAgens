@@ -441,30 +441,44 @@ from the books at every wake, so nothing is ever compacted and no detail is lost
 5. **Desk budgets** are constants of the prior (not knobs): recent messages, memory candidates,
    the verbatim result in a thread, the whole volatile part, and the catch-up window.
 
-**D38 — Knowing, not knowing and misremembering: one generic mechanism.**
-No phrasing, scenario or case is written into the core. The core gives the PFC honest material;
-the PFC words it as a person would.
-1. **Every piece of knowledge carries its basis.** Memories gain `basis`: `observed` (seen in the
-   soul's own log), `told` (someone reported it; weighed by that person's reliability, D24) or
-   `inferred` (the soul's own conclusion). Sleep summaries are `inferred` gist with lower
-   credence than the events they come from. `<memories>` shows basis, source, absolute date and
-   age.
-2. **Recall reports its scope.** A `recall` result says what was searched (places, time range)
-   and what was found, including "nothing", so not finding is itself information the PFC can
-   use.
-3. **The source outranks the gist.** When a summary and its original events disagree, the
-   events win and the summary is revised (`revise`), which can become a lesson. Stored times
-   are always absolute; relative words are resolved against `<now>` only at recall. Sleep
-   merges episodes only when people, place and time agree, never on similarity alone.
-4. **The soul's view of the world is partial.** It knows only what reached it through its organs.
-   No record is not evidence that something did not happen; a reference to something absent
-   from the log, or a jump in state, is a prediction error that suggests a blind spot.
-5. **Honesty principles in the stable prompt, general and few:** speak as a person about what
-   you know — sure, unsure, don't know, don't remember — and do not describe your own
-   machinery (memory, log, database) unless asked; check before asserting anything with
-   consequences; do not agree only to please, and do not insist when you may simply not have
-   seen it; ask about a gap only when it matters.
-Fits the complexity budget: one column and a few principle lines, no new primitive.
+**D38 — Knowing, not knowing and misremembering: borrowed from how the brain does it.**
+No phrasing, scenario or case is written into the core. Each piece below is a brain function
+with a studied model (formulas and sources in docs/MATH.md §14); the PFC words the outcome as
+a person would.
+1. **Source monitoring** (prefrontal). People misremember mostly by misattributing *where* a
+   memory came from. The soul does not have to guess: provenance is logged. Memories carry
+   `basis` — `observed` (in its own log), `told` (someone reported it; weighed by that person's
+   reliability, D24) or `inferred` (its own conclusion, sleep gist included). `<memories>` shows
+   basis, source, absolute date and age.
+2. **Familiarity vs recollection** (dual-process recognition; hippocampus for recollection).
+   Familiarity is graded similarity and activation ("sounds familiar"); recollection is
+   recovering the original events with matching people, place and time. Specific details are
+   asserted only on recollection; familiarity alone is reported as familiarity. Déjà vu is high
+   familiarity with no recollection.
+3. **Verbatim vs gist** (fuzzy-trace theory). Events are the verbatim trace, sleep summaries the
+   gist. Gist drives most false memories; the verbatim trace can reject them (recollection
+   rejection). When they disagree, the events win and the summary is revised (`revise`).
+4. **Pattern separation** (hippocampus, dentate gyrus/CA3). Similar experiences are kept apart:
+   sleep merges episodes only when people, place and time agree, never on similarity alone.
+5. **Reality filter** (orbitofrontal). Memories that no longer hold now are suppressed:
+   `valid_to` / `superseded_by`, absolute stored times, relative words resolved against `<now>`
+   only at recall.
+6. **Metacognitive control of report** (Koriat & Goldsmith). The soul estimates how likely an
+   answer is right, reports only above a criterion that rises with the stakes (base:
+   `certainty_bar`), and otherwise answers at a coarser grain ("mid-October") or withholds
+   ("I don't know"). A high criterion is also what sends it to `recall` first.
+7. **Reasoning from absence and filling gaps** (memorability-based rejection; constructive
+   episodic simulation). Not finding something means little unless it would have been seen:
+   the weight of absence depends on coverage (how likely the soul's organs would have caught
+   it). `recall` reports what it searched and found, "nothing" included. Gaps are filled with
+   hypotheses built from nearby episodes, which are `inferred` and said as guesses. A reference
+   to something absent from the log is a prediction error that suggests a blind spot.
+8. **Stable prompt carries only general principles**, worded by the PFC: speak as a person
+   (sure, unsure, don't know, don't remember) without describing your own machinery unless
+   asked; do not agree only to please, do not insist when you may not have seen it; ask about a
+   gap only when it matters.
+Fits the complexity budget: one column (`basis`) and a few principle lines; coverage is judged
+by the PFC for now (learning it is deferred with D32.9).
 
 ## Accepted in principle, details pending
 

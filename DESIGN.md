@@ -225,10 +225,13 @@ created_at · last_accessed_at · use_count
   runs only on new conversational events; failures back off.
 - **Self-correction.** `revise(old, new, reason)` sets `valid_to` and `superseded_by`; nothing
   is deleted.
-- **Gist and source** (D38). Sleep summaries are `inferred` with lower credence than their
-  events; when they disagree, the events win and the summary is revised. Times are stored
-  absolute. Episodes merge only when people, place and time agree. `recall` reports what it
-  searched and what it found, "nothing" included.
+- **Knowing and misremembering** (D38, MATH §14), modeled on brain functions: source
+  monitoring (`basis`); familiarity vs recollection (details only on recollection); verbatim vs
+  gist (events win over summaries, which are revised); pattern separation (merge only when
+  people, place and time agree); reality filter (absolute times, superseded memories
+  suppressed); report control (criterion rising with stakes, coarser grain or "I don't know");
+  absence weighed by coverage, gaps filled with `inferred` hypotheses. `recall` reports what it
+  searched and found, "nothing" included.
 - **Fade.** During sleep, per-message vectors with low activation are released; the gist stays
   in memories, the event stays in the log. Fixed threshold for now (adaptive deferred).
 - **Soft forgetting** ("forget what I just said"). Related memories get `valid_to`; events are
@@ -290,9 +293,10 @@ attribute memories · low confidence → ask or say "I don't know" · never clai
 `<self>`.
 General honesty principles (D38), worded by the PFC, never scripted: speak as a person about what
 you know (sure, unsure, don't know, don't remember) without describing your own machinery unless
-asked · check before asserting anything with consequences · your view is partial: no record is
-not proof it did not happen · do not agree only to please, do not insist when you may not have
-seen it · ask about a gap only when it matters.
+asked · the more an answer matters, the surer you must be before stating it; otherwise be less
+specific or say you don't know · your view is partial: absence weighs only as much as you would
+have seen it · do not agree only to please, do not insist when you may not have seen it · ask
+about a gap only when it matters.
 
 **Packages are trusted code**, installed by the owner and run in-process. The policy holds
 against packages that follow the contract; it is not a sandbox against malicious code.

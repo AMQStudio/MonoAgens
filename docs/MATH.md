@@ -202,6 +202,59 @@ and missed-help rates, promise keeping, recall after 1/7/30 days, and a blind "w
 bot" test with a target near 50%. Turing-style tests measure persona skill, not cognition: a
 persona-prompted GPT-4.5 was judged human 73% of the time [Jones & Bergen, arXiv 2503.23674, PP].
 
+## 14. Knowing, not knowing and misremembering (D38)
+Seven brain functions, each with a studied model; together they decide what the soul may
+assert about the past.
+
+**Source monitoring.** People attribute a memory's source from its qualities (perceptual
+detail, context, the operations that produced it); most memory distortions are source
+misattributions, and prefrontal regions are central [Johnson, Hashtroudi & Lindsay 1993, PR;
+Johnson & Raye 1981, PR; Mitchell & Johnson 2009, PR]. The soul logs provenance, so `basis`
+(observed | told | inferred) is source monitoring without guessing.
+
+**Familiarity vs recollection.** Dual-process signal detection [Yonelinas 1994; 2002, PR]:
+recollection R is threshold-like (all-or-none retrieval of details) and depends on the
+hippocampus; familiarity F is a continuous signal-detection process:
+  P("seen before") = R + (1 − R) · P(F > c).
+Mapping: F = cosine and activation (§5); R = `recall` recovering original events whose people,
+place and time match. Details are asserted only when R holds; F alone yields "sounds familiar".
+Déjà vu = F > c with R = 0.
+
+**Verbatim vs gist.** Fuzzy-trace theory: verbatim and gist traces are stored in parallel and
+independently; verbatim fades faster; gist drives false memories, and verbatim supports
+*recollection rejection* of meaning-consistent but unpresented items [Brainerd & Reyna 2002, PR;
+Reyna et al. 2016, PR]. The classic demonstration is the DRM paradigm [Roediger & McDermott
+1995, PR]. Mapping: events = verbatim, sleep summaries = gist; on conflict the events win.
+
+**Pattern separation and completion.** The dentate gyrus/CA3 orthogonalize similar inputs into
+distinct memories; CA3 completes a pattern from a partial cue [Yassa & Stark 2011, PR]. Mapping:
+sleep merges two episodes only when people, place and time agree (high overlap), never on vector
+similarity alone.
+
+**Reality filter.** The posterior medial orbitofrontal cortex suppresses evoked memories that do
+not pertain to ongoing reality; its failure produces spontaneous confabulation [Schnider 2003,
+PR; Schnider 2008, book]. Mapping: `valid_to` / `superseded_by`, absolute stored times, relative
+words resolved against `<now>` only at recall.
+
+**Metacognitive control of report.** Monitoring yields an assessed probability c that a
+candidate answer is correct; the answer is volunteered only if c ≥ P_rc, a response criterion
+set by the payoffs (higher cost of error → higher criterion); otherwise the person withholds
+("don't know") or reports at a coarser grain [Koriat & Goldsmith 1996, PR; Goldsmith & Koriat
+2008]. In utility form, choose the answer and grain g that maximize
+  U(g) = c(g) · value(g) − (1 − c(g)) · cost_error,
+where finer grain has more value and lower c. Mapping: P_rc starts at `certainty_bar` and the PFC
+raises it with the stakes; a criterion above the current c is what triggers `recall` first.
+
+**Reasoning from absence; filling gaps.** People reject an item confidently when they judge they
+*would* remember it had it occurred (memorability-based negative recognition) [Brown, Lewis &
+Monk 1977, PR]. In Bayesian form, with coverage q = P(recorded | it happened):
+  P(happened | not found) = (1 − q)·p / ((1 − q)·p + (1 − p)),  p = prior.
+High q (things here are said in chat) → absence is strong evidence; low q (things like this are
+said face to face) → absence says little. Gaps are filled by recombining nearby episodes into a
+hypothesis, as episodic memory does for simulation [Schacter & Addis 2007, PR]; the hypothesis
+is `inferred` and said as a guess. For now the PFC judges q from context; learning q per place
+and topic is deferred (D32.9).
+
 ---
 
 ## References
@@ -211,6 +264,33 @@ persona-prompted GPT-4.5 was judged human 73% of the time [Jones & Bergen, arXiv
   (ACT-R) [PR, book]
 - Petrov, A. A. (2006). Computationally efficient approximation of the base-level learning
   equation in ACT-R. *ICCM*. [PR]
+- Johnson, M. K., Hashtroudi, S., & Lindsay, D. S. (1993). Source monitoring. *Psychological
+  Bulletin*, 114(1), 3–28. [PR]
+- Johnson, M. K., & Raye, C. L. (1981). Reality monitoring. *Psychological Review*, 88, 67–85. [PR]
+- Mitchell, K. J., & Johnson, M. K. (2009). Source monitoring 15 years later. *Psychological
+  Bulletin*, 135(4), 638–677. [PR]
+- Yonelinas, A. P. (2002). The nature of recollection and familiarity: a review of 30 years of
+  research. *Journal of Memory and Language*, 46(3), 441–517. [PR]
+- Brainerd, C. J., & Reyna, V. F. (2002). Fuzzy-trace theory and false memory. *Current
+  Directions in Psychological Science*, 11(5), 164–169. [PR]
+- Reyna, V. F., Corbin, J. C., Weldon, R. B., & Brainerd, C. J. (2016). How fuzzy-trace theory
+  predicts true and false memories for words, sentences, and narratives. *Journal of Applied
+  Research in Memory and Cognition*. [PR]
+- Roediger, H. L., & McDermott, K. B. (1995). Creating false memories. *JEP: Learning, Memory,
+  and Cognition*. [PR]
+- Yassa, M. A., & Stark, C. E. L. (2011). Pattern separation in the hippocampus. *Trends in
+  Neurosciences*, 34(10), 515–525. [PR]
+- Schnider, A. (2003). Spontaneous confabulation and the adaptation of thought to ongoing
+  reality. *Nature Reviews Neuroscience*, 4, 662–671. [PR]
+- Schnider, A. (2008). *The Confabulating Mind*. Oxford UP. [PR, book]
+- Koriat, A., & Goldsmith, M. (1996). Monitoring and control processes in the strategic
+  regulation of memory accuracy. *Psychological Review*, 103(3), 490–517. [PR]
+- Goldsmith, M., & Koriat, A. (2008). The strategic regulation of memory accuracy and
+  informativeness. *Psychology of Learning and Motivation*, 48. [PR]
+- Brown, J., Lewis, V. J., & Monk, A. F. (1977). Memorability, word frequency and negative
+  recognition. *Quarterly Journal of Experimental Psychology*, 29(3), 461–473. [PR]
+- Schacter, D. L., & Addis, D. R. (2007). The cognitive neuroscience of constructive memory:
+  remembering the past and imagining the future. *Phil. Trans. R. Soc. B*, 362, 773–786. [PR]
 - Park, J. S., et al. (2023). Generative Agents: Interactive Simulacra of Human Behavior.
   *UIST*. arXiv 2304.03442. [PR]
 - Liu, X. B., et al. (2025). Proactive Conversational Agents with Inner Thoughts. *CHI*.
