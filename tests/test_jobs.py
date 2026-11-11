@@ -11,25 +11,16 @@ from datetime import datetime, timedelta, timezone
 
 from monoagens.clock import FakeClock
 from monoagens.kernel import Kernel
-from monoagens.memory import FakeEmbedder
+from monoagens.embedding import FakeEmbedder
 from monoagens.pfc import ToolCall
 from monoagens.store import append_event, read_event_vector, read_state
 from monoagens.types import Event
+from tests.support import settings
 
 START = datetime(2026, 11, 10, 8, 0, tzinfo=timezone.utc)
 PLACE = "space:tg:1"
 WHO = "person:owner"
-SOUL = {
-    "name": "Mona",
-    "timezone": "Asia/Jakarta",
-    "cognition": {"seed": 1, "weights": {"name_mentioned": 0.5, "info_gap": 0.35,
-                                         "feeling_of_knowing": 0.35, "relevance": 0.2,
-                                         "social_cost": -0.4}},
-    "sleep": {"idle_minutes": 30, "retry_minutes": 30, "hour": 2},
-    "memory": {"retrieve_k": 5},
-    "expectations": {"default_expires_days": 30, "max_active": 200},
-    "jobs": {"timeout_seconds": 5.0},
-}
+SETTINGS = settings()
 SLEEP_ARGS = {
     "items": [{"text": "Muqsith suka kopi tubruk tanpa gula", "importance": 0.9,
                "who": WHO, "place": PLACE}],
@@ -90,7 +81,7 @@ async def _rows(conn, kind: str) -> list[dict]:
 async def test_pfc_and_embedding_run_as_jobs_and_record_results(aconn):
     pfc = GatePFC()
     pfc.gate.set()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=pfc, soul=SOUL,
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=pfc, settings=SETTINGS,
                     embedder=FakeEmbedder())
 
     stored = await _put(kernel, _msg("halo"))
@@ -122,7 +113,7 @@ async def test_pfc_and_embedding_run_as_jobs_and_record_results(aconn):
 
 async def test_one_pfc_per_place_and_one_re_wake_with_the_newest_event(aconn):
     pfc = GatePFC()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=pfc, soul=SOUL,
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=pfc, settings=SETTINGS,
                     embedder=FakeEmbedder())
 
     first = await _put(kernel, _msg("first"))
@@ -147,8 +138,8 @@ async def test_embedding_job_timeout_returns_a_job_result_error(aconn):
             await asyncio.sleep(10)
             return [[0.0] * 384 for _ in texts]
 
-    soul = {**SOUL, "jobs": {"timeout_seconds": 0.01}}
-    kernel = Kernel(aconn, clock=FakeClock(START), soul=soul, embedder=HangingEmbedder())
+    runtime = settings(constants={"job_timeout_seconds": 0.01})
+    kernel = Kernel(aconn, clock=FakeClock(START), settings=runtime, embedder=HangingEmbedder())
     stored = await _put(kernel, _msg("slow"))
     await kernel.run_until_idle()
 
@@ -162,7 +153,7 @@ async def test_sleep_runs_as_a_job_and_records_sleep_done(aconn):
     await append_event(aconn, ts=START, kind="percept", who=WHO, place=PLACE, body="telegram",
                        payload={"text": "Muqsith suka kopi tubruk"})
     clock = FakeClock(START + timedelta(minutes=45))
-    kernel = Kernel(aconn, clock=clock, pfc=SleepPFC(SLEEP_ARGS), soul=SOUL,
+    kernel = Kernel(aconn, clock=clock, pfc=SleepPFC(SLEEP_ARGS), settings=SETTINGS,
                     embedder=FakeEmbedder())
 
     await kernel.put(Event(id=None, ts=clock.now(), kind="tick"))

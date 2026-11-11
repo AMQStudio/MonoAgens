@@ -70,3 +70,48 @@ def test_environment_wins_over_file(tmp_path, monkeypatch):
 def test_missing_file_and_env_yield_empty_strings(tmp_path):
     assert os.environ.get("LLM_MODEL") is None
     assert load_llm_config(tmp_path / "absent") == {"base_url": "", "api_key": "", "model": ""}
+
+
+def test_config_yaml_holds_only_deployment_settings():
+    from monoagens.config import DEFAULT_CONFIG_PATH, load_config
+
+    config = load_config(DEFAULT_CONFIG_PATH)
+
+    assert set(config) == {"timezone", "owner_settings", "runtime", "bodies", "plugins"}
+    assert config["timezone"] == "Asia/Jakarta"
+    assert config["owner_settings"]["daily_token_budget"] == 300000
+    assert config["runtime"]["tick_seconds"] == 30
+    assert config["bodies"]["cli"]["enabled"] is True
+
+
+def test_soul_yaml_is_only_the_birth_certificate():
+    from monoagens.config import DEFAULT_SOUL_PATH, load_soul
+
+    certificate = load_soul(DEFAULT_SOUL_PATH)
+
+    assert set(certificate) == {"name", "language", "persona", "principles"}
+    assert certificate["name"] == "Mona"
+    assert "Never lie and never invent facts." in certificate["principles"]
+
+
+def test_the_prior_carries_the_behavioral_numbers():
+    from monoagens.prior import load_prior, signal_weights, load_settings
+
+    prior = load_prior()
+    assert set(prior["constants"]) >= {"seed", "retrieve_k", "decay", "default_expires_days",
+                                       "max_active", "job_timeout_seconds"}
+    assert set(prior["knobs"]) and set(prior["calibration"])
+    assert set(signal_weights(load_settings())) == {
+        "name_mentioned", "info_gap", "feeling_of_knowing", "relevance", "social_cost"}
+
+
+def test_settings_join_config_certificate_and_prior():
+    from monoagens.prior import load_settings
+
+    settings = load_settings()
+
+    assert settings["identity"]["name"] == "Mona"
+    assert settings["timezone"] == "Asia/Jakarta"
+    assert settings["owner_settings"]["daily_token_budget"] == 300000
+    assert settings["runtime"]["sleep"]["hour"] == 2
+    assert "cognition" not in settings and "memory" not in settings

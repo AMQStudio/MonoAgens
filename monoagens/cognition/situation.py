@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
+from monoagens.prior import constants
 from monoagens.store import read_event_vector, read_last_events, read_state
 from monoagens.types import RECENT_KINDS, Event
 
@@ -25,13 +26,13 @@ class Situation:
 
 async def assemble_situation(conn, event: Event, *, now: datetime,
                              embedder: Any = None,
-                             soul: dict[str, Any] | None = None) -> Situation:
+                             settings: dict[str, Any] | None = None) -> Situation:
     """Assemble once what the signals may read about this event (at `now`)."""
-    soul = soul or {}
-    zone = ZoneInfo(str(soul.get("timezone") or "UTC"))
-    memory_soul = soul.get("memory") or {}
+    settings = settings or {}
+    zone = ZoneInfo(str(settings.get("timezone") or "UTC"))
+    values = constants(settings)
     recent = await read_last_events(conn, event.place,
-                                    limit=int(memory_soul.get("recent_events", 20)),
+                                    limit=int(values["recent_events"]),
                                     kinds=RECENT_KINDS) if event.place else []
     vector = await read_event_vector(conn, event.id) if event.id is not None else None
     keys = ["cognition:weights"]

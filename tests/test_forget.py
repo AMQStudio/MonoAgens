@@ -10,11 +10,11 @@ from psycopg.types.json import Jsonb
 from monoagens import expect
 from monoagens.forget import fade, forget_hard
 from monoagens.store import append_event, insert_event_vector
+from tests.support import settings
 
 PLACE = "space:tg:1"
 START = datetime(2026, 11, 10, 8, 0, tzinfo=timezone.utc)
-SOUL = {"timezone": "Asia/Jakarta",
-        "expectations": {"default_expires_days": 30, "max_active": 200}}
+SETTINGS = settings()
 
 
 async def _event(conn, *, ts, kind="percept"):
@@ -46,7 +46,7 @@ async def test_lineage_is_recorded_on_vectors_memories_and_expectations(aconn):
     assert (await cur.fetchone())[0] == [source.id]
 
     await expect.create(aconn, {"about": "coffee", "cue_time": {"every": "1d"},
-                                "expect": {"none": True}}, now=START, soul=SOUL, source=source)
+                                "expect": {"none": True}}, now=START, settings=SETTINGS, source=source)
     cur = await aconn.execute("SELECT derived_from FROM expectations")
     assert (await cur.fetchone())[0] == [source.id]
 

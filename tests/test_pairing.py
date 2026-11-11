@@ -90,3 +90,14 @@ async def test_inbound_hook_claims_from_the_context(aconn):
     outcome = await pairing.inbound(event, {"conn": aconn, "now": START})
     assert isinstance(outcome, Continue)
     assert await read_state(aconn, pairing.OWNER_KEY) == {"who": "person:tg:42"}
+
+
+async def test_the_paired_owner_is_rewritten_at_intake(aconn):
+    code = await pairing.ensure(aconn, now=START)
+    event = await _percept(aconn, text=code)
+    await pairing.claim(aconn, event, now=START)
+
+    rewritten = await pairing.as_owner(aconn, event)
+    assert rewritten.who == "person:owner"
+    other = await pairing.as_owner(aconn, await _percept(aconn, who="person:tg:99"))
+    assert other.who == "person:tg:99"

@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from psycopg.types.json import Jsonb
 
+from monoagens.prior import constants
 from monoagens.store import (append_event, fire_expectation, insert_expectation,
                              read_expectations, read_state, resolve_expectation)
 
@@ -17,9 +18,9 @@ _OPS = ("eq", "gt", "lt")
 _KINDS = ("promise", "wait", "predict", "guard")
 
 
-def tz(soul):
-    """Return the configured zoneinfo from soul.yaml."""
-    return ZoneInfo(str(soul.get("timezone") or "UTC"))
+def tz(settings):
+    """Return the configured zoneinfo from config.yaml."""
+    return ZoneInfo(str(settings.get("timezone") or "UTC"))
 
 
 def parse_duration(value):
@@ -78,7 +79,7 @@ def _operator(expect):
     raise ValueError(f"unknown expect operator: {expect!r}")
 
 
-def validate(data, *, now, soul):
+def validate(data, *, now, settings):
     """Validate one `expect` tool call and return the row values to insert."""
     about, raw = str(data.get("about") or "").strip(), data.get("condition", data.get("expect"))
     if not about or not isinstance(raw, dict) or not raw:
@@ -97,7 +98,8 @@ def validate(data, *, now, soul):
     expires = data.get("expires_at")
     if not cue_time and not cue_event:
         raise ValueError("expect needs cue_time or cue_event")
-    days, zone = float(soul["expectations"]["default_expires_days"]), tz(soul)
+    values, zone = constants(settings), tz(settings)
+    days = float(values["default_expires_days"])
     return {
         "kind": kind, "who": data.get("who"), "place": data.get("place"), "about": about,
         "cue_time": cue_time, "cue_event": cue_event, "condition": _operator(raw),
@@ -108,10 +110,10 @@ def validate(data, *, now, soul):
     }
 
 
-async def create(conn, data, *, now, soul, source):
+async def create(conn, data, *, now, settings, source):
     """Validate and store an expectation, recording its creation event."""
-    row = validate(data, now=now, soul=soul)
-    limit = int(soul["expectations"]["max_active"])
+    row = validate(data, now=now, settings=settings)
+    limit = int(constants(settings)["max_active"])
     count = (await (await conn.execute(
         "SELECT count(*) FROM expectations WHERE status = 'active'")).fetchone())[0]
     if count >= limit:
@@ -169,7 +171,7 @@ async def is_met(conn, condition, now):
         return False
 
 
-async def due(conn, event, *, now, soul):
+async def due(conn, event, *, now, settings):
     """Fire or resolve expectations that are due for this event."""
     if event.kind == "tick":
         where, params = "ex.status = 'active' AND ex.next_check_at <= %s", (now,)
@@ -187,11 +189,11 @@ async def due(conn, event, *, now, soul):
             await resolve_expectation(conn, row, now, "satisfied")
         else:
             query = "UPDATE expectations SET next_check_at = %s WHERE id = %s"
-            await conn.execute(query, (next_check(row["cue_time"], now, tz(soul)), row["id"]))
+            await conn.execute(query, (next_check(row["cue_time"], now, tz(settings)), row["id"]))
     return fired
 
 
-async def settle(conn, exp_id, *, now, soul):
+async def settle(conn, exp_id, *, now, settings):
     """Apply the firing policy of a fired expectation after it was handled."""
     rows = await read_expectations(conn, "ex.id = %s", (exp_id,))
     row = rows[0] if rows else None
@@ -204,7 +206,7 @@ async def settle(conn, exp_id, *, now, soul):
         status = "satisfied" if policy.get("once") is True else "dropped"
         return await resolve_expectation(conn, {**row, "fired_event": None}, now, status)
     nxt = now + parse_duration(policy["cooldown"]) if policy.get("cooldown") else next_check(
-        row["cue_time"], now, tz(soul))
+        row["cue_time"], now, tz(settings))
     query = "UPDATE expectations SET status = 'active', next_check_at = %s WHERE id = %s"
     await conn.execute(query, (nxt, exp_id))
 

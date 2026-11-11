@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
 import math
 from collections.abc import Sequence
 from datetime import datetime
@@ -15,15 +13,13 @@ from pgvector import Vector
 
 from monoagens import budget
 from monoagens.pfc import PFCContext
+from monoagens.prior import constants, retrieval
 from monoagens.store import (active_expectation_lines, append_event,
                              read_event_vector, read_expectations, read_last_events,
                              read_last_events_elsewhere, read_state,
                              resolve_expectation, write_state)
 from monoagens.types import RECENT_KINDS, Event
 
-DIM = 384
-MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-RRF_K, DECAY = 60.0, 0.995
 _ROWS = "id, text, who, place, importance, last_accessed_at, private"
 _VECTOR_SQL = (f"SELECT {_ROWS} FROM memories WHERE valid_to IS NULL AND embedding IS NOT NULL "
                "ORDER BY embedding <=> %s LIMIT 20")
@@ -71,44 +67,6 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
     return dot / norm if norm else 0.0
 
 
-class FakeEmbedder:
-    """A deterministic hashed bag-of-words embedder for tests."""
-
-    def _vector(self, text: str) -> list[float]:
-        vec = [0.0] * DIM
-        for token in str(text).lower().split():
-            token = "".join(ch for ch in token if ch.isalnum())
-            if not token:
-                continue
-            digest = hashlib.sha256(token.encode()).digest()
-            vec[int.from_bytes(digest[:4], "big") % DIM] += 1.0
-            vec[int.from_bytes(digest[4:8], "big") % DIM] -= 0.5
-        norm = math.sqrt(sum(x * x for x in vec))
-        return [x / norm for x in vec] if norm else vec
-
-    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
-        """Return one hashed vector per text."""
-        return [self._vector(text) for text in texts]
-
-
-class FastEmbedder:
-    """The real embedder, lazily loaded and run off the event loop."""
-
-    def __init__(self, model_name: str = MODEL) -> None:
-        """Remember the model name; the model itself loads on first use."""
-        self.model_name = model_name
-        self._model: Any = None
-
-    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
-        """Return one embedding per text, computed in a worker thread."""
-        if self._model is None:
-            from fastembed import TextEmbedding
-
-            self._model = await asyncio.to_thread(TextEmbedding, model_name=self.model_name)
-        return await asyncio.to_thread(
-            lambda: [[float(x) for x in v] for v in self._model.embed(list(texts))])
-
-
 class MemoryHit(str):
     """A retrieved memory line that carries its place and privacy flag."""
 
@@ -120,7 +78,7 @@ class MemoryHit(str):
 
 
 async def retrieve(conn: psycopg.AsyncConnection[Any], embedder: Any, query: str, *,
-                   now: datetime, k: int = 5,
+                   now: datetime, k: int, decay: float, rrf_k: float,
                    event_id: int | None = None) -> list[str]:
     """Retrieve up to k memories by hybrid RRF search with importance and decay."""
     if not query.strip():
@@ -135,12 +93,12 @@ async def retrieve(conn: psycopg.AsyncConnection[Any], embedder: Any, query: str
     scores: dict[int, float] = {}
     for ranked in (list(vec), list(txt)):
         for rank, row_id in enumerate(ranked, 1):
-            scores[row_id] = scores.get(row_id, 0.0) + 1.0 / (RRF_K + rank)
+            scores[row_id] = scores.get(row_id, 0.0) + 1.0 / (rrf_k + rank)
     rows = {**vec, **txt}
     scored = []
     for row_id, score in scores.items():
         hours = max(0.0, (now - rows[row_id][5]).total_seconds() / 3600.0)
-        scored.append((score * float(rows[row_id][4]) * DECAY ** hours, row_id))
+        scored.append((score * float(rows[row_id][4]) * decay ** hours, row_id))
     chosen = [rows[row_id] for _, row_id in sorted(scored, reverse=True)[:k]]
     if chosen:
         await conn.execute("UPDATE memories SET last_accessed_at = %s WHERE id = ANY(%s)",
@@ -149,17 +107,27 @@ async def retrieve(conn: psycopg.AsyncConnection[Any], embedder: Any, query: str
                       place=row[3], private=bool(row[6])) for row in chosen]
 
 
+async def candidates(conn: psycopg.AsyncConnection[Any], embedder: Any, event: Event, *,
+                     now: datetime, settings: dict[str, Any]) -> tuple[str, ...]:
+    """Return the memory candidates for one event, using the prior's retrieval constants."""
+    query = str(event.payload.get("description") or event.payload.get("text")
+                or event.payload.get("about") or "")
+    if embedder is None or not query.strip():
+        return ()
+    return tuple(await retrieve(conn, embedder, query, now=now, event_id=event.id,
+                                **retrieval(settings)))
+
+
 async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place: str,
-                        reason: str, *, now: datetime, soul: dict[str, Any],
+                        reason: str, *, now: datetime, settings: dict[str, Any],
                         memories: Sequence[str], capabilities: Sequence[dict[str, Any]],
                         ) -> PFCContext:
     """Lay out the desk for one wake: recent events, memories, state and expectations."""
-    memory_soul = soul.get("memory") or {}
-    recent = await read_last_events(conn, place,
-                                    limit=int(memory_soul.get("recent_events", 20)),
+    values = constants(settings)
+    recent = await read_last_events(conn, place, limit=int(values["recent_events"]),
                                     kinds=RECENT_KINDS)
     recent_elsewhere = await read_last_events_elsewhere(
-        conn, event.who, place, limit=int(memory_soul.get("recent_elsewhere", 10)),
+        conn, event.who, place, limit=int(values["recent_elsewhere"]),
         kinds=RECENT_KINDS) if event.who else []
     core = await read_state(conn, "core_memory")
     last = None
@@ -178,9 +146,10 @@ async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place:
 
 
 async def sleep_due(conn: psycopg.AsyncConnection[Any], now: datetime,
-                    soul: dict[str, Any]) -> bool:
+                    settings: dict[str, Any]) -> bool:
     """Return whether the self should sleep now."""
-    config, zone = soul.get("sleep") or {}, ZoneInfo(str(soul.get("timezone") or "UTC"))
+    config = (settings.get("runtime") or {}).get("sleep") or {}
+    zone = ZoneInfo(str(settings.get("timezone") or "UTC"))
     last_id = int((await read_state(conn, "sleep:last_event") or {}).get("id") or 0)
     cur = await conn.execute(
         "SELECT max(id) FILTER (WHERE kind IN ('percept', 'act.out')), "
@@ -202,16 +171,16 @@ async def sleep_due(conn: psycopg.AsyncConnection[Any], now: datetime,
 
 
 async def sleep(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder: Any, now: datetime,
-                soul: dict[str, Any]) -> Event | None:
+                settings: dict[str, Any]) -> Event | None:
     """Summarize new events into memories, or record sleep.failed and wait to retry."""
     try:
-        return await _consolidate(conn, pfc=pfc, embedder=embedder, now=now, soul=soul)
+        return await _consolidate(conn, pfc=pfc, embedder=embedder, now=now, settings=settings)
     except Exception as exc:
         return await append_event(conn, ts=now, kind="sleep.failed", payload={"error": str(exc)})
 
 
 async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder: Any,
-                       now: datetime, soul: dict[str, Any]) -> Event | None:
+                       now: datetime, settings: dict[str, Any]) -> Event | None:
     """Summarize new events into memories, refresh core_memory, record sleep.done."""
     last_id = int((await read_state(conn, "sleep:last_event") or {}).get("id") or 0)
     cur = await conn.execute("SELECT id, ts, kind, who, place, payload FROM events WHERE id > %s "
@@ -221,19 +190,21 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
     rows = await cur.fetchall()
     if not rows:
         return None
-    zone = ZoneInfo(str(soul.get("timezone") or "UTC"))
+    zone = ZoneInfo(str(settings.get("timezone") or "UTC"))
+    identity = settings.get("identity") or {}
     lines = [f"#{r[0]} {r[1].astimezone(zone):%Y-%m-%d %H:%M} [{r[2]}] {r[3] or '?'} @ "
              f"{r[4] or '?'}: {_payload_text(r[5])}"
              for r in rows]
     old_core = str((await read_state(conn, "core_memory") or {}).get("text") or "")
     messages = [
-        {"role": "system", "content": SLEEP_SYSTEM.format(name=soul.get("name") or "Mona",
-                                                          language=soul.get("language") or "en")},
+        {"role": "system", "content": SLEEP_SYSTEM.format(name=identity.get("name") or "Mona",
+                                                          language=identity.get("language")
+                                                          or "en")},
         {"role": "user", "content": f"<core_memory>{old_core}</core_memory>\n<events>\n"
                                     + "\n".join(lines) + "\n</events>"}]
     calls = await pfc.call(messages, [STORE_MEMORIES])
     await budget.record_call(conn, int(rows[-1][0]), pfc, purpose="sleep.consolidate",
-                             now=now, soul=soul)
+                             now=now, settings=settings)
     args = next((call.arguments for call in calls if call.name == "store_memories"), {})
     items = [item for item in args.get("items") or []
              if isinstance(item, dict) and item.get("text")]

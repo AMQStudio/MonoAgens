@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+from dataclasses import replace
 from datetime import datetime
 
 from monoagens.middleware import Continue
@@ -60,6 +61,14 @@ async def claim(conn, event, *, now: datetime):
         await conn.execute("DELETE FROM state WHERE key = %s", (CODE_KEY,))
     LOGGER.info("owner paired: %s", event.who)
     return claimed
+
+
+async def as_owner(conn, event):
+    """Rewrite the paired owner's native id to `person:owner` at intake."""
+    owner = await read_state(conn, OWNER_KEY) or {}
+    if event.who and event.who == owner.get("who"):
+        return replace(event, who="person:owner")
+    return event
 
 
 async def inbound(item, ctx):

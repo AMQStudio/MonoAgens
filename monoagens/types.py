@@ -33,6 +33,7 @@ class Action:
     place: str
     payload: dict[str, Any] = field(default_factory=dict)
     body: str | None = None
+    event_id: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)

@@ -33,15 +33,14 @@ class TelegramBody:
 
     name = "telegram"
 
-    def __init__(self, token: str, *, owner_ids: set[int] | frozenset[int] = frozenset(),
+    def __init__(self, token: str, *,
                  get_cursor: GetCursor | None = None, poll_timeout: float = 30.0,
                  transport: httpx.AsyncBaseTransport | None = None,
                  api_base: str = "https://api.telegram.org", retry_base: float = 1.0,
                  clock: Clock | None = None) -> None:
-        """Store the token, the owner ids, and the polling settings."""
+        """Store the token and the polling settings."""
         self._token = token
         self._clock = clock or Clock()
-        self._owner_ids = set(owner_ids)
         self._get_cursor = get_cursor
         self._poll_timeout = poll_timeout
         self._transport = transport
@@ -126,7 +125,7 @@ class TelegramBody:
     def _event(self, update_id: int, message: dict[str, Any], text: str) -> Event:
         chat = message["chat"]
         sender_id = (message.get("from") or {}).get("id")
-        who = "person:owner" if sender_id in self._owner_ids else f"person:tg:{sender_id}"
+        who = f"person:tg:{sender_id}"
         place_kind = "direct" if chat.get("type") == "private" else "group"
         return Event(id=None, ts=self._clock.now(), kind="percept", who=who,
                      place=f"space:tg:{chat['id']}", body=self.name,

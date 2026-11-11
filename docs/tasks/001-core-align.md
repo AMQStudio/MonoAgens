@@ -16,7 +16,7 @@ Bring the merged Track A code in line with the frozen core spec. This is the onl
 - [x] T7 Injected clock everywhere (no `datetime.now()` in the core); replay uses event times.
 - [x] T8 Slow work off the loop: PFC, classifier, embedding and sleep as background jobs whose results return as events; one PFC job per place; re-wake once if a new event arrived meanwhile.
 - [x] T9 Numbered SQL migrations with a version table and a backup before migrating; pairing code for the first owner.
-- [ ] T10 Identity as birth content: `soul.yaml` becomes the birth certificate; cognition numbers move to the default prior in `prior/` as knobs / calibration / constants (core.md §9.4); the rest of today's `soul.yaml` splits by project.md §2: `timezone`, sleep, clock, budget and enabled bodies go to a new `config.yaml`; memory and expectation numbers go to the prior's constants; owner ids are replaced by pairing; secrets stay in `.env`; identity stored in `state: identity` after birth; an `identity_changing` capability for owner changes.
+- [x] T10 Identity as birth content: `soul.yaml` becomes the birth certificate; cognition numbers move to the default prior in `prior/` as knobs / calibration / constants (core.md §9.4); the rest of today's `soul.yaml` splits by project.md §2: `timezone`, sleep, clock, budget and enabled bodies go to a new `config.yaml`; memory and expectation numbers go to the prior's constants; owner ids are replaced by pairing; secrets stay in `.env`; identity stored in `state: identity` after birth; an `identity_changing` capability for owner changes.
 - [ ] T11 Stability contract: `schema_version` on every event with upcasting on read; plugin event kinds under `<plugin>.<kind>`; readers ignore unknown fields (core.md §3).
 - [ ] T12 Watchdog: `hook_timeout_ms` on every hook call (timeout = Stop + `error`), `job_timeout_seconds` on background jobs; a test where a hanging hook does not stop the loop.
 
@@ -90,3 +90,14 @@ All tests and replay pass; grep shows no platform name, no world action and no d
   (`{"who": ...}`), deletes the code and records `pair.claimed`, and refuses once an owner
   exists. `pair.created`/`pair.claimed` are additive event kinds; the code itself is never
   stored in the Log.
+- T10: `soul.yaml` holds only name, language, persona and principles. `monoagens/config.py`
+  reads it and `config.yaml`; `monoagens/prior.py` loads `manifest`, `knobs`, `calibration`,
+  `constants`, `references`, `lessons` and `procedures` into one runtime view, and only the
+  prior supplies signal weights, the gate seed, retrieval numbers and expectation limits.
+  `monoagens/identity.py` writes the certificate into `state: identity` once (`identity.born`,
+  projected from the Log), reads state afterwards and declares the core's only organ, `self`,
+  with `set_identity` (`identity_changing: true`); the action hook's owner policy gates it and
+  a successful change records `identity.updated`. `pairing.as_owner` rewrites the paired
+  owner's native id to `person:owner` at intake, so no owner ids live in configuration; the
+  Telegram body no longer takes them. Embedders moved to `monoagens/embedding.py` to keep
+  `memory.py` in budget; the kernel is 280 lines.

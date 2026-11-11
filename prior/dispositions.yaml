@@ -25,18 +25,32 @@ constants:        # engineering values; change only with replay evidence
   spontaneity_tau: [0.02, 0.2]
   boredom_gamma_per_minute: [0.99, 0.8]
   persistence_decay_d: [0.7, 0.3]
-  # weights and windows
+  seed: 1
+  # signal weights
   own_name_weight: 0.5
+  info_gap_weight: 0.35
+  feeling_of_knowing_weight: 0.35
   relevance_weight: 0.2
+  social_cost_weight: -0.4
+  # weights and windows
   talk_rate_window_minutes: 10
   promise_debt_weight: 0.1
   budget_weight: 0.3
   note_band: 0.2
   forward_window_minutes: 30
-  context_weight: 1.0
-  importance_weight: 0.5
   learning_rate: 0.02
   rule_of_three_epsilon: 0.06
+  # memory
+  retrieve_k: 5
+  recent_events: 20
+  recent_elsewhere: 10
+  rrf_k: 60
+  decay: 0.995                 # per-hour retention in retrieval ranking
+  context_weight: 1.0
+  importance_weight: 0.5
+  # expectations
+  default_expires_days: 30
+  max_active: 200
   # robustness
   hook_timeout_ms: 500
   job_timeout_seconds: 120

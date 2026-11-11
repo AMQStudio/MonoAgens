@@ -169,6 +169,9 @@ async def project_event(conn, event: Event) -> None:
             await write_state(conn, "core_memory", core, event.id)
         last = {"id": event.payload.get("last_event_id", event.id)}
         await write_state(conn, "sleep:last_event", last, event.id)
+    if event.kind in ("identity.born", "identity.updated"):
+        if "identity" in event.payload:
+            await write_state(conn, "identity", event.payload["identity"], event.id)
 
 
 async def rebuild_state(conn) -> None:

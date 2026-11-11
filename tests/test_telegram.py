@@ -79,7 +79,6 @@ class FakeTelegram:
 def _body(fake: FakeTelegram, **kwargs) -> TelegramBody:
     return TelegramBody(
         "test-token",
-        owner_ids={OWNER_ID},
         transport=httpx.MockTransport(fake.handler),
         **kwargs,
     )
@@ -128,7 +127,7 @@ async def test_private_message_from_owner():
     event = events[0]
     assert event.kind == "percept"
     assert event.body == "telegram"
-    assert event.who == "person:owner"
+    assert event.who == f"person:tg:{OWNER_ID}"
     assert event.place == f"space:tg:{CHAT_PRIVATE}"
     assert event.payload["cursor"] == 500
     assert event.payload["data"]["message_id"] == 11
@@ -240,7 +239,6 @@ async def test_get_updates_retries_with_backoff():
 
     body = TelegramBody(
         "test-token",
-        owner_ids={OWNER_ID},
         transport=httpx.MockTransport(flaky),
         retry_base=0.001,
     )

@@ -31,11 +31,13 @@ class OrganRegistry:
         """Return the capability descriptors in registration order."""
         return tuple(self.capabilities.values())
 
-    async def act(self, event: Event, capability: str, payload: dict[str, Any]) -> Any:
+    async def act(self, event: Event, capability: str, payload: dict[str, Any], *,
+                  event_id: int | None = None) -> Any:
         """Hand one action to the organ that declared the capability."""
         organ, _, name = capability.partition(".")
         body = self.bodies.get(organ)
         if body is None:
             raise RuntimeError(f"No body registered for {organ!r}")
-        action = Action(kind=name, place=event.place or "", payload=payload, body=organ)
+        action = Action(kind=name, place=event.place or "", payload=payload, body=organ,
+                        event_id=event_id)
         return await body.act(action)

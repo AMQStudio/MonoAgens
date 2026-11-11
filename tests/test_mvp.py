@@ -16,27 +16,14 @@ import httpx
 from monoagens import expect
 from monoagens.clock import FakeClock
 from monoagens.kernel import Kernel
-from monoagens.memory import FakeEmbedder
+from monoagens.embedding import FakeEmbedder
 from monoagens.pfc import PFC
 from monoagens.store import append_event, read_state
 from monoagens.bodies.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
+from tests.support import settings
 
-SOUL = {
-    "name": "Mona",
-    "language": "id",
-    "timezone": "Asia/Jakarta",
-    "persona": "Calm and honest.",
-    "principles": ["Never lie.", "Silence is better than interrupting."],
-    "cognition": {
-        "seed": 1,
-        "weights": {"name_mentioned": 0.5, "info_gap": 0.35, "feeling_of_knowing": 0.35,
-                    "relevance": 0.2, "social_cost": -0.4},
-    },
-    "sleep": {"idle_minutes": 30, "hour": 2},
-    "memory": {"retrieve_k": 5},
-    "expectations": {"default_expires_days": 30, "max_active": 200},
-}
+SETTINGS = settings()
 PLACE = "space:tg:1"
 GROUP = "space:tg:-100123"
 WHO = "person:owner"
@@ -71,7 +58,7 @@ class FakeLLM:
 
 
 def _pfc(fake: FakeLLM) -> PFC:
-    return PFC("https://llm.test/v1", "test-key", "fake-model", soul=SOUL,
+    return PFC("https://llm.test/v1", "test-key", "fake-model", settings=SETTINGS,
                transport=httpx.MockTransport(fake.handler))
 
 
@@ -129,13 +116,13 @@ async def test_mvp_a_restart_preserves_conversation_context(aconn):
     clock = FakeClock(START)
 
     first_fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "kita bahas kopi ya"}})]])
-    first = Kernel(aconn, clock=clock, pfc=_pfc(first_fake), soul=SOUL)
+    first = Kernel(aconn, clock=clock, pfc=_pfc(first_fake), settings=SETTINGS)
     first.register_body(RecordingBody())
     await _feed(first, _msg("besok kita bahas apa?"))
 
     # Restart: a brand-new Kernel and PFC on the same database.
     second_fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "lanjut soal kopi"}})]])
-    second = Kernel(aconn, clock=clock, pfc=_pfc(second_fake), soul=SOUL)
+    second = Kernel(aconn, clock=clock, pfc=_pfc(second_fake), settings=SETTINGS)
     body = RecordingBody()
     second.register_body(body)
     await _feed(second, _msg("lanjut", message_id=2))
@@ -154,7 +141,7 @@ async def test_mvp_a_restart_preserves_conversation_context(aconn):
 async def test_mvp_b_silence_and_mention(aconn):
     """MVP (b): 20 ordinary group messages stay silent; a mention gets a reply."""
     fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "iya, ada apa?"}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
     kernel.register_body(body)
 
@@ -200,7 +187,7 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
                      "policy": {"once": True}})],
         [("act", {"capability": "telegram.say", "arguments": {"text": "sudah jam 7"}})],
     ])
-    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
     kernel.register_body(body)
 
@@ -225,7 +212,7 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
 
     # Restart around 7: the reminder already answered, so nothing fires again.
     restarted_fake = FakeLLM()
-    restarted = Kernel(aconn, clock=clock, pfc=_pfc(restarted_fake), soul=SOUL)
+    restarted = Kernel(aconn, clock=clock, pfc=_pfc(restarted_fake), settings=SETTINGS)
     restarted.register_body(RecordingBody())
     await restarted.recover()
     await restarted.run_until_idle()
@@ -242,7 +229,7 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
         aconn, {"about": "nudge me if I skip workouts", "cue_event": pattern,
                 "expect": {"event_seen": pattern, "within": "2d"},
                 "weight": 1.0, "policy": {"once": True}},
-        now=clock.now(), soul=SOUL, source=source)
+        now=clock.now(), settings=SETTINGS, source=source)
     exp_id = int(created.payload["expectation_id"])
 
     await _feed(restarted, _msg("saya sudah WORKOUT hari ini", message_id=2, place=GROUP,
@@ -276,7 +263,7 @@ async def test_mvp_d_sleep_consolidation_and_retrieval(aconn):
         (max_before,))).fetchall()
 
     fake = FakeLLM([[("store_memories", SLEEP_ARGS)], []])
-    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), soul=SOUL, embedder=FakeEmbedder())
+    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), settings=SETTINGS, embedder=FakeEmbedder())
     kernel.register_body(RecordingBody())
 
     # Idle for 45 minutes: the tick path runs sleep.

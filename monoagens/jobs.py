@@ -41,12 +41,10 @@ class JobRunner:
     """Owns the background tasks and answers their results on the kernel queue."""
 
     def __init__(self, kernel: Any) -> None:
-        """Read the timeout from the soul and start with nothing in flight."""
+        """Read the timeout from the prior and start with nothing in flight."""
         self.kernel = kernel
-        config = kernel.soul.get("jobs") or {}
-        self.timeout = float(config.get("timeout_seconds")
-                             or kernel.soul.get("job_timeout_seconds")
-                             or DEFAULT_TIMEOUT_SECONDS)
+        values = (kernel.settings.get("constants") or {})
+        self.timeout = float(values.get("job_timeout_seconds") or DEFAULT_TIMEOUT_SECONDS)
         self.in_flight: dict[str, Job] = {}
         self.tasks: set[asyncio.Task[None]] = set()
 
@@ -106,7 +104,7 @@ class JobRunner:
             await register_vector_async(conn)
             done = await memory.sleep(conn, pfc=self.kernel.pfc,
                                       embedder=self.kernel.embedder, now=now,
-                                      soul=self.kernel.soul)
+                                      settings=self.kernel.settings)
             return {"sleep_event": done.id if done is not None else None}
         finally:
             await conn.close()

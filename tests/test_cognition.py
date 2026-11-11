@@ -16,28 +16,16 @@ from monoagens.clock import FakeClock
 from monoagens.cognition import (SIGNALS, Appraisal, Situation, appraise,
                                  assemble_situation, seeded_rng, validate_signals)
 from monoagens.kernel import Kernel
-from monoagens.memory import FakeEmbedder
+from monoagens.embedding import FakeEmbedder
 from monoagens.middleware import Continue, HookPipeline, HookRegistry, Replace, Stop
 from monoagens.pfc import PFC
 from monoagens.store import (append_event, insert_event_vector, read_event_vector,
                              read_state, write_state)
 from monoagens.bodies.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
+from tests.support import settings
 
-SOUL = {
-    "name": "Mona",
-    "language": "id",
-    "timezone": "Asia/Jakarta",
-    "persona": "Calm and honest.",
-    "principles": ["Never lie."],
-    "memory": {"retrieve_k": 5},
-    "cognition": {
-        "seed": 1,
-        "weights": {"name_mentioned": 0.5, "info_gap": 0.35, "feeling_of_knowing": 0.35,
-                    "relevance": 0.2, "social_cost": -0.4},
-    },
-    "expectations": {"default_expires_days": 30, "max_active": 200},
-}
+SETTINGS = settings()
 PLACE = "space:tg:1"
 GROUP = "space:tg:-100123"
 WHO = "person:owner"
@@ -91,7 +79,7 @@ class RecordingBody:
 
 
 def _pfc(fake: FakeLLM) -> PFC:
-    return PFC("https://llm.test/v1", "test-key", "fake-model", soul=SOUL,
+    return PFC("https://llm.test/v1", "test-key", "fake-model", settings=SETTINGS,
                transport=httpx.MockTransport(fake.handler))
 
 
@@ -177,7 +165,7 @@ def test_appraisal_payload_carries_every_number_and_the_signals():
 
 async def test_addressed_message_is_a_wake_reflex():
     event = _msg("mona, halo", addressed=True)
-    appraisal = await appraise(event, soul=SOUL)
+    appraisal = await appraise(event, settings=SETTINGS)
     assert (appraisal.decision, appraisal.reflex, appraisal.reason) == (
         "wake", "addressed", "addressed message")
     assert (appraisal.s, appraisal.theta, appraisal.p) == (1.0, 0.0, 1.0)
@@ -189,15 +177,15 @@ async def test_addressed_message_is_a_wake_reflex():
 async def test_fired_expectation_is_a_wake_reflex():
     event = Event(None, START, "expectation.fired", who=WHO, place=PLACE,
                   payload={"expectation_id": 1})
-    appraisal = await appraise(event, soul=SOUL)
+    appraisal = await appraise(event, settings=SETTINGS)
     assert (appraisal.decision, appraisal.reflex, appraisal.p) == (
         "wake", "pfc_expectation", 1.0)
 
 
 async def test_an_ordinary_message_is_silent_and_reproducible():
     event = Event(42, START, "percept", who=WHO, place=PLACE, payload={"text": "obrolan"})
-    first = await appraise(event, soul=SOUL)
-    second = await appraise(event, soul=SOUL)
+    first = await appraise(event, settings=SETTINGS)
+    second = await appraise(event, settings=SETTINGS)
     assert (first.decision, first.reflex, first.reason) == (
         "silent", None, "gate score below silent threshold")
     assert (first.s, first.theta, first.p) == (0.0, 0.0, 0.0)
@@ -216,7 +204,7 @@ async def test_assemble_situation_holds_vector_recent_and_state(aconn):
     current = await append_event(aconn, ts=START, kind="percept", who=WHO, place=PLACE,
                                  body="telegram", payload={"text": "halo"})
 
-    situation = await assemble_situation(aconn, current, now=START, soul=SOUL)
+    situation = await assemble_situation(aconn, current, now=START, settings=SETTINGS)
     assert situation.event.id == current.id
     assert situation.vector is None
     assert [seen.id for seen in situation.recent] == [earlier.id, current.id]
@@ -224,13 +212,14 @@ async def test_assemble_situation_holds_vector_recent_and_state(aconn):
     assert situation.state[f"habit:{PLACE}:{WHO}"] == {"h": 1}
     assert f"budget:{START.astimezone(JAKARTA).date().isoformat()}" not in situation.state
 
-    older = await assemble_situation(aconn, earlier, now=START, soul=SOUL)
+    older = await assemble_situation(aconn, earlier, now=START, settings=SETTINGS)
     assert older.vector is not None and len(older.vector) == 384
 
 
 async def test_kernel_encodes_a_message_once_and_retrieval_reuses_the_vector(aconn):
     embedder = CountingEmbedder()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=None, soul=SOUL, embedder=embedder)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=None, settings=SETTINGS,
+                    embedder=embedder)
 
     stored = await _feed(kernel, _msg("halo"))
 
@@ -239,16 +228,21 @@ async def test_kernel_encodes_a_message_once_and_retrieval_reuses_the_vector(aco
     vector = await read_event_vector(aconn, stored.id)
     assert vector is not None and len(vector) == 384
 
-    await memory.retrieve(aconn, embedder, "halo", now=START, event_id=stored.id)
+    values = SETTINGS["constants"]
+    await memory.retrieve(aconn, embedder, "halo", now=START, event_id=stored.id,
+                          k=values["retrieve_k"], decay=values["decay"],
+                          rrf_k=values["rrf_k"])
     assert embedder.calls == 1
-    await memory.retrieve(aconn, embedder, "halo", now=START)
+    await memory.retrieve(aconn, embedder, "halo", now=START,
+                          k=values["retrieve_k"], decay=values["decay"],
+                          rrf_k=values["rrf_k"])
     assert embedder.calls == 2
 
 
 async def test_kernel_encodes_the_reply_once_too(aconn):
     embedder = CountingEmbedder()
     fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL,
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS,
                     embedder=embedder)
     kernel.register_body(RecordingBody())
 
@@ -268,7 +262,7 @@ async def test_kernel_encodes_the_reply_once_too(aconn):
 
 async def test_silent_decision_event_carries_the_full_appraisal(aconn):
     fake = FakeLLM()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     await _feed(kernel, _msg("obrolan biasa", place=GROUP, place_kind="group",
                              addressed=False))
 
@@ -286,7 +280,7 @@ async def test_silent_decision_event_carries_the_full_appraisal(aconn):
 async def test_llm_token_usage_lands_in_the_daily_budget_key(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
     pfc = _pfc(fake)
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=pfc, soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=pfc, settings=SETTINGS)
     kernel.register_body(RecordingBody())
 
     await _feed(kernel, _msg("halo"))
@@ -307,24 +301,25 @@ async def test_llm_token_usage_lands_in_the_daily_budget_key(aconn):
 
 
 async def test_the_budget_spent_raises_theta(aconn):
-    soul = {**SOUL, "cognition": {**SOUL["cognition"], "daily_token_budget": 100,
-                                  "threshold": {"budget": 0.3}}}
+    runtime = settings(owner_settings={"daily_token_budget": 100})
     event = Event(42, START, "percept", who=WHO, place=PLACE, payload={"text": "obrolan"})
     key = f"budget:{START.astimezone(JAKARTA).date().isoformat()}"
     source = await append_event(aconn, ts=START, kind="percept", payload={"text": "obrolan"})
-    assert (await appraise(event, soul=soul)).theta == 0.0
+    assert (await appraise(event, settings=runtime)).theta == 0.0
 
     await write_state(aconn, key, {"total_tokens": 50}, source.id)
-    assert (await appraise(event, conn=aconn, now=START, soul=soul)).theta == pytest.approx(0.15)
+    theta = (await appraise(event, conn=aconn, now=START, settings=runtime)).theta
+    assert theta == pytest.approx(0.15)
 
     await write_state(aconn, key, {"total_tokens": 250}, source.id)
-    assert (await appraise(event, conn=aconn, now=START, soul=soul)).theta == pytest.approx(0.3)
+    theta = (await appraise(event, conn=aconn, now=START, settings=runtime)).theta
+    assert theta == pytest.approx(0.3)
 
 
 async def test_budget_exhausted_is_recorded_once_per_day(aconn):
-    soul = {**SOUL, "cognition": {**SOUL["cognition"], "daily_token_budget": 10}}
+    runtime = settings(owner_settings={"daily_token_budget": 10})
     fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=soul)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=runtime)
     kernel.register_body(RecordingBody())
 
     await _feed(kernel, _msg("halo"))
@@ -345,7 +340,7 @@ async def test_inbound_stop_records_guard_stopped_and_skips_cognition(aconn):
     async def block(item, ctx):
         return Stop("not now")
 
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.hooks.inbound.add("block", block)
     await _feed(kernel, _msg("halo"))
 
@@ -358,7 +353,7 @@ async def test_inbound_exception_fails_closed_with_an_error_and_a_stop(aconn):
     async def boom(item, ctx):
         raise RuntimeError("nope")
 
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM()), soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM()), settings=SETTINGS)
     kernel.hooks.inbound.add("boom", boom)
     await _feed(kernel, _msg("halo"))
 
@@ -372,7 +367,7 @@ async def test_inbound_replace_swaps_the_event_before_appraisal(aconn):
     async def rewrite(item, ctx):
         return Replace(replace(item, payload={**item.payload, "addressed": True}))
 
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_body(RecordingBody())
     kernel.hooks.inbound.add("rewrite", rewrite)
     await _feed(kernel, _msg("halo", addressed=False))
@@ -387,7 +382,7 @@ async def test_context_hook_can_replace_the_pfc_context(aconn):
     async def rewrite(item, ctx):
         return Replace(replace(item, reason="rewritten by middleware"))
 
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_body(RecordingBody())
     kernel.hooks.context.add("rewrite", rewrite)
     await _feed(kernel, _msg("halo"))
@@ -404,7 +399,7 @@ async def test_action_hook_replaces_the_payload_and_continue_passes(aconn):
     async def note(item, ctx):
         return Continue()
 
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
     kernel.register_body(body)
     kernel.hooks.action.add("note", note)
@@ -422,7 +417,7 @@ async def test_action_hook_stop_keeps_the_logged_message_but_never_acts(aconn):
     async def block(item, ctx):
         return Stop("privacy")
 
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
     kernel.register_body(body)
     kernel.hooks.action.add("block", block)
@@ -439,7 +434,7 @@ async def test_organ_own_action_hook_runs_only_for_its_organ(aconn):
     async def block(item, ctx):
         return Stop("telegram only")
 
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
     kernel.register_body(body)
     kernel.hooks.action.add("other-organ", block, organ="cli")
@@ -452,7 +447,7 @@ async def test_inbound_organ_own_hook_skips_events_from_another_organ(aconn):
     async def block(item, ctx):
         return Stop("telegram only")
 
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM()), soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM()), settings=SETTINGS)
     kernel.hooks.inbound.add("other-organ", block, organ="cli")
     await _feed(kernel, _msg("halo"))
 
@@ -525,11 +520,11 @@ def test_duplicate_middleware_names_fail_at_registration():
         HookPipeline("outbound")
 
 
-def test_kernel_refuses_a_soul_whose_signal_weights_do_not_match(conn):
-    with pytest.raises(ValueError, match="cognition.weights mismatch"):
-        Kernel(conn, soul={**SOUL, "cognition": {"weights": {"bogus": 1.0}}})
-    with pytest.raises(ValueError, match="cognition.weights mismatch"):
-        Kernel(conn, soul={key: value for key, value in SOUL.items() if key != "cognition"})
+def test_kernel_refuses_settings_whose_signal_weights_do_not_match(conn):
+    broken = settings()
+    broken["constants"] = {}
+    with pytest.raises(ValueError, match="signal weights missing"):
+        Kernel(conn, settings=broken)
 
 
 class IdentityBody(RecordingBody):
@@ -543,7 +538,7 @@ class IdentityBody(RecordingBody):
 
 async def test_identity_changing_capability_is_refused_for_a_non_owner(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.set_identity", "arguments": {}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = IdentityBody()
     kernel.register_body(body)
 
@@ -557,7 +552,7 @@ async def test_identity_changing_capability_is_refused_for_a_non_owner(aconn):
 
 async def test_identity_changing_capability_passes_for_the_owner(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.set_identity", "arguments": {}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = IdentityBody()
     kernel.register_body(body)
 

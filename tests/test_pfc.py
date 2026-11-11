@@ -15,19 +15,9 @@ from monoagens.pfc import PFC, TOOL_NAMES
 from monoagens.store import append_event, read_state, write_state
 from monoagens.bodies.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
+from tests.support import settings
 
-SOUL = {
-    "name": "Mona",
-    "language": "id",
-    "timezone": "Asia/Jakarta",
-    "persona": "Calm and honest.",
-    "principles": ["Never lie."],
-    "cognition": {
-        "seed": 1,
-        "weights": {"name_mentioned": 0.5, "info_gap": 0.35, "feeling_of_knowing": 0.35,
-                    "relevance": 0.2, "social_cost": -0.4},
-    },
-}
+SETTINGS = settings()
 PLACE = "space:tg:1"
 START = datetime(2026, 11, 10, 8, 0, tzinfo=timezone.utc)  # 15:00 in Jakarta
 
@@ -74,7 +64,7 @@ def _pfc(fake: FakeLLM) -> PFC:
         "https://llm.test/v1",
         "test-key",
         "fake-model",
-        soul=SOUL,
+        settings=SETTINGS,
         transport=httpx.MockTransport(fake.handler),
     )
 
@@ -145,7 +135,7 @@ async def _kinds(conn) -> list[str]:
 async def test_layered_prompt_structure(aconn):
     """Stable identity, then core_memory, then tagged volatile sections in order."""
     fake = FakeLLM()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
     kernel.register_body(body)
 
@@ -168,7 +158,7 @@ async def test_layered_prompt_structure(aconn):
     act_tool = next(tool for tool in request["tools"]
                     if tool["function"]["name"] == "act")
     capability = act_tool["function"]["parameters"]["properties"]["capability"]
-    assert capability["enum"] == ["telegram.say", "telegram.react"]
+    assert capability["enum"] == ["self.set_identity", "telegram.say", "telegram.react"]
     expect_tool = next(tool for tool in request["tools"]
                        if tool["function"]["name"] == "expect")
     kind = expect_tool["function"]["parameters"]["properties"]["kind"]
@@ -202,7 +192,7 @@ async def test_layered_prompt_structure(aconn):
 async def test_recent_shows_only_conversational_events(aconn):
     """<recent> carries percepts, act.out, and fired expectations, never bookkeeping."""
     fake = FakeLLM()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
 
     await append_event(aconn, ts=START, kind="percept", who="person:owner", place=PLACE,
                        body="telegram", payload={"description": "halo pagi"})
@@ -235,7 +225,7 @@ async def test_recent_shows_only_conversational_events(aconn):
 
 async def test_say_is_recorded_before_the_body_acts(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "halo juga"}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody(aconn)
     kernel.register_body(body)
 
@@ -259,7 +249,7 @@ async def test_say_is_recorded_before_the_body_acts(aconn):
 
 async def test_react_is_recorded_before_the_body_acts(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.react", "arguments": {"emoji": "👍"}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody(aconn)
     kernel.register_body(body)
 
@@ -278,7 +268,7 @@ async def test_react_is_recorded_before_the_body_acts(aconn):
 async def test_an_organ_result_is_recorded_as_act_result(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.say",
                               "arguments": {"text": "done"}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_body(ResultBody())
 
     await _feed(kernel, _msg("halo"))
@@ -291,7 +281,7 @@ async def test_an_organ_result_is_recorded_as_act_result(aconn):
 
 async def test_a_wake_without_act_is_recorded_as_silent(aconn):
     fake = FakeLLM([[]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
     kernel.register_body(body)
 
@@ -306,7 +296,7 @@ async def test_a_wake_without_act_is_recorded_as_silent(aconn):
 async def test_think_is_recorded_and_silence_keeps_its_reason(aconn):
     fake = FakeLLM([[("think", {"thought": "nothing to add", "motivation": 2,
                                "confidence": 0.4})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_body(RecordingBody())
 
     await _feed(kernel, _msg("hm"))
@@ -321,7 +311,7 @@ async def test_think_is_recorded_and_silence_keeps_its_reason(aconn):
 
 async def test_unaddressed_message_does_not_wake_the_pfc(aconn):
     fake = FakeLLM()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
 
     await _feed(kernel, _msg("group chatter", addressed=False))
 
@@ -331,7 +321,7 @@ async def test_unaddressed_message_does_not_wake_the_pfc(aconn):
 
 async def test_invalid_tool_call_becomes_an_error_event_and_the_loop_lives(aconn):
     fake = FakeLLM([[("shout", {"text": "hi"})], [("act", {"capability": "telegram.say", "arguments": {"text": "still here"}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_body(RecordingBody())
 
     await _feed(kernel, _msg("first"))
@@ -346,7 +336,7 @@ async def test_invalid_tool_call_becomes_an_error_event_and_the_loop_lives(aconn
 
 async def test_llm_failure_becomes_an_error_event_and_the_loop_lives(aconn):
     fake = FakeLLM(status=500)
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
 
     await _feed(kernel, _msg("halo"))
 
@@ -367,13 +357,13 @@ async def test_mvp_a_restart_keeps_the_conversation_context(aconn):
     clock = FakeClock(START)
 
     first_fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "kita bahas kopi ya"}})]])
-    first = Kernel(aconn, clock=clock, pfc=_pfc(first_fake))
+    first = Kernel(aconn, clock=clock, pfc=_pfc(first_fake), settings=SETTINGS)
     first.register_body(RecordingBody())
     await _feed(first, _msg("besok kita bahas apa?"))
 
     # Restart: a new Kernel and a new PFC on the same database.
     second_fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "lanjut soal kopi"}})]])
-    second = Kernel(aconn, clock=clock, pfc=_pfc(second_fake))
+    second = Kernel(aconn, clock=clock, pfc=_pfc(second_fake), settings=SETTINGS)
     body = RecordingBody(aconn)
     second.register_body(body)
     await _feed(second, _msg("lanjut", message_id=2))
@@ -414,10 +404,10 @@ async def test_dm_gets_a_reply_through_the_telegram_body(aconn):
             sent.append(params)
         return httpx.Response(200, json={"ok": True, "result": True})
 
-    body = TelegramBody("token", owner_ids={111}, transport=httpx.MockTransport(handler))
-    kernel = Kernel(
-        aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "halo!"}})]]))
-    )
+    body = TelegramBody("token", transport=httpx.MockTransport(handler))
+    fake = FakeLLM([[("act", {"capability": "telegram.say",
+                              "arguments": {"text": "halo!"}})]])
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_body(body)
 
     stop = asyncio.Event()
@@ -442,7 +432,7 @@ async def test_dm_gets_a_reply_through_the_telegram_body(aconn):
 async def test_recent_includes_other_places_prefixed(aconn):
     """<recent> lists this place first, then the same person's other places, prefixed."""
     fake = FakeLLM()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
 
     await append_event(aconn, ts=START, kind="percept", who="person:owner", place=PLACE,
                        body="telegram", payload={"description": "di sini"})
@@ -470,7 +460,7 @@ async def test_recent_includes_other_places_prefixed(aconn):
 
 async def test_recent_is_nothing_yet_when_both_parts_are_empty(aconn):
     fake = FakeLLM()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
 
     await _feed(kernel, _msg("halo pertama"))
 

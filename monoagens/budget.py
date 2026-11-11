@@ -12,19 +12,19 @@ from monoagens.types import Event
 COUNTERS = ("prompt_tokens", "cached_tokens", "completion_tokens", "total_tokens")
 
 
-def _zone(soul: Mapping[str, Any]) -> ZoneInfo:
-    return ZoneInfo(str(soul.get("timezone") or "UTC"))
+def _zone(settings: Mapping[str, Any]) -> ZoneInfo:
+    return ZoneInfo(str(settings.get("timezone") or "UTC"))
 
 
-def daily_limit(soul: Mapping[str, Any]) -> float:
+def daily_limit(settings: Mapping[str, Any]) -> float:
     """Return the owner's daily token budget (0 or less means no cap)."""
-    cognition = soul.get("cognition") or {}
-    return float(cognition.get("daily_token_budget") or 0)
+    owner = settings.get("owner_settings") or {}
+    return float(owner.get("daily_token_budget") or 0)
 
 
-def key_for(now: datetime, soul: Mapping[str, Any]) -> str:
+def key_for(now: datetime, settings: Mapping[str, Any]) -> str:
     """Return the state key that holds the token usage of that local day."""
-    return f"budget:{now.astimezone(_zone(soul)).date().isoformat()}"
+    return f"budget:{now.astimezone(_zone(settings)).date().isoformat()}"
 
 
 def used_fraction(value: Mapping[str, Any] | None, limit: float) -> float:
@@ -36,7 +36,7 @@ def used_fraction(value: Mapping[str, Any] | None, limit: float) -> float:
 
 
 async def record_call(conn, trigger_id: int | None, pfc: Any, *, purpose: str,
-                      now: datetime, soul: Mapping[str, Any],
+                      now: datetime, settings: Mapping[str, Any],
                       usage: Mapping[str, Any] | None = None) -> Event | None:
     """Record one model call with its purpose and tokens, then count it for today."""
     if trigger_id is None:
@@ -48,20 +48,20 @@ async def record_call(conn, trigger_id: int | None, pfc: Any, *, purpose: str,
         payload={"purpose": purpose, "model": str(getattr(pfc, "model", "") or ""),
                  "usage": totals_usage})
     totals = await add_budget_usage(
-        conn, now=now, timezone=str(soul.get("timezone") or "UTC"),
+        conn, now=now, timezone=str(settings.get("timezone") or "UTC"),
         usage=totals_usage, updated_by_event=call.id)
-    await _record_exhausted(conn, now, soul, totals, call.id)
+    await _record_exhausted(conn, now, settings, totals, call.id)
     return call
 
 
-async def _record_exhausted(conn, now: datetime, soul: Mapping[str, Any],
+async def _record_exhausted(conn, now: datetime, settings: Mapping[str, Any],
                             totals: dict[str, int], call_id: int) -> None:
     """Write budget.exhausted once per local day when the budget runs out."""
-    limit = daily_limit(soul)
+    limit = daily_limit(settings)
     used = int(totals.get("total_tokens") or 0)
     if limit <= 0 or used < limit:
         return
-    local = now.astimezone(_zone(soul))
+    local = now.astimezone(_zone(settings))
     midnight = datetime.combine(local.date(), time.min, tzinfo=local.tzinfo)
     cur = await conn.execute("SELECT 1 FROM events WHERE kind = 'budget.exhausted' "
                              "AND ts >= %s LIMIT 1", (midnight,))

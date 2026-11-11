@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
-from monoagens import budget, expect, jobs, memory
+from monoagens import budget, expect, identity, jobs, memory, pairing
 from monoagens.clock import Clock
 from monoagens.cognition import Appraisal, appraise, validate_signals
-from monoagens.config import load_soul
+from monoagens.prior import load_settings, signal_weights
 from monoagens.middleware import HookRegistry, owner_policy
 from monoagens.organs import OrganRegistry
 from monoagens.pfc import PFC, ToolCall
@@ -29,21 +29,23 @@ class Kernel:
     """The one loop that records events, wakes the PFC, and acts through bodies."""
 
     def __init__(self, conn, clock: Clock | None = None, pfc: PFC | None = None,
-                 soul: dict[str, Any] | None = None, embedder: Any = None) -> None:
+                 settings: dict[str, Any] | None = None, embedder: Any = None) -> None:
         """Wire the kernel to its database connection and collaborators."""
         self.conn, self.clock, self.pfc = conn, clock or Clock(), pfc
-        self.soul = dict(soul) if soul is not None else load_soul()
+        self.settings = dict(settings) if settings is not None else load_settings()
         self.embedder = embedder
         self.queue: asyncio.Queue[_Queued] = asyncio.Queue()
         self.jobs = jobs.JobRunner(self)
         self.organs = OrganRegistry()
+        self.organs.register(identity.SelfOrgan(conn, self.clock))
         self.hooks = HookRegistry()
         for pipeline in self.hooks:
             pipeline.set_policy(owner_policy(pipeline.name))
-        validate_signals((self.soul.get("cognition") or {}).get("weights") or {})
+        validate_signals(signal_weights(self.settings))
 
     async def put(self, event: Event) -> Event | None:
         """Accept one event from a body or the clock (ticks are not acknowledged)."""
+        event = await pairing.as_owner(self.conn, event)
         ack = None if event.kind == "tick" else asyncio.get_running_loop().create_future()
         await self.queue.put(_Queued(event, ack))
         return await ack if ack is not None else None
@@ -117,18 +119,20 @@ class Kernel:
                                               on_error=failed)
 
     async def _appraise(self, event: Event) -> Appraisal:
-        return await appraise(event, conn=self.conn, now=self.clock.now(), soul=self.soul)
+        return await appraise(event, conn=self.conn, now=self.clock.now(),
+                              settings=self.settings)
 
     async def _wake(self, event: Event) -> None:
         if event.kind == "job.result":
             await self._finish_job(event)
             return
-        fired = await expect.due(self.conn, event, now=self.clock.now(), soul=self.soul)
+        fired = await expect.due(self.conn, event, now=self.clock.now(),
+                                  settings=self.settings)
         for item in fired:
             await self._expect_wake(item)
         if event.kind == "tick" and self.pfc is not None and self.embedder is not None:
             now = self.clock.now()
-            if await memory.sleep_due(self.conn, now, self.soul):
+            if await memory.sleep_due(self.conn, now, self.settings):
                 await self.jobs.start("sleep", "sleep", event,
                                       partial(self.jobs.sleep, now))
         if fired or self.pfc is None or event.kind != "percept":
@@ -142,8 +146,10 @@ class Kernel:
     async def _think(self, event: Event, reason: str, place: str) -> None:
         """Lay out the desk, pass the context hook, start one PFC job per place."""
         context = await memory.build_context(
-            self.conn, event, place, reason, now=self.clock.now(), soul=self.soul,
-            memories=await self._memories(event), capabilities=self.organs.descriptors())
+            self.conn, event, place, reason, now=self.clock.now(), settings=self.settings,
+            memories=await memory.candidates(self.conn, self.embedder, event,
+                                             now=self.clock.now(), settings=self.settings),
+            capabilities=self.organs.descriptors())
         ctx = {"conn": self.conn, "event": event, "now": self.clock.now()}
         context = await self._run_hooks("context", context, ctx, event, organ=event.body)
         if context is None:
@@ -166,21 +172,12 @@ class Kernel:
         elif job.name == "pfc":
             await budget.record_call(self.conn, job.trigger.id, self.pfc,
                                      purpose="pfc.decide", now=self.clock.now(),
-                                     soul=self.soul, usage=result.get("usage"))
+                                     settings=self.settings, usage=result.get("usage"))
             await jobs.apply_calls(self, job.trigger, result.get("calls") or [])
         elif job.name == "encode" and isinstance(result.get("vector"), list):
             await insert_event_vector(self.conn, int(result["event_id"]), result["vector"])
         if job.re_wake is not None:
             await self._think(*job.re_wake)
-
-    async def _memories(self, event: Event) -> tuple[str, ...]:
-        query = str(event.payload.get("description") or event.payload.get("text")
-                    or event.payload.get("about") or "")
-        if self.embedder is None or not query.strip():
-            return ()
-        k = int((self.soul.get("memory") or {}).get("retrieve_k", 5))
-        return tuple(await memory.retrieve(self.conn, self.embedder, query, k=k,
-                                           now=self.clock.now(), event_id=event.id))
 
     async def _expect_wake(self, item: dict[str, Any]) -> None:
         now = self.clock.now()
@@ -197,7 +194,7 @@ class Kernel:
             reason = (f"expectation missed: {item['about']} "
                       f"(intent: {item['intent'] or 'none'}); {appraisal.reason}")
             await self._think(trigger, reason, trigger.place or "")
-        await expect.settle(self.conn, item["id"], now=now, soul=self.soul)
+        await expect.settle(self.conn, item["id"], now=now, settings=self.settings)
 
     async def recover(self) -> None:
         """Wake once more for expectations left fired across a restart."""
@@ -211,8 +208,8 @@ class Kernel:
         elif call.name == "act":
             return await self._act_call(event, args)
         elif call.name == "expect":
-            await expect.create(self.conn, args, now=self.clock.now(), soul=self.soul,
-                                source=event)
+            await expect.create(self.conn, args, now=self.clock.now(),
+                                settings=self.settings, source=event)
         elif call.name == "resolve":
             await expect.resolve(self.conn, int(args["id"]), str(args["status"]),
                                  now=self.clock.now())
@@ -238,10 +235,13 @@ class Kernel:
         payload = await self._run_hooks("action", arguments, ctx, event,
                                         organ=capability.partition(".")[0])
         if payload is not None:
-            result = await self.organs.act(event, capability, payload)
+            result = await self.organs.act(event, capability, payload, event_id=stored.id)
             if result is not None:
                 await self._emit(event, "act.result",
                                  {"capability": capability, "result": result})
+            if capability == "self.set_identity" and isinstance(result, dict) and self.pfc:
+                self.pfc.identity = result["identity"]
+                self.settings = {**self.settings, "identity": result["identity"]}
         return True
 
     async def _emit(self, trigger: Event, kind: str, payload: dict[str, Any]) -> Event:

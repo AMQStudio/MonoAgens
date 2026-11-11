@@ -16,20 +16,9 @@ from monoagens.pfc import PFC
 from monoagens.store import append_event, write_state
 from monoagens.bodies.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
+from tests.support import settings
 
-SOUL = {
-    "name": "Mona",
-    "language": "id",
-    "timezone": "Asia/Jakarta",
-    "persona": "Calm and honest.",
-    "principles": ["Never lie."],
-    "cognition": {
-        "seed": 1,
-        "weights": {"name_mentioned": 0.5, "info_gap": 0.35, "feeling_of_knowing": 0.35,
-                    "relevance": 0.2, "social_cost": -0.4},
-    },
-    "expectations": {"default_expires_days": 30, "max_active": 200},
-}
+SETTINGS = settings()
 PLACE = "space:tg:1"
 WHO = "person:owner"
 START = datetime(2026, 11, 10, 23, 0, tzinfo=timezone.utc)  # 06:00 in Jakarta
@@ -57,7 +46,7 @@ class FakeLLM:
 
 
 def _pfc(fake: FakeLLM) -> PFC:
-    return PFC("https://llm.test/v1", "test-key", "fake-model", soul=SOUL,
+    return PFC("https://llm.test/v1", "test-key", "fake-model", settings=SETTINGS,
                transport=httpx.MockTransport(fake.handler))
 
 
@@ -118,7 +107,7 @@ async def _create(conn, **overrides) -> tuple[int, Event]:
     data.update(overrides)
     source = await append_event(conn, ts=START, kind="percept", who=WHO, place=PLACE, body="telegram",
                                 payload={"text": "source"})
-    created = await expect.create(conn, data, now=START, soul=SOUL, source=source)
+    created = await expect.create(conn, data, now=START, settings=SETTINGS, source=source)
     return int(created.payload["expectation_id"]), created
 
 
@@ -136,8 +125,8 @@ def test_parse_duration_units():
             expect.parse_duration(bad)
 
 
-def test_next_check_at_every_and_daily_in_the_soul_timezone():
-    jakarta = expect.tz(SOUL)
+def test_next_check_at_every_and_daily_in_the_configured_timezone():
+    jakarta = expect.tz(SETTINGS)
     assert expect.next_check({"at": "2026-11-11T07:00:00+07:00"}, START, jakarta) == SEVEN
     assert expect.next_check({"every": "2d"}, START, jakarta) == START + timedelta(days=2)
     # 06:00 Jakarta -> 07:00 the same day; 08:00 Jakarta -> 07:00 the next day
@@ -151,7 +140,7 @@ def test_next_check_at_every_and_daily_in_the_soul_timezone():
 
 def test_validation_defaults_and_rejections():
     row = expect.validate({"about": "x", "cue_time": {"every": "1d"}, "expect": {"none": True}},
-                          now=START, soul=SOUL)
+                          now=START, settings=SETTINGS)
     assert row["weight"] == 0.5
     assert row["policy"] == {"once": True}
     assert row["expires_at"] == START + timedelta(days=30)
@@ -159,7 +148,7 @@ def test_validation_defaults_and_rejections():
 
     explicit = expect.validate({"about": "x", "cue_time": {"at": START.isoformat()},
                                 "expect": {"none": True}, "weight": 0.2,
-                                "expires_at": "2026-12-01T00:00:00+00:00"}, now=START, soul=SOUL)
+                                "expires_at": "2026-12-01T00:00:00+00:00"}, now=START, settings=SETTINGS)
     assert explicit["expires_at"] == datetime(2026, 12, 1, tzinfo=timezone.utc)
 
     bad = [
@@ -175,16 +164,16 @@ def test_validation_defaults_and_rejections():
     ]
     for data in bad:
         with pytest.raises(ValueError):
-            expect.validate(data, now=START, soul=SOUL)
+            expect.validate(data, now=START, settings=SETTINGS)
 
 
 async def test_max_active_is_enforced(aconn):
-    soul = {**SOUL, "expectations": {"default_expires_days": 30, "max_active": 1}}
+    runtime = settings(constants={"max_active": 1})
     await expect.create(aconn, {"about": "first", "cue_time": {"every": "1d"}, "expect": {"none": True}},
-                        now=START, soul=soul, source=_source())
+                        now=START, settings=runtime, source=_source())
     with pytest.raises(ValueError, match="too many active"):
         await expect.create(aconn, {"about": "second", "cue_time": {"every": "1d"}, "expect": {"none": True}},
-                            now=START, soul=soul, source=_source())
+                            now=START, settings=runtime, source=_source())
 
 
 # --- the three operators -----------------------------------------------------
@@ -230,7 +219,7 @@ def test_matches_cue_is_exact_on_ids_and_substring_on_text():
 async def test_time_path_fires_only_when_next_check_is_due(aconn):
     exp_id, _ = await _create(aconn, weight=1.0)
     clock = FakeClock(START)
-    kernel = Kernel(aconn, clock=clock, pfc=None, soul=SOUL)
+    kernel = Kernel(aconn, clock=clock, pfc=None, settings=SETTINGS)
 
     await _tick(kernel, clock)
     assert await _status(aconn, exp_id) == "fired"
@@ -243,7 +232,7 @@ async def test_time_path_fires_only_when_next_check_is_due(aconn):
 async def test_time_path_ignores_future_expectations(aconn):
     exp_id, _ = await _create(aconn, cue_time={"at": (START + timedelta(hours=1)).isoformat()})
     clock = FakeClock(START)
-    kernel = Kernel(aconn, clock=clock, pfc=None, soul=SOUL)
+    kernel = Kernel(aconn, clock=clock, pfc=None, settings=SETTINGS)
 
     await _tick(kernel, clock)
     assert await _status(aconn, exp_id) == "active"
@@ -253,7 +242,7 @@ async def test_time_path_ignores_future_expectations(aconn):
 async def test_event_path_fires_on_a_matching_event(aconn):
     exp_id, _ = await _create(aconn, cue_time=None,
                               cue_event={"kind": "percept", "who": WHO, "text_like": "workout"})
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=None, soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=None, settings=SETTINGS)
 
     await _feed(kernel, _msg("halo", message_id=1))
     assert await _status(aconn, exp_id) == "active"
@@ -266,7 +255,7 @@ async def test_event_seen_expectation_that_is_met_never_fires(aconn):
     pattern = {"kind": "percept", "who": WHO, "text_like": "workout"}
     exp_id, _ = await _create(aconn, cue_time=None, cue_event=pattern,
                               expect={"event_seen": pattern, "within": "2d"})
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=None, soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=None, settings=SETTINGS)
 
     await _feed(kernel, _msg("saya sudah workout hari ini"))
 
@@ -283,7 +272,7 @@ async def test_time_path_met_event_seen_resolves_without_firing(aconn):
                        body="telegram", payload={"text": "workout done"})
     exp_id, _ = await _create(aconn, expect={"event_seen": pattern, "within": "2d"})
     clock = FakeClock(START)
-    kernel = Kernel(aconn, clock=clock, pfc=None, soul=SOUL)
+    kernel = Kernel(aconn, clock=clock, pfc=None, settings=SETTINGS)
 
     await _tick(kernel, clock)
     assert await _status(aconn, exp_id) == "satisfied"
@@ -298,7 +287,7 @@ async def test_low_weight_fired_expectation_still_wakes_the_pfc_once(aconn):
     exp_id, _ = await _create(aconn, weight=0.3)
     clock = FakeClock(START)
     fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "sudah jam 7"}})]])
-    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_body(RecordingBody())
 
     await _tick(kernel, clock)
@@ -313,10 +302,10 @@ async def test_low_weight_fired_expectation_still_wakes_the_pfc_once(aconn):
 async def test_policy_once_is_satisfied_after_the_turn(aconn):
     exp_id, _ = await _create(aconn)
     clock = FakeClock(START)
-    kernel = Kernel(aconn, clock=clock, pfc=None, soul=SOUL)
+    kernel = Kernel(aconn, clock=clock, pfc=None, settings=SETTINGS)
     await _tick(kernel, clock)
 
-    await expect.settle(aconn, exp_id, now=START, soul=SOUL)
+    await expect.settle(aconn, exp_id, now=START, settings=SETTINGS)
     assert await _status(aconn, exp_id) == "satisfied"
     assert "expectation.resolved" in await _kinds(aconn)
 
@@ -324,10 +313,10 @@ async def test_policy_once_is_satisfied_after_the_turn(aconn):
 async def test_recurring_policy_reschedules_by_cooldown_then_drops_at_max_fires(aconn):
     exp_id, _ = await _create(aconn, policy={"cooldown": "6h", "max_fires": 2})
     clock = FakeClock(START)
-    kernel = Kernel(aconn, clock=clock, pfc=None, soul=SOUL)
+    kernel = Kernel(aconn, clock=clock, pfc=None, settings=SETTINGS)
 
     await _tick(kernel, clock)
-    await expect.settle(aconn, exp_id, now=START, soul=SOUL)
+    await expect.settle(aconn, exp_id, now=START, settings=SETTINGS)
     cur = await aconn.execute("SELECT status, next_check_at FROM expectations WHERE id = %s", (exp_id,))
     assert await cur.fetchone() == ("active", START + timedelta(hours=6))
 
@@ -338,7 +327,7 @@ async def test_recurring_policy_reschedules_by_cooldown_then_drops_at_max_fires(
     clock.set_time(START + timedelta(hours=6))
     await _tick(kernel, clock)
     assert (await _kinds(aconn)).count("expectation.fired") == 2
-    await expect.settle(aconn, exp_id, now=clock.now(), soul=SOUL)
+    await expect.settle(aconn, exp_id, now=clock.now(), settings=SETTINGS)
     cur = await aconn.execute("SELECT status, fire_count FROM expectations WHERE id = %s", (exp_id,))
     assert await cur.fetchone() == ("dropped", 2)
 
@@ -350,7 +339,7 @@ async def test_expect_tool_creates_an_expectation_and_records_it(aconn):
     fake = FakeLLM([[("expect", {"about": "remind me at 7", "cue_time": {"daily": "07:00"},
                                 "expect": {"none": True}, "intent": "remind gently",
                                 "weight": 0.9, "policy": {"once": True}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
 
     await _feed(kernel, _msg("ingatkan saya jam 7"))
 
@@ -366,7 +355,7 @@ async def test_expect_tool_creates_an_expectation_and_records_it(aconn):
 async def test_expect_with_an_invalid_weight_becomes_an_error_event(aconn):
     fake = FakeLLM([[("expect", {"about": "bad", "cue_time": {"daily": "07:00"},
                                 "expect": {"none": True}, "weight": 2.0})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
 
     await _feed(kernel, _msg("buat janji"))
 
@@ -381,7 +370,7 @@ async def test_expect_with_an_invalid_weight_becomes_an_error_event(aconn):
 async def test_resolve_tool_closes_an_expectation(aconn):
     exp_id, _ = await _create(aconn)
     fake = FakeLLM([[("resolve", {"id": exp_id, "status": "dropped"})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
 
     await _feed(kernel, _msg("lupakan saja"))
 
@@ -403,7 +392,7 @@ async def test_mvp_c_remind_me_at_seven_exactly_once_across_a_restart(aconn):
                      "policy": {"once": True}})],
         [("act", {"capability": "telegram.say", "arguments": {"text": "sudah jam 7"}})],
     ])
-    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
     kernel.register_body(body)
 
@@ -432,7 +421,7 @@ async def test_mvp_c_remind_me_at_seven_exactly_once_across_a_restart(aconn):
 
     # Restart right after the reminder: no second message, no second LLM call.
     restarted_fake = FakeLLM()
-    restarted = Kernel(aconn, clock=clock, pfc=_pfc(restarted_fake), soul=SOUL)
+    restarted = Kernel(aconn, clock=clock, pfc=_pfc(restarted_fake), settings=SETTINGS)
     restarted.register_body(RecordingBody())
     await restarted.recover()
     await restarted.run_until_idle()
@@ -449,12 +438,12 @@ async def test_recovery_wakes_once_for_a_fired_expectation_without_a_reply(aconn
     exp_id, _ = await _create(aconn)
     clock = FakeClock(START)
     # No PFC in the first process: the reminder fired but was never answered.
-    crashed = Kernel(aconn, clock=clock, pfc=None, soul=SOUL)
+    crashed = Kernel(aconn, clock=clock, pfc=None, settings=SETTINGS)
     await _tick(crashed, clock)
     assert await _status(aconn, exp_id) == "fired"
 
     fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "sudah jam 7"}})]])
-    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_body(RecordingBody())
     await kernel.recover()
     await kernel.run_until_idle()
@@ -465,7 +454,7 @@ async def test_recovery_wakes_once_for_a_fired_expectation_without_a_reply(aconn
 
     # A second restart finds nothing left to do.
     again_fake = FakeLLM()
-    again = Kernel(aconn, clock=clock, pfc=_pfc(again_fake), soul=SOUL)
+    again = Kernel(aconn, clock=clock, pfc=_pfc(again_fake), settings=SETTINGS)
     await again.recover()
     await again.run_until_idle()
     assert again_fake.requests == []
@@ -474,7 +463,7 @@ async def test_recovery_wakes_once_for_a_fired_expectation_without_a_reply(aconn
 async def test_recovery_only_resolves_when_the_reply_already_exists(aconn):
     exp_id, _ = await _create(aconn)
     clock = FakeClock(START)
-    crashed = Kernel(aconn, clock=clock, pfc=None, soul=SOUL)
+    crashed = Kernel(aconn, clock=clock, pfc=None, settings=SETTINGS)
     await _tick(crashed, clock)
 
     cur = await aconn.execute("SELECT id FROM events WHERE kind = 'expectation.fired'")
@@ -483,7 +472,7 @@ async def test_recovery_only_resolves_when_the_reply_already_exists(aconn):
                        payload={"text": "sudah jam 7"}, caused_by=fired_id)
 
     fake = FakeLLM()
-    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), settings=SETTINGS)
     await kernel.recover()
     await kernel.run_until_idle()
 
@@ -495,7 +484,7 @@ async def test_recovery_only_resolves_when_the_reply_already_exists(aconn):
 async def test_recovery_does_not_touch_active_expectations(aconn):
     exp_id, _ = await _create(aconn, cue_time={"at": (START + timedelta(days=1)).isoformat()})
     fake = FakeLLM()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     await kernel.recover()
     await kernel.run_until_idle()
 
@@ -511,18 +500,18 @@ KINDS = ("promise", "wait", "predict", "guard")
 @pytest.mark.parametrize("kind", KINDS)
 def test_validation_accepts_every_kind(kind):
     row = expect.validate({"about": "x", "kind": kind, "cue_time": {"every": "1d"},
-                           "expect": {"none": True}}, now=START, soul=SOUL)
+                           "expect": {"none": True}}, now=START, settings=SETTINGS)
     assert row["kind"] == kind
     assert row["condition"] == {"none": True}
 
 
 def test_validation_defaults_to_promise_and_rejects_unknown_kinds():
     row = expect.validate({"about": "x", "cue_time": {"every": "1d"},
-                           "expect": {"none": True}}, now=START, soul=SOUL)
+                           "expect": {"none": True}}, now=START, settings=SETTINGS)
     assert row["kind"] == "promise"
     with pytest.raises(ValueError, match="unknown expectation kind"):
         expect.validate({"about": "x", "kind": "wish", "cue_time": {"every": "1d"},
-                         "expect": {"none": True}}, now=START, soul=SOUL)
+                         "expect": {"none": True}}, now=START, settings=SETTINGS)
 
 
 async def test_create_stores_kind_origin_actor_and_lineage(aconn):
@@ -537,7 +526,7 @@ async def test_guard_never_fires_or_wakes_the_pfc_on_a_tick(aconn):
     exp_id, _ = await _create(aconn, kind="guard", weight=1.0)
     fake = FakeLLM()
     clock = FakeClock(START)
-    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), soul=SOUL)
+    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), settings=SETTINGS)
 
     await _tick(kernel, clock)
 
@@ -550,7 +539,7 @@ async def test_guard_never_fires_when_its_cue_event_arrives(aconn):
     exp_id, _ = await _create(aconn, kind="guard", cue_time=None,
                               cue_event={"kind": "percept", "who": WHO,
                                          "text_like": "workout"})
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=None, soul=SOUL)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=None, settings=SETTINGS)
 
     await _feed(kernel, _msg("saya sudah WORKOUT"))
 

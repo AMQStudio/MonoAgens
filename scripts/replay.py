@@ -39,11 +39,11 @@ from monoagens.bodies.cli import CAPABILITIES as CLI_CAPABILITIES
 from monoagens.bodies.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.clock import FakeClock
 from monoagens.cognition import Appraisal
-from monoagens.config import (DEFAULT_ENV_PATH, load_env_file, load_llm_config,
-                              load_soul)
+from monoagens.config import DEFAULT_ENV_PATH, load_env_file, load_llm_config
+from monoagens.prior import constants, load_settings
 from monoagens.expect import parse_duration
 from monoagens.kernel import Kernel
-from monoagens.memory import FastEmbedder, FakeEmbedder
+from monoagens.embedding import FastEmbedder, FakeEmbedder
 from monoagens.migrate import migrate, migrate_url
 from monoagens.pfc import PFC, PFCContext, ToolCall
 from monoagens.types import Action, Event
@@ -388,12 +388,12 @@ def _event_row(row: Sequence[Any]) -> dict[str, Any]:
 class ReplayRunner:
     """Runs scenarios against a real kernel on a throwaway database."""
 
-    def __init__(self, url: str, soul: dict[str, Any], fake: bool, tracker: Tracker,
-                 settings: dict[str, str]) -> None:
-        """Wire the runner to the database, soul, and LLM settings."""
-        self.url, self.soul, self.fake, self.tracker = url, soul, fake, tracker
-        self.settings = settings
-        self.zone = ZoneInfo(str(soul.get("timezone") or "UTC"))
+    def __init__(self, url: str, settings: dict[str, Any], fake: bool, tracker: Tracker,
+                 llm: dict[str, str]) -> None:
+        """Wire the runner to the database, the settings, and the LLM settings."""
+        self.url, self.settings, self.fake, self.tracker = url, settings, fake, tracker
+        self.llm = llm
+        self.zone = ZoneInfo(str(settings.get("timezone") or "UTC"))
         self.embedder: Any = FakeEmbedder() if fake else FastEmbedder()
         self.clock = FakeClock()
         self.conn: psycopg.AsyncConnection[Any] | None = None
@@ -407,14 +407,14 @@ class ReplayRunner:
             return FakePFC(self.tracker)
         client = httpx.AsyncClient(
             transport=UsageTransport(httpx.AsyncHTTPTransport(), self.tracker), timeout=90.0)
-        return PFC(self.settings["base_url"], self.settings["api_key"],
-                   self.settings["model"], soul=self.soul, client=client, timeout=90.0)
+        return PFC(self.llm["base_url"], self.llm["api_key"], self.llm["model"],
+                   settings=self.settings, client=client, timeout=90.0)
 
     def _make_kernel(self) -> Kernel:
         """Build a fresh kernel that records its appraisals."""
         pfc = self._make_pfc()
-        kernel = RecordingKernel(self.conn, clock=self.clock, pfc=pfc, soul=self.soul,
-                                 embedder=self.embedder)
+        kernel = RecordingKernel(self.conn, clock=self.clock, pfc=pfc,
+                                 settings=self.settings, embedder=self.embedder)
         kernel.register_body(FakeBody(BODY_NAME))
         kernel.register_body(FakeBody(CLI_BODY))
         self.kernel = kernel
@@ -799,19 +799,18 @@ def _summary_row(result: ScenarioResult) -> str:
 
 
 def render_report(results: Sequence[ScenarioResult], usage: Usage, mode: str,
-                  model: str, soul: dict[str, Any], when: datetime,
+                  model: str, settings: dict[str, Any], when: datetime,
                   zone: ZoneInfo) -> str:
     """Build the full markdown report."""
     lines = [f"# Replay report — {when:%Y-%m-%d %H:%M}", "",
              f"- Mode: **{mode}**", f"- Model: `{model}`", f"- Timezone: `{zone.key}`",
              f"- Scenarios: {len(results)}", f"- Report generated: {when:%Y-%m-%d %H:%M:%S}",
              ""]
-    cognition = soul.get("cognition") or {}
+    values = constants(settings)
     lines += ["## Cognition configuration", "",
-              f"- Weights: `{json.dumps(cognition.get('weights') or {}, sort_keys=True)}`",
-              f"- Seed: `{cognition.get('seed', 1)}`",
-              f"- Band: `{json.dumps(cognition.get('band') or {}, sort_keys=True)}`",
-              f"- Threshold: `{json.dumps(cognition.get('threshold') or {}, sort_keys=True)}`",
+              f"- Knobs: `{json.dumps(settings.get('knobs') or {}, sort_keys=True)}`",
+              f"- Calibration: `{json.dumps(settings.get('calibration') or {}, sort_keys=True)}`",
+              f"- Constants: `{json.dumps(values, sort_keys=True)}`",
               ""]
     for result in results:
         lines += _scenario_section(result, zone)
@@ -852,12 +851,12 @@ def scenario_paths(args: Sequence[str]) -> list[pathlib.Path]:
 
 
 async def run_all(paths: Sequence[pathlib.Path], fake: bool, url: str,
-                  soul: dict[str, Any],
-                  settings: dict[str, str]) -> tuple[list[ScenarioResult], Usage]:
+                  settings: dict[str, Any],
+                  llm: dict[str, str]) -> tuple[list[ScenarioResult], Usage]:
     """Reset the database and replay every scenario in order."""
-    zone = ZoneInfo(str(soul.get("timezone") or "UTC"))
+    zone = ZoneInfo(str(settings.get("timezone") or "UTC"))
     tracker = Tracker()
-    runner = ReplayRunner(url, soul, fake, tracker, settings)
+    runner = ReplayRunner(url, settings, fake, tracker, llm)
     results: list[ScenarioResult] = []
     for path in paths:
         scenario = load_scenario(path, zone)
@@ -879,18 +878,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     load_environment()
     url = replay_url()
-    soul = load_soul()
-    settings = {"base_url": DEFAULT_BASE_URL, "api_key": "", "model": DEFAULT_MODEL}
+    settings = load_settings()
+    llm = {"base_url": DEFAULT_BASE_URL, "api_key": "", "model": DEFAULT_MODEL}
     if not args.fake:
-        settings = llm_settings()
+        llm = llm_settings()
     paths = scenario_paths(args.scenarios)
     ensure_database(url)
     reset_schema(url)
-    results, usage = asyncio.run(run_all(paths, args.fake, url, soul, settings))
+    results, usage = asyncio.run(run_all(paths, args.fake, url, settings, llm))
     when = datetime.now(timezone.utc)
-    zone = ZoneInfo(str(soul.get("timezone") or "UTC"))
+    zone = ZoneInfo(str(settings.get("timezone") or "UTC"))
     mode = "fake LLM (free)" if args.fake else "real LLM"
-    text = render_report(results, usage, mode, settings["model"], soul, when, zone)
+    text = render_report(results, usage, mode, llm["model"], settings, when, zone)
     path = write_report(text, when)
     failed = [check.label for result in results for check in result.checks if not check.passed]
     print(f"\nreport: {path}")

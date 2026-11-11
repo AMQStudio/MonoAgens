@@ -1,4 +1,4 @@
-"""Configuration: soul.yaml, the tiny .env loader, and LLM settings."""
+"""Configuration: config.yaml, the birth certificate, the tiny .env loader, LLM settings."""
 
 from __future__ import annotations
 
@@ -8,32 +8,41 @@ from typing import Any
 
 import yaml
 
-DEFAULT_SOUL_PATH = pathlib.Path(__file__).resolve().parent.parent / "soul.yaml"
-DEFAULT_ENV_PATH = pathlib.Path(__file__).resolve().parent.parent / ".env"
+DEFAULT_ROOT = pathlib.Path(__file__).resolve().parent.parent
+DEFAULT_SOUL_PATH = DEFAULT_ROOT / "soul.yaml"
+DEFAULT_CONFIG_PATH = DEFAULT_ROOT / "config.yaml"
+DEFAULT_ENV_PATH = DEFAULT_ROOT / ".env"
 DEFAULT_TICK_SECONDS = 30.0
 _LLM_KEYS = (("base_url", "LLM_BASE_URL"), ("api_key", "LLM_API_KEY"),
              ("model", "LLM_MODEL"))
 
 
-def load_soul(path=DEFAULT_SOUL_PATH) -> dict[str, Any]:
-    """Load soul.yaml and return it as a dict (empty when the file is blank)."""
+def read_yaml(path: pathlib.Path) -> dict[str, Any]:
+    """Load one YAML file as a dict (empty when the file is missing or blank)."""
+    path = pathlib.Path(path)
+    if not path.is_file():
+        return {}
     with open(path, encoding="utf-8") as handle:
         return yaml.safe_load(handle) or {}
 
 
-def load_owner_ids(path=DEFAULT_SOUL_PATH) -> set[int]:
-    """Return the owner's Telegram ids from soul.yaml."""
-    owner = load_soul(path).get("owner") or {}
-    return {int(tid) for tid in owner.get("telegram_ids") or []}
+def load_config(path: pathlib.Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
+    """Load config.yaml: this deployment's non-secret settings."""
+    return read_yaml(path)
 
 
-def load_clock_tick_seconds(path=DEFAULT_SOUL_PATH) -> float:
-    """Return the clock tick period from soul.yaml."""
-    soul = load_soul(path)
-    return float((soul.get("clock") or {}).get("tick_seconds", DEFAULT_TICK_SECONDS))
+def load_soul(path: pathlib.Path = DEFAULT_SOUL_PATH) -> dict[str, Any]:
+    """Load soul.yaml: the birth certificate, read once at birth."""
+    return read_yaml(path)
 
 
-def load_env_file(path=DEFAULT_ENV_PATH) -> dict[str, str]:
+def tick_seconds(settings: dict[str, Any]) -> float:
+    """Return the clock tick period from the runtime settings."""
+    runtime = settings.get("runtime") or {}
+    return float(runtime.get("tick_seconds") or DEFAULT_TICK_SECONDS)
+
+
+def load_env_file(path: pathlib.Path = DEFAULT_ENV_PATH) -> dict[str, str]:
     """Read a simple KEY=VALUE .env file into a dict."""
     env_path = pathlib.Path(path)
     if not env_path.is_file():
@@ -44,7 +53,7 @@ def load_env_file(path=DEFAULT_ENV_PATH) -> dict[str, str]:
              if line and not line.startswith("#") and "=" in line)}
 
 
-def load_llm_config(env_path=DEFAULT_ENV_PATH) -> dict[str, str]:
+def load_llm_config(env_path: pathlib.Path = DEFAULT_ENV_PATH) -> dict[str, str]:
     """Resolve the LLM settings from the environment, then the .env file."""
     file_values = load_env_file(env_path)
     return {name: os.environ.get(key) or file_values.get(key) or ""

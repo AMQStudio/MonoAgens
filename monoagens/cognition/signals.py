@@ -12,7 +12,7 @@ SIGNALS: dict[str, Signal] = {}
 
 
 def register_signal(name: str) -> Callable[[Signal], Signal]:
-    """Register a signal under its name in cognition.weights."""
+    """Register a signal under the name its prior weight uses."""
 
     def decorator(fn: Signal) -> Signal:
         SIGNALS[name] = fn
@@ -26,7 +26,7 @@ def validate_signals(weights: Mapping[str, float]) -> None:
     if set(SIGNALS) != set(weights):
         missing = sorted(set(SIGNALS) - set(weights))
         unknown = sorted(set(weights) - set(SIGNALS))
-        raise ValueError(f"cognition.weights mismatch: missing {missing}, unknown {unknown}")
+        raise ValueError(f"signal weights mismatch: missing {missing}, unknown {unknown}")
 
 
 @register_signal("name_mentioned")

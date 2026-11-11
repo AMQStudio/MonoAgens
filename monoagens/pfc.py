@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from monoagens.config import load_soul
+from monoagens.prior import load_settings
 from monoagens.types import RECENT_KINDS, Event
 
 SYSTEM_TAIL = "You act only through the tools. Staying silent is a valid choice."
@@ -111,14 +111,17 @@ class PFC:
     """The LLM client: layered prompts and tool calls over chat completions."""
 
     def __init__(self, base_url: str, api_key: str, model: str, *,
-                 soul: dict[str, Any] | None = None,
+                 settings: dict[str, Any] | None = None,
+                 identity: dict[str, Any] | None = None,
                  transport: httpx.AsyncBaseTransport | None = None,
                  client: httpx.AsyncClient | None = None, timeout: float = 30.0) -> None:
-        """Store the endpoint, the key, the model, and the persona."""
+        """Store the endpoint, the key, the model, and the identity."""
         self.base_url, self.api_key, self.model = base_url.rstrip("/"), api_key, model
-        self.soul = soul if soul is not None else load_soul()
-        self.timezone = ZoneInfo(str(self.soul.get("timezone") or "UTC"))
-        self.name = str(self.soul.get("name") or "Mona")
+        self.settings = settings if settings is not None else load_settings()
+        self.identity = dict(identity if identity is not None
+                             else self.settings.get("identity") or {})
+        self.timezone = ZoneInfo(str(self.settings.get("timezone") or "UTC"))
+        self.name = str(self.identity.get("name") or "")
         self.last_usage: dict[str, int] = {}
         self._transport, self._client, self._timeout = transport, client, timeout
 
@@ -166,11 +169,11 @@ class PFC:
         ]
 
     def _stable_prompt(self) -> str:
-        parts = [f"You are {self.name}.", str(self.soul.get("persona") or "").strip()]
-        principles = [str(p) for p in self.soul.get("principles") or []]
+        parts = [f"You are {self.name}.", str(self.identity.get("persona") or "").strip()]
+        principles = [str(p) for p in self.identity.get("principles") or []]
         if principles:
             parts.append("Principles:\n" + "\n".join(f"- {p}" for p in principles))
-        parts += [f"Language: {self.soul.get('language') or 'en'}.", SYSTEM_TAIL]
+        parts += [f"Language: {self.identity.get('language') or 'en'}.", SYSTEM_TAIL]
         return "\n\n".join(part for part in parts if part)
 
     def _volatile_prompt(self, context: PFCContext) -> str:
