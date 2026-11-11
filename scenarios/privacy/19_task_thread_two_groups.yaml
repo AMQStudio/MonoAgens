@@ -154,6 +154,13 @@ model_answers:
           arguments:
             text: "Kode sudah selesai dan sudah kukirim ke Budi. Mau kukirim ke grup yang mana: Tim Alpha atau Tim Beta?"
             to: "person:owner"
+  - step: 4
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: whatsapp.say
+          arguments: {text: "Ini kodenya, sudah selesai dan lulus tes."}
   - step: 5
     tool: decide
     calls:
@@ -174,3 +181,10 @@ model_answers:
           arguments:
             text: "Ini kode terbaru dari owner, sudah lulus tes."
             to: "space:wa:1203630001@g.us"
+  - step: 6
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: whatsapp.say
+          arguments: {text: "Ini kode terbaru dari owner, sudah lulus tes."}

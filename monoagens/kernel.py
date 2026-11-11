@@ -128,6 +128,11 @@ class Kernel:
         if event.kind == "job.result":
             await self._finish_job(event)
             return
+        if event.kind == "intent":
+            if self.pfc is not None:
+                await self._think(event, str(event.payload.get("description") or ""),
+                                  event.place or "")
+            return
         fired = await expect.due(self.conn, event, now=self.clock.now(),
                                   settings=self.settings)
         for item in fired:

@@ -26,14 +26,19 @@ async def aliases(conn) -> dict[str, str]:
     return {key[6:]: str((value or {}).get("who") or value) for key, value in await cur.fetchall()}
 
 
-async def direct(conn, place: str | None) -> bool:
-    """Return whether a place is a 1:1 chat, by the kind its organ reported."""
+async def place_kind(conn, place: str | None) -> str:
+    """Return the kind the organ reported for a place; unknown counts as shared."""
     if not place:
-        return False
+        return "shared"
     row = await (await conn.execute(
         "SELECT payload->>'place_kind' FROM events WHERE place = %s "
         "AND payload ? 'place_kind' ORDER BY id DESC LIMIT 1", (place,))).fetchone()
-    return bool(row and row[0] == "direct")
+    return str(row[0] or "shared") if row else "shared"
+
+
+async def direct(conn, place: str | None) -> bool:
+    """Return whether a place is a 1:1 chat, by the kind its organ reported."""
+    return await place_kind(conn, place) == "direct"
 
 
 async def audience(conn, place: str | None, before: int | None = None) -> frozenset[str]:

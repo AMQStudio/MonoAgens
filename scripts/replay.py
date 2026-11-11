@@ -183,18 +183,24 @@ class Usage:
                      self.total - other.total)
 
 
+def _prompt_place(content: str) -> str | None:
+    """Read the place a real prompt names in its `<place>` section."""
+    match = re.search(r"<place>(.*?) \(", content)
+    return match.group(1) if match else None
+
+
 @dataclass
 class Tracker:
     """Shared usage counters and captured prompts."""
 
     usage: Usage = field(default_factory=Usage)
-    prompts: list[tuple[int, str]] = field(default_factory=list)
+    prompts: list[tuple[int, str | None, str]] = field(default_factory=list)
     step_index: int = 0
     answers_used: dict[tuple[int, str], int] = field(default_factory=dict)
 
-    def record_prompt(self, content: str) -> None:
-        """Store one prompt with the step that produced it."""
-        self.prompts.append((self.step_index, content))
+    def record_prompt(self, content: str, place: str | None = None) -> None:
+        """Store one prompt with the step and place that produced it."""
+        self.prompts.append((self.step_index, place or _prompt_place(content), content))
 
 
 class UsageTransport(httpx.AsyncBaseTransport):
@@ -274,7 +280,7 @@ class FakePFC:
     async def decide(self, context: PFCContext) -> list[ToolCall]:
         """Return the recorded answer for this step, else say(text="ok")."""
         self._tracker.usage.calls += 1
-        self._tracker.record_prompt(_fake_context_text(context))
+        self._tracker.record_prompt(_fake_context_text(context), context.place)
         recorded = self._recorded("decide")
         if recorded is not None:
             return recorded
@@ -399,7 +405,7 @@ class ScenarioResult:
     scenario: Scenario
     steps: list[StepRecord]
     replies: list[Reply]
-    prompts: list[tuple[int, str]]
+    prompts: list[tuple[int, str | None, str]]
     events: list[dict[str, Any]]
     memories: int
     usage: Usage
@@ -895,25 +901,31 @@ def _check_event_order(spec: dict[str, Any], result: ScenarioResult) -> CheckRes
     return CheckResult(str(spec["label"]), started, detail)
 
 
-def _check_prompt_absent(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:
-    needle = str(spec.get("text") or "").lower()
+def _scoped_prompts(spec: dict[str, Any],
+                    result: ScenarioResult) -> list[tuple[int, str | None, str]]:
+    """Filter recorded prompts to the steps and the place the check names."""
     steps = spec.get("steps")
     wanted = {int(step) for step in steps} if steps is not None else None
-    prompts = [(index, content) for index, content in result.prompts
-               if wanted is None or index in wanted]
+    scoped = [item for item in result.prompts if wanted is None or item[0] in wanted]
     if spec.get("step") is not None:
-        prompts = [(index, content) for index, content in prompts if index == int(spec["step"])]
-    hits = [index for index, content in prompts if needle in content.lower()]
+        scoped = [item for item in scoped if item[0] == int(spec["step"])]
+    if any(key in spec for key in ("place", "place_prefix", "place_any")):
+        scoped = [item for item in scoped if _place_matches(spec, item[1] or "")]
+    return scoped
+
+
+def _check_prompt_absent(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:
+    needle = str(spec.get("text") or "").lower()
+    hits = [index for index, _, content in _scoped_prompts(spec, result)
+            if needle in content.lower()]
     return CheckResult(str(spec["label"]), not hits,
                        f"prompt steps with {needle!r}: {hits or 'none'}")
 
 
 def _check_prompt_contains(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:
     needle = str(spec.get("text") or "").lower()
-    step = spec.get("step")
-    prompts = [(index, content) for index, content in result.prompts
-               if step is None or index == int(step)]
-    hits = [index for index, content in prompts if needle in content.lower()]
+    hits = [index for index, _, content in _scoped_prompts(spec, result)
+            if needle in content.lower()]
     return CheckResult(str(spec["label"]), bool(hits),
                        f"prompt steps with {needle!r}: {hits or 'none'}")
 

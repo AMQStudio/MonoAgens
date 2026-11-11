@@ -113,7 +113,7 @@ May touch: `monoagens/` (all), `scripts/replay.py`, `scenarios/`, `tests/`, `pri
 Found in the architect's review of Parts 1–9.
 
 - [x] 10.1 `place_kind` (direct | shared) comes from the organ in every percept (Telegram, CLI and the replay's test organs set it); `reach.py` uses it and no longer reads the shape of any id; unknown is treated as shared. Grep proves no platform name or id format in the core.
-- [ ] 10.2 Speaking elsewhere: a communicative act aimed at another place becomes an intent and one more wake in the target place, with that place's desk; the message is written there. `reach.leaks` stays as a second check. Test: a fake model that paraphrases Fulan's private line when asked to message Budi cannot leak it, because the line is not on Budi's desk. Scenarios 18 and 19 follow the new flow.
+- [x] 10.2 Speaking elsewhere: a communicative act aimed at another place becomes an intent and one more wake in the target place, with that place's desk; the message is written there. `reach.leaks` stays as a second check. Test: a fake model that paraphrases Fulan's private line when asked to message Budi cannot leak it, because the line is not on Budi's desk. Scenarios 18 and 19 follow the new flow.
 - [ ] 10.3 Split `identity.py`: `self.recall` and the task desk move to a new `recall.py` (≤ 160); `identity.py` ≤ 120; whole package ≤ 3,800.
 - [ ] 10.4 Wire the circuit breaker's "goal continued" arm (`act.result`) in the kernel loop.
 - [ ] 10.5 Feeling-of-knowing: the cue's own vector is never one of its candidates.
@@ -394,3 +394,28 @@ Part 10 notes (worker/coordinator, 10.1):
 - `monoagens/reach.py` dropped `_DIRECT`, `_GROUP`, and `looks_direct`. `direct(conn, place)` returns True only when recorded `place_kind == "direct"`; unknown or other values default to shared (False). `direct_place` matches `kind == "direct"`.
 - Grep of `monoagens/` excluding `bodies/` and `__main__.py` confirms zero platform names and zero id shapes in core.
 - `monoagens/reach.py` is at 136 lines (budget 150). Tests: 240 passed; fake replay: 86/86 passed.
+
+Part 10 notes (worker, 10.2):
+- `organs.dispatch` now routes a communicative act whose resolved target place differs from the
+  event's place into `organs._intend`: it writes `act.intent` (capability, the draft arguments, `to`,
+  `target`) in the source place, then enqueues an `intent` event at the target place with only
+  "carry out intent #N: a message for <to>", the capability, and the target's `place_kind`. The draft
+  and the source's other content never enter that desk. `kernel._wake` handles `intent` by laying
+  the target place's desk (`_think`) without a gate draw; the message is written by that wake and
+  is the only `act.out`. Same-place acts and the "person is here" shortcut are unchanged.
+- `reach.place_kind(conn, place)` is the new public helper (`direct` delegates to it); the intent
+  payload carries the kind so the target desk renders direct/shared correctly. `reach.leaks` stays
+  in dispatch and in the replay metric as the second check, and the leak test calls it directly.
+- Tests: `test_a_message_to_another_place_becomes_an_intent_there` (no act.out at the source, an
+  `intent` queued at the target with its kind) and
+  `test_a_paraphrase_of_a_private_line_is_not_on_the_other_places_desk` (a scripted model drafts
+  Fulan's private line at the owner's desk; the target desk's rendered prompt contains no `di-PHK`
+  and only the benign line is spoken at Budi's place). The old `act_reaches`/gated tests were
+  rewritten for the new flow, not loosened.
+- `scripts/replay.py` records each prompt's place: `decide` passes `context.place`, the real
+  transport parses `<place>` from the prompt, and `prompt_contains`/`prompt_absent` accept
+  `place`/`place_prefix`/`place_any`. Scenario 18's step-6 `prompt_absent` is scoped to
+  `space:game:world1`, because the required extra wake at the owner's private channel rightly sees
+  the file line. Scenarios 18 (steps 6, 7) and 19 (steps 4, 6) gained the target-desk answers.
+- Tests: `uv run pytest` 240 passed; fake replay 86/86, absolute-line violations 0, honesty 51/51.
+  Budgets: kernel 270/280, reach 141/150, pfc 276/280, organs 132, package 3,755/3,800.

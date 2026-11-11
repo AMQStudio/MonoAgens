@@ -28,6 +28,7 @@ expectations:
   - type: prompt_absent
     text: "sketsa_logo"
     step: 6
+    place: space:game:world1
     label: file line stays out of the prompt with another player present
   - type: reply_in
     place: space:game:world1
@@ -181,6 +182,13 @@ model_answers:
           arguments:
             text: "Ada file dari Budi, sketsa_logo.png versi barunya. Kukirim di chat pribadi ya."
             to: "person:owner"
+  - step: 6
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: game.say
+          arguments: {text: "Ada file dari Budi, sketsa_logo.png versi barunya."}
   - step: 7
     tool: decide
     calls:
@@ -203,6 +211,14 @@ model_answers:
           intent: sampaikan jawaban Budi ke owner di tempat owner sekarang
           weight: 0.7
           policy: {once: true}
+  - step: 7
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: whatsapp.say
+          arguments:
+            text: "Ini hasil kerjaan kita. Menurutmu cocok atau tidak?"
   - step: 8
     tool: decide
     calls:

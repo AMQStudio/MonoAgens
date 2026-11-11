@@ -84,6 +84,9 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any]) -> bool:
                            {"capability": capability, "to": to, "result": {"error": error}})
         return True
     place = target or event.place
+    if place != event.place and cap.get("communicative"):
+        await _intend(kernel, event, capability, arguments, to, place)
+        return True
     if await reach.leaks(kernel.conn, event.place, place, str(arguments.get("text") or "")):
         await kernel._emit(event, "act.result", {"capability": capability, "to": to, "result": {
             "error": "that place may not see this content; say it where it belongs"}})
@@ -112,3 +115,18 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any]) -> bool:
         kernel.pfc.identity = result["identity"]
         kernel.settings = {**kernel.settings, "identity": result["identity"]}
     return True
+
+
+async def _intend(kernel: Any, event: Event, capability: str, arguments: dict[str, Any],
+                  to: str | None, place: str) -> None:
+    """Record what to say elsewhere and wake the PFC there, with that place's desk (D48)."""
+    intent = await kernel._emit(event, "act.intent", {
+        "capability": capability, "arguments": arguments, "to": to, "target": place,
+        "why": event.payload.get("text") or event.payload.get("description")})
+    kernel.enqueue(Event(
+        id=None, ts=kernel.clock.now(), kind="intent", who=event.who, place=place,
+        caused_by=intent.id, origin_actor=event.origin_actor,
+        payload={"description": f"carry out intent #{intent.id}: a message for "
+                                f"{to or place}",
+                 "capability": capability, "to": to, "intent": intent.id,
+                 "place_kind": await reach.place_kind(kernel.conn, place)}))

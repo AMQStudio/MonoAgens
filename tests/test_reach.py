@@ -9,7 +9,7 @@ from typing import Any
 from monoagens import hooks, memory, reach, threads
 from monoagens.clock import FakeClock
 from monoagens.kernel import Kernel
-from monoagens.pfc import ToolCall
+from monoagens.pfc import PFC, ToolCall
 from monoagens.store import append_event, read_state, write_state
 from monoagens.types import Action, Event
 from tests.support import settings
@@ -55,8 +55,9 @@ class Body:
         return {"ok": True} if action.kind == "run" else {}
 
 
-async def _kernel(conn, *, settings_value=None) -> Kernel:
-    kernel = Kernel(conn, clock=FakeClock(START), settings=settings_value or SETTINGS)
+async def _kernel(conn, *, settings_value=None, pfc=None, embedder=None) -> Kernel:
+    kernel = Kernel(conn, clock=FakeClock(START), settings=settings_value or SETTINGS,
+                    pfc=pfc, embedder=embedder)
     kernel.register_body(Body("whatsapp"))
     kernel.register_body(Body("telegram"))
     kernel.register_body(Body("dev", long_running=True))
@@ -183,7 +184,7 @@ async def test_share_with_a_place_grants_everyone_present(aconn):
     assert row[0]["persons"] == ["person:fulan", OWNER]
 
 
-async def test_act_reaches_a_person_on_their_direct_place(aconn):
+async def test_a_message_to_another_place_becomes_an_intent_there(aconn):
     await _said(aconn, "person:budi", BUDI, "direct", body="whatsapp")
     kernel = await _kernel(aconn)
     at = await _said(aconn, OWNER, GROUP, "shared")
@@ -191,9 +192,16 @@ async def test_act_reaches_a_person_on_their_direct_place(aconn):
         "capability": "whatsapp.say",
         "arguments": {"text": "halo Budi", "to": "person:budi", "via": "whatsapp"}}))
     row = await (await aconn.execute(
-        "SELECT place, payload FROM events WHERE kind = 'act.out'")).fetchone()
-    assert row[0] == BUDI
+        "SELECT place, payload FROM events WHERE kind = 'act.intent'")).fetchone()
+    assert row[0] == GROUP
     assert row[1]["to"] == "person:budi"
+    assert row[1]["target"] == BUDI
+    assert await (await aconn.execute(
+        "SELECT count(*) FROM events WHERE kind = 'act.out'")).fetchone() == (0,)
+    queued = kernel.queue.get_nowait()
+    assert queued.event.kind == "intent"
+    assert queued.event.place == BUDI
+    assert queued.event.payload["place_kind"] == "direct"
 
 
 async def test_act_to_an_unreachable_person_fails_honestly(aconn):
@@ -212,20 +220,51 @@ async def test_act_offers_the_capabilities_of_every_running_organ(aconn):
         kernel.organs.capabilities)
 
 
-async def test_a_message_to_another_place_is_gated_by_that_places_audience(aconn):
-    fulan = await _said(aconn, "person:fulan", FULAN_A, "direct", "aku di-PHK")
+class _ScriptedPFC:
+    """Replay one tool-call list per decide call and keep every desk it was given."""
+
+    def __init__(self, answers: list[list[ToolCall]]) -> None:
+        """Start with the answers in call order."""
+        self.answers, self.contexts, self.last_usage = list(answers), [], {}
+
+    async def decide(self, context: Any) -> list[ToolCall]:
+        """Return the next answer and remember what the desk showed."""
+        self.contexts.append(context)
+        return self.answers.pop(0)
+
+
+async def test_a_paraphrase_of_a_private_line_is_not_on_the_other_places_desk(aconn):
+    await _said(aconn, "person:fulan", FULAN_A, "direct", "aku di-PHK")
     await aconn.execute(
         "INSERT INTO memories (who, place, text, importance, private) "
         "VALUES (%s, %s, %s, 0.9, true)", ("person:fulan", FULAN_A, "aku di-PHK"))
-    await _said(aconn, "person:charlie", GROUP, "shared")
-    kernel = await _kernel(aconn)
-    await kernel._apply(_trigger(fulan, FULAN_A), ToolCall("act", {
-        "capability": "whatsapp.say",
-        "arguments": {"text": "Fulan bilang: aku di-PHK", "to": GROUP}}))
-    kinds = [row[0] for row in await (await aconn.execute(
-        "SELECT kind FROM events ORDER BY id")).fetchall()]
-    assert "act.out" not in kinds
-    assert "act.result" in kinds
+    await _said(aconn, "person:budi", BUDI, "direct", body="whatsapp")
+    owner_dm = await _said(aconn, OWNER, "space:tg:owner_dm", "direct")
+    pfc = _ScriptedPFC([
+        [ToolCall("act", {"capability": "whatsapp.say",
+                          "arguments": {"text": "Halo Budi, ada kabar?"}})],
+    ])
+    kernel = await _kernel(aconn, pfc=pfc)
+    await kernel._apply(_trigger(owner_dm, "space:tg:owner_dm"), ToolCall("act", {
+        "capability": "whatsapp.say", "arguments": {
+            "text": "Fulan bilang: aku di-PHK", "to": "person:budi", "via": "whatsapp"}}))
+    await kernel.run_until_idle()
+
+    assert len(pfc.contexts) == 1
+    assert pfc.contexts[0].place == BUDI
+    prompt = "\n".join(message["content"] for message in
+                       PFC("http://unused", "", "fake", settings=SETTINGS)
+                       .build_messages(pfc.contexts[0]))
+    assert "di-PHK" not in prompt
+    intent = await (await aconn.execute(
+        "SELECT place, payload FROM events WHERE kind = 'act.intent'")).fetchone()
+    assert intent[0] == "space:tg:owner_dm"
+    assert "di-PHK" in intent[1]["arguments"]["text"]
+    spoken = await (await aconn.execute(
+        "SELECT place, payload FROM events WHERE kind = 'act.out'")).fetchone()
+    assert spoken[0] == BUDI
+    assert "di-PHK" not in spoken[1]["arguments"]["text"]
+    assert await reach.leaks(aconn, FULAN_A, BUDI, "Fulan bilang: aku di-PHK") is True
 
 
 async def test_a_long_action_opens_a_task_thread_and_it_closes_when_done(aconn):
