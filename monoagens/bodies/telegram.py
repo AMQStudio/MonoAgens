@@ -14,6 +14,19 @@ from monoagens.types import Action, Event
 Put = Callable[[Event], Awaitable[None]]
 GetCursor = Callable[[], Awaitable[Any | None]]
 
+CAPABILITIES = (
+    {"name": "say", "description": "Send a text message in the current place.",
+     "schema": {"type": "object", "properties": {"text": {"type": "string"}},
+                "required": ["text"]},
+     "communicative": True, "long_running": False, "identity_changing": False},
+    {"name": "react", "description": "React to a message with one emoji.",
+     "schema": {"type": "object",
+                "properties": {"emoji": {"type": "string"},
+                               "message_id": {"type": "integer"}},
+                "required": ["emoji"]},
+     "communicative": False, "long_running": False, "identity_changing": False},
+)
+
 
 class TelegramBody:
     """Eyes and hands for Telegram: getUpdates in, sendMessage and reactions out."""
@@ -35,6 +48,10 @@ class TelegramBody:
         self._client: httpx.AsyncClient | None = None
         self.bot_id: int | None = None
         self.bot_username: str | None = None
+
+    def capabilities(self) -> tuple[dict[str, Any], ...]:
+        """Return the capability descriptors this organ declares."""
+        return CAPABILITIES
 
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -109,10 +126,11 @@ class TelegramBody:
         sender_id = (message.get("from") or {}).get("id")
         who = "person:owner" if sender_id in self._owner_ids else f"person:tg:{sender_id}"
         place_kind = "direct" if chat.get("type") == "private" else "group"
-        return Event(id=None, ts=datetime.now(timezone.utc), kind="msg.in", who=who,
+        return Event(id=None, ts=datetime.now(timezone.utc), kind="percept", who=who,
                      place=f"space:tg:{chat['id']}", body=self.name,
-                     payload={"cursor": update_id, "message_id": message["message_id"],
-                              "text": text, "place_kind": place_kind,
+                     payload={"cursor": update_id,
+                              "data": {"message_id": message["message_id"]},
+                              "description": text, "place_kind": place_kind,
                               "addressed": self._addressed(chat, message, text)})
 
     def _addressed(self, chat: dict[str, Any], message: dict[str, Any], text: str) -> bool:

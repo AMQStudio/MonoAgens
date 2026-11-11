@@ -96,9 +96,9 @@ async def _add_memory(conn, text: str, *, importance=0.5, accessed=START, valid_
 
 
 async def _seed_events(conn) -> int:
-    await append_event(conn, ts=START, kind="msg.in", who="person:owner", place=PLACE, body="telegram",
+    await append_event(conn, ts=START, kind="percept", who="person:owner", place=PLACE, body="telegram",
                        payload={"text": "Muqsith suka kopi tubruk tanpa gula"})
-    last = await append_event(conn, ts=START + timedelta(minutes=1), kind="msg.out", who="person:owner",
+    last = await append_event(conn, ts=START + timedelta(minutes=1), kind="act.out", who="person:owner",
                               place=PLACE, body="telegram", payload={"text": "baik, dicatat"})
     return last.id
 
@@ -176,7 +176,7 @@ async def test_sleep_writes_memories_core_memory_and_never_touches_raw_events(ac
 
 async def test_sleep_drops_expired_expectations(aconn):
     source_id = await _seed_events(aconn)
-    source = Event(id=source_id, ts=START, kind="msg.in", who="person:owner", place=PLACE, body="telegram",
+    source = Event(id=source_id, ts=START, kind="percept", who="person:owner", place=PLACE, body="telegram",
                    payload={"text": "remind me"})
     await expect.create(aconn, {"about": "rapat pagi", "cue_time": {"every": "1d"},
                                 "expect": {"none": True},
@@ -208,7 +208,7 @@ async def test_mvp_d_sleep_then_a_differently_worded_question_finds_the_memory(a
     before = await (await aconn.execute(
         "SELECT id, kind, payload FROM events WHERE id <= %s ORDER BY id", (max_before,))).fetchall()
     clock = FakeClock(START)
-    fake = FakeLLM([[("store_memories", SLEEP_ARGS)], [("stay_silent", {"reason": "just checking"})]])
+    fake = FakeLLM([[("store_memories", SLEEP_ARGS)], []])
     kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), soul=SOUL, embedder=FakeEmbedder())
 
     # Idle for 45 minutes: the tick path runs sleep.
@@ -225,7 +225,7 @@ async def test_mvp_d_sleep_then_a_differently_worded_question_finds_the_memory(a
 
     # A new question, worded differently, must retrieve the coffee memory first.
     clock.set_time(START + timedelta(hours=2))
-    await _feed(kernel, Event(id=None, ts=clock.now(), kind="msg.in", who="person:owner", place=PLACE,
+    await _feed(kernel, Event(id=None, ts=clock.now(), kind="percept", who="person:owner", place=PLACE,
                               body="telegram", payload={"text": "Apa kopi favorit saya?", "addressed": True,
                                                         "place_kind": "direct"}))
     assert len(fake.requests) == 2  # sleep, then the reply turn
@@ -242,16 +242,16 @@ async def test_mvp_d_sleep_then_a_differently_worded_question_finds_the_memory(a
 
 async def test_sleep_due_runs_at_the_configured_hour_once_per_day(aconn):
     night = datetime(2026, 11, 10, 19, 0, tzinfo=timezone.utc)  # 02:00 in Jakarta
-    await append_event(aconn, ts=night - timedelta(minutes=1), kind="msg.in", who="person:owner",
+    await append_event(aconn, ts=night - timedelta(minutes=1), kind="percept", who="person:owner",
                        place=PLACE, body="telegram", payload={"text": "masih bangun"})
     assert await memory.sleep_due(aconn, night, SOUL) is True  # the hour, though not idle
     await memory.sleep(aconn, pfc=FakePFC(SLEEP_ARGS), embedder=FakeEmbedder(), now=night, soul=SOUL)
 
-    await append_event(aconn, ts=night + timedelta(minutes=5), kind="msg.in", who="person:owner",
+    await append_event(aconn, ts=night + timedelta(minutes=5), kind="percept", who="person:owner",
                        place=PLACE, body="telegram", payload={"text": "pagi"})
     assert await memory.sleep_due(aconn, night + timedelta(minutes=10), SOUL) is False  # already slept today
     tomorrow = night + timedelta(days=1)
-    await append_event(aconn, ts=tomorrow - timedelta(minutes=1), kind="msg.in", who="person:owner",
+    await append_event(aconn, ts=tomorrow - timedelta(minutes=1), kind="percept", who="person:owner",
                        place=PLACE, body="telegram", payload={"text": "begadang lagi"})
     assert await memory.sleep_due(aconn, tomorrow, SOUL) is True
 
@@ -291,7 +291,7 @@ async def test_internal_events_never_make_sleep_due(aconn):
     # Idle long enough, but only bookkeeping happened since sleep: not due.
     assert await memory.sleep_due(aconn, START + timedelta(hours=3), SOUL) is False
 
-    await append_event(aconn, ts=START + timedelta(hours=3), kind="msg.in", who="person:owner",
+    await append_event(aconn, ts=START + timedelta(hours=3), kind="percept", who="person:owner",
                        place=PLACE, body="telegram", payload={"text": "halo"})
     assert await memory.sleep_due(aconn, START + timedelta(hours=3, minutes=31), SOUL) is True
 

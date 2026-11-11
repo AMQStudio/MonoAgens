@@ -1,4 +1,4 @@
-"""CLI body: an in-process Unix socket; one msg.in per line typed by the owner."""
+"""CLI body: an in-process Unix socket; one percept per line typed by the owner."""
 
 from __future__ import annotations
 
@@ -12,6 +12,19 @@ from monoagens.types import Action, Event
 
 DEFAULT_SOCKET = "/tmp/monoagens.sock"
 Put = Callable[[Event], Awaitable[None]]
+
+CAPABILITIES = (
+    {"name": "say", "description": "Write a text line to the terminal.",
+     "schema": {"type": "object", "properties": {"text": {"type": "string"}},
+                "required": ["text"]},
+     "communicative": True, "long_running": False, "identity_changing": False},
+    {"name": "react", "description": "Write one emoji to the terminal.",
+     "schema": {"type": "object",
+                "properties": {"emoji": {"type": "string"},
+                               "message_id": {"type": "integer"}},
+                "required": ["emoji"]},
+     "communicative": False, "long_running": False, "identity_changing": False},
+)
 
 
 def socket_path() -> str:
@@ -28,6 +41,10 @@ class CLIBody:
         """Store the socket path; the file is created when the server starts."""
         self.path = path or socket_path()
         self._writers: set[asyncio.StreamWriter] = set()
+
+    def capabilities(self) -> tuple[dict[str, Any], ...]:
+        """Return the capability descriptors this organ declares."""
+        return CAPABILITIES
 
     async def run(self, put: Put) -> None:
         """Serve typed lines from local clients until the task is cancelled."""
@@ -69,9 +86,9 @@ class CLIBody:
                 writer.close()
 
     def _event(self, text: str) -> Event:
-        return Event(id=None, ts=datetime.now(timezone.utc), kind="msg.in",
+        return Event(id=None, ts=datetime.now(timezone.utc), kind="percept",
                      who="person:owner", place="space:cli", body=self.name,
-                     payload={"text": text, "addressed": True, "place_kind": "direct"})
+                     payload={"description": text, "addressed": True, "place_kind": "direct"})
 
     def _unlink(self) -> None:
         try:

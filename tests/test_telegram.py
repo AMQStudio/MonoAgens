@@ -126,13 +126,13 @@ async def test_private_message_from_owner():
 
     assert len(events) == 1
     event = events[0]
-    assert event.kind == "msg.in"
+    assert event.kind == "percept"
     assert event.body == "telegram"
     assert event.who == "person:owner"
     assert event.place == f"space:tg:{CHAT_PRIVATE}"
     assert event.payload["cursor"] == 500
-    assert event.payload["message_id"] == 11
-    assert event.payload["text"] == "halo"
+    assert event.payload["data"]["message_id"] == 11
+    assert event.payload["description"] == "halo"
     assert event.payload["addressed"] is True
     assert event.payload["place_kind"] == "direct"
 
@@ -246,7 +246,7 @@ async def test_get_updates_retries_with_backoff():
     )
     events = await _drive(body, fake, expected=1, polls=1)
 
-    assert [e.payload["text"] for e in events] == ["retry"]
+    assert [e.payload["description"] for e in events] == ["retry"]
     assert failures["left"] == 0
 
 
@@ -277,3 +277,15 @@ async def test_act_react_sets_reaction():
             },
         )
     ]
+
+
+def test_capability_descriptors():
+    """say counts as speaking; react does not; react accepts a message id."""
+    caps = {cap["name"]: cap for cap in TelegramBody("token").capabilities()}
+    assert set(caps) == {"say", "react"}
+    assert caps["say"]["communicative"] is True
+    assert caps["react"]["communicative"] is False
+    assert caps["react"]["schema"]["properties"]["message_id"]["type"] == "integer"
+    for cap in caps.values():
+        assert cap["long_running"] is False
+        assert cap["identity_changing"] is False

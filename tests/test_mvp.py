@@ -19,6 +19,7 @@ from monoagens.kernel import Kernel
 from monoagens.memory import FakeEmbedder
 from monoagens.pfc import PFC
 from monoagens.store import append_event, read_state
+from monoagens.bodies.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
 
 SOUL = {
@@ -57,7 +58,7 @@ class FakeLLM:
     """Scripted OpenAI-compatible endpoint; records every request it receives."""
 
     def __init__(self, responses: list[list[tuple[str, dict]]] | None = None) -> None:
-        self.responses = responses or [[("stay_silent", {"reason": "testing"})]]
+        self.responses = responses or [[]]
         self.requests: list[dict] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -80,15 +81,18 @@ class RecordingBody:
     def __init__(self) -> None:
         self.actions: list[Action] = []
 
+    def capabilities(self):
+        return TELEGRAM_CAPABILITIES
+
     async def act(self, action: Action) -> None:
         self.actions.append(action)
 
 
 def _msg(text: str, *, message_id: int = 1, place: str = PLACE, place_kind: str = "direct",
          addressed: bool = True, who: str = WHO) -> Event:
-    return Event(id=None, ts=START, kind="msg.in", who=who, place=place, body="telegram",
-                 payload={"text": text, "message_id": message_id, "addressed": addressed,
-                          "place_kind": place_kind})
+    return Event(id=None, ts=START, kind="percept", who=who, place=place, body="telegram",
+                 payload={"description": text, "addressed": addressed,
+                          "place_kind": place_kind, "data": {"message_id": message_id}})
 
 
 async def _feed(kernel: Kernel, event: Event) -> Event:
@@ -120,13 +124,13 @@ async def test_mvp_a_restart_preserves_conversation_context(aconn):
     """MVP (a): a restart keeps the topic; the next reply continues it."""
     clock = FakeClock(START)
 
-    first_fake = FakeLLM([[("say", {"text": "kita bahas kopi ya"})]])
+    first_fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "kita bahas kopi ya"}})]])
     first = Kernel(aconn, clock=clock, pfc=_pfc(first_fake), soul=SOUL)
     first.register_body(RecordingBody())
     await _feed(first, _msg("besok kita bahas apa?"))
 
     # Restart: a brand-new Kernel and PFC on the same database.
-    second_fake = FakeLLM([[("say", {"text": "lanjut soal kopi"})]])
+    second_fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "lanjut soal kopi"}})]])
     second = Kernel(aconn, clock=clock, pfc=_pfc(second_fake), soul=SOUL)
     body = RecordingBody()
     second.register_body(body)
@@ -140,12 +144,12 @@ async def test_mvp_a_restart_preserves_conversation_context(aconn):
     assert "<event>owner: lanjut</event>" in volatile
     assert body.actions == [Action(kind="say", place=PLACE, payload={"text": "lanjut soal kopi"},
                                    body="telegram")]
-    assert (await _kinds(aconn)).count("msg.out") == 2
+    assert (await _kinds(aconn)).count("act.out") == 2
 
 
 async def test_mvp_b_silence_and_mention(aconn):
     """MVP (b): 20 ordinary group messages stay silent; a mention gets a reply."""
-    fake = FakeLLM([[("say", {"text": "iya, ada apa?"})]])
+    fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "iya, ada apa?"}})]])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
     body = RecordingBody()
     kernel.register_body(body)
@@ -156,8 +160,8 @@ async def test_mvp_b_silence_and_mention(aconn):
 
     assert fake.requests == []
     kinds = await _kinds(aconn)
-    assert kinds.count("msg.in") == 20
-    assert kinds.count("msg.out") == 0
+    assert kinds.count("percept") == 20
+    assert kinds.count("act.out") == 0
     assert kinds.count("decision.silent") == 20
 
     payloads = [row[0] for row in await (await aconn.execute(
@@ -178,7 +182,7 @@ async def test_mvp_b_silence_and_mention(aconn):
 
     assert len(fake.requests) == 1
     assert "<why_awake>addressed message</why_awake>" in _volatile(fake)
-    assert (await _kinds(aconn)).count("msg.out") == 1
+    assert (await _kinds(aconn)).count("act.out") == 1
     assert body.actions == [Action(kind="say", place=GROUP, payload={"text": "iya, ada apa?"},
                                    body="telegram")]
 
@@ -190,24 +194,24 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
         [("expect", {"about": "remind the owner at 7", "cue_time": {"daily": "07:00"},
                      "expect": {"none": True}, "intent": "remind gently", "weight": 1.0,
                      "policy": {"once": True}})],
-        [("say", {"text": "sudah jam 7"})],
+        [("act", {"capability": "telegram.say", "arguments": {"text": "sudah jam 7"}})],
     ])
     kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), soul=SOUL)
     body = RecordingBody()
     kernel.register_body(body)
 
     await _feed(kernel, _msg("ingatkan saya jam 7"))
-    assert await _kinds(aconn) == ["msg.in", "expectation.created"]
+    assert await _kinds(aconn) == ["percept", "expectation.created", "decision.silent"]
 
     clock.set_time(SEVEN - timedelta(minutes=10))
     await _tick(kernel, clock)
-    assert (await _kinds(aconn)).count("msg.out") == 0
+    assert (await _kinds(aconn)).count("act.out") == 0
 
     clock.set_time(SEVEN)
     await _tick(kernel, clock)
     kinds = await _kinds(aconn)
     assert kinds.count("expectation.fired") == 1
-    assert kinds.count("msg.out") == 1
+    assert kinds.count("act.out") == 1
     assert body.actions == [Action(kind="say", place=PLACE, payload={"text": "sudah jam 7"},
                                    body="telegram")]
     assert "expectation missed: remind the owner at 7" in _volatile(fake).split("<why_awake>")[1]
@@ -223,11 +227,11 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
     clock.advance(600)
     await _tick(restarted, clock)
     assert restarted_fake.requests == []
-    assert (await _kinds(aconn)).count("msg.out") == 1
+    assert (await _kinds(aconn)).count("act.out") == 1
 
     # An event_seen expectation that is met is resolved, never fired.
-    pattern = {"kind": "msg.in", "who": WHO, "text_like": "workout"}
-    source = await append_event(aconn, ts=clock.now(), kind="msg.in", who=WHO, place=GROUP,
+    pattern = {"kind": "percept", "who": WHO, "text_like": "workout"}
+    source = await append_event(aconn, ts=clock.now(), kind="percept", who=WHO, place=GROUP,
                                 body="telegram", payload={"text": "source"})
     created = await expect.create(
         aconn, {"about": "nudge me if I skip workouts", "cue_event": pattern,
@@ -250,23 +254,23 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
         "AND payload->>'expectation_id' = %s", (str(exp_id),))).fetchone()
     assert resolved[0]["status"] == "satisfied"
     assert restarted_fake.requests == []
-    assert (await _kinds(aconn)).count("msg.out") == 1
+    assert (await _kinds(aconn)).count("act.out") == 1
 
 
 async def test_mvp_d_sleep_consolidation_and_retrieval(aconn):
     """MVP (d): sleep writes memories and core_memory, never edits events, and a
     differently worded question retrieves the right memory."""
     clock = FakeClock(START)
-    await append_event(aconn, ts=START, kind="msg.in", who=WHO, place=PLACE, body="telegram",
+    await append_event(aconn, ts=START, kind="percept", who=WHO, place=PLACE, body="telegram",
                        payload={"text": "Muqsith suka kopi tubruk tanpa gula"})
-    last = await append_event(aconn, ts=START + timedelta(minutes=1), kind="msg.out", who=WHO,
+    last = await append_event(aconn, ts=START + timedelta(minutes=1), kind="act.out", who=WHO,
                               place=PLACE, body="telegram", payload={"text": "baik, dicatat"})
     max_before = last.id
     before = await (await aconn.execute(
         "SELECT id, ts, kind, who, place, body, payload FROM events WHERE id <= %s ORDER BY id",
         (max_before,))).fetchall()
 
-    fake = FakeLLM([[("store_memories", SLEEP_ARGS)], [("stay_silent", {"reason": "noted"})]])
+    fake = FakeLLM([[("store_memories", SLEEP_ARGS)], []])
     kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), soul=SOUL, embedder=FakeEmbedder())
     kernel.register_body(RecordingBody())
 

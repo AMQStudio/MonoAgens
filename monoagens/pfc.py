@@ -29,12 +29,17 @@ def _text(description: str) -> dict[str, Any]:
 
 
 TOOLS: list[dict[str, Any]] = [
-    _tool("say", "Say something in the current place.",
-          {"text": _text("What to say.")}, ["text"]),
-    _tool("react", "React with an emoji to the message that woke you.",
-          {"emoji": _text("One emoji.")}, ["emoji"]),
-    _tool("stay_silent", "Deliberately do not respond.",
-          {"reason": _text("Why silence.")}, ["reason"]),
+    _tool("think", "Think before acting; state the thought and how sure you are.",
+          {"thought": _text("One sentence of inner thought."),
+           "motivation": {"type": "integer", "minimum": 1, "maximum": 5,
+                          "description": "How strongly this deserves to be said."},
+           "confidence": {"type": "number", "minimum": 0, "maximum": 1,
+                          "description": "How sure the thought is."}},
+          ["thought", "motivation", "confidence"]),
+    _tool("act", "Use one organ capability.",
+          {"capability": _text("The organ capability name."),
+           "arguments": {"type": "object", "description": "Arguments for the capability."}},
+          ["capability", "arguments"]),
     _tool("expect", "Hold an expectation about the future; you are woken if it is missed.",
           {"about": _text("One sentence: what is expected."),
            "cue_time": {"type": "object",
@@ -51,8 +56,27 @@ TOOLS: list[dict[str, Any]] = [
     _tool("resolve", "Close an expectation.",
           {"id": {"type": "integer"},
            "status": {"type": "string", "enum": ["satisfied", "dropped"]}}, ["id", "status"]),
+    _tool("revise", "Correct an earlier memory; nothing is deleted.",
+          {"old": _text("The memory being corrected."),
+           "new": _text("The corrected memory."),
+           "reason": _text("Why the correction is made.")}, ["old", "new", "reason"]),
 ]
 TOOL_NAMES = frozenset(tool["function"]["name"] for tool in TOOLS)
+
+
+def tools_for(capabilities: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return the fixed thought acts with `act` listing the capabilities present now."""
+    names = [f"{cap['organ']}.{cap['name']}" for cap in capabilities]
+    lines = [f"{name}: {cap.get('description') or ''}"
+             for name, cap in zip(names, capabilities)]
+    capability = {"type": "string", "description": "The organ capability name."}
+    if names:
+        capability["enum"] = names
+    act = _tool("act", "Use one organ capability.\n" + "\n".join(lines),
+                {"capability": capability,
+                 "arguments": {"type": "object", "description": "Arguments for the capability."}},
+                ["capability", "arguments"])
+    return [act if tool["function"]["name"] == "act" else tool for tool in TOOLS]
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +102,7 @@ class PFCContext:
     recent_elsewhere: Sequence[Event] = ()
     trigger: Event | None = None
     last_interaction: datetime | None = None
+    capabilities: Sequence[dict[str, Any]] = ()
 
 
 class PFC:
@@ -128,7 +153,7 @@ class PFC:
 
     async def decide(self, context: PFCContext) -> list[ToolCall]:
         """Ask the model to act on one context."""
-        return await self.call(self.build_messages(context), TOOLS)
+        return await self.call(self.build_messages(context), tools_for(context.capabilities))
 
     def build_messages(self, context: PFCContext) -> list[dict[str, Any]]:
         """Build the layered prompt: stable, core memory, volatile."""
@@ -175,16 +200,17 @@ class PFC:
                 f"{speaker}: {text}") if text else ""
 
     def _recent_parts(self, event: Event) -> tuple[str, Any]:
-        if event.kind == "msg.out":
-            return self.name, event.payload.get("text")
+        if event.kind == "act.out":
+            arguments = event.payload.get("arguments") or {}
+            return self.name, arguments.get("text")
         if event.kind == "expectation.fired":
             return "expectation", (event.payload.get("text") or event.payload.get("about"))
-        return str(event.who or "?").removeprefix("person:"), event.payload.get("text")
+        return str(event.who or "?").removeprefix("person:"), event.payload.get("description")
 
     def _event_text(self, event: Event | None) -> str:
         if event is None:
             return "(no trigger event)"
-        text = event.payload.get("text")
+        text = event.payload.get("description") or event.payload.get("text")
         who = str(event.who or "?").removeprefix("person:")
         return f"{who}: {text}" if text else f"[{event.kind}]"
 

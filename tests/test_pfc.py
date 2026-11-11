@@ -13,6 +13,7 @@ from monoagens.clock import FakeClock
 from monoagens.kernel import Kernel
 from monoagens.pfc import PFC, TOOL_NAMES
 from monoagens.store import append_event, read_state, write_state
+from monoagens.bodies.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
 
 SOUL = {
@@ -40,7 +41,7 @@ class FakeLLM:
         *,
         status: int = 200,
     ) -> None:
-        self.responses = responses or [[("stay_silent", {"reason": "testing"})]]
+        self.responses = responses or [[]]
         self.status = status
         self.requests: list[dict] = []
         self.headers: list[httpx.Headers] = []
@@ -88,6 +89,9 @@ class RecordingBody:
         self.actions: list[Action] = []
         self.log_at_act: list[list[str]] = []
 
+    def capabilities(self):
+        return TELEGRAM_CAPABILITIES
+
     async def act(self, action: Action) -> None:
         if self.conn is not None:
             cur = await self.conn.execute("SELECT kind FROM events ORDER BY id")
@@ -95,17 +99,25 @@ class RecordingBody:
         self.actions.append(action)
 
 
+class ResultBody(RecordingBody):
+    """A body that answers every action with a result."""
+
+    async def act(self, action: Action):
+        await super().act(action)
+        return {"message_id": 7}
+
+
 def _msg(text: str, *, message_id: int = 1, addressed: bool = True, who: str = "person:owner") -> Event:
     return Event(
         id=None,
         ts=START,
-        kind="msg.in",
+        kind="percept",
         who=who,
         place=PLACE,
         body="telegram",
         payload={
-            "text": text,
-            "message_id": message_id,
+            "description": text,
+            "data": {"message_id": message_id},
             "addressed": addressed,
             "place_kind": "direct",
         },
@@ -136,10 +148,11 @@ async def test_layered_prompt_structure(aconn):
     seed = await append_event(aconn, ts=START, kind="decision.note", place=PLACE)
     assert seed.id is not None
     await write_state(aconn, "core_memory", {"text": "The owner likes coffee."}, seed.id)
-    await append_event(aconn, ts=START, kind="msg.in", who="person:owner", place=PLACE,
-                       body="telegram", payload={"text": "halo"})
-    await append_event(aconn, ts=START, kind="msg.out", who="person:owner", place=PLACE,
-                       body="telegram", payload={"text": "hai"})
+    await append_event(aconn, ts=START, kind="percept", who="person:owner", place=PLACE,
+                       body="telegram", payload={"description": "halo"})
+    await append_event(aconn, ts=START, kind="act.out", who="person:owner", place=PLACE,
+                       body="telegram",
+                       payload={"capability": "telegram.say", "arguments": {"text": "hai"}})
 
     await _feed(kernel, _msg("lagi?"))
 
@@ -147,7 +160,11 @@ async def test_layered_prompt_structure(aconn):
     assert request["model"] == "fake-model"
     assert request["tool_choice"] == "required"
     assert {tool["function"]["name"] for tool in request["tools"]} == {
-        "say", "react", "stay_silent", "expect", "resolve"}
+        "think", "act", "expect", "resolve", "revise"}
+    act_tool = next(tool for tool in request["tools"]
+                    if tool["function"]["name"] == "act")
+    capability = act_tool["function"]["parameters"]["properties"]["capability"]
+    assert capability["enum"] == ["telegram.say", "telegram.react"]
     assert fake.headers[0]["authorization"] == "Bearer test-key"
 
     messages = fake.last_messages
@@ -175,12 +192,12 @@ async def test_layered_prompt_structure(aconn):
 
 
 async def test_recent_shows_only_conversational_events(aconn):
-    """<recent> carries msg.in, msg.out, and fired expectations, never bookkeeping."""
+    """<recent> carries percepts, act.out, and fired expectations, never bookkeeping."""
     fake = FakeLLM()
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
 
-    await append_event(aconn, ts=START, kind="msg.in", who="person:owner", place=PLACE,
-                       body="telegram", payload={"text": "halo pagi"})
+    await append_event(aconn, ts=START, kind="percept", who="person:owner", place=PLACE,
+                       body="telegram", payload={"description": "halo pagi"})
     await append_event(aconn, ts=START, kind="decision.silent", place=PLACE,
                        payload={"reason": "internal-silence"})
     await append_event(aconn, ts=START, kind="error", place=PLACE,
@@ -191,8 +208,9 @@ async def test_recent_shows_only_conversational_events(aconn):
                        payload={"about": "internal-expectation"})
     await append_event(aconn, ts=START, kind="expectation.fired", who="person:owner",
                        place=PLACE, body="telegram", payload={"about": "minum air"})
-    await append_event(aconn, ts=START, kind="msg.out", who="person:owner", place=PLACE,
-                       body="telegram", payload={"text": "pagi juga"})
+    await append_event(aconn, ts=START, kind="act.out", who="person:owner", place=PLACE,
+                       body="telegram",
+                       payload={"capability": "telegram.say", "arguments": {"text": "pagi juga"}})
 
     await _feed(kernel, _msg("masih di sana?"))
 
@@ -208,22 +226,22 @@ async def test_recent_shows_only_conversational_events(aconn):
 
 
 async def test_say_is_recorded_before_the_body_acts(aconn):
-    fake = FakeLLM([[("say", {"text": "halo juga"})]])
+    fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "halo juga"}})]])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
     body = RecordingBody(aconn)
     kernel.register_body(body)
 
     trigger = await _feed(kernel, _msg("halo"))
 
-    assert await _kinds(aconn) == ["msg.in", "msg.out"]
-    cur = await aconn.execute("SELECT who, place, body, payload, caused_by FROM events WHERE kind='msg.out'")
+    assert await _kinds(aconn) == ["percept", "act.out"]
+    cur = await aconn.execute("SELECT who, place, body, payload, caused_by FROM events WHERE kind='act.out'")
     who, place, body_name, payload, caused_by = await cur.fetchone()
     assert (who, place, body_name) == ("person:owner", PLACE, "telegram")
-    assert payload == {"text": "halo juga"}
+    assert payload == {"capability": "telegram.say", "arguments": {"text": "halo juga"}}
     assert caused_by == trigger.id
 
-    # msg.out is already in the Log when act() is called.
-    assert body.log_at_act == [["msg.in", "msg.out"]]
+    # act.out is already in the Log when act() is called.
+    assert body.log_at_act == [["percept", "act.out"]]
     assert body.actions == [
         Action(kind="say", place=PLACE, payload={"text": "halo juga"}, body="telegram")
     ]
@@ -232,34 +250,65 @@ async def test_say_is_recorded_before_the_body_acts(aconn):
 
 
 async def test_react_is_recorded_before_the_body_acts(aconn):
-    fake = FakeLLM([[("react", {"emoji": "👍"})]])
+    fake = FakeLLM([[("act", {"capability": "telegram.react", "arguments": {"emoji": "👍"}})]])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
     body = RecordingBody(aconn)
     kernel.register_body(body)
 
     await _feed(kernel, _msg("mantap", message_id=42))
 
-    assert await _kinds(aconn) == ["msg.in", "react.out"]
-    cur = await aconn.execute("SELECT payload FROM events WHERE kind='react.out'")
-    assert (await cur.fetchone())[0] == {"emoji": "👍", "message_id": 42}
-    assert body.log_at_act == [["msg.in", "react.out"]]
+    assert await _kinds(aconn) == ["percept", "act.out"]
+    cur = await aconn.execute("SELECT payload FROM events WHERE kind='act.out'")
+    assert (await cur.fetchone())[0] == {
+        "capability": "telegram.react", "arguments": {"emoji": "👍"}}
+    assert body.log_at_act == [["percept", "act.out"]]
     assert body.actions == [
-        Action(kind="react", place=PLACE, payload={"emoji": "👍", "message_id": 42}, body="telegram")
+        Action(kind="react", place=PLACE, payload={"emoji": "👍"}, body="telegram")
     ]
 
 
-async def test_stay_silent_is_recorded_and_calls_no_body(aconn):
-    fake = FakeLLM([[("stay_silent", {"reason": "nothing to add"})]])
+async def test_an_organ_result_is_recorded_as_act_result(aconn):
+    fake = FakeLLM([[("act", {"capability": "telegram.say",
+                              "arguments": {"text": "done"}})]])
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
+    kernel.register_body(ResultBody())
+
+    await _feed(kernel, _msg("halo"))
+
+    assert await _kinds(aconn) == ["percept", "act.out", "act.result"]
+    cur = await aconn.execute("SELECT payload FROM events WHERE kind='act.result'")
+    assert (await cur.fetchone())[0] == {"capability": "telegram.say",
+                                         "result": {"message_id": 7}}
+
+
+async def test_a_wake_without_act_is_recorded_as_silent(aconn):
+    fake = FakeLLM([[]])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
     body = RecordingBody()
     kernel.register_body(body)
 
     await _feed(kernel, _msg("hm"))
 
-    assert await _kinds(aconn) == ["msg.in", "decision.silent"]
+    assert await _kinds(aconn) == ["percept", "decision.silent"]
+    cur = await aconn.execute("SELECT payload FROM events WHERE kind='decision.silent'")
+    assert (await cur.fetchone())[0] == {"reason": "no act"}
+    assert body.actions == []
+
+
+async def test_think_is_recorded_and_silence_keeps_its_reason(aconn):
+    fake = FakeLLM([[("think", {"thought": "nothing to add", "motivation": 2,
+                               "confidence": 0.4})]])
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
+    kernel.register_body(RecordingBody())
+
+    await _feed(kernel, _msg("hm"))
+
+    assert await _kinds(aconn) == ["percept", "decision.note", "decision.silent"]
+    cur = await aconn.execute("SELECT payload FROM events WHERE kind='decision.note'")
+    assert (await cur.fetchone())[0] == {
+        "act": "think", "thought": "nothing to add", "motivation": 2, "confidence": 0.4}
     cur = await aconn.execute("SELECT payload FROM events WHERE kind='decision.silent'")
     assert (await cur.fetchone())[0] == {"reason": "nothing to add"}
-    assert body.actions == []
 
 
 async def test_unaddressed_message_does_not_wake_the_pfc(aconn):
@@ -269,11 +318,11 @@ async def test_unaddressed_message_does_not_wake_the_pfc(aconn):
     await _feed(kernel, _msg("group chatter", addressed=False))
 
     assert fake.requests == []
-    assert await _kinds(aconn) == ["msg.in", "decision.silent"]
+    assert await _kinds(aconn) == ["percept", "decision.silent"]
 
 
 async def test_invalid_tool_call_becomes_an_error_event_and_the_loop_lives(aconn):
-    fake = FakeLLM([[("shout", {"text": "hi"})], [("say", {"text": "still here"})]])
+    fake = FakeLLM([[("shout", {"text": "hi"})], [("act", {"capability": "telegram.say", "arguments": {"text": "still here"}})]])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
     kernel.register_body(RecordingBody())
 
@@ -281,7 +330,7 @@ async def test_invalid_tool_call_becomes_an_error_event_and_the_loop_lives(aconn
     await _feed(kernel, _msg("second", message_id=2))
 
     kinds = await _kinds(aconn)
-    assert kinds == ["msg.in", "error", "msg.in", "msg.out"]
+    assert kinds == ["percept", "error", "decision.silent", "percept", "act.out"]
     cur = await aconn.execute("SELECT payload FROM events WHERE kind='error'")
     error = (await cur.fetchone())[0]
     assert "invalid tool call: shout" in error["error"]
@@ -294,7 +343,7 @@ async def test_llm_failure_becomes_an_error_event_and_the_loop_lives(aconn):
     await _feed(kernel, _msg("halo"))
 
     kinds = await _kinds(aconn)
-    assert kinds == ["msg.in", "error"]
+    assert kinds == ["percept", "error"]
     cur = await aconn.execute("SELECT payload, caused_by FROM events WHERE kind='error'")
     payload, caused_by = await cur.fetchone()
     assert "500" in payload["error"]
@@ -309,13 +358,13 @@ async def test_mvp_a_restart_keeps_the_conversation_context(aconn):
     """PLAN.md Step 4 MVP (a): after a restart, the next prompt carries the topic."""
     clock = FakeClock(START)
 
-    first_fake = FakeLLM([[("say", {"text": "kita bahas kopi ya"})]])
+    first_fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "kita bahas kopi ya"}})]])
     first = Kernel(aconn, clock=clock, pfc=_pfc(first_fake))
     first.register_body(RecordingBody())
     await _feed(first, _msg("besok kita bahas apa?"))
 
     # Restart: a new Kernel and a new PFC on the same database.
-    second_fake = FakeLLM([[("say", {"text": "lanjut soal kopi"})]])
+    second_fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "lanjut soal kopi"}})]])
     second = Kernel(aconn, clock=clock, pfc=_pfc(second_fake))
     body = RecordingBody(aconn)
     second.register_body(body)
@@ -359,7 +408,7 @@ async def test_dm_gets_a_reply_through_the_telegram_body(aconn):
 
     body = TelegramBody("token", owner_ids={111}, transport=httpx.MockTransport(handler))
     kernel = Kernel(
-        aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM([[("say", {"text": "halo!"})]]))
+        aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "halo!"}})]]))
     )
     kernel.register_body(body)
 
@@ -379,7 +428,7 @@ async def test_dm_gets_a_reply_through_the_telegram_body(aconn):
         await asyncio.gather(*tasks, return_exceptions=True)
 
     assert sent == [{"chat_id": "111", "text": "halo!"}]
-    assert await _kinds(aconn) == ["msg.in", "msg.out"]
+    assert await _kinds(aconn) == ["percept", "act.out"]
 
 
 async def test_recent_includes_other_places_prefixed(aconn):
@@ -387,14 +436,14 @@ async def test_recent_includes_other_places_prefixed(aconn):
     fake = FakeLLM()
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake))
 
-    await append_event(aconn, ts=START, kind="msg.in", who="person:owner", place=PLACE,
-                       body="telegram", payload={"text": "di sini"})
-    await append_event(aconn, ts=START, kind="msg.in", who="person:owner", place="space:cli",
-                       body="cli", payload={"text": "dari cli"})
+    await append_event(aconn, ts=START, kind="percept", who="person:owner", place=PLACE,
+                       body="telegram", payload={"description": "di sini"})
+    await append_event(aconn, ts=START, kind="percept", who="person:owner", place="space:cli",
+                       body="cli", payload={"description": "dari cli"})
     await append_event(aconn, ts=START, kind="decision.silent", who="person:owner",
                        place="space:cli", payload={"reason": "internal-elsewhere"})
-    await append_event(aconn, ts=START, kind="msg.in", who="person:alice", place="space:cli",
-                       body="cli", payload={"text": "bukan owner"})
+    await append_event(aconn, ts=START, kind="percept", who="person:alice", place="space:cli",
+                       body="cli", payload={"description": "bukan owner"})
     await append_event(aconn, ts=START, kind="expectation.fired", who="person:owner",
                        place="space:cli", body="cli", payload={"about": "minum air"})
 
@@ -423,4 +472,4 @@ async def test_recent_is_nothing_yet_when_both_parts_are_empty(aconn):
 
 
 async def test_tool_names_are_the_five_tools():
-    assert TOOL_NAMES == {"say", "react", "stay_silent", "expect", "resolve"}
+    assert TOOL_NAMES == {"think", "act", "expect", "resolve", "revise"}

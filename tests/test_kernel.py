@@ -34,7 +34,7 @@ class FakeBody:
             event = Event(
                 id=None,
                 ts=base_time + timedelta(seconds=seq),
-                kind="msg.in",
+                kind="percept",
                 who=f"person:{self.name}",
                 place="space:lobby",
                 body=self.name,
@@ -165,7 +165,7 @@ async def test_atomic_transaction_per_event(aconn):
     event = Event(
         id=None,
         ts=datetime(2026, 11, 10, 11, 0, 0, tzinfo=timezone.utc),
-        kind="msg.in",
+        kind="percept",
         who="person:atomic",
         place="space:test",
         body="tester",
@@ -195,7 +195,7 @@ async def test_put_returns_only_after_event_is_committed(aconn):
     event = Event(
         id=None,
         ts=datetime(2020, 1, 1, tzinfo=timezone.utc),  # overridden by the kernel clock
-        kind="msg.in",
+        kind="percept",
         who="person:ack",
         place="space:ack",
         body="tester",

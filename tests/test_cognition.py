@@ -21,6 +21,7 @@ from monoagens.middleware import Continue, Replace, Stop
 from monoagens.pfc import PFC
 from monoagens.store import (append_event, insert_event_vector, read_event_vector,
                              read_state, write_state)
+from monoagens.bodies.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
 
 SOUL = {
@@ -48,7 +49,7 @@ class FakeLLM:
     """Scripted OpenAI-compatible endpoint that also reports token usage."""
 
     def __init__(self, responses: list[list[tuple[str, dict]]] | None = None) -> None:
-        self.responses = responses or [[("stay_silent", {"reason": "testing"})]]
+        self.responses = responses or [[]]
         self.requests: list[dict] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -82,6 +83,9 @@ class RecordingBody:
     def __init__(self) -> None:
         self.actions: list[Action] = []
 
+    def capabilities(self):
+        return TELEGRAM_CAPABILITIES
+
     async def act(self, action: Action) -> None:
         self.actions.append(action)
 
@@ -93,9 +97,9 @@ def _pfc(fake: FakeLLM) -> PFC:
 
 def _msg(text: str = "halo", *, message_id: int = 1, place: str = PLACE,
          place_kind: str = "direct", addressed: bool = True) -> Event:
-    return Event(id=None, ts=START, kind="msg.in", who=WHO, place=place, body="telegram",
-                 payload={"text": text, "message_id": message_id, "addressed": addressed,
-                          "place_kind": place_kind})
+    return Event(id=None, ts=START, kind="percept", who=WHO, place=place, body="telegram",
+                 payload={"description": text, "addressed": addressed,
+                          "place_kind": place_kind, "data": {"message_id": message_id}})
 
 
 def _situation(**overrides) -> Situation:
@@ -189,7 +193,7 @@ async def test_fired_expectation_is_a_wake_reflex():
 
 
 async def test_an_ordinary_message_is_silent_and_reproducible():
-    event = Event(42, START, "msg.in", who=WHO, place=PLACE, payload={"text": "obrolan"})
+    event = Event(42, START, "percept", who=WHO, place=PLACE, payload={"text": "obrolan"})
     first = await appraise(event, soul=SOUL)
     second = await appraise(event, soul=SOUL)
     assert (first.decision, first.reflex, first.reason) == (
@@ -202,12 +206,12 @@ async def test_an_ordinary_message_is_silent_and_reproducible():
 
 
 async def test_assemble_situation_holds_vector_recent_and_state(aconn):
-    earlier = await append_event(aconn, ts=START, kind="msg.in", who=WHO, place=PLACE,
+    earlier = await append_event(aconn, ts=START, kind="percept", who=WHO, place=PLACE,
                                  body="telegram", payload={"text": "kopi"})
     await insert_event_vector(aconn, earlier.id, [0.5] * 384)
     await write_state(aconn, "cognition:weights", {"name_mentioned": 1.0}, earlier.id)
     await write_state(aconn, f"habit:{PLACE}:{WHO}", {"h": 1}, earlier.id)
-    current = await append_event(aconn, ts=START, kind="msg.in", who=WHO, place=PLACE,
+    current = await append_event(aconn, ts=START, kind="percept", who=WHO, place=PLACE,
                                  body="telegram", payload={"text": "halo"})
 
     situation = await assemble_situation(aconn, current, now=START, soul=SOUL)
@@ -241,7 +245,7 @@ async def test_kernel_encodes_a_message_once_and_retrieval_reuses_the_vector(aco
 
 async def test_kernel_encodes_the_reply_once_too(aconn):
     embedder = CountingEmbedder()
-    fake = FakeLLM([[("say", {"text": "hai"})]])
+    fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL,
                     embedder=embedder)
     kernel.register_body(RecordingBody())
@@ -263,19 +267,19 @@ async def test_silent_decision_event_carries_the_full_appraisal(aconn):
     await _feed(kernel, _msg("obrolan biasa", place=GROUP, place_kind="group",
                              addressed=False))
 
-    assert await _kinds(aconn) == ["msg.in", "decision.silent"]
+    assert await _kinds(aconn) == ["percept", "decision.silent"]
     payload = await _payload(aconn, "decision.silent")
     assert set(payload) == {"decision", "reason", "reflex", "signals", "s", "theta", "p", "u"}
     assert (payload["decision"], payload["reason"], payload["reflex"]) == (
         "silent", "gate score below silent threshold", None)
     assert (payload["s"], payload["theta"], payload["p"]) == (0.0, 0.0, 0.0)
-    stored = await (await aconn.execute("SELECT id FROM events WHERE kind = 'msg.in'")).fetchone()
+    stored = await (await aconn.execute("SELECT id FROM events WHERE kind = 'percept'")).fetchone()
     assert payload["u"] == seeded_rng(1, stored[0]).random()
     assert fake.requests == []
 
 
 async def test_llm_token_usage_lands_in_the_daily_budget_key(aconn):
-    fake = FakeLLM([[("say", {"text": "hai"})]])
+    fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
     pfc = _pfc(fake)
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=pfc, soul=SOUL)
     kernel.register_body(RecordingBody())
@@ -303,7 +307,7 @@ async def test_inbound_stop_records_guard_stopped_and_skips_cognition(aconn):
     await _feed(kernel, _msg("halo"))
 
     assert fake.requests == []
-    assert await _kinds(aconn) == ["msg.in", "guard.stopped"]
+    assert await _kinds(aconn) == ["percept", "guard.stopped"]
     assert await _payload(aconn, "guard.stopped") == {"hook": "inbound", "reason": "not now"}
 
 
@@ -315,12 +319,12 @@ async def test_inbound_exception_fails_closed_with_an_error_and_a_stop(aconn):
     kernel.hooks_inbound.append(boom)
     await _feed(kernel, _msg("halo"))
 
-    assert await _kinds(aconn) == ["msg.in", "error", "guard.stopped"]
+    assert await _kinds(aconn) == ["percept", "error", "guard.stopped"]
     assert await _payload(aconn, "guard.stopped") == {"hook": "inbound", "reason": "nope"}
 
 
 async def test_inbound_replace_swaps_the_event_before_appraisal(aconn):
-    fake = FakeLLM([[("say", {"text": "hai"})]])
+    fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
 
     async def rewrite(item, ctx):
         return Replace(replace(item, payload={**item.payload, "addressed": True}))
@@ -331,11 +335,11 @@ async def test_inbound_replace_swaps_the_event_before_appraisal(aconn):
     await _feed(kernel, _msg("halo", addressed=False))
 
     assert len(fake.requests) == 1
-    assert "msg.out" in await _kinds(aconn)
+    assert "act.out" in await _kinds(aconn)
 
 
 async def test_context_hook_can_replace_the_pfc_context(aconn):
-    fake = FakeLLM([[("say", {"text": "hai"})]])
+    fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
 
     async def rewrite(item, ctx):
         return Replace(replace(item, reason="rewritten by middleware"))
@@ -349,7 +353,7 @@ async def test_context_hook_can_replace_the_pfc_context(aconn):
 
 
 async def test_tool_hook_stops_a_call_before_it_runs(aconn):
-    fake = FakeLLM([[("say", {"text": "hai"})]])
+    fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
 
     async def block(item, ctx):
         return Stop("tools are closed")
@@ -361,13 +365,13 @@ async def test_tool_hook_stops_a_call_before_it_runs(aconn):
     await _feed(kernel, _msg("halo"))
 
     assert body.actions == []
-    assert "msg.out" not in await _kinds(aconn)
+    assert "act.out" not in await _kinds(aconn)
     assert await _payload(aconn, "guard.stopped") == {"hook": "tool",
                                                       "reason": "tools are closed"}
 
 
 async def test_outbound_hook_replaces_the_payload_and_continue_passes(aconn):
-    fake = FakeLLM([[("say", {"text": "hai"})]])
+    fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
 
     async def rewrite(item, ctx):
         return Replace({**item, "text": "hai (checked)"})
@@ -383,11 +387,11 @@ async def test_outbound_hook_replaces_the_payload_and_continue_passes(aconn):
 
     assert body.actions == [Action(kind="say", place=PLACE,
                                    payload={"text": "hai (checked)"}, body="telegram")]
-    assert (await _payload(aconn, "msg.out"))["text"] == "hai"
+    assert (await _payload(aconn, "act.out"))["arguments"]["text"] == "hai"
 
 
 async def test_outbound_stop_keeps_the_logged_message_but_never_acts(aconn):
-    fake = FakeLLM([[("say", {"text": "hai"})]])
+    fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
 
     async def block(item, ctx):
         return Stop("privacy")
@@ -399,7 +403,7 @@ async def test_outbound_stop_keeps_the_logged_message_but_never_acts(aconn):
     await _feed(kernel, _msg("halo"))
 
     assert body.actions == []
-    assert (await _payload(aconn, "msg.out"))["text"] == "hai"
+    assert (await _payload(aconn, "act.out"))["arguments"]["text"] == "hai"
     assert await _payload(aconn, "guard.stopped") == {"hook": "outbound", "reason": "privacy"}
 
 

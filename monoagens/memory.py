@@ -52,6 +52,14 @@ class Embedder(Protocol):
         """Return one vector per input text."""
 
 
+def _payload_text(payload: dict[str, Any]) -> str:
+    """Return the human-readable text of one event payload."""
+    for key in ("description", "text", "reason", "about"):
+        if payload.get(key):
+            return str(payload[key])
+    return ""
+
+
 def cosine(a: Sequence[float], b: Sequence[float]) -> float:
     """Return the cosine similarity of two vectors (0.0 for a zero vector)."""
     dot = sum(x * y for x, y in zip(a, b))
@@ -134,9 +142,9 @@ async def sleep_due(conn: psycopg.AsyncConnection[Any], now: datetime,
     config, zone = soul.get("sleep") or {}, ZoneInfo(str(soul.get("timezone") or "UTC"))
     last_id = int((await read_state(conn, "sleep:last_event") or {}).get("id") or 0)
     cur = await conn.execute(
-        "SELECT max(id) FILTER (WHERE kind IN ('msg.in', 'msg.out')), "
+        "SELECT max(id) FILTER (WHERE kind IN ('percept', 'act.out')), "
         "max(ts) FILTER (WHERE kind = 'sleep.failed'), "
-        "max(ts) FILTER (WHERE kind IN ('msg.in', 'msg.out')), "
+        "max(ts) FILTER (WHERE kind IN ('percept', 'act.out')), "
         "max(ts) FILTER (WHERE kind = 'sleep.done') FROM events")
     newest, last_failed, idle_since, slept = await cur.fetchone()
     if newest is None or int(newest) <= last_id:
@@ -172,7 +180,7 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
         return None
     zone = ZoneInfo(str(soul.get("timezone") or "UTC"))
     lines = [f"#{r[0]} {r[1].astimezone(zone):%Y-%m-%d %H:%M} [{r[2]}] {r[3] or '?'} @ "
-             f"{r[4] or '?'}: {r[5].get('text') or r[5].get('reason') or r[5].get('about') or ''}"
+             f"{r[4] or '?'}: {_payload_text(r[5])}"
              for r in rows]
     old_core = str((await read_state(conn, "core_memory") or {}).get("text") or "")
     messages = [

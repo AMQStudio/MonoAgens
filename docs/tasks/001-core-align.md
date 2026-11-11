@@ -7,7 +7,7 @@ May touch: `monoagens/` (all), `sql/`, `soul.yaml`, `config.yaml` (new), `script
 Bring the merged Track A code in line with the frozen core spec. This is the only task allowed to change the shared files (`kernel.py`, `store.py`, `sql/schema.sql`, `soul.yaml`).
 
 ## Tasks
-- [ ] T1 Thought acts `think, act, expect, resolve, revise`; `say`/`react` become Telegram and CLI capabilities (core.md §9.1); silence = a wake without `act`; `msg.in` becomes `percept` with a description and optional data (§9.2); `act.out`/`act.result` replace `msg.out`/`react.out` in code, tests and replay.
+- [x] T1 Thought acts `think, act, expect, resolve, revise`; `say`/`react` become Telegram and CLI capabilities (core.md §9.1); silence = a wake without `act`; `msg.in` becomes `percept` with a description and optional data (§9.2); `act.out`/`act.result` replace `msg.out`/`react.out` in code, tests and replay.
 - [ ] T2 Three hooks (inbound, context, action) with owner-policy slots first and last, shared vs organ-own scope, collision check at boot.
 - [ ] T3 Provenance and privacy: `origin_actor` on events (inherited along `caused_by`), `identity_changing` check in the action hook; `place` + `private` on memories and the context-hook filter.
 - [ ] T4 Lineage: `derived_from` on memories, expectations and vectors; replace the `event_vectors` no-delete trigger with the two dedicated paths (fade, hard forget) — stubs that write their events are fine.
@@ -24,3 +24,7 @@ Bring the merged Track A code in line with the frozen core spec. This is the onl
 All tests and replay pass; grep shows no platform name, no world action and no direct clock or random call in the core.
 
 ## Notes
+- T1: five thought acts only; `act` carries `{capability, arguments}` for the capabilities
+  declared by each body (`monoagens/organs.py`); a wake without `act` writes
+  `decision.silent`; percepts carry `description` + optional `data`; `act.out`/`act.result`
+  replace the old message kinds across code, tests and replay.

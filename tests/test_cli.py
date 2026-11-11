@@ -49,11 +49,12 @@ async def test_socket_round_trip_with_cli_body(tmp_path):
         await asyncio.wait_for(posted_event.wait(), timeout=5.0)
 
         event = posted[0]
-        assert event.kind == "msg.in"
+        assert event.kind == "percept"
         assert event.body == "cli"
         assert event.who == "person:owner"
         assert event.place == "space:cli"
-        assert event.payload == {"text": "halo", "addressed": True, "place_kind": "direct"}
+        assert event.payload == {"description": "halo", "addressed": True,
+                                 "place_kind": "direct"}
 
         await body.act(Action(kind="say", place="space:cli", payload={"text": "hai"}))
         assert await asyncio.wait_for(reader.readline(), timeout=5.0) == b"hai\n"
@@ -83,3 +84,11 @@ def test_client_reports_main_process_not_running(tmp_path):
 
     assert result.returncode == 1
     assert "MonoAgens main process is not running." in result.stderr
+
+
+def test_capability_descriptors():
+    """The CLI declares the same communicative and non-communicative capabilities."""
+    caps = {cap["name"]: cap for cap in CLIBody("/tmp/unused.sock").capabilities()}
+    assert set(caps) == {"say", "react"}
+    assert caps["say"]["communicative"] is True
+    assert caps["react"]["communicative"] is False

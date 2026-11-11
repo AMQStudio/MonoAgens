@@ -53,7 +53,7 @@ def matches_cue(pattern, event):
     if any(pattern.get(f) is not None and pattern[f] != getattr(event, f) for f in fields):
         return False
     needle = pattern.get("text_like")
-    haystack = str(event.payload.get("text") or "").lower()
+    haystack = str(event.payload.get("description") or event.payload.get("text") or "").lower()
     return needle is None or str(needle).lower() in haystack
 
 
@@ -143,7 +143,8 @@ async def is_met(conn, condition, now):
         fields = [f for f in ("kind", "who", "place") if pattern.get(f) is not None]
         clauses, params = [f"{f} = %s" for f in fields], [pattern[f] for f in fields]
         if pattern.get("text_like") is not None:
-            clauses.append("position(lower(%s) in lower(coalesce(payload->>'text', ''))) > 0")
+            clauses.append("position(lower(%s) in lower(coalesce(payload->>'description', "
+                           "payload->>'text', ''))) > 0")
             params.append(str(pattern["text_like"]))
         params.extend([now - parse_duration(condition["within"]), now])
         sql = ("SELECT 1 FROM events WHERE "
@@ -210,7 +211,7 @@ async def recovery(conn, *, now):
             (str(row["id"]),))).fetchone()
         fired_id = hit[0] if hit else None
         answered = fired_id is not None and await (await conn.execute(
-            "SELECT 1 FROM events WHERE kind = 'msg.out' AND caused_by = %s LIMIT 1",
+            "SELECT 1 FROM events WHERE kind = 'act.out' AND caused_by = %s LIMIT 1",
             (fired_id,))).fetchone() is not None
         if answered:
             await resolve_expectation(conn, {**row, "fired_event": fired_id}, now, "satisfied")

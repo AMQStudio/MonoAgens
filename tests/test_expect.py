@@ -14,6 +14,7 @@ from monoagens.clock import FakeClock
 from monoagens.kernel import Kernel
 from monoagens.pfc import PFC
 from monoagens.store import append_event, write_state
+from monoagens.bodies.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
 
 SOUL = {
@@ -39,7 +40,7 @@ class FakeLLM:
     """Scripted OpenAI-compatible endpoint; records every request it receives."""
 
     def __init__(self, responses: list[list[tuple[str, dict]]] | None = None) -> None:
-        self.responses = responses or [[("stay_silent", {"reason": "testing"})]]
+        self.responses = responses or [[]]
         self.requests: list[dict] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -66,18 +67,21 @@ class RecordingBody:
     def __init__(self) -> None:
         self.actions: list[Action] = []
 
+    def capabilities(self):
+        return TELEGRAM_CAPABILITIES
+
     async def act(self, action: Action) -> None:
         self.actions.append(action)
 
 
 def _msg(text: str = "halo", *, message_id: int = 1, addressed: bool = True) -> Event:
-    return Event(id=None, ts=START, kind="msg.in", who=WHO, place=PLACE, body="telegram",
-                 payload={"text": text, "message_id": message_id, "addressed": addressed,
-                          "place_kind": "direct"})
+    return Event(id=None, ts=START, kind="percept", who=WHO, place=PLACE, body="telegram",
+                 payload={"description": text, "addressed": addressed, "place_kind": "direct",
+                          "data": {"message_id": message_id}})
 
 
 def _source() -> Event:
-    return Event(id=None, ts=START, kind="msg.in", who=WHO, place=PLACE, body="telegram",
+    return Event(id=None, ts=START, kind="percept", who=WHO, place=PLACE, body="telegram",
                  payload={"text": "source"})
 
 
@@ -108,7 +112,7 @@ async def _create(conn, **overrides) -> tuple[int, Event]:
     data = {"about": "test expectation", "cue_time": {"at": START.isoformat()},
             "expect": {"none": True}, "weight": 1.0, "policy": {"once": True}}
     data.update(overrides)
-    source = await append_event(conn, ts=START, kind="msg.in", who=WHO, place=PLACE, body="telegram",
+    source = await append_event(conn, ts=START, kind="percept", who=WHO, place=PLACE, body="telegram",
                                 payload={"text": "source"})
     created = await expect.create(conn, data, now=START, soul=SOUL, source=source)
     return int(created.payload["expectation_id"]), created
@@ -160,7 +164,7 @@ def test_validation_defaults_and_rejections():
         {"about": "x", "cue_time": {"every": "1d"}, "expect": {"none": True}, "weight": 2.0},
         {"about": "x", "cue_time": {"every": "1d"}, "expect": {"none": True}, "weight": -0.1},
         {"about": "x", "cue_time": {"every": "1d"}, "expect": {"state": "k", "op": "like", "value": 1}},
-        {"about": "x", "cue_time": {"every": "1d"}, "expect": {"event_seen": {"kind": "msg.in"}}},
+        {"about": "x", "cue_time": {"every": "1d"}, "expect": {"event_seen": {"kind": "percept"}}},
         {"about": "x", "cue_time": {"every": "1d"}, "expect": {"none": True}, "policy": {"once": False}},
         {"about": "x", "cue_time": {"every": "1d"}, "expect": {"none": True}, "policy": {"cooldown": "soon"}},
         {"about": "x", "expect": {"none": True}},
@@ -187,13 +191,13 @@ async def test_operator_none_is_never_met(aconn):
 
 
 async def test_operator_event_seen_checks_the_window(aconn):
-    old = await append_event(aconn, ts=START - timedelta(days=3), kind="msg.in", who=WHO, place=PLACE,
+    old = await append_event(aconn, ts=START - timedelta(days=3), kind="percept", who=WHO, place=PLACE,
                              body="telegram", payload={"text": "I did my WORKOUT"})
     assert old.id is not None
-    pattern = {"kind": "msg.in", "who": WHO, "text_like": "workout"}
+    pattern = {"kind": "percept", "who": WHO, "text_like": "workout"}
     assert await expect.is_met(aconn, {"event_seen": pattern, "within": "4d"}, START) is True
     assert await expect.is_met(aconn, {"event_seen": pattern, "within": "2d"}, START) is False
-    assert await expect.is_met(aconn, {"event_seen": {"kind": "msg.in", "text_like": "swim"}, "within": "4d"},
+    assert await expect.is_met(aconn, {"event_seen": {"kind": "percept", "text_like": "swim"}, "within": "4d"},
                                START) is False
 
 
@@ -209,10 +213,10 @@ async def test_operator_state_compares_eq_gt_lt(aconn):
 
 def test_matches_cue_is_exact_on_ids_and_substring_on_text():
     event = _msg("waktu Workout sore")
-    assert expect.matches_cue({"kind": "msg.in", "who": WHO, "place": PLACE}, event) is True
+    assert expect.matches_cue({"kind": "percept", "who": WHO, "place": PLACE}, event) is True
     assert expect.matches_cue({"text_like": "WORKOUT"}, event) is True
     assert expect.matches_cue({"who": "person:other"}, event) is False
-    assert expect.matches_cue({"kind": "msg.out"}, event) is False
+    assert expect.matches_cue({"kind": "act.out"}, event) is False
     assert expect.matches_cue(None, event) is False
 
 
@@ -244,7 +248,7 @@ async def test_time_path_ignores_future_expectations(aconn):
 
 async def test_event_path_fires_on_a_matching_event(aconn):
     exp_id, _ = await _create(aconn, cue_time=None,
-                              cue_event={"kind": "msg.in", "who": WHO, "text_like": "workout"})
+                              cue_event={"kind": "percept", "who": WHO, "text_like": "workout"})
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=None, soul=SOUL)
 
     await _feed(kernel, _msg("halo", message_id=1))
@@ -255,7 +259,7 @@ async def test_event_path_fires_on_a_matching_event(aconn):
 
 
 async def test_event_seen_expectation_that_is_met_never_fires(aconn):
-    pattern = {"kind": "msg.in", "who": WHO, "text_like": "workout"}
+    pattern = {"kind": "percept", "who": WHO, "text_like": "workout"}
     exp_id, _ = await _create(aconn, cue_time=None, cue_event=pattern,
                               expect={"event_seen": pattern, "within": "2d"})
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=None, soul=SOUL)
@@ -270,8 +274,8 @@ async def test_event_seen_expectation_that_is_met_never_fires(aconn):
 
 
 async def test_time_path_met_event_seen_resolves_without_firing(aconn):
-    pattern = {"kind": "msg.in", "who": WHO, "text_like": "workout"}
-    await append_event(aconn, ts=START - timedelta(hours=1), kind="msg.in", who=WHO, place=PLACE,
+    pattern = {"kind": "percept", "who": WHO, "text_like": "workout"}
+    await append_event(aconn, ts=START - timedelta(hours=1), kind="percept", who=WHO, place=PLACE,
                        body="telegram", payload={"text": "workout done"})
     exp_id, _ = await _create(aconn, expect={"event_seen": pattern, "within": "2d"})
     clock = FakeClock(START)
@@ -289,7 +293,7 @@ async def test_low_weight_fired_expectation_still_wakes_the_pfc_once(aconn):
     """A missed expectation below the silent band fires the PFC anyway (DESIGN appraisal)."""
     exp_id, _ = await _create(aconn, weight=0.3)
     clock = FakeClock(START)
-    fake = FakeLLM([[("say", {"text": "sudah jam 7"})]])
+    fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "sudah jam 7"}})]])
     kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), soul=SOUL)
     kernel.register_body(RecordingBody())
 
@@ -297,7 +301,7 @@ async def test_low_weight_fired_expectation_still_wakes_the_pfc_once(aconn):
 
     kinds = await _kinds(aconn)
     assert kinds.count("expectation.fired") == 1
-    assert kinds.count("msg.out") == 1
+    assert kinds.count("act.out") == 1
     assert len(fake.requests) == 1
     assert await _status(aconn, exp_id) == "satisfied"
 
@@ -346,7 +350,7 @@ async def test_expect_tool_creates_an_expectation_and_records_it(aconn):
 
     await _feed(kernel, _msg("ingatkan saya jam 7"))
 
-    assert await _kinds(aconn) == ["msg.in", "expectation.created"]
+    assert await _kinds(aconn) == ["percept", "expectation.created", "decision.silent"]
     cur = await aconn.execute("SELECT who, place, about, weight, status, next_check_at, expires_at "
                               "FROM expectations")
     who, place, about, weight, status, next_check, expires = await cur.fetchone()
@@ -363,7 +367,7 @@ async def test_expect_with_an_invalid_weight_becomes_an_error_event(aconn):
     await _feed(kernel, _msg("buat janji"))
 
     kinds = await _kinds(aconn)
-    assert kinds == ["msg.in", "error"]
+    assert kinds == ["percept", "error"]
     cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'error'")
     assert "weight" in (await cur.fetchone())[0]["error"]
     cur = await aconn.execute("SELECT count(*) FROM expectations")
@@ -387,39 +391,39 @@ async def test_resolve_tool_closes_an_expectation(aconn):
 
 
 async def test_mvp_c_remind_me_at_seven_exactly_once_across_a_restart(aconn):
-    """PLAN.md Step 6: "remind me at 7" -> exactly one msg.out at 7, even after a restart."""
+    """PLAN.md Step 6: "remind me at 7" -> exactly one act.out at 7, even after a restart."""
     clock = FakeClock(START)  # 06:00 Jakarta
     fake = FakeLLM([
         [("expect", {"about": "remind the owner at 7", "cue_time": {"daily": "07:00"},
                      "expect": {"none": True}, "intent": "remind gently", "weight": 1.0,
                      "policy": {"once": True}})],
-        [("say", {"text": "sudah jam 7"})],
+        [("act", {"capability": "telegram.say", "arguments": {"text": "sudah jam 7"}})],
     ])
     kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), soul=SOUL)
     body = RecordingBody()
     kernel.register_body(body)
 
     await _feed(kernel, _msg("ingatkan saya jam 7"))
-    assert await _kinds(aconn) == ["msg.in", "expectation.created"]
+    assert await _kinds(aconn) == ["percept", "expectation.created", "decision.silent"]
 
     clock.set_time(SEVEN - timedelta(minutes=10))
     await _tick(kernel, clock)
-    assert (await _kinds(aconn)).count("msg.out") == 0
+    assert (await _kinds(aconn)).count("act.out") == 0
 
     clock.set_time(SEVEN)
     await _tick(kernel, clock)
     kinds = await _kinds(aconn)
     assert kinds.count("expectation.fired") == 1
-    assert kinds.count("msg.out") == 1
+    assert kinds.count("act.out") == 1
     assert body.actions == [Action(kind="say", place=PLACE, payload={"text": "sudah jam 7"}, body="telegram")]
     assert "expectation missed: remind the owner at 7" in fake.last_prompt.split("<why_awake>")[1]
 
     cur = await aconn.execute("SELECT status, fire_count FROM expectations")
     assert await cur.fetchone() == ("satisfied", 1)
 
-    # The msg.out is linked to the fired event, which is what recovery relies on.
+    # The act.out is linked to the fired event, which is what recovery relies on.
     cur = await aconn.execute("SELECT f.id, m.caused_by FROM events f JOIN events m ON m.caused_by = f.id "
-                              "WHERE f.kind = 'expectation.fired' AND m.kind = 'msg.out'")
+                              "WHERE f.kind = 'expectation.fired' AND m.kind = 'act.out'")
     assert (await cur.fetchone())[0] is not None
 
     # Restart right after the reminder: no second message, no second LLM call.
@@ -430,7 +434,7 @@ async def test_mvp_c_remind_me_at_seven_exactly_once_across_a_restart(aconn):
     clock.advance(600)
     await _tick(restarted, clock)
     assert restarted_fake.requests == []
-    assert (await _kinds(aconn)).count("msg.out") == 1
+    assert (await _kinds(aconn)).count("act.out") == 1
 
 
 # --- startup recovery --------------------------------------------------------
@@ -444,13 +448,13 @@ async def test_recovery_wakes_once_for_a_fired_expectation_without_a_reply(aconn
     await _tick(crashed, clock)
     assert await _status(aconn, exp_id) == "fired"
 
-    fake = FakeLLM([[("say", {"text": "sudah jam 7"})]])
+    fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "sudah jam 7"}})]])
     kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), soul=SOUL)
     kernel.register_body(RecordingBody())
     await kernel.recover()
 
     assert len(fake.requests) == 1
-    assert (await _kinds(aconn)).count("msg.out") == 1
+    assert (await _kinds(aconn)).count("act.out") == 1
     assert await _status(aconn, exp_id) == "satisfied"
 
     # A second restart finds nothing left to do.
@@ -468,7 +472,7 @@ async def test_recovery_only_resolves_when_the_reply_already_exists(aconn):
 
     cur = await aconn.execute("SELECT id FROM events WHERE kind = 'expectation.fired'")
     fired_id = (await cur.fetchone())[0]
-    await append_event(aconn, ts=START, kind="msg.out", who=WHO, place=PLACE, body="telegram",
+    await append_event(aconn, ts=START, kind="act.out", who=WHO, place=PLACE, body="telegram",
                        payload={"text": "sudah jam 7"}, caused_by=fired_id)
 
     fake = FakeLLM()
@@ -477,7 +481,7 @@ async def test_recovery_only_resolves_when_the_reply_already_exists(aconn):
 
     assert fake.requests == []
     assert await _status(aconn, exp_id) == "satisfied"
-    assert (await _kinds(aconn)).count("msg.out") == 1
+    assert (await _kinds(aconn)).count("act.out") == 1
 
 
 async def test_recovery_does_not_touch_active_expectations(aconn):

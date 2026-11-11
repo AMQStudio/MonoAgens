@@ -35,6 +35,8 @@ from psycopg import sql
 from pgvector.psycopg import register_vector_async
 import yaml
 
+from monoagens.bodies.cli import CAPABILITIES as CLI_CAPABILITIES
+from monoagens.bodies.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.clock import FakeClock
 from monoagens.cognition import Appraisal
 from monoagens.config import (DEFAULT_ENV_PATH, load_env_file, load_llm_config,
@@ -190,9 +192,9 @@ class UsageTransport(httpx.AsyncBaseTransport):
 def _fake_context_text(context: PFCContext) -> str:
     """Render a fake-mode prompt from the pieces the kernel handed over."""
     parts: list[str] = [context.core_memory, *context.memories]
-    parts.extend(str(event.payload.get("text") or "") for event in context.recent)
+    parts.extend(str(event.payload.get("description") or "") for event in context.recent)
     if context.trigger is not None:
-        parts.append(str(context.trigger.payload.get("text") or ""))
+        parts.append(str(context.trigger.payload.get("description") or ""))
     return "\n".join(part for part in parts if part)
 
 
@@ -218,7 +220,7 @@ class FakePFC:
         """Always answer with say(text="ok")."""
         self._tracker.usage.calls += 1
         self._tracker.record_prompt(_fake_context_text(context))
-        return [ToolCall("say", {"text": "ok"})]
+        return [ToolCall("act", {"capability": "telegram.say", "arguments": {"text": "ok"}})]
 
     async def call(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], *,
                    tool_choice: str = "required") -> list[ToolCall]:
@@ -228,7 +230,7 @@ class FakePFC:
         names = {tool["function"]["name"] for tool in tools}
         if "store_memories" in names:
             return [ToolCall("store_memories", _fake_sleep_arguments(messages))]
-        return [ToolCall("say", {"text": "ok"})]
+        return [ToolCall("act", {"capability": "telegram.say", "arguments": {"text": "ok"}})]
 
     async def aclose(self) -> None:
         """Nothing to close."""
@@ -241,6 +243,10 @@ class FakeBody:
         """Start with an empty action list and the given body name."""
         self.name = name
         self.actions: list[Action] = []
+
+    def capabilities(self) -> Sequence[dict[str, Any]]:
+        """Declare the same capabilities as the real body of that name."""
+        return CLI_CAPABILITIES if self.name == CLI_BODY else TELEGRAM_CAPABILITIES
 
     async def act(self, action: Action) -> None:
         """Record the action instead of sending it."""
@@ -295,7 +301,7 @@ class StepRecord:
 
 @dataclass
 class Reply:
-    """One msg.out produced by the kernel."""
+    """One act.out produced by the kernel."""
 
     step: int
     ts: datetime
@@ -363,8 +369,12 @@ def place_kind(place: str) -> str:
 
 
 def _event_row(row: Sequence[Any]) -> dict[str, Any]:
+    payload = row[5] or {}
+    text = payload.get("description")
+    if text is None:
+        text = (payload.get("arguments") or {}).get("text")
     return {"id": row[0], "ts": row[1], "kind": row[2], "who": row[3], "place": row[4],
-            "text": (row[5] or {}).get("text"), "payload": row[5] or {}}
+            "text": text, "payload": payload}
 
 
 # ------------------------------------------------------------------- runner
@@ -476,18 +486,19 @@ class ReplayRunner:
                           text=label, addressed=addressed,
                           appraisals=list(self.kernel.appraisals),
                           replies=[(event["place"] or "", str(event["text"]))
-                                   for event in events if event["kind"] == "msg.out"],
+                                   for event in events if event["kind"] == "act.out"],
                           events=events)
 
     async def _feed(self, *, who: str, place: str, text: str, addressed: bool,
                     body: str | None = None) -> None:
-        """Put one msg.in and let the single consumer process it to completion."""
+        """Put one percept and let the single consumer process it to completion."""
         self._message_id += 1
         name = CLI_BODY if body == CLI_BODY or place.startswith("space:cli") else BODY_NAME
         kind = "direct" if name == CLI_BODY else place_kind(place)
-        event = Event(id=None, ts=self.clock.now(), kind="msg.in", who=who, place=place,
-                      body=name, payload={"text": text, "message_id": self._message_id,
-                                          "addressed": addressed, "place_kind": kind})
+        event = Event(id=None, ts=self.clock.now(), kind="percept", who=who, place=place,
+                      body=name, payload={"description": text, "addressed": addressed,
+                                          "place_kind": kind,
+                                          "data": {"message_id": self._message_id}})
         task = asyncio.create_task(self.kernel.put(event))
         await asyncio.sleep(0)
         await self.kernel.step()
@@ -512,9 +523,9 @@ class ReplayRunner:
         return int(row[0])
 
     def _replies(self, steps: Sequence[StepRecord]) -> list[Reply]:
-        """Flatten every msg.out with the step that produced it."""
+        """Flatten every act.out with the step that produced it."""
         return [Reply(step.index, event["ts"], event["place"] or "", str(event["text"] or ""))
-                for step in steps for event in step.events if event["kind"] == "msg.out"]
+                for step in steps for event in step.events if event["kind"] == "act.out"]
 
 
 # ------------------------------------------------------------------- checks
@@ -581,7 +592,7 @@ def _scoped_replies(spec: dict[str, Any], result: ScenarioResult) -> list[Reply]
 def _detail(replies: Sequence[Reply]) -> str:
     """Render replies for a check's detail line."""
     if not replies:
-        return "no msg.out"
+        return "no act.out"
     return "; ".join(f"[{reply.place}] {reply.text}" for reply in replies)
 
 
@@ -604,7 +615,7 @@ def _time_matches(expected: str, ts: datetime, zone: ZoneInfo) -> bool:
 def _check_no_reply(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:
     replies = _scoped_replies(spec, result)
     return CheckResult(str(spec["label"]), not replies,
-                       "no msg.out" if not replies else _detail(replies))
+                       "no act.out" if not replies else _detail(replies))
 
 
 def _check_reply(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:

@@ -153,7 +153,7 @@ async def project_event(conn, event: Event) -> None:
     if event.who is not None:
         value = {"ts": event.ts.isoformat(), "place": event.place, "body": event.body}
         await write_state(conn, f"last_seen:{event.who}", value, event.id)
-    if event.kind == "msg.out" and event.place is not None:
+    if event.kind == "act.out" and event.place is not None:
         await write_state(conn, f"last_spoke:{event.place}", {"ts": event.ts.isoformat()}, event.id)
     if event.kind == "sleep.done":
         if "core_memory" in event.payload:

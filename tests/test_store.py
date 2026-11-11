@@ -21,7 +21,7 @@ from monoagens.types import Event
 
 async def test_append_event_requires_ts_and_kind(aconn):
     with pytest.raises(ValueError, match="ts and kind must be explicitly provided"):
-        await append_event(aconn, kind="msg.in", ts=None)
+        await append_event(aconn, kind="percept", ts=None)
 
     with pytest.raises(ValueError, match="ts and kind must be explicitly provided"):
         await append_event(aconn, kind=None, ts=datetime.now(timezone.utc))
@@ -35,7 +35,7 @@ async def test_events_ordering(aconn):
     e1 = await append_event(
         aconn,
         ts=t0,
-        kind="msg.in",
+        kind="percept",
         who="person:owner",
         place="space:alpha",
         payload={"msg": "one"},
@@ -43,7 +43,7 @@ async def test_events_ordering(aconn):
     e2 = await append_event(
         aconn,
         ts=t1,
-        kind="msg.in",
+        kind="percept",
         who="person:owner",
         place="space:alpha",
         payload={"msg": "two"},
@@ -51,7 +51,7 @@ async def test_events_ordering(aconn):
     e3 = await append_event(
         aconn,
         ts=t2,
-        kind="msg.in",
+        kind="percept",
         who="person:owner",
         place="space:alpha",
         payload={"msg": "three"},
@@ -80,14 +80,14 @@ async def test_read_last_events_filters_by_kind(aconn):
     """A kinds filter keeps internal events from displacing conversational ones."""
     t = datetime(2026, 11, 10, 10, 0, 0, tzinfo=timezone.utc)
     conversational = await append_event(
-        aconn, ts=t, kind="msg.in", who="person:owner", place="space:alpha",
+        aconn, ts=t, kind="percept", who="person:owner", place="space:alpha",
         payload={"text": "first"},
     )
     for _ in range(25):
         await append_event(aconn, ts=t, kind="decision.silent", place="space:alpha")
 
     events = await read_last_events(
-        aconn, "space:alpha", limit=5, kinds=("msg.in", "msg.out", "expectation.fired")
+        aconn, "space:alpha", limit=5, kinds=("percept", "act.out", "expectation.fired")
     )
 
     assert [event.id for event in events] == [conversational.id]
@@ -96,17 +96,17 @@ async def test_read_last_events_filters_by_kind(aconn):
 async def test_read_last_events_elsewhere(aconn):
     """Elsewhere events belong to one person, skip this place, and keep only recent kinds."""
     t = datetime(2026, 11, 10, 10, 0, 0, tzinfo=timezone.utc)
-    here = await append_event(aconn, ts=t, kind="msg.in", who="person:owner",
+    here = await append_event(aconn, ts=t, kind="percept", who="person:owner",
                               place="space:here", payload={"text": "here"})
-    first = await append_event(aconn, ts=t, kind="msg.in", who="person:owner",
+    first = await append_event(aconn, ts=t, kind="percept", who="person:owner",
                                 place="space:other", payload={"text": "first"})
     await append_event(aconn, ts=t, kind="decision.silent", who="person:owner",
                        place="space:other", payload={"reason": "internal"})
-    second = await append_event(aconn, ts=t, kind="msg.out", who="person:owner",
+    second = await append_event(aconn, ts=t, kind="act.out", who="person:owner",
                                 place="space:other", payload={"text": "second"})
-    await append_event(aconn, ts=t, kind="msg.in", who="person:alice",
+    await append_event(aconn, ts=t, kind="percept", who="person:alice",
                        place="space:other", payload={"text": "stranger"})
-    homeless = await append_event(aconn, ts=t, kind="msg.in", who="person:owner",
+    homeless = await append_event(aconn, ts=t, kind="percept", who="person:owner",
                                   place=None, payload={"text": "no place"})
 
     events = await read_last_events_elsewhere(aconn, "person:owner", "space:here")
@@ -121,7 +121,7 @@ async def test_read_last_events_elsewhere(aconn):
     assert [event.id for event in newest] == [homeless.id]
 
     assert await read_last_events_elsewhere(aconn, "person:owner", "space:here",
-                                            kinds=("msg.out",)) == [second]
+                                            kinds=("act.out",)) == [second]
     assert await read_last_events_elsewhere(aconn, "", "space:here") == []
 
 
@@ -135,7 +135,7 @@ async def test_cursor_tracking(aconn):
     await append_event(
         aconn,
         ts=t,
-        kind="msg.in",
+        kind="percept",
         body="body:stream",
         payload={"cursor": 101},
     )
@@ -145,17 +145,17 @@ async def test_cursor_tracking(aconn):
     await append_event(
         aconn,
         ts=t,
-        kind="msg.in",
+        kind="percept",
         body="body:stream",
         payload={"cursor": 102},
     )
     assert await cursor(aconn, "body:stream") == 102
 
-    # A subsequent msg.out for the same body WITHOUT a cursor must NOT clobber the cursor
+    # A subsequent act.out for the same body WITHOUT a cursor must NOT clobber the cursor
     await append_event(
         aconn,
         ts=t,
-        kind="msg.out",
+        kind="act.out",
         body="body:stream",
         payload={"text": "outgoing response without cursor"},
     )
@@ -198,7 +198,7 @@ async def test_rebuild_state_from_events(aconn):
     e1 = await append_event(
         aconn,
         ts=t1,
-        kind="msg.in",
+        kind="percept",
         who="person:owner",
         place="space:room1",
         body="body:one",
@@ -207,14 +207,14 @@ async def test_rebuild_state_from_events(aconn):
     e2 = await append_event(
         aconn,
         ts=t2,
-        kind="msg.out",
+        kind="act.out",
         place="space:room1",
         payload={"text": "hello back"},
     )
     e3 = await append_event(
         aconn,
         ts=t3,
-        kind="msg.in",
+        kind="percept",
         who="person:alice",
         place="space:room2",
         body="body:two",
@@ -223,7 +223,7 @@ async def test_rebuild_state_from_events(aconn):
     e4 = await append_event(
         aconn,
         ts=t4,
-        kind="msg.in",
+        kind="percept",
         who="person:owner",
         place="space:room2",
         body="body:one",

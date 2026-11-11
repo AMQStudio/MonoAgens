@@ -46,7 +46,7 @@ def test_events_place_id_index_exists(conn):
 
 def test_insert_event_succeeds(conn):
     row = conn.execute(
-        "INSERT INTO events (kind, who, place, body) VALUES ('msg.in', 'person:owner', 'space:cli', 'hello')"
+        "INSERT INTO events (kind, who, place, body) VALUES ('percept', 'person:owner', 'space:cli', 'hello')"
         " RETURNING id, ts, payload"
     ).fetchone()
     event_id, ts, payload = row
@@ -60,7 +60,7 @@ def test_update_event_is_rejected(conn):
         "INSERT INTO events (kind) VALUES ('decision.silent') RETURNING id"
     ).fetchone()[0]
     with pytest.raises(psycopg.Error, match="events table is append-only"):
-        conn.execute("UPDATE events SET kind = 'msg.out' WHERE id = %s", (event_id,))
+        conn.execute("UPDATE events SET kind = 'act.out' WHERE id = %s", (event_id,))
 
 
 def test_delete_event_is_rejected(conn):
@@ -73,7 +73,7 @@ def test_delete_event_is_rejected(conn):
 
 def test_event_vectors_are_append_only(conn):
     event_id = conn.execute(
-        "INSERT INTO events (kind) VALUES ('msg.in') RETURNING id"
+        "INSERT INTO events (kind) VALUES ('percept') RETURNING id"
     ).fetchone()[0]
     conn.execute("INSERT INTO event_vectors (event_id, embedding) VALUES (%s, %s)",
                  (event_id, [0.0] * 384))
