@@ -14,6 +14,9 @@ LLMs are a prefrontal cortex without the rest of the brain. MonoAgens is the res
 3. Contracts first, code second. Parallel tracks start only after their contract is merged.
 4. Every behavior change ships with at least one replay scenario that shows it.
 5. Public documents mention no hosted service (D8).
+6. **Design by brain function, not by scenario** (D39). A new situation becomes a replay test
+   against the brain map; a missing behavior fixes a function or goes to middleware, never a
+   rule for one case.
 
 ## Done
 - MVP: Telegram, the four books, gate, PFC, Expectations, memory and sleep; tests (a)–(d).

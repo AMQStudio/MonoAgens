@@ -480,6 +480,22 @@ a person would.
 Fits the complexity budget: one column (`basis`) and a few principle lines; coverage is judged
 by the PFC for now (learning it is deferred with D32.9).
 
+**D39 — Design by brain function, not by scenario.**
+The human scenarios are endless; covering them one by one never finishes and makes the soul
+rigid. So:
+1. **The core is a closed list of brain functions** — the brain map in DESIGN §2. Each row has a
+   brain region, a studied model with its formula and sources (docs/MATH.md), and one mechanism
+   in the core. A decision about the core is a row: research how the brain does it, then write
+   the mechanism.
+2. **Scenarios are tests, not design inputs.** A new human situation is checked against the
+   map: which functions produce this behavior? If they do, it becomes a replay scenario, not a
+   change. The PFC (an LLM that already knows people) fills the gaps between functions.
+3. **No rule to close a single case.** If replay shows a behavior repeatedly missing, first ask
+   which function is weak and fix the function; behavior specific to a role, place or
+   preference goes to middleware. The core never gains a deterministic rule for one situation.
+4. A new row is added only when a whole brain function is missing, and it must fit the
+   complexity budget (D26).
+
 ## Accepted in principle, details pending
 
 (None. P1 was detailed as D27.)

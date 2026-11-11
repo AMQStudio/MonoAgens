@@ -34,6 +34,10 @@ brain.**
 - **Hooks are guards at three doors**: they do not think; they apply rules and cannot be talked
   out of them.
 
+This table is the **brain map** (D39): the closed list of functions the core implements. Every
+core decision is a row; formulas and sources are in docs/MATH.md. Scenarios are tests against
+the map, never new rows.
+
 | Brain function (analogy) | Mechanism | Where |
 |---|---|---|
 | Brainstem | the kernel loop | core |
@@ -41,7 +45,10 @@ brain.**
 | Hippocampus | the event log; consolidation during sleep | core / sleep |
 | Declarative memory | ACT-R activation | core |
 | Predictive cortex | Expectations; `predict` after acting | core |
-| Metamemory | feeling-of-knowing signal | core |
+| Working memory (dorsolateral PFC) | the desk: prompt rebuilt per wake, work thread, `recall` (D37) | core |
+| Metamemory | feeling-of-knowing; source monitoring (`basis`); report control (D38) | core |
+| Recognition (hippocampus, perirhinal) | familiarity vs recollection; pattern separation (D38) | core / sleep |
+| Reality filter (orbitofrontal) | superseded memories suppressed; absolute time (D38) | core |
 | Salience network, habituation | salience over signals; per-source dampening | core |
 | Cognitive drives (no emotion) | threshold: talk rate, budget, promise debt | core |
 | Basal ganglia (go / no-go) | seeded probabilistic gate | core |
