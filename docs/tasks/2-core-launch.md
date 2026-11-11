@@ -81,12 +81,12 @@ May touch: `monoagens/expect.py`, `tests/test_expect.py`, `scenarios/`
 Read first: [core.md](../core.md) §4, §8, §9.4 (desk constants)
 May touch: `monoagens/pfc.py`, the `self` organ module, `tests/test_pfc.py`, `scenarios/`
 
-- [ ] 7.1 Section token budgets from prior constants; trimming oldest-first per section.
-- [ ] 7.2 A task thread's desk shows its work in `<doing>`: goal, one line per step, latest result verbatim, older results as pointers.
-- [ ] 7.3 Middleware notes rendered with their event.
-- [ ] 7.4 `recall(query | event_id, place?, from?, to?)`: time range, lineage, text search on events, scope reported; obeys absolute line 2 as built in Part 3.
-- [ ] 7.5 Back-fill appraised as one age-discounted percept per place.
-- [ ] 7.6 Check: a 15-step task keeps a flat prompt size; "what did we do last month?" lists that month's episodes with details from the original events, also after the vector faded and when sleep failed; 40 unread messages are appraised once.
+- [x] 7.1 Section token budgets from prior constants; trimming oldest-first per section.
+- [x] 7.2 A task thread's desk shows its work in `<doing>`: goal, one line per step, latest result verbatim, older results as pointers.
+- [x] 7.3 Middleware notes rendered with their event.
+- [x] 7.4 `recall(query | event_id, place?, from?, to?)`: time range, lineage, text search on events, scope reported; obeys absolute line 2 as built in Part 3.
+- [x] 7.5 Back-fill appraised as one age-discounted percept per place.
+- [x] 7.6 Check: a 15-step task keeps a flat prompt size; "what did we do last month?" lists that month's episodes with details from the original events, also after the vector faded and when sleep failed; 40 unread messages are appraised once.
 
 ## Part 8 — Threshold, gate and circuit breaker
 Read first: [core.md](../core.md) §6, [core-math.md](../core-math.md) §3, §15
@@ -247,3 +247,40 @@ Part 6 notes (worker):
 - `expect.py` is at 240 lines (budget 240); room came from removing single-use constants
   (`_KINDS`, `_OPS`), a duplicated `row["policy"]` read in `settle`, a redundant rows/row dance
   in `resolve`, and a temp in `_operator`. `uv run pytest`: 216 passed. Fake replay: 75/75.
+
+Part 7 notes (worker):
+- `pfc.py` (276 lines, budget 280): `_volatile_prompt` now trims `<recent>` and `<memories>`
+  oldest-first to `recent_tokens`/`memory_tokens`, keeps the goal and latest `<doing>` line
+  while trimming steps to `thread_result_tokens`, and sheds the oldest lines of each section
+  until the whole volatile part fits `volatile_tokens_max`. `<event>` renders any
+  `payload.notes` lines as `note: ...` under the event; middleware may attach notes by
+  replacing the event's payload (the replay renders them in the trigger).
+- 7.2: a task place's desk gets `PFCContext.doing` from `identity.doing_lines`, which reads the
+  thread's own place and its parent after the task's `since`, then emits `goal:`, one `step:`
+  line per `act.out`, `earlier result #<id> (recall it)` for every result but the last, and the
+  latest `result:` verbatim (truncated to `thread_result_tokens`). `threads.open_for` now stores
+  the task's `goal` and `since` in `task:<place>`.
+- 7.4: `self.recall` is a second `SelfOrgan` capability over the Log and memories. It supports
+  `query` (ILIKE over event payloads and memory text), `event_id` (recursive `caused_by` chain
+  back to the origin), `place`, `from`, `to`, lists memories with their `derived_from` original
+  events as `details` (so a faded/NULL embedding or a failed sleep does not lose the month's
+  episodes), reports `searched`, `scope`, `count`, `found` and `note: nothing found`, and filters
+  every event/memory through `reach.visible` (absolute line 2). Conversational kinds only.
+- 7.5: one back-fill percept per place is the contract: the batch percept carries
+  `backfill: true`, `sent_at` and `messages`. `appraise` discounts every signal by
+  `exp(-d*age_hours)` (`memory.decay_d`, ACT-R) and trips the circuit breaker when any message
+  in the batch is addressed. Pinned by tests for one decision event for 40 unread messages and
+  for the age discount.
+- 7.6: `tests/test_pfc.py` has the flat-prompt test (5 vs 15 steps under the same budgets),
+  the task-desk test, the notes test, the month recall test (no vectors, then a NULL-embedding
+  memory with original-event details), the absolute-line-2 recall test, the 40-unread one-appraisal
+  test and the age-discount test. Scenario `scenarios/memory/23_recall_episodes.yaml` failed 2/4
+  before the code and passes 4/4. Fake replay 79/79, `uv run pytest` 223 passed.
+- Out-of-list edits, all forced by the wiring (flagging for the architect): `memory.py` builds
+  the task desk's `doing` from `identity.doing_lines`; `threads.py` stores `goal`/`since`;
+  `organs.dispatch` no longer pops `to`/`via` for non-routed capabilities (it was eating
+  `recall`'s `to` date and using it as a target place); `cognition/appraise.py` imports
+  `memory.decay_d`; `middleware.py`'s dead context branch was removed.
+- Budget caveat: `pfc.py` 276/280 and `memory.py` 260/260 hold, but the whole package is
+  3543/3500 (43 over). Recall and the task desk are the new code; reaching 3500 needs a
+  package-wide cut the architect has to choose. No further compression was made by hand.

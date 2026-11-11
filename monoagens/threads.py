@@ -33,8 +33,10 @@ async def open_for(kernel, event, audience) -> dict[str, Any] | None:
     task_place = f"space:task:{event.id}"
     opened = await kernel._emit(event, "task.opened",
                                {"parent": place, "audience": sorted(audience)}, place=task_place)
+    goal = str(event.payload.get("description") or event.payload.get("text") or "")
     task = {"place": task_place, "parent": place, "audience": sorted(audience),
-            "status": OPEN, "steps": 0, "waiting_for": None, "opened_event": opened.id}
+            "status": OPEN, "steps": 0, "waiting_for": None, "opened_event": opened.id,
+            "goal": goal, "since": event.id}
     await write_state(conn, KEY + task_place, task, opened.id)
     return task
 

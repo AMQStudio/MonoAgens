@@ -10,8 +10,10 @@ import httpx
 import pytest
 
 from monoagens.clock import FakeClock
+from monoagens.cognition import Situation, appraise
+from monoagens.identity import SelfOrgan, doing_lines
 from monoagens.kernel import Kernel
-from monoagens.pfc import PFC, TOOL_NAMES
+from monoagens.pfc import PFC, PFCContext, TOOL_NAMES
 from monoagens.store import append_event, read_state, write_state
 from monoagens.bodies.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
@@ -158,8 +160,8 @@ async def test_layered_prompt_structure(aconn):
     act_tool = next(tool for tool in request["tools"]
                     if tool["function"]["name"] == "act")
     capability = act_tool["function"]["parameters"]["properties"]["capability"]
-    assert capability["enum"] == ["self.set_identity", "self.share", "telegram.say",
-                                 "telegram.react"]
+    assert capability["enum"] == ["self.set_identity", "self.recall", "self.share",
+                                 "telegram.say", "telegram.react"]
     expect_tool = next(tool for tool in request["tools"]
                        if tool["function"]["name"] == "expect")
     kind = expect_tool["function"]["parameters"]["properties"]["kind"]
@@ -472,3 +474,131 @@ async def test_recent_is_nothing_yet_when_both_parts_are_empty(aconn):
 
 async def test_tool_names_are_the_five_tools():
     assert TOOL_NAMES == {"think", "act", "expect", "resolve", "revise"}
+
+
+def _doing(steps: int) -> tuple[str, ...]:
+    return tuple([f"goal: selesaikan kode"] + [f"step: langkah {n}" for n in range(steps)]
+                 + [f"earlier result #{n} (recall it)" for n in range(steps - 1)]
+                 + [f"result: hasil {steps - 1}"])
+
+
+def _desk(**changes) -> PFCContext:
+    return PFCContext(now=START, place="space:task:1", place_kind="task", reason="work",
+                      **changes)
+
+
+def test_a_fifteen_step_task_keeps_the_prompt_flat():
+    small = settings(constants={"thread_result_tokens": 80, "volatile_tokens_max": 400})
+    pfc = PFC("https://llm.test/v1", "k", "m", settings=small)
+    five = pfc.build_messages(_desk(doing=_doing(5)))[2]["content"]
+    fifteen = pfc.build_messages(_desk(doing=_doing(15)))[2]["content"]
+    assert len(fifteen) <= len(five) + 200 and len(fifteen) < 1200
+    assert "result: hasil 14" in fifteen
+    assert fifteen.index("goal:") < fifteen.index("result:")
+
+
+def test_middleware_notes_are_rendered_with_their_event():
+    event = Event(id=1, ts=START, kind="percept", who="person:owner", place=PLACE,
+                  payload={"description": "halo", "notes": ["alias: Fulan = person:fulan"]})
+    pfc = PFC("https://llm.test/v1", "k", "m", settings=SETTINGS)
+    volatile = pfc.build_messages(_desk(trigger=event))[2]["content"]
+    assert "<event>owner: halo\nnote: alias: Fulan = person:fulan</event>" in volatile
+
+
+async def test_a_task_desk_shows_goal_steps_and_the_latest_result(aconn):
+    task = {"goal": "selesaikan kode", "parent": PLACE, "since": 0}
+    first = await append_event(aconn, ts=START, kind="act.out", place="space:task:1",
+                               payload={"capability": "dev.run",
+                                        "arguments": {"text": "langkah satu"}})
+    await append_event(aconn, ts=START, kind="act.result", place="space:task:1",
+                       payload={"capability": "dev.run", "result": {"text": "hasil satu"}})
+    await append_event(aconn, ts=START, kind="act.out", place="space:task:1",
+                       payload={"capability": "dev.run", "arguments": {"text": "langkah dua"}})
+    await append_event(aconn, ts=START, kind="act.result", place="space:task:1",
+                       payload={"capability": "dev.run", "result": {"text": "hasil dua"}})
+
+    lines = await doing_lines(aconn, "space:task:1", task, SETTINGS["constants"])
+    assert "goal: selesaikan kode" in lines
+    assert "step: langkah satu" in lines and "step: langkah dua" in lines
+    assert f"earlier result #{first.id + 1} (recall it)" in lines
+    assert "result: hasil dua" in lines
+
+
+async def test_recall_lists_the_month_after_vectors_faded_and_sleep_failed(aconn):
+    october = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    first = await append_event(aconn, ts=october + timedelta(days=2), kind="percept",
+                               who="person:owner", place=PLACE,
+                               payload={"description": "Kita buka Kopi Senja."})
+    second = await append_event(aconn, ts=october + timedelta(days=19), kind="percept",
+                                who="person:owner", place=PLACE,
+                                payload={"description": "Harga biji kopi naik dua belas persen."})
+    organ = SelfOrgan(aconn, FakeClock(START))
+    args = {"from": "2026-10-01T00:00:00+00:00", "to": "2026-11-01T00:00:00+00:00"}
+
+    result = await organ.act(Action(kind="recall", place=PLACE, payload=dict(args)))
+
+    assert result["searched"]["from"] == args["from"]
+    assert result["count"] == 2
+    text = json.dumps(result["found"])
+    assert "Kopi Senja" in text and "dua belas persen" in text
+
+    await aconn.execute(
+        "INSERT INTO memories (text, place, derived_from, created_at, embedding) "
+        "VALUES (%s, %s, %s, %s, NULL)",
+        ("Episod Oktober: kafe dan harga kopi.", PLACE, [first.id, second.id], START))
+    result = await organ.act(Action(kind="recall", place=PLACE, payload=dict(args)))
+
+    memory = next(item for item in result["found"] if item["kind"] == "memory")
+    assert "Episod Oktober" in memory["text"]
+    details = json.dumps(memory["details"])
+    assert "Kopi Senja" in details and "dua belas persen" in details
+
+
+async def test_recall_obeys_absolute_line_two(aconn):
+    private = "space:tg:2002"
+    group = "space:tg:-100"
+    await append_event(aconn, ts=START, kind="percept", who="person:fulan", place=private,
+                       payload={"description": "rahasia fulan tentang kafe"})
+    await append_event(aconn, ts=START, kind="percept", who="person:charlie", place=group,
+                       payload={"description": "halo semua"})
+    organ = SelfOrgan(aconn, FakeClock(START))
+
+    hidden = await organ.act(Action(kind="recall", place=group,
+                                    payload={"query": "rahasia fulan"}))
+    assert hidden["found"] == []
+
+    owner = "space:tg:1001"
+    await append_event(aconn, ts=START, kind="percept", who="person:owner", place=owner,
+                       payload={"description": "halo"})
+    allowed = await organ.act(Action(kind="recall", place=owner,
+                                     payload={"query": "rahasia fulan"}))
+    assert "rahasia fulan" in json.dumps(allowed["found"])
+
+
+async def test_forty_unread_messages_are_appraised_once(aconn):
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM()), settings=SETTINGS)
+    messages = [{"description": f"pesan {n}", "addressed": False} for n in range(40)]
+    event = Event(id=None, ts=START, kind="percept", who="person:fulan", place=PLACE,
+                  body="telegram", payload={
+                      "description": "40 pesan belum dibaca", "backfill": True,
+                      "sent_at": (START - timedelta(hours=8)).isoformat(),
+                      "place_kind": "direct", "messages": messages})
+
+    await _feed(kernel, event)
+
+    kinds = await _kinds(aconn)
+    assert kinds.count("decision.silent") == 1
+    assert "act.out" not in kinds
+
+
+async def test_backfill_signals_are_discounted_by_age():
+    old = Event(id=1, ts=START - timedelta(hours=10), kind="percept", who="person:fulan",
+                place=PLACE, payload={"description": "Mona", "backfill": True,
+                                      "sent_at": (START - timedelta(hours=10)).isoformat()})
+    fresh = Event(id=2, ts=START, kind="percept", who="person:fulan", place=PLACE,
+                  payload={"description": "Mona"})
+    aged = await appraise(old, situation=Situation(event=old, self_name="Mona", now=START),
+                          now=START, settings=SETTINGS)
+    new = await appraise(fresh, situation=Situation(event=fresh, self_name="Mona", now=START),
+                         now=START, settings=SETTINGS)
+    assert aged.signals["own_name"] < new.signals["own_name"]

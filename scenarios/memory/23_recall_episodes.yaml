@@ -1,0 +1,59 @@
+name: 23_recall_episodes
+description: >-
+  The owner asks what happened last month. The swing-sleep never ran, so no
+  episode memory exists and no vector was ever written; the soul recalls the
+  month by time range from the Log itself and answers with details from the
+  original events.
+expectations:
+  - type: event_seen
+    kind: act.result
+    step: 3
+    payload: {capability: self.recall}
+    text_contains: "Kopi Senja"
+    label: recall returns the original event that named the cafe
+  - type: event_seen
+    kind: act.result
+    step: 3
+    payload: {capability: self.recall}
+    text_contains: "dua belas persen"
+    label: recall returns the original event with the price detail
+  - type: reply_in
+    place: space:tg:1001
+    step: 3
+    count: 1
+    label: the owner hears the month's episodes back
+  - type: mentions
+    text: "Kopi Senja"
+    step: 3
+    label: the answer names the cafe from the recalled detail
+steps:
+  - at: "2026-10-03T10:00:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Kita buka kafe bulan depan. Namanya Kopi Senja."
+    addressed: true
+  - at: "2026-10-20T16:30:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Harga biji kopi naik dua belas persen."
+    addressed: true
+  - at: "2026-11-11T09:00:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "apa yang kita lakukan bulan lalu?"
+    addressed: true
+model_answers:
+  - step: 3
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: self.recall
+          arguments:
+            from: "2026-10-01T00:00:00+07:00"
+            to: "2026-11-01T00:00:00+07:00"
+      - name: act
+        arguments:
+          capability: telegram.say
+          arguments:
+            text: "Bulan lalu kita membuka Kopi Senja dan harga biji kopi naik dua belas persen."

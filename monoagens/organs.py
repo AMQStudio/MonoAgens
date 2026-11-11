@@ -60,7 +60,8 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any]) -> bool:
         return False
     arguments = args.get("arguments") if isinstance(args.get("arguments"), dict) else {}
     arguments = dict(arguments)
-    to, via = arguments.pop("to", None), arguments.pop("via", None)
+    routed = cap.get("communicative") or capability == reach.SHARE
+    to, via = (arguments.pop("to", None), arguments.pop("via", None)) if routed else (None, None)
     if capability == reach.SHARE:
         allowed, source = await reach.consent(kernel.conn, event, arguments)
         if not allowed:

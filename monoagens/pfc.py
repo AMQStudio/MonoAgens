@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from monoagens.prior import load_settings
+from monoagens.prior import constants, load_settings
 from monoagens.types import RECENT_KINDS, Event
 
 SYSTEM_TAIL = "You act only through the tools. Staying silent is a valid choice."
@@ -102,6 +102,7 @@ class PFCContext:
     memories: Sequence[str] = ()
     recent: Sequence[Event] = ()
     recent_elsewhere: Sequence[Event] = ()
+    doing: Sequence[str] = ()
     trigger: Event | None = None
     last_interaction: datetime | None = None
     capabilities: Sequence[dict[str, Any]] = ()
@@ -178,18 +179,31 @@ class PFC:
 
     def _volatile_prompt(self, context: PFCContext) -> str:
         local_now = context.now.astimezone(self.timezone)
-        sections = [
-            f"<now>{local_now:%Y-%m-%d %H:%M}, {local_now:%A}, {self.timezone.key}, "
-            "time since last interaction: "
-            f"{_duration(context.now, context.last_interaction)}</now>",
-            f"<place>{context.place} ({context.place_kind})</place>",
-            f"<why_awake>{context.reason}</why_awake>",
-            f"<expectations>{_listed(context.expectations)}</expectations>",
-            f"<memories>{_listed(context.memories)}</memories>",
-            f"<recent>\n{chr(10).join(self._recent_lines(context))}\n</recent>",
-            f"<event>{self._event_text(context.trigger)}</event>",
-        ]
-        return "\n".join(sections)
+        values = constants(self.settings)
+        doing = _fit(list(context.doing), int(values["thread_result_tokens"]), keep_first=True)
+        memories = _fit([str(item) for item in context.memories], int(values["memory_tokens"]))
+        recent = _fit(self._recent_lines(context), int(values["recent_tokens"]))
+
+        def build() -> list[str]:
+            return [
+                f"<now>{local_now:%Y-%m-%d %H:%M}, {local_now:%A}, {self.timezone.key}, "
+                "time since last interaction: "
+                f"{_duration(context.now, context.last_interaction)}</now>",
+                f"<place>{context.place} ({context.place_kind})</place>",
+                f"<why_awake>{context.reason}</why_awake>",
+                f"<doing>\n{_listed(doing)}\n</doing>",
+                f"<expectations>{_listed(context.expectations)}</expectations>",
+                f"<memories>\n{_listed(memories)}\n</memories>",
+                f"<recent>\n{chr(10).join(recent)}\n</recent>",
+                f"<event>{self._event_text(context.trigger)}</event>",
+            ]
+
+        limit, parts = int(values["volatile_tokens_max"]), build()
+        for bucket in (recent, memories):
+            while _tokens("\n".join(parts)) > limit and len(bucket) > 1:
+                bucket.pop(0)
+                parts = build()
+        return "\n".join(parts)
 
     def _recent_lines(self, context: PFCContext) -> list[str]:
         lines = [self._recent_line(event) for event in context.recent]
@@ -206,8 +220,7 @@ class PFC:
 
     def _recent_parts(self, event: Event) -> tuple[str, Any]:
         if event.kind == "act.out":
-            arguments = event.payload.get("arguments") or {}
-            return self.name, arguments.get("text")
+            return self.name, (event.payload.get("arguments") or {}).get("text")
         if event.kind == "expectation.fired":
             return "expectation", (event.payload.get("text") or event.payload.get("about"))
         return str(event.who or "?").removeprefix("person:"), event.payload.get("description")
@@ -217,35 +230,47 @@ class PFC:
             return "(no trigger event)"
         text = event.payload.get("description") or event.payload.get("text")
         who = str(event.who or "?").removeprefix("person:")
-        return f"{who}: {text}" if text else f"[{event.kind}]"
+        line = f"{who}: {text}" if text else f"[{event.kind}]"
+        notes = event.payload.get("notes")
+        if notes:
+            each = [notes] if isinstance(notes, str) else notes
+            line += "\n" + "\n".join(f"note: {note}" for note in each)
+        return line
 
 
 def _usage(raw: dict[str, Any]) -> dict[str, int]:
     """Normalize one response's token usage into the four tracked counters."""
-    details = raw.get("prompt_tokens_details") or {}
-    prompt = int(raw.get("prompt_tokens") or 0)
+    details, prompt = raw.get("prompt_tokens_details") or {}, int(raw.get("prompt_tokens") or 0)
     completion = int(raw.get("completion_tokens") or 0)
-    return {
-        "prompt_tokens": prompt,
-        "cached_tokens": int(details.get("cached_tokens") or 0),
-        "completion_tokens": completion,
-        "total_tokens": int(raw.get("total_tokens") or prompt + completion),
-    }
+    return {"prompt_tokens": prompt, "cached_tokens": int(details.get("cached_tokens") or 0),
+            "completion_tokens": completion,
+            "total_tokens": int(raw.get("total_tokens") or prompt + completion)}
 
 
 def _listed(items: Sequence[str]) -> str:
     return "\n".join(str(item) for item in items) if items else "none"
 
 
+def _tokens(text: str) -> int:
+    """Approximate one section's token count from its characters."""
+    return max(1, len(text) // 4)
+
+
+def _fit(lines: list[str], limit: int, *, keep_first: bool = False) -> list[str]:
+    """Drop the oldest lines until the section fits its token budget."""
+    lines = list(lines)
+    while len(lines) > 1 and sum(map(_tokens, lines)) > limit:
+        lines.pop(1 if keep_first and len(lines) > 2 else 0)
+    return lines
+
+
 def _duration(now: datetime, then: datetime | None) -> str:
     if then is None:
         return "first interaction"
-    minutes = int((now - then).total_seconds() // 60)
-    if minutes < 1:
-        return "less than a minute"
+    minutes = max(0, int((now - then).total_seconds() // 60))
     days, rest = divmod(minutes, 1440)
     hours, mins = divmod(rest, 60)
     if days:
         return f"{days}d {hours}h"
-    return f"{hours}h {mins}m" if hours else f"{mins}m"
+    return f"{hours}h {mins}m" if hours else f"{minutes}m"
 

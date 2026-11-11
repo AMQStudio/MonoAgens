@@ -5,7 +5,7 @@ The three pipelines, their ordered slots and the watchdog live in `hooks.py`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 SLOTS = ("first", "middle", "last")
@@ -21,11 +21,6 @@ def owner_policy(hook: str) -> Middleware:
         if hook == "action" and ctx.get("identity_changing") \
                 and ctx.get("origin_actor") != OWNER:
             return Stop("only the owner may invoke identity_changing capabilities")
-        if hook == "context":
-            keep = tuple(m for m in item.memories if not getattr(m, "private", False)
-                         or m.place == item.place or (item.place_kind == "direct"
-                         and getattr(item.trigger, "who", None) == OWNER))
-            return Replace(replace(item, memories=keep))
         return Continue()
 
     return policy
