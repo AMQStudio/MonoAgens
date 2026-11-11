@@ -120,8 +120,8 @@ async def best_activation(conn: psycopg.AsyncConnection[Any], embedder: Any, eve
     cur = await conn.execute(
         "SELECT 1 - (v.embedding <=> %s), e.ts FROM event_vectors v "
         "JOIN events e ON e.id = v.event_id WHERE e.place = %s AND e.kind = ANY(%s) "
-        "ORDER BY e.id DESC LIMIT %s",
-        (Vector(vector), event.place, list(RECENT_KINDS),
+        "AND e.id <> %s ORDER BY e.id DESC LIMIT %s",
+        (Vector(vector), event.place, list(RECENT_KINDS), event.id,
          int(constants(settings)["recent_messages"])))
     values, d = constants(settings), decay_d(settings)
     scores = [base_level(0, max(0.0, (now - ts).total_seconds() / 3600.0), d)

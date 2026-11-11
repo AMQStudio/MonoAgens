@@ -116,7 +116,7 @@ Found in the architect's review of Parts 1–9.
 - [x] 10.2 Speaking elsewhere: a communicative act aimed at another place becomes an intent and one more wake in the target place, with that place's desk; the message is written there. `reach.leaks` stays as a second check. Test: a fake model that paraphrases Fulan's private line when asked to message Budi cannot leak it, because the line is not on Budi's desk. Scenarios 18 and 19 follow the new flow.
 - [x] 10.3 Split `identity.py`: `self.recall` and the task desk move to a new `recall.py` (≤ 160); `identity.py` ≤ 120; whole package ≤ 3,800.
 - [x] 10.4 Wire the circuit breaker's "goal continued" arm (`act.result`) in the kernel loop.
-- [ ] 10.5 Feeling-of-knowing: the cue's own vector is never one of its candidates.
+- [x] 10.5 Feeling-of-knowing: the cue's own vector is never one of its candidates.
 - [ ] 10.6 Unaddressed help: at least five scenarios where an unaddressed group line should be answered because the soul knows something useful ("lupa nama tempatnya apa ya" with the answer in memory), and five where it should stay silent. If the gate misses them, tune prior values only, and write the evidence under Notes.
 - [ ] 10.7 Every scenario gets `capability:` (one line: what it proves) and its brain function. Checks test behavior — spoke or stayed silent, in which place, which events and capabilities — never the model's exact wording. Every changed check is listed under Notes with its reason; a check that catches a real failure is never loosened.
 - [ ] 10.8 Classify each of the 35 real-model failures from 9.3 as (a) check too strict → rewritten per 10.7, or (b) the soul behaved wrongly → fixed by brain function, never by a rule for that case. List all 35 under Notes.
@@ -460,3 +460,19 @@ Part 10 notes (worker, 10.4):
   `tests/test_reach.py`'s scripted PFC gained the silent answer for the `say` result and now
   checks that both Budi desks carry no `di-PHK`. Scenario 23 gained one recorded silent answer
   for the wake that follows `self.recall`'s result (it had produced a second "ok" reply).
+
+Part 10 notes (worker, 10.5):
+- `memory.best_activation`'s recent-message query in `event_vectors`/`events` now excludes the
+  cue event (`AND e.id <> %s`, `event.id` bound), so a cue whose vector is already stored can no
+  longer contribute its own similarity 1.0. Candidates come from `memories`, not
+  `event_vectors`, so no other path can pick the cue's event vector up. `memory.py` stays at
+  260/260.
+- `test_best_activation_ignores_the_cue_vector_so_fok_cannot_saturate` (tests/test_memory.py)
+  stores the cue's vector, adds one other recent message at cosine 0.5, and asserts the exact
+  activation of that message only plus `peak <` the self-match value. Before the fix the cue
+  added `base_level(0, 0) + context_weight` and saturated FOK.
+- `test_best_activation_covers_candidates_and_recent_messages` used the cue event itself as its
+  "recent message", so it pinned the bug; it now uses a distinct message event and keeps its
+  original candidate/message assertions unchanged.
+- `uv run pytest`: 243 passed. Fake replay: 86/86 checks, absolute-line violations 0, honesty
+  51/51, missed-help rate 0.0%.

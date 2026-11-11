@@ -202,23 +202,48 @@ async def test_candidates_are_top_40_by_vector_union_top_20_by_text(aconn):
 
 async def test_best_activation_covers_candidates_and_recent_messages(aconn):
     created = START - timedelta(days=1)
-    await _add_memory(aconn, "Kunci cadangan di meja kerja", importance=0.5,
-                      created=created, uses=20)
-    source = await append_event(aconn, ts=START - timedelta(minutes=1), kind="percept",
-                                who="person:owner", place=PLACE, body="telegram",
-                                payload={"description": "Kunci cadangan di meja kerja"})
-    await insert_event_vector(aconn, source.id,
-                              (await FakeEmbedder().embed(["Kunci cadangan di meja kerja"]))[0])
-    event = Event(id=source.id, ts=START, kind="percept", who="person:owner", place=PLACE,
+    query = [1.0] + [0.0] * 383
+    await _add_vector_memory(aconn, "Kunci cadangan di meja kerja", query, importance=0.5,
+                             created=created, uses=20)
+    message = await append_event(aconn, ts=START - timedelta(minutes=1), kind="percept",
+                                 who="person:owner", place=PLACE, body="telegram",
+                                 payload={"description": "Kunci cadangan di meja kerja"})
+    await insert_event_vector(aconn, message.id, query)
+    cue = await append_event(aconn, ts=START, kind="percept", who="person:owner", place=PLACE,
+                             body="telegram", payload={"description": "kunci cadangan"})
+    await insert_event_vector(aconn, cue.id, query)
+    event = Event(id=cue.id, ts=START, kind="percept", who="person:owner", place=PLACE,
                   payload={"description": "kunci cadangan"})
 
-    peak = await memory.best_activation(aconn, FakeEmbedder(), event, now=START,
-                                        settings=SETTINGS)
+    peak = await memory.best_activation(aconn, FixedEmbedder({"kunci cadangan": query}), event,
+                                        now=START, settings=SETTINGS)
 
     d = decay_d(SETTINGS)
     memory_a = base_level(20, 24.0, d) + 1.0 + 0.5 * 0.5
     message_a = base_level(0, 1 / 60, d) + 1.0
     assert peak == pytest.approx(max(memory_a, message_a), abs=0.02)
+
+
+async def test_best_activation_ignores_the_cue_vector_so_fok_cannot_saturate(aconn):
+    cue = await append_event(aconn, ts=START, kind="percept", who="person:owner", place=PLACE,
+                             body="telegram", payload={"description": "kunci cadangan"})
+    query = [1.0] + [0.0] * 383
+    await insert_event_vector(aconn, cue.id, query)  # the cue's own vector is already stored
+    message = await append_event(aconn, ts=START - timedelta(minutes=10), kind="percept",
+                                 who="person:owner", place=PLACE, body="telegram",
+                                 payload={"description": "barang di meja"})
+    await insert_event_vector(aconn, message.id, [0.5, math.sqrt(1 - 0.5**2)] + [0.0] * 382)
+    event = Event(id=cue.id, ts=START, kind="percept", who="person:owner", place=PLACE,
+                  payload={"description": "kunci cadangan"})
+
+    peak = await memory.best_activation(aconn, FixedEmbedder({"kunci cadangan": query}), event,
+                                        now=START, settings=SETTINGS)
+
+    d = decay_d(SETTINGS)
+    expected = base_level(0, 10 / 60, d) + 0.5 * float(VALUES["context_weight"])
+    assert peak == pytest.approx(expected, abs=0.01)
+    # A self-match would add base_level(0, 0) + context_weight and push FOK towards 1.
+    assert peak < base_level(0, 0.0, d) + float(VALUES["context_weight"])
 
 
 async def test_sleep_writes_memories_core_memory_and_never_touches_raw_events(aconn):
