@@ -1,9 +1,13 @@
-# DESIGN.md — MonoAgens
+# Core — Design
 
-**Status: final for v1 (2026-11-11).** The current design in eight sections. The rulings it
-implements are in DECISIONS.md (cited as Dxx); file formats in docs/FORMATS.md; formulas and
-sources in docs/MATH.md; steps in ROADMAP.md; rules for coding agents in AGENTS.md. If this file
-and DECISIONS.md disagree, DECISIONS.md wins and this file has a bug.
+**Status: FINAL for v1 — frozen (2026-11-11).** The core design in eight sections. Only
+inconsistencies, typos, broken references and clarifications that change no behavior may be
+edited; everything else belongs to another layer or waits for a v2 opened by the owner
+([DECISIONS.md](DECISIONS.md) §0). Rulings: [DECISIONS.md](DECISIONS.md) (cited as Dxx); core
+formats: [FORMATS.md](FORMATS.md); formulas and sources: [MATH.md](MATH.md); order of work:
+[plan/](plan/README.md); other layers: [docs/README.md](../README.md); rules for coding agents:
+[AGENTS.md](../../AGENTS.md). If this file and DECISIONS.md disagree, DECISIONS.md wins and this
+file has a bug.
 
 ---
 
@@ -46,7 +50,7 @@ brain.**
   out of them.
 
 The table below is the **brain map** (D39): the closed list of functions the core implements.
-Every core decision is a row; formulas and sources are in docs/MATH.md. Scenarios are tests
+Every core decision is a row; formulas and sources are in MATH.md. Scenarios are tests
 against the map, never new rows.
 
 | Brain function (analogy) | Mechanism | Where |
@@ -158,7 +162,7 @@ the organs present now, listed in a fixed order so the prompt cache holds.
 - Organs map native accounts to person ids (alias map) and native command syntax to a neutral
   `command` event; one shared command registry makes `/help` identical everywhere (D9).
 - Organs report `addressed` (direct chat, reply, tag) as a neutral event field (D40).
-- What an organ senses enters as a `percept` (format in docs/FORMATS.md): the organ, like a
+- What an organ senses enters as a `percept` (format in FORMATS.md): the organ, like a
   sensory cortex, turns its signal into a short description, with raw data attached (D41).
 - On start an organ asks for `cursor(organ)`, so input is never lost or duplicated.
 - `communicative` capabilities count as speaking for the talk-rate drive and the forward model.
@@ -245,7 +249,7 @@ unresolved; `budget.exhausted` is recorded.
 
 **Knobs.** All tunable behavior is about ten named knobs in the prior (talkativeness, patience,
 reserve when unfamiliar, …); one function maps them to θ, τ, γ and the weights (D36,
-docs/FORMATS.md).
+docs/birth/FORMATS.md).
 
 **Learning.** Active now: the wake-gate edge `lo` follows classifier verdicts within bounds;
 credence and reliability update as α/β counts. Deferred until weeks of real logs exist: learned
@@ -303,7 +307,7 @@ valid_to · superseded_by · derived_from · created_at · last_accessed_at · u
 **Learned state** has three layers, all in the core: (1) dispositions, (2) generic procedures,
 lessons and social intuition, (3) episodic memory with per-place and per-person tuning.
 Installed skills are not learned state; they belong to packages (D34). A soul is born from a
-**prior** (layers 1–2, a local folder; format in docs/FORMATS.md). This repository only loads a
+**prior** (layers 1–2, a local folder; format in docs/birth/FORMATS.md). This repository only loads a
 prior; it never exports or shares learned state (D25).
 
 ## 8. Trust, identity and the self-model

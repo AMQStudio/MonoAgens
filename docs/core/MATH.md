@@ -1,13 +1,13 @@
 # MATH.md — The Mathematics of MonoAgens and Its Sources
 
 Every formula the core uses, what each symbol means, why it was chosen, and where the idea
-comes from. DESIGN.md states *what* the core does; this file states *how* and *why*, so a
+comes from. DESIGN.md (this folder) states *what* the core does; this file states *how* and *why*, so a
 scientist can check it and a new session does not have to rediscover it.
 
 Source tags: **[PR]** peer-reviewed · **[PP]** preprint · **[IND]** industry documentation or
 standard. Many 2025–2026 agent papers are preprints; treat their numbers as the authors' claims.
 Parameters named in `code font` are knobs, calibration values or constants of the prior
-(docs/FORMATS.md §3).
+(docs/birth/FORMATS.md §1).
 
 ---
 

@@ -4,12 +4,11 @@ A tiny kernel for one persistent AI self that lives in many bodies. The kernel r
 everything it sees, holds Expectations about the world, and only thinks hard (calls the LLM)
 when the cognition layer's appraisal decides an event matters.
 
-- `DESIGN.md` — the current design (read this first).
-- `DECISIONS.md` — every design decision and why.
-- `ROADMAP.md` — what is done and what comes next.
-- `AGENTS.md` — rules and invariants for coding agents.
-- `docs/FORMATS.md` — capability, prior and skill formats.
-- `docs/MATH.md` — every formula, why it was chosen, and its sources.
+- [`docs/README.md`](docs/README.md) — map of all documents, layer by layer, and the
+  implementation order (read this first).
+- [`docs/core/`](docs/core/) — the core design (final, frozen): DESIGN, DECISIONS, FORMATS,
+  MATH (every formula and its sources) and the plan.
+- [`AGENTS.md`](AGENTS.md) — rules and invariants for coding agents.
 - `scripts/replay.py` — scenario replay for tuning the cognition layer.
 
 ## Tuning with replay

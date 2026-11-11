@@ -1,28 +1,21 @@
-# DECISIONS.md — Rulings
+# Core — Decisions (rulings)
 
-Status: **final for v1 (2026-11-11).** Every point below is agreed between the owner and the
-architect. If DESIGN.md, ROADMAP.md or docs/ disagree with this file, this file wins.
-Each point carries the decision numbers it came from (Dxx); the full discussion history of
-D1–D40 is in git (commit 32248b1 and earlier). Points marked **Draft** were not discussed in
-depth: they state the current intent and may change without a new decision.
+Status: **FINAL for v1 — frozen** (2026-11-11). Every point is agreed between the owner and the
+architect and carries the decision numbers it came from (Dxx); the discussion history of D1–D41
+is in git (commit 32248b1 and earlier). If DESIGN.md, MATH.md, FORMATS.md or any other layer
+disagrees with this file, this file wins.
 
-Layers:
-- **Core** — the soul: a generic brain. Fixed for v1.
-- **Organs** — bodies (Telegram, CLI, WhatsApp, a robot) and tools (search, files, email):
-  how the soul senses and acts.
-- **Middleware** — static rules in the three hooks: owner policy, commands, RBAC, installed
-  skills. Does not learn.
-- **Packages** — what other projects call plugins: bundles of organs, middleware, installed
-  skills and dependencies.
-- **Birth inputs** — the birth certificate (who I am) and the prior (my instincts).
-- **Project** — license, users, release, documents.
+The other layers have their own rulings: [organs](../organs/DECISIONS.md),
+[middleware](../middleware/DECISIONS.md), [packages](../packages/DECISIONS.md),
+[birth inputs](../birth/DECISIONS.md), [project](../project/DECISIONS.md). Map of all
+documents: [docs/README.md](../README.md).
 
 ---
 
 ## 0. Method
 - **Design by brain function, not by scenario** (D39). The core is a closed list of brain
-  functions, the brain map in DESIGN §2. Each row is a brain region, a studied model with its
-  formula and sources (docs/MATH.md) and one core mechanism. A core decision = research how the
+  functions, the brain map in DESIGN.md §2. Each row is a brain region, a studied model with its
+  formula and sources (MATH.md) and one core mechanism. A core decision = research how the
   brain does it, then write the row.
 - **Scenarios are tests, not design inputs** (D39). A new human situation is checked against
   the map and becomes a replay scenario. The PFC fills the gaps between functions.
@@ -31,6 +24,12 @@ Layers:
 - **Complexity budget** (D26, D32). At most 4 books, 5 thought acts, 3 hooks, 10 signals,
   3 drives and one gate formula. A new primitive must replace one or be refused. A new brain-map
   row is added only when a whole brain function is missing.
+
+- **The core is FINAL for v1 and frozen.** Allowed edits to the core documents: fixing an
+  inconsistency, a typo or a broken reference, and clarifications that change no behavior.
+  Everything else belongs in another layer (organs, middleware, packages, birth inputs). If a
+  need truly cannot be met there, it waits for a v2 of the core, which only the owner can open,
+  with a new major version. A plan, a package or a worker never changes the core design.
 
 ## 1. Core
 
@@ -84,7 +83,7 @@ Layers:
 - Schema changes are numbered SQL migrations with a version table, applied at start after an
   automatic backup; no migration framework (D33.4).
 
-### 1.4 Attention and the decision to act (formulas: MATH §2–4, §15)
+### 1.4 Attention and the decision to act (formulas: MATH.md §2–4, §15)
 - **Circuit breaker** (ventral attention): an event bypasses the draw when it engages a
   commitment — the turn was allocated to the soul (`addressed`: direct chat, reply, tag), it
   fires or answers an active Expectation, or it continues an active goal (D40).
@@ -144,7 +143,7 @@ Layers:
   within bounds; the gray band keeps a minimum width (D29).
 - A woken PFC re-judges the situation; it never replays a promise blindly.
 
-### 1.7 Memory and knowing (MATH §5, §14)
+### 1.7 Memory and knowing (MATH.md §5, §14)
 - `memories` kinds: fact, episode, lesson, procedure; each with `basis` (observed | told |
   inferred), who, place, private, source, importance, validity, `derived_from`, use count.
 - **Retrieval by ACT-R activation**: A = B + w_ctx·cos + w_imp·importance; candidates top 40 by
@@ -216,129 +215,7 @@ Layers:
   capability outside it. Honesty principles are few and general and worded by the PFC, never
   scripted (D12, D38, D40).
 
-## 2. Organs (bodies and tools)
-- An organ senses (`run(put)`) and/or acts (`act(action)`) and declares capabilities: name, JSON
-  schema, description, flags `communicative`, `long_running`, `identity_changing`. The PFC's
-  capability list is assembled from the organs present, in a fixed order (D2, D32).
-- The brain decides intent and content; the organ decides how (bubbles, TTS, gestures). Fine
-  motor control stays in the organ (D2).
-- Long actions report progress and completion as `act.result`; the core never waits (D3).
-- `communicative` capabilities count as speaking for talk rate and the forward model (D2).
-- On start an organ asks for `cursor(organ)`, so input is never lost or duplicated.
-- Organs translate native accounts into neutral ids (through the alias map) and native command
-  syntax into a neutral `command` event, adding presentation only (menus, buttons) (D9).
-- Organs report `addressed` (direct chat, reply, tag) as a neutral field (D40).
-- What an organ senses enters as a `percept`: who, place, `addressed`, a short description in
-  language, optional raw data, and `sent_at` when the sense has its own clock. The organ, like a
-  sensory cortex, turns its signal into that description (D41).
-- A body may offer `history(place, before, limit)`; on connect it back-fills what it missed as
-  `percept` with `backfill: true` and `sent_at`. The core appraises a backlog per place once, as
-  one age-discounted percept; an addressed message still trips the circuit breaker (D37, D40).
-- Tools are organs too (search, files, email) (D35). The only organ inside the core is `self`.
-- Present: Telegram (long polling) and CLI (Unix socket, thin client).
-- **Draft**: WhatsApp (with history), Discord, voice (STT/TTS), a first non-chat organ (IoT
-  device or robot simulation); web search/fetch and file read as the first tool organs. Each
-  organ owns its own retries, rate limits and platform quirks.
-
-## 3. Middleware (static; runs in the hooks; never learns)
-- Middleware adds capabilities and rules the owner chooses; it does not learn (D34).
-- **Open to any behavior** (D41). The core never knows the case — modes ("daily" vs
-  "professional"), a persona layer, simulated emotions, RBAC, moderation. Every middleware uses
-  the same levers:
-  1. *Pass, replace or stop* any item at the three doors (percepts, the desk, actions).
-  2. *Annotate* an item; the note travels with it to the PFC.
-  3. *Declare* standing rules, which appear in `<self>`.
-  4. *Remember* only by putting events; its state is a projection under its own namespace
-     (`<package>:*`), so replay and hard forgetting still work.
-  5. *Sense and act* through organs of its own package (a timer, a `set_mode` capability).
-  6. *Steer the knobs* by a bounded, temporary offset recorded as `disposition.updated` with the
-     package as source; learning never moves an offset, and removing the package removes it.
-  Limits: it cannot cross the two absolute lines (the owner policy runs first and last), add a
-  thought act, signal or book, or write core books except through events. The core's "no
-  emotions" non-goal is about the core; a package may simulate them.
-- **Owner policy** wraps every package middleware (first and last) and cannot be removed by a
-  package (D9).
-- **Default owner policy**, active out of the box: the two absolute lines, the daily model
-  budget, quiet hours. Budget and quiet hours are owner settings; the owner may tighten or loosen
-  them; packages may add rules inside it, never remove it (D22, D24, D36).
-- Scope: **shared** (every organ that opts in: commands, skills, tool rules) or **organ-own**
-  (unique to one platform) (D9).
-- **Commands**: one shared registry; `/help` is identical on every organ; packages register
-  commands into it (D9).
-- **RBAC, roles, hierarchy as permission**: in the hooks only; platform role facts ("admin of
-  this group") are recorded as facts about that person for the soul's social understanding
-  (D31).
-- **Tool-use rules and approvals**: optional; e.g. an owner may require approval before a
-  learned procedure is used (D19).
-- **Installed skills**: SKILL.md; only names and descriptions of relevant skills enter the
-  prompt via the context hook; the body is loaded on request; versioned; use counts feed the
-  same ACT-R activation as memories (D11, D34).
-- **Alias map** (one person across bodies): every mapping is an event and can be undone; only the
-  owner, or the person via a verification code sent from the second account, may link; the soul
-  may suspect and ask, never links silently. Needed when a second chat app arrives (D10).
-- **Draft — memory-view**: list what the soul remembers about the asker or this place;
-  corrections via `revise` with the asker as `origin_actor`; owner-only Markdown export as a
-  view, never the source of truth; both absolute lines apply (D37).
-- **Draft — package suggestions**: only to the owner, only from the local catalog, at most once
-  per missing capability per habituation window, never installs anything (D28).
-- **Draft**: per-person rate limits, content filters, scheduled quiet modes — owner choices.
-
-## 4. Packages (plugins)
-- A package bundles organs, middleware, installed skills and dependencies. A loader outside the
-  core assembles them; the core sees only senses, organs and hooks (D9).
-- Name collisions (two packages claiming the same command, organ or state namespace) fail at boot
-  (D9, D41).
-- A package declares what it brings — organs, middleware, commands, installed skills, standing
-  rules, its state namespace — in one manifest (format in docs/FORMATS.md, Draft) (D41).
-- Packages are trusted code installed by the owner and run in-process (the Home Assistant model).
-  The owner policy holds against packages that follow the contract; it is not a sandbox against
-  malicious code, and the docs say so (D32.11).
-- Role packages (assistant, customer service, sysadmin) may ship a birth certificate, used only at
-  birth; they can never overwrite identity afterwards (D20, D35).
-- **Draft**: installed by the owner through the installer or a command; a local catalog;
-  semantic versions; stable, versioned contracts for organs, packages and middleware only after
-  they have not changed for a while (Phase 9).
-
-## 5. Birth inputs
-- **Birth certificate** (`soul.yaml`): name, language, persona, principles; persona may be in any
-  language. Read once at birth (D35).
-- **Prior**: a local folder loaded at birth — `manifest.yaml` (format version, date, embedder,
-  LLM family, language), `dispositions.yaml` (knobs, calibration, constants),
-  `references.yaml`, `lessons.yaml`, `procedures.yaml` (with credence). Replay scenarios that
-  prove a prior live in the repository's `scenarios/`, not inside it. A default prior ships with
-  the repository (D25, D30, D34, D36).
-- **Knobs**: about ten values named by behavior — talkativeness, restraint after speaking,
-  spontaneity, helpfulness, boredom with repeats, patience, reserve when unfamiliar, speaking
-  bar, certainty bar, memory persistence — each with an "if the soul is too X" guide. One
-  function maps them to θ, τ, γ and the weights. Calibration is measured per embedder and model,
-  never set by hand; constants change only by a decision. End users never see the prior
-  (D36, D40).
-- **Loading rules**: different embedder → calibration falls back to defaults; different LLM family
-  → load, halving procedure and lesson credence until proven; unknown major format → refuse with
-  a clear message (D30).
-- This repository only loads a prior; it never exports, uploads, shares or aggregates learned
-  state (D18, D25).
-
-## 6. Project
-- Open source under Apache 2.0; public documents mention no hosted service (D8).
-- BYOK; one deployment is one soul with its own database; keys only from the environment; the
-  embedder is a replaceable port (D7).
-- Out of the box for non-technical people: no configuration panel; a soul is born from a prior and
-  adapts (D20).
-- Order of users: the owner alone, then one real group the owner knows well (also the honest
-  human-likeness evaluation), then developers once contracts are stable (D13).
-- **Release gate**: end-to-end tests with a real model, a real database, long multi-day
-  conversations and real people; a per-model replay report and a list of recommended models
-  (D33.6).
-- Never described as conscious or as "% human"; claims are per behavior against a human
-  baseline.
-- Documents: DESIGN.md (current design), this file (rulings), docs/FORMATS.md, docs/MATH.md
-  (formulas and sources), ROADMAP.md (steps), AGENTS.md (rules for coding agents) (D32.14).
-- **Draft**: installer (one command from clone to a talking soul); README with the brain table,
-  install, talk, tune with replay; compressed daily backups with an owner-set retention (D14).
-
-## 7. Open
-- Deferred until weeks of real logs exist: learned signal weights and knobs, adaptive fade
-  threshold, social standing, learned coverage, identity linking, package suggestions; research
-  on consolidation and forgetting formulas.
-- Worker prompts for Track A2 and Phase 2 tracks, when the owner resumes implementation.
+## 2. Deferred (core)
+- Until weeks of real logs exist: learned signal weights and knobs, adaptive fade threshold,
+  social standing, learned coverage; research on consolidation and forgetting formulas. These
+  are learning *inside* existing functions, so enabling them does not change the core design.

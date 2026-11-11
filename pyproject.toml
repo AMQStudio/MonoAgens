@@ -2,7 +2,7 @@
 name = "monoagens"
 version = "0.1.0"
 description = "A tiny kernel for one persistent AI self that lives in many bodies."
-readme = "DESIGN.md"
+readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "psycopg[binary,pool]>=3.3,<3.4",
