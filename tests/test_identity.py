@@ -24,18 +24,20 @@ PLACE = "space:tg:1"
 
 
 class FakeLLM:
-    """One scripted `act` call that changes the identity."""
+    """One scripted `act` call that changes the identity, then silence."""
 
     def __init__(self, arguments: dict) -> None:
-        self.arguments = arguments
+        self.arguments, self.calls = arguments, 0
 
     def handler(self, request: httpx.Request) -> httpx.Response:
-        call = {"name": "act",
+        self.calls += 1
+        calls = [] if self.calls > 1 else [
+            {"id": "call_1", "type": "function", "function": {
+                "name": "act",
                 "arguments": json.dumps({"capability": "self.set_identity",
-                                         "arguments": self.arguments})}
+                                         "arguments": self.arguments})}}]
         return httpx.Response(200, json={
-            "choices": [{"message": {"tool_calls": [
-                {"id": "call_1", "type": "function", "function": call}]}}],
+            "choices": [{"message": {"tool_calls": calls}}],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}})
 
 

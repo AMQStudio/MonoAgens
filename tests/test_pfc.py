@@ -271,16 +271,54 @@ async def test_react_is_recorded_before_the_body_acts(aconn):
 
 async def test_an_organ_result_is_recorded_as_act_result(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.say",
-                              "arguments": {"text": "done"}})]])
+                              "arguments": {"text": "done"}})],
+                    [("think", {"thought": "the result arrived", "motivation": 2,
+                               "confidence": 0.5})]])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_body(ResultBody())
 
     await _feed(kernel, _msg("halo"))
 
-    assert await _kinds(aconn) == ["percept", "model.call", "act.out", "act.result"]
+    assert await _kinds(aconn) == ["percept", "model.call", "act.out", "act.result",
+                                   "model.call", "decision.note", "decision.silent"]
     cur = await aconn.execute("SELECT payload FROM events WHERE kind='act.result'")
     assert (await cur.fetchone())[0] == {"capability": "telegram.say",
                                          "result": {"message_id": 7}}
+
+
+async def test_an_act_result_wakes_the_pfc_as_a_continued_goal(aconn):
+    fake = FakeLLM([[("act", {"capability": "telegram.say",
+                              "arguments": {"text": "done"}})],
+                    [("think", {"thought": "the result arrived", "motivation": 2,
+                               "confidence": 0.5})]])
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel.register_body(ResultBody())
+
+    await _feed(kernel, _msg("halo"))
+
+    assert len(fake.requests) == 2
+    volatile = fake.requests[1]["messages"][-1]["content"]
+    assert "<why_awake>goal continued</why_awake>" in volatile
+    assert "<event>[act.result]</event>" in volatile
+
+
+async def test_an_act_result_is_routed_to_its_task_thread(aconn):
+    fake = FakeLLM([[("act", {"capability": "telegram.say",
+                              "arguments": {"text": "done"}})],
+                    [("think", {"thought": "step done", "motivation": 1,
+                               "confidence": 0.5})]])
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel.register_body(ResultBody())
+    seed = await append_event(aconn, ts=START, kind="task.opened",
+                              place="space:task:5", payload={"parent": PLACE})
+    await write_state(aconn, "task:space:task:5", {
+        "place": "space:task:5", "parent": PLACE, "audience": [], "status": "open",
+        "steps": 1, "waiting_for": None, "opened_event": seed.id, "goal": "finish",
+        "since": seed.id}, seed.id)
+
+    await _feed(kernel, _msg("halo"))
+
+    assert "<place>space:task:5 (" in fake.requests[1]["messages"][-1]["content"]
 
 
 async def test_a_wake_without_act_is_recorded_as_silent(aconn):

@@ -57,3 +57,6 @@ model_answers:
           capability: telegram.say
           arguments:
             text: "Bulan lalu kita membuka Kopi Senja dan harga biji kopi naik dua belas persen."
+  - step: 3
+    tool: decide
+    calls: []

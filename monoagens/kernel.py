@@ -142,7 +142,12 @@ class Kernel:
             if await memory.sleep_due(self.conn, now, self.settings):
                 await self.jobs.start("sleep", "sleep", event,
                                       partial(self.jobs.sleep, now))
-        if fired or self.pfc is None or event.kind != "percept":
+        if fired or self.pfc is None or event.kind not in ("percept", "act.result"):
+            return
+        if event.kind == "act.result":
+            appraisal = await self._appraise(event)
+            if appraisal.decision == "wake":
+                await self._think(event, appraisal.reason, event.place or "")
             return
         appraisal = await self._appraise(event)
         if appraisal.decision != "wake":

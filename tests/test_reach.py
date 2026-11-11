@@ -243,6 +243,7 @@ async def test_a_paraphrase_of_a_private_line_is_not_on_the_other_places_desk(ac
     pfc = _ScriptedPFC([
         [ToolCall("act", {"capability": "whatsapp.say",
                           "arguments": {"text": "Halo Budi, ada kabar?"}})],
+        [],
     ])
     kernel = await _kernel(aconn, pfc=pfc)
     await kernel._apply(_trigger(owner_dm, "space:tg:owner_dm"), ToolCall("act", {
@@ -250,12 +251,13 @@ async def test_a_paraphrase_of_a_private_line_is_not_on_the_other_places_desk(ac
             "text": "Fulan bilang: aku di-PHK", "to": "person:budi", "via": "whatsapp"}}))
     await kernel.run_until_idle()
 
-    assert len(pfc.contexts) == 1
-    assert pfc.contexts[0].place == BUDI
-    prompt = "\n".join(message["content"] for message in
-                       PFC("http://unused", "", "fake", settings=SETTINGS)
-                       .build_messages(pfc.contexts[0]))
-    assert "di-PHK" not in prompt
+    # The dict result of `say` continues the goal, so Budi's desk wakes once more there.
+    assert [context.place for context in pfc.contexts] == [BUDI, BUDI]
+    for context in pfc.contexts:
+        prompt = "\n".join(message["content"] for message in
+                           PFC("http://unused", "", "fake", settings=SETTINGS)
+                           .build_messages(context))
+        assert "di-PHK" not in prompt
     intent = await (await aconn.execute(
         "SELECT place, payload FROM events WHERE kind = 'act.intent'")).fetchone()
     assert intent[0] == "space:tg:owner_dm"

@@ -115,7 +115,7 @@ Found in the architect's review of Parts 1–9.
 - [x] 10.1 `place_kind` (direct | shared) comes from the organ in every percept (Telegram, CLI and the replay's test organs set it); `reach.py` uses it and no longer reads the shape of any id; unknown is treated as shared. Grep proves no platform name or id format in the core.
 - [x] 10.2 Speaking elsewhere: a communicative act aimed at another place becomes an intent and one more wake in the target place, with that place's desk; the message is written there. `reach.leaks` stays as a second check. Test: a fake model that paraphrases Fulan's private line when asked to message Budi cannot leak it, because the line is not on Budi's desk. Scenarios 18 and 19 follow the new flow.
 - [x] 10.3 Split `identity.py`: `self.recall` and the task desk move to a new `recall.py` (≤ 160); `identity.py` ≤ 120; whole package ≤ 3,800.
-- [ ] 10.4 Wire the circuit breaker's "goal continued" arm (`act.result`) in the kernel loop.
+- [x] 10.4 Wire the circuit breaker's "goal continued" arm (`act.result`) in the kernel loop.
 - [ ] 10.5 Feeling-of-knowing: the cue's own vector is never one of its candidates.
 - [ ] 10.6 Unaddressed help: at least five scenarios where an unaddressed group line should be answered because the soul knows something useful ("lupa nama tempatnya apa ya" with the answer in memory), and five where it should stay silent. If the gate misses them, tune prior values only, and write the evidence under Notes.
 - [ ] 10.7 Every scenario gets `capability:` (one line: what it proves) and its brain function. Checks test behavior — spoke or stayed silent, in which place, which events and capabilities — never the model's exact wording. Every changed check is listed under Notes with its reason; a check that catches a real failure is never loosened.
@@ -436,3 +436,27 @@ Part 10 notes (worker, 10.3):
   `monoagens.recall`. No behavior changed.
 - `uv run pytest`: 240 passed. Fake replay: 86/86 checks, absolute-line violations 0, honesty
   51/51, missed-help rate 0.0%. Package: 3,769 lines (budget 3,800).
+
+Part 10 notes (worker, 10.4):
+- `kernel._wake` now appraises `act.result` after the Expectation check: when nothing fired, the
+  appraisal sees `appraise.reflex` return `("goal continued", "goal")`, so the decision is
+  `wake` without the gate draw and without `create_wait`, and the PFC is woken through
+  `_think(event, appraisal.reason, event.place or "")` (reason `goal continued`). An
+  `act.result` that fired an Expectation is left to that wake only. Kernel: 275/280 lines.
+- Routing needed no new code: `_think` already asks `threads.place_for`, whose `CONTINUATIONS`
+  contains `act.result`; a result arriving at a task thread's parent place is laid out at the
+  task place, and one already in the task place stays there.
+- `test_an_organ_result_is_recorded_as_act_result` was updated, not loosened: the follow-up wake
+  is now part of what it records (`model.call`, `decision.note`, `decision.silent` after the
+  `act.out`/`act.result` pair). Added `test_an_act_result_wakes_the_pfc_as_a_continued_goal`
+  (a second model call whose desk shows `<why_awake>goal continued</why_awake>` and
+  `<event>[act.result]</event>`) and `test_an_act_result_is_routed_to_its_task_thread` (the
+  second desk is laid out at `<place>space:task:5`).
+- `uv run pytest`: 242 passed. Fake replay: 86/86 checks, absolute-line violations 0, honesty
+  51/51, missed-help rate 0.0%. Kernel 275/280, package 3,774/3,800.
+- Two existing scripts were made finite for the new follow-up wake, not weakened:
+  `tests/test_identity.py`'s FakeLLM answered `self.set_identity` on every request, so the
+  identity result's wake re-ran it forever (it now answers once, then silence);
+  `tests/test_reach.py`'s scripted PFC gained the silent answer for the `say` result and now
+  checks that both Budi desks carry no `di-PHK`. Scenario 23 gained one recorded silent answer
+  for the wake that follows `self.recall`'s result (it had produced a second "ok" reply).
