@@ -176,7 +176,8 @@ In replay with a real model, about 88% of prompt tokens were served from cache.
   `origin_actor` is inherited along the causal chain and checked in the action hook for
   capabilities flagged `identity_changing`. This is a minimal form of separating control flow
   from untrusted data [Debenedetti et al., CaMeL, arXiv 2503.18813, PP; SaTML 2026, PR].
-- **Absolute line 2** (private content never enters another place) is information-flow
+- **Absolute line 2** (private content never reaches anyone who was not part of it: the
+  audience of the context must be a subset of the audience of the content) is information-flow
   control in the context hook: what is not in the prompt cannot leak.
 - Messages from non-owners are delimited as quoted data (spotlighting) [Hines et al. 2024,
   CAMLIS, PR]; this only lowers attack success and is never relied on for the absolute lines

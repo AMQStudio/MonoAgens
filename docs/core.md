@@ -355,9 +355,13 @@ loads a prior and never exports or shares learned state (D25).
 1. **Only the owner changes who the soul is** (principles, settings, access to the owner's
    data). Enforced in the action hook: a capability flagged `identity_changing` passes only when
    the chain's `origin_actor` is the owner.
-2. **Private content never enters another place.** Enforced in the context hook: private
-   memories and lines enter a context only in their own place or in a direct chat with the
-   owner.
+2. **Private content never reaches anyone who was not part of it** (D45). Privacy follows people,
+   not places. A private memory or line may enter a context only if every person who will see
+   the result was part of its audience — the people present where it was said (after the alias
+   map, so one person's linked accounts count as one) — or the context is a direct chat with the
+   owner. So what Fulan said in a private chat on one body may be used in Fulan's private chat on
+   another body, but never in a group where anyone else is present. Content from places that are
+   not private flows freely. Enforced in the context hook.
 
 **Everything else is weighed by the PFC** (D24, D31). Anyone may ask; requests are judged
 against the owner's interests and the principles. Learned procedures and lessons carry credence

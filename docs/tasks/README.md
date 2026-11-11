@@ -22,7 +22,7 @@ may run in parallel with the others of the same task; `- [x]` when done.
 
 ## Launch path (do these first)
 "Launch" means: the owner uses the soul every day in a direct chat and one group. The shortest
-path there, in order: [001](001-core-align.md) → [003](003-core-signals.md),
+path there, in order: [001](001-core-align.md) → [020](020-core-audience-privacy.md) → [003](003-core-signals.md),
 [004](004-core-gate.md), [005](005-core-turn-taking.md) → [010](010-core-desk.md), with
 [011](011-core-replay.md) measuring the first number: the **missed-help rate** — of the group
 messages that should have been answered, how many passed the gate. The gate is tuned for
@@ -39,7 +39,7 @@ missed moment is a failure. Everything else follows once there are weeks of real
 ## Order and waves
 | Wave | Tasks | Runs |
 |---|---|---|
-| 1 | [001](001-core-align.md) | alone; touches shared files |
+| 1 | [001](001-core-align.md), then [020](020-core-audience-privacy.md) | alone; touch shared files |
 | 2a | [002](002-core-activation.md) · [003](003-core-signals.md) · [005](005-core-turn-taking.md) · [010](010-core-desk.md) | in parallel |
 | 2b | [004](004-core-gate.md) (after 003) · [006](006-core-inner-thought.md) (after 010) · [007](007-core-beliefs.md) (after 002) · [008](008-core-wake-gate.md) (after 005) | in parallel |
 | 2c | [009](009-core-trust-forgetting.md) (after 007) | |

@@ -61,7 +61,7 @@ The one middleware that is always present.
 - **Data leaving the machine** (D43): by default nothing does. Data goes out only through a
   plugin the owner installed and configured for it. Such a plugin sends numbers (counts,
   tokens, timings, decisions), not conversation content; sending content outside counts as
-  moving it to another place and is held to absolute line 2.
+  showing it to people who were not part of it and is held to absolute line 2.
 - **Default owner policy**, active out of the box: the two absolute lines, the daily model
   budget, quiet hours. Budget and quiet hours are owner settings (starting values in `config.yaml`, later changes in
   chat as events) the owner may tighten or loosen;

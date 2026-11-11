@@ -46,7 +46,8 @@ formula. A new primitive must replace one or be refused.
 Enforced deterministically by the owner policy, never decided by the model, never removable by a
 plugin:
 1. Only the owner changes who the soul is.
-2. Private content never enters another place.
+2. Private content never reaches anyone who was not part of it (D45): it follows the people
+   it belongs to, across bodies and places, and nobody else.
 
 ## 6. Engineering invariants
 Append-only log · record first, then act · one queue, one consumer; slow work as background jobs
