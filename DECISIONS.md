@@ -1,6 +1,6 @@
 # DECISIONS.md — Concept Decisions (design freeze)
 
-Status: **DESIGN.md and ROADMAP.md were rewritten from D1–D23 on 2026-11-10.**
+Status: **DESIGN.md was finalized from D1–D32 on 2026-11-11.**
 These decisions are agreed between the owner and the architect. If DESIGN.md or ROADMAP.md
 ever disagree with this file, this file wins and the other document is a bug.
 Implementation resumes only when the owner says so, starting with ROADMAP Phase 1 (Track A2).
@@ -291,6 +291,57 @@ Refines D6 and D24.**
   tone. No new core primitive (D26) and no emotions. Standing never buys dishonesty or a breach
   of principles.
 
+**D32 — Final consolidation after the architecture audit (2026-11-11).**
+1. *Thought acts* are **think, act, expect, resolve, revise**. `act` is how the PFC uses any
+   organ capability (speaking included). Silence is not an act: a wake that ends without `act`
+   is silent, and its reason is in `think` and the decision event. Replaces the act list of D2
+   and D26.
+2. *Three hooks*: inbound, context, action. `outbound` is merged into `action` (every world act
+   is an organ capability). Replaces the hook count of D26.
+3. *Absolute line 1 is enforced by provenance, not judgment.* Every event carries
+   `origin_actor`, inherited along its causal chain. Capabilities may be flagged
+   `identity_changing`; the owner policy in the action hook passes them only when
+   `origin_actor` is the owner. No model involved.
+4. *Place and privacy for absolute line 2.* Every event and memory has a `place`. Memories
+   derived from a private place are labelled private and enter a context only in the same
+   place or in a direct chat with the owner. One filter in the context hook.
+5. *Lineage for hard forgetting.* Memories, expectations and vectors record `derived_from`
+   (source event ids). Hard forgetting follows it. After hard forgetting, only metadata remains
+   (kind, time, a hash of the actor). D14's word "forget" becomes **fade** (only the index is
+   released; the log stays). Owner backups (pg_dump) are allowed; documentation states that
+   old backups and the model provider's own logs are outside the soul's reach.
+6. *Thrift mode when the budget is spent.* Only reflexes (addressed, due promises) wake the
+   PFC; classifier calls are skipped (treated as "no"); a `budget.exhausted` event is written.
+7. *Who may teach character.* Dispositions move only from the owner's reactions and classifier
+   verdicts. Other people's reactions update only their own person card. Each change stores
+   its own delta, so rollback and replay do not depend on message contents (which may be
+   forgotten). A disposition that sits at a bound for several days freezes and is reported.
+8. *One Expectation schema, four kinds*: `promise` (promises, reminders, approvals), `wait`
+   (patience), `predict` (forward model, created after `act`, resolved by `act.result` or a
+   reply), `guard` (guarded fact; passive, never wakes, checked during sleep). A fifth kind
+   needs a new decision.
+9. *Order of learning loops.* Active from the start: the D21 classifier band and credence for
+   skills, lessons and reliability (stored as α/β counts, beta reputation). **Deferred until
+   there are weeks of real logs**: learned signal weights, learned dispositions, adaptive
+   retention threshold, social standing (D31), identity linking (D10), package suggestions
+   (D28), and a version system for learned skills (a folder under git is enough). Deferral
+   loses nothing: the log keeps everything, so learning can later run over the whole history.
+10. *Determinism needs an injected clock.* All time comes from the injected clock; replay uses
+   event times. ACT-R activation is computed from that clock.
+11. *Packages are trusted code*, installed by the owner and run in-process (the Home Assistant
+   model). The owner policy cannot be bypassed by packages that follow the contract; it is not
+   a sandbox against malicious code, and the docs say so.
+12. *Messages from non-owners are delimited* in the prompt as quoted data (spotlighting). This is
+   a cheap extra layer; the absolute lines never depend on it.
+13. *Knowledge cutoff* comes from per-model configuration, set slightly earlier than the vendor
+   claims; it is never asked from the model. The current date is always in `<now>`.
+14. *Documents*: DESIGN.md holds only the current design (8 sections); history and reasons live
+   here; formats in docs/FORMATS.md; steps in ROADMAP.md (PLAN.md merged into it); agent rules
+   in AGENTS.md.
+
+Status of amended decisions: D2 act list, D26 counts → replaced by D32.1–2. D5, D22 → superseded
+by D24. D18 → superseded by D25. D14 wording "forget" → "fade" (D32.5).
+
 ## Accepted in principle, details pending
 
 (None. P1 was detailed as D27.)
@@ -298,5 +349,5 @@ Refines D6 and D24.**
 ## Still open
 - Deferred: deeper research on memory consolidation and forgetting formulas (D14), to be done
   once real usage data exists.
-- Best-practice research before implementation resumes (owner request, 2026-11-10).
+- Deferred items of D32.9, to be decided with real logs.
 - Worker prompts for Track A2 and Phase 2 tracks (after the owner resumes implementation).
