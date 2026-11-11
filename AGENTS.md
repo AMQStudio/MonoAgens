@@ -101,10 +101,10 @@ functions and classes, docstrings on public functions. Compressing code to fit t
 violation, not a fix.
 Going over budget means the design is wrong. Stop and report; do not force it.
 
-## Parallel tasks
-- A task touches only the files its **May touch** line names Shared files (`kernel.py`,
-  `store.py`, `sql/migrations/`, `soul.yaml`) are changed only by a
-  task whose **May touch** line says so explicitly; other tasks that need a change there stop and report.
+## Files a part may touch
+- Each part touches only the files its **May touch** line names. Shared files (`kernel.py`,
+  `store.py`, `sql/migrations/`, `soul.yaml`) are changed only by a part whose **May touch**
+  line says so explicitly; a part that needs a change there otherwise stops and reports.
 - Always `git pull --rebase` before starting and before pushing.
 
 ## Tests
