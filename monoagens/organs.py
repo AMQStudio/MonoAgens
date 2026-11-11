@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
+from monoagens import reach, threads
 from monoagens.types import Action, Event
 
 
@@ -27,6 +29,12 @@ class OrganRegistry:
                 raise ValueError(f"Capability collision: {full}")
             self.capabilities[full] = {"organ": name, **capability}
 
+    def add_capability(self, full: str, descriptor: dict[str, Any]) -> None:
+        """Declare a capability the core itself dispatches, like `self.share`."""
+        if full in self.capabilities:
+            raise ValueError(f"Capability collision: {full}")
+        self.capabilities[full] = {"organ": full.partition(".")[0], **descriptor}
+
     def descriptors(self) -> tuple[dict[str, Any], ...]:
         """Return the capability descriptors in registration order."""
         return tuple(self.capabilities.values())
@@ -41,3 +49,65 @@ class OrganRegistry:
         action = Action(kind=name, place=event.place or "", payload=payload, body=organ,
                         event_id=event_id)
         return await body.act(action)
+
+
+async def dispatch(kernel: Any, event: Event, args: dict[str, Any]) -> bool:
+    """Resolve, guard and hand one `act` call to the organ that declares it (D2, D46)."""
+    capability = str(args.get("capability") or "")
+    cap = kernel.organs.capabilities.get(capability)
+    if cap is None:
+        await kernel._record_error(event, f"unknown capability: {capability!r}")
+        return False
+    arguments = args.get("arguments") if isinstance(args.get("arguments"), dict) else {}
+    arguments = dict(arguments)
+    to, via = arguments.pop("to", None), arguments.pop("via", None)
+    if capability == reach.SHARE:
+        allowed, source = await reach.consent(kernel.conn, event, arguments)
+        if not allowed:
+            await kernel._emit(event, "act.result", {"capability": capability, "to": to,
+                               "result": {"error": "only someone who was part of it can "
+                                                   "share it"}})
+            return True
+        ctx = {"conn": kernel.conn, "event": event, "now": kernel.clock.now(),
+               "capability": capability, "origin_actor": event.origin_actor, "to": to,
+               "identity_changing": cap.get("identity_changing")}
+        payload = await kernel._run_hooks("action", arguments, ctx, event, organ="self")
+        if payload is not None:
+            await reach.grant(kernel, event, payload, to, source)
+        return True
+    target, error = await reach.resolve_to(kernel.conn, str(to), via) if to else (None, None)
+    if to and target is None and str(to) == event.who:
+        target, error = event.place, None  # the person is here: answer them here
+    if error:
+        await kernel._emit(event, "act.result",
+                           {"capability": capability, "to": to, "result": {"error": error}})
+        return True
+    place = target or event.place
+    if await reach.leaks(kernel.conn, event.place, place, str(arguments.get("text") or "")):
+        await kernel._emit(event, "act.result", {"capability": capability, "to": to, "result": {
+            "error": "that place may not see this content; say it where it belongs"}})
+        return True
+    record = {"capability": capability, "arguments": arguments}
+    stored = await kernel._emit(event, "act.out", {**record, "to": to} if to else record,
+                                place=place)
+    await kernel._encode(stored, str(arguments.get("text") or "") or None)
+    ctx = {"conn": kernel.conn, "event": event, "now": kernel.clock.now(),
+           "capability": capability, "origin_actor": event.origin_actor, "to": to,
+           "identity_changing": cap.get("identity_changing")}
+    payload = await kernel._run_hooks("action", arguments, ctx, event,
+                                      organ=capability.partition(".")[0])
+    if payload is None:
+        return True
+    if cap.get("long_running"):
+        await threads.open_for(kernel, event, await reach.audience(kernel.conn, event.place))
+    result = await kernel.organs.act(replace(event, place=place), capability, payload,
+                                     event_id=stored.id)
+    if result is not None:
+        kernel.enqueue(Event(id=None, ts=kernel.clock.now(), kind="act.result", who=event.who,
+                             place=place, body=event.body, caused_by=stored.id,
+                             origin_actor=event.origin_actor,
+                             payload={"capability": capability, "result": result}))
+    if capability == "self.set_identity" and isinstance(result, dict) and kernel.pfc:
+        kernel.pfc.identity = result["identity"]
+        kernel.settings = {**kernel.settings, "identity": result["identity"]}
+    return True

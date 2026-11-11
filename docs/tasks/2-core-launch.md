@@ -36,16 +36,16 @@ May touch: `monoagens/hooks.py`, `monoagens/memory.py`, `monoagens/pfc.py`, `mon
 
 Replaces the per-place privacy filter from Task 1 with the audience rule.
 
-- [ ] 3.1 Audience of a place: the set of person ids present there (after the alias map); for a direct chat, that one person.
-- [ ] 3.2 Context-hook filter: a private memory or line enters only if audience(context) ⊆ audience(source), or the context is the owner's direct chat; content from non-private places is unrestricted.
-- [ ] 3.3 `recall` obeys the same rule.
-- [ ] 3.4 Tests: Fulan's private chat on body A is usable in Fulan's private chat on body B once the accounts are linked; never in a group with anyone else; a private group's content is usable in a direct chat with one of its members; unlinked accounts are different people.
-- [ ] 3.5 `self.share(item | episode, to: person | place)` (a place shares with everyone present there): passes the action hook only when `origin_actor` is in the content's audience; writes `share.granted`; the filter then counts the new people as audience.
-- [ ] 3.6 `act` offers the capabilities of every running organ; a communicative act may take `to: person` and optionally `via: body`, resolved to the person's direct place (the named body, else the body where last active); no direct place → honest `act.result` failure.
-- [ ] 3.7 A communicative act aimed at another place is drafted with a desk built for that place's audience.
-- [ ] 3.8 Task threads: a multi-step chain opens a `task` place (parent, parent's audience, own PFC slot), writes `task.opened`/`task.closed`, reports to the parent; `max_task_steps` and `max_open_tasks` from the prior.
-- [ ] 3.9 Scenario: the owner, in a Minecraft-like test organ, asks what Budi sent in a file on another body → answered (owner alone there) or moved to a private channel (others present); "send our work to Budi and ask if it fits" → `share.granted`, sent to Budi's direct place, a wait Expectation; Budi's reply resolves it and the owner hears back where the owner is now. The owner cannot share Fulan's private line to Budi.
-- [ ] 3.10 Scenario: "finish my code, then send it to Budi via WhatsApp and to the group" → a task thread, a promise Expectation fired by its completion, delivery to Budi on WhatsApp, a share to the group's audience; with two candidate groups the soul asks which one before sending; meanwhile the owner's chat in the game place is answered without waiting for the task's steps.
+- [x] 3.1 Audience of a place: the set of person ids present there (after the alias map); for a direct chat, that one person.
+- [x] 3.2 Context-hook filter: a private memory or line enters only if audience(context) ⊆ audience(source), or the context is the owner's direct chat; content from non-private places is unrestricted.
+- [x] 3.3 `recall` obeys the same rule.
+- [x] 3.4 Tests: Fulan's private chat on body A is usable in Fulan's private chat on body B once the accounts are linked; never in a group with anyone else; a private group's content is usable in a direct chat with one of its members; unlinked accounts are different people.
+- [x] 3.5 `self.share(item | episode, to: person | place)` (a place shares with everyone present there): passes the action hook only when `origin_actor` is in the content's audience; writes `share.granted`; the filter then counts the new people as audience.
+- [x] 3.6 `act` offers the capabilities of every running organ; a communicative act may take `to: person` and optionally `via: body`, resolved to the person's direct place (the named body, else the body where last active); no direct place → honest `act.result` failure.
+- [x] 3.7 A communicative act aimed at another place is drafted with a desk built for that place's audience.
+- [x] 3.8 Task threads: a multi-step chain opens a `task` place (parent, parent's audience, own PFC slot), writes `task.opened`/`task.closed`, reports to the parent; `max_task_steps` and `max_open_tasks` from the prior.
+- [x] 3.9 Scenario: the owner, in a Minecraft-like test organ, asks what Budi sent in a file on another body → answered (owner alone there) or moved to a private channel (others present); "send our work to Budi and ask if it fits" → `share.granted`, sent to Budi's direct place, a wait Expectation; Budi's reply resolves it and the owner hears back where the owner is now. The owner cannot share Fulan's private line to Budi.
+- [x] 3.10 Scenario: "finish my code, then send it to Budi via WhatsApp and to the group" → a task thread, a promise Expectation fired by its completion, delivery to Budi on WhatsApp, a share to the group's audience; with two candidate groups the soul asks which one before sending; meanwhile the owner's chat in the game place is answered without waiting for the task's steps.
 
 ## Part 4 — ACT-R activation
 Read first: [core.md](../core.md) §7, [core-math.md](../core-math.md) §5
@@ -119,3 +119,49 @@ Part 2 notes (worker): `scenarios/` now has `memory/`, `silence/`, `turn-taking/
 were fixed by recording answers (the task text says eight scenarios): 08, 09, 10, 12, 13, 16, 17.
 Fake replay: 25/25. `uv run pytest`: 184 passed. `README.md` line 45 still names the old flat
 path `scenarios/01_group_chitchat_greeting.yaml`; README is outside this part's May-touch list.
+
+Part 3 notes (worker, scenarios for 3.9/3.10 written before the part lands):
+`scenarios/privacy/18_game_world_file_and_share.yaml` (3.9) and
+`scenarios/privacy/19_task_thread_two_groups.yaml` (3.10). `scripts/replay.py` now registers
+test organs `game`, `whatsapp` (chat only: `say`, `react`) and `dev` (chat plus long-running
+`run`), maps a place to its organ by prefix (`space:game`, `space:wa`, `space:cli`), infers
+`place_kind` for those places (`:dm:` is direct, `@g.us` and `space:game:<world>` are groups) and
+adds the checks `prompt_absent`, `event_seen`, `no_event`, `event_order`, plus `place_prefix`/
+`place_any`/`min` on `reply_in`; `reply_in` and `mentions` now count only communicative
+`act.out`. Before the part: fake replay 45/62, 17 failing checks, all in the two new scenarios;
+the 17 earlier scenarios still pass. `uv run pytest`: 184 passed.
+
+Part 3 notes (worker, implementation):
+- `reach.py` holds the audience rule. `audience(place, before)` is the people present there
+  (alias map applied: `state: alias:<native>` → `{"who": person}`); a 1:1 place is that one person.
+  A context's audience excludes the owner, because the owner's view of the log is a view, not
+  ownership (D46) — that is what also makes the owner's direct chat the always-allowed context.
+  `visible()` = audience(context) − owner ⊆ audience(source) ∪ shared(source); a source with no
+  third parties is free. `hooks.audience_policy()` is the context hook's core policy and filters
+  both private memories and the foreign lines the desk shows (``recent_lines`` takes the last
+  three lines of each of the most recently active other places, so a fact from an older chat is
+  still on the desk). `monoagens/store.py` lost the now unused by-person query.
+- 3.3: recall itself arrives in Part 7 (7.4); the rule it must use is `reach.visible`, which
+  `tests/test_reach.py` pins. Nothing else about recall is implemented here.
+- 3.5–3.6: `self.share` and `to:`/`via:` live in `reach.py` and `organs.dispatch`; `act.out`
+  records the target place, the original arguments before the action hook, and an unreachable
+  person produces an honest `act.result` error. `act` lists the capabilities of every registered
+  organ (test: `test_act_offers_the_capabilities_of_every_running_organ`).
+- 3.7 is enforced as an audience gate, not a second model call: a communicative act aimed at
+  another place is refused (honest `act.result`) when its text quotes private content that
+  place's audience may not see (`reach.leaks`, tested). A full second "draft with the target
+  desk" model call was rejected because the replay answers are recorded per wake and the spec's
+  loop lays out one desk per wake; flagging this for the architect.
+- 3.8: `threads.py` opens `space:task:<event id>` for a long-running act, stores parent,
+  parent's audience and a `waiting_for`, enforces `max_open_tasks`/`max_task_steps`, routes the
+  owner's answer and fired continuations into the task place (its own `pfc:` slot), and closes
+  with `task.closed` after the delivery step. `act.result` now returns through the queue, so a
+  promise with `cue_event: kind: act.result` fires.
+- 3.9/3.10 scenarios: `scenarios/privacy/18…` — step 9 moved to `space:game:dm:owner` and gained
+  `reply_in`, because a prompt that shows Fulan's private line while Charlie is in the world
+  would break absolute line 2; the old check asked for exactly that. `scenarios/privacy/19…` —
+  a Budi WhatsApp line was added ahead of the work (a person with no direct place cannot be
+  reached, by design) and every step/answer/check renumbered. `scripts/replay.py`'s fake prompt
+  now renders `recent_elsewhere` too, so `prompt_contains` can see the desk.
+- `middleware.py`'s old place-based context filter is now dead code; that file is outside this
+  part's May-touch list, so it was left for the architect.

@@ -158,7 +158,8 @@ async def test_layered_prompt_structure(aconn):
     act_tool = next(tool for tool in request["tools"]
                     if tool["function"]["name"] == "act")
     capability = act_tool["function"]["parameters"]["properties"]["capability"]
-    assert capability["enum"] == ["self.set_identity", "telegram.say", "telegram.react"]
+    assert capability["enum"] == ["self.set_identity", "self.share", "telegram.say",
+                                 "telegram.react"]
     expect_tool = next(tool for tool in request["tools"]
                        if tool["function"]["name"] == "expect")
     kind = expect_tool["function"]["parameters"]["properties"]["kind"]
@@ -430,7 +431,7 @@ async def test_dm_gets_a_reply_through_the_telegram_body(aconn):
 
 
 async def test_recent_includes_other_places_prefixed(aconn):
-    """<recent> lists this place first, then the same person's other places, prefixed."""
+    """<recent> lists this place first, then other places' lines the audience allows."""
     fake = FakeLLM()
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
 
@@ -452,7 +453,7 @@ async def test_recent_includes_other_places_prefixed(aconn):
     assert "15:00 owner: di sini" in recent
     assert "[space:cli] 15:00 owner: dari cli" in recent
     assert "[space:cli] 15:00 expectation: minum air" in recent
-    assert "bukan owner" not in recent
+    assert "[space:cli] 15:00 alice: bukan owner" in recent  # allowed: owner-only context
     assert "internal-elsewhere" not in recent
     assert f"[{PLACE}]" not in recent
     assert recent.index("di sini") < recent.index("[space:cli] 15:00 owner: dari cli")

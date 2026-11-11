@@ -7,11 +7,10 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
-from monoagens import budget, expect, hooks, identity, jobs, memory, pairing
+from monoagens import budget, expect, hooks, identity, jobs, memory, organs, pairing, reach, threads
 from monoagens.clock import Clock
 from monoagens.cognition import Appraisal, appraise, validate_signals
 from monoagens.prior import load_settings, signal_weights
-from monoagens.middleware import owner_policy
 from monoagens.organs import OrganRegistry
 from monoagens.pfc import PFC, ToolCall
 from monoagens.store import (append_event, cursor as store_cursor, insert_event_vector,
@@ -38,9 +37,10 @@ class Kernel:
         self.jobs = jobs.JobRunner(self)
         self.organs = OrganRegistry()
         self.organs.register(identity.SelfOrgan(conn, self.clock))
+        self.organs.add_capability(reach.SHARE, reach.SHARE_CAPABILITY)
         self.hooks = hooks.HookRegistry(self.settings)
         for pipeline in self.hooks:
-            pipeline.set_policy(owner_policy(pipeline.name))
+            pipeline.set_policy(hooks.policy_for(pipeline.name))
         validate_signals(signal_weights(self.settings))
 
     async def put(self, event: Event) -> Event | None:
@@ -63,11 +63,13 @@ class Kernel:
         self.organs.register(body)
 
     async def _append(self, event: Event, kind: str, payload: dict[str, Any], *,
-                      caused_by: int | None = None, project: bool = True) -> Event:
+                      caused_by: int | None = None, project: bool = True,
+                      place: str | None = None) -> Event:
         async with self.conn.transaction():
             stored = await append_event(self.conn, ts=self.clock.now(), kind=kind, who=event.who,
-                                        place=event.place, body=event.body, payload=payload,
-                                        caused_by=caused_by, origin_actor=event.origin_actor)
+                                        place=place or event.place, body=event.body,
+                                        payload=payload, caused_by=caused_by,
+                                        origin_actor=event.origin_actor)
             if project:
                 await project_event(self.conn, stored)
         return stored
@@ -145,6 +147,7 @@ class Kernel:
 
     async def _think(self, event: Event, reason: str, place: str) -> None:
         """Lay out the desk, pass the context hook, start one PFC job per place."""
+        place = await threads.place_for(self.conn, event, place) or place
         context = await memory.build_context(
             self.conn, event, place, reason, now=self.clock.now(), settings=self.settings,
             memories=await memory.candidates(self.conn, self.embedder, event,
@@ -174,6 +177,7 @@ class Kernel:
                                      purpose="pfc.decide", now=self.clock.now(),
                                      settings=self.settings, usage=result.get("usage"))
             await jobs.apply_calls(self, job.trigger, result.get("calls") or [])
+            await threads.after_step(self, job, event, result.get("calls") or [])
         elif job.name == "encode" and isinstance(result.get("vector"), list):
             await insert_event_vector(self.conn, int(result["event_id"]), result["vector"])
         if job.re_wake is not None:
@@ -206,7 +210,7 @@ class Kernel:
         if call.name == "think":
             await self._emit(event, "decision.note", {"act": "think", **args})
         elif call.name == "act":
-            return await self._act_call(event, args)
+            return await organs.dispatch(self, event, args)
         elif call.name == "expect":
             await expect.create(self.conn, args, now=self.clock.now(),
                                 settings=self.settings, source=event)
@@ -219,33 +223,9 @@ class Kernel:
             await self._record_error(event, f"invalid tool call: {call.name} {args}")
         return False
 
-    async def _act_call(self, event: Event, args: dict[str, Any]) -> bool:
-        capability = str(args.get("capability") or "")
-        if capability not in self.organs.capabilities:
-            await self._record_error(event, f"unknown capability: {capability!r}")
-            return False
-        arguments = args.get("arguments")
-        arguments = arguments if isinstance(arguments, dict) else {}
-        stored = await self._emit(event, "act.out",
-                                  {"capability": capability, "arguments": arguments})
-        await self._encode(stored, str(arguments.get("text") or "") or None)
-        ctx = {"conn": self.conn, "event": event, "now": self.clock.now(),
-               "capability": capability, "origin_actor": event.origin_actor,
-               "identity_changing": self.organs.capabilities[capability].get("identity_changing")}
-        payload = await self._run_hooks("action", arguments, ctx, event,
-                                        organ=capability.partition(".")[0])
-        if payload is not None:
-            result = await self.organs.act(event, capability, payload, event_id=stored.id)
-            if result is not None:
-                await self._emit(event, "act.result",
-                                 {"capability": capability, "result": result})
-            if capability == "self.set_identity" and isinstance(result, dict) and self.pfc:
-                self.pfc.identity = result["identity"]
-                self.settings = {**self.settings, "identity": result["identity"]}
-        return True
-
-    async def _emit(self, trigger: Event, kind: str, payload: dict[str, Any]) -> Event:
-        return await self._append(trigger, kind, payload, caused_by=trigger.id)
+    async def _emit(self, trigger: Event, kind: str, payload: dict[str, Any], *,
+                    place: str | None = None) -> Event:
+        return await self._append(trigger, kind, payload, caused_by=trigger.id, place=place)
 
     async def _record_error(self, event: Event, exc: BaseException | str) -> None:
         try:

@@ -57,9 +57,42 @@ DEFAULT_MODEL = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
 DEFAULT_START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 BODY_NAME = "telegram"
 CLI_BODY = "cli"
+GAME_BODY = "game"
+WHATSAPP_BODY = "whatsapp"
+DEV_BODY = "dev"
 OWNER = "person:owner"
 OWNER_DM = "space:tg:1001"
 TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?$")
+
+# Neutral places used by the test organs; the prefix names the organ.
+PLACE_BODIES = (("space:game", GAME_BODY), ("space:wa", WHATSAPP_BODY),
+                ("space:cli", CLI_BODY))
+
+# A test organ only needs the two chat capabilities of a real body.
+CHAT_CAPABILITIES = (
+    {"name": "say", "description": "Send a text message in the current place.",
+     "schema": {"type": "object", "properties": {"text": {"type": "string"}},
+                "required": ["text"]},
+     "communicative": True, "long_running": False, "identity_changing": False},
+    {"name": "react", "description": "React to a message with one emoji.",
+     "schema": {"type": "object", "properties": {"emoji": {"type": "string"}},
+                "required": ["emoji"]},
+     "communicative": False, "long_running": False, "identity_changing": False},
+)
+
+# `dev` is the owner's workspace organ: it chats and runs the owner's code.
+DEV_CAPABILITIES = (*CHAT_CAPABILITIES,
+                    {"name": "run", "description": "Run a command and report completion.",
+                     "schema": {"type": "object", "properties": {"command": {"type": "string"}},
+                                "required": ["command"]},
+                     "communicative": False, "long_running": True,
+                     "identity_changing": False})
+
+TEST_CAPABILITIES = {GAME_BODY: CHAT_CAPABILITIES, WHATSAPP_BODY: CHAT_CAPABILITIES,
+                     DEV_BODY: DEV_CAPABILITIES}
+
+# Action kinds a test organ reports as a finished long action (an `act.result`).
+TEST_LONG_RUNNING = {DEV_BODY: frozenset({"run"})}
 
 
 # ---------------------------------------------------------------- environment
@@ -195,6 +228,7 @@ def _fake_context_text(context: PFCContext) -> str:
     """Render a fake-mode prompt from the pieces the kernel handed over."""
     parts: list[str] = [context.core_memory, *context.memories]
     parts.extend(str(event.payload.get("description") or "") for event in context.recent)
+    parts.extend(str(event.payload.get("description") or "") for event in context.recent_elsewhere)
     if context.trigger is not None:
         parts.append(str(context.trigger.payload.get("description") or ""))
     return "\n".join(part for part in parts if part)
@@ -266,11 +300,17 @@ class FakeBody:
 
     def capabilities(self) -> Sequence[dict[str, Any]]:
         """Declare the same capabilities as the real body of that name."""
-        return CLI_CAPABILITIES if self.name == CLI_BODY else TELEGRAM_CAPABILITIES
+        if self.name == CLI_BODY:
+            return CLI_CAPABILITIES
+        if self.name == BODY_NAME:
+            return TELEGRAM_CAPABILITIES
+        return TEST_CAPABILITIES[self.name]
 
-    async def act(self, action: Action) -> None:
-        """Record the action instead of sending it."""
+    async def act(self, action: Action) -> Any:
+        """Record the action; a long action also reports its completion."""
         self.actions.append(action)
+        if action.kind in TEST_LONG_RUNNING.get(self.name, frozenset()):
+            return {"ok": True, "finished": True}
 
 
 class RecordingKernel(Kernel):
@@ -405,17 +445,33 @@ def parse_at(value: Any, clock: FakeClock, zone: ZoneInfo) -> datetime:
 
 
 def place_kind(place: str) -> str:
-    """Guess direct vs group from the neutral Telegram place id."""
-    return "group" if place.startswith("space:tg:-") else "direct"
+    """Guess direct vs group from the neutral place id."""
+    if ":dm:" in place:
+        return "direct"
+    if place.startswith("space:tg:-") or place.endswith("@g.us"):
+        return "group"
+    if ":group:" in place or place.startswith(f"space:{GAME_BODY}:"):
+        return "group"
+    return "direct"
+
+
+def body_for(place: str, explicit: str | None = None) -> str:
+    """Resolve which organ a percept came from: the step's body, else its place prefix."""
+    if explicit:
+        return explicit
+    for prefix, body in PLACE_BODIES:
+        if place.startswith(prefix):
+            return body
+    return BODY_NAME
 
 
 def _event_row(row: Sequence[Any]) -> dict[str, Any]:
-    payload = row[5] or {}
+    payload = row[6] or {}
     text = payload.get("description")
     if text is None:
         text = (payload.get("arguments") or {}).get("text")
     return {"id": row[0], "ts": row[1], "kind": row[2], "who": row[3], "place": row[4],
-            "text": text, "payload": payload}
+            "text": text, "body": row[5], "payload": payload}
 
 
 # ------------------------------------------------------------------- runner
@@ -452,8 +508,8 @@ class ReplayRunner:
         pfc = self._make_pfc()
         kernel = RecordingKernel(self.conn, clock=self.clock, pfc=pfc,
                                  settings=self.settings, embedder=self.embedder)
-        kernel.register_body(FakeBody(BODY_NAME))
-        kernel.register_body(FakeBody(CLI_BODY))
+        for name in (BODY_NAME, CLI_BODY, GAME_BODY, WHATSAPP_BODY, DEV_BODY):
+            kernel.register_body(FakeBody(name))
         self.kernel = kernel
         return kernel
 
@@ -539,7 +595,7 @@ class ReplayRunner:
                     body: str | None = None) -> None:
         """Put one percept and let the single consumer process it to completion."""
         self._message_id += 1
-        name = CLI_BODY if body == CLI_BODY or place.startswith("space:cli") else BODY_NAME
+        name = body_for(place, body)
         kind = "direct" if name == CLI_BODY else place_kind(place)
         event = Event(id=None, ts=self.clock.now(), kind="percept", who=who, place=place,
                       body=name, payload={"description": text, "addressed": addressed,
@@ -559,8 +615,8 @@ class ReplayRunner:
     async def _new_events(self, after_id: int) -> list[dict[str, Any]]:
         """Read every event appended after the step started."""
         cur = await self.conn.execute(
-            "SELECT id, ts, kind, who, place, payload FROM events WHERE id > %s ORDER BY id",
-            (after_id,))
+            "SELECT id, ts, kind, who, place, body, payload FROM events "
+            "WHERE id > %s ORDER BY id", (after_id,))
         return [_event_row(row) for row in await cur.fetchall()]
 
     async def _memory_count(self) -> int:
@@ -569,9 +625,13 @@ class ReplayRunner:
         return int(row[0])
 
     def _replies(self, steps: Sequence[StepRecord]) -> list[Reply]:
-        """Flatten every act.out with the step that produced it."""
+        """Flatten every communicative act.out with the step that produced it."""
+        capabilities = self.kernel.organs.capabilities if self.kernel is not None else {}
         return [Reply(step.index, event["ts"], event["place"] or "", str(event["text"] or ""))
-                for step in steps for event in step.events if event["kind"] == "act.out"]
+                for step in steps for event in step.events
+                if event["kind"] == "act.out" and capabilities.get(
+                    str((event.get("payload") or {}).get("capability") or ""),
+                    {}).get("communicative", True)]
 
 
 # ------------------------------------------------------------------- checks
@@ -692,16 +752,103 @@ def _check_min_replies(spec: dict[str, Any], result: ScenarioResult) -> CheckRes
 
 
 def _check_reply_in(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:
-    place = str(spec.get("place") or "")
     replies = _scoped_replies(spec, result)
-    hits = [reply for reply in replies if reply.place == place]
-    count = spec.get("count")
-    if count is None:
+    hits = [reply for reply in replies if _place_matches(spec, reply.place)]
+    want = spec.get("count")
+    if want is None and spec.get("min") is not None:
+        floor = int(spec["min"])
+        return CheckResult(str(spec["label"]), len(hits) >= floor,
+                           f"{len(hits)} >= {floor}: {_detail(hits) if hits else _detail(replies)}")
+    if want is None:
         return CheckResult(str(spec["label"]), bool(hits),
                            _detail(hits) if hits else _detail(replies))
-    want = int(count)
+    want = int(want)
     return CheckResult(str(spec["label"]), len(hits) == want,
                        f"{len(hits)} == {want}: {_detail(hits) if hits else _detail(replies)}")
+
+
+def _place_matches(spec: dict[str, Any], place: str) -> bool:
+    """Match a reply place against an exact place, a prefix, or a list of places."""
+    places = spec.get("place_any")
+    if places is not None:
+        return place in {str(item) for item in places}
+    prefix = spec.get("place_prefix")
+    if prefix is not None:
+        return place.startswith(str(prefix))
+    return place == str(spec.get("place") or "")
+
+
+def _scoped_events(spec: dict[str, Any], result: ScenarioResult) -> list[dict[str, Any]]:
+    """Filter events to the steps the check names, or to every step."""
+    steps = spec.get("steps")
+    if steps is not None:
+        wanted = {int(step) for step in steps}
+        return [event for step in result.steps if step.index in wanted for event in step.events]
+    step = spec.get("step")
+    if step is not None:
+        wanted_step = int(step)
+        return [event for step in result.steps if step.index == wanted_step
+                for event in step.events]
+    return list(result.events)
+
+
+def _matches_event(spec: dict[str, Any], event: dict[str, Any]) -> bool:
+    """Return whether one event matches a check's kind, actors and payload fields."""
+    if event["kind"] != str(spec.get("kind") or ""):
+        return False
+    for field in ("who", "place", "body"):
+        if spec.get(field) is not None and event.get(field) != spec[field]:
+            return False
+    for key, value in (spec.get("payload") or {}).items():
+        if str((event.get("payload") or {}).get(key)) != str(value):
+            return False
+    needle = spec.get("text_contains")
+    if needle is not None:
+        haystack = json.dumps(event, default=str).lower()
+        if str(needle).lower() not in haystack:
+            return False
+    return True
+
+
+def _check_event_seen(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:
+    hits = [event for event in _scoped_events(spec, result) if _matches_event(spec, event)]
+    want = int(spec.get("count") or 1)
+    return CheckResult(str(spec["label"]), len(hits) >= want,
+                       f"{len(hits)} {spec.get('kind')} >= {want}")
+
+
+def _check_no_event(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:
+    hits = [event for event in _scoped_events(spec, result) if _matches_event(spec, event)]
+    allowed = int(spec.get("count") or 0)
+    return CheckResult(str(spec["label"]), len(hits) <= allowed,
+                       f"{len(hits)} {spec.get('kind')} <= {allowed}")
+
+
+def _first_event_id(spec: dict[str, Any], kind: str,
+                    result: ScenarioResult) -> int | None:
+    hits = [event for event in _scoped_events(spec, result) if event["kind"] == kind]
+    return min((int(event["id"]) for event in hits), default=None)
+
+
+def _check_event_order(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:
+    first = _first_event_id(spec, str(spec.get("first") or ""), result)
+    then = _first_event_id(spec, str(spec.get("then") or ""), result)
+    started = first is not None and then is not None and first < then
+    detail = f"{spec.get('first')}#{first} before {spec.get('then')}#{then}"
+    return CheckResult(str(spec["label"]), started, detail)
+
+
+def _check_prompt_absent(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:
+    needle = str(spec.get("text") or "").lower()
+    steps = spec.get("steps")
+    wanted = {int(step) for step in steps} if steps is not None else None
+    prompts = [(index, content) for index, content in result.prompts
+               if wanted is None or index in wanted]
+    if spec.get("step") is not None:
+        prompts = [(index, content) for index, content in prompts if index == int(spec["step"])]
+    hits = [index for index, content in prompts if needle in content.lower()]
+    return CheckResult(str(spec["label"]), not hits,
+                       f"prompt steps with {needle!r}: {hits or 'none'}")
 
 
 def _check_prompt_contains(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:
@@ -733,6 +880,10 @@ CHECKS: dict[str, Callable[[dict[str, Any], ScenarioResult], CheckResult]] = {
     "min_replies": _check_min_replies,
     "reply_in": _check_reply_in,
     "prompt_contains": _check_prompt_contains,
+    "prompt_absent": _check_prompt_absent,
+    "event_seen": _check_event_seen,
+    "no_event": _check_no_event,
+    "event_order": _check_event_order,
     "sleep_done": _check_sleep_done,
     "memories_stored": _check_memories,
 }

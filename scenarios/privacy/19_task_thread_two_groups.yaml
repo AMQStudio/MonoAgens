@@ -1,0 +1,176 @@
+name: 19_task_thread_two_groups
+description: >-
+  Owner meminta satu pekerjaan bertingkat: selesaikan kode, kirim ke Budi lewat
+  WhatsApp, lalu ke grup. Pekerjaan membuka task thread, promise Expectation
+  dibuat sebelum bekerja dan terpicu saat pekerjaan selesai, hasil dikirim ke
+  tempat langsung Budi di WhatsApp. Ada dua grup yang mungkin, jadi soul harus
+  bertanya grup mana dulu sebelum mengirim; share ke grup dicatat. Sementara
+  thread menunggu jawaban, chat owner di tempat game tetap dijawab tanpa
+  menunggu langkah thread.
+expectations:
+  - type: event_seen
+    kind: task.opened
+    count: 1
+    label: the work runs in its own task thread
+  - type: event_seen
+    kind: expectation.created
+    step: 4
+    payload: {kind: promise}
+    label: a promise is held before the work starts
+  - type: event_seen
+    kind: expectation.fired
+    step: 4
+    text_contains: "kirim"
+    label: the promise is fired by the work's completion
+  - type: reply_in
+    place: space:wa:628110001@s.whatsapp.net
+    step: 4
+    count: 1
+    label: the finished code is delivered to Budi on WhatsApp
+  - type: reply_in
+    place_any: [space:game:world1, space:game:dm:owner]
+    step: 4
+    count: 1
+    label: the owner is told the work is done and asked which group
+  - type: mentions
+    text: "tim alpha"
+    step: 4
+    label: the question names the candidate groups
+  - type: reply_in
+    place: space:wa:1203630001@g.us
+    step: 4
+    count: 0
+    label: no group receives the code before the owner chooses
+  - type: reply_in
+    place: space:wa:1203630002@g.us
+    step: 4
+    count: 0
+    label: the second group receives nothing before the owner chooses
+  - type: reply_in
+    place: space:game:world1
+    step: 5
+    count: 1
+    label: the owner's game chat is answered while the task waits
+  - type: no_event
+    kind: task.closed
+    step: 5
+    label: the task did not advance while the owner chatted
+  - type: reply_in
+    place: space:wa:628110001@s.whatsapp.net
+    step: 5
+    count: 0
+    label: the waiting task sends nothing else
+  - type: reply_in
+    place: space:wa:1203630001@g.us
+    step: 5
+    count: 0
+    label: the waiting task sends nothing to the group
+  - type: event_seen
+    kind: share.granted
+    step: 6
+    label: sharing the code with the group is recorded
+  - type: event_order
+    steps: [6]
+    first: share.granted
+    then: act.out
+    label: consent is recorded before the group message
+  - type: reply_in
+    place: space:wa:1203630001@g.us
+    step: 6
+    count: 1
+    label: only the chosen group receives the code
+  - type: reply_in
+    place: space:wa:1203630002@g.us
+    step: 6
+    count: 0
+    label: the other candidate group receives nothing
+  - type: event_seen
+    kind: task.closed
+    count: 1
+    label: the task thread closes
+  - type: event_order
+    first: task.opened
+    then: task.closed
+    label: the thread closes after it opened
+steps:
+  - at: "2026-11-11T08:55:00+07:00"
+    who: person:budi
+    place: space:wa:628110001@s.whatsapp.net
+    text: "Halo, ini nomorku yang baru ya."
+  - at: "2026-11-11T09:00:00+07:00"
+    who: person:owner
+    place: space:wa:1203630001@g.us
+    text: "pagi semua"
+  - at: "2026-11-11T09:01:00+07:00"
+    who: person:owner
+    place: space:wa:1203630002@g.us
+    text: "pagi juga"
+  - at: "2026-11-11T09:05:00+07:00"
+    who: person:owner
+    place: space:game:world1
+    text: >-
+      Tolong selesaikan kodeku dulu, lalu kirim ke Budi lewat WhatsApp dan ke
+      grup.
+    addressed: true
+  - at: "2026-11-11T09:06:00+07:00"
+    who: person:owner
+    place: space:game:world1
+    text: "Kamu masih di situ?"
+    addressed: true
+  - at: "2026-11-11T09:10:00+07:00"
+    who: person:owner
+    place: space:game:world1
+    text: "Yang Tim Alpha ya."
+    addressed: true
+model_answers:
+  - step: 4
+    tool: decide
+    calls:
+      - name: expect
+        arguments:
+          about: kirim kode yang sudah selesai ke Budi dan ke grup
+          kind: promise
+          cue_event: {kind: act.result}
+          expect: {none: true}
+          intent: kirim hasil kerja ke Budi lalu ke grup yang dipilih owner
+          weight: 0.8
+          policy: {once: true}
+      - name: act
+        arguments:
+          capability: dev.run
+          arguments: {command: "uv run pytest"}
+  - step: 4
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: whatsapp.say
+          arguments:
+            text: "Ini kodenya, sudah selesai dan lulus tes."
+            to: "person:budi"
+      - name: act
+        arguments:
+          capability: game.say
+          arguments:
+            text: "Kode sudah selesai dan sudah kukirim ke Budi. Mau kukirim ke grup yang mana: Tim Alpha atau Tim Beta?"
+            to: "person:owner"
+  - step: 5
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: game.say
+          arguments: {text: "Masih. Aku menunggu kamu pilih grupnya."}
+  - step: 6
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: self.share
+          arguments: {item: "kode yang sudah selesai", to: "space:wa:1203630001@g.us"}
+      - name: act
+        arguments:
+          capability: whatsapp.say
+          arguments:
+            text: "Ini kode terbaru dari owner, sudah lulus tes."
+            to: "space:wa:1203630001@g.us"

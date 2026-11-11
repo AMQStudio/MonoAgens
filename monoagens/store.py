@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from pgvector import Vector
 from psycopg.types.json import Jsonb
 
-from monoagens.types import CURRENT_SCHEMA_VERSION, RECENT_KINDS, Event, StateEntry
+from monoagens.types import CURRENT_SCHEMA_VERSION, Event, StateEntry
 from monoagens.versioning import is_valid_event_kind, upcast
 
 EXPECTATION_COLUMNS = (
@@ -94,18 +94,6 @@ async def read_last_events(conn, place, limit=20, *, chronological=True,
     where, params = "place = %s", [place]
     if kinds is not None:
         where, params = f"{where} AND kind = ANY(%s)", [place, list(kinds)]
-    return await _recent(conn, where, params, limit, chronological)
-
-
-async def read_last_events_elsewhere(conn, who, exclude_place, limit=10,
-                                     kinds: Sequence[str] | None = RECENT_KINDS,
-                                     chronological=True) -> list[Event]:
-    """Return one person's last events in places other than exclude_place."""
-    if not who:
-        return []
-    where, params = "who = %s AND (place IS NULL OR place != %s)", [who, exclude_place]
-    if kinds is not None:
-        where, params = f"{where} AND kind = ANY(%s)", [who, exclude_place, list(kinds)]
     return await _recent(conn, where, params, limit, chronological)
 
 

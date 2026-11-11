@@ -8,12 +8,39 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Iterator
+from dataclasses import replace
 from typing import Any
 
+from monoagens import reach
 from monoagens.middleware import (OWNER_POLICY, SLOTS, Continue, HookOutcome, Middleware,
-                                  Registration, Replace, Stop)
+                                  Registration, Replace, Stop, owner_policy)
 
 DEFAULT_HOOK_TIMEOUT_MS = 500
+
+
+def audience_policy() -> Middleware:
+    """Absolute line 2 (D45): private content enters only an allowed audience."""
+
+    async def policy(item: Any, ctx: Any) -> HookOutcome:
+        """Keep only the memories and foreign lines this context's audience may see."""
+        conn, place = ctx["conn"], item.place
+
+        async def allowed(source: str | None, before: int | None = None) -> bool:
+            return await reach.visible(conn, context=place, source=source, before=before)
+
+        memories = [memory for memory in item.memories
+                    if not getattr(memory, "private", False)
+                    or await allowed(getattr(memory, "place", None))]
+        lines = [line for line in item.recent_elsewhere
+                 if await allowed(getattr(line, "place", None), getattr(line, "id", None))]
+        return Replace(replace(item, memories=tuple(memories), recent_elsewhere=tuple(lines)))
+
+    return policy
+
+
+def policy_for(hook: str) -> Middleware:
+    """Return the core policy of one hook: the audience rule for context, else owner policy."""
+    return audience_policy() if hook == "context" else owner_policy(hook)
 
 
 class HookPipeline:

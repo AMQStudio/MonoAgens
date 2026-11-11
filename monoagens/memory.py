@@ -16,8 +16,7 @@ from monoagens.pfc import PFCContext
 from monoagens.prior import constants, retrieval
 from monoagens.store import (active_expectation_lines, append_event,
                              read_event_vector, read_expectations, read_last_events,
-                             read_last_events_elsewhere, read_state,
-                             resolve_expectation, write_state)
+                             read_state, resolve_expectation, write_state)
 from monoagens.types import RECENT_KINDS, Event
 
 _ROWS = "id, text, who, place, importance, last_accessed_at, private"
@@ -118,6 +117,23 @@ async def candidates(conn: psycopg.AsyncConnection[Any], embedder: Any, event: E
                                 **retrieval(settings)))
 
 
+async def recent_lines(conn: psycopg.AsyncConnection[Any], exclude_place: str,
+                       limit: int = 10) -> list[Event]:
+    """Return the latest conversational lines of the other places, per place."""
+    cur = await conn.execute(
+        "WITH places AS (SELECT place, max(id) AS newest FROM events "
+        "WHERE place IS NOT NULL AND place <> %s AND kind = ANY(%s) "
+        "GROUP BY place ORDER BY newest DESC LIMIT %s), "
+        "lines AS (SELECT e.*, row_number() OVER (PARTITION BY e.place ORDER BY e.id DESC) "
+        "AS rn FROM events e JOIN places p ON p.place = e.place WHERE e.kind = ANY(%s)) "
+        "SELECT id, ts, kind, who, place, body, payload, caused_by, origin_actor, "
+        "schema_version FROM lines WHERE rn <= 3 ORDER BY id",
+        (exclude_place, list(RECENT_KINDS), max(1, limit // 2), list(RECENT_KINDS)))
+    return [Event(id=row[0], ts=row[1], kind=row[2], who=row[3], place=row[4], body=row[5],
+                  payload=row[6] or {}, caused_by=row[7], origin_actor=row[8],
+                  schema_version=row[9]) for row in await cur.fetchall()]
+
+
 async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place: str,
                         reason: str, *, now: datetime, settings: dict[str, Any],
                         memories: Sequence[str], capabilities: Sequence[dict[str, Any]],
@@ -126,9 +142,7 @@ async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place:
     values = constants(settings)
     recent = await read_last_events(conn, place, limit=int(values["recent_events"]),
                                     kinds=RECENT_KINDS)
-    recent_elsewhere = await read_last_events_elsewhere(
-        conn, event.who, place, limit=int(values["recent_elsewhere"]),
-        kinds=RECENT_KINDS) if event.who else []
+    recent_elsewhere = await recent_lines(conn, place, limit=int(values["recent_elsewhere"]))
     core = await read_state(conn, "core_memory")
     last = None
     for key in (f"last_spoke:{place}", f"last_seen:{event.who}"):
