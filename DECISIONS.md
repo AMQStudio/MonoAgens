@@ -398,6 +398,16 @@ Separate what a person *is and learns* from the *skills* they are given.
   and approvals, behaviors and role packages, installed skills, the alias map, any owner rule.
   **Birth inputs** — birth certificate and prior.
 
+**D36 — The prior speaks in behavior, not formulas.**
+`dispositions.yaml` has three sections: **knobs** (about 10 values named by behavior —
+talkativeness, restraint after speaking, spontaneity, helpfulness, boredom with repeats,
+patience, shyness in new places, speaking bar, certainty bar, memory persistence), each with a
+one-line "if the soul is too X, change this" guide; **calibration** (per embedder and model,
+measured by tools, never set by hand); and **constants** (engineering values changed only by a
+decision). One function maps knobs to the gate's internal values (θ, τ, γ, weights). Learning
+moves knobs, so every learned change is readable. End users never see the prior; developers tune
+it with replay reports. Budget and quiet hours are owner settings, not knobs.
+
 ## Accepted in principle, details pending
 
 (None. P1 was detailed as D27.)

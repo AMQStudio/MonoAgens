@@ -179,9 +179,13 @@ impact, urgency, coherence, originality, balance, dynamics.
 **Thrift mode.** When the daily budget is spent: reflexes only, classifier calls skipped and
 treated as "no", `budget.exhausted` recorded.
 
+**Knobs.** All tunable behavior is expressed as about ten named knobs in the prior
+(talkativeness, patience, shyness in new places, …); one function maps them to θ, τ, γ and the
+weights above (D36, docs/FORMATS.md).
+
 **Learning.** Active now: the wake-gate edge `lo` follows classifier verdicts within bounds;
 credence and reliability update as α/β counts. Deferred until weeks of real logs exist (D32.9):
-learned signal weights and dispositions. Until then they come from the prior. When
+learned knobs (dispositions) and signal weights. Until then they come from the prior. When
 enabled, only the owner's reactions and classifier verdicts move them, in bounded steps that each
 store their own delta, with an evidence minimum, a daily cap, and freeze-and-report at bounds
 (D29, D32.7). Behavior in a given place or with a given person adapts from those people's

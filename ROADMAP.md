@@ -43,7 +43,7 @@ LLMs are a prefrontal cortex without the rest of the brain. MonoAgens is the res
 9. Numbered SQL migrations with a version table and a backup before migrating; pairing code
    for the first owner.
 10. Identity as birth content (D35): soul.yaml becomes the birth certificate (cognition numbers
-   move to the default prior); identity stored in `state: identity` after birth; an
+   move to the default prior as knobs / calibration / constants, D36); identity stored in `state: identity` after birth; an
    `identity_changing` capability for owner changes.
 Done when: all tests and replay pass; grep shows no platform name, no world action and no
 direct clock or random call in the core.
