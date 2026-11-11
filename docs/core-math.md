@@ -178,7 +178,9 @@ In replay with a real model, about 88% of prompt tokens were served from cache.
   from untrusted data [Debenedetti et al., CaMeL, arXiv 2503.18813, PP; SaTML 2026, PR].
 - **Absolute line 2** (private content never reaches anyone who was not part of it: the
   audience of the context must be a subset of the audience of the content) is information-flow
-  control in the context hook: what is not in the prompt cannot leak.
+  control in the context hook: what is not in the prompt cannot leak. Sharing is declassification
+  by owners in the decentralized label model [Myers & Liskov 1997]: each person in the audience
+  may extend the audience of what they were part of, and only that.
 - Messages from non-owners are delimited as quoted data (spotlighting) [Hines et al. 2024,
   CAMLIS, PR]; this only lowers attack success and is never relied on for the absolute lines
   [Shi et al., arXiv 2505.14534, PP].
@@ -409,6 +411,8 @@ kernel.
 - Wang, Z., et al. (2023). Humanoid Agents. *EMNLP System Demonstrations*. arXiv 2310.05418. [PR]
 - Debenedetti, E., et al. (2025/2026). Defeating Prompt Injections by Design (CaMeL).
   arXiv 2503.18813; *SaTML 2026*. [PP → PR]
+- Myers, A. C., & Liskov, B. (1997). A Decentralized Model for Information Flow Control.
+  *SOSP*. [PR]
 - Hines, K., et al. (2024). Defending Against Indirect Prompt Injection Attacks With
   Spotlighting. *CAMLIS*. arXiv 2403.14720. [PR]
 - Shi, C., et al. (2025). Lessons from Defending Gemini Against Indirect Prompt Injections.

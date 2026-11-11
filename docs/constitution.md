@@ -47,7 +47,8 @@ Enforced deterministically by the owner policy, never decided by the model, neve
 plugin:
 1. Only the owner changes who the soul is.
 2. Private content never reaches anyone who was not part of it (D45): it follows the people
-   it belongs to, across bodies and places, and nobody else.
+   it belongs to, across bodies and places, and reaches someone new only when one of those
+   people shares it (D46).
 
 ## 6. Engineering invariants
 Append-only log · record first, then act · one queue, one consumer; slow work as background jobs

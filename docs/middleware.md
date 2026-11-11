@@ -65,7 +65,11 @@ The one middleware that is always present.
 - **Privacy rules narrow, never widen.** The core enforces absolute line 2 on its own (D45).
   Middleware may only add stricter rules (a mode that keeps health topics out even of the
   person's own chat, an organization rule that a past meeting stays with its board); it can
-  never let private content reach someone the core would refuse.
+  never let private content reach someone the core would refuse. It may also ask for more than
+  consent before sharing (confirm before forwarding any file; internal documents never go
+  outside the organization) (D46).
+- **Routes to a person** (D46): a hint via lever 2 when the default (the body where the person
+  was last active) is wrong, such as email for work, WhatsApp in the evening.
 - **Default owner policy**, active out of the box: the two absolute lines, the daily model
   budget, quiet hours. Budget and quiet hours are owner settings (starting values in `config.yaml`, later changes in
   chat as events) the owner may tighten or loosen;

@@ -179,7 +179,7 @@ user-space ABI:
 **Event kinds** (each with a `schema_version`; plugins use `<plugin>.<kind>`). percept · command · act.out · act.result · decision.silent · decision.note ·
 decision.wake · model.call · budget.exhausted · expectation.created · expectation.fired ·
 expectation.resolved · job.started · job.result · classifier.verdict · credence.updated ·
-disposition.updated · guard.stopped · forget.soft · forget.hard · fade.done · sleep.done ·
+disposition.updated · share.granted · guard.stopped · forget.soft · forget.hard · fade.done · sleep.done ·
 sleep.failed · error.
 
 ## 4. Organs and capabilities
@@ -187,7 +187,8 @@ sleep.failed · error.
 An organ is anything that senses (`run(put)`) and/or acts (`act(action)`). It declares its
 capabilities (§9.1): name · JSON schema · description · `communicative` · `long_running` ·
 `identity_changing`. The PFC's tools are the five thought acts; `act` offers the capabilities of
-the organs present now, listed in a fixed order so the prompt cache holds (D2, D32).
+every running organ, not only the one the current percept came from, listed in a fixed order so
+the prompt cache holds (D2, D32, D46). The soul can act in any body from any body.
 
 - The brain decides intent and content; the organ decides how (chat bubbles, TTS, gestures).
   Fine control stays inside the organ (D2).
@@ -203,6 +204,15 @@ the organs present now, listed in a fixed order so the prompt cache holds (D2, D
 - On start an organ asks for `cursor(organ)`, so input is never lost or duplicated.
 - `communicative` capabilities count as speaking for the talk-rate drive and the forward model.
 
+**Reaching a person** (D46). A communicative act may name a person instead of a place
+(`to: person`). The core resolves it to that person's direct place from the log and the alias
+map — by default the body where the person was last active — before the action hook; a
+middleware hint may suggest another route (lever 2). No known direct place → the act fails with
+an honest `act.result` ("no way to reach Budi yet"). A communicative act aimed at a place other
+than the current one is drafted with a desk built for the target place's audience (§8, absolute
+line 2), never with the current desk, so what the soul says to Budi is written as it would be
+written in Budi's chat.
+
 **History and catching up** (D37, D40). An organ may offer `history(place, before, limit)` for
 messages the log lacks. On connect it back-fills what it missed as `percept` with
 `backfill: true` and `sent_at`. A backlog of one place is appraised once, as one percept with
@@ -214,7 +224,9 @@ non-communicative capability, `recall(query | event_id, place?, from?, to?)`: a 
 the soul's own log and memories — by time range (no query lists the episodes in that range),
 along `derived_from` to the original events, and by text search over event payloads, so faded or
 unsummarized messages are still found. It obeys absolute line 2 and reports what it searched and
-found, "nothing" included.
+found, "nothing" included. Its second capability, `share(item | episode, to: person)` (D46), records
+consent to show private content to someone new (§8, absolute line 2); it passes the action hook
+only when the chain's `origin_actor` is part of that content's audience.
 
 ## 5. Expectations
 
@@ -361,7 +373,11 @@ loads a prior and never exports or shares learned state (D25).
    map, so one person's linked accounts count as one) — or the context is a direct chat with the
    owner. So what Fulan said in a private chat on one body may be used in Fulan's private chat on
    another body, but never in a group where anyone else is present. Content from places that are
-   not private flows freely. Enforced by the core itself in the context hook, so it holds with
+   not private flows freely. Content reaches someone new only by consent (D46): a person in its
+   audience shares it (`self.share`, recorded as `share.granted`), and the new person then counts
+   as part of its audience. Each person speaks only for what they were part of: the owner can share
+   work done with the soul, but cannot share what Fulan said in private; the owner's view of
+   everything is a view, not ownership. Enforced by the core itself in the context hook, so it holds with
    an empty middleware pipeline. Middleware decides who is the same person (the alias map) and
    may add stricter rules (narrow); it can never widen what this line allows.
 
