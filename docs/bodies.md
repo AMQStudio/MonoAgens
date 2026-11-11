@@ -34,6 +34,22 @@ language plus raw data; like a motor cortex, it turns an intention into native a
   of the loop.
 - Tokens and URLs come from `.env`; non-secret options (enabled or not, …) from `config.yaml`;
   nothing about a body lives in the core or in `soul.yaml`.
+- Report `place_kind` (direct | shared) in every percept; only the body knows it (D48).
+
+**Loading a body** (D49). A body is a module with one factory, `create(options, env)`, that
+returns the body: `options` is its own section of `config.yaml`, `env` gives the variables it
+declares (it reads only those). `config.yaml` lists the enabled bodies by name; a body outside
+this repository also names its module (`module: some_package.minecraft`). The same install
+module that loads plugins ([middleware.md §5](middleware.md)) loads bodies, so there is one
+loader, not two. The entry point (`monoagens/__main__.py`) never imports a body: it asks the
+loader for the enabled ones. Adding a body means installing its module and adding a few lines
+to `config.yaml`, never editing code.
+
+```yaml
+bodies:
+  telegram: { enabled: true }                       # built in: monoagens.bodies.telegram
+  minecraft: { enabled: true, module: mono_minecraft, server: localhost:25565 }
+```
 
 ## 3. Present and planned bodies
 | Body | Status | Notes |

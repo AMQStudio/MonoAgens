@@ -11,11 +11,12 @@ are enforced by the core itself; middleware only narrows.
 
 ## Part 1 — The foundation
 Read first: [middleware.md](../middleware.md)
-May touch: `monoagens/middleware.py` (and a `middleware/` package if it outgrows its budget), `monoagens/bodies/`, `monoagens/store.py` (read-only view only), `tests/`, `scenarios/`
+May touch: `monoagens/middleware.py` (and a `middleware/` package if it outgrows its budget), `monoagens/bodies/`, `monoagens/__main__.py`, `config.yaml`, `monoagens/store.py` (read-only view only), `tests/`, `scenarios/`
 
 - [ ] 1.1 Policy: default owner policy — daily budget, quiet hours; first and last in every hook; privacy rules that only narrow (confirm before forwarding a file, a mode that keeps a topic out); route hints to a person via lever 2.
 - [ ] 1.2 Commands & tools: one command registry (identical `/help`); capability registry behind `<self>`; optional tool-use approvals.
 - [ ] 1.3 Install: plugin manager reading the manifest (plugins.md §3); collisions fail at boot; uninstall removes everything but events.
+- [ ] 1.3b Bodies through the same loader (bodies.md §2, D49): Telegram and CLI get a `create(options, env)` factory; `__main__.py` imports no body and asks the loader for the enabled ones; a test body from outside the package loads from `config.yaml` alone.
 - [ ] 1.4 Skills: names and descriptions of relevant SKILL.md in the desk; body on request.
 - [ ] 1.5 Read-only view of the log and state for plugins (core.md §3, D43); the policy rule on data leaving the machine (middleware.md §3).
 - [ ] 1.6 Check: private content never reaches someone outside its audience, even when someone tries to talk the soul into it and even with a plugin that tries to widen it; a reasonable request from a group member is helped; no plugin can remove the policy; `/help` is identical on Telegram and CLI.

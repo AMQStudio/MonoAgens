@@ -97,6 +97,8 @@ The one middleware that is always present.
   The owner policy holds against plugins that follow the contract; it is not a sandbox against
   malicious code, and the docs say so (D32.11).
 - The installed plugins are listed in `config.yaml` ([project.md §2](project.md)).
+- Bodies are loaded by the same module, from the `bodies:` section, through each body's
+  `create(options, env)` factory ([bodies.md §2](bodies.md), D49).
 - Uninstalling removes a plugin's organs, middleware, rules and knob offsets; its events stay in
   the log as history.
 - **Draft**: installed by the owner by listing it in `config.yaml` or with a command; a local
