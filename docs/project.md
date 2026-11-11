@@ -29,7 +29,8 @@ and may change without a new decision. Nothing here may change the core
 | `docs/constitution.md` | everyone | the rules that never change |
 | `docs/core.md` | everyone | the core specification (frozen) |
 | `docs/core-math.md` | scientists | every formula, why it was chosen, sources |
-| `docs/middleware.md`, `bodies.md`, `plugins.md`, `birth.md`, `project.md` | everyone | one specification per layer |
+| `docs/middleware.md`, `bodies.md`, `plugins.md`, `project.md` | everyone | one specification per layer |
+| `prior/` (root) | developers | default prior values: data, tuned with replay |
 | `docs/tasks/` | workers | one file per work package, in order |
 
 Rules for documents: one layer = one file, split only when a file grows too long; rulings and

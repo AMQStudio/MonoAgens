@@ -7,8 +7,8 @@ when the cognition layer's appraisal decides an event matters.
 - [`docs/constitution.md`](docs/constitution.md) — the rules that never change (read first).
 - [`docs/core.md`](docs/core.md) — the core specification (final, frozen); formulas and sources
   in [`docs/core-math.md`](docs/core-math.md).
-- [`docs/`](docs/README.md) — one specification per layer: middleware, bodies, plugins, birth,
-  project.
+- [`docs/`](docs/README.md) — one specification per layer: middleware, bodies, plugins, project.
+- [`prior/`](prior/) — the default instincts (knob values) a new soul is born with; tune with replay.
 - [`docs/tasks/`](docs/tasks/README.md) — work for coding workers, in order.
 - [`AGENTS.md`](AGENTS.md) — rules and invariants for coding agents.
 - `scripts/replay.py` — scenario replay for tuning the cognition layer.

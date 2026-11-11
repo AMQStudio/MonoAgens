@@ -32,7 +32,7 @@ may run in parallel with the others of the same task; `- [x]` when done.
 | 4 | [014](014-project-first-users.md) | |
 | 5 | [015](015-project-evaluation.md) | |
 | 6 | [016](016-plugins-tools.md) | |
-| 7 | [017](017-birth-prior.md) | |
+| 7 | [017](017-core-prior.md) | |
 | 8 | [018](018-bodies-more.md) | |
 | 9 | [019](019-plugins-developer-contracts.md) | after contracts have been stable a while |
 

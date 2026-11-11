@@ -1,0 +1,7 @@
+# Default prior: the instincts a new soul is born with (docs/core.md §9.4).
+# Data, not specification: tune the values with replay (scripts/replay.py).
+format_version: 1
+created: 2026-11-11
+embedder: { name: paraphrase-multilingual-MiniLM-L12-v2, version: fastembed }
+llm_family: any
+language: id

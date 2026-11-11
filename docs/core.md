@@ -22,11 +22,10 @@ brain.**
 
 | Layer | What it is | Learns? |
 |---|---|---|
-| Core | the soul: a generic brain (this file) | yes |
+| Core | the soul: a generic brain, including what it is born with — birth certificate and prior (§9.3–9.4) | yes |
 | Middleware | the foundation between the core and everything outside it, running in the three hooks: policy, commands & tools, install, skills, identity, RBAC ([middleware.md](middleware.md)) | no |
 | Bodies | organs for platforms and devices ([bodies.md](bodies.md)) | no |
 | Plugins (packages) | features built on the middleware: tool organs, memory-view, modes, roles ([plugins.md](plugins.md)) | no |
-| Birth inputs | birth certificate (who I am) and prior (my instincts) ([birth.md](birth.md)) | — |
 
 **Scope** (D1, D35). The core knows three generic things: **senses** (anything that `put`s
 events), **organs** (anything that receives `act` and may return results as events) and
@@ -252,7 +251,7 @@ stays unresolved; `budget.exhausted` is recorded.
 
 **Knobs.** All tunable behavior is about ten named knobs in the prior (talkativeness, patience,
 reserve when unfamiliar, …); one function maps them to θ, τ, γ and the weights (D36,
-[birth.md §3](birth.md)).
+§9.4).
 
 **Learning** (D16, D17, D24, D29, D32.7, D32.9, D33.3, D34, D40).
 - The soul learns; skills do not. Procedures and lessons are memories with credence (α/β): the
@@ -315,7 +314,7 @@ valid_to · superseded_by · derived_from · created_at · last_accessed_at · u
 (2) generic procedures, lessons and social intuition, (3) episodic memory with per-place and
 per-person tuning. Test for 1–2: "would it make sense for a soul that does not know these
 people?" — otherwise it is layer 3. Installed skills are not learned state; they belong to
-plugins. A soul is born from a **prior** (layers 1–2, [birth.md](birth.md)); this repository only
+plugins. A soul is born from a **prior** (layers 1–2, §9.4); this repository only
 loads a prior and never exports or shares learned state (D25).
 
 ## 8. Trust, identity and the self-model
@@ -333,8 +332,8 @@ against the owner's interests and the principles. Learned procedures and lessons
 that the PFC sees. Claims are weighed by the speaker's reliability in that domain. Standing never
 buys dishonesty.
 
-**Identity** (D35). A soul is born from a birth certificate (`soul.yaml`: name, language,
-persona, principles; a neutral default if none) and a prior. After birth, identity lives in
+**Identity** (D35). A soul is born from a birth certificate (§9.3; a neutral default if none)
+and a prior (§9.4). After birth, identity lives in
 `state: identity`; the owner changes it in conversation through an `identity_changing`
 capability; without a birth certificate the soul may ask the owner what to be called. Role
 plugins may provide a birth certificate, used only at birth.
@@ -376,8 +375,9 @@ soul can `recall`.
 holds against plugins that follow the contract; it is not a sandbox against malicious code.
 
 ## 9. Formats the core reads
-Changes to a format bump its version. Other formats: prior ([birth.md](birth.md)), installed
-skill ([middleware.md](middleware.md)), plugin manifest ([plugins.md](plugins.md)).
+Changes to a format bump its version; the formats are frozen with the core, the *values* in a
+prior are not. Other formats: installed skill ([middleware.md](middleware.md)), plugin manifest
+([plugins.md](plugins.md)).
 
 ### 9.1 Organ capability descriptor
 Declared by an organ at registration. One entry per capability:
@@ -409,6 +409,76 @@ backfill: false             # true when an organ catches up on what it missed
 
 Other senses use the same shape: `description: "kitchen temperature 31 °C"` with
 `data: { celsius: 31 }`, or `description: "someone entered through the front door"`.
+
+### 9.3 Birth certificate (`soul.yaml`, format version 1)
+Who the soul is, read once at birth (D35). After birth, identity lives in `state: identity`; the
+file is not re-read, and only the owner changes identity, in conversation. Without a birth
+certificate the soul is born neutral and may ask the owner what to be called. Role plugins may
+ship one, used only at birth.
+
+```yaml
+name: Mona
+language: id                # the language it speaks with the owner
+timezone: Asia/Jakarta
+persona: |                  # any language
+  Calm, honest, straight to the point. Speaks only as much as needed.
+principles:
+  - Never lie and never invent facts.
+  - Keep the owner's private matters private; never bring them up in other places.
+```
+
+Nothing else belongs in it: the owner is found by pairing (§8), body settings live in `.env`,
+and every number lives in the prior.
+
+### 9.4 Prior (format version 1)
+A soul's instincts: a plain folder with layers 1–2 of learned state, loaded at birth (D25, D30,
+D34, D36). It never contains layer 3 (episodic memory, people, places, personal details). End
+users never see it; developers tune it with replay reports, not by guessing numbers. The default
+prior is [`prior/`](../prior/) in the repository; its values are data, tuned with replay, and are
+not part of the frozen design. This repository only loads a prior; it never exports, uploads,
+shares or aggregates learned state (D18, D25).
+
+```
+prior/
+  manifest.yaml       # format_version, created, embedder (name + version), llm_family, language
+  dispositions.yaml   # knobs, calibration, constants
+  references.yaml     # per language: reference sentences for the info_gap signal
+  lessons.yaml        # list of {text, credence: {alpha, beta}}
+  procedures.yaml     # list of {about, steps, lessons, credence: {alpha, beta}}
+```
+
+`dispositions.yaml` has three sections, from "tune this" to "leave this alone":
+- **knobs** — about ten values named by behavior; the only values a developer normally changes.
+  Each is in [0, 1] unless stated, has a floor and a ceiling, and is what learning moves
+  (`disposition.updated talkativeness 0.45 → 0.44`).
+- **calibration** — measured per embedder and model by tools (`fok_threshold`, `fok_scale`,
+  `wake_gate_lo`, `wake_gate_hi`); never set by hand.
+- **constants** — engineering values: how each knob maps to the gate (the two ends of its range),
+  signal weights, windows, the rule-of-three ε, and the desk budgets (recent messages and
+  tokens, memory candidates and tokens, verbatim thread result, the whole volatile part, recall
+  results). Changed only with replay evidence.
+One function in the code maps knobs to θ, τ, γ and the weights; nothing else reads knobs
+directly. The daily model budget and quiet hours are owner settings (owner policy), not knobs.
+
+| Knob | What it means | Drives (internally) | If the soul is… |
+|---|---|---|---|
+| `talkativeness` | how easily it speaks without being addressed | θ base (higher knob → lower θ) | too chatty → lower; too quiet → raise |
+| `restraint_after_speaking` | how much having just spoken holds it back | talk-rate weight `a` and `social_cost` weight | dominates a conversation → raise |
+| `spontaneity` | how varied its decisions are in similar moments | τ (higher knob → more variation) | robotic and predictable → raise; erratic → lower |
+| `helpfulness` | how strongly a question it can answer pulls it in | `info_gap` and `feeling_of_knowing` weights | misses chances to help → raise; answers what nobody asked → lower |
+| `boredom_with_repeats` | how fast repeated stimuli fade | habituation γ (higher knob → faster fading) | reacts to every sticker or repeat → raise |
+| `patience_seconds` | how long it waits for someone else to answer first | the `wait` Expectation window | jumps in too fast → raise; answers too late → lower |
+| `reserve_when_unfamiliar` | how reserved it is with unfamiliar places and people | r in θ, times (1 − familiarity) | too forward in new company → raise; too stiff with new people → lower |
+| `speaking_bar` | how strong a thought must be before saying it (1..5) | minimum motivation in `think` | says weak things → raise |
+| `certainty_bar` | how sure it must be before stating something | minimum confidence; base of the report criterion | states shaky things → raise; hedges too much → lower |
+| `memory_persistence` | how long unused memories stay strong | ACT-R decay d (higher knob → slower decay) | forgets too fast → raise; drags up old trivia → lower |
+
+**Loading rules** (D30):
+- different embedder → `calibration` falls back to the default prior's;
+- different LLM family → load, but halve the α and β of procedures and lessons until proven
+  again;
+- unknown major `format_version` → refuse with a clear message;
+- replay scenarios that prove a prior live in the repository's `scenarios/`, not inside it.
 
 ## 10. Deferred
 Until weeks of real logs exist (D32.9): learned signal weights and knobs, adaptive fade

@@ -1,6 +1,6 @@
 # 010 — Core: the desk and recall (Track K)
 Status: todo | Wave: 2a | Depends on: 001
-Read first: [core.md](../core.md) §4, §8, [birth.md](../birth.md) §3.1 (desk constants)
+Read first: [core.md](../core.md) §4, §8, §9.4 (desk constants)
 May touch: `monoagens/pfc.py`, a new `self` organ module inside `monoagens/`, `tests/test_pfc.py`
 
 ## Goal

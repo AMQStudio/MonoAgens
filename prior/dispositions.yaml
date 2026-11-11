@@ -1,0 +1,47 @@
+# Default dispositions (docs/core.md §9.4). Data, not specification: every value here may be
+# tuned with replay without changing the core design. Meaning of each key: docs/core.md §9.4.
+
+knobs:            # behavior, in plain words; the only values a developer normally changes
+  talkativeness: 0.45
+  restraint_after_speaking: 0.5
+  spontaneity: 0.2
+  helpfulness: 0.6
+  boredom_with_repeats: 0.5
+  patience_seconds: 90
+  reserve_when_unfamiliar: 0.3
+  speaking_bar: 4            # 1..5
+  certainty_bar: 0.5
+  memory_persistence: 0.5
+
+calibration:      # measured per embedder/model by tools; never set by hand
+  fok_threshold: 0.0
+  fok_scale: 1.0
+  wake_gate_lo: 0.35
+  wake_gate_hi: 1.0          # 1.0 = "clearly yes" band off
+
+constants:        # engineering values; change only with replay evidence
+  # how knobs map to the gate (knob 0 → first value, knob 1 → second value)
+  talkativeness_theta_base: [0.85, 0.35]
+  spontaneity_tau: [0.02, 0.2]
+  boredom_gamma_per_minute: [0.99, 0.8]
+  persistence_decay_d: [0.7, 0.3]
+  # weights and windows
+  own_name_weight: 0.5
+  relevance_weight: 0.2
+  talk_rate_window_minutes: 10
+  promise_debt_weight: 0.1
+  budget_weight: 0.3
+  note_band: 0.2
+  forward_window_minutes: 30
+  context_weight: 1.0
+  importance_weight: 0.5
+  learning_rate: 0.02
+  rule_of_three_epsilon: 0.06
+  # the desk: what one wake's prompt may hold
+  recent_messages: 20          # roughly one phone screen; older lines via recall
+  recent_tokens: 2000
+  memory_candidates: 8
+  memory_tokens: 1500
+  thread_result_tokens: 3000   # latest result shown verbatim in <doing>
+  volatile_tokens_max: 8000    # whole volatile part; trimmed oldest-first within each section
+  recall_results: 10

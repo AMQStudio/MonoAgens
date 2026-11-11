@@ -6,8 +6,9 @@ owner can amend this file. Decision numbers (Dxx) trace to the history in git.
 ## 1. The core is a frozen brain
 The core design ([core.md](core.md)) is **FINAL for v1 and frozen**. Allowed edits to it: fixing
 an inconsistency, a typo or a broken reference, and clarifications that change no behavior.
-Everything else belongs to another layer — middleware, bodies, plugins, birth inputs. A need that
-truly cannot be met there waits for a v2 of the core, which only the owner can open, with a new
+Everything else belongs to another layer — middleware, bodies, plugins. The *values* in the default
+prior (`prior/`) are data, tuned with replay, not part of the frozen design. A need that truly
+cannot be met elsewhere waits for a v2 of the core, which only the owner can open, with a new
 major version. No task, plugin or worker changes the core design.
 
 ## 2. Design by brain function, not by scenario (D39, D40)
@@ -24,10 +25,10 @@ The core holds at most 4 books, 5 thought acts, 3 hooks, 10 signals, 3 drives an
 formula. A new primitive must replace one or be refused.
 
 ## 4. Layers (D35, D41)
-- **Core** — the soul, a generic brain. **Middleware** — the foundation in the middle: policy,
-  commands & tools, install, skills, identity, RBAC. **Bodies** — organs for platforms and
-  devices. **Plugins** — features built on the middleware. **Birth inputs** — birth certificate
-  and prior.
+- **Core** — the soul, a generic brain, including what it is born with (birth certificate and
+  prior). **Middleware** — the foundation in the middle: policy, commands & tools, install,
+  skills, identity, RBAC. **Bodies** — organs for platforms and devices. **Plugins** — features
+  built on the middleware.
 - Bodies and plugins reach the core only through the middleware: the three hooks and the organ
   contract. Everything that reaches the brain is a `percept`; everything that persists is an
   event.
