@@ -60,13 +60,13 @@ May touch: `monoagens/memory.py`, `tests/test_memory.py`, `scenarios/`
 Read first: [core.md](../core.md) §6, [core-math.md](../core-math.md) §2–3, §15
 May touch: `monoagens/cognition/signals.py`, `monoagens/cognition/situation.py`, `tests/test_cognition.py`, `scenarios/`
 
-- [ ] 5.1 `own_name` (attention capture, not obligation).
-- [ ] 5.2 `info_gap` from the prior's reference sentences.
-- [ ] 5.3 `feeling_of_knowing` using the helper from 4.3.
-- [ ] 5.4 `relevance` to active promises and core memory.
-- [ ] 5.5 `social_cost`: the floor belongs to someone else, lowered by closeness.
-- [ ] 5.6 Habituation per (place, who) with γ from `boredom_with_repeats`.
-- [ ] 5.7 Check: "lupa nama tempatnya apa ya" scores high only when the answer is known; repeated stickers fade; signals are pure (no I/O).
+- [x] 5.1 `own_name` (attention capture, not obligation).
+- [x] 5.2 `info_gap` from the prior's reference sentences.
+- [x] 5.3 `feeling_of_knowing` using the helper from 4.3.
+- [x] 5.4 `relevance` to active promises and core memory.
+- [x] 5.5 `social_cost`: the floor belongs to someone else, lowered by closeness.
+- [x] 5.6 Habituation per (place, who) with γ from `boredom_with_repeats`.
+- [x] 5.7 Check: "lupa nama tempatnya apa ya" scores high only when the answer is known; repeated stickers fade; signals are pure (no I/O).
 
 ## Part 6 — Turn-taking and patience
 Read first: [core.md](../core.md) §5–6, [core-math.md](../core-math.md) §4, §15
@@ -191,3 +191,37 @@ Part 4 notes (worker):
   and a later question must still show the used memory on the desk (`importance 0.01` in the
   step-17 prompt). It failed 1/2 before the code and passes 2/2 after; fake replay 65/65,
   `uv run pytest` 201 passed.
+
+Part 5 notes (worker):
+- `monoagens/cognition/signals.py` holds the five pure signals, named as the spec names them
+  (`own_name` replaces the old `name_mentioned` key in `prior.signal_weights`; the weight key
+  `own_name_weight` is unchanged). `own_name` is 1 only when the name appears as a whole word
+  and the turn is not allocated; `info_gap` is the best cosine to the prior's reference
+  sentences for the identity's language; `feeling_of_knowing` is
+  σ((A* − `fok_threshold`) / `fok_scale`); `relevance` is the best cosine to active promise
+  texts and core memory; `social_cost` is 1 when another person was selected or the soul just
+  answered, scaled by (1 − closeness).
+- `situation.py` gathers everything a signal may read: event vector, recent events, reference
+  vectors, core-memory vector, active-promise vectors (one embed call), closeness from
+  `person:<id>`, the FOK input from `memory.best_activation` (4.3), and the habituation state.
+  `boredom_gamma` maps the knob (0 → 0.99, 1 → 0.8 per minute); `habituate` is
+  h·γ^Δminutes + 1 and is written to `habit:<place>:<who>` at assembly; `effective_salience`
+  is S/(1+h) for Part 8.
+- 5.7: `test_fok_scores_high_only_when_the_answer_is_known` uses the literal question: with no
+  memory the cue stays below 0.6, after an answer memory it is above 0.9.
+  `test_habituation_fades_repeats_with_gamma_from_boredom` pins the fading; the purity test
+  calls every signal twice and checks the same value with no I/O arguments.
+- Scenario `scenarios/silence/21_own_name_capture.yaml` was added first with a `signal` check:
+  it failed 2/3 before the code and passes 3/3 after. Fake replay 68/68, `uv run pytest` 209
+  passed. Cognition: signals 93 lines, situation 146, total 340 (budget 600/160).
+- Out-of-list edits forced by the wiring (flagging for the architect): `appraise.py` now fills
+  `Appraisal.signals` from the registered signals and accepts an `embedder`; `kernel.py`'s
+  `_appraise` passes `self.embedder` (one line); `comments` in `prior.py`'s weight map;
+  `scripts/replay.py` gained the `signal` check type (Part 3 precedent: the replay scripts were
+  edited for scenarios); `tests/support.py` gained `boredom_with_repeats` and
+  `boredom_gamma_per_minute`.
+- Calibration caveat (Part 8): with the default `fok_threshold` 0.0 a cue with no candidate
+  memory scores 0.5, and the recent-message term of `best_activation` includes the cue itself
+  when its vector is already stored, which saturates FOK. In the kernel flow the cue vector
+  lands after appraisal, so candidates dominate there; the threshold still needs calibration
+  with the real embedder before the gate uses FOK.

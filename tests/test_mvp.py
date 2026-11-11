@@ -165,7 +165,7 @@ async def test_mvp_b_silence_and_mention(aconn):
         assert payload["s"] == 0.0 and payload["theta"] == 0.0 and payload["p"] == 0.0
         assert 0.0 <= payload["u"] < 1.0
         assert set(payload["signals"]) == {
-            "name_mentioned", "info_gap", "feeling_of_knowing", "relevance", "social_cost",
+            "own_name", "info_gap", "feeling_of_knowing", "relevance", "social_cost",
         }
 
     await _feed(kernel, _msg("mona, halo?", message_id=99, place=GROUP, place_kind="group",

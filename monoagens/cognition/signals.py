@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import math
+import re
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from monoagens.cognition.situation import Situation
@@ -29,31 +31,63 @@ def validate_signals(weights: Mapping[str, float]) -> None:
         raise ValueError(f"signal weights mismatch: missing {missing}, unknown {unknown}")
 
 
-@register_signal("name_mentioned")
-def name_mentioned(situation: Situation) -> float:
-    """Score whether the self's name appears without a tag (stub for Track A)."""
-    return 0.0
+def _clamp(value: float) -> float:
+    """Return a signal value clipped to [0, 1]."""
+    return max(0.0, min(1.0, float(value)))
+
+
+def _cosine(left: Sequence[float] | None, right: Sequence[float] | None) -> float:
+    """Return the cosine between two vectors, or 0 when either is absent."""
+    if not left or not right or len(left) != len(right):
+        return 0.0
+    dot = sum(a * b for a, b in zip(left, right))
+    norm = math.sqrt(sum(a * a for a in left)) * math.sqrt(sum(b * b for b in right))
+    return dot / norm if norm else 0.0
+
+
+def _best_cosine(vector: Sequence[float] | None,
+                 others: Sequence[Sequence[float]]) -> float:
+    """Return the highest cosine between `vector` and any of `others`."""
+    return max((_cosine(vector, other) for other in others), default=0.0)
+
+
+@register_signal("own_name")
+def own_name(situation: Situation) -> float:
+    """Score 1 when the self's name appears without the turn being allocated to it."""
+    name = situation.self_name.strip()
+    if not name or situation.event.payload.get("addressed") is True:
+        return 0.0
+    pattern = rf"(?<!\w){re.escape(name)}(?!\w)"
+    return 1.0 if re.search(pattern, situation.text, re.IGNORECASE) else 0.0
 
 
 @register_signal("info_gap")
 def info_gap(situation: Situation) -> float:
-    """Score whether the message is an open question or something forgotten."""
-    return 0.0
+    """Score the best cosine to the prior's reference sentences for the language."""
+    return _clamp(_best_cosine(situation.vector, situation.references))
 
 
 @register_signal("feeling_of_knowing")
 def feeling_of_knowing(situation: Situation) -> float:
-    """Score "I think I know this" from memory activation (stub for Track A)."""
-    return 0.0
+    """Score metamemory: sigma((A* - fok_threshold) / fok_scale)."""
+    scale = situation.fok_scale if situation.fok_scale > 0 else 1.0
+    score = max(-60.0, min(60.0, (situation.best_activation - situation.fok_threshold) / scale))
+    return _clamp(1.0 / (1.0 + math.exp(-score)))
 
 
 @register_signal("relevance")
 def relevance(situation: Situation) -> float:
-    """Score how much the message matches what the owner cares about now."""
-    return 0.0
+    """Score the best cosine to active promises and the core memory."""
+    vectors: list[Sequence[float]] = list(situation.promise_vectors)
+    if situation.core_vector:
+        vectors.append(situation.core_vector)
+    return _clamp(_best_cosine(situation.vector, vectors))
 
 
 @register_signal("social_cost")
 def social_cost(situation: Situation) -> float:
-    """Score what speaking here would cost socially (stub for Track A)."""
-    return 0.0
+    """Score a floor that belongs to someone else, lowered by closeness to the speaker."""
+    if situation.event.payload.get("addressed") is True:
+        return 0.0
+    taken = situation.other_selected or situation.soul_answered
+    return _clamp(float(taken) * (1.0 - _clamp(situation.closeness)))

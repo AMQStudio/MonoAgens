@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -15,6 +16,7 @@ from monoagens import memory
 from monoagens.clock import FakeClock
 from monoagens.cognition import (SIGNALS, Appraisal, Situation, appraise,
                                  assemble_situation, seeded_rng, validate_signals)
+from monoagens.cognition.situation import boredom_gamma, effective_salience, habituate
 from monoagens.kernel import Kernel
 from monoagens.embedding import FakeEmbedder
 from monoagens.hooks import HookPipeline, HookRegistry
@@ -124,14 +126,14 @@ def _volatile(fake: FakeLLM) -> str:
 
 
 def test_the_five_initial_signals_are_registered():
-    assert set(SIGNALS) == {"name_mentioned", "info_gap", "feeling_of_knowing", "relevance",
+    assert set(SIGNALS) == {"own_name", "info_gap", "feeling_of_knowing", "relevance",
                             "social_cost"}
 
 
 def test_validate_signals_accepts_the_configured_weights_and_fails_otherwise():
     validate_signals({name: 1.0 for name in SIGNALS})
     with pytest.raises(ValueError, match="missing"):
-        validate_signals({"name_mentioned": 1.0})
+        validate_signals({"own_name": 1.0})
     with pytest.raises(ValueError, match="unknown"):
         validate_signals({**{name: 0.0 for name in SIGNALS}, "bogus": 1.0})
 
@@ -142,6 +144,69 @@ def test_signals_are_pure_bounded_functions_of_a_situation():
         value = signal(situation)
         assert isinstance(value, float)
         assert 0.0 <= value <= 1.0
+        assert signal(situation) == value
+
+
+def test_own_name_scores_one_only_when_the_turn_is_not_allocated():
+    named = _msg("Mona, dokumen baru sudah aku kirim", addressed=False)
+    tagged = _msg("Mona, lihat ini", addressed=True)
+    other = _msg("dokumen baru sudah aku kirim", addressed=False)
+    lookalike = _msg("Monas lagi macet", addressed=False)
+    assert SIGNALS["own_name"](_situation(event=named, self_name="Mona")) == 1.0
+    assert SIGNALS["own_name"](_situation(event=tagged, self_name="Mona")) == 0.0
+    assert SIGNALS["own_name"](_situation(event=other, self_name="Mona")) == 0.0
+    assert SIGNALS["own_name"](_situation(event=lookalike, self_name="Mona")) == 0.0
+
+
+def test_info_gap_is_the_best_cosine_to_the_prior_references():
+    situation = _situation(vector=[1.0, 0.0], references=([0.0, 1.0], [1.0, 0.0]))
+    assert SIGNALS["info_gap"](situation) == pytest.approx(1.0)
+    unrelated = _situation(vector=[1.0, 0.0], references=([0.0, 1.0], [-1.0, 0.0]))
+    assert SIGNALS["info_gap"](unrelated) == 0.0
+
+
+def test_feeling_of_knowing_is_high_only_when_the_answer_is_known():
+    known = _situation(best_activation=3.0, fok_threshold=0.0, fok_scale=1.0)
+    unknown = _situation(best_activation=-3.0, fok_threshold=0.0, fok_scale=1.0)
+    assert SIGNALS["feeling_of_knowing"](known) > 0.9
+    assert SIGNALS["feeling_of_knowing"](unknown) < 0.1
+    scaled = _situation(best_activation=1.0, fok_threshold=0.0, fok_scale=2.0)
+    assert SIGNALS["feeling_of_knowing"](scaled) == pytest.approx(1 / (1 + math.exp(-0.5)))
+
+
+def test_relevance_matches_active_promises_and_core_memory():
+    promise = _situation(vector=[1.0, 0.0], promise_vectors=([0.0, 1.0],))
+    core = _situation(vector=[1.0, 0.0], core_vector=[1.0, 0.0])
+    neither = _situation(vector=[1.0, 0.0], core_vector=[0.0, 1.0])
+    assert SIGNALS["relevance"](promise) == 0.0
+    assert SIGNALS["relevance"](core) == 1.0
+    assert SIGNALS["relevance"](neither) == 0.0
+
+
+def test_social_cost_belongs_to_someone_else_and_is_lowered_by_closeness():
+    selected = _situation(event=_msg("halo", addressed=False), other_selected=True)
+    answered = _situation(event=_msg("halo", addressed=False), soul_answered=True)
+    close = _situation(event=_msg("halo", addressed=False), other_selected=True, closeness=0.8)
+    tagged = _situation(event=_msg("halo", addressed=True), other_selected=True)
+    assert SIGNALS["social_cost"](selected) == 1.0
+    assert SIGNALS["social_cost"](answered) == 1.0
+    assert SIGNALS["social_cost"](close) == pytest.approx(0.2)
+    assert SIGNALS["social_cost"](tagged) == 0.0
+
+
+def test_habituation_fades_repeats_with_gamma_from_boredom():
+    slow = settings(knobs={"boredom_with_repeats": 0.0})
+    fast = settings(knobs={"boredom_with_repeats": 1.0})
+    assert boredom_gamma(slow) == pytest.approx(0.99)
+    assert boredom_gamma(fast) == pytest.approx(0.8)
+    h, saliences = 0.0, []
+    for _ in range(3):
+        h = habituate({"h": h, "ts": START.isoformat()}, START, 0.8)
+        saliences.append(effective_salience(1.0, h))
+    assert saliences == [0.5, pytest.approx(1 / 3), pytest.approx(0.25)]
+    decayed = habituate({"h": 1.0, "ts": START.isoformat()},
+                        START + timedelta(minutes=10), 0.9)
+    assert decayed == pytest.approx(0.9**10 + 1)
 
 
 # --- seeded randomness -------------------------------------------------------
@@ -200,7 +265,7 @@ async def test_assemble_situation_holds_vector_recent_and_state(aconn):
     earlier = await append_event(aconn, ts=START, kind="percept", who=WHO, place=PLACE,
                                  body="telegram", payload={"text": "kopi"})
     await insert_event_vector(aconn, earlier.id, [0.5] * 384)
-    await write_state(aconn, "cognition:weights", {"name_mentioned": 1.0}, earlier.id)
+    await write_state(aconn, "cognition:weights", {"own_name": 1.0}, earlier.id)
     await write_state(aconn, f"habit:{PLACE}:{WHO}", {"h": 1}, earlier.id)
     current = await append_event(aconn, ts=START, kind="percept", who=WHO, place=PLACE,
                                  body="telegram", payload={"text": "halo"})
@@ -209,12 +274,50 @@ async def test_assemble_situation_holds_vector_recent_and_state(aconn):
     assert situation.event.id == current.id
     assert situation.vector is None
     assert [seen.id for seen in situation.recent] == [earlier.id, current.id]
-    assert situation.state["cognition:weights"] == {"name_mentioned": 1.0}
-    assert situation.state[f"habit:{PLACE}:{WHO}"] == {"h": 1}
+    assert situation.state["cognition:weights"] == {"own_name": 1.0}
+    assert situation.habituation == pytest.approx(2.0)
+    assert situation.state[f"habit:{PLACE}:{WHO}"] == {"h": 2.0, "ts": START.isoformat()}
     assert f"budget:{START.astimezone(JAKARTA).date().isoformat()}" not in situation.state
 
     older = await assemble_situation(aconn, earlier, now=START, settings=SETTINGS)
     assert older.vector is not None and len(older.vector) == 384
+
+
+async def test_assemble_situation_habituates_per_place_and_person(aconn):
+    previous = await append_event(aconn, ts=START - timedelta(minutes=10), kind="percept",
+                                  who=WHO, place=PLACE, body="telegram",
+                                  payload={"text": "stiker lagi"})
+    await write_state(aconn, f"habit:{PLACE}:{WHO}", {
+        "h": 2.0, "ts": (START - timedelta(minutes=10)).isoformat()}, previous.id)
+    current = await append_event(aconn, ts=START, kind="percept", who=WHO, place=PLACE,
+                                 body="telegram", payload={"text": "stiker lagi"})
+
+    situation = await assemble_situation(aconn, current, now=START, settings=SETTINGS)
+    expected = 2.0 * boredom_gamma(SETTINGS) ** 10 + 1
+
+    assert situation.habituation == pytest.approx(expected)
+    assert (await read_state(aconn, f"habit:{PLACE}:{WHO}"))["h"] == pytest.approx(expected)
+
+
+async def test_fok_scores_high_only_when_the_answer_is_known(aconn):
+    embedder = FakeEmbedder()
+    unknown = "lupa nama tempatnya apa ya"
+    cue = await append_event(aconn, ts=START, kind="percept", who=WHO, place=PLACE,
+                             body="telegram", payload={"description": unknown})
+
+    before = await assemble_situation(aconn, cue, now=START, settings=SETTINGS,
+                                      embedder=embedder)
+    assert SIGNALS["feeling_of_knowing"](before) < 0.6
+
+    answer = (await embedder.embed(["nama tempat itu Bandung"]))[0]
+    await aconn.execute(
+        "INSERT INTO memories (who, place, text, embedding, importance, last_accessed_at, "
+        "created_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+        (WHO, PLACE, "nama tempat itu Bandung", answer, 0.9, START, START))
+
+    after = await assemble_situation(aconn, cue, now=START, settings=SETTINGS,
+                                     embedder=embedder)
+    assert SIGNALS["feeling_of_knowing"](after) > 0.9
 
 
 async def test_kernel_encodes_a_message_once_and_retrieval_reuses_the_vector(aconn):
@@ -248,9 +351,9 @@ async def test_kernel_encodes_the_reply_once_too(aconn):
     await _feed(kernel, _msg("halo"))
 
     # The incoming message and the reply are encoded by background jobs; the wake
-    # that decides the reply runs before the intake vector lands, so retrieval
-    # embeds its query once more.
-    assert embedder.calls == 3
+    # that decides the reply runs before the intake vector lands, so the FOK
+    # retrieval and the memory retrieval each embed their query once more.
+    assert embedder.calls == 4
     rows = await (await aconn.execute(
         "SELECT event_id FROM event_vectors ORDER BY event_id")).fetchall()
     assert len(rows) == 2
@@ -301,17 +404,16 @@ async def test_llm_token_usage_lands_in_the_daily_budget_key(aconn):
 
 async def test_the_budget_spent_raises_theta(aconn):
     runtime = settings(owner_settings={"daily_token_budget": 100})
-    event = Event(42, START, "percept", who=WHO, place=PLACE, payload={"text": "obrolan"})
     key = f"budget:{START.astimezone(JAKARTA).date().isoformat()}"
     source = await append_event(aconn, ts=START, kind="percept", payload={"text": "obrolan"})
-    assert (await appraise(event, settings=runtime)).theta == 0.0
+    assert (await appraise(source, settings=runtime)).theta == 0.0
 
     await write_state(aconn, key, {"total_tokens": 50}, source.id)
-    theta = (await appraise(event, conn=aconn, now=START, settings=runtime)).theta
+    theta = (await appraise(source, conn=aconn, now=START, settings=runtime)).theta
     assert theta == pytest.approx(0.15)
 
     await write_state(aconn, key, {"total_tokens": 250}, source.id)
-    theta = (await appraise(event, conn=aconn, now=START, settings=runtime)).theta
+    theta = (await appraise(source, conn=aconn, now=START, settings=runtime)).theta
     assert theta == pytest.approx(0.3)
 
 

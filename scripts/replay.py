@@ -872,6 +872,24 @@ def _check_memories(spec: dict[str, Any], result: ScenarioResult) -> CheckResult
                        f"{result.memories} memories stored (need {want})")
 
 
+def _check_signal(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:
+    """Compare the highest value of one signal over the named steps."""
+    name = str(spec.get("signal") or "")
+    wanted = spec.get("steps")
+    if wanted is not None:
+        wanted = {int(step) for step in wanted}
+    if spec.get("step") is not None:
+        wanted = {int(spec["step"])}
+    values = [appraisal.signals.get(name, 0.0) for step in result.steps
+              if wanted is None or step.index in wanted for appraisal in step.appraisals]
+    peak = max(values, default=0.0)
+    floor, ceiling = spec.get("min"), spec.get("max")
+    ok = bool(values) and (floor is None or peak >= float(floor)) \
+        and (ceiling is None or peak <= float(ceiling))
+    return CheckResult(str(spec["label"]), ok,
+                       f"{name} max {peak:.3f} over {len(values)} appraisals")
+
+
 CHECKS: dict[str, Callable[[dict[str, Any], ScenarioResult], CheckResult]] = {
     "no_reply": _check_no_reply,
     "reply": _check_reply,
@@ -886,6 +904,7 @@ CHECKS: dict[str, Callable[[dict[str, Any], ScenarioResult], CheckResult]] = {
     "event_order": _check_event_order,
     "sleep_done": _check_sleep_done,
     "memories_stored": _check_memories,
+    "signal": _check_signal,
 }
 
 

@@ -15,21 +15,24 @@ from monoagens.types import Event
 
 
 async def appraise(event: Event, *, conn: Any = None, situation: Situation | None = None,
-                   now: datetime | None = None,
+                   now: datetime | None = None, embedder: Any = None,
                    settings: dict[str, Any] | None = None) -> Appraisal:
-    """Return the decision for one event (no LLM, no writes)."""
+    """Return the decision for one event (no LLM call)."""
     settings = settings if settings is not None else load_settings()
     values = constants(settings)
     now = now or event.ts
     u = seeded_rng(values["seed"], event.id).random()
     signals = {name: 0.0 for name in SIGNALS}
     if situation is None and conn is not None:
-        situation = await assemble_situation(conn, event, now=now, settings=settings)
+        situation = await assemble_situation(conn, event, now=now, embedder=embedder,
+                                             settings=settings)
     if event.payload.get("addressed") is True:
         return Appraisal("wake", "addressed message", "addressed", signals, 1.0, 0.0, 1.0, u)
     if event.kind == "expectation.fired":
         return Appraisal("wake", "fired expectation", "pfc_expectation", signals,
                          1.0, 0.0, 1.0, u)
+    if situation is not None:
+        signals = {name: fn(situation) for name, fn in SIGNALS.items()}
     moment = now or (situation.now if situation is not None else event.ts)
     limit = budget.daily_limit(settings)
     state = situation.state if situation is not None else {}

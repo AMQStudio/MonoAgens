@@ -63,7 +63,7 @@ def signal_weights(settings: Mapping[str, Any]) -> dict[str, float]:
     if missing:
         raise ValueError(f"signal weights missing from prior constants: {missing}")
     return {
-        "name_mentioned": float(values["own_name_weight"]),
+        "own_name": float(values["own_name_weight"]),
         "info_gap": float(values["info_gap_weight"]),
         "feeling_of_knowing": float(values["feeling_of_knowing_weight"]),
         "relevance": float(values["relevance_weight"]),

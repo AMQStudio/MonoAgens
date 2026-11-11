@@ -102,7 +102,7 @@ def test_the_prior_carries_the_behavioral_numbers():
                                        "max_active", "job_timeout_seconds"}
     assert set(prior["knobs"]) and set(prior["calibration"])
     assert set(signal_weights(load_settings())) == {
-        "name_mentioned", "info_gap", "feeling_of_knowing", "relevance", "social_cost"}
+        "own_name", "info_gap", "feeling_of_knowing", "relevance", "social_cost"}
 
 
 def test_settings_join_config_certificate_and_prior():

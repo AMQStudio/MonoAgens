@@ -122,7 +122,7 @@ class Kernel:
 
     async def _appraise(self, event: Event) -> Appraisal:
         return await appraise(event, conn=self.conn, now=self.clock.now(),
-                              settings=self.settings)
+                              settings=self.settings, embedder=self.embedder)
 
     async def _wake(self, event: Event) -> None:
         if event.kind == "job.result":

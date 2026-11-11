@@ -1,0 +1,26 @@
+name: 21_own_name_capture
+description: >-
+  Nama Mona disebut di grup tanpa tag dan tanpa alokasi giliran. own_name
+  harus menangkap perhatian (skor 1), tetapi itu bukan kewajiban: tidak ada
+  balasan. Pesan lain tanpa namanya tidak boleh mendapat skor yang sama.
+expectations:
+  - type: signal
+    signal: own_name
+    step: 1
+    min: 1.0
+    label: own name captures attention without allocating the turn
+  - type: signal
+    signal: own_name
+    step: 2
+    max: 0.5
+    label: a message without the name does not score
+  - no reply
+steps:
+  - at: "2026-11-10T15:00:00+07:00"
+    who: person:tg:6001
+    place: space:tg:-1003
+    text: "Mona, dokumen baru sudah aku kirim ya."
+  - at: "2026-11-10T15:01:00+07:00"
+    who: person:tg:6001
+    place: space:tg:-1003
+    text: "Dokumen baru sudah aku kirim ya."
