@@ -7,7 +7,6 @@ from collections.abc import Sequence
 from typing import Any, Mapping
 
 from monoagens import reach
-from monoagens.prior import constants, load_settings
 from monoagens.store import append_event, project_event, read_last_events, read_state
 from monoagens.types import RECENT_KINDS
 
@@ -114,10 +113,12 @@ class SelfOrgan:
 
     async def _recall(self, action) -> dict[str, Any]:
         """Search events and memories, obeying the audience of the current context."""
+        from monoagens import prior  # local: prior imports identity at module level
+
         args, context = dict(action.payload), action.place or None
         query = str(args.get("query") or "").strip()
         start, end = _stamp(args.get("from")), _stamp(args.get("to"))
-        limit = int(constants(load_settings())["recall_results"])
+        limit = int(prior.constants(prior.load_settings())["recall_results"])
         clause, params = ["kind = ANY(%s)"], [list(RECENT_KINDS)]
         for value, condition in ((args.get("place"), "place = %s"), (start, "ts >= %s"),
                                  (end, "ts < %s")):
