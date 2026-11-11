@@ -1,12 +1,13 @@
 """Shared test fixtures: a real Postgres, no mocks.
 
 The suite runs ONLY against TEST_DATABASE_URL, and only if that database name
-ends with '_test'. Anything else refuses to run. sql/schema.sql is applied
-once per session.
+ends with '_test'. Anything else refuses to run. The numbered migrations in
+sql/migrations/ are applied once per session.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import pathlib
 
@@ -14,8 +15,9 @@ from pgvector.psycopg import register_vector_async
 import psycopg
 import pytest
 
+from monoagens.migrate import migrate
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SCHEMA_PATH = ROOT / "sql" / "schema.sql"
 REFUSAL = (
     "Refusing to run tests: TEST_DATABASE_URL is required and database name "
     "must end with '_test'"
@@ -55,10 +57,13 @@ def database_url() -> str:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _install_schema(database_url: str):
-    sql = SCHEMA_PATH.read_text(encoding="utf-8")
-    with psycopg.connect(database_url, autocommit=True) as conn:
-        conn.execute(sql)
+def _install_schema(database_url: str, tmp_path_factory):
+    async def apply() -> None:
+        async with await psycopg.AsyncConnection.connect(database_url,
+                                                         autocommit=True) as conn:
+            await migrate(conn, backup_dir=tmp_path_factory.mktemp("backups"))
+
+    asyncio.run(apply())
     yield
 
 

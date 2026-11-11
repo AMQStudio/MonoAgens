@@ -14,6 +14,9 @@ from monoagens.clock import Clock
 from monoagens.config import load_clock_tick_seconds, load_llm_config, load_owner_ids
 from monoagens.kernel import Kernel
 from monoagens.memory import FastEmbedder
+from monoagens.migrate import migrate
+from monoagens.pairing import ensure as ensure_pairing
+from monoagens.pairing import inbound as pairing_inbound
 from monoagens.pfc import PFC
 
 
@@ -26,9 +29,15 @@ async def main() -> None:
         )
     pfc = PFC(llm["base_url"], llm["api_key"], llm["model"])
     async with await psycopg.AsyncConnection.connect(os.environ["DATABASE_URL"]) as conn:
+        await migrate(conn)
         await register_vector_async(conn)
         clock = Clock(tick_seconds=load_clock_tick_seconds())
         kernel = Kernel(conn, clock=clock, pfc=pfc, embedder=FastEmbedder())
+        kernel.hooks.inbound.add("pairing", pairing_inbound)
+        code = await ensure_pairing(conn, now=clock.now())
+        if code:
+            print(f"pairing code: {code} — send it from any organ to become the owner",
+                  flush=True)
         telegram = TelegramBody(os.environ["TELEGRAM_BOT_TOKEN"], owner_ids=load_owner_ids(),
                                 get_cursor=lambda: kernel.cursor("telegram"))
         cli = CLIBody()

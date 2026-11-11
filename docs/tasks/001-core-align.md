@@ -15,7 +15,7 @@ Bring the merged Track A code in line with the frozen core spec. This is the onl
 - [x] T6 Expectation schema with the four kinds (`promise`, `wait`, `predict`, `guard`).
 - [x] T7 Injected clock everywhere (no `datetime.now()` in the core); replay uses event times.
 - [x] T8 Slow work off the loop: PFC, classifier, embedding and sleep as background jobs whose results return as events; one PFC job per place; re-wake once if a new event arrived meanwhile.
-- [ ] T9 Numbered SQL migrations with a version table and a backup before migrating; pairing code for the first owner.
+- [x] T9 Numbered SQL migrations with a version table and a backup before migrating; pairing code for the first owner.
 - [ ] T10 Identity as birth content: `soul.yaml` becomes the birth certificate; cognition numbers move to the default prior in `prior/` as knobs / calibration / constants (core.md §9.4); the rest of today's `soul.yaml` splits by project.md §2: `timezone`, sleep, clock, budget and enabled bodies go to a new `config.yaml`; memory and expectation numbers go to the prior's constants; owner ids are replaced by pairing; secrets stay in `.env`; identity stored in `state: identity` after birth; an `identity_changing` capability for owner changes.
 - [ ] T11 Stability contract: `schema_version` on every event with upcasting on read; plugin event kinds under `<plugin>.<kind>`; readers ignore unknown fields (core.md §3).
 - [ ] T12 Watchdog: `hook_timeout_ms` on every hook call (timeout = Stop + `error`), `job_timeout_seconds` on background jobs; a test where a hanging hook does not stop the loop.
@@ -78,5 +78,15 @@ All tests and replay pass; grep shows no platform name, no world action and no d
   flight); a wake that arrives meanwhile is kept as one pending re-wake with the newest trigger
   and fires after the result is applied. Sleep runs on a private connection (DSN rebuilt from
   `conn.info`, password included) so the shared async connection is never used concurrently.
-  `put` now returns the stored event; `run_until_idle` also drains in-flight jobs. Retrieval in
+  put` now returns the stored event; `run_until_idle` also drains in-flight jobs. Retrieval in
   a wake that races its intake encoding embeds its query once more (test updated).
+- T9: `monoagens/migrate.py` applies `sql/migrations/NNN_name.sql` in version order; the initial
+  schema moved from `sql/schema.sql` to `001_initial.sql`. `schema_version` (version, name,
+  applied_at) records each file, each migration runs in one transaction, and a JSON snapshot of
+  every book (`backups/before-NNN.json`, `MONOAGENS_BACKUP_DIR`) is written before the first
+  pending one. Boot (`__main__`), replay, test bootstrap and `scripts/db_init.py` all go through
+  it. `monoagens/pairing.py` creates a `pairing_code` state key on first start (logged), records
+  `pair.created`; the inbound hook turns a percept that contains the code into `state: owner`
+  (`{"who": ...}`), deletes the code and records `pair.claimed`, and refuses once an owner
+  exists. `pair.created`/`pair.claimed` are additive event kinds; the code itself is never
+  stored in the Log.

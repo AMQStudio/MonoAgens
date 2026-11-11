@@ -1,5 +1,5 @@
 #!/usr/bin/env -S uv run python
-"""Apply sql/schema.sql to the MonoAgens database.
+"""Apply the numbered SQL migrations to the MonoAgens database.
 
 Usage:
     uv run python scripts/db_init.py [DATABASE_URL]
@@ -11,14 +11,16 @@ development default.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import pathlib
 import sys
 
 import psycopg
 
+from monoagens.migrate import migrate_url
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SCHEMA = ROOT / "sql" / "schema.sql"
 DEFAULT_URL = "postgresql://monoagens:monoagens@localhost:5433/monoagens"
 
 
@@ -46,11 +48,11 @@ def resolve_url(argv: list[str]) -> str:
 
 def main(argv: list[str]) -> int:
     url = resolve_url(argv)
-    sql = SCHEMA.read_text(encoding="utf-8")
+    applied = asyncio.run(migrate_url(url))
     with psycopg.connect(url, autocommit=True) as conn:
-        conn.execute(sql)
         row = conn.execute("SELECT current_database(), version()").fetchone()
-    print(f"schema applied to {row[0]}")
+    print(f"migrations applied: {applied or 'none (already current)'}")
+    print(f"schema on {row[0]}")
     print(row[1])
     return 0
 

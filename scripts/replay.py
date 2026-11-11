@@ -44,11 +44,11 @@ from monoagens.config import (DEFAULT_ENV_PATH, load_env_file, load_llm_config,
 from monoagens.expect import parse_duration
 from monoagens.kernel import Kernel
 from monoagens.memory import FastEmbedder, FakeEmbedder
+from monoagens.migrate import migrate, migrate_url
 from monoagens.pfc import PFC, PFCContext, ToolCall
 from monoagens.types import Action, Event
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SCHEMA_PATH = ROOT / "sql" / "schema.sql"
 SCENARIO_DIR = ROOT / "scenarios"
 REPORT_DIR = ROOT / "reports"
 DEFAULT_BASE_URL = "https://api.deepinfra.com/v1/openai"
@@ -82,11 +82,11 @@ def replay_url() -> str:
 
 
 def reset_schema(url: str) -> None:
-    """Drop and recreate the public schema, then apply sql/schema.sql."""
+    """Drop and recreate the public schema, then apply the migrations."""
     with psycopg.connect(url, autocommit=True) as conn:
         conn.execute("DROP SCHEMA IF EXISTS public CASCADE")
         conn.execute("CREATE SCHEMA public")
-        conn.execute(SCHEMA_PATH.read_text(encoding="utf-8"))
+    asyncio.run(migrate_url(url, backup_dir=REPORT_DIR / "backups"))
 
 
 def ensure_database(url: str) -> None:
@@ -431,7 +431,7 @@ class ReplayRunner:
             self.conn = conn
             await conn.execute("DROP SCHEMA IF EXISTS public CASCADE")
             await conn.execute("CREATE SCHEMA public")
-            await conn.execute(SCHEMA_PATH.read_text(encoding="utf-8"))
+            await migrate(conn, backup_dir=REPORT_DIR / "backups")
             await register_vector_async(conn)
             self._make_kernel()
             await self.kernel.recover()
