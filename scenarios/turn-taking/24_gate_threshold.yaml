@@ -1,4 +1,6 @@
 name: 24_gate_threshold
+function: turn-taking
+capability: "The gate keeps a busy group silent, an addressed line always wakes, and the decision event stores its terms."
 description: >-
   The gate and the circuit breaker (core.md §6, core-math.md §3, §15). A busy
   group of six people stays silent: the soul's share of talk stays below the

@@ -1,4 +1,6 @@
 name: 19_task_thread_two_groups
+function: privacy
+capability: "A multi-step job opens a task thread, holds a promise, delivers to Budi's direct place, asks which group before sharing, and its waiting does not block the owner's chat."
 description: >-
   Owner meminta satu pekerjaan bertingkat: selesaikan kode, kirim ke Budi lewat
   WhatsApp, lalu ke grup. Pekerjaan membuka task thread, promise Expectation
@@ -33,9 +35,9 @@ expectations:
     count: 1
     label: the owner is told the work is done and asked which group
   - type: mentions
-    text: "tim alpha"
+    text: "grup"
     step: 4
-    label: the question names the candidate groups
+    label: the question asks which group
   - type: reply_in
     place: space:wa:1203630001@g.us
     step: 4
@@ -110,7 +112,7 @@ steps:
     place: space:game:world1
     text: >-
       Tolong selesaikan kodeku dulu, lalu kirim ke Budi lewat WhatsApp dan ke
-      grup.
+      grup. Kodenya ada di workspace dev, file src/parser.py, tesnya masih gagal.
     addressed: true
   - at: "2026-11-11T09:06:00+07:00"
     who: person:owner

@@ -1,4 +1,6 @@
 name: 13_fired_reminder_different_place
+function: promises
+capability: "A reminder fires in the direct place it was made in, not in a busy group."
 description: >-
   Pengingat dibuat di DM, lalu owner aktif di grup saat jamnya tiba. Pengingat
   harus dikirim ke DM asal, bukan ke grup yang sedang ramai.

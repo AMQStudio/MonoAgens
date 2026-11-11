@@ -118,8 +118,8 @@ Found in the architect's review of Parts 1–9.
 - [x] 10.4 Wire the circuit breaker's "goal continued" arm (`act.result`) in the kernel loop.
 - [x] 10.5 Feeling-of-knowing: the cue's own vector is never one of its candidates.
 - [x] 10.6 Unaddressed help: at least five scenarios where an unaddressed group line should be answered because the soul knows something useful ("lupa nama tempatnya apa ya" with the answer in memory), and five where it should stay silent. If the gate misses them, tune prior values only, and write the evidence under Notes.
-- [ ] 10.7 Every scenario gets `capability:` (one line: what it proves) and its brain function. Checks test behavior — spoke or stayed silent, in which place, which events and capabilities — never the model's exact wording. Every changed check is listed under Notes with its reason; a check that catches a real failure is never loosened.
-- [ ] 10.8 Classify each of the 35 real-model failures from 9.3 as (a) check too strict → rewritten per 10.7, or (b) the soul behaved wrongly → fixed by brain function, never by a rule for that case. List all 35 under Notes.
+- [x] 10.7 Every scenario gets `capability:` (one line: what it proves) and its brain function. Checks test behavior — spoke or stayed silent, in which place, which events and capabilities — never the model's exact wording. Every changed check is listed under Notes with its reason; a check that catches a real failure is never loosened.
+- [x] 10.8 Classify each of the 35 real-model failures from 9.3 as (a) check too strict → rewritten per 10.7, or (b) the soul behaved wrongly → fixed by brain function, never by a rule for that case. List all 35 under Notes.
 - [ ] 10.9 `scripts/replay.py` writes `scenarios/README.md`, the capability record: per brain function, each capability with its fake result and its real-model result (passes over runs, model, date). Generated, never hand-edited.
 - [ ] 10.10 Final run: `uv run pytest` on the real Postgres; the fake replay in full; the real-model replay **three times**, with every scenario passing in all three runs and absolute-line violations 0 in every run; a live session with the real model that also covers "send this to Budi" (shared, written at Budi's desk, delivered). The capability record is regenerated from these runs and committed.
 
@@ -514,3 +514,154 @@ Part 10 notes (worker, 10.6):
   decision time.
 - `uv run pytest`: 243 passed. Fake replay: 29 scenarios, 106/106 checks, missed-help 0/59
   (0.0%), false-speak 0/66 (0.0%), absolute-line violations 0, honesty 58/58.
+
+Part 10 notes (worker, 10.7):
+- All 29 scenarios declare `function:` (its brain function, the same as its folder) and
+  `capability:` (one line: what it proves). `scripts/replay.py`'s `load_scenario` refuses a
+  scenario without either, a `function` outside the eight, or a function that does not match
+  its folder, and the report prints `**Function:** <function> — <capability>` under each
+  scenario header so 10.9 can group by function. `tests/test_replay_scenarios.py` (3 tests)
+  pins the contract over the whole tree and the two rejections.
+- Checks are stated as behaviour: `reply_in`/`place`/`place_prefix`/`place_any` (did it speak,
+  in which place), `no_reply`/`reply`/`min_replies` (whether it spoke), `event_seen`/
+  `no_event`/`event_order` (which event, which capability, in which order), `prompt_contains`/
+  `prompt_absent` (what the wake's desk held) and `signal` (what it scored). `mentions` /
+  `mentions_any` are used only for a fact the scenario itself introduced (a name, a time, a
+  place, a file, a password); no check compares the model's sentence.
+- Changed checks, each with its reason:
+  - 20: `prompt_contains "importance 0.01"` -> `prompt_contains "laci"` (step 17, place
+    `space:cli`) plus `mentions "laci"`. The importance is a value only the scripted fake
+    answer writes, so no real model can pass it; the fact is the claim. The drawer cannot
+    reach that desk from `recent_elsewhere` (the last three lines of `space:tg:1001` do not
+    name it), so the check still fails when retrieval drops the used memory.
+  - 18: dropped `no_reply` step 2 and its `should: silent`. Step 2 is an addressed direct
+    line; answering it is the circuit breaker's normal behaviour (8.3), and the model's answer
+    ("Baik, aku lihat dulu ya.") revealed nothing. The file still must reach the owner's desk
+    (step 4) and still must not be said in the shared world (step 6).
+  - 18: `mentions "sketsa_logo"` (steps 4 and 6) -> `mentions "sketsa"`. The model writes
+    "Sketsa logo"; the exact file token was the fake answer's spelling.
+  - 18: dropped `mentions "tidak bisa"` (step 9). `reply_in space:game:dm:owner` already
+    requires the refusal where it belongs; the wording check could only fail a correct,
+    differently phrased refusal (observed: "Itu pesan pribadi Fulan...").
+  - 19: `mentions "tim alpha"` -> `mentions "grup"`. The behaviour is "ask which group before
+    sending"; naming both candidates is one wording of it.
+  - 19: step 4's text now names the code (`src/parser.py` in the dev workspace, tests
+    failing). With no code to work on an honest model correctly refuses ("I have no code
+    here") and no task thread can open, so the scenario premise, not the check, was
+    impossible. The checks are unchanged.
+  - 23: the price detail moved from the `act.result` body to the answer
+    (`mentions_any ["dua belas", "12 persen"]`). The result-level check pinned the breadth of
+    the model's query (a search for "Kopi Senja" cannot also return the price); what the
+    scenario claims is that the owner hears the month's detail. The cafe-result check stays.
+  - 26: `mentions "sembilan"` -> `mentions_any ["sembilan", "jam 9", "09"]`; the model wrote
+    "Jam 9 pagi" while the fake answer writes "jam sembilan".
+- Nothing that catches a real failure was loosened: every removed check is listed above with
+  its reason, and the remaining checks keep their step and place scope.
+- New `monoagens/guidance.py` holds the general PFC instructions (brain function, no platform
+  names): a promise is an expectation with a cue that wakes you; a capability's answer is told
+  to the person; another place is reached with `act to:`/`via:` and content from another place
+  needs `self.share` and is never repeated where its audience may not see it; long work goes
+  through a long-running capability; thinking is not acting. `pfc.py` appends it to the stable
+  prompt and now lists each capability's argument names in `act`'s description
+  (`self.recall(query, event_id, place, from, to)`).
+- Size: `pfc.py` 280/280, `expect.py` 240/240, `store.py` 218/240 (its unused
+  `count_recent_events` was deleted to make room), `guidance.py` 18, package 3,787/3,800.
+- Fake replay: 29 scenarios, 105/105 checks, missed-help 0/60, false-speak 0/65, absolute-line
+  violations 0, honesty 58/58. `uv run pytest`: 246 passed.
+
+Part 10 notes (worker, 10.8):
+- The 35 failures of `reports/replay-20261111-143246.md`, each classified. **(a)** = the check
+  asked for something only the fake model's wording made possible, or forbade correct
+  behaviour; rewritten per 10.7. **(b)** = the soul behaved wrongly; fixed in general brain
+  function (`monoagens/guidance.py` and `act`'s capability list), never by a rule for that
+  case.
+- 20 (1):
+  1. "the frequently used memory reaches the desk" — (a), rewritten (see 10.7).
+- 23 (2):
+  2. "the owner hears the month's episodes back" — (b). The real model called `self.recall`
+     with `text: "bulan lalu"` instead of `query:`, so the search ran without the words and
+     the reply was "bulan lalu". Fix: `act`'s description lists every capability's argument
+     names, and the instructions say a capability's answer is told to the person.
+  3. "the answer names the cafe from the recalled detail" — (b), same cause and fix.
+- 18 (14):
+  4. "Budi's file message is not answered in Budi's chat" — (a), dropped (see 10.7).
+  5. "the answer names the file" — (a), `mentions "sketsa"`.
+  6. "nothing about the file is said in the shared world" — (b). The model repeated the file
+     line while Charlie was in the world; the instructions now say content from another place
+     is never repeated where its audience may not see it.
+  7. "the answer moves to the owner's private channel" — (b), the same instruction ("say it in
+     a private place instead") with `act to:`.
+  8. "the private answer names the file" — (b), same.
+  9. "sharing the owner's work to Budi is recorded" — (b), instruction: content from another
+     place needs `self.share` first.
+  10. "a wait expectation follows the message to Budi" — (b), instruction: what you promise
+      for later is an expectation with a cue.
+  11. "consent is recorded before the message reaches Budi" — (b), same as 9.
+  12. "the work is sent to Budi's direct place" — (b), instruction: reach a person with
+      `act to:`/`via:`.
+  13. "Budi's reply fires the wait expectation" — (b), the expectation of 10.
+  14. "the owner hears back where the owner is now" — (b), the promise's intent in 10.
+  15. "the answer reports Budi's verdict" — (b), same.
+  16. "the refusal is said to the owner in the owner's direct chat" — (b). The model recorded
+      `decision.note` and stayed silent while the owner asked. Instructions: thinking is not
+      acting, and what cannot be done is said plainly where it belongs.
+  17. "the refusal is said to the owner" — (a), wording check dropped (see 10.7).
+- 19 (10):
+  18. "the work runs in its own task thread" — (b). Instruction: long work goes through a
+      long-running capability and the task thread opens for you; the scenario now supplies the
+      code (10.7).
+  19. "a promise is held before the work starts" — (b), promise instruction.
+  20. "the promise is fired by the work's completion" — (b), same.
+  21. "the finished code is delivered to Budi on WhatsApp" — (b), `to:`/`via:` instruction.
+  22. "the question names the candidate groups" — (a), `mentions "grup"`.
+  23. "sharing the code with the group is recorded" — (b), share instruction.
+  24. "consent is recorded before the group message" — (b), same.
+  25. "only the chosen group receives the code" — (b), share + `to:` instructions.
+  26. "the task thread closes" — (b), follows 18 (a thread closes when its delivery step
+      completes).
+  27. "the thread closes after it opened" — (b), same.
+- 09 (1):
+  28. "exactly one reminder at 11:00" — (b). The model's `expect` call was rejected ("expect
+      needs cue_time or cue_event"), so no promise existed. Instruction: a promise needs a cue
+      that wakes you.
+- 16 (2):
+  29. "exactly one message to the owner's DM" — (b). The Log proves the cause: one `think` call
+      whose thought says "I need to hold a guard expectation", no `expect` call. Instruction:
+      thinking is not acting.
+  30. "reply mentions down" — (b), same; the watch now fires (2/3 in the last run).
+- 22 (3):
+  31. "a wait Expectation holds the floor twice" — (b). The real model creates no `wait` at
+      all; see the design question below.
+  32. "exactly one answer after the patience window expires" — (b), same.
+  33. "the wait settles as satisfied when another person answers" — (b), same.
+- 24 (2):
+  34. "an active promise fires on an unaddressed message" — (b). The model said "nanti
+      kukabari" but held no expectation; promise instruction.
+  35. "the fired promise wakes the PFC" — (b), same.
+- Evidence. Three real-model runs after the changes: `reports/replay-20261111-165002.md` (all
+  29 scenarios, before the `think` instruction), `-165455.md` and `-165656.md` (the failing
+  subset, after it). Absolute-line violations 0 and false-speak 0.0% in all three. Per
+  scenario, checks passed: 04 0/1 -> 1/1; 25 2/4 -> 4/4; 16 1/3 -> 2/3; 26 3/4 -> 3/4 (its
+  time check now accepts "Jam 9 pagi"); 18 5/20 -> 7/18; 23 2/4 -> 3/4 -> 1/4; 14 1/2 -> 0/2;
+  22 4/7 unchanged; 24 5/7 unchanged; 19 7/18 -> 6/18. The real model is not deterministic:
+  09 and 13 failed in 9.3 and passed when replayed alone.
+- Remaining causes, with their evidence, for the architect (design questions, not worked
+  around):
+  - A `think`-only answer is the largest real-model failure: at a wake where it should act,
+    the model writes the plan in `think` and calls no tool (16's Log: `decision.note` +
+    `decision.silent`, thought "I need to hold a guard expectation"). The instructions now say
+    thinking is not acting (which fixed 04, 25, 16), yet 14 and 19 still show it. A general
+    "a rejected or actionless tool answer wakes the PFC once more with the reason" would make
+    this recoverable and is the honest next step; it needs budget in `jobs.py` (146/150) or
+    `kernel.py` (275/280) and was not forced.
+  - 22: 6.1 creates a `wait` only on a gate go, and the gate never opens on 22's unaddressed
+    lines, so only the model can create the wait. Making patience deterministic means the
+    kernel holding a wait after the soul speaks in a shared place, and deciding what settles
+    it — a Part 6 behaviour change the architect must choose.
+  - 18: `prompt_absent` at step 6 failed in the last run because the soul's own step-4 line,
+    said in `space:game:world1` while only the owner was there, is a line of that shared place,
+    and `reach.visible` treats content from a shared place as unrestricted (3.2). Charlie then
+    reads it in the prompt. Either the desk must withhold a line whose audience has grown
+    since it was said, or 3.2 must say how a line that entered a shared place from private
+    content is treated. The check was kept: it catches a real leak.
+

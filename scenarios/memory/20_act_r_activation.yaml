@@ -1,4 +1,6 @@
 name: 20_act_r_activation
+function: memory
+capability: "A frequently used memory outranks newer, more important unused ones (ACT-R activation) and answers the question."
 description: >-
   ACT-R activation: one memory is used many times (its use_count climbs with
   every retrieval), then sleep stores eight newer, never-used memories with a
@@ -12,8 +14,13 @@ expectations:
     label: sleep.done recorded
   - type: prompt_contains
     step: 17
-    text: importance 0.01
-    label: the frequently used memory reaches the desk
+    place: space:cli
+    text: "laci"
+    label: the frequently used memory reaches the desk (its fact, not a fake-model importance)
+  - type: mentions
+    step: 17
+    text: "laci"
+    label: the answer uses the remembered location
 steps:
   - at: "2026-11-10T20:00:00+07:00"
     who: person:owner

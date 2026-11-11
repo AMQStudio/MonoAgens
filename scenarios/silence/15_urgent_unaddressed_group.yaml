@@ -1,4 +1,6 @@
 name: 15_urgent_unaddressed_group
+function: silence
+capability: "An unaddressed urgent line that is not the soul's business gets no reply."
 description: >-
   Pesan darurat di grup yang tidak ditujukan ke Mona. Gate tidak boleh ikut
   panik: tanpa addressed, surprise, atau fired expectation, keputusannya diam.

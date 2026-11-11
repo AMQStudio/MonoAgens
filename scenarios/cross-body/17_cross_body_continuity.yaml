@@ -1,4 +1,6 @@
 name: 17_cross_body_continuity
+function: cross-body
+capability: "A topic started on one body continues on another with its context intact."
 description: >-
   Topik dimulai di Telegram, lalu owner melanjutkannya lewat body CLI. Kernel
   harus membawa konteks lintas body sehingga jawabannya masih membahas Rust.

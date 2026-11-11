@@ -1,4 +1,6 @@
 name: 03_group_chitchat_weather
+function: silence
+capability: "An unaddressed traffic complaint in a group gets no reply."
 description: >-
   Keluhan macet di grup. Bukan urusan Mona, jadi tidak ada balasan.
 expectations:

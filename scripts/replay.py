@@ -62,6 +62,8 @@ REPORT_DIR = ROOT / "reports"
 DEFAULT_BASE_URL = "https://api.deepinfra.com/v1/openai"
 DEFAULT_MODEL = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
 DEFAULT_START = datetime(2026, 1, 1, tzinfo=timezone.utc)
+SCENARIO_FUNCTIONS = ("cross-body", "honesty", "learning", "memory", "privacy",
+                      "promises", "silence", "turn-taking")
 BODY_NAME = "telegram"
 CLI_BODY = "cli"
 GAME_BODY = "game"
@@ -360,6 +362,8 @@ class Scenario:
     expectations: list[Any]
     answers: dict[tuple[int, str], list[list[ToolCall]]]
     zone: ZoneInfo
+    function: str = ""
+    capability: str = ""
 
 
 @dataclass
@@ -428,10 +432,19 @@ def load_scenario(path: pathlib.Path, zone: ZoneInfo) -> Scenario:
         should = str(step.get("should") or "").strip().lower()
         if should and should not in (*ANSWER_WORDS, *SILENT_WORDS):
             raise ValueError(f"{path}: step {index} has an unknown should value")
+    function = str(data.get("function") or "").strip()
+    if function not in SCENARIO_FUNCTIONS:
+        raise ValueError(f"{path}: function must be one of {sorted(SCENARIO_FUNCTIONS)}")
+    if path.parent.name != function:
+        raise ValueError(f"{path}: function {function!r} does not match its folder")
+    capability = str(data.get("capability") or "").strip()
+    if not capability or "\n" in capability:
+        raise ValueError(f"{path}: capability must be one line naming what it proves")
     return Scenario(path=path, name=str(data.get("name") or path.stem),
                     description=str(data.get("description") or ""), steps=steps,
                     expectations=list(data.get("expectations") or []),
-                    answers=load_answers(path, data), zone=zone)
+                    answers=load_answers(path, data), zone=zone,
+                    function=function, capability=capability)
 
 
 def load_answers(path: pathlib.Path,
@@ -799,6 +812,13 @@ def _check_mentions(spec: dict[str, Any], result: ScenarioResult) -> CheckResult
     return CheckResult(str(spec["label"]), bool(hits), _detail(hits) if hits else _detail(replies))
 
 
+def _check_mentions_any(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:
+    replies = _scoped_replies(spec, result)
+    needles = [str(item).lower() for item in spec.get("texts") or ()]
+    hits = [reply for reply in replies if any(item in reply.text.lower() for item in needles)]
+    return CheckResult(str(spec["label"]), bool(hits), _detail(hits) if hits else _detail(replies))
+
+
 def _check_remind_at(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:
     expected = str(spec.get("at") or "")
     replies = _scoped_replies(spec, result)
@@ -963,6 +983,7 @@ CHECKS: dict[str, Callable[[dict[str, Any], ScenarioResult], CheckResult]] = {
     "no_reply": _check_no_reply,
     "reply": _check_reply,
     "mentions": _check_mentions,
+    "mentions_any": _check_mentions_any,
     "remind_at": _check_remind_at,
     "min_replies": _check_min_replies,
     "reply_in": _check_reply_in,
@@ -1049,6 +1070,8 @@ def _scenario_section(result: ScenarioResult, zone: ZoneInfo) -> list[str]:
     lines = [f"## {scenario.name}", ""]
     if scenario.description:
         lines += [scenario.description, ""]
+    if scenario.function or scenario.capability:
+        lines += [f"**Function:** `{scenario.function}` — {scenario.capability}", ""]
     lines += ["| # | Time | Who | Place | Input | Decision | Reflex | S | Theta | P | u "
               "| Reason | Reply | Events |",
               "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]

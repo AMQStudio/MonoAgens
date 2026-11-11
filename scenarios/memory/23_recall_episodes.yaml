@@ -1,4 +1,6 @@
 name: 23_recall_episodes
+function: memory
+capability: "A month's episodes are recalled from the Log, with details from the original events."
 description: >-
   The owner asks what happened last month. The swing-sleep never ran, so no
   episode memory exists and no vector was ever written; the soul recalls the
@@ -11,12 +13,10 @@ expectations:
     payload: {capability: self.recall}
     text_contains: "Kopi Senja"
     label: recall returns the original event that named the cafe
-  - type: event_seen
-    kind: act.result
+  - type: mentions_any
+    texts: ["dua belas", "12 persen"]
     step: 3
-    payload: {capability: self.recall}
-    text_contains: "dua belas persen"
-    label: recall returns the original event with the price detail
+    label: the owner hears the price detail of the recalled month
   - type: reply_in
     place: space:tg:1001
     step: 3

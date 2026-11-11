@@ -1,4 +1,6 @@
 name: 28_help_package_location
+function: memory
+capability: "An unaddressed question from a new speaker is answered with a remembered location."
 description: >-
   Unaddressed help, case four: the owner leaves a package in the front cabinet
   and tells Mona in a direct chat; a housemate group then asks where it went

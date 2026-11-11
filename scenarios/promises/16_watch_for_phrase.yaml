@@ -1,4 +1,6 @@
 name: 16_watch_for_phrase
+function: promises
+capability: "A watch for a phrase stays silent through ordinary chatter and reports once when the phrase is said."
 description: >-
   Owner minta dikabari kalau ada yang menyebut "server down" di grup. Obrolan
   grup biasa harus diabaikan, tetapi begitu Charlie menyebut frasa itu di grup

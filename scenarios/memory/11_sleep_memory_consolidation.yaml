@@ -1,4 +1,6 @@
 name: 11_sleep_memory_consolidation
+function: memory
+capability: "An idle stretch triggers sleep, which stores memories and records sleep.done."
 description: >-
   Dua pesan percakapan lalu idle 35 menit. Tick harus memicu tidur: memori
   tersimpan dan event sleep.done tercatat.

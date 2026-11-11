@@ -1,4 +1,6 @@
 name: 12_topic_recall_after_sleep
+function: memory
+capability: "A preference said once is recalled later from another body after sleep."
 description: >-
   Fakta preferensi kopi sengaja dikubur di bawah 25 pesan lain di DM, jauh di
   luar recent_events (20) dan recent_elsewhere (10). Setelah tidur

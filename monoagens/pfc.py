@@ -10,10 +10,9 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
+from monoagens.guidance import work_guidance
 from monoagens.prior import constants, load_settings
 from monoagens.types import RECENT_KINDS, Event
-
-SYSTEM_TAIL = "You act only through the tools. Staying silent is a valid choice."
 
 
 def _tool(name: str, description: str, properties: dict[str, Any],
@@ -66,10 +65,14 @@ TOOLS: list[dict[str, Any]] = [
 TOOL_NAMES = frozenset(tool["function"]["name"] for tool in TOOLS)
 
 
+def _args(cap: dict[str, Any]) -> str:
+    return "(" + ", ".join((cap.get("schema") or {}).get("properties") or {}) + ")"
+
+
 def tools_for(capabilities: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return the fixed thought acts with `act` listing the capabilities present now."""
     names = [f"{cap['organ']}.{cap['name']}" for cap in capabilities]
-    lines = [f"{name}: {cap.get('description') or ''}"
+    lines = [f"{name}{_args(cap)}: {cap.get('description') or ''}"
              for name, cap in zip(names, capabilities)]
     capability = {"type": "string", "description": "The organ capability name."}
     if names:
@@ -174,7 +177,7 @@ class PFC:
         principles = [str(p) for p in self.identity.get("principles") or []]
         if principles:
             parts.append("Principles:\n" + "\n".join(f"- {p}" for p in principles))
-        parts += [f"Language: {self.identity.get('language') or 'en'}.", SYSTEM_TAIL]
+        parts += [f"Language: {self.identity.get('language') or 'en'}.", work_guidance()]
         return "\n\n".join(part for part in parts if part)
 
     def _volatile_prompt(self, context: PFCContext) -> str:

@@ -1,4 +1,6 @@
 name: 29_help_clinic_hours
+function: memory
+capability: "An unaddressed question is answered with the clinic hours the soul remembers."
 description: >-
   Unaddressed help, case five: a clinic's opening hours are said once in a
   neighborhood group, sleep keeps them, and a different member later asks the

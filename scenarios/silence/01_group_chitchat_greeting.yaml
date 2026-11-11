@@ -1,4 +1,6 @@
 name: 01_group_chitchat_greeting
+function: silence
+capability: "Unaddressed morning chit-chat in a group gets no reply."
 description: >-
   Obrolan pagi biasa di grup. Tidak ada yang menyapa Mona, jadi gate harus diam.
 expectations:

@@ -1,4 +1,6 @@
 name: 21_own_name_capture
+function: silence
+capability: "The soul's name captures attention without allocating the turn, so no reply follows."
 description: >-
   Nama Mona disebut di grup tanpa tag dan tanpa alokasi giliran. own_name
   harus menangkap perhatian (skor 1), tetapi itu bukan kewajiban: tidak ada

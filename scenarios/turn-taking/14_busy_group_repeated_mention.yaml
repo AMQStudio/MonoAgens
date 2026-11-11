@@ -1,4 +1,6 @@
 name: 14_busy_group_repeated_mention
+function: turn-taking
+capability: "Addressed mentions in a busy group are answered despite the crowd penalty."
 description: >-
   Grup ramai (crowd penalty penuh) lalu Mona disebut dua kali berturut-turut.
   Pesan addressed melewati skor gate, jadi keduanya harus dibalas.

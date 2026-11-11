@@ -1,4 +1,6 @@
 name: 09_reminder_ask_again
+function: promises
+capability: "A follow-up asked for one hour later fires once while the owner stays silent."
 description: >-
   "Tanya lagi kalau aku belum jawab dalam 1 jam": Expectation dengan cue satu jam
   kemudian harus terpicu sekali bila owner tetap diam.

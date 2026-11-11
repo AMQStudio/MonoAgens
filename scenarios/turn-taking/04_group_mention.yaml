@@ -1,4 +1,6 @@
 name: 04_group_mention
+function: turn-taking
+capability: "A direct mention in a group is answered there."
 description: >-
   Mona disebut langsung di grup; pesan addressed harus membangunkan PFC dan dibalas.
 expectations:

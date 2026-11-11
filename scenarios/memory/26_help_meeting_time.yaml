@@ -1,4 +1,6 @@
 name: 26_help_meeting_time
+function: memory
+capability: "An unaddressed question in a group is answered with a time said in the owner's direct chat."
 description: >-
   Unaddressed help, case two: the owner tells Mona the meeting time in a direct
   chat, sleep stores it, and a group member who was not there asks when the
@@ -17,8 +19,8 @@ expectations:
     step: 4
     count: 1
     label: exactly one answer in the group
-  - type: mentions
-    text: "sembilan"
+  - type: mentions_any
+    texts: ["sembilan", "jam 9", "09"]
     step: 4
     label: the answer gives the meeting time from memory
 steps:

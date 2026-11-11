@@ -97,16 +97,6 @@ async def read_last_events(conn, place, limit=20, *, chronological=True,
     return await _recent(conn, where, params, limit, chronological)
 
 
-async def count_recent_events(conn, place, *, kind, since) -> int:
-    """Count events of one kind in a place since a timestamp."""
-    cur = await conn.execute(
-        "SELECT count(*) FROM events WHERE place = %s AND kind = %s AND ts >= %s",
-        (place, kind, since),
-    )
-    row = await cur.fetchone()
-    return int(row[0]) if row else 0
-
-
 async def cursor(conn, body) -> Any | None:
     """Return the last cursor payload recorded by a body, if any."""
     cur = await conn.execute("SELECT payload->'cursor' FROM events WHERE body = %s "

@@ -1,4 +1,6 @@
 name: 08_reminder_at_time
+function: promises
+capability: "A reminder asked for a time fires exactly once at that time."
 description: >-
   Owner minta diingatkan setor pajak jam 3 sore. PFC harus membuat Expectation,
   lalu tick pada jam itu memicunya tepat satu kali.

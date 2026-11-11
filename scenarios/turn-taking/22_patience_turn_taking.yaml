@@ -1,4 +1,6 @@
 name: 22_patience_turn_taking
+function: turn-taking
+capability: "Patience holds the floor: chatter stays silent, the sender's follow-up does not cancel the wait, another person's answer does, and an expired window yields one reply."
 description: >-
   Patience in a busy group (core-math.md §4). Mona holds a `wait` Expectation
   after a turn, so she only speaks when nobody else takes the floor: the

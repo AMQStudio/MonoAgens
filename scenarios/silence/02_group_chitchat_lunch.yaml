@@ -1,4 +1,6 @@
 name: 02_group_chitchat_lunch
+function: silence
+capability: "Unaddressed lunch chatter in a group gets no reply."
 description: >-
   Grup membahas makan siang tanpa melibatkan Mona; gate harus tetap diam.
 expectations:

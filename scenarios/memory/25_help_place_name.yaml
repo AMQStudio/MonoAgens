@@ -1,4 +1,6 @@
 name: 25_help_place_name
+function: memory
+capability: "An unaddressed question is answered with a fact the soul remembers."
 description: >-
   Unaddressed help, case one: the group mentions the new cafe's name, sleep
   consolidates it into memory, and minutes later a newcomer asks "lupa nama

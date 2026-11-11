@@ -1,4 +1,6 @@
 name: 10_reminder_recurring_nudge
+function: promises
+capability: "A recurring reminder fires again on the next day under its policy."
 description: >-
   Nudge berulang setiap hari. Satu hari kemudian pengingat pertama terpicu,
   satu hari lagi pengingat kedua harus terpicu (bukan policy sekali saja).

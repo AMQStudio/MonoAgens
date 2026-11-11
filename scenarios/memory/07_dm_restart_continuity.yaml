@@ -1,4 +1,6 @@
 name: 07_dm_restart_continuity
+function: memory
+capability: "A restart keeps the conversation's context because the same Log is read again."
 description: >-
   Diskusi di DM, bot restart di tengah percakapan, lalu owner melanjutkan topik.
   Kernel baru harus memakai database yang sama sehingga konteks "pindah kantor"

@@ -1,4 +1,6 @@
 name: 06_dm_conversation
+function: turn-taking
+capability: "A direct message is answered."
 description: >-
   Obrolan langsung dengan owner. Pesan DM selalu addressed dan harus dibalas.
 expectations:
