@@ -114,7 +114,7 @@ Found in the architect's review of Parts 1–9.
 
 - [x] 10.1 `place_kind` (direct | shared) comes from the organ in every percept (Telegram, CLI and the replay's test organs set it); `reach.py` uses it and no longer reads the shape of any id; unknown is treated as shared. Grep proves no platform name or id format in the core.
 - [x] 10.2 Speaking elsewhere: a communicative act aimed at another place becomes an intent and one more wake in the target place, with that place's desk; the message is written there. `reach.leaks` stays as a second check. Test: a fake model that paraphrases Fulan's private line when asked to message Budi cannot leak it, because the line is not on Budi's desk. Scenarios 18 and 19 follow the new flow.
-- [ ] 10.3 Split `identity.py`: `self.recall` and the task desk move to a new `recall.py` (≤ 160); `identity.py` ≤ 120; whole package ≤ 3,800.
+- [x] 10.3 Split `identity.py`: `self.recall` and the task desk move to a new `recall.py` (≤ 160); `identity.py` ≤ 120; whole package ≤ 3,800.
 - [ ] 10.4 Wire the circuit breaker's "goal continued" arm (`act.result`) in the kernel loop.
 - [ ] 10.5 Feeling-of-knowing: the cue's own vector is never one of its candidates.
 - [ ] 10.6 Unaddressed help: at least five scenarios where an unaddressed group line should be answered because the soul knows something useful ("lupa nama tempatnya apa ya" with the answer in memory), and five where it should stay silent. If the gate misses them, tune prior values only, and write the evidence under Notes.
@@ -419,3 +419,20 @@ Part 10 notes (worker, 10.2):
   the file line. Scenarios 18 (steps 6, 7) and 19 (steps 4, 6) gained the target-desk answers.
 - Tests: `uv run pytest` 240 passed; fake replay 86/86, absolute-line violations 0, honesty 51/51.
   Budgets: kernel 270/280, reach 141/150, pfc 276/280, organs 132, package 3,755/3,800.
+
+Part 10 notes (worker, 10.3):
+- `monoagens/recall.py` is new (127 lines, budget 160): it declares the `recall` capability
+  (`RECALL`), holds the search over the Log and memories (`search(conn, action)`, moved verbatim
+  from `SelfOrgan._recall`) and the task desk (`doing_lines`), with its private helpers
+  (`_rows`, `_result_text`, `_inside`, `_stamp`, `_payload_text`). `prior` is imported inside
+  `search` because `prior` imports `identity` at module level; importing it at module level
+  made `memory -> recall -> prior -> identity -> recall` fail when `recall` was the first module
+  loaded.
+- `monoagens/identity.py` is 101 lines (budget 120): birth (`from_certificate`, `load`,
+  `ensure`), the identity update (`_update`) and `SelfOrgan`, whose `act` delegates `recall` to
+  `recall.search`; `CAPABILITIES` keeps the same order (`set_identity`, then `RECALL`), so the
+  capability enum `["self.set_identity", "self.recall", ...]` is unchanged.
+- Call sites updated: `memory.py` and `tests/test_pfc.py` import `doing_lines` from
+  `monoagens.recall`. No behavior changed.
+- `uv run pytest`: 240 passed. Fake replay: 86/86 checks, absolute-line violations 0, honesty
+  51/51, missed-help rate 0.0%. Package: 3,769 lines (budget 3,800).

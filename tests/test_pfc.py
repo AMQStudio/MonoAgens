@@ -11,7 +11,8 @@ import pytest
 
 from monoagens.clock import FakeClock
 from monoagens.cognition import Situation, appraise
-from monoagens.identity import SelfOrgan, doing_lines
+from monoagens.identity import SelfOrgan
+from monoagens.recall import doing_lines
 from monoagens.kernel import Kernel
 from monoagens.pfc import PFC, PFCContext, TOOL_NAMES
 from monoagens.store import append_event, read_state, write_state

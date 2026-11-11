@@ -12,7 +12,7 @@ import psycopg
 from pgvector import Vector
 
 from monoagens import budget
-from monoagens.identity import doing_lines
+from monoagens.recall import doing_lines
 from monoagens.pfc import PFCContext
 from monoagens.prior import constants, retrieval
 from monoagens.store import (active_expectation_lines, append_event,
