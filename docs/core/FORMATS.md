@@ -2,7 +2,7 @@
 
 The two formats the core itself reads: what an organ declares and what it senses. Changes to
 a format bump its version. Other formats: [prior](../birth/FORMATS.md),
-[installed skill](../middleware/FORMATS.md), [package manifest](../packages/FORMATS.md).
+[installed skill](../middleware/skills/FORMATS.md), [plugin manifest](../plugins/FORMATS.md).
 
 ## 1. Organ capability descriptor
 Declared by an organ at registration. One entry per capability:

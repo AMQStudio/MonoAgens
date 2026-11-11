@@ -1,9 +1,9 @@
-# Packages — Formats
+# Plugins — Formats
 
 Changes to a format bump its version.
 
-## 1. Package manifest (Draft)
-One file at the root of a package declares everything it brings (D41). The loader reads it; the
+## 1. Plugin manifest (Draft)
+One file at the root of a plugin declares everything it brings (D41). The install module reads it; the
 core never does.
 
 ```yaml

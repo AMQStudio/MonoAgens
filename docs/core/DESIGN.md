@@ -24,9 +24,9 @@ brain.**
 | Layer | What it is | Learns? |
 |---|---|---|
 | Core | the soul: a generic brain (this document, sections 2–3, 5–8) | yes |
-| Organs | bodies (Telegram, CLI, later WhatsApp, robots) and tools (search, files, email) | no |
-| Middleware | static rules in the three hooks: owner policy, commands, RBAC, installed skills | no |
-| Packages | bundles of organs, middleware, installed skills and dependencies ("plugins") | no |
+| Middleware | the foundation between the core and everything outside it, running in the three hooks: policy, RBAC, commands & tools, install, identity, skills | no |
+| Bodies | organs for platforms and devices (Telegram, CLI, later WhatsApp, robots) | no |
+| Packages (plugins) | features built on the middleware: tool organs (search, files), memory-view, modes, roles | no |
 | Birth inputs | birth certificate (who I am) and prior (my instincts) | — |
 
 **Non-goals.**

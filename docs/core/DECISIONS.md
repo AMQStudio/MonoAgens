@@ -5,8 +5,9 @@ architect and carries the decision numbers it came from (Dxx); the discussion hi
 is in git (commit 32248b1 and earlier). If DESIGN.md, MATH.md, FORMATS.md or any other layer
 disagrees with this file, this file wins.
 
-The other layers have their own rulings: [organs](../organs/DECISIONS.md),
-[middleware](../middleware/DECISIONS.md), [packages](../packages/DECISIONS.md),
+The other layers have their own rulings: [bodies](../bodies/DECISIONS.md),
+[middleware](../middleware/DECISIONS.md), [plugins](../plugins/DECISIONS.md) (called packages
+here),
 [birth inputs](../birth/DECISIONS.md), [project](../project/DECISIONS.md). Map of all
 documents: [docs/README.md](../README.md).
 

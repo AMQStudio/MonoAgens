@@ -28,4 +28,5 @@ git.
 
 ## 2. Open
 - Worker prompts for core Track A2 and the Phase 2 tracks, when the owner resumes implementation.
-- Deferred non-core items: identity linking and package suggestions (middleware).
+- Deferred non-core items: identity linking (middleware/identity) and plugin suggestions
+  (plugins).
