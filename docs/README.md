@@ -3,7 +3,7 @@
 | Read | When |
 |---|---|
 | [constitution.md](constitution.md) | always first: the rules that never change |
-| [core.md](core.md) | the soul, incl. birth certificate and prior format — **FINAL, frozen** |
+| [core.md](core.md) | the soul, incl. birth certificate and prior format — **FINAL; contract frozen** |
 | [core-math.md](core-math.md) | the formulas behind the core and their sources |
 | [middleware.md](middleware.md) | the foundation in the middle: policy, commands & tools, install, skills, identity, RBAC |
 | [bodies.md](bodies.md) | Telegram, CLI, later WhatsApp, voice, robots |

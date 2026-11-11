@@ -1,5 +1,5 @@
 # 017 — Core: born from a prior
-Status: todo | Wave: 7 | Depends on: 001
+Status: deferred (until weeks of real logs) | Wave: 7 | Depends on: 001
 Read first: [core.md](../core.md) §9.3–9.4
 May touch: `monoagens/config.py`, `prior/`, `tests/`
 

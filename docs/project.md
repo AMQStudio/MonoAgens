@@ -59,7 +59,7 @@ The rule for every setting: the file gives the starting value; what the soul's b
 | `README.md` (root) | people | what it is, install, run, tune with replay |
 | `AGENTS.md` (root) | coding agents | rules, stack, invariants, size budget |
 | `docs/constitution.md` | everyone | the rules that never change |
-| `docs/core.md` | everyone | the core specification (frozen) |
+| `docs/core.md` | everyone | the core specification (contract frozen) |
 | `docs/core-math.md` | scientists | every formula, why it was chosen, sources |
 | `docs/middleware.md`, `bodies.md`, `plugins.md`, `project.md` | everyone | one specification per layer |
 | `prior/` (root) | developers | default prior values: data, tuned with replay |

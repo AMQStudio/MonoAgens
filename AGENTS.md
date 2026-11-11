@@ -16,8 +16,9 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
 - Specifications (every `docs/*.md`) and this file are owned by the architect. Workers may tick
   boxes and write under **Notes** in their own task file in `docs/tasks/`; they never edit a
   specification.
-- **The core design is FINAL and frozen** (`docs/constitution.md` §1). No track, worker or
-  package changes it; a need the core cannot meet stops and goes to the owner.
+- **The core's contract is frozen and its formulas change only with evidence**
+  (`docs/constitution.md` §1). No task, worker or plugin changes the core design; a need the
+  core cannot meet stops and goes to the owner.
 
 ## Secrets (never break this)
 - Never read, print, cat, grep, copy, or summarize `.env` or any file holding secrets.
@@ -38,8 +39,8 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
 - Persona text in `soul.yaml` may be in any language.
 
 ## Invariants (never break these)
-1. **The core is only a brain** (D1, D2, D32). `monoagens/kernel.py`, `store.py`, `expect.py`,
-   `memory.py`, `pfc.py` and `monoagens/cognition/` know only senses, organs, hooks and thought
+1. **The core is only a brain** (D1, D2, D32). `monoagens/kernel.py`, `hooks.py`, `jobs.py`,
+   `migrate.py`, `store.py`, `expect.py`, `memory.py`, `pfc.py` and `monoagens/cognition/` know only senses, organs, hooks and thought
    acts. They never import from `monoagens/bodies/` or packages, never mention a platform, and
    never hard-code a world action (speaking included) — those are organ capabilities.
 2. **The log is immutable.** The `events` table is INSERT-only, enforced by a trigger. The only
@@ -87,7 +88,9 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
 - No new dependency, ORM, agent framework, or platform SDK without the owner's approval.
 
 ## Size budget (excluding tests)
-kernel.py ≤ 280 lines · store.py ≤ 240 · expect.py ≤ 240 · memory.py ≤ 260 · pfc.py ≤ 280 ·
+kernel.py ≤ 280 lines · hooks.py ≤ 150 (hook lists, ordering, watchdog) · jobs.py ≤ 150
+(background jobs and their timeouts) · migrate.py ≤ 120 (numbered migrations, backup) ·
+store.py ≤ 240 · expect.py ≤ 240 · memory.py ≤ 260 · pfc.py ≤ 280 ·
 bodies/telegram.py ≤ 180 ·
 bodies/cli.py ≤ 120 · cli.py ≤ 60 · cognition/ ≤ 600 in total, each file ≤ 160 ·
 middleware.py ≤ 150 · whole package ≤ 3,500 lines.
@@ -97,7 +100,8 @@ violation, not a fix.
 Going over budget means the design is wrong. Stop and report; do not force it.
 
 ## Parallel tasks
-- A task touches only the files its **May touch** line names. Shared files (`kernel.py`,
+- A task touches only the files its **May touch** line names (task 001 may create `hooks.py`,
+  `jobs.py` and `migrate.py`). Shared files (`kernel.py`,
   `store.py`, `sql/schema.sql`, `soul.yaml`) are changed only by task 001 (alignment), or by a
   task whose **May touch** line says so explicitly; other tasks that need a change there stop and report.
 - Always `git pull --rebase` before starting and before pushing.

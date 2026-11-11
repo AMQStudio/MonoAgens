@@ -3,13 +3,19 @@
 The few rules that never change. Every document, task, plugin and worker follows them. Only the
 owner can amend this file. Decision numbers (Dxx) trace to the history in git.
 
-## 1. The core is a frozen brain
-The core design ([core.md](core.md)) is **FINAL for v1 and frozen**. Allowed edits to it: fixing
-an inconsistency, a typo or a broken reference, and clarifications that change no behavior.
-Everything else belongs to another layer — middleware, bodies, plugins. The *values* in the default
-prior (`prior/`) are data, tuned with replay, not part of the frozen design. A need that truly
-cannot be met elsewhere waits for a v2 of the core, which only the owner can open, with a new
-major version. No task, plugin or worker changes the core design.
+## 1. The core's contract is frozen; its internals answer to evidence (D44)
+Like a kernel: the interface to the outside never breaks, the inside may improve.
+- **Frozen for v1** — the stability contract ([core.md §3](core.md)): percept, capability
+  descriptor, hook contract, the six levers, events, `recall`, birth certificate and prior
+  format — plus the two absolute lines, the complexity budget and the list of brain functions
+  (the brain map). Breaking any of these is a core v2, which only the owner can open.
+- **Provisional** — the internal formulas: how each signal is computed, the terms of θ, the
+  ACT-R parameters, the desk layout. They may change **only with evidence** (replay scenarios
+  plus real logs showing the change is better), recorded as a decision with that evidence, never
+  by a task, plugin or worker on its own.
+- **Data** — the values in the default prior (`prior/`), tuned with replay at any time.
+- Always allowed: fixing an inconsistency, a typo or a broken reference, and clarifications that
+  change no behavior. Everything else belongs to another layer — middleware, bodies, plugins.
 
 ## 2. Design by brain function, not by scenario (D39, D40)
 - The core is a closed list of brain functions: the brain map in [core.md §2](core.md). Each row

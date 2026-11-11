@@ -13,6 +13,6 @@ Dynamic θ, the seeded go/no-go draw and the circuit breaker on commitments.
 - [ ] T4 Knob mapping function (one place) from the prior's knobs to θ, τ, γ and weights.
 
 ## Done when
-Same events + seed → same decisions; talk rate ≤ 1/n in a busy group; an addressed message always wakes.
+Same events + seed → same decisions; talk rate ≤ 1/n in a busy group; an addressed message always wakes; tuned for recall — the missed-help rate (011) is the first number to bring down.
 
 ## Notes

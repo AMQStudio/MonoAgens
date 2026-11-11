@@ -9,7 +9,7 @@ through its checklist, ticks it, and commits.
    the task links, before touching code.
 2. Touch only the files listed under **May touch**. A needed change elsewhere stops the work and
    goes to the architect.
-3. **Never change a specification** (`docs/*.md`). The core is frozen. A design question stops
+3. **Never change a specification** (`docs/*.md`). The core contract is frozen. A design question stops
    the work; write it under **Notes** and report.
 4. One sub-task = one commit when practical. A task is done only when its **Done when** checks
    pass **and** every earlier test and the replay suite still pass.
@@ -19,6 +19,22 @@ through its checklist, ticks it, and commits.
 
 Checklist syntax (as in Spec Kit / Kiro): `- [ ] T1 description` — `[P]` marks a sub-task that
 may run in parallel with the others of the same task; `- [x]` when done.
+
+## Launch path (do these first)
+"Launch" means: the owner uses the soul every day in a direct chat and one group. The shortest
+path there, in order: [001](001-core-align.md) → [003](003-core-signals.md),
+[004](004-core-gate.md), [005](005-core-turn-taking.md) → [010](010-core-desk.md), with
+[011](011-core-replay.md) measuring the first number: the **missed-help rate** — of the group
+messages that should have been answered, how many passed the gate. The gate is tuned for
+recall, not precision: a needless wake costs a few tokens and the PFC can still stay silent; a
+missed moment is a failure. Everything else follows once there are weeks of real logs.
+
+**Deferred until weeks of real logs** (the spec stays; only the work waits):
+- 001 T11: only the `schema_version` field now; upcasting is written when a payload schema first
+  changes.
+- 001 T10: the code reads `prior/dispositions.yaml` directly; the full prior loader with loading
+  rules is task 017, deferred.
+- 009 T5 (snapshots) and task 017 (prior loader).
 
 ## Order and waves
 | Wave | Tasks | Runs |

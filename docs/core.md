@@ -1,8 +1,9 @@
 # Core — Specification
 
-**Status: FINAL for v1 — frozen (2026-11-11).** This one file is the core's design, rulings and
-formats. Only inconsistencies, typos, broken references and clarifications that change no
-behavior may be edited ([constitution §1](constitution.md)). Every rule carries the decision
+**Status: FINAL for v1 (2026-11-11).** This one file is the core's design, rulings and formats.
+The contract (§3 stability contract, the two absolute lines, the brain map) is frozen; internal
+formulas are provisional and change only with evidence from replay and real logs; prior values
+are data ([constitution §1](constitution.md)). Every rule carries the decision
 numbers it came from (Dxx); the discussion history of D1–D41 is in git (commit 32248b1 and
 earlier). Formulas and sources: [core-math.md](core-math.md). Work: [tasks/](tasks/README.md).
 
@@ -151,8 +152,8 @@ book.
 **Schema changes** are numbered SQL migrations with a version table, applied at start after an
 automatic backup; no migration framework (D33).
 
-**Snapshots** (D42). `state` is a projection of the log; rebuilding it from the first event gets
-slow over years. The core periodically writes a snapshot of `state` with the id of the last event
+**Snapshots** (D42; built once real logs show rebuilds are slow). `state` is a projection of the
+log; rebuilding it from the first event gets slow over years. The core periodically writes a snapshot of `state` with the id of the last event
 it includes (every `snapshot_every_events`); a rebuild loads the latest snapshot and replays only
 later events. Snapshots are caches: deleting them loses nothing. Hard forgetting invalidates every
 snapshot that contains the forgotten data; a new one is written from the cleaned log.
@@ -166,8 +167,9 @@ user-space ABI:
 - *Within v1, changes are additive only*: new optional fields, new event kinds, new constants.
   Readers ignore fields they do not know. Nothing that exists is renamed, removed or given a new
   meaning.
-- *Events are versioned*: every event carries a `schema_version`; readers upgrade old versions on
-  read (upcasting); stored events are never rewritten, except by hard forgetting.
+- *Events are versioned*: every event carries a `schema_version`; when a payload schema first
+  changes, readers upgrade old versions on read (upcasting); stored events are never rewritten,
+  except by hard forgetting.
 - Plugins put their own events under their own namespace (`<plugin>.<kind>`); only the core
   defines unprefixed kinds.
 - *Not part of the contract*: code modules and functions, database tables and indexes, prompt
