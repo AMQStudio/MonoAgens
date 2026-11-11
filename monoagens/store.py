@@ -25,22 +25,25 @@ _INSERT_EXPECTATION = (
     "policy, status, next_check_at, source_event, expires_at) VALUES (%s, %s, %s, %s, %s, %s, "
     "%s, %s, %s, 'active', %s, %s, %s) RETURNING id"
 )
-_EVENT_COLS = "id, ts, kind, who, place, body, payload, caused_by"
+_EVENT_COLS = "id, ts, kind, who, place, body, payload, caused_by, origin_actor"
 
 
 def _row_to_event(row):
     payload = row[6] if row[6] is not None else {}
-    return Event(row[0], row[1], row[2], row[3], row[4], row[5], payload, row[7])
+    return Event(row[0], row[1], row[2], row[3], row[4], row[5], payload, row[7], row[8])
 
 
 async def append_event(conn, *, ts, kind, who=None, place=None, body=None, payload=None,
-                       caused_by=None) -> Event:
-    """Append one event to the immutable Log."""
+                       caused_by=None, origin_actor=None) -> Event:
+    """Append one event to the immutable Log; origin inherits along caused_by."""
     if ts is None or kind is None:
         raise ValueError("ts and kind must be explicitly provided")
-    query = ("INSERT INTO events (ts, kind, who, place, body, payload, caused_by) VALUES "
-             f"(%s, %s, %s, %s, %s, %s, %s) RETURNING {_EVENT_COLS}")
-    cur = await conn.execute(query, (ts, kind, who, place, body, Jsonb(payload or {}), caused_by))
+    query = ("INSERT INTO events (ts, kind, who, place, body, payload, caused_by, origin_actor) "
+             "VALUES (%s, %s, %s, %s, %s, %s, %s, COALESCE(%s, "
+             "(SELECT origin_actor FROM events WHERE id = %s), %s)) "
+             f"RETURNING {_EVENT_COLS}")
+    cur = await conn.execute(query, (ts, kind, who, place, body, Jsonb(payload or {}), caused_by,
+                                    origin_actor, caused_by, who))
     return _row_to_event(await cur.fetchone())
 
 

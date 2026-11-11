@@ -13,8 +13,11 @@ CREATE TABLE IF NOT EXISTS events (
     place     text,
     body      text,
     payload   jsonb NOT NULL DEFAULT '{}'::jsonb,
-    caused_by bigint REFERENCES events (id)
+    caused_by bigint REFERENCES events (id),
+    origin_actor text
 );
+
+ALTER TABLE events ADD COLUMN IF NOT EXISTS origin_actor text;
 
 CREATE INDEX IF NOT EXISTS idx_events_place_id ON events (place, id);
 
@@ -87,6 +90,7 @@ CREATE TABLE IF NOT EXISTS memories (
     embedding        vector(384),
     tsv              tsvector GENERATED ALWAYS AS (to_tsvector('simple', text)) STORED,
     importance       real NOT NULL DEFAULT 0.5,
+    private          boolean NOT NULL DEFAULT false,
     valid_from       timestamptz NOT NULL DEFAULT now(),
     valid_to         timestamptz,
     superseded_by    bigint REFERENCES memories (id),
@@ -97,3 +101,4 @@ CREATE TABLE IF NOT EXISTS memories (
 );
 
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS use_count integer NOT NULL DEFAULT 0;
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS private boolean NOT NULL DEFAULT false;

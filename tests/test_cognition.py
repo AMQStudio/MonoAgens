@@ -487,3 +487,38 @@ def test_kernel_refuses_a_soul_whose_signal_weights_do_not_match(conn):
         Kernel(conn, soul={**SOUL, "cognition": {"weights": {"bogus": 1.0}}})
     with pytest.raises(ValueError, match="cognition.weights mismatch"):
         Kernel(conn, soul={key: value for key, value in SOUL.items() if key != "cognition"})
+
+
+class IdentityBody(RecordingBody):
+    """A body with one capability that changes who the soul is."""
+
+    def capabilities(self):
+        return [{"name": "set_identity", "description": "change who the soul is",
+                 "communicative": False, "long_running": False,
+                 "identity_changing": True}]
+
+
+async def test_identity_changing_capability_is_refused_for_a_non_owner(aconn):
+    fake = FakeLLM([[("act", {"capability": "telegram.set_identity", "arguments": {}})]])
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
+    body = IdentityBody()
+    kernel.register_body(body)
+
+    await _feed(kernel, replace(_msg("ubah dirimu"), who="person:other"))
+
+    assert body.actions == []
+    assert await _payload(aconn, "guard.stopped") == {
+        "hook": "action",
+        "reason": "only the owner may invoke identity_changing capabilities"}
+
+
+async def test_identity_changing_capability_passes_for_the_owner(aconn):
+    fake = FakeLLM([[("act", {"capability": "telegram.set_identity", "arguments": {}})]])
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
+    body = IdentityBody()
+    kernel.register_body(body)
+
+    await _feed(kernel, _msg("ubah dirimu"))
+
+    assert len(body.actions) == 1
+    assert await _kinds(aconn) == ["percept", "act.out"]

@@ -11,7 +11,7 @@ from monoagens import expect, memory
 from monoagens.clock import Clock
 from monoagens.cognition import Appraisal, appraise, validate_signals
 from monoagens.config import load_soul
-from monoagens.middleware import HookRegistry
+from monoagens.middleware import HookRegistry, owner_policy
 from monoagens.organs import OrganRegistry
 from monoagens.pfc import PFC, PFCContext, ToolCall
 from monoagens.store import (active_expectation_lines, add_budget_usage, append_event,
@@ -38,6 +38,8 @@ class Kernel:
         self.queue: asyncio.Queue[_Queued] = asyncio.Queue()
         self.organs = OrganRegistry()
         self.hooks = HookRegistry()
+        for pipeline in self.hooks:
+            pipeline.set_policy(owner_policy(pipeline.name))
         validate_signals((self.soul.get("cognition") or {}).get("weights") or {})
 
     async def put(self, event: Event) -> None:
@@ -62,7 +64,7 @@ class Kernel:
         async with self.conn.transaction():
             stored = await append_event(self.conn, ts=self.clock.now(), kind=kind, who=event.who,
                                         place=event.place, body=event.body, payload=payload,
-                                        caused_by=caused_by)
+                                        caused_by=caused_by, origin_actor=event.origin_actor)
             if project:
                 await project_event(self.conn, stored)
         return stored
@@ -235,7 +237,8 @@ class Kernel:
                                   {"capability": capability, "arguments": arguments})
         await self._encode(stored, str(arguments.get("text") or "") or None)
         ctx = {"conn": self.conn, "event": event, "now": self.clock.now(),
-               "capability": capability}
+               "capability": capability, "origin_actor": event.origin_actor,
+               "identity_changing": self.organs.capabilities[capability].get("identity_changing")}
         payload = await self._run_hooks("action", arguments, ctx, event,
                                         organ=capability.partition(".")[0])
         if payload is not None:

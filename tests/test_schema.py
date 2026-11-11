@@ -95,3 +95,16 @@ def test_new_cognition_columns_exist(conn):
     assert "use_count" in memories
     assert conn.execute("SELECT origin FROM expectations LIMIT 0").description is not None
     assert conn.execute("SELECT use_count FROM memories LIMIT 0").description is not None
+
+
+def test_provenance_and_privacy_columns_exist(conn):
+    events = {row[0] for row in conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'events'").fetchall()}
+    memories = {row[0] for row in conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'memories'").fetchall()}
+    assert "origin_actor" in events
+    assert "private" in memories
+    assert conn.execute("SELECT origin_actor FROM events LIMIT 0").description is not None
+    assert conn.execute("SELECT private FROM memories LIMIT 0").description is not None

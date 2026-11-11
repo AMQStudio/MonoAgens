@@ -21,7 +21,7 @@ from monoagens.types import Event
 DIM = 384
 MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 RRF_K, DECAY = 60.0, 0.995
-_ROWS = "id, text, who, place, importance, last_accessed_at"
+_ROWS = "id, text, who, place, importance, last_accessed_at, private"
 _VECTOR_SQL = (f"SELECT {_ROWS} FROM memories WHERE valid_to IS NULL AND embedding IS NOT NULL "
                "ORDER BY embedding <=> %s LIMIT 20")
 _TEXT_SQL = (f"SELECT {_ROWS} FROM memories WHERE valid_to IS NULL AND "
@@ -34,7 +34,8 @@ STORE_MEMORIES = {"type": "function", "function": {
         "items": {"type": "array", "items": {"type": "object", "required": ["text"],
                                              "properties": {
             "text": {"type": "string"}, "importance": {"type": "number"},
-            "who": {"type": "string"}, "place": {"type": "string"}}}},
+            "who": {"type": "string"}, "place": {"type": "string"},
+            "private": {"type": "boolean"}}}},
         "core_memory": {"type": "string"}}}}}
 SLEEP_SYSTEM = (
     "You are {name}'s memory, asleep; nobody sees this. Summarize the events into "
@@ -105,6 +106,16 @@ class FastEmbedder:
             lambda: [[float(x) for x in v] for v in self._model.embed(list(texts))])
 
 
+class MemoryHit(str):
+    """A retrieved memory line that carries its place and privacy flag."""
+
+    def __new__(cls, line: str, *, place: str | None, private: bool) -> MemoryHit:
+        """Build one line the context policy can filter."""
+        hit = super().__new__(cls, line)
+        hit.place, hit.private = place, private
+        return hit
+
+
 async def retrieve(conn: psycopg.AsyncConnection[Any], embedder: Any, query: str, *,
                    k: int = 5, now: datetime | None = None,
                    event_id: int | None = None) -> list[str]:
@@ -132,8 +143,8 @@ async def retrieve(conn: psycopg.AsyncConnection[Any], embedder: Any, query: str
     if chosen:
         await conn.execute("UPDATE memories SET last_accessed_at = %s WHERE id = ANY(%s)",
                            (now, [row[0] for row in chosen]))
-    return [f"- {row[1]} ({row[2] or '?'} at {row[3] or '?'}; importance {row[4]:.2f})"
-            for row in chosen]
+    return [MemoryHit(f"- {row[1]} ({row[2] or '?'} at {row[3] or '?'}; importance {row[4]:.2f})",
+                      place=row[3], private=bool(row[6])) for row in chosen]
 
 
 async def sleep_due(conn: psycopg.AsyncConnection[Any], now: datetime,
@@ -198,11 +209,12 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
     async with conn.transaction():
         for item, vector in zip(items, vectors):
             await conn.execute(
-                "INSERT INTO memories (who, place, text, embedding, importance, valid_from, "
-                "last_accessed_at, source_events) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                "INSERT INTO memories (who, place, text, embedding, importance, private, "
+                "valid_from, last_accessed_at, source_events) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (item.get("who") or None, item.get("place") or None, str(item["text"]),
-                 Vector(vector), float(item.get("importance", 0.5)), now, now,
-                 [r[0] for r in rows]))
+                 Vector(vector), float(item.get("importance", 0.5)),
+                 bool(item.get("private", False)), now, now, [r[0] for r in rows]))
         for row in await read_expectations(conn, "ex.status = 'active' AND ex.expires_at <= %s",
                                            (now,)):
             await resolve_expectation(conn, row, now, "dropped")

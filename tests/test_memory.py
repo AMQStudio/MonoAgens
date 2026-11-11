@@ -307,3 +307,29 @@ async def test_memory_query_falls_back_to_the_expectation_about(aconn):
     lines = await kernel._memories(Event(id=None, ts=START, kind="expectation.fired",
                                          payload={"about": "kopi"}))
     assert lines and "Kopi tubruk" in lines[0]
+
+
+async def test_private_memories_enter_only_their_place_or_an_owner_direct_chat(aconn):
+    await _add_memory(aconn, "Muqsith punya tato rahasia", importance=0.9)
+    await aconn.execute("UPDATE memories SET private = true")
+    fake = FakeLLM([[]])
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL,
+                    embedder=FakeEmbedder())
+
+    def percept(place: str, place_kind: str) -> Event:
+        return Event(id=None, ts=START, kind="percept", who="person:owner", place=place,
+                     body="telegram", payload={"description": "tato rahasia",
+                                               "addressed": True, "place_kind": place_kind})
+
+    def memories() -> str:
+        prompt = fake.requests[-1]["messages"][2]["content"]
+        return prompt.split("<memories>", 1)[1].split("</memories>", 1)[0]
+
+    await _feed(kernel, percept("space:tg:2", "group"))
+    assert "tato rahasia" not in memories()
+
+    await _feed(kernel, percept("space:tg:2", "direct"))
+    assert "tato rahasia" in memories()
+
+    await _feed(kernel, percept(PLACE, "group"))
+    assert "tato rahasia" in memories()

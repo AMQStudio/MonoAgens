@@ -275,3 +275,23 @@ async def test_rebuild_state_from_events(aconn):
     assert restored is not None
     assert restored.value["place"] == "space:room2"
     assert restored.updated_by_event == e4.id
+
+
+async def test_origin_actor_defaults_to_who_and_inherits_along_caused_by(aconn):
+    t = datetime(2026, 11, 10, 10, 0, tzinfo=timezone.utc)
+    parent = await append_event(aconn, ts=t, kind="percept", who="person:alice",
+                                place="space:test")
+    assert parent.origin_actor == "person:alice"
+
+    inherited = await append_event(aconn, ts=t, kind="decision.note", who="person:mona",
+                                   place="space:test", caused_by=parent.id)
+    assert inherited.origin_actor == "person:alice"
+
+    explicit = await append_event(aconn, ts=t, kind="act.out", who="person:mona",
+                                  place="space:test", caused_by=parent.id,
+                                  origin_actor="person:owner")
+    assert explicit.origin_actor == "person:owner"
+
+    stored = await read_last_events(aconn, "space:test", limit=10)
+    assert [event.origin_actor for event in stored] == [
+        "person:alice", "person:alice", "person:owner"]

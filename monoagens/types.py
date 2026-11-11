@@ -22,6 +22,7 @@ class Event:
     body: str | None = None
     payload: dict[str, Any] = field(default_factory=dict)
     caused_by: int | None = None
+    origin_actor: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

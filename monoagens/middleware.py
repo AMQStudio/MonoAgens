@@ -3,11 +3,30 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
 SLOTS = ("first", "middle", "last")
 OWNER_POLICY = "policy"
+OWNER = "person:owner"
+
+
+def owner_policy(hook: str) -> Middleware:
+    """Return the absolute-line owner policy for one hook."""
+
+    async def policy(item: Any, ctx: Any) -> HookOutcome:
+        """Enforce the identity and privacy lines deterministically."""
+        if hook == "action" and ctx.get("identity_changing") \
+                and ctx.get("origin_actor") != OWNER:
+            return Stop("only the owner may invoke identity_changing capabilities")
+        if hook == "context":
+            keep = tuple(m for m in item.memories if not getattr(m, "private", False)
+                         or m.place == item.place or (item.place_kind == "direct"
+                         and getattr(item.trigger, "who", None) == OWNER))
+            return Replace(replace(item, memories=keep))
+        return Continue()
+
+    return policy
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,16 +104,14 @@ class HookPipeline:
     def middlewares(self, organ: str | None = None) -> tuple[Middleware, ...]:
         """Return the shared and matching organ-own middleware in slot order."""
         ordered = sorted(self._registrations, key=lambda item: SLOTS.index(item.slot))
-        return tuple(item.middleware for item in ordered
-                     if item.organ is None or item.organ == organ)
+        return tuple(reg.middleware for reg in ordered if reg.organ in (None, organ))
 
     async def run(self, item: Any, ctx: Any, *, organ: str | None = None,
                   on_stop: Callable[[str], Awaitable[None]],
                   on_error: Callable[[Exception], Awaitable[None]]) -> Any | None:
         """Run the chain in order; return the final item, or None when it stopped."""
-        chain = list(self.middlewares(organ))
-        if self.policy is not None:
-            chain = [self.policy, *chain, self.policy]
+        scoped = list(self.middlewares(organ))
+        chain = [self.policy, *scoped, self.policy] if self.policy is not None else scoped
         for middleware in chain:
             try:
                 outcome = await middleware(item, ctx)
