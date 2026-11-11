@@ -1,19 +1,19 @@
 # AGENTS.md — Standing Rules for Coding Agents
 
 This project is **MonoAgens**: a tiny kernel for one persistent AI self that lives in many bodies.
-Status: prototype. Read `DESIGN.md` before touching code. Work ONLY on the step or track you were given
-from `PLAN.md` or `ROADMAP.md`.
+Status: prototype. Read `DESIGN.md` before touching code. Work ONLY on the track you were given from
+`ROADMAP.md`.
 
 ## Who writes code
 - All implementation work is delegated to an **Orca Orchestration** worker running
   agent `omp` with model **`opencode-go/deepseek-v4.1-flash`**, effort **low**, on OpenCode Go.
-- The session that receives a PLAN.md step acts only as **coordinator**: it hands the step
+- The session that receives a ROADMAP track acts only as **coordinator**: it hands the track
   to the worker, then verifies the result (reads the diff, runs `uv run pytest`, checks the
   invariants and the size budget) before committing and reporting.
 - The coordinator does not write implementation code itself. If the worker fails twice on
   the same step, stop and report to the owner instead of taking over.
-- Architecture and design documents (`DESIGN.md`, `DECISIONS.md`, `PLAN.md`, `ROADMAP.md`, this file) are owned by the
-  architect. Workers may only tick steps in PLAN.md and never edit design decisions.
+- Architecture and design documents (`DESIGN.md`, `DECISIONS.md`, `ROADMAP.md`, `docs/FORMATS.md`, this file) are owned by the
+  architect. Workers may only tick tracks in ROADMAP.md and never edit design decisions.
 
 ## Secrets (never break this)
 - Never read, print, cat, grep, copy, or summarize `.env` or any file holding secrets.
@@ -24,9 +24,9 @@ from `PLAN.md` or `ROADMAP.md`.
 - If a secret is exposed anyway, stop and tell the owner which one, so it can be rotated.
 
 ## How to work
-- One session = one PLAN.md step = one commit.
+- One session = one ROADMAP track (or one listed sub-step) = one commit.
 - Do not start the next step. Do not add features that were not asked for.
-- A step is done only when all tests pass (`uv run pytest`). Tick the step in PLAN.md.
+- A step is done only when all tests pass (`uv run pytest`). Tick it in ROADMAP.md.
 - If a design question comes up, STOP and write the question down. Do not guess.
 
 ## Language
@@ -34,13 +34,13 @@ from `PLAN.md` or `ROADMAP.md`.
 - Persona text in `soul.yaml` may be in any language.
 
 ## Invariants (never break these)
-1. **The core is only a brain** (D1, D2). `monoagens/kernel.py`, `store.py`, `expect.py`,
+1. **The core is only a brain** (D1, D2, D32). `monoagens/kernel.py`, `store.py`, `expect.py`,
    `memory.py`, `pfc.py` and `monoagens/cognition/` know only senses, organs, hooks and thought
    acts. They never import from `monoagens/bodies/` or packages, never mention a platform, and
    never hard-code a world action (speaking included) — those are organ capabilities.
 2. **The log is immutable.** The `events` table is INSERT-only, enforced by a trigger. The only
-   exception is hard forgetting (DESIGN §9), through one dedicated function that the trigger
-   recognizes. `event_vectors` rows are deleted only by retention or hard forgetting, each
+   exception is hard forgetting (DESIGN §7), through one dedicated function that the trigger
+   recognizes. `event_vectors` rows are deleted only by fading or hard forgetting, each
    through its own dedicated path that writes an event.
 3. **One queue, one consumer.** Every source (bodies, clock) only `put`s into the queue.
    Only the kernel loop processes events, one at a time, in order.
@@ -59,10 +59,11 @@ from `PLAN.md` or `ROADMAP.md`.
 9. **Signals are pure.** A cognition signal only reads its `Situation` and returns a number in
    [0, 1]. No writes, no LLM calls, no I/O beyond what `Situation` already holds.
 10. **Decisions are reproducible.** Random draws come only from the seeded generator described
-   in DESIGN; never from `random` or the clock directly.
-
-11. **Complexity budget** (D26). The core holds at most 4 books, 5 thought acts,
-   4 hooks, 10 signals, 3 drives and one gate formula. A change that needs another core
+   in DESIGN, and all time comes from the injected clock (replay uses event times); never from
+   `random`, `datetime.now()` or `time.time()` directly.
+11. **Complexity budget** (D26, D32). The core holds at most 4 books, 5 thought acts
+   (think, act, expect, resolve, revise), 3 hooks (inbound, context, action), 10 signals,
+   3 drives and one gate formula. A change that needs another core
    primitive stops and goes to the architect.
 
 ## Stack and versions
@@ -81,9 +82,9 @@ from `PLAN.md` or `ROADMAP.md`.
 
 ## Size budget (excluding tests)
 kernel.py ≤ 280 lines · store.py ≤ 240 · expect.py ≤ 240 · memory.py ≤ 260 · pfc.py ≤ 280 ·
-gate.py ≤ 120 (removed once cognition replaces it) · bodies/telegram.py ≤ 180 ·
+bodies/telegram.py ≤ 180 ·
 bodies/cli.py ≤ 120 · cli.py ≤ 60 · cognition/ ≤ 600 in total, each file ≤ 160 ·
-middleware.py ≤ 150 · whole package ≤ 2,600 lines.
+middleware.py ≤ 150 · whole package ≤ 3,500 lines.
 Counted on readable code: lines ≤ 100 characters, one statement per line, blank lines between
 functions and classes, docstrings on public functions. Compressing code to fit the budget is a
 violation, not a fix.

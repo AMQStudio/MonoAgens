@@ -20,42 +20,51 @@ LLMs are a prefrontal cortex without the rest of the brain. MonoAgens is the res
 - Fix-up pass; replay tool with a real LLM (17 scenarios); CLI organ; `<recent>` across places.
 - Track A foundation: cognition package, `event_vectors`, seeded generator, decision
   breakdowns, hook lists, token budget.
+- Concept freeze: DECISIONS D1–D32, DESIGN.md finalized in eight sections.
 
 ## Phase 1 — Align the code with DESIGN (one track, first)
-**Track A2** — bring the merged Track A in line with D1–D23:
-- `say` / `react` move out of `pfc.py` into the Telegram and CLI organs as declared
-  capabilities (with the `communicative` flag); the PFC tool list is assembled from organs.
-- `act.out` / `act.result` replace `msg.out` / `react.out` (with a migration of old kinds in
-  replay and tests).
-- `event_vectors`: replace the no-delete trigger with the two dedicated delete paths
-  (retention, hard forgetting) — paths may be stubs that only write their events for now.
-- Hooks: four hooks named inbound / context / action / outbound; owner-policy slots first and
-  last; shared vs organ-own scope; collision check at boot.
-- `model.call` events for every model call (D23).
-Done when: all tests and replay pass; grep shows no platform name and no world action in the core.
+**Track A2** — bring the merged Track A in line with DESIGN (D32). Sub-steps, one commit each:
+1. Thought acts `think, act, expect, resolve, revise`; `say`/`react` become Telegram and CLI
+   capabilities (descriptor in docs/FORMATS.md); silence = a wake without `act`;
+   `act.out`/`act.result` replace `msg.out`/`react.out` in code, tests and replay.
+2. Three hooks (inbound, context, action) with owner-policy slots first and last, shared vs
+   organ-own scope, collision check at boot.
+3. Provenance and privacy: `origin_actor` on events (inherited along `caused_by`),
+   `identity_changing` check in the action hook; `place` + `private` on memories and the
+   context-hook filter.
+4. Lineage: `derived_from` on memories, expectations and vectors; replace the `event_vectors`
+   no-delete trigger with the two dedicated paths (fade, hard forget) — stubs that write their
+   events are fine.
+5. Budget: `model.call` for every model call; thrift mode and `budget.exhausted`.
+6. Expectation schema with the four kinds (`promise`, `wait`, `predict`, `guard`).
+7. Injected clock everywhere (no `datetime.now()` in the core); replay uses event times.
+Done when: all tests and replay pass; grep shows no platform name, no world action and no
+direct clock or random call in the core.
 
 ## Phase 2 — Cognition and memory (parallel tracks after A2)
 | Track | Work | Done when |
 |---|---|---|
-| B | ACT-R activation, `use_count`, FOK helper | frequently used memories outrank newer unused ones |
-| C | signals + habituation | "lupa nama tempatnya apa ya" scores high only when the answer is known; repeated stickers fade |
-| D | dynamic θ, go/no-go, decision outcomes | same events + seed → same decisions; talk rate ≤ 1/n in a busy group |
-| E | patience Expectations, `not_who` | someone else answers → silent; nobody → one reply |
-| F | `think`, motivation/confidence gate, principles, person cards, self-model (D12) | proactive replies always have a recorded thought; "what can you do?" matches `<self>` |
-| G | forward model, delta rule, dispositions with bounds (D16) | ignored proactive messages lower their causes; α = 0 disables learning |
-| H | self-correction (P1): `revise`, guarded facts, lessons | a correction supersedes the old memory; a contradicted fact triggers revision |
-| I | wake gate (D15, D21): relevance, staleness, allowed-now; free-text completion with cosine filter + classifier | a promise already fulfilled wakes no one; a question on the same topic never resolves a promise |
-| J | memory source and trust (D6); retention by activation (D14); soft and hard forgetting (D4) | a stranger cannot override an owner fact; hard forget leaves only `{"forgotten": true}` |
-| R | replay scenarios for B–J (any time) | each new scenario fails before its track lands and passes after |
+| B | ACT-R activation, `use_count`, feeling-of-knowing helper | frequently used memories outrank newer unused ones |
+| C | the five signals + habituation | "lupa nama tempatnya apa ya" scores high only when the answer is known; repeated stickers fade |
+| D | dynamic θ, seeded go/no-go, decision outcomes | same events + seed → same decisions; talk rate ≤ 1/n in a busy group |
+| E | `wait` Expectations (patience), `not_who` | someone else answers → silent; nobody → one reply |
+| F | `think` with motivation/confidence, principles, person cards, self-model | proactive replies always have a recorded thought; "what can you do?" matches `<self>` |
+| H | `revise`, `guard` facts checked in sleep, lessons with credence (α/β) | a correction supersedes the old memory; a contradicted fact is revised at the next sleep |
+| I | wake gate; free-text conditions with cosine filter + classifier; `lo` learning | a fulfilled promise wakes no one; a question on the same topic never resolves a promise |
+| J | attribution and reliability (α/β) per domain; fade with a fixed threshold; soft and hard forgetting | a stranger cannot override an owner fact; hard forget leaves only `{"forgotten": true}` and metadata |
+| R | replay scenarios for B–J, plus report metrics: false-speak rate, missed-help rate, tokens per simulated day, absolute-line violations (must be 0), honesty-rule compliance | each new scenario fails before its track lands and passes after |
+
+**Deferred until weeks of real logs exist (D32.9):** learned signal weights, learned
+dispositions (D16, D29), adaptive fade threshold (D14), social standing (D31), identity linking
+(D10), package suggestions (D28), a version system for learned skills.
 
 ## Phase 3 — Packages and the default owner policy
 - Loader for packages (organs + middleware + skills + dependencies), shared/organ-own scope.
 - Default owner policy, active out of the box (D22, D24): the two absolute lines (only the owner
   changes who the soul is; private content never enters another place), budget, quiet hours.
   Everything else is weighed by the PFC.
-- Credence for skills and lessons (D24): provenance, track record, bounded updates.
-- Shared packages: **commands** (one registry, identical `/help`), **alias map** (D10),
-  **skills** (installed SKILL.md, learned skills, versions, rollback; D11, D19).
+- Shared packages: **commands** (one registry, identical `/help`) and **skills** (installed and
+  learned SKILL.md in a folder under git; D11, D19). The alias map waits for a second chat app.
 Done when: a DM fact is never visible or said in a group, even when someone tries to talk the
 soul into it; a reasonable request from a group member is helped; a package cannot remove the
 policy;
@@ -81,8 +90,7 @@ Done when: "who is the president now?" triggers a search when a search organ exi
 honest "as of my knowledge" answer when it does not.
 
 ## Phase 7 — Born from a prior (D17, D25)
-A versioned prior file format for layers 1–2 (dispositions, generic skills and lessons, the
-models they were learned with); loading it at birth; a default prior in the repository.
+Loading a prior (docs/FORMATS.md) at birth; a default prior in the repository.
 Done when: a fresh soul born from the default prior passes the replay suite with empty memory.
 
 ## Phase 8 — More bodies, more models

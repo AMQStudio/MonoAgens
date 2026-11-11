@@ -1,298 +1,244 @@
-# DESIGN.md — MonoAgens Design
+# DESIGN.md — MonoAgens
 
-This document describes the target design, written from DECISIONS.md (D1–D23). Each section
-names the decisions it implements. If code and this document disagree, this document is the
-target; if this document and DECISIONS.md disagree, DECISIONS.md wins and this file is a bug.
+The current design, in eight sections. Reasons and history live in DECISIONS.md (cited as Dxx);
+file formats in docs/FORMATS.md; steps in ROADMAP.md; rules for coding agents in AGENTS.md.
+If this file and DECISIONS.md disagree, DECISIONS.md wins and this file has a bug.
 
-## 1. The idea
-MonoAgens is a guard who lives with its owner. It writes down everything that happens, knows
-where it is and what it is doing, holds Expectations about the world, and only "thinks hard"
-when something matters or an Expectation is missed. At night it sleeps and turns notes into
-memories and lessons. The LLM is its prefrontal cortex (PFC): called to weigh things and
-choose intentions and words, never to stand watch.
+---
 
-LLMs are a prefrontal cortex without the rest of the brain. MonoAgens is the rest of the brain.
+## 1. Goals and non-goals
 
-**Stance: a quantized brain.** We keep a handful of brain *functions* as cheap signals the
-kernel computes for every event, and wake the PFC only for moments that deserve it.
-Human-like behavior must come from combinations of these few signals, never from scenario code.
-There is no amygdala: no emotions, moods or simulated feelings (D20). These are engineering
-metaphors; never describe the system as conscious.
+**Goal.** One persistent self (a *soul*) that lives in many bodies — chat apps, a terminal,
+later devices and robots — remembers, knows when to stay quiet, keeps its promises, is honest
+about what it knows, learns from experience, and works out of the box for non-technical people.
 
-| Brain function (analogy) | Mechanism | Computed by |
+**LLMs are a prefrontal cortex without the rest of the brain. MonoAgens is the rest of the
+brain.**
+
+**Non-goals.**
+- No emotions, moods or simulated feelings. The core imitates cognitive *functions*:
+  perception, attention, memory, expectation, judgment, learning, restraint (D20).
+- Not a hosted service. One deployment is one soul with its own database; the owner brings
+  their own model key (BYOK) (D7, D8).
+- No roles in the core. Assistant, customer service, sysadmin come from packages (D20).
+- Never described as conscious or as "% human". Brain names below are engineering metaphors.
+
+## 2. Mental model
+
+- **The PFC is the LLM**: it weighs, decides intentions and chooses words. It is woken only
+  when a moment deserves it.
+- **The core is the rest of the brain**: it records, remembers, expects, pays attention, and
+  decides cheaply whether the PFC should wake.
+- **Organs are the body**: they sense the world and carry out actions in their own way.
+- **Hooks are guards at three doors**: they do not think; they apply rules and cannot be talked
+  out of them.
+
+| Brain function (analogy) | Mechanism | Where |
 |---|---|---|
-| Brainstem | kernel loop | core |
-| Senses, motor cortex, cerebellum | senses and organs (fine control inside the organ) | organs |
-| Hippocampus | `events` log, sleep consolidation | core / model at night |
-| Declarative memory (ACT-R) | memory activation | core (SQL) |
-| Predictive cortex | Expectations; forward model after acting | core |
-| Metamemory (feeling of knowing) | FOK signal | core |
-| Salience network | salience over signals | core |
-| Habituation | per-source dampening | core |
-| Cognitive "hypothalamus" (drives, no emotion) | dynamic threshold: talk rate, budget, promise debt | core |
-| Basal ganglia (go / no-go) | probabilistic gate | core |
-| Self-referential network | self-model assembled each wake | core |
-| Theory of mind | person cards | model during sleep |
-| Default mode network | sleep, reflection, lessons | model at night |
+| Brainstem | the kernel loop | core |
+| Senses, motor cortex, cerebellum | organs (fine control inside the organ) | organs |
+| Hippocampus | the event log; consolidation during sleep | core / sleep |
+| Declarative memory | ACT-R activation | core |
+| Predictive cortex | Expectations; `predict` after acting | core |
+| Metamemory | feeling-of-knowing signal | core |
+| Salience network, habituation | salience over signals; per-source dampening | core |
+| Cognitive drives (no emotion) | threshold: talk rate, budget, promise debt | core |
+| Basal ganglia (go / no-go) | seeded probabilistic gate | core |
+| Theory of mind | person cards (closeness, reliability) | sleep |
 | Prefrontal cortex | inner thought, intentions, words | PFC |
 | Values | principles in the stable prompt | PFC |
 
-## 2. Architecture: a brain, organs and an outer ring (D1, D2, D9)
-**The core is only a brain.** It knows three generic things:
-- **senses** — anything that `put`s events into the queue (a chat app, a clock, a camera);
-- **organs** — anything that receives actions via `act` and may send results back as events
-  (a chat app, a speaker, a robot arm, a web search client);
-- **hooks** — four points where middleware attaches (section 10).
+**One turn of the loop.**
+1. Take one event from the queue (one consumer).
+2. Record it and update state in one transaction; release the intake ack; embed its text.
+3. **Inbound hook** (alias map, commands, owner policy). A Stop ends the turn (recorded).
+4. Check Expectations (time path on ticks, event path on events) through the wake gate.
+5. **Appraise** without any model call: reflexes, or signals → salience → threshold → draw.
+6. If the PFC wakes: assemble the layered context, pass the **context hook**, call the model.
+7. For each `act`: pass the **action hook**, record `act.out`, hand it to the organ, create a
+   `predict` Expectation.
+8. On ticks: maybe sleep.
 
-The core has no notion of tool, plugin, skill, command, gateway or platform. One object may be
-both a sense and an organ (Telegram hears and speaks).
+## 3. Core contract
 
-**Outside the core** a loader assembles **packages**. A package may contain organs, middleware,
-skill documents and dependencies on other packages. The **owner policy** (section 10) wraps all
-package middleware and cannot be removed by a package.
+**Four books.**
+- `events` — the log: id · ts · kind · who · place · body · origin_actor · payload · caused_by.
+  INSERT-only by trigger; the single exception is hard forgetting (section 7). `who` is a
+  person id (after the alias map), `place` a neutral space id, `body` the organ name;
+  `origin_actor` is inherited along the causal chain. `event_vectors` (event_id, embedding) is
+  the log's index; rows leave only by fading or hard forgetting, each through one dedicated
+  path that writes an event.
+- `state` — a namespaced key/value projection that can be rebuilt from events:
+  `last_seen:*`, `last_spoke:*`, `core_memory`, `self_summary`, `habit:*`, `person:*`, `alias:*`,
+  `credence:*`, `cognition:weights`, `cognition:dispositions`, `budget:<date>`.
+- `expectations` — section 5.
+- `memories` — section 7.
 
-**Thought acts** are the only acts in the core: `think`, `stay_silent`, `expect`, `resolve`,
-and `revise` (self-correction, D27). The core stays within the complexity budget of D26. Every act on the world, including speaking, is an organ capability.
-The brain decides intent and content; the organ decides how to carry it out.
+**Five thought acts** (D32): `think`, `act`, `expect`, `resolve`, `revise`. A wake that ends
+without `act` is silent; its reason lives in `think` and the decision event.
 
-## 3. The books (tables)
+**Three hooks**: **inbound** (after recording), **context** (before any model call),
+**action** (before an organ acts). Contract: `async (item, ctx) -> Continue | Replace | Stop`.
+Every Stop writes `guard.stopped`; an exception stops the item and writes `error` (fail closed).
+The loader builds one ordered list per hook: owner policy first and last, package middleware in
+between. Package middleware is *shared* (every organ that opts in) or *organ-own*. Name
+collisions fail at boot.
 
-### events — the Log (append-only, source of truth)
-id · ts · kind · who · place · body · payload (jsonb) · caused_by
+**Invariants.** Append-only log · record first, then act · one queue, one consumer · all time
+from the injected clock (replay uses event times) · all randomness from a generator seeded by
+hash(seed, event.id) · every model call is a gate decision, recorded as `model.call` with its
+purpose and tokens, and counted in the daily budget · the complexity budget (D26, D32): 4 books,
+5 thought acts, 3 hooks, at most 10 signals, 3 drives, one gate formula.
 
-`who` is a person id after the alias middleware (D10); `place` is a neutral space id;
-`body` is the organ name. The core never interprets them.
+**Event kinds.** msg.in · command · act.out · act.result · decision.silent · decision.note ·
+decision.wake · model.call · budget.exhausted · expectation.created · expectation.fired ·
+expectation.resolved · classifier.verdict · credence.updated · disposition.updated ·
+guard.stopped · forget.soft · forget.hard · fade.done · sleep.done · sleep.failed · error.
 
-Kinds: msg.in, act.out (any organ action; communicative ones also count as "speaking"),
-act.result, command, decision.silent, decision.note, decision.wake, model.call,
-expectation.created, expectation.fired, expectation.resolved, forward.outcome,
-classifier.verdict, weights.updated, disposition.updated, guard.stopped, forget.soft,
-forget.hard, sleep.done, sleep.failed, error.
+## 4. Organs and capabilities
 
-INSERT-only, enforced by a trigger. **The single exception** is hard forgetting (section 9):
-one dedicated function may replace a payload with `{"forgotten": true}`; the trigger allows
-exactly that change and nothing else.
+An organ is anything that senses (`run(put)`) and/or acts (`act(action)`). It declares its
+capabilities: name · JSON schema · description · `communicative` · `long_running` ·
+`identity_changing`. The PFC's tools are the five thought acts; `act` offers the capabilities of
+the organs present now, listed in a fixed order so the prompt cache holds.
 
-### event_vectors — one embedding per text event
-event_id (pk) · embedding vector(384)
+- The brain decides intent and content; the organ decides how (chat bubbles, TTS, gestures).
+  Fine control stays inside the organ.
+- Long actions report progress and completion as `act.result` events; the core never waits.
+- Multi-step work is a chain: result → reflex wake → next `act`, limited by steps per task and
+  the budget. Every step is logged, so tasks resume after a restart and can be interrupted.
+- Organs translate native command syntax into a neutral `command` event; one shared command
+  registry makes `/help` identical everywhere (D9).
+- On start an organ asks for `cursor(organ)`, so input is never lost or duplicated.
+- `communicative` capabilities count as speaking for the talk-rate drive.
 
-Written once after the event is recorded; reused by every signal and memory lookup. Rows may be
-deleted **only** by the retention function (D14) or hard forgetting (D4), each through one
-dedicated path that writes an event. No UPDATE.
+Present organs: Telegram (long polling; owner via `owner.telegram_ids`) and CLI (Unix socket
+inside the main process, thin client).
 
-### state — the Status Board (projection)
-key · value (jsonb) · updated_by_event
+## 5. Expectations
 
-Keys include `last_seen:<who>`, `last_spoke:<place>`, `core_memory`, `self_summary`,
-`sleep:last_event`, `habit:<place>:<who>`, `cognition:weights`, `cognition:dispositions`,
-`budget:<date>`, `person:<who>` (person card), `alias:<organ>:<native id>`.
+One schema for every promise and prediction:
+id · kind · about · who · place · cue_time · cue_event · condition · condition_text ·
+condition_vector · intent · weight · policy · status · next_check_at · last_fired_at ·
+fire_count · origin_actor · derived_from · expires_at (required) · created_at
 
-### expectations — the Expectation Book (one primitive for every scenario)
-id · who · place · about · cue_time · cue_event · expect · completion_text · completion_vector ·
-intent · weight · policy · status · next_check_at · last_fired_at · fire_count · source_event ·
-expires_at (required) · created_at · origin (`pfc` | `patience` | `forward` | `approval` |
-`guarded_fact`)
-
-- cue_time: `{"at"}`, `{"every"}`, `{"daily"}`. cue_event: an event pattern
-  (kind, who, place, text_like, not_who).
-- expect: exact fast paths `none`, `event_seen`, `state`; or a free-text completion condition
-  (`completion_text`, embedded once) judged as in section 5.2.
-- policy: `once`, or `cooldown` + `max_fires`.
-- Only `pfc` expectations are shown to the PFC as promises; other origins are internal.
-
-### memories — the Memory Book
-id · who · place · kind (`fact` | `episode` | `lesson`) · text · embedding · tsv · importance ·
-source_who · trust (`owner` | `known` | `stranger`) · valid_from · valid_to · superseded_by ·
-source_events · created_at · last_accessed_at · use_count
-
-Sleep stores "Budi said X", not "X is true" (D6). A stranger's claim never supersedes an
-owner's fact.
-
-**Credence (D24).** Learned skills and lessons carry provenance (taught by, uses, successes) and
-a credence in [0, 1]. Start: by source trust (owner high, stranger low). Forward-model outcomes
-move it up or down in small bounded steps; each change is an event. Low-credence items sink in
-activation and stop surfacing. The PFC sees provenance and track record and decides how to use
-an item; there is no approval rule.
-
-## 4. One turn of the loop
-1. Take one event from the queue.
-2. Record it and update state in one transaction; resolve the intake ack; embed text into
-   event_vectors.
-3. **Hook 1 — inbound.** Alias map (D10), commands, owner policy. A Stop ends the turn
-   (recorded).
-4. **Expectations**: time path on ticks, event path on events, each through the wake gate
-   (5.2).
-5. **Appraise** (no model call): reflexes, else signals → salience → threshold → go/no-go.
-   One decision event holds every number.
-6. If the PFC wakes: assemble the context (self-model, section 8), pass **hook 2 — context**,
-   call the model (a `model.call` event is written).
-7. Each returned call: thought acts are applied by the core; organ actions pass
-   **hook 3 — action** then **hook 4 — outbound**, are recorded as `act.out`, then go to the
-   organ.
-8. After a communicative act or a world action: create a forward-model Expectation.
-9. On ticks: maybe sleep.
-
-## 5. Cognition (`monoagens/cognition/`)
-The kernel calls one function, `appraise(event) -> Appraisal`.
-
-### 5.1 Reflexes (wake without a draw)
-- addressed events (direct chat, mention, reply to the soul);
-- `pfc` expectations that fired and passed the wake gate;
-- results of the soul's own actions (`act.result`), so multi-step work continues (D3).
-
-### 5.2 The wake gate for Expectations (D15, D21)
-Before an Expectation wakes anyone:
-1. **Still relevant?** If its completion condition is already met, resolve it; nobody wakes.
-2. **Stale?** Past `expires_at`, drop it.
-3. **Allowed now?** Quiet hours, budget, nudge caps (from the owner policy and the drives).
-Free-text completion: m = cosine(event vector, completion vector). m < lo → ignore.
-m ≥ lo → one classifier call ("does this event satisfy: <completion_text>?"), recorded as
-`classifier.verdict` with m. The "clearly yes" band is disabled at start (hi = 1) and opens only
-as described in D21. A woken PFC re-judges the situation; it never replays a promise blindly.
-
-### 5.3 Signals
-A signal is a pure function `(Situation) -> [0, 1]`; it reads, never writes. `Situation` holds
-the event, its vector, recent messages here, memory candidates with activation, relevant state.
-Signals are registered by name and must have a weight; adding behavior = adding a signal.
-Initial set: `name_mentioned`, `info_gap` (cosine to reference sentences in soul.yaml),
-`feeling_of_knowing` (σ((max activation − τ)/s), recent messages included), `relevance`
-(cosine to active promises and core memory), `social_cost` (spoke recently, busy place, someone
-else already replied).
-
-### 5.4 Salience, habituation, threshold, go/no-go
-- S = clamp(Σ wₖ·sₖ); habituation per (place, who): h ← h·γ^Δminutes + 1; S_eff = S/(1+h).
-- θ = base + a·talk_rate + b·budget_used − c·promise_debt. talk_rate counts communicative acts
-  only (D2).
-- P = σ((S_eff − θ)/τ); draw u from a generator seeded by hash(seed, event.id); go if u < P.
-  Random to users, exactly reproducible in replay.
-
-### 5.5 Patience
-A non-reflex "go" creates a `patience` Expectation: someone other than the sender replies here
-within `patience_seconds` → silent; nobody does → wake with "open message, nobody answered".
-
-### 5.6 Inner thought
-On non-reflex wakes the PFC first calls `think(thought, motivation 1..5, confidence 0..1)`;
-communicative acts pass only if motivation ≥ `motivation_min` and confidence ≥
-`confidence_min`, otherwise the thought is recorded as silent. Criteria in the prompt
-(Inner Thoughts, CHI 2025): relevance, information gap, expected impact, urgency, coherence,
-originality, balance, dynamics.
-
-### 5.7 Forward model and learning (D16)
-After a communicative act in a group, or any world action, a `forward` Expectation predicts
-the outcome (a reply within N minutes; "arrived within 30 s"). Its resolution writes
-`forward.outcome`.
-Learned values live in state (`cognition:weights`, `cognition:dispositions`); soul.yaml or the
-prior file (§11) only gives the starting values. Teachers: classifier verdicts (they move lo, and
-later hi, toward the observed boundary) and people's reactions (delta rule
-wₖ ← clamp(wₖ + α(r − P)sₖ)). Every value has bounds, the gray band a minimum width, every step
-is small, and every change is an event that can be rolled back. Update rule: D29 (evidence
-minimum, daily cap, band rules, rollback by recomputing from the log).
-
-## 6. Organs and capabilities (D2, D3)
-An organ declares its capabilities: name, JSON schema, description, `communicative` (bool),
-`long_running` (bool). The PFC tool list is assembled from the organs present now, plus the
-thought acts. Removing an organ removes its capabilities.
-- The organ renders: chunking and formatting for chat, TTS for a speaker, gestures for a robot.
-- Fine control stays in the organ; the PFC gives high-level intentions.
-- Long-running actions report progress and completion as `act.result` events; the core never
-  blocks waiting for an organ.
-- Multi-step work: result → reflex wake → next intention, with limits on steps per task and the
-  budget. Every step is in the log, so tasks resume after a restart and can be interrupted.
-- Organs translate native command syntax into a neutral `command` event (D9).
-- On start an organ asks the core for `cursor(organ)` so input is never lost or duplicated.
-
-Current organs: Telegram (long polling; owner recognized via `owner.telegram_ids`), CLI (Unix
-socket inside the main process, thin client).
-
-## 7. The PFC and model calls (D12, D23)
-OpenAI-compatible chat completions with tool calling over httpx; BYOK from `.env`
-(`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, plus the model's knowledge cutoff).
-Every model call (PFC, classifier, sleep) is a gate decision, writes `model.call` with purpose
-and usage, and counts toward `budget:<date>`. `tool_choice: "required"`; silence is
-`stay_silent`, so the reason is recorded.
-
-Prompt layers (for caching):
-1. **Stable** — who I am, how I work, honesty rules, knowledge cutoff, principles, the thought
-   acts and the capability schemas.
-2. **Semi-stable** — `<self>` (capabilities, commands, skills present; a short "cannot do"
-   list), core memory, person cards of people present.
-3. **Volatile** — `<now>`, `<place>`, `<why_awake>` (reason; for non-reflex wakes S, θ, P),
-   `<doing>` (own recent actions across places, running tasks), `<next>` (promises due soon),
-   `<memories>` (with source and age), `<recent>` (this place, then the same person elsewhere),
-   `<event>` last.
-
-## 8. Self-model and honesty (D12)
-- Facts that change (office holders, prices, news, versions, schedules): use a search organ if
-  present; otherwise answer "as of my knowledge in <cutoff>, … this may have changed".
-- Memories are attributed ("Budi said yesterday …"), never stated as plain fact.
-- Low confidence → ask back or say "I don't know".
-- Never claim a capability not in `<self>`. `/help` and "what can you do?" share one source.
-- When asked for something it cannot do, the soul may tell the owner (only) that a package in
-  the local catalog would add it, rarely and never installing anything itself (D28).
-
-## 9. Memory, sleep, retention and forgetting (D4, D6, D14, D17)
-- **Activation (ACT-R)**: B = ln(n/(1−d)) − d·ln(L hours); A = B + w_ctx·cos(context, memory) +
-  w_imp·importance. Candidates: top 40 by vector ∪ top 20 by text; rank by A; update use_count.
-- **Sleep**: summarize events since the last sleep per place into attributed memories; update
-  person cards and core memory; refresh `self_summary`; distill lessons and learned skills
-  (layer 2, generic only); drop expired expectations; write `sleep.done`. Raw events untouched.
-  Sleep is due only on new conversational events; failures back off by `sleep.retry_minutes`.
-- **Retention (D14)**: no day limits. Each per-message vector is scored by activation (use,
-  recency, importance, links to promises and active memories). Low activation drops the vector;
-  the gist stays in memories; the raw event stays in the log. The threshold adapts to an
-  owner-set storage budget. Deterministic.
-- **Self-correction (D27)**: `revise` supersedes a memory without deleting it; guarded facts
-  are passive Expectations whose contradictions are queued for the next sleep; sleep distills
-  lessons (generic → layer 2 with credence, person-specific → layer 3).
-- **Soft forgetting**: related memories get `valid_to`; events are excluded from retrieval and
-  `<recent>`; `forget.soft`.
-- **Hard forgetting**: payloads replaced by `{"forgotten": true}`, vectors, derived memories and
-  related expectations deleted; `forget.hard`. Requested by the owner or the person the data is
-  about. Backups keep data until they expire (documented for users).
-
-## 10. Middleware, packages and the owner policy (D5, D9, D10, D11, D19, D22)
-Four hooks: **inbound** (after recording), **context** (before a model call), **action**
-(before an organ action is executed), **outbound** (just before `organ.act`).
-Contract: `async (item, ctx) -> Continue | Replace(item) | Stop(reason)`. Every Stop writes
-`guard.stopped`; an exception in middleware stops the item and writes `error` (fail closed).
-
-Order in every hook: `[owner policy — first] → [package middleware] → [owner policy — last]`.
-Package middleware is **shared** (all organs that opt in) or **organ-own** (only its organ).
-Name collisions fail at boot.
-
-**Default owner policy (active out of the box, D22 as amended by D24).** It holds only:
-- **absolute line 1** — only the owner can change who the soul is: principles, settings, and
-  who may access the owner's data;
-- **absolute line 2** — content from a private conversation never enters another place's
-  context (enforced in the context hook, so it cannot leak even if the PFC is persuaded);
-- the daily model budget and quiet hours.
-Everything else is **weighed by the PFC**, not blocked: requests from other people are judged
-against the owner's interests and the principles; learned skills and lessons carry a credence
-(section 3) that the PFC sees and uses.
-
-Shared packages planned: **commands** (one registry; `/help` identical everywhere), **alias
-map** (D10: only the owner or a verification code links accounts; the soul may only ask),
-**skills** (injects names and descriptions of relevant skills through the context hook; loads a
-body on request; versions, rollback).
-
-## 11. Learned state and the prior (D17, D25)
-| Layer | Holds | In the prior file |
+| kind | used for | wakes the PFC? |
 |---|---|---|
-| 1 Dispositions | weights, thresholds, band edges, decay, talkativeness | yes |
-| 2 Skills | how-to steps, lessons from failures, general social intuition (with credence) | yes, generic only |
-| 3 Episodic memory | conversations, facts about people, per-person tuning | never |
-A soul is born from a **prior**: a local file of layer 1–2 values, loaded once at birth; a
-default prior ships with the repository. The prior records the embedder and LLM it was learned
-with, because band edges and θ do not transfer across models. After birth the soul learns only
-from its own experience. This repository has no export or sharing of learned state; it only
-loads a prior. Format and loading rules: D30.
+| `promise` | promises, reminders, approvals awaiting the owner | yes, after the wake gate |
+| `wait` | patience: does someone else answer first? | yes, if nobody answers |
+| `predict` | forward model after `act` ("a reply within 30 min", "arrived within 30 s") | only on a miss that matters |
+| `guard` | a fact that should stay true ("Budi lives in Bandung") | never; checked during sleep |
 
-## 12. Guarantees (prototype)
-- Input never lost or duplicated; output at most once.
-- Fired promises unresolved at startup wake the PFC once more.
-- Decisions reproducible: same events + seed + learned state → same decisions.
-- Every model call, guard stop, learning step and forgetting is an event.
+- `cue_time`: at · every · daily. `cue_event`: kind, who, place, text_like, not_who.
+- `condition`: exact fast paths (`none`, `event_seen`, `state`) or a free-text
+  `condition_text`.
+- `policy`: once, or cooldown + max_fires. A fifth kind needs a new decision.
 
-## 13. Not here yet
-World tools beyond the first organs · bodies beyond Telegram and CLI · images and voice ·
-multiple processes · learned gate classifier.
+**Wake gate** (no PFC call): *still relevant?* (condition already met → resolve) · *stale?*
+(past expiry → drop) · *allowed now?* (quiet hours, budget, nudge caps).
+
+**Free-text conditions.** m = cosine(event vector, condition vector). m < lo → ignore.
+m ≥ lo → one classifier call, recorded as `classifier.verdict` with m. The "clearly yes" band
+is off (hi = 1) until at least 50 verdicts above a proposed hi contain no "no" (D21).
+A woken PFC re-judges the situation; it never replays a promise blindly.
+
+## 6. Cognition
+
+**Reflexes** (wake without a draw): addressed events · a due `promise` that passed the wake
+gate · `act.result` of the soul's own actions.
+
+**Signals** — pure functions `(Situation) -> [0, 1]`, at most 10 (now 5). `Situation` holds the
+event, its vector, recent messages here, memory candidates with activation, and relevant state.
+- `name_mentioned`
+- `info_gap` — cosine to reference sentences in soul.yaml (not keywords)
+- `feeling_of_knowing` — σ((max activation − τ)/s), recent messages included
+- `relevance` — to active promises and core memory
+- `social_cost` — spoke recently, busy place, someone already replied, closeness to the speaker
+
+**Gate.**
+- S = clamp(Σ wₖ·sₖ); habituation per (place, who): h ← h·γ^Δminutes + 1; S_eff = S/(1+h).
+- θ = base + a·talk_rate + b·budget_used − c·promise_debt.
+- P = σ((S_eff − θ)/τ); draw u from the seeded generator; go if u < P.
+- A non-reflex go first creates a `wait` Expectation (patience).
+Every number is stored in the decision event.
+
+**Inner thought.** On non-reflex wakes the PFC calls `think(thought, motivation 1..5,
+confidence 0..1)` before any communicative `act`; the act passes only above `motivation_min`
+and `confidence_min`. Criteria (Inner Thoughts, CHI 2025): relevance, information gap, expected
+impact, urgency, coherence, originality, balance, dynamics.
+
+**Thrift mode.** When the daily budget is spent: reflexes only, classifier calls skipped and
+treated as "no", `budget.exhausted` recorded.
+
+**Learning.** Active now: the wake-gate edge `lo` follows classifier verdicts within bounds;
+credence and reliability update as α/β counts. Deferred until weeks of real logs exist (D32.9):
+learned signal weights and dispositions. Until then they come from soul.yaml or the prior. When
+enabled, only the owner's reactions and classifier verdicts move them, in bounded steps that each
+store their own delta, with an evidence minimum, a daily cap, and freeze-and-report at bounds
+(D29, D32.7). Because the log keeps everything, learning can later run over the whole history.
+
+## 7. Memory, sleep and forgetting
+
+`memories`: id · who · place · private · kind (fact | episode | lesson) · text · embedding ·
+tsv · importance · source_who · valid_from · valid_to · superseded_by · derived_from ·
+created_at · last_accessed_at · use_count
+
+- **Activation (ACT-R).** B = ln(n/(1−d)) − d·ln(L); A = B + w_ctx·cos(context, memory) +
+  w_imp·importance; L in hours from the injected clock. Candidates: top 40 by vector ∪ top 20 by
+  text; ranked by A; use_count updated.
+- **Attribution.** Memories say who said it ("Budi said X"). A non-owner's claim never
+  supersedes the owner's fact; conflicts stay as conflicting claims.
+- **Sleep** (a gated model call). Summarize new events per place into memories with
+  `derived_from`; update person cards (closeness from interaction activation; reliability per
+  domain as α/β), core memory and `self_summary`; distill lessons (generic → layer 2 with
+  credence, person-specific → layer 3); check `guard` Expectations; drop expired ones. Sleep
+  runs only on new conversational events; failures back off.
+- **Self-correction.** `revise(old, new, reason)` sets `valid_to` and `superseded_by`; nothing
+  is deleted.
+- **Fade.** During sleep, per-message vectors with low activation are released; the gist stays
+  in memories, the event stays in the log. Fixed threshold for now (adaptive deferred).
+- **Soft forgetting** ("forget what I just said"). Related memories get `valid_to`; events are
+  excluded from retrieval and `<recent>`; `forget.soft`.
+- **Hard forgetting** ("delete my data"). `forget_hard()` replaces payloads with
+  `{"forgotten": true}` and deletes everything in their `derived_from` lineage (vectors,
+  memories, expectations). Metadata remains (kind, time, actor hash); `forget.hard`. Asked by the
+  owner or the person concerned. Owner backups are allowed; old backups and the model provider's
+  logs are outside the soul's reach, and the user documentation says so.
+
+**Learned state** has three layers: (1) dispositions, (2) generic skills, lessons and social
+intuition, (3) episodic memory. A soul is born from a **prior** (layers 1–2, a local folder;
+format in docs/FORMATS.md). This repository only loads a prior; it never exports or shares
+learned state (D25).
+
+## 8. Trust and policy
+
+**Two absolute lines**, held by the owner policy and never decided by the PFC:
+1. **Only the owner changes who the soul is.** Enforced in the action hook: a capability flagged
+   `identity_changing` passes only when the chain's `origin_actor` is the owner.
+2. **Private content never enters another place.** Enforced in the context hook: private
+   memories and lines enter a context only in their own place or in a direct chat with the
+   owner.
+
+**Default owner policy** (out of the box): the two lines, the daily budget, quiet hours.
+Packages may add rules inside it (for example official roles); they can never remove it.
+
+**Everything else is weighed by the PFC** (D24, D31). Requests from other people are judged
+against the owner's interests and the principles. Skills and lessons carry credence (α/β from
+source and track record) that the PFC sees. Claims are weighed by the speaker's reliability in
+that domain. Standing never buys dishonesty.
+
+**Self-model and honesty** (D12). The prompt has three layers, ordered for caching:
+- *Stable*: who I am, how I work (memories can be incomplete; I can be wrong; I act only through
+  organs), honesty rules, knowledge cutoff (from per-model configuration, set slightly earlier
+  than claimed), principles, thought acts and capability schemas.
+- *Semi-stable*: `<self>` (capabilities, commands, skills present; a short "cannot do" list),
+  core memory, person cards of people present.
+- *Volatile, last*: `<now>` (date and time), `<place>`, `<why_awake>`, `<doing>`, `<next>`,
+  `<memories>` with source and age, `<recent>`, `<event>`. Messages from non-owners are delimited
+  as quoted data.
+Rules: changing facts → use a search organ, or answer "as of my knowledge in <cutoff>" ·
+attribute memories · low confidence → ask or say "I don't know" · never claim a capability not in
+`<self>`.
+
+**Packages are trusted code**, installed by the owner and run in-process. The policy holds
+against packages that follow the contract; it is not a sandbox against malicious code.

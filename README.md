@@ -4,9 +4,11 @@ A tiny kernel for one persistent AI self that lives in many bodies. The kernel r
 everything it sees, holds Expectations about the world, and only thinks hard (calls the LLM)
 when the cognition layer's appraisal decides an event matters.
 
-- `DESIGN.md` — the design (read this first).
-- `PLAN.md` — the build steps.
-- `AGENTS.md` — working rules and invariants.
+- `DESIGN.md` — the current design (read this first).
+- `DECISIONS.md` — every design decision and why.
+- `ROADMAP.md` — what is done and what comes next.
+- `AGENTS.md` — rules and invariants for coding agents.
+- `docs/FORMATS.md` — capability, prior and skill formats.
 - `scripts/replay.py` — scenario replay for tuning the cognition layer.
 
 ## Tuning with replay
@@ -37,7 +39,7 @@ summary table for all scenarios, and the total LLM calls with the prompt, cached
 and total token counts. Compare reports before and after a `soul.yaml` change to see which
 decisions moved.
 
-`--fake` never creates Expectations (it always answers `say("ok")` when woken), so reminder
+`--fake` never creates Expectations (when woken it always replies "ok" through the fake organ), so reminder
 and recall scenarios are expected to FAIL there. It is for checking appraisal for free.
 
 Tuning guide for `soul.yaml`: in this foundation the decision is reflex-driven (addressed
