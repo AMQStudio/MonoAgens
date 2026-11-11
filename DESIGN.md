@@ -72,7 +72,7 @@ brain.**
   the log's index; rows leave only by fading or hard forgetting, each through one dedicated
   path that writes an event.
 - `state` — a namespaced key/value projection that can be rebuilt from events:
-  `last_seen:*`, `last_spoke:*`, `core_memory`, `self_summary`, `habit:*`, `person:*`, `alias:*`,
+  `identity`, `last_seen:*`, `last_spoke:*`, `core_memory`, `self_summary`, `habit:*`, `person:*`, `alias:*`,
   `credence:*`, `cognition:weights`, `cognition:dispositions`, `budget:<date>`.
 - `expectations` — section 5.
 - `memories` — section 7.
@@ -232,6 +232,12 @@ learned state (D25).
 2. **Private content never enters another place.** Enforced in the context hook: private
    memories and lines enter a context only in their own place or in a direct chat with the
    owner.
+
+**Identity** (D35). The core has a slot for identity, not an identity. A soul is born from a
+birth certificate (`soul.yaml`: name, language, persona, principles; a neutral default if none)
+and a prior (instincts). After birth, identity lives in `state: identity`; the owner changes it in
+conversation through an `identity_changing` capability. Role packages may provide a birth
+certificate, used only at birth.
 
 **Becoming the owner.** On first start the soul shows a short pairing code; the first person
 who sends it from any organ becomes the owner. Changing the owner later needs the current

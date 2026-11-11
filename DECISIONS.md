@@ -379,6 +379,25 @@ Separate what a person *is and learns* from the *skills* they are given.
 - Consequences: "learned skills" (D11, D19) are now core procedures, not package skills; the
   prior (D30) carries `procedures.yaml` and `lessons.yaml`, not a `skills/` folder.
 
+**D35 — Identity is birth content; the mechanism is core.**
+- The core is a raw brain with a *place* for identity (the stable-prompt slot, the self-model,
+  absolute line 1). It does not know who it is until it is told.
+- `soul.yaml` becomes a **birth certificate**: name, language, persona, principles. The numbers
+  now in soul.yaml (cognition parameters) move to the prior. A soul is born from two inputs:
+  *who I am* (birth certificate) and *my instincts* (prior).
+- After birth, identity lives in the soul's own books (`state: identity`), not re-read from the
+  file. The owner changes it in conversation ("your name is Sari now") through a capability
+  flagged `identity_changing`, which only passes for the owner (absolute line 1).
+- Role packages may ship a ready-made birth certificate, used only at birth; they can never
+  overwrite identity afterwards.
+- Without a birth certificate, the soul is born with a neutral default identity and may ask the
+  owner what to be called after pairing (D33).
+- Layer map: **core** — log, memory, Expectations, attention, gate, inner thought, sleep,
+  learning, self-model, identity slot, the two absolute lines. **Organs** — bodies and tools
+  (search, files, email are organs). **Middleware** — RBAC and roles, commands, tool-use rules
+  and approvals, behaviors and role packages, installed skills, the alias map, any owner rule.
+  **Birth inputs** — birth certificate and prior.
+
 ## Accepted in principle, details pending
 
 (None. P1 was detailed as D27.)
