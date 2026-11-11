@@ -1,23 +1,22 @@
 # AGENTS.md — Standing Rules for Coding Agents
 
 This project is **MonoAgens**: a tiny kernel for one persistent AI self that lives in many bodies.
-Status: prototype. Read [docs/README.md](docs/README.md) and the DESIGN.md of the layer you work
-on (the core: `docs/core/DESIGN.md`) before touching code. Work ONLY on the track you were given
-from that layer's `plan/README.md`.
+Status: prototype. Before touching code read [docs/constitution.md](docs/constitution.md), the
+task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec sections it links
+(the core: [docs/core.md](docs/core.md)). Work ONLY on that task.
 
 ## Who writes code
 - All implementation work is delegated to an **Orca Orchestration** worker running
   agent `omp` with model **`opencode-go/deepseek-v4.1-flash`**, effort **low**, on OpenCode Go.
-- The session that receives a plan track acts only as **coordinator**: it hands the track
+- The session that receives a task acts only as **coordinator**: it hands the track
   to the worker, then verifies the result (reads the diff, runs `uv run pytest`, checks the
   invariants and the size budget) before committing and reporting.
 - The coordinator does not write implementation code itself. If the worker fails twice on
   the same step, stop and report to the owner instead of taking over.
-- Design documents (every `DESIGN.md`, `DECISIONS.md`, `FORMATS.md` and `MATH.md` under `docs/`,
-  `docs/README.md` and this file) are owned by the architect. Workers may tick steps in a layer's
-  `plan/README.md` and add their own working files in that `plan/` folder; they never edit design
-  decisions.
-- **The core design is FINAL and frozen** (`docs/core/DECISIONS.md` §0). No track, worker or
+- Specifications (every `docs/*.md`) and this file are owned by the architect. Workers may tick
+  boxes and write under **Notes** in their own task file in `docs/tasks/`; they never edit a
+  specification.
+- **The core design is FINAL and frozen** (`docs/constitution.md` §1). No track, worker or
   package changes it; a need the core cannot meet stops and goes to the owner.
 
 ## Secrets (never break this)
@@ -29,9 +28,9 @@ from that layer's `plan/README.md`.
 - If a secret is exposed anyway, stop and tell the owner which one, so it can be rotated.
 
 ## How to work
-- One session = one plan track (or one listed sub-step) = one commit.
+- One session = one task (or one listed sub-task) = one commit.
 - Do not start the next step. Do not add features that were not asked for.
-- A step is done only when all tests pass (`uv run pytest`). Tick it in the layer's `plan/README.md`.
+- A step is done only when all tests pass (`uv run pytest`). Tick it in the task file.
 - If a design question comes up, STOP and write the question down. Do not guess.
 
 ## Language
@@ -44,7 +43,7 @@ from that layer's `plan/README.md`.
    acts. They never import from `monoagens/bodies/` or packages, never mention a platform, and
    never hard-code a world action (speaking included) — those are organ capabilities.
 2. **The log is immutable.** The `events` table is INSERT-only, enforced by a trigger. The only
-   exception is hard forgetting (`docs/core/DESIGN.md` §7), through one dedicated function that the trigger
+   exception is hard forgetting (`docs/core.md` §7), through one dedicated function that the trigger
    recognizes. `event_vectors` rows are deleted only by fading or hard forgetting, each
    through its own dedicated path that writes an event.
 3. **One queue, one consumer.** Every source (bodies, clock) only `put`s into the queue.
@@ -55,7 +54,7 @@ from that layer's `plan/README.md`.
    message or per tick by default; each call is a gate decision, is recorded as an event with
    its purpose and token usage, and counts toward the daily budget.
 6. **No scenario features.** No "reminder", "monitor", or "habit tracker" modules. All of them
-   are Expectations (see `docs/core/DESIGN.md`). If an idea cannot be an Expectation, a state key, or a body
+   are Expectations (see `docs/core.md` §5). If an idea cannot be an Expectation, a state key, or a body
    adapter, it does not go in.
 7. **Pure async.** No blocking calls inside `async def`. CPU work (embedding) goes through
    `asyncio.to_thread`.
@@ -65,7 +64,7 @@ from that layer's `plan/README.md`.
 9. **Signals are pure.** A cognition signal only reads its `Situation` and returns a number in
    [0, 1]. No writes, no LLM calls, no I/O beyond what `Situation` already holds.
 10. **Decisions are reproducible.** Random draws come only from the seeded generator described
-   in DESIGN, and all time comes from the injected clock (replay uses event times); never from
+   in `docs/core.md`, and all time comes from the injected clock (replay uses event times); never from
    `random`, `datetime.now()` or `time.time()` directly.
 11. **Complexity budget** (D26, D32). The core holds at most 4 books, 5 thought acts
    (think, act, expect, resolve, revise), 3 hooks (inbound, context, action), 10 signals,
@@ -96,10 +95,10 @@ functions and classes, docstrings on public functions. Compressing code to fit t
 violation, not a fix.
 Going over budget means the design is wrong. Stop and report; do not force it.
 
-## Parallel tracks
-- A track touches only the files its plan row names. Shared files (`kernel.py`,
-  `store.py`, `sql/schema.sql`, `soul.yaml`) are changed only by the alignment track (A2), or by a
-  track whose plan row says so explicitly; other tracks that need a change there stop and report.
+## Parallel tasks
+- A task touches only the files its **May touch** line names. Shared files (`kernel.py`,
+  `store.py`, `sql/schema.sql`, `soul.yaml`) are changed only by task 001 (alignment), or by a
+  task whose **May touch** line says so explicitly; other tasks that need a change there stop and report.
 - Always `git pull --rebase` before starting and before pushing.
 
 ## Tests

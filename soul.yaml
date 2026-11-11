@@ -39,7 +39,7 @@ expectations:
   default_expires_days: 30
   max_active: 200
 
-# Cognition layer (docs/core/DESIGN.md §6; moves to the prior in Track A2). Starting values; tune with scripts/replay.py.
+# Cognition layer (docs/core.md §6; moves to the prior in Track A2). Starting values; tune with scripts/replay.py.
 cognition:
   seed: 1
   weights:                 # initial signal weights; learning updates the copy in state

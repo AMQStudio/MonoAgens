@@ -4,10 +4,12 @@ A tiny kernel for one persistent AI self that lives in many bodies. The kernel r
 everything it sees, holds Expectations about the world, and only thinks hard (calls the LLM)
 when the cognition layer's appraisal decides an event matters.
 
-- [`docs/README.md`](docs/README.md) — map of all documents, layer by layer, and the
-  implementation order (read this first).
-- [`docs/core/`](docs/core/) — the core design (final, frozen): DESIGN, DECISIONS, FORMATS,
-  MATH (every formula and its sources) and the plan.
+- [`docs/constitution.md`](docs/constitution.md) — the rules that never change (read first).
+- [`docs/core.md`](docs/core.md) — the core specification (final, frozen); formulas and sources
+  in [`docs/core-math.md`](docs/core-math.md).
+- [`docs/`](docs/README.md) — one specification per layer: middleware, bodies, plugins, birth,
+  project.
+- [`docs/tasks/`](docs/tasks/README.md) — work for coding workers, in order.
 - [`AGENTS.md`](AGENTS.md) — rules and invariants for coding agents.
 - `scripts/replay.py` — scenario replay for tuning the cognition layer.
 
