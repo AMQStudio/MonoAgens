@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import sys
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -45,3 +46,102 @@ def test_a_scenario_whose_function_does_not_match_its_folder_is_rejected(
                     "steps:\n  - text: hi\n", encoding="utf-8")
     with pytest.raises(ValueError, match="folder"):
         replay.load_scenario(path, ZoneInfo("UTC"))
+
+
+def _claims() -> list[replay.Capability]:
+    return [replay.Capability(scenario.name, scenario.function, scenario.capability)
+            for scenario in (replay.load_scenario(path, ZoneInfo("UTC"))
+                             for path in sorted((ROOT / "scenarios").rglob("*.yaml")))]
+
+
+def test_the_capability_record_covers_every_function_and_capability() -> None:
+    claims = _claims()
+    when = datetime(2026, 11, 12, 9, 0, tzinfo=timezone.utc)
+    text = replay.build_capability_record(claims, [], when)
+    assert text.startswith(replay.GENERATED_MARK)
+    assert "| Capability | Scenario | Fake result | Real model |" in text
+    for function in replay.SCENARIO_FUNCTIONS:
+        assert f"\n## {function}\n" in text
+    for claim in claims:
+        row = f"| {replay._cell(claim.capability)} | {claim.name} |"
+        assert text.count(row) == 1, claim.name
+        assert text.count(f"| {claim.name} |") == 1, claim.name
+    assert "not run" in text
+    assert text.count("| Capability |") == sum(
+        1 for function in replay.SCENARIO_FUNCTIONS
+        if any(claim.function == function for claim in claims))
+
+
+def test_the_committed_capability_record_covers_every_capability() -> None:
+    path = ROOT / "scenarios" / "README.md"
+    text = path.read_text(encoding="utf-8")
+    assert text.startswith(replay.GENERATED_MARK)
+    for claim in _claims():
+        assert claim.capability in text, claim.name
+        assert claim.name in text, claim.name
+    for function in replay.SCENARIO_FUNCTIONS:
+        assert f"\n## {function}\n" in text
+
+
+def test_parse_report_reads_mode_model_and_verdicts(tmp_path: pathlib.Path) -> None:
+    path = tmp_path / "replay-20261111-165656.md"
+    path.write_text(
+        "# Replay report — 2026-11-11 16:56\n\n"
+        "- Mode: **real LLM**\n- Model: `some/real-model`\n\n"
+        "## Headline metrics\n\n1. **Missed-help rate: 0.0%** — fine.\n\n"
+        "- Report generated: 2026-11-11 16:56:56\n\n"
+        "## 25_help_place_name\n\n**Expectations: PASS**\n\n"
+        "- **PASS** — one: yes\n- **PASS** — two: yes\n\n"
+        "## 24_gate_threshold\n\n**Expectations: FAIL**\n\n"
+        "- **PASS** — one: yes\n- **FAIL** — two: no\n",
+        encoding="utf-8")
+    run = replay.parse_report(path)
+    assert run is not None
+    assert (run.mode, run.model) == ("real", "some/real-model")
+    assert run.when == datetime(2026, 11, 11, 16, 56, 56, tzinfo=timezone.utc)
+    assert run.results["25_help_place_name"].passed == 2
+    assert run.results["25_help_place_name"].total == 2
+    assert run.results["24_gate_threshold"].passed == 1
+    assert "Headline metrics" not in run.results
+
+
+def test_a_report_without_scenarios_is_ignored(tmp_path: pathlib.Path) -> None:
+    path = tmp_path / "replay-20261111-120000.md"
+    path.write_text("# Replay report — 2026-11-11 12:00\n\n- Mode: **fake LLM (free)**\n",
+                    encoding="utf-8")
+    assert replay.parse_report(path) is None
+
+
+def test_the_capability_record_counts_passes_over_runs() -> None:
+    claim = replay.Capability("01_group_chitchat_greeting", "silence", "A greeting is ignored.")
+    day = datetime(2026, 11, 11, 10, 0, tzinfo=timezone.utc)
+    runs = [
+        replay.ReportRun(pathlib.Path("a"), day, "real", "m-1",
+                         {"01_group_chitchat_greeting": replay.CapabilityVerdict(2, 2)}),
+        replay.ReportRun(pathlib.Path("b"), day - timedelta(days=1), "real", "m-1",
+                         {"01_group_chitchat_greeting": replay.CapabilityVerdict(1, 2)}),
+        replay.ReportRun(pathlib.Path("c"), day, "fake", "scripted",
+                         {"01_group_chitchat_greeting": replay.CapabilityVerdict(3, 3)}),
+    ]
+    text = replay.build_capability_record([claim], runs, day)
+    row = next(line for line in text.splitlines() if line.startswith("| A greeting"))
+    assert row.split(" | ")[2] == "PASS 1/1 · 2026-11-11"
+    assert row.split(" | ")[3].startswith("FAIL 1/2 · m-1 · 2026-11-11")
+
+
+def test_the_capability_record_keeps_only_its_recent_runs() -> None:
+    claim = replay.Capability("01_group_chitchat_greeting", "silence", "A greeting is ignored.")
+    day = datetime(2026, 11, 11, 10, 0, tzinfo=timezone.utc)
+    runs = [replay.ReportRun(pathlib.Path(str(index)), day - timedelta(days=index), "real",
+                             "m", {"01_group_chitchat_greeting": replay.CapabilityVerdict(1, 1)})
+            for index in range(replay.RECORD_RUNS + 2)]
+    text = replay.build_capability_record([claim], runs, day)
+    assert "PASS 3/3" in text
+    assert "PASS 4/4" not in text and "PASS 5/5" not in text
+
+
+def test_write_capability_record_writes_the_given_path(tmp_path: pathlib.Path) -> None:
+    target = tmp_path / "scenarios" / "README.md"
+    path = replay.write_capability_record("x\n", target)
+    assert path == target
+    assert target.read_text(encoding="utf-8") == "x\n"
