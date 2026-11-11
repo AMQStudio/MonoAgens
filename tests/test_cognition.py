@@ -17,7 +17,8 @@ from monoagens.cognition import (SIGNALS, Appraisal, Situation, appraise,
                                  assemble_situation, seeded_rng, validate_signals)
 from monoagens.kernel import Kernel
 from monoagens.embedding import FakeEmbedder
-from monoagens.middleware import Continue, HookPipeline, HookRegistry, Replace, Stop
+from monoagens.hooks import HookPipeline, HookRegistry
+from monoagens.middleware import Continue, Replace, Stop
 from monoagens.pfc import PFC
 from monoagens.store import (append_event, insert_event_vector, read_event_vector,
                              read_state, write_state)
@@ -452,6 +453,29 @@ async def test_inbound_organ_own_hook_skips_events_from_another_organ(aconn):
     await _feed(kernel, _msg("halo"))
 
     assert "guard.stopped" not in await _kinds(aconn)
+
+
+async def test_hanging_hook_times_out_as_a_stop_and_the_loop_goes_on(aconn):
+    async def hang(item, ctx):
+        await asyncio.sleep(10)
+        return Continue()
+
+    runtime = settings(constants={"hook_timeout_ms": 10})
+    kernel = Kernel(aconn, clock=FakeClock(START), settings=runtime)
+    kernel.hooks.inbound.add("hang", hang, organ="telegram")
+
+    await _feed(kernel, _msg("slow"))
+    second = await _feed(kernel, replace(_msg("next", message_id=2), body="cli"))
+
+    kinds = await _kinds(aconn)
+    assert kinds.count("error") == 1 and kinds.count("guard.stopped") == 1
+    timed_out = "inbound hook timed out after 0.01s"
+    assert (await _payload(aconn, "error"))["error"] == timed_out
+    assert await _payload(aconn, "guard.stopped") == {"hook": "inbound", "reason": timed_out}
+    assert second.id is not None  # the next event was recorded and processed
+    cur = await aconn.execute("SELECT payload->>'description' FROM events "
+                             "WHERE kind = 'percept' ORDER BY id")
+    assert [row[0] for row in await cur.fetchall()] == ["slow", "next"]
 
 
 def test_owner_policy_runs_first_and_last_around_every_hook():

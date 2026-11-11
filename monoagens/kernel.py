@@ -7,11 +7,11 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
-from monoagens import budget, expect, identity, jobs, memory, pairing
+from monoagens import budget, expect, hooks, identity, jobs, memory, pairing
 from monoagens.clock import Clock
 from monoagens.cognition import Appraisal, appraise, validate_signals
 from monoagens.prior import load_settings, signal_weights
-from monoagens.middleware import HookRegistry, owner_policy
+from monoagens.middleware import owner_policy
 from monoagens.organs import OrganRegistry
 from monoagens.pfc import PFC, ToolCall
 from monoagens.store import (append_event, cursor as store_cursor, insert_event_vector,
@@ -38,7 +38,7 @@ class Kernel:
         self.jobs = jobs.JobRunner(self)
         self.organs = OrganRegistry()
         self.organs.register(identity.SelfOrgan(conn, self.clock))
-        self.hooks = HookRegistry()
+        self.hooks = hooks.HookRegistry(self.settings)
         for pipeline in self.hooks:
             pipeline.set_policy(owner_policy(pipeline.name))
         validate_signals(signal_weights(self.settings))

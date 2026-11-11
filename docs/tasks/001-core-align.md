@@ -18,7 +18,7 @@ Bring the merged Track A code in line with the frozen core spec. This is the onl
 - [x] T9 Numbered SQL migrations with a version table and a backup before migrating; pairing code for the first owner.
 - [x] T10 Identity as birth content: `soul.yaml` becomes the birth certificate; cognition numbers move to the default prior in `prior/` as knobs / calibration / constants (core.md §9.4); the rest of today's `soul.yaml` splits by project.md §2: `timezone`, sleep, clock, budget and enabled bodies go to a new `config.yaml`; memory and expectation numbers go to the prior's constants; owner ids are replaced by pairing; secrets stay in `.env`; identity stored in `state: identity` after birth; an `identity_changing` capability for owner changes.
 - [x] T11 Stability contract: `schema_version` on every event with upcasting on read; plugin event kinds under `<plugin>.<kind>`; readers ignore unknown fields (core.md §3).
-- [ ] T12 Watchdog: `hook_timeout_ms` on every hook call (timeout = Stop + `error`), `job_timeout_seconds` on background jobs; a test where a hanging hook does not stop the loop.
+- [x] T12 Watchdog: `hook_timeout_ms` on every hook call (timeout = Stop + `error`), `job_timeout_seconds` on background jobs; a test where a hanging hook does not stop the loop.
 
 ## Done when
 All tests and replay pass; grep shows no platform name, no world action and no direct clock or random call in the core.
@@ -102,3 +102,17 @@ All tests and replay pass; grep shows no platform name, no world action and no d
   Telegram body no longer takes them. Embedders moved to `monoagens/embedding.py` to keep
   `memory.py` in budget; the kernel is 280 lines.
 - T11: `events.schema_version` (`integer NOT NULL DEFAULT 1`, migration `002_event_schema_version.sql`) and `Event.schema_version` (`CURRENT_SCHEMA_VERSION` in `types.py`); `append_event` writes it and rejects a malformed kind or a version below 1. The immutability trigger now compares `schema_version` too, so hard forgetting can scrub only the payload. `monoagens/versioning.py` holds `upcast()` (a per-version translator chain in `UPCASTERS`, empty at v1; an older version without a translator raises) and the kind rules: every kind is a lower-case dotted name, `plugin_kind(plugin, kind)` composes the required `<plugin>.<kind>` namespace, and `is_namespaced_event_kind` tells a plugin kind from a core one. `_row_to_event` upcasts every event read, so stored rows are never rewritten; readers keep unknown payload fields untouched. `store.py` is 240 lines. Note: `sql/schema.sql` is a leftover duplicate of `001_initial.sql` that nothing reads (the code goes through `sql/migrations/`); it was left untouched.
+
+- T12: the hook machinery (ordered slots, scoped lists, watchdog) moved from
+  `middleware.py` to `monoagens/hooks.py`, which the size budget already reserves for it;
+  `middleware.py` keeps only the contract (outcomes, `Middleware`, `Registration`,
+  `owner_policy`) at 74 lines, `hooks.py` is 102. `HookRegistry(settings)` reads
+  `hook_timeout_ms` from the prior constants (default 500 ms) and gives it to every
+  `HookPipeline`; `run()` wraps each middleware call in `asyncio.wait_for`, and a timeout
+  calls `on_error(TimeoutError)` (the kernel records `error` and `guard.stopped`) and stops
+  the item. Background jobs already ran under `job_timeout_seconds` (default 60 s, prior 120 s)
+  and returned `job.result` with an error; no change was needed there. New test
+  `test_hanging_hook_times_out_as_a_stop_and_the_loop_goes_on` registers a hook that sleeps
+  10 s, asserts one `error` + one `guard.stopped` after 10 ms, and shows the next event is
+  recorded and processed. `uv run pytest` is 181 passed; replay is 17/25, the same 8 failing
+  scenario checks as before T12 (reminders, recall, watch-for, cross-body), unchanged.
