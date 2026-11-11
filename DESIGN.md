@@ -20,7 +20,8 @@ brain.**
   perception, attention, memory, expectation, judgment, learning, restraint (D20).
 - Not a hosted service. One deployment is one soul with its own database; the owner brings
   their own model key (BYOK) (D7, D8).
-- No roles in the core. Assistant, customer service, sysadmin come from packages (D20).
+- No roles or skills in the core. Assistant, customer service, sysadmin, and installed skills
+  come from optional packages, which do not learn. The soul itself learns (D20, D34).
 - Never described as conscious or as "% human". Brain names below are engineering metaphors.
 
 ## 2. Mental model
@@ -179,7 +180,8 @@ store their own delta, with an evidence minimum, a daily cap, and freeze-and-rep
 
 ## 7. Memory, sleep and forgetting
 
-`memories`: id · who · place · private · kind (fact | episode | lesson) · text · embedding ·
+`memories`: id · who · place · private · kind (fact | episode | lesson | procedure) · text ·
+embedding ·
 tsv · importance · source_who · valid_from · valid_to · superseded_by · derived_from ·
 created_at · last_accessed_at · use_count
 
@@ -190,8 +192,9 @@ created_at · last_accessed_at · use_count
   supersedes the owner's fact; conflicts stay as conflicting claims.
 - **Sleep** (a gated model call). Summarize new events per place into memories with
   `derived_from`; update person cards (closeness from interaction activation; reliability per
-  domain as α/β), core memory and `self_summary`; distill lessons (generic → layer 2 with
-  credence, person-specific → layer 3); check `guard` Expectations; drop expired ones. Sleep
+  domain as α/β), core memory and `self_summary`; distill lessons and procedures ("how I did
+  this before"; generic → layer 2 with credence, person- or place-specific → layer 3); check
+  `guard` Expectations; drop expired ones. Sleep
   runs only on new conversational events; failures back off.
 - **Self-correction.** `revise(old, new, reason)` sets `valid_to` and `superseded_by`; nothing
   is deleted.
@@ -205,8 +208,9 @@ created_at · last_accessed_at · use_count
   owner or the person concerned. Owner backups are allowed; old backups and the model provider's
   logs are outside the soul's reach, and the user documentation says so.
 
-**Learned state** has three layers: (1) dispositions, (2) generic skills, lessons and social
-intuition, (3) episodic memory. A soul is born from a **prior** (layers 1–2, a local folder;
+**Learned state** has three layers, all in the core: (1) dispositions, (2) generic procedures,
+lessons and social intuition, (3) episodic memory with per-place and per-person tuning.
+Installed skills are not learned state; they belong to packages (D34). A soul is born from a **prior** (layers 1–2, a local folder;
 format in docs/FORMATS.md). This repository only loads a prior; it never exports or shares
 learned state (D25).
 
@@ -223,15 +227,15 @@ learned state (D25).
 Packages may add rules inside it (for example official roles); they can never remove it.
 
 **Everything else is weighed by the PFC** (D24, D31). Requests from other people are judged
-against the owner's interests and the principles. Skills and lessons carry credence (α/β from
-source and track record) that the PFC sees. Claims are weighed by the speaker's reliability in
+against the owner's interests and the principles. Learned procedures and lessons carry credence
+(α/β from source and track record) that the PFC sees. Claims are weighed by the speaker's reliability in
 that domain. Standing never buys dishonesty.
 
 **Self-model and honesty** (D12). The prompt has three layers, ordered for caching:
 - *Stable*: who I am, how I work (memories can be incomplete; I can be wrong; I act only through
   organs), honesty rules, knowledge cutoff (from per-model configuration, set slightly earlier
   than claimed), principles, thought acts and capability schemas.
-- *Semi-stable*: `<self>` (capabilities, commands, skills present; a short "cannot do" list),
+- *Semi-stable*: `<self>` (capabilities, commands, installed skills; a short "cannot do" list),
   core memory, person cards of people present.
 - *Volatile, last*: `<now>` (date and time), `<place>`, `<why_awake>`, `<doing>`, `<next>`,
   `<memories>` with source and age, `<recent>`, `<event>`. Messages from non-owners are delimited

@@ -49,22 +49,22 @@ direct clock or random call in the core.
 | D | dynamic θ, seeded go/no-go, decision outcomes | same events + seed → same decisions; talk rate ≤ 1/n in a busy group |
 | E | `wait` Expectations (patience), `not_who` | someone else answers → silent; nobody → one reply |
 | F | `think` with motivation/confidence, principles, person cards, self-model | proactive replies always have a recorded thought; "what can you do?" matches `<self>` |
-| H | `revise`, `guard` facts checked in sleep, lessons with credence (α/β) | a correction supersedes the old memory; a contradicted fact is revised at the next sleep |
+| H | `revise`, `guard` facts checked in sleep, lessons and procedures with credence (α/β) | a correction supersedes the old memory; a contradicted fact is revised at the next sleep |
 | I | wake gate; free-text conditions with cosine filter + classifier; `lo` learning | a fulfilled promise wakes no one; a question on the same topic never resolves a promise |
 | J | attribution and reliability (α/β) per domain; fade with a fixed threshold; soft and hard forgetting | a stranger cannot override an owner fact; hard forget leaves only `{"forgotten": true}` and metadata |
 | R | replay scenarios for B–J, plus report metrics: false-speak rate, missed-help rate, tokens per simulated day, absolute-line violations (must be 0), honesty-rule compliance | each new scenario fails before its track lands and passes after |
 
 **Deferred until weeks of real logs exist (D32.9):** learned signal weights, learned
 dispositions (D16, D29), adaptive fade threshold (D14), social standing (D31), identity linking
-(D10), package suggestions (D28), a version system for learned skills.
+(D10), package suggestions (D28).
 
 ## Phase 3 — Packages and the default owner policy
 - Loader for packages (organs + middleware + skills + dependencies), shared/organ-own scope.
 - Default owner policy, active out of the box (D22, D24): the two absolute lines (only the owner
   changes who the soul is; private content never enters another place), budget, quiet hours.
   Everything else is weighed by the PFC.
-- Shared packages: **commands** (one registry, identical `/help`) and **skills** (installed and
-  learned SKILL.md in a folder under git; D11, D19). The alias map waits for a second chat app.
+- Shared packages: **commands** (one registry, identical `/help`) and **skills** (installed
+  SKILL.md only; static; D34). The alias map waits for a second chat app.
 Done when: a DM fact is never visible or said in a group, even when someone tries to talk the
 soul into it; a reasonable request from a group member is helped; a package cannot remove the
 policy;

@@ -23,32 +23,30 @@ prior/
   manifest.yaml       # format_version, created, embedder (name + version), llm_family, language
   dispositions.yaml   # name: {value, min, max}
   lessons.yaml        # list of {text, credence: {alpha, beta}}
-  skills/<name>/SKILL.md
+  procedures.yaml     # list of {about, steps, lessons, credence: {alpha, beta}}
 ```
 
 Loading rules:
 - Different embedder → vector-dependent values (wake-gate edges, feeling-of-knowing threshold)
   fall back to soul.yaml defaults.
-- Different LLM family → load, but scale skill and lesson credence down (halve alpha and beta)
+- Different LLM family → load, but scale procedure and lesson credence down (halve alpha and beta)
   until proven again.
 - Unknown major `format_version` → refuse with a clear message.
 - Replay scenarios that prove the prior are kept in the repository's `scenarios/`, not inside
   the prior (they are tests, not learned state).
 
-## 3. Skill (SKILL.md)
-The common SKILL.md format: YAML front matter, then the instructions in Markdown.
+## 3. Installed skill (SKILL.md)
+Installed skills come from packages; they are static and never learned (D34). The common
+SKILL.md format: YAML front matter, then the instructions in Markdown.
 
 ```markdown
 ---
-name: daily-summary
-description: Summarize yesterday's group conversation for the owner each morning.
-version: 3
-credence: { alpha: 7, beta: 2 }
-taught_by: owner          # owner | person id | self
+name: shop-customer-service
+description: Answer customer questions for a small shop politely and accurately.
+version: 1
 ---
 Steps …
-Lessons: what failed and why …
 ```
 
 Only `name` and `description` enter the prompt; the body is loaded when the PFC asks for it.
-Learned skills live in a folder under git (versions = commits) until a version system is needed.
+What the soul learns by itself is stored as `procedure` and `lesson` memories, not as SKILL.md.

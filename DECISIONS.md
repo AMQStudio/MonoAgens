@@ -81,7 +81,7 @@ Public documents describe MonoAgens only; they mention no hosted service.
   between places).
 - The alias map is an inbound middleware; the core never sees raw accounts.
 
-**D11 — Skills are outside the core and learned skills need approval.**
+**D11 — Skills are outside the core and learned skills need approval.** *(Superseded in part by D34: learned procedures are core memories; skills packages hold installed skills only.)*
 - Installed skills: `skills/<name>/SKILL.md` (the common SKILL.md format), contributed by
   packages and injected through the context hook. Only names and descriptions of relevant skills
   enter the prompt; the body is loaded when the PFC asks for it.
@@ -365,6 +365,19 @@ by D24. D18 → superseded by D25. D14 wording "forget" → "fade" (D32.5).
 6. *Release gate.* Before any release: end-to-end tests with a real model, a real database, long
    multi-day conversations and real people. Replay also produces a per-model report (scenarios
    passed, too chatty / too quiet), from which recommended models are listed for users.
+
+**D34 — The soul learns; skills do not. Amends D11, D17, D19, D30.**
+Separate what a person *is and learns* from the *skills* they are given.
+- **Core (the soul)**: cognitive functions and everything learned from experience — lessons,
+  procedures that worked before ("how I did this last time"), social intuition, dispositions,
+  per-place and per-person tuning. Learned procedures and lessons are memories (kinds
+  `procedure` and `lesson`) with credence (α/β), activation and lineage, like any memory.
+  Without any middleware installed, the soul still learns.
+- **Middleware (packages)**: optional, static extra capabilities, functions and behaviors that the
+  owner chooses to install — installed skills (SKILL.md), commands, roles, RBAC rules. They do
+  not learn. A skills package only injects installed skills into the context.
+- Consequences: "learned skills" (D11, D19) are now core procedures, not package skills; the
+  prior (D30) carries `procedures.yaml` and `lessons.yaml`, not a `skills/` folder.
 
 ## Accepted in principle, details pending
 
