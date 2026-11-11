@@ -10,7 +10,8 @@ from zoneinfo import ZoneInfo
 from pgvector import Vector
 from psycopg.types.json import Jsonb
 
-from monoagens.types import RECENT_KINDS, Event, StateEntry
+from monoagens.types import CURRENT_SCHEMA_VERSION, RECENT_KINDS, Event, StateEntry
+from monoagens.versioning import is_valid_event_kind, upcast
 
 EXPECTATION_COLUMNS = (
     "id", "kind", "who", "place", "about", "cue_time", "cue_event", "condition",
@@ -27,25 +28,33 @@ _INSERT_EXPECTATION = (
     "expires_at) VALUES "
     "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s, %s) RETURNING id"
 )
-_EVENT_COLS = "id, ts, kind, who, place, body, payload, caused_by, origin_actor"
+_EVENT_COLS = ("id, ts, kind, who, place, body, payload, caused_by, origin_actor, "
+               "schema_version")
 
 
 def _row_to_event(row):
     payload = row[6] if row[6] is not None else {}
-    return Event(row[0], row[1], row[2], row[3], row[4], row[5], payload, row[7], row[8])
+    event = Event(row[0], row[1], row[2], row[3], row[4], row[5], payload, row[7], row[8],
+                  row[9])
+    return upcast(event)
 
 
 async def append_event(conn, *, ts, kind, who=None, place=None, body=None, payload=None,
-                       caused_by=None, origin_actor=None) -> Event:
+                       caused_by=None, origin_actor=None,
+                       schema_version=CURRENT_SCHEMA_VERSION) -> Event:
     """Append one event to the immutable Log; origin inherits along caused_by."""
     if ts is None or kind is None:
         raise ValueError("ts and kind must be explicitly provided")
-    query = ("INSERT INTO events (ts, kind, who, place, body, payload, caused_by, origin_actor) "
-             "VALUES (%s, %s, %s, %s, %s, %s, %s, COALESCE(%s, "
-             "(SELECT origin_actor FROM events WHERE id = %s), %s)) "
+    if not is_valid_event_kind(kind):
+        raise ValueError(f"invalid event kind: {kind!r}")
+    if schema_version < 1:
+        raise ValueError(f"schema_version must be positive: {schema_version!r}")
+    query = ("INSERT INTO events (ts, kind, who, place, body, payload, caused_by, origin_actor, "
+             "schema_version) VALUES (%s, %s, %s, %s, %s, %s, %s, COALESCE(%s, "
+             "(SELECT origin_actor FROM events WHERE id = %s), %s), %s) "
              f"RETURNING {_EVENT_COLS}")
     cur = await conn.execute(query, (ts, kind, who, place, body, Jsonb(payload or {}), caused_by,
-                                    origin_actor, caused_by, who))
+                                    origin_actor, caused_by, who, schema_version))
     return _row_to_event(await cur.fetchone())
 
 

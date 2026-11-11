@@ -9,6 +9,9 @@ from typing import Any
 # The only kinds the PFC's <recent> section may show; internal bookkeeping stays out.
 RECENT_KINDS = ("percept", "act.out", "expectation.fired")
 
+# The payload schema every event is written with; readers upcast older ones (core.md §3).
+CURRENT_SCHEMA_VERSION = 1
+
 
 @dataclass(frozen=True, slots=True)
 class Event:
@@ -23,6 +26,7 @@ class Event:
     payload: dict[str, Any] = field(default_factory=dict)
     caused_by: int | None = None
     origin_actor: str | None = None
+    schema_version: int = CURRENT_SCHEMA_VERSION
 
 
 @dataclass(frozen=True, slots=True)
