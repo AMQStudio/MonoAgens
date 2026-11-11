@@ -23,7 +23,7 @@ LLMs are a prefrontal cortex without the rest of the brain. MonoAgens is the res
 - Fix-up pass; replay tool with a real LLM (17 scenarios); CLI organ; `<recent>` across places.
 - Track A foundation: cognition package, `event_vectors`, seeded generator, decision
   breakdowns, hook lists, token budget.
-- Concept freeze: DECISIONS D1–D37, DESIGN.md finalized in eight sections.
+- Concept freeze: DECISIONS consolidated into layered rulings (D1–D40), DESIGN.md final.
 
 ## Phase 1 — Align the code with DESIGN (one track, first)
 **Track A2** — bring the merged Track A in line with DESIGN (D32). Sub-steps, one commit each:

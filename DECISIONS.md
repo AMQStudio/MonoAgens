@@ -1,561 +1,315 @@
-# DECISIONS.md — Concept Decisions (design freeze)
+# DECISIONS.md — Rulings
 
-Status: **DESIGN.md was finalized from D1–D32 on 2026-11-11.**
-These decisions are agreed between the owner and the architect. If DESIGN.md or ROADMAP.md
-ever disagree with this file, this file wins and the other document is a bug.
-Implementation resumes only when the owner says so, starting with ROADMAP Phase 1 (Track A2).
+Status: **final for v1 (2026-11-11).** Every point below is agreed between the owner and the
+architect. If DESIGN.md, ROADMAP.md or docs/ disagree with this file, this file wins.
+Each point carries the decision numbers it came from (Dxx); the full discussion history of
+D1–D40 is in git (commit 32248b1 and earlier). Points marked **Draft** were not discussed in
+depth: they state the current intent and may change without a new decision.
 
-## Locked
+Layers:
+- **Core** — the soul: a generic brain. Fixed for v1.
+- **Organs** — bodies (Telegram, CLI, WhatsApp, a robot) and tools (search, files, email):
+  how the soul senses and acts.
+- **Middleware** — static rules in the three hooks: owner policy, commands, RBAC, installed
+  skills. Does not learn.
+- **Packages** — what other projects call plugins: bundles of organs, middleware, installed
+  skills and dependencies.
+- **Birth inputs** — the birth certificate (who I am) and the prior (my instincts).
+- **Project** — license, users, release, documents.
 
-**D1 — The core is only a brain.**
-The core knows exactly three generic things: **senses** (anything that `put`s events),
-**organs** (anything that receives actions via `act` and may send results back as events),
-and **hooks** (points where middleware attaches). The core has no notion of "tool", "plugin",
-"skill", "command", "gateway", or any platform.
+---
 
-**D2 — Only thought acts live in the core.**
-Core acts: `think`, `stay_silent`, `expect`, `resolve`. The brain decides intent and content.
-Every act on the world, **including speaking**, is a capability an organ declares
-(name, JSON schema, description, and whether it is *communicative*). The organ decides how to
-carry it out (Telegram splits into bubbles, a speaker uses TTS, a lamp blinks). Fine motor
-control lives inside the organ; the PFC only gives high-level intentions ("go to the kitchen").
-The PFC tool list is assembled from the organs that are currently present.
-Signals that count "talking" (talk rate, forward model) use the *communicative* flag.
+## 0. Method
+- **Design by brain function, not by scenario** (D39). The core is a closed list of brain
+  functions, the brain map in DESIGN §2. Each row is a brain region, a studied model with its
+  formula and sources (docs/MATH.md) and one core mechanism. A core decision = research how the
+  brain does it, then write the row.
+- **Scenarios are tests, not design inputs** (D39). A new human situation is checked against
+  the map and becomes a replay scenario. The PFC fills the gaps between functions.
+- **No rule to close a single case** (D39, D40). A behavior that keeps failing means a weak
+  function to fix; role-, place- or preference-specific behavior goes to middleware.
+- **Complexity budget** (D26, D32). At most 4 books, 5 thought acts, 3 hooks, 10 signals,
+  3 drives and one gate formula. A new primitive must replace one or be refused. A new brain-map
+  row is added only when a whole brain function is missing.
 
-**D3 — Multi-step work is a chain of events.**
-An organ's result comes back as an event; cognition treats "result of my own action" as a
-reflex and wakes the PFC to continue. Every step is recorded, so tasks survive restarts and can
-be interrupted by new messages. Limits: max steps per task, token budget, approvals via hooks.
-Acting on the world also creates a forward-model Expectation ("I expect to arrive within 30 s");
-a miss wakes the PFC.
+## 1. Core
 
-**D4 — Two levels of forgetting.**
-- *Soft* ("forget what I just said"): related memories get `valid_to`, the events are excluded
-  from `<recent>` and retrieval, and a `forget.soft` event is written. Data remains, never
-  surfaced.
-- *Hard* ("delete my data"): the only exception to the immutable log. One dedicated function
-  replaces event payloads with `{"forgotten": true}`, deletes their vectors, derived memories and
-  related expectations, and writes a `forget.hard` event. The database trigger allows exactly
-  this change and nothing else.
-- Who may ask: the owner, or the person the data is about. Backups keep old data until they
-  expire; this must be documented for users.
+### 1.1 Scope
+- The core is only a brain. It knows three generic things: **senses** (anything that `put`s
+  events), **organs** (anything that receives `act` and may return results as events) and
+  **hooks**. It has no notion of tool, plugin, skill, command, gateway or platform (D1, D35).
+- The LLM is the prefrontal cortex: it weighs, decides intentions and chooses words, and is woken
+  only by the gate. The core is the rest of the brain (D20).
+- The core imitates cognitive functions — perception, attention, memory, expectation, judgment,
+  learning, restraint — and no emotions, moods or simulated feelings (D20).
+- No roles or installed skills in the core; they come from packages (D20, D34).
+- The core has a slot for identity, not an identity (D35).
 
-**D5 — Owner-only instructions switch on automatically in any group.** *(Amended by D24: others' requests are weighed; only the two absolute lines are hard.)*
-Personal mode (no middleware) is only for a bot used purely by its owner. As soon as the bot is
-in a group, the owner-only policy middleware is active: others may talk to it, only the owner
-can instruct it, create promises on its behalf, or change settings.
+### 1.2 Books, acts, hooks
+- **Four books** (D26, D32):
+  - `events`: id, ts, kind, who, place, body, origin_actor, payload, caused_by. INSERT-only by
+    trigger; the only exception is hard forgetting. `event_vectors` is its index.
+  - `state`: a namespaced key/value projection rebuildable from events (identity, last_seen,
+    last_spoke, core_memory, self_summary, person cards, credence, dispositions, budget, …).
+  - `expectations` (§1.6) and `memories` (§1.7).
+- Every event and memory has a neutral `place`; `who` is a person id (after the alias map);
+  `origin_actor` is inherited along `caused_by` (D32.3–4).
+- **Five thought acts**: `think`, `act`, `expect`, `resolve`, `revise`. `act` uses any organ
+  capability, speaking included. Silence is a wake without `act`; its reason is in `think` and
+  the decision event (D2, D32.1).
+- **Three hooks**: inbound (after recording), context (before any model call), action (before an
+  organ acts). Contract `async (item, ctx) -> Continue | Replace | Stop`. Every Stop writes
+  `guard.stopped`; an exception stops the item and writes `error` (fail closed). One ordered list
+  per hook: owner policy first and last, package middleware between (D9, D32.2).
 
-**D6 — Memories record their source and trust.**
-Sleep stores "Budi said X", not "X is true". Each memory has `source_who` and a trust level
-(owner > known person > stranger). A stranger's claim never overrides an owner's fact.
-Messages from non-owners appear in prompts as quoted, attributed data, never as instructions.
-The strongest defense against leaks is the context hook: what is not in the prompt cannot leak.
+### 1.3 Running
+- Record first, then act; silent decisions are recorded too.
+- One queue, one consumer that only records and decides. Slow work — PFC, classifier,
+  embedding, sleep — runs as background jobs whose results return as events. At most one PFC job
+  per place; if a new message arrived there meanwhile, the result is applied and the PFC is woken
+  once more with the newest context (D33.1).
+- All time from the injected clock (replay uses event times); all randomness from a generator
+  seeded by hash(seed, event.id) (D32.10).
+- Every model call is a gate decision, recorded as `model.call` with purpose and tokens, and
+  counted in the daily budget. No call per message or per tick by default (D23).
+- Multi-step work is a chain of events: result → circuit breaker → next `act`, limited by steps
+  per task and the budget. Every step is logged, so tasks survive restarts and can be
+  interrupted (D3).
+- Acting creates a `predict` Expectation (forward model); a miss that matters wakes the PFC (D3).
+- Schema changes are numbered SQL migrations with a version table, applied at start after an
+  automatic backup; no migration framework (D33.4).
 
-**D7 — BYOK; one deployment is one soul.**
-The user brings their own model key. Each deployment runs exactly one soul with its own
-database. Keys come from the environment only, never from soul.yaml or the database. The
-embedder stays a replaceable port.
+### 1.4 Attention and the decision to act (formulas: MATH §2–4, §15)
+- **Circuit breaker** (ventral attention): an event bypasses the draw when it engages a
+  commitment — the turn was allocated to the soul (`addressed`: direct chat, reply, tag), it
+  fires or answers an active Expectation, or it continues an active goal (D40).
+- **Signals**, pure functions in [0, 1], at most 10 (now 5): `own_name` (attention capture, not
+  obligation), `info_gap` (cosine to the prior's reference sentences), `feeling_of_knowing`,
+  `relevance` (to active promises and core memory), `social_cost` (the floor belongs to someone
+  else, lowered by closeness) (D40).
+- **Salience and habituation**: S = clamp(Σ w·s); per (place, who) h ← h·γ^Δmin + 1;
+  S_eff = S/(1+h).
+- **Threshold (three drives + familiarity)**: θ = base + a·talk_rate + b·budget_used −
+  c·promise_debt + r·(1 − familiarity). talk_rate is measured against the fair share 1/n;
+  familiarity = σ(ACT-R activation of interactions with this place and the people present)
+  (D33.2, D40).
+- **Go / no-go**: P = σ((S_eff − θ)/τ), seeded draw. Every number is stored in the decision.
+- **Patience = turn-taking**: addressed → answer without waiting (possibly "I don't know"); not
+  addressed → self-select only if nobody else takes the floor (`wait` Expectation) (D40).
+- **Inner thought**: when self-selecting, the PFC calls `think(thought, motivation 1–5,
+  confidence 0–1)`; a communicative act passes only above `speaking_bar` and `certainty_bar`.
+  Criteria offered: relevance, information gap, expected impact, urgency, coherence,
+  originality, balance, dynamics.
+- **Budget is not a mode**: as it is spent θ rises; the circuit breaker still fires; a free-text
+  condition with no affordable classifier call stays unresolved; `budget.exhausted` is recorded
+  (D32.6, D40).
 
-**D8 — Open source under Apache 2.0.**
-Public documents describe MonoAgens only; they mention no hosted service.
+### 1.5 Working memory: the desk (D37)
+- The prompt is a desk, not the memory: rebuilt from the books at every wake, never compacted.
+- Three layers ordered for caching: *stable* (who I am, how I work, honesty principles,
+  knowledge cutoff, principles, acts and capability schemas), *semi-stable* (`<self>`, core
+  memory, person cards present), *volatile last* (`<now>`, `<place>`, `<why_awake>`, `<doing>`,
+  `<next>`, `<memories>` with basis/source/date/age, `<recent>`, `<event>`). `<now>` holds local
+  time, timezone and time since the last interaction (D12).
+- Each volatile section has a token budget (prior constants). In a chain, `<doing>` holds the
+  goal, one line per step and the latest result verbatim; older results are pointers.
+- Messages from non-owners are delimited as quoted data (spotlighting); the absolute lines never
+  depend on it (D6, D32.12).
+- Knowledge cutoff comes from per-model configuration, set slightly earlier than claimed; the
+  current date is always in `<now>` (D32.13).
+- The built-in `self` organ offers `recall(query | event_id, place?, from?, to?)`: deeper search
+  of the soul's own log and memories, by time range (no query lists the episodes), along
+  `derived_from` to the original events, and by text search over event payloads; it obeys
+  absolute line 2 and reports what it searched and found, "nothing" included (D37, D38).
 
-**D9 — Packages bundle organs, middleware, skills and dependencies.**
-- A loader outside the core assembles packages; the core only sees the resulting senses,
-  organs and hooks.
-- Middleware scope is **shared** (applies to every organ that opts in: commands, skills, tool
-  handling) or **organ-own** (only for things unique to that platform).
-- **Commands are defined once** in a shared registry. Organs only translate their native syntax
-  (`/help@bot`, `/help`, `:help`) into a neutral `command` event and may add presentation
-  (menus, buttons) but never logic. `/help` is the same everywhere; packages register new
-  commands into the same registry.
-- **Owner policy middleware wraps every package middleware** and cannot be bypassed or removed
-  by a package: `[owner policy — first] → [package middleware] → [owner policy — last]`.
-- Name collisions (two packages claiming the same command or organ name) fail at boot.
+### 1.6 Expectations (D15, D21, D32.8, D40)
+- One schema, four kinds: `promise` (promises, reminders, approvals), `wait` (patience),
+  `predict` (forward model), `guard` (an important belief; never wakes by itself). A fifth kind
+  needs a decision.
+- Cues by time (at, every, daily) or event (kind, who, place, text_like, not_who); conditions as
+  fast paths or free text; `policy` once or cooldown + max fires; `expires_at` required.
+- **Wake gate**, no PFC call: still relevant? (condition met → resolve) · stale? (expired →
+  drop). Quiet hours are owner policy; repeats are limited by `policy` and habituation.
+- **Free text**: cosine only filters (below `lo` → ignore); every candidate goes to one recorded
+  classifier call. The "clearly yes" band opens only when zero false resolutions are seen in
+  n ≥ 3/ε verdicts (rule of three). `lo` moves toward the lowest m with a "yes" minus a margin,
+  within bounds; the gray band keeps a minimum width (D29).
+- A woken PFC re-judges the situation; it never replays a promise blindly.
 
-**D10 — Identity across bodies.**
-- Every native account (`telegram:123`, `whatsapp:628…`) maps to one person id; each mapping is
-  an event and can be undone.
-- Only the owner, or the person themself via a verification code sent from the second account,
-  may link two accounts.
-- The agent may suspect and ask the owner, but never links silently (linking lets memories flow
-  between places).
-- The alias map is an inbound middleware; the core never sees raw accounts.
+### 1.7 Memory and knowing (MATH §5, §14)
+- `memories` kinds: fact, episode, lesson, procedure; each with `basis` (observed | told |
+  inferred), who, place, private, source, importance, validity, `derived_from`, use count.
+- **Retrieval by ACT-R activation**: A = B + w_ctx·cos + w_imp·importance; candidates top 40 by
+  vector ∪ top 20 by text.
+- **Attribution and trust**: memories say who said it; a non-owner's claim never supersedes an
+  owner's fact; conflicts stay as conflicting claims (D6, D31).
+- **Knowing and misremembering**, from brain functions (D38): source monitoring (`basis`);
+  details only on recollection, familiarity alone is said as familiarity; events (verbatim) win
+  over sleep summaries (gist); merge episodes only when people, place and time agree; superseded
+  memories suppressed, times absolute; report only above a criterion that rises with the stakes,
+  else coarser or "I don't know"; absence weighed by coverage; gaps filled with `inferred`
+  hypotheses said as guesses.
+- The model's own knowledge counts as `told`, dated at the knowledge cutoff (D40).
+- **Self-correction**: `revise(old, new, reason)` sets `valid_to` and `superseded_by`; nothing is
+  deleted. A stranger's correction of an owner fact becomes a conflicting claim. The soul never
+  revises its own principles or persona (D27).
+- **Fade**: during sleep, per-message vectors with low activation are released; gist stays in
+  memories, events stay in the log. Deterministic, fixed threshold for now (D14, D32.5).
+- **Soft forgetting** ("forget what I just said"): related memories get `valid_to`; events leave
+  retrieval and `<recent>`; `forget.soft` (D4).
+- **Hard forgetting** ("delete my data"): payloads become `{"forgotten": true}` and everything in
+  their `derived_from` lineage is deleted; metadata (kind, time, actor hash) remains;
+  `forget.hard`. Asked by the owner or the person concerned. Owner backups are allowed; old
+  backups and provider logs are outside the soul's reach and the docs say so (D4, D32.5).
 
-**D11 — Skills are outside the core and learned skills need approval.** *(Superseded in part by D34: learned procedures are core memories; skills packages hold installed skills only.)*
-- Installed skills: `skills/<name>/SKILL.md` (the common SKILL.md format), contributed by
-  packages and injected through the context hook. Only names and descriptions of relevant skills
-  enter the prompt; the body is loaded when the PFC asks for it.
-- Learned skills: during sleep, a successful multi-step task may be distilled into a draft
-  skill. A draft becomes active only after owner approval (an approval Expectation) or a
-  configured number of successful uses. **Amended by D19 and D24: drafts activate at once with a credence that follows their source and track record.**
-- Skills are versioned; a new version never silently overwrites the old one. Skill use counts
-  feed the same ACT-R activation as memories.
+### 1.8 Sleep (D27, D31, D40)
+- A gated background job, only on new conversational events, with backoff on failure.
+- Summarizes new events per place into memories with `derived_from`; updates person cards
+  (closeness from interaction activation, reliability per domain as α/β), core memory and
+  `self_summary`; distills lessons and procedures; checks `guard` beliefs; drops expired
+  Expectations; fades vectors.
+- A contradiction of a belief is a prediction error weighted by precision (belief credence ×
+  source reliability): relevant now → the PFC sees it live; otherwise it is settled in sleep.
 
-**D12 — Self-model: the PFC always knows who, when, where, what and how.**
-Assembled by the kernel on every wake from data that already exists; the LLM only reads it.
-- Stable prompt: *who I am* (soul.yaml), *how I work* (a short fixed self-description: I have
-  memories that can be incomplete, I can be wrong, I act only through organs), *honesty rules*
-  (below), and *my knowledge cutoff* (from model configuration).
-- Semi-stable: `<self>` — what I can do, assembled from the registries of present organs,
-  commands and skills, including a short "cannot do" list for commonly asked things; person
-  cards. `/help` and "what can you do?" come from the same source.
-- Volatile: `<now>` (local time, timezone, time since the last interaction), `<doing>` (my own
-  last actions across places, running tasks), `<next>` (promises due soon).
-- Honesty rules: (1) facts that change (office holders, prices, news, versions, schedules):
-  use a search organ if one is present; otherwise answer as "as of my knowledge in <cutoff>,
-  ... this may have changed". (2) Retrieved memories carry their source and age, and the PFC
-  attributes them ("Budi said yesterday ...") instead of stating them as facts. (3) Low
-  confidence from `think` means ask back or say "I don't know". Never claim a capability that is
-  not in `<self>`.
+### 1.9 Learning (D16, D17, D24, D29, D32.7, D32.9, D33.3, D34, D40)
+- **The soul learns; skills do not.** Learned state, all in the core: (1) dispositions (knobs),
+  (2) generic procedures, lessons and social intuition, (3) episodic memory with per-place and
+  per-person tuning. Test for 1–2: "would it make sense for a soul that does not know these
+  people?" — otherwise it is layer 3.
+- Procedures and lessons are memories with credence (α/β): the start follows the source's trust
+  (owner high, stranger low), outcomes move it; the PFC sees provenance and track record and
+  decides to use, try carefully, or ask. No approval rule in the core.
+- Dispositions change slowly: prior, floor, ceiling, small steps; a knob moves only when the 95%
+  interval of its evidence excludes "no change"; at most 5% of its range per day; a knob stuck at
+  a bound for days freezes and is reported. Teachers: the owner's reactions and classifier
+  verdicts only. Other people's reactions tune layer 3 for their place and person. Each change
+  is an event storing its own delta; rollback recomputes from the log.
+- **Active now**: the wake-gate edge and α/β credence and reliability. **Deferred until weeks of
+  real logs**: learned weights and knobs, adaptive fade threshold, social standing, learned
+  coverage. Deferral loses nothing: the log keeps everything.
 
-**D13 — Order of users.**
-First the owner alone, then one real group the owner knows well (which is also where the honest
-human-likeness evaluation happens), then other developers once the contracts are stable.
+### 1.10 Trust, identity and the two absolute lines (D24, D31, D32.3–4, D33.5, D35)
+- **Weigh, don't block.** Anyone may ask; the PFC weighs requests against the owner's interests
+  and the principles, and claims by the speaker's reliability in that domain. Standing never
+  buys dishonesty.
+- **Two absolute lines**, enforced deterministically by the owner policy, never by the PFC:
+  1. Only the owner changes who the soul is (principles, settings, access to the owner's data):
+     a capability flagged `identity_changing` passes only when the chain's `origin_actor` is the
+     owner.
+  2. Private content never enters another place: private memories and lines enter a context
+     only in their own place or in a direct chat with the owner (context hook).
+- **Identity** lives in `state: identity` after birth; the owner changes it in conversation
+  through an `identity_changing` capability; without a birth certificate the soul starts neutral
+  and may ask the owner what to be called.
+- **Becoming the owner**: on first start the soul shows a pairing code; the first person to send
+  it from any organ becomes the owner; a later change needs the current owner.
+- **Self-model**: `<self>` is assembled from the registries of present organs, commands and
+  skills and is closed-world — what is not listed cannot be done; the soul never claims a
+  capability outside it. Honesty principles are few and general and worded by the PFC, never
+  scripted (D12, D38, D40).
 
-**D14 — Retention by activation, not by age.**
-No fixed day limits. During sleep every detail trace (per-message vector) is scored with the
-same ACT-R activation as memories (use, recency, importance, links to promises and to active
-memories). High activation keeps the detail; low activation drops the vector so only the gist in
-memories remains. Raw events always stay in the log (subject to D4 hard forgetting). The
-activation threshold adapts to a storage budget set by the owner, like the other drives.
-Retention is adaptive but deterministic: same data and same rules give the same result; no
-randomness. Backups are compressed daily with an owner-set retention period.
+## 2. Organs (bodies and tools)
+- An organ senses (`run(put)`) and/or acts (`act(action)`) and declares capabilities: name, JSON
+  schema, description, flags `communicative`, `long_running`, `identity_changing`. The PFC's
+  capability list is assembled from the organs present, in a fixed order (D2, D32).
+- The brain decides intent and content; the organ decides how (bubbles, TTS, gestures). Fine
+  motor control stays in the organ (D2).
+- Long actions report progress and completion as `act.result`; the core never waits (D3).
+- `communicative` capabilities count as speaking for talk rate and the forward model (D2).
+- On start an organ asks for `cursor(organ)`, so input is never lost or duplicated.
+- Organs translate native accounts into neutral ids (through the alias map) and native command
+  syntax into a neutral `command` event, adding presentation only (menus, buttons) (D9).
+- Organs report `addressed` (direct chat, reply, tag) as a neutral field (D40).
+- A body may offer `history(place, before, limit)`; on connect it back-fills what it missed as
+  `msg.in` with `backfill: true` and `sent_at`. The core appraises a backlog per place once, as
+  one age-discounted percept; an addressed message still trips the circuit breaker (D37, D40).
+- Tools are organs too (search, files, email) (D35). The only organ inside the core is `self`.
+- Present: Telegram (long polling) and CLI (Unix socket, thin client).
+- **Draft**: WhatsApp (with history), Discord, voice (STT/TTS), a first non-chat organ (IoT
+  device or robot simulation); web search/fetch and file read as the first tool organs. Each
+  organ owns its own retries, rate limits and platform quirks.
 
-**D15 — Waking is not thinking.**
-When an Expectation comes due, or an event might answer it, the kernel first runs a cheap gate
-with no PFC call:
-- *Still relevant?* If the completion condition is already met, the Expectation is resolved
-  and nobody is woken.
-- *Stale?* Past its expiry, it is dropped.
-- *Allowed now?* Quiet hours, daily budget and nudge caps are checked.
-Only what survives wakes the PFC. A woken PFC re-judges the situation; it never replays an old
-promise blindly.
-An Expectation's completion condition may be free text ("Muqsith answered about the
-schedule"). It is judged by meaning: a match score from vector similarity, in three bands:
-clearly no (ignore), clearly yes (resolve), gray (one call to a small classifier model, whose
-verdict is recorded as an event). Optional hints (who, place) only narrow the search.
+## 3. Middleware (static; runs in the hooks; never learns)
+- Middleware adds capabilities and rules the owner chooses; it does not learn (D34).
+- **Owner policy** wraps every package middleware (first and last) and cannot be removed by a
+  package (D9).
+- **Default owner policy**, active out of the box: the two absolute lines, the daily model
+  budget, quiet hours. Budget and quiet hours are owner settings; the owner may tighten or loosen
+  them; packages may add rules inside it, never remove it (D22, D24, D36).
+- Scope: **shared** (every organ that opts in: commands, skills, tool rules) or **organ-own**
+  (unique to one platform) (D9).
+- **Commands**: one shared registry; `/help` is identical on every organ; packages register
+  commands into it (D9).
+- **RBAC, roles, hierarchy as permission**: in the hooks only; platform role facts ("admin of
+  this group") are recorded as facts about that person for the soul's social understanding
+  (D31).
+- **Tool-use rules and approvals**: optional; e.g. an owner may require approval before a
+  learned procedure is used (D19).
+- **Installed skills**: SKILL.md; only names and descriptions of relevant skills enter the
+  prompt via the context hook; the body is loaded on request; versioned; use counts feed the
+  same ACT-R activation as memories (D11, D34).
+- **Alias map** (one person across bodies): every mapping is an event and can be undone; only the
+  owner, or the person via a verification code sent from the second account, may link; the soul
+  may suspect and ask, never links silently. Needed when a second chat app arrives (D10).
+- **Draft — memory-view**: list what the soul remembers about the asker or this place;
+  corrections via `revise` with the asker as `origin_actor`; owner-only Markdown export as a
+  view, never the source of truth; both absolute lines apply (D37).
+- **Draft — package suggestions**: only to the owner, only from the local catalog, at most once
+  per missing capability per habituation window, never installs anything (D28).
+- **Draft**: per-person rate limits, content filters, scheduled quiet modes — owner choices.
 
-**D16 — Dispositions are learned, not configured.**
-No tuning panel. The numbers that shape behavior (the band edges of D15, the speak/silent
-threshold θ, decay rates, general talkativeness) start from an innate prior (D18, or soul.yaml
-defaults) and move by small, bounded steps from experience. Every change is an event, so it can
-be audited and rolled back. Main teacher: the classifier's verdicts on gray cases; they become
-labelled examples that slowly narrow the gray band, so the gate gets cheaper over time.
-Corrector: how people react (answered, ignored, told to stop). Learning is slow and bounded;
-one bad day must not change the character. This extends the delta-rule learning already in
-DESIGN.md.
+## 4. Packages (plugins)
+- A package bundles organs, middleware, installed skills and dependencies. A loader outside the
+  core assembles them; the core sees only senses, organs and hooks (D9).
+- Name collisions (two packages claiming the same command or organ) fail at boot (D9).
+- Packages are trusted code installed by the owner and run in-process (the Home Assistant model).
+  The owner policy holds against packages that follow the contract; it is not a sandbox against
+  malicious code, and the docs say so (D32.11).
+- Role packages (assistant, customer service, sysadmin) may ship a birth certificate, used only at
+  birth; they can never overwrite identity afterwards (D20, D35).
+- **Draft**: installed by the owner through the installer or a command; a local catalog;
+  semantic versions; stable, versioned contracts for organs, packages and middleware only after
+  they have not changed for a while (Phase 9).
 
-**D17 — Three layers of learned state.**
-1. *Dispositions* — the numbers of D16.
-2. *Skills* — how to solve things, lessons from failures (what went wrong and why), and general
-   social intuition ("when someone says 'whatever', they often want me to choose").
-3. *Episodic memory* — conversations, facts about people, relationships.
-Test for layers 1–2: "would this still make sense for another soul that does not know who
-these people are?" If not, it belongs to layer 3. Tuning that concerns one relationship
-("chatty with A, quiet with B") is layer 3. Lessons from P1 enter layer 2 only after being
-generalised.
+## 5. Birth inputs
+- **Birth certificate** (`soul.yaml`): name, language, persona, principles; persona may be in any
+  language. Read once at birth (D35).
+- **Prior**: a local folder loaded at birth — `manifest.yaml` (format version, date, embedder,
+  LLM family, language), `dispositions.yaml` (knobs, calibration, constants),
+  `references.yaml`, `lessons.yaml`, `procedures.yaml` (with credence), `scenarios/` (replay
+  proof). A default prior ships with the repository (D25, D30, D34, D36).
+- **Knobs**: about ten values named by behavior — talkativeness, restraint after speaking,
+  spontaneity, helpfulness, boredom with repeats, patience, reserve when unfamiliar, speaking
+  bar, certainty bar, memory persistence — each with an "if the soul is too X" guide. One
+  function maps them to θ, τ, γ and the weights. Calibration is measured per embedder and model,
+  never set by hand; constants change only by a decision. End users never see the prior
+  (D36, D40).
+- **Loading rules**: different embedder → calibration falls back to defaults; different LLM family
+  → load, halving procedure and lesson credence until proven; unknown major format → refuse with
+  a clear message (D30).
+- This repository only loads a prior; it never exports, uploads, shares or aggregates learned
+  state (D18, D25).
 
-**D18 — Birth snapshot.** *(Amended by D25: inside this repository only loading a prior exists; building and sharing snapshots is out of scope.)*
-Layers 1–2 can be exported as a snapshot; layer 3 never is. A snapshot is *generic* (names,
-places and personal details removed), *reproducible* (it carries replay scenarios that prove
-each item still works) and records the embedder and LLM models it was learned with (learned
-numbers do not transfer across models). A new soul is born from a snapshot with empty memory
-and keeps learning from its own users. Inheritance gate: an item is passed on only if it passes
-replay on a fresh soul, no previously passing scenario regresses, and, at first, the owner
-approves it as curator. Public documents say "snapshot" and nothing about hosting (D8).
+## 6. Project
+- Open source under Apache 2.0; public documents mention no hosted service (D8).
+- BYOK; one deployment is one soul with its own database; keys only from the environment; the
+  embedder is a replaceable port (D7).
+- Out of the box for non-technical people: no configuration panel; a soul is born from a prior and
+  adapts (D20).
+- Order of users: the owner alone, then one real group the owner knows well (also the honest
+  human-likeness evaluation), then developers once contracts are stable (D13).
+- **Release gate**: end-to-end tests with a real model, a real database, long multi-day
+  conversations and real people; a per-model replay report and a list of recommended models
+  (D33.6).
+- Never described as conscious or as "% human"; claims are per behavior against a human
+  baseline.
+- Documents: DESIGN.md (current design), this file (rulings), docs/FORMATS.md, docs/MATH.md
+  (formulas and sources), ROADMAP.md (steps), AGENTS.md (rules for coding agents) (D32.14).
+- **Draft**: installer (one command from clone to a talking soul); README with the brain table,
+  install, talk, tune with replay; compressed daily backups with an owner-set retention (D14).
 
-**D19 — Autonomy lives in the core; brakes live in the owner policy. Amends D11.**
-Learned skills become active immediately, are versioned, and can be rolled back. Requiring
-approval before activation is no longer a core rule; an owner may still add it as an
-owner-policy setting (D9). The same holds for every other brake: the core has none of its own.
-
-**D20 — Product stance: out of the box.**
-The target is non-technical people. A good first experience needs no configuration: the soul is
-born with an innate prior (D18) and adapts. The core aims at human cognitive *functions*
-(perception, attention, memory, judgement, learning, restraint), not emotions. Roles such as
-assistant, customer service or sysadmin come from packages (D9), never from the core.
-
-**D21 — Cosine is only a filter, never a judge. Amends D15.**
-Vector similarity measures "about the same thing", not "answers it": a question on the same
-topic scores as high as its answer. So for free-text completion conditions the cosine only
-filters: m < lo is ignored; every m ≥ lo goes to the classifier. The "clearly yes" band starts
-disabled (hi = 1) and may open only when recorded classifier verdicts show that the band above
-the proposed hi contains no false resolutions. Opening it is a `disposition.updated` event.
-
-**D22 — The default owner policy ships with sensible brakes. Amends D19 and D20.** *(Amended by D24.)*
-The core still has no brakes of its own (D19). But a soul is installed with a default owner
-policy, active out of the box, so a non-technical owner is protected without configuring
-anything:
-- skills learned from work with the owner activate at once; skills whose source involves
-  anyone else wait for owner approval (an approval Expectation);
-- owner-only instructions in groups (D5);
-- the daily model budget and quiet hours.
-The owner may loosen or tighten these; packages cannot remove them (D9).
-
-**D23 — Every model call goes through a gate and is accounted for. Replaces the old wording of
-invariant 5.**
-No model call (PFC, classifier, sleep) happens per message or per tick by default. Each call is
-the result of a gate decision, is recorded as an event with its purpose and token usage, and
-counts toward the daily budget. The D15 classifier therefore needs no exception.
-
-**D24 — Weigh, don't block: trust grows from experience; only two absolute lines. Amends D5
-and D22.**
-People do not follow "advice from others needs permission". They weigh who said it, how
-plausible it is and what it costs if wrong, try it carefully, and trust it more when it works.
-- **Credence for skills and lessons.** Every skill and lesson carries its provenance (who
-  taught it, uses, successes). Starting credence follows the source's trust (owner high,
-  stranger low). Forward-model outcomes raise or lower it; a skill that keeps failing sinks and
-  stops being used. The PFC sees provenance and track record ("taught by Budi, used 3×, worked
-  1×") and decides: use it, try it carefully, or ask the owner. No approval rule.
-- **Requests from others are weighed, not refused.** Anyone may ask ("Mona, remind us at 7");
-  the PFC weighs the request against the owner's interests and its principles, like a good
-  assistant would.
-- **Only two absolute lines**, because LLM judgment can be talked into anything and these must
-  hold even then:
-  1. Only the owner can change who the soul is: principles, settings, and who may access the
-     owner's data.
-  2. Content from a private conversation never enters another place: it is never put into the
-     prompt there (context hook).
-- The default owner policy (D22) keeps only these two lines plus the budget and quiet hours.
-  Its former "skills from others wait for approval" and D5's "only the owner can instruct" are
-  replaced by weighing.
-
-**D25 — The open-source core is for using and learning on your own. Amends D18.**
-- The open-source repository contains everything a soul needs to live and to learn from its
-  own owner and people: all three layers of learned state, stored in its own database, with
-  layers 1–2 kept clearly separate from layer 3.
-- It can **start from a prior**: a local file of layer 1–2 values (dispositions, generic skills
-  and lessons) that is loaded at birth. A default prior ships with the repository.
-- It contains **no export, upload, sharing, aggregation or curation** of learned state. Building
-  snapshots from many souls, filtering them and grouping them per model family is a separate
-  project outside this repository; public documents do not describe it (D8).
-- Because the prior is only a file format, the core stays unaware of where a prior came from.
-
-**D26 — Complexity budget for the core.**
-The core holds at most: 4 books (events, state, expectations, memories; event_vectors is the
-index of events), 5 thought acts (think, stay_silent, expect, resolve, revise — D27), 4 hooks, 10 signals, 3 drives,
-one gate formula. A new idea that needs another core primitive must replace an existing one or
-be refused. Everything else lives in organs, packages or the owner policy.
-
-**D27 — Self-correction (details of P1).**
-- *Direct correction*: the PFC is already awake when someone replies to the soul. It uses the
-  thought act `revise(old memory, new text, reason)`: the old memory gets `valid_to` and points
-  to its replacement; nothing is deleted. Trust still applies: a stranger's correction of an
-  owner fact is stored as a conflicting claim, and the soul may ask the owner.
-- *Guarded facts*: during sleep, important facts about people from trusted sources become
-  passive Expectations ("this should still be true", origin `guarded_fact`). Possible
-  contradictions are found by the wake gate (cosine filter, then classifier; D21) and are
-  **queued for the next sleep**, not woken live — unless the fact is relevant to the current
-  conversation, in which case the PFC uses the newest information at once.
-- *Lessons*: during sleep, forward outcomes, corrections and failed actions are distilled into
-  lessons. Generic ones go to layer 2 with credence (D24); person-specific ones to layer 3.
-- The soul never revises its own principles or persona.
-
-**D28 — The soul may suggest a package, politely and rarely.**
-Only to the owner; only if the package is in the local catalog of installable packages (never
-invented); at most once per missing capability per habituation window; it can never install
-anything itself (absolute line 1, D24).
-
-**D29 — How dispositions learn.**
-Character may change slowly; one strange day must not change it.
-- Every value has a prior, a floor, a ceiling and a small step size.
-- A value moves only after enough consistent evidence (minimum count, e.g. 10 events).
-- Daily cap: a value moves at most a small share of its range per day (start: 5%).
-- Wake-gate band: `lo` moves toward the lowest m at which the classifier said "yes", minus a
-  margin; `hi` stays 1 until at least 50 verdicts above a proposed hi contain no "no" (D21);
-  the gray band keeps a minimum width.
-- Rollback: "go back to how you were yesterday" recomputes the values from the log up to that
-  date.
-Starting numbers are provisional and are tuned with replay when the tracks are built.
-
-**D30 — Prior file format (D25).**
-A plain folder: `manifest.yaml` (format version, date, embedder model, LLM family, language),
-`dispositions.yaml` (values with bounds), `skills/<name>/SKILL.md` (standard format plus
-credence and version), `lessons.yaml` (with credence), `scenarios/*.yaml` (replay proof).
-Loading rules: different embedder → vector-dependent values (band edges, FOK threshold) fall
-back to defaults; different LLM family → load, but lower skill and lesson credence slightly
-until proven again; unknown major format version → refuse with a clear message.
-
-**D31 — Hierarchy: permission is middleware, social understanding is brain knowledge.
-Refines D6 and D24.**
-- Hierarchy as **permission** (roles, RBAC, who may do what) is enforced by owner policy or
-  package middleware in the hooks. The core never sees it.
-- Facts about roles reported by a platform ("admin of this group") come from organs or
-  middleware and are recorded as facts about that person.
-- Hierarchy as **social understanding** is knowledge in the person card, updated during sleep:
-  *closeness* (ACT-R-style activation of interactions), *reliability per domain* (how often
-  their claims proved right, from corrections and guarded facts), *standing* (role or authority
-  in a place). It replaces D6's three fixed trust levels with computed values; the owner stays
-  absolute.
-- Signals (`social_cost`) and the PFC read these values to weigh claims, requests, timing and
-  tone. No new core primitive (D26) and no emotions. Standing never buys dishonesty or a breach
-  of principles.
-
-**D32 — Final consolidation after the architecture audit (2026-11-11).**
-1. *Thought acts* are **think, act, expect, resolve, revise**. `act` is how the PFC uses any
-   organ capability (speaking included). Silence is not an act: a wake that ends without `act`
-   is silent, and its reason is in `think` and the decision event. Replaces the act list of D2
-   and D26.
-2. *Three hooks*: inbound, context, action. `outbound` is merged into `action` (every world act
-   is an organ capability). Replaces the hook count of D26.
-3. *Absolute line 1 is enforced by provenance, not judgment.* Every event carries
-   `origin_actor`, inherited along its causal chain. Capabilities may be flagged
-   `identity_changing`; the owner policy in the action hook passes them only when
-   `origin_actor` is the owner. No model involved.
-4. *Place and privacy for absolute line 2.* Every event and memory has a `place`. Memories
-   derived from a private place are labelled private and enter a context only in the same
-   place or in a direct chat with the owner. One filter in the context hook.
-5. *Lineage for hard forgetting.* Memories, expectations and vectors record `derived_from`
-   (source event ids). Hard forgetting follows it. After hard forgetting, only metadata remains
-   (kind, time, a hash of the actor). D14's word "forget" becomes **fade** (only the index is
-   released; the log stays). Owner backups (pg_dump) are allowed; documentation states that
-   old backups and the model provider's own logs are outside the soul's reach.
-6. *Thrift mode when the budget is spent.* Only reflexes (addressed, due promises) wake the
-   PFC; classifier calls are skipped (treated as "no"); a `budget.exhausted` event is written.
-7. *Who may teach character.* Dispositions move only from the owner's reactions and classifier
-   verdicts. Other people's reactions update only their own person card. Each change stores
-   its own delta, so rollback and replay do not depend on message contents (which may be
-   forgotten). A disposition that sits at a bound for several days freezes and is reported.
-8. *One Expectation schema, four kinds*: `promise` (promises, reminders, approvals), `wait`
-   (patience), `predict` (forward model, created after `act`, resolved by `act.result` or a
-   reply), `guard` (guarded fact; passive, never wakes, checked during sleep). A fifth kind
-   needs a new decision.
-9. *Order of learning loops.* Active from the start: the D21 classifier band and credence for
-   skills, lessons and reliability (stored as α/β counts, beta reputation). **Deferred until
-   there are weeks of real logs**: learned signal weights, learned dispositions, adaptive
-   retention threshold, social standing (D31), identity linking (D10), package suggestions
-   (D28), and a version system for learned skills (a folder under git is enough). Deferral
-   loses nothing: the log keeps everything, so learning can later run over the whole history.
-10. *Determinism needs an injected clock.* All time comes from the injected clock; replay uses
-   event times. ACT-R activation is computed from that clock.
-11. *Packages are trusted code*, installed by the owner and run in-process (the Home Assistant
-   model). The owner policy cannot be bypassed by packages that follow the contract; it is not
-   a sandbox against malicious code, and the docs say so.
-12. *Messages from non-owners are delimited* in the prompt as quoted data (spotlighting). This is
-   a cheap extra layer; the absolute lines never depend on it.
-13. *Knowledge cutoff* comes from per-model configuration, set slightly earlier than the vendor
-   claims; it is never asked from the model. The current date is always in `<now>`.
-14. *Documents*: DESIGN.md holds only the current design (8 sections); history and reasons live
-   here; formats in docs/FORMATS.md; steps in ROADMAP.md (PLAN.md merged into it); agent rules
-   in AGENTS.md.
-
-Status of amended decisions: D2 act list, D26 counts → replaced by D32.1–2. D5, D22 → superseded
-by D24. D18 → superseded by D25. D14 wording "forget" → "fade" (D32.5).
-
-**D33 — Running for years: slow work off the loop, newcomer shyness, migrations, pairing.**
-1. *Slow work runs beside the loop; its results come back as events.* The single consumer only
-   records and decides (milliseconds). PFC calls, classifier calls, embedding and sleep run as
-   background jobs whose results enter the queue as events, like `act.result`. At most one PFC
-   job is in flight per place, so a conversation stays in order; other places proceed. If a new
-   message arrived in that place while the PFC was thinking, the result is applied and the PFC
-   is woken once more with the newest context. Sleep is just another slow job, so it never
-   blocks incoming messages. Invariant 3 is unchanged: one consumer decides.
-2. *Newcomer shyness.* In a new place θ starts slightly higher and relaxes toward the normal
-   value as interactions in that place accumulate (one extra term in the existing θ formula).
-3. *Where tuning comes from.* The soul's general character (dispositions) learns from the owner
-   and the classifier (D32.7). How it behaves **in a given place or with a given person** adapts
-   from that place's and those people's suggestions, criticism and reactions, stored as layer 3
-   (per-place and per-person tuning). Like people: you adapt to a group without changing who you
-   are.
-4. *Schema migrations.* Numbered SQL files and a small version table, applied automatically at
-   start, with an automatic backup before any migration. No migration framework.
-5. *Becoming the owner without technical steps.* On first start the soul shows a short pairing
-   code; the first person who sends that code from any organ becomes the owner. Later owner
-   changes need the current owner (absolute line 1).
-6. *Release gate.* Before any release: end-to-end tests with a real model, a real database, long
-   multi-day conversations and real people. Replay also produces a per-model report (scenarios
-   passed, too chatty / too quiet), from which recommended models are listed for users.
-
-**D34 — The soul learns; skills do not. Amends D11, D17, D19, D30.**
-Separate what a person *is and learns* from the *skills* they are given.
-- **Core (the soul)**: cognitive functions and everything learned from experience — lessons,
-  procedures that worked before ("how I did this last time"), social intuition, dispositions,
-  per-place and per-person tuning. Learned procedures and lessons are memories (kinds
-  `procedure` and `lesson`) with credence (α/β), activation and lineage, like any memory.
-  Without any middleware installed, the soul still learns.
-- **Middleware (packages)**: optional, static extra capabilities, functions and behaviors that the
-  owner chooses to install — installed skills (SKILL.md), commands, roles, RBAC rules. They do
-  not learn. A skills package only injects installed skills into the context.
-- Consequences: "learned skills" (D11, D19) are now core procedures, not package skills; the
-  prior (D30) carries `procedures.yaml` and `lessons.yaml`, not a `skills/` folder.
-
-**D35 — Identity is birth content; the mechanism is core.**
-- The core is a raw brain with a *place* for identity (the stable-prompt slot, the self-model,
-  absolute line 1). It does not know who it is until it is told.
-- `soul.yaml` becomes a **birth certificate**: name, language, persona, principles. The numbers
-  now in soul.yaml (cognition parameters) move to the prior. A soul is born from two inputs:
-  *who I am* (birth certificate) and *my instincts* (prior).
-- After birth, identity lives in the soul's own books (`state: identity`), not re-read from the
-  file. The owner changes it in conversation ("your name is Sari now") through a capability
-  flagged `identity_changing`, which only passes for the owner (absolute line 1).
-- Role packages may ship a ready-made birth certificate, used only at birth; they can never
-  overwrite identity afterwards.
-- Without a birth certificate, the soul is born with a neutral default identity and may ask the
-  owner what to be called after pairing (D33).
-- Layer map: **core** — log, memory, Expectations, attention, gate, inner thought, sleep,
-  learning, self-model, identity slot, the two absolute lines. **Organs** — bodies and tools
-  (search, files, email are organs). **Middleware** — RBAC and roles, commands, tool-use rules
-  and approvals, behaviors and role packages, installed skills, the alias map, any owner rule.
-  **Birth inputs** — birth certificate and prior.
-
-**D36 — The prior speaks in behavior, not formulas.**
-`dispositions.yaml` has three sections: **knobs** (about 10 values named by behavior —
-talkativeness, restraint after speaking, spontaneity, helpfulness, boredom with repeats,
-patience, shyness in new places, speaking bar, certainty bar, memory persistence), each with a
-one-line "if the soul is too X, change this" guide; **calibration** (per embedder and model,
-measured by tools, never set by hand); and **constants** (engineering values changed only by a
-decision). One function maps knobs to the gate's internal values (θ, τ, γ, weights). Learning
-moves knobs, so every learned change is readable. End users never see the prior; developers tune
-it with replay reports. Budget and quiet hours are owner settings, not knobs.
-
-**D37 — The prompt is a desk, not the memory; recall and catching up.**
-The soul's memory is its books. The context window is a desk that is cleared and laid out again
-from the books at every wake, so nothing is ever compacted and no detail is lost to a summary.
-1. **Work thread.** During a multi-step chain, `<doing>` carries the goal, one line per finished
-   step and the latest result verbatim. Older results appear as pointers (event id, what it is,
-   its size) and are re-read on demand.
-2. **Recall ("let me think, I know this").** The core ships one internal organ, `self`, with a
-   non-communicative capability `recall(query | event_id, place?, from?, to?)` that searches the
-   soul's own log and memories deeper than the automatic candidates. It obeys absolute line 2
-   and returns as `act.result`. No new thought act: it is used through `act`.
-   - **By time.** `from`/`to` (resolved against `<now>`, e.g. "a month ago") restrict the search;
-     with no query it lists the episodes in that range, oldest first.
-   - **Down the lineage.** A hit on an episode or fact can be followed through `derived_from` to
-     the original events, read verbatim.
-   - **Never only by vector.** Recall also runs text search (`pg_trgm`) over event payloads, so
-     a message whose vector faded, or whose episode sleep failed to write, is still found.
-   Nothing is lost except by hard forgetting; what can fail is noticing, which is why the soul
-   says "let me check" and recalls instead of guessing.
-3. **Scrolling up and catching up.** The soul's own log is its first "scroll up": everything
-   since it joined a place is recorded. A body *may* add a capability `history(place, before,
-   limit)` for messages the log lacks (before joining, while offline). When a body connects, it
-   back-fills what it missed as `msg.in` with `backfill: true` and `sent_at` (the platform's
-   time; `ts` stays the recording time). Back-filled events are recorded and indexed but never
-   gated one by one. Back-filled messages newer than the soul's last activity in that place and
-   younger than `catch_up_hours` produce one `catch_up` wake per place, like a person opening
-   unread chats; older ones are only remembered.
-4. **Seeing what it remembers.** Showing and correcting memories is a package (`memory-view`),
-   not core: a command lists what the soul remembers about the asker or this place, corrections
-   go through `revise` with the asker as `origin_actor`, and an owner-only Markdown export is a
-   *view*, never the source of truth. Both absolute lines and attribution rules (D24) apply.
-5. **Desk budgets** are constants of the prior (not knobs): recent messages, memory candidates,
-   the verbatim result in a thread, the whole volatile part, and the catch-up window.
-
-**D38 — Knowing, not knowing and misremembering: borrowed from how the brain does it.**
-No phrasing, scenario or case is written into the core. Each piece below is a brain function
-with a studied model (formulas and sources in docs/MATH.md §14); the PFC words the outcome as
-a person would.
-1. **Source monitoring** (prefrontal). People misremember mostly by misattributing *where* a
-   memory came from. The soul does not have to guess: provenance is logged. Memories carry
-   `basis` — `observed` (in its own log), `told` (someone reported it; weighed by that person's
-   reliability, D24) or `inferred` (its own conclusion, sleep gist included). `<memories>` shows
-   basis, source, absolute date and age.
-2. **Familiarity vs recollection** (dual-process recognition; hippocampus for recollection).
-   Familiarity is graded similarity and activation ("sounds familiar"); recollection is
-   recovering the original events with matching people, place and time. Specific details are
-   asserted only on recollection; familiarity alone is reported as familiarity. Déjà vu is high
-   familiarity with no recollection.
-3. **Verbatim vs gist** (fuzzy-trace theory). Events are the verbatim trace, sleep summaries the
-   gist. Gist drives most false memories; the verbatim trace can reject them (recollection
-   rejection). When they disagree, the events win and the summary is revised (`revise`).
-4. **Pattern separation** (hippocampus, dentate gyrus/CA3). Similar experiences are kept apart:
-   sleep merges episodes only when people, place and time agree, never on similarity alone.
-5. **Reality filter** (orbitofrontal). Memories that no longer hold now are suppressed:
-   `valid_to` / `superseded_by`, absolute stored times, relative words resolved against `<now>`
-   only at recall.
-6. **Metacognitive control of report** (Koriat & Goldsmith). The soul estimates how likely an
-   answer is right, reports only above a criterion that rises with the stakes (base:
-   `certainty_bar`), and otherwise answers at a coarser grain ("mid-October") or withholds
-   ("I don't know"). A high criterion is also what sends it to `recall` first.
-7. **Reasoning from absence and filling gaps** (memorability-based rejection; constructive
-   episodic simulation). Not finding something means little unless it would have been seen:
-   the weight of absence depends on coverage (how likely the soul's organs would have caught
-   it). `recall` reports what it searched and found, "nothing" included. Gaps are filled with
-   hypotheses built from nearby episodes, which are `inferred` and said as guesses. A reference
-   to something absent from the log is a prediction error that suggests a blind spot.
-8. **Stable prompt carries only general principles**, worded by the PFC: speak as a person
-   (sure, unsure, don't know, don't remember) without describing your own machinery unless
-   asked; do not agree only to please, do not insist when you may not have seen it; ask about a
-   gap only when it matters.
-Fits the complexity budget: one column (`basis`) and a few principle lines; coverage is judged
-by the PFC for now (learning it is deferred with D32.9).
-
-**D39 — Design by brain function, not by scenario.**
-The human scenarios are endless; covering them one by one never finishes and makes the soul
-rigid. So:
-1. **The core is a closed list of brain functions** — the brain map in DESIGN §2. Each row has a
-   brain region, a studied model with its formula and sources (docs/MATH.md), and one mechanism
-   in the core. A decision about the core is a row: research how the brain does it, then write
-   the mechanism.
-2. **Scenarios are tests, not design inputs.** A new human situation is checked against the
-   map: which functions produce this behavior? If they do, it becomes a replay scenario, not a
-   change. The PFC (an LLM that already knows people) fills the gaps between functions.
-3. **No rule to close a single case.** If replay shows a behavior repeatedly missing, first ask
-   which function is weak and fix the function; behavior specific to a role, place or
-   preference goes to middleware. The core never gains a deterministic rule for one situation.
-4. A new row is added only when a whole brain function is missing, and it must fit the
-   complexity budget (D26).
-
-**D40 — Generalization pass: every case rule becomes a brain function (applies D39).**
-An audit of D1–D39 found rules that were written for one situation. Each is replaced by the
-brain function that produces it; formulas and sources in docs/MATH.md §15.
-1. **Reflexes = the circuit breaker on commitments** (ventral attention network). Instead of a
-   list (addressed, due promise, own results), one principle: an event bypasses the draw when it
-   engages a commitment the soul holds — the turn was allocated to it (selected by the speaker:
-   a direct chat, a reply, a tag; conversational obligation), it fires or answers an active
-   Expectation, or it continues an active goal (a result of its own action). The organ reports
-   `addressed` as a neutral event field.
-2. **Own name is attention capture, not obligation.** `name_mentioned` becomes `own_name`: it
-   raises salience (cocktail-party effect) but does not allocate the turn; "Mona said earlier…"
-   is heard, not answered by force.
-3. **Patience is the self-selection rule of turn-taking.** When the turn was not allocated to the
-   soul, it may self-select only if nobody else takes the floor first (the `wait` Expectation).
-   When it was selected, it answers (possibly "I don't know"); no waiting.
-4. **`social_cost` is "the floor belongs to someone else"**: another person was selected, or
-   someone already answered; lowered by closeness to the speaker. The soul's own share of talk
-   lives only in θ (talk_rate), so the two no longer overlap.
-5. **Newcomer shyness becomes reserve in unfamiliar context.** familiarity = σ(B) of the ACT-R
-   base-level activation of the soul's interactions with this place and the people present
-   (0 when none). θ gains `reserve_when_unfamiliar` · (1 − familiarity). It covers new places,
-   new people, and a place it has not visited for a long time. `newcomer_interactions` is
-   removed.
-6. **Catching up is ordinary perception.** No `catch_up` wake and no `catch_up_hours`.
-   Back-filled events of one place form one percept (a chunk) and are appraised once, with every
-   signal discounted by age through the same ACT-R decay ((1 + L_hours)^(−d)). The circuit
-   breaker still applies: a message addressed to the soul while it was away still holds the turn.
-7. **Thrift is not a mode.** As the budget is spent, θ's budget term rises, so only salient
-   events pass; the circuit breaker still fires (a tired person still answers when called).
-   Classifier calls are model calls under the same budget; when none is affordable a free-text
-   condition stays unresolved. `budget.exhausted` is still recorded.
-8. **The wake gate checks only relevance and staleness.** "Allowed now?" is gone from the core:
-   quiet hours are owner policy in the hooks, the budget is θ, and "nudge caps" are replaced by
-   the Expectation's own `policy` (cooldown, max fires) and habituation.
-9. **One rule for "enough evidence".** Every evidence threshold uses the beta posterior's 95%
-   bound. The wake gate's "clearly yes" band opens when zero false resolutions have been seen in
-   n ≥ 3/ε verdicts (rule of three; ε = 0.06 gives the old 50). A knob moves only when the 95%
-   interval of its evidence excludes "no change" (replaces "at least 10 events").
-10. **Honesty rules fold into D38.** The model's own knowledge counts as `told`, dated at the
-    knowledge cutoff; volatile facts are then handled by the reality filter and report control
-    like any old memory (use a search organ if one is present, or answer as of that date). The
-    hand-written "cannot do" list is removed: `<self>` is closed-world — what is not listed
-    cannot be done.
-11. **Guarded facts are prediction errors.** An important memory is a prediction; a contradicting
-    event is a prediction error weighted by precision (the belief's credence × the new source's
-    reliability) and enters through the same salience path: relevant now → the PFC sees it live;
-    otherwise it is settled in sleep. No separate queueing rule.
-12. **Not brain functions, so not core:** package suggestions (D28) and identity linking (D10)
-    are middleware; social standing (D31) stays person-card knowledge (deferred).
-Brain map rows added: circuit breaker (ventral attention), turn-taking, goal maintenance
-(prefrontal), learning from outcomes (dopamine prediction error), context familiarity.
-Status: D12 honesty list, D15 "allowed now", D21/D29 evidence counts, D27 guard queueing, D32.6
-thrift mode, D33.2 newcomer term and D37 catch-up are replaced by D40. D28 moves to middleware.
-
-## Accepted in principle, details pending
-
-(None. P1 was detailed as D27.)
-
-## Still open
-- Deferred: deeper research on memory consolidation and forgetting formulas (D14), to be done
-  once real usage data exists.
-- Deferred items of D32.9, to be decided with real logs.
-- Worker prompts for Track A2 and Phase 2 tracks (after the owner resumes implementation).
+## 7. Open
+- Deferred until weeks of real logs exist: learned signal weights and knobs, adaptive fade
+  threshold, social standing, learned coverage, identity linking, package suggestions; research
+  on consolidation and forgetting formulas.
+- Worker prompts for Track A2 and Phase 2 tracks, when the owner resumes implementation.
