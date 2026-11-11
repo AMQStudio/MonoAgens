@@ -158,11 +158,14 @@ async def test_mvp_b_silence_and_mention(aconn):
     payloads = [row[0] for row in await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'decision.silent' ORDER BY id")).fetchall()]
     for payload in payloads:
-        assert set(payload) == {"decision", "reason", "reflex", "signals", "s", "theta", "p", "u"}
+        assert set(payload) == {"decision", "reason", "reflex", "signals", "s", "s_eff",
+                                "theta", "tau", "p", "u", "habituation", "talk_rate",
+                                "budget_used", "promise_debt", "familiarity"}
         assert payload["decision"] == "silent"
         assert payload["reason"] == "gate score below silent threshold"
         assert payload["reflex"] is None
-        assert payload["s"] == 0.0 and payload["theta"] == 0.0 and payload["p"] == 0.0
+        assert payload["s_eff"] < payload["theta"] and payload["p"] < 1e-3
+        assert payload["talk_rate"] == 0.0 and payload["budget_used"] == 0.0
         assert 0.0 <= payload["u"] < 1.0
         assert set(payload["signals"]) == {
             "own_name", "info_gap", "feeling_of_knowing", "relevance", "social_cost",

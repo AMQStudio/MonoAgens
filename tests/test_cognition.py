@@ -15,7 +15,7 @@ import pytest
 from monoagens import memory
 from monoagens.clock import FakeClock
 from monoagens.cognition import (SIGNALS, Appraisal, Situation, appraise,
-                                 assemble_situation, seeded_rng, validate_signals)
+                                 assemble_situation, gate, seeded_rng, validate_signals)
 from monoagens.cognition.situation import boredom_gamma, effective_salience, habituate
 from monoagens.kernel import Kernel
 from monoagens.embedding import FakeEmbedder
@@ -222,10 +222,13 @@ def test_seeded_rng_is_reproducible_and_depends_on_the_event():
 
 
 def test_appraisal_payload_carries_every_number_and_the_signals():
-    appraisal = Appraisal("note", "why", "reflex", {"a": 0.5}, 0.4, 0.3, 0.6, 0.9)
+    appraisal = Appraisal("note", "why", "reflex", {"a": 0.5}, 0.4, 0.3, 0.6, 0.9,
+                          0.35, 0.056, 2.0, 0.25, 0.5, 0.125, 0.75)
     assert appraisal.payload() == {
         "decision": "note", "reason": "why", "reflex": "reflex", "signals": {"a": 0.5},
-        "s": 0.4, "theta": 0.3, "p": 0.6, "u": 0.9,
+        "s": 0.4, "s_eff": 0.35, "theta": 0.3, "tau": 0.056, "p": 0.6, "u": 0.9,
+        "habituation": 2.0, "talk_rate": 0.25, "budget_used": 0.5, "promise_debt": 0.125,
+        "familiarity": 0.75,
     }
 
 
@@ -254,8 +257,196 @@ async def test_an_ordinary_message_is_silent_and_reproducible():
     second = await appraise(event, settings=SETTINGS)
     assert (first.decision, first.reflex, first.reason) == (
         "silent", None, "gate score below silent threshold")
-    assert (first.s, first.theta, first.p) == (0.0, 0.0, 0.0)
+    assert first.s == 0.0
+    assert first.theta == pytest.approx(0.925)  # base 0.625 + reserve 0.3, no log
+    assert first.p < 1e-6
     assert first.u == second.u == seeded_rng(1, 42).random()
+
+
+# --- the gate: knob mapping, theta, probability, circuit breaker --------------
+
+
+def test_gate_params_map_the_prior_knobs_in_one_place():
+    low = settings(knobs={"talkativeness": 0.0, "spontaneity": 0.0,
+                          "boredom_with_repeats": 0.0, "restraint_after_speaking": 0.0,
+                          "reserve_when_unfamiliar": 0.0})
+    high = settings(knobs={"talkativeness": 1.0, "spontaneity": 1.0,
+                           "boredom_with_repeats": 1.0, "restraint_after_speaking": 1.0,
+                           "reserve_when_unfamiliar": 1.0})
+    floor, ceiling = gate.gate_params(low), gate.gate_params(high)
+    assert (floor.theta_base, floor.tau, floor.gamma) == (0.85, 0.02, 0.99)
+    assert (ceiling.theta_base, ceiling.tau, ceiling.gamma) == (0.35, 0.2, 0.8)
+    assert (floor.talk_weight, floor.reserve) == (0.0, 0.0)
+    assert (ceiling.talk_weight, ceiling.reserve) == (1.0, 1.0)
+    assert floor.weights == gate.gate_params(SETTINGS).weights
+    assert floor.weights["own_name"] == 0.5 and floor.weights["social_cost"] == -0.4
+    assert gate.gate_params(SETTINGS).note_band == 0.2
+
+
+def test_theta_is_the_documented_sum_of_the_drives():
+    params = gate.gate_params(SETTINGS)
+    value = gate.theta(params, talk_rate=0.2, budget_used=0.5, promise_debt=0.4,
+                       familiarity=0.25)
+    expected = 0.625 + 0.5 * 0.2 + 0.3 * 0.5 - 0.1 * 0.4 + 0.3 * (1.0 - 0.25)
+    assert value == pytest.approx(expected)
+    assert gate.theta(params, talk_rate=-0.5, budget_used=0.0, promise_debt=0.0,
+                      familiarity=1.0) == pytest.approx(0.625)
+
+
+def test_probability_is_a_sigmoid_around_theta_and_the_bands_are_explicit():
+    params = gate.gate_params(SETTINGS)
+    assert gate.probability(0.4, 0.4, params.tau) == 0.5
+    assert gate.probability(0.5, 0.3, params.tau) > 0.9
+    assert gate.probability(0.1, 0.9, params.tau) < 1e-6
+    assert gate.decide(0.1, 0.5, 0.2) == ("wake", "gate opened: u < P")
+    assert gate.decide(0.9, 0.5, 0.2) == ("note", "gate score in the note band, no go")
+    assert gate.decide(0.9, 0.05, 0.2) == ("silent",
+                                           "gate score below silent threshold")
+
+
+async def test_same_event_and_seed_give_the_same_decision():
+    event = Event(7, START, "percept", who=WHO, place=GROUP, body="telegram",
+                  payload={"description": "obrolan grup"})
+    situation = _situation(event=event, vector=[1.0, 0.0], best_activation=1.0,
+                           familiarity=0.5)
+    first = await appraise(event, situation=situation, settings=SETTINGS)
+    second = await appraise(event, situation=situation, settings=SETTINGS)
+    assert first.payload() == second.payload()
+    assert first.u == seeded_rng(1, 7).random()
+    reseeded = settings()
+    reseeded["constants"] = {**reseeded["constants"], "seed": 2}
+    other = await appraise(event, situation=situation, settings=reseeded)
+    assert other.u == seeded_rng(2, 7).random() and other.u != first.u
+
+
+async def test_the_gate_opens_on_a_salient_unaddressed_message():
+    event = Event(3, START, "percept", who=WHO, place=GROUP, body="telegram",
+                  payload={"description": "Mona, ada yang tahu nggak?"})
+    situation = _situation(event=event, vector=[1.0, 0.0], references=([1.0, 0.0],),
+                           self_name="Mona", best_activation=-3.0, familiarity=1.0)
+    appraisal = await appraise(event, situation=situation, settings=SETTINGS)
+    assert appraisal.decision == "wake" and appraisal.reflex is None
+    assert appraisal.reason == "gate opened: u < P"
+    assert appraisal.u < appraisal.p and appraisal.p > 0.9
+    assert appraisal.s_eff > appraisal.theta
+
+
+async def test_a_busy_group_keeps_the_soul_at_or_below_its_fair_share(aconn):
+    for index in range(6):
+        await append_event(aconn, ts=START - timedelta(seconds=30), kind="percept",
+                           who=f"person:tg:{index}", place=GROUP, body="telegram",
+                           payload={"description": f"obrolan {index}"})
+    current = await append_event(aconn, ts=START, kind="percept", who="person:tg:0",
+                                 place=GROUP, body="telegram",
+                                 payload={"description": "halo semua"})
+    quiet = await appraise(current, conn=aconn, now=START, settings=SETTINGS)
+    assert quiet.talk_rate == 0.0
+    assert quiet.decision == "silent"
+
+    for _ in range(10):
+        await append_event(aconn, ts=START, kind="act.out", who=WHO, place=GROUP,
+                           payload={"capability": "telegram.say"})
+    talkative = await appraise(current, conn=aconn, now=START, settings=SETTINGS)
+    assert talkative.talk_rate == pytest.approx(10 / 17 - 1 / 7)
+    assert talkative.theta > quiet.theta
+    assert talkative.p < quiet.p
+
+
+async def test_promise_debt_is_the_share_due_within_the_hour(aconn):
+    from monoagens import expect
+    source = await append_event(aconn, ts=START, kind="percept", who=WHO, place=PLACE,
+                                body="telegram", payload={"text": "halo"})
+    for minutes in (30, 60 * 24 * 3):
+        await expect.create(aconn, {
+            "about": "janji", "kind": "promise",
+            "cue_time": {"at": (START + timedelta(minutes=minutes)).isoformat()},
+            "expect": {"none": True}, "policy": {"once": True}},
+            now=START, settings=SETTINGS, source=source)
+    inputs = await gate.inputs(aconn, source, now=START, settings=SETTINGS)
+    assert inputs.promise_debt == pytest.approx(0.5)
+    params = gate.gate_params(SETTINGS)
+    assert gate.theta(params, talk_rate=0.0, budget_used=0.0, promise_debt=0.5,
+                      familiarity=1.0) == pytest.approx(0.625 - 0.05)
+
+
+async def test_familiarity_comes_from_act_r_activation_of_the_place(aconn):
+    fresh = Event(1, START, "percept", who=WHO, place="space:tg:999", payload={})
+    unknown = await gate.inputs(aconn, fresh, now=START, settings=SETTINGS)
+    assert unknown.familiarity == 0.0
+    for index in range(3):
+        await append_event(aconn, ts=START - timedelta(minutes=30 - index), kind="percept",
+                           who=WHO, place="space:tg:999", body="telegram",
+                           payload={"text": "halo"})
+    known = await gate.inputs(aconn, fresh, now=START, settings=SETTINGS)
+    activation = memory.base_level(2, 0.5, memory.decay_d(SETTINGS))
+    assert known.familiarity == pytest.approx(gate.familiarity(activation))
+    assert known.familiarity > 0.5
+
+
+async def test_addressed_always_wakes_even_with_the_gate_saturated(aconn):
+    runtime = settings(owner_settings={"daily_token_budget": 100})
+    key = f"budget:{START.astimezone(JAKARTA).date().isoformat()}"
+    source = await append_event(aconn, ts=START, kind="percept", who=WHO, place=GROUP,
+                                body="telegram", payload={"text": "halo"})
+    await write_state(aconn, key, {"total_tokens": 500}, source.id)
+    for _ in range(20):
+        await append_event(aconn, ts=START, kind="act.out", who=WHO, place=GROUP,
+                           payload={"capability": "telegram.say"})
+    tagged = Event(None, START, "percept", who=WHO, place=GROUP, body="telegram",
+                   payload={"description": "Mona, halo?", "addressed": True})
+    appraisal = await appraise(tagged, conn=aconn, now=START, settings=runtime)
+    assert (appraisal.decision, appraisal.reflex, appraisal.reason) == (
+        "wake", "addressed", "addressed message")
+    params = gate.gate_params(runtime)
+    inputs = await gate.inputs(aconn, tagged, now=START, settings=runtime)
+    knew = gate.theta(params, talk_rate=inputs.talk_rate, budget_used=1.0,
+                      promise_debt=inputs.promise_debt, familiarity=inputs.familiarity)
+    assert knew > 0.9  # the draw could not have opened the gate
+    assert gate.probability(0.0, knew, params.tau) < 1e-3
+
+
+async def test_a_gate_go_on_an_unaddressed_turn_creates_a_wait_instead_of_waking(aconn):
+    go = Appraisal(decision="wake", reason="gate opened: u < P", s=0.9, s_eff=0.9,
+                   theta=0.6, p=1.0, u=0.1)
+
+    class GateKernel(Kernel):
+        async def _appraise(self, event):
+            return go
+
+    fake = FakeLLM()
+    kernel = GateKernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    await _feed(kernel, _msg("obrolan grup", place=GROUP, place_kind="group",
+                             addressed=False))
+
+    assert fake.requests == []
+    kind, payload = (await (await aconn.execute(
+        "SELECT kind, payload FROM events WHERE kind IN ('decision.wake', "
+        "'expectation.created') ORDER BY id")).fetchall())[1]
+    assert kind == "expectation.created" and payload["kind"] == "wait"
+    stored = await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'decision.wake'")).fetchone()
+    assert stored[0]["p"] == 1.0 and stored[0]["u"] == 0.1
+
+
+async def test_the_circuit_breaker_wakes_on_a_fired_expectation_and_a_goal_result(aconn):
+    from monoagens import expect
+    goal = Event(11, START, "act.result", who=WHO, place=PLACE, body="cli",
+                 payload={"capability": "cli.run", "result": {"ok": True}})
+    continued = await appraise(goal, settings=SETTINGS)
+    assert (continued.decision, continued.reflex, continued.reason) == (
+        "wake", "goal", "goal continued")
+    source = await append_event(aconn, ts=START, kind="percept", who=WHO, place=PLACE,
+                                body="telegram", payload={"text": "halo"})
+    await expect.create(aconn, {
+        "about": "balasan Budi", "kind": "promise",
+        "cue_event": {"kind": "percept", "place": PLACE, "text_like": "budi"},
+        "expect": {"none": True}, "policy": {"once": True}},
+        now=START, settings=SETTINGS, source=source)
+    answer = Event(None, START, "percept", who="person:budi", place=PLACE, body="telegram",
+                   payload={"description": "budi menjawab"})
+    engaged = await appraise(answer, conn=aconn, now=START, settings=SETTINGS)
+    assert (engaged.decision, engaged.reflex, engaged.reason) == (
+        "wake", "expectation", "expectation engaged")
 
 
 # --- situation and encode once ----------------------------------------------
@@ -370,10 +561,17 @@ async def test_silent_decision_event_carries_the_full_appraisal(aconn):
 
     assert await _kinds(aconn) == ["percept", "decision.silent"]
     payload = await _payload(aconn, "decision.silent")
-    assert set(payload) == {"decision", "reason", "reflex", "signals", "s", "theta", "p", "u"}
+    assert set(payload) == {"decision", "reason", "reflex", "signals", "s", "s_eff", "theta",
+                            "tau", "p", "u", "habituation", "talk_rate", "budget_used",
+                            "promise_debt", "familiarity"}
     assert (payload["decision"], payload["reason"], payload["reflex"]) == (
         "silent", "gate score below silent threshold", None)
-    assert (payload["s"], payload["theta"], payload["p"]) == (0.0, 0.0, 0.0)
+    assert payload["s"] == pytest.approx(0.175)  # no memory: FOK sits at 0.5
+    assert payload["s_eff"] == pytest.approx(payload["s"] / 2)  # first stimulus, h = 1
+    assert payload["theta"] == pytest.approx(0.6298, abs=1e-3)
+    assert payload["p"] < 1e-3
+    assert payload["talk_rate"] == 0.0 and payload["budget_used"] == 0.0
+    assert payload["promise_debt"] == 0.0 and payload["familiarity"] > 0.9
     stored = await (await aconn.execute("SELECT id FROM events WHERE kind = 'percept'")).fetchone()
     assert payload["u"] == seeded_rng(1, stored[0]).random()
     assert fake.requests == []
@@ -406,15 +604,16 @@ async def test_the_budget_spent_raises_theta(aconn):
     runtime = settings(owner_settings={"daily_token_budget": 100})
     key = f"budget:{START.astimezone(JAKARTA).date().isoformat()}"
     source = await append_event(aconn, ts=START, kind="percept", payload={"text": "obrolan"})
-    assert (await appraise(source, settings=runtime)).theta == 0.0
+    base = (await appraise(source, conn=aconn, now=START, settings=runtime)).theta
+    assert base > 0.0
 
     await write_state(aconn, key, {"total_tokens": 50}, source.id)
     theta = (await appraise(source, conn=aconn, now=START, settings=runtime)).theta
-    assert theta == pytest.approx(0.15)
+    assert theta - base == pytest.approx(0.15)
 
     await write_state(aconn, key, {"total_tokens": 250}, source.id)
     theta = (await appraise(source, conn=aconn, now=START, settings=runtime)).theta
-    assert theta == pytest.approx(0.3)
+    assert theta - base == pytest.approx(0.3)
 
 
 async def test_budget_exhausted_is_recorded_once_per_day(aconn):

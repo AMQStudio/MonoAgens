@@ -8,6 +8,7 @@ from typing import Any, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from monoagens import memory
+from monoagens.cognition import gate
 from monoagens.prior import constants
 from monoagens.store import (read_event_vector, read_expectations, read_last_events,
                              read_state, write_state)
@@ -35,6 +36,9 @@ class Situation:
     soul_answered: bool = False
     fok_threshold: float = 0.0
     fok_scale: float = 1.0
+    talk_rate: float = 0.0
+    promise_debt: float = 0.0
+    familiarity: float = 0.0
 
     @property
     def text(self) -> str:
@@ -44,10 +48,8 @@ class Situation:
 
 
 def boredom_gamma(settings: Mapping[str, Any]) -> float:
-    """Map boredom_with_repeats to gamma per minute (0 -> 0.99, 1 -> 0.8)."""
-    low, high = constants(settings)["boredom_gamma_per_minute"]
-    knob = float((settings.get("knobs") or {}).get("boredom_with_repeats") or 0.0)
-    return float(low) + (float(high) - float(low)) * knob
+    """Return gamma per minute from the gate's one knob mapping (0.99 -> 0.8)."""
+    return gate.gate_params(settings).gamma
 
 
 def habituate(stored: Mapping[str, Any] | None, now: datetime, gamma: float) -> float:
@@ -133,6 +135,7 @@ async def assemble_situation(conn, event: Event, *, now: datetime,
                                               settings=settings) if event.id else 0.0
     other_selected, soul_answered = _floor_flags(event, recent)
     calibration = settings.get("calibration") or {}
+    gate_inputs = await gate.inputs(conn, event, now=now, settings=settings)
     return Situation(
         event=event, vector=vector, recent=tuple(recent), state=state, now=now,
         self_name=str((settings.get("identity") or {}).get("name") or ""),
@@ -142,4 +145,6 @@ async def assemble_situation(conn, event: Event, *, now: datetime,
         soul_answered=soul_answered,
         fok_threshold=float(calibration.get("fok_threshold") or 0.0),
         fok_scale=float(calibration.get("fok_scale") or 1.0),
+        talk_rate=gate_inputs.talk_rate, promise_debt=gate_inputs.promise_debt,
+        familiarity=gate_inputs.familiarity,
     )

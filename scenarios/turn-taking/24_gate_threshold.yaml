@@ -1,0 +1,107 @@
+name: 24_gate_threshold
+description: >-
+  The gate and the circuit breaker (core.md §6, core-math.md §3, §15). A busy
+  group of six people stays silent: the soul's share of talk stays below the
+  fair share 1/n, and the three log-derived terms of theta (talk_rate,
+  promise_debt, budget_used) are stored in every decision event. An addressed
+  message always wakes the PFC, and an active promise fired by an unaddressed
+  message wakes it too.
+expectations:
+  - type: no_reply
+    steps: [1, 2, 3, 4, 5, 6, 8, 9]
+    label: unaddressed chatter in a busy group stays silent
+  - type: event_seen
+    kind: model.call
+    step: 7
+    count: 1
+    label: an addressed message always wakes
+  - type: event_seen
+    kind: decision.silent
+    payload: {talk_rate: 0.0}
+    steps: [1, 2, 3, 4, 5, 6]
+    count: 6
+    label: the gate stores its talk rate in the decision event
+  - type: event_seen
+    kind: decision.silent
+    payload: {promise_debt: 0.0}
+    steps: [1, 2, 3, 4, 5, 6]
+    count: 6
+    label: the gate stores the promise debt in the decision event
+  - type: event_seen
+    kind: decision.silent
+    payload: {budget_used: 0.0}
+    steps: [1, 2, 3, 4, 5, 6]
+    count: 6
+    label: the gate stores the budget used in the decision event
+  - type: event_seen
+    kind: expectation.fired
+    step: 10
+    count: 1
+    label: an active promise fires on an unaddressed message
+  - type: reply_in
+    place: space:tg:-1004
+    step: 10
+    count: 1
+    label: the fired promise wakes the PFC
+steps:
+  - at: "2026-11-10T13:00:00+07:00"
+    who: person:tg:7001
+    place: space:tg:-1004
+    text: "Pagi semua."
+  - at: "2026-11-10T13:00:30+07:00"
+    who: person:tg:7002
+    place: space:tg:-1004
+    text: "Pagi juga."
+  - at: "2026-11-10T13:01:00+07:00"
+    who: person:tg:7003
+    place: space:tg:-1004
+    text: "Ada agenda hari ini?"
+  - at: "2026-11-10T13:01:30+07:00"
+    who: person:tg:7004
+    place: space:tg:-1004
+    text: "Rapat jam sepuluh."
+  - at: "2026-11-10T13:02:00+07:00"
+    who: person:tg:7005
+    place: space:tg:-1004
+    text: "Oke siap."
+  - at: "2026-11-10T13:02:30+07:00"
+    who: person:tg:7006
+    place: space:tg:-1004
+    text: "Aku ikut rapat."
+  - at: "2026-11-10T13:03:00+07:00"
+    who: person:tg:7001
+    place: space:tg:-1004
+    addressed: true
+    text: "Mona, kabari aku ya kalau dokumennya sudah selesai."
+  - at: "2026-11-10T13:04:00+07:00"
+    who: person:tg:7002
+    place: space:tg:-1004
+    text: "Dokumennya masih di review."
+  - at: "2026-11-10T13:04:30+07:00"
+    who: person:tg:7003
+    place: space:tg:-1004
+    text: "Nanti sore selesai."
+  - at: "2026-11-10T13:05:00+07:00"
+    who: person:tg:7004
+    place: space:tg:-1004
+    text: "Dokumennya sudah selesai kok."
+model_answers:
+  - step: 7
+    tool: decide
+    calls:
+      - name: expect
+        arguments:
+          about: kabari pemilik kalau dokumennya sudah selesai
+          kind: promise
+          cue_event: {kind: percept, place: "space:tg:-1004", text_like: "sudah selesai"}
+          expect: {none: true}
+          intent: beri tahu bahwa dokumennya sudah selesai
+          weight: 0.7
+          policy: {once: true}
+  - step: 10
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: telegram.say
+          arguments: {text: "Dokumennya sudah selesai, sesuai janjiku."}

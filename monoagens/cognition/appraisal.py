@@ -18,6 +18,13 @@ class Appraisal:
     theta: float = 0.0
     p: float = 0.0
     u: float = 0.0
+    s_eff: float = 0.0
+    tau: float = 0.0
+    habituation: float = 0.0
+    talk_rate: float = 0.0
+    budget_used: float = 0.0
+    promise_debt: float = 0.0
+    familiarity: float = 0.0
 
     def payload(self) -> dict[str, Any]:
         """Return the decision payload that is stored in the Log."""
@@ -27,7 +34,14 @@ class Appraisal:
             "reflex": self.reflex,
             "signals": self.signals,
             "s": self.s,
+            "s_eff": self.s_eff,
             "theta": self.theta,
+            "tau": self.tau,
             "p": self.p,
             "u": self.u,
+            "habituation": self.habituation,
+            "talk_rate": self.talk_rate,
+            "budget_used": self.budget_used,
+            "promise_debt": self.promise_debt,
+            "familiarity": self.familiarity,
         }

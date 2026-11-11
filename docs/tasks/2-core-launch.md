@@ -92,11 +92,11 @@ May touch: `monoagens/pfc.py`, the `self` organ module, `tests/test_pfc.py`, `sc
 Read first: [core.md](../core.md) §6, [core-math.md](../core-math.md) §3, §15
 May touch: `monoagens/cognition/appraise.py`, `monoagens/cognition/appraisal.py`, `monoagens/cognition/rng.py`, `tests/test_cognition.py`, `scenarios/`
 
-- [ ] 8.1 θ = base + a·talk_rate + b·budget_used − c·promise_debt + r·(1 − familiarity); familiarity from ACT-R activation of interactions with the place and people present.
-- [ ] 8.2 P = σ((S_eff − θ)/τ) with the seeded draw; every number stored in the decision event.
-- [ ] 8.3 Circuit breaker: `addressed`, an active Expectation fired or answered, or an active goal continued.
-- [ ] 8.4 Knob mapping function (one place) from the prior's knobs to θ, τ, γ and weights.
-- [ ] 8.5 Check: same events + seed → same decisions; talk rate ≤ 1/n in a busy group; an addressed message always wakes; tuned for recall.
+- [x] 8.1 θ = base + a·talk_rate + b·budget_used − c·promise_debt + r·(1 − familiarity); familiarity from ACT-R activation of interactions with the place and people present.
+- [x] 8.2 P = σ((S_eff − θ)/τ) with the seeded draw; every number stored in the decision event.
+- [x] 8.3 Circuit breaker: `addressed`, an active Expectation fired or answered, or an active goal continued.
+- [x] 8.4 Knob mapping function (one place) from the prior's knobs to θ, τ, γ and weights.
+- [x] 8.5 Check: same events + seed → same decisions; talk rate ≤ 1/n in a busy group; an addressed message always wakes; tuned for recall.
 
 ## Part 9 — Metrics and the real-model test
 May touch: `scripts/replay.py`, `scenarios/`, `tests/`
@@ -284,3 +284,40 @@ Part 7 notes (worker):
 - Budget caveat: `pfc.py` 276/280 and `memory.py` 260/260 hold, but the whole package is
   3543/3500 (43 over). Recall and the task desk are the new code; reaching 3500 needs a
   package-wide cut the architect has to choose. No further compression was made by hand.
+
+Part 8 notes (worker):
+- `cognition/gate.py` (122 lines) is the single knob mapping (8.4): `gate_params` turns
+  `talkativeness` -> theta base (0.85..0.35), `spontaneity` -> tau (0.02..0.2),
+  `boredom_with_repeats` -> gamma (0.99..0.8), `restraint_after_speaking` -> a, and reads
+  the constant weights from `prior.signal_weights`; `situation.boredom_gamma` now delegates
+  to it. The same file holds `theta`, `probability`, `decide` (the note/silent bands) and
+  `inputs`, which reads the three log-derived terms.
+- 8.1: `talk_rate` = the soul's share of the place's lines in `talk_rate_window_minutes`
+  (act.out vs percept) minus the fair share 1/n, floored at 0, with n = distinct speakers in
+  that place + 1 (the soul). `promise_debt` = active promises due within the hour / all active
+  promises. `familiarity` = sigma(ACT-R base level) of the place's interactions, 0 when the
+  place has none. The people-present half of familiarity is not folded in: the place's own
+  interaction history is the term, so a new place stays unfamiliar.
+- 8.2: `P = sigma((S_eff - theta) / tau)`; the draw is `seeded_rng(seed, event.id)`. The
+  decision payload (Appraisal) now also carries `s_eff`, `tau`, `habituation`, `talk_rate`,
+  `budget_used`, `promise_debt`, `familiarity` beside `s`, `theta`, `p`, `u`, `signals`.
+- 8.3: `appraise.reflex` bypasses the draw for `addressed`, an `expectation.fired` trigger, an
+  `act.result` (goal continued) and an event that matches an active non-guard Expectation
+  ("answered"). The kernel appraises only percepts and the fired trigger, so the `act.result`
+  arm is pinned by a unit test but is not yet wired in the loop (kernel is outside this part).
+- Out-of-list edits, all forced by the wiring (flagging for the architect): `kernel._wake` now
+  emits `decision.wake` and calls `expect.create_wait` on a gate go, so a self-selected turn
+  waits for patience instead of waking the PFC at once (Part 6 deferred its caller here);
+  `tests/support.py` mirrors the new knobs/constants (`talkativeness`, `spontaneity`,
+  `restraint_after_speaking`, `reserve_when_unfamiliar`, `patience_seconds`,
+  `talkativeness_theta_base`, `spontaneity_tau`, `talk_rate_window_minutes`,
+  `promise_debt_weight`, `note_band`); `tests/test_mvp.py`'s payload-key assertions follow the
+  extended decision payload.
+- Scenario `scenarios/turn-taking/24_gate_threshold.yaml` failed 3/7 before the code (the gate
+  numbers absent from the decision event) and passes 7/7 after: a six-person group stays silent
+  over eight unaddressed lines, an addressed line always wakes, and an active promise fired by
+  an unaddressed line wakes the PFC. Fake replay 86/86, `uv run pytest` 234 passed.
+- Budgets: gate 122, appraise 103, situation 150, cognition total 541 (limits 160/600).
+- Calibration caveat for Part 9: with the default prior (theta base 0.625, tau 0.056) the gate
+  alone opens only for very salient turns; recall currently rests on the circuit breaker. The
+  missed-help metric will tell whether theta or tau needs tuning.

@@ -143,6 +143,11 @@ class Kernel:
         if appraisal.decision != "wake":
             await self._emit(event, f"decision.{appraisal.decision}", appraisal.payload())
             return
+        if appraisal.reflex is None:
+            await self._emit(event, "decision.wake", appraisal.payload())
+            if await expect.create_wait(self.conn, event, now=self.clock.now(),
+                                        settings=self.settings):
+                return
         await self._think(event, appraisal.reason, event.place or "")
 
     async def _think(self, event: Event, reason: str, place: str) -> None:
