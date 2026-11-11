@@ -130,7 +130,8 @@ One ordered list per hook: owner policy first and last, everything else in betwe
 **What the middleware may do** (D41) — the same levers for every case, from RBAC to modes to
 simulated emotions: pass, replace or stop an item · annotate it (the note travels with the item
 to the PFC, inside its token budget, before the owner policy's last pass) · declare standing
-rules (shown in `<self>`) · remember only by putting events (state under its own namespace) ·
+rules (shown in `<self>`) · remember only by putting events (state under its own namespace) and
+observe the log and state read-only ·
 sense and act through its own organs · steer knobs by a bounded, temporary offset recorded as
 `disposition.updated`. It cannot cross the two absolute lines or add a thought act, signal or
 book.
@@ -158,7 +159,8 @@ snapshot that contains the forgotten data; a new one is written from the cleaned
 **Stability contract** (D42). What middleware, bodies and plugins may rely on, like a kernel's
 user-space ABI:
 - *Stable surfaces*: the percept (§9.2), the capability descriptor (§9.1), the hook contract
-  (Continue / Replace / Stop, fail closed, watchdog), the six levers, event kinds and their
+  (Continue / Replace / Stop, fail closed, watchdog), the six levers, the read-only view of the
+  log and state (for dashboards, debugging, metric exporters; D43), event kinds and their
   payloads, `recall`, the birth certificate (§9.3) and the prior format (§9.4).
 - *Within v1, changes are additive only*: new optional fields, new event kinds, new constants.
   Readers ignore fields they do not know. Nothing that exists is renamed, removed or given a new

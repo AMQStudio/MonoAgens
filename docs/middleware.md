@@ -37,8 +37,9 @@ Every plugin and body uses the same levers, so the core never knows the case —
 2. **Annotate** an item; the note travels with it to the PFC, inside its token budget, before the
    policy's last pass.
 3. **Declare** standing rules, shown in `<self>` in a fixed order (cache-friendly).
-4. **Remember** only by putting events; state is a projection under `<plugin>:*`, so replay and
-   hard forgetting still work.
+4. **Remember and observe**: write only by putting events (state is a projection under
+   `<plugin>:*`, so replay and hard forgetting still work); read the log and state read-only,
+   for dashboards, debugging or metric exporters (D43).
 5. **Sense and act** through its own organs (a timer, a `set_mode` capability, a search tool).
 6. **Steer knobs** by a bounded, temporary offset recorded as `disposition.updated` with the
    plugin as source; learning never moves an offset, and uninstalling removes it.
@@ -57,6 +58,10 @@ The one middleware that is always present.
 - Enforces the core's two absolute lines deterministically: the `identity_changing` check on
   `origin_actor` in the action hook, and the private-content filter in the context hook
   (D24, D32.3–4).
+- **Data leaving the machine** (D43): by default nothing does. Data goes out only through a
+  plugin the owner installed and configured for it. Such a plugin sends numbers (counts,
+  tokens, timings, decisions), not conversation content; sending content outside counts as
+  moving it to another place and is held to absolute line 2.
 - **Default owner policy**, active out of the box: the two absolute lines, the daily model
   budget, quiet hours. Budget and quiet hours are owner settings (starting values in `config.yaml`, later changes in
   chat as events) the owner may tighten or loosen;
