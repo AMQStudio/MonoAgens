@@ -1,61 +1,55 @@
-# Stage 4 — Bodies and project
+# Task 4 — Bodies, first users and release
 
-More bodies, first users, release, evaluation. Order and status: [README](README.md). Each
-section is one task; work only inside yours.
+Status: todo | Depends on: Task 3
+One task = one coordinator prompt. Work through the parts **in order**. Rules: [README](README.md).
+
+**Goal.** One soul across many bodies and providers, then real users, a release, an honest
+evaluation, and stable contracts for other developers.
 
 ---
 
-## 018 — Bodies: identity linking, more bodies, more models
-Status: todo | Depends on: 012
+## Part 1 — Identity linking, more bodies, more models
 Read first: [bodies.md](../bodies.md), [middleware.md](../middleware.md) §7 (identity), [core.md](../core.md) §4, §8
-May touch: `monoagens/bodies/`, `monoagens/middleware.py` (identity part), provider adapters, `tests/`
+May touch: `monoagens/bodies/`, `monoagens/middleware.py` (identity part), provider adapters, `tests/`, `scenarios/`
 
-**Goal.** One soul across many bodies and providers. Linking comes first: it is what lets a
-person's private context follow them (D45), so a wrong link is a leak.
+Linking comes first: it is what lets a person's private context follow them (D45), so a wrong
+link is a leak.
 
-- [ ] T1 Identity linking (`/link`): the owner links accounts, or the person confirms with a verification code sent from the second account; every link is an event and can be undone; the soul may suspect and ask, never link silently.
-- [ ] T2 [P] WhatsApp with `history` and back-fill on connect.
-- [ ] T3 [P] Discord.
-- [ ] T4 [P] Voice (STT/TTS).
-- [ ] T5 [P] First non-chat body (a game such as Minecraft, an IoT device or a robot simulation) with its own reflexes inside the body.
-- [ ] T6 Native provider adapters; optional separate models for sleep and the classifier.
+- [ ] 1.1 Identity linking (`/link`): the owner links accounts, or the person confirms with a verification code sent from the second account; every link is an event and can be undone; the soul may suspect and ask, never link silently.
+- [ ] 1.2 WhatsApp with `history` and back-fill on connect.
+- [ ] 1.3 Discord.
+- [ ] 1.4 Voice (STT/TTS).
+- [ ] 1.5 First non-chat body (a game such as Minecraft, an IoT device or a robot simulation) with its own reflexes inside the body.
+- [ ] 1.6 Native provider adapters; optional separate models for sleep and the classifier.
+- [ ] 1.7 Check: one conversation continues across three bodies; a person's private context follows them only after a verified link; a non-chat body senses and acts through the same contract; switching provider is a `.env` change.
 
-**Done when.** One conversation continues across three bodies; a person's private context
-follows them only after a verified link; a non-chat body senses and acts through the same
-contract; switching provider is a `.env` change.
-
-**Notes.**
-
----
-
-## 014 — Project: first users and the release gate
-Status: todo | Depends on: 013
+## Part 2 — First users and the release gate
 Read first: [project.md](../project.md) §1
 May touch: `README.md`, `LICENSE`, `scenarios/`
 
-**Goal.** Real use, then a release.
+- [ ] 2.1 The owner alone for a few days with replay checks after each change.
+- [ ] 2.2 One real group the owner knows well, with the owner policy on.
+- [ ] 2.3 Release gate: end-to-end with a real model, a real database, long multi-day conversations and real people; per-model replay report; recommended models.
+- [ ] 2.4 README for technical self-hosters (brain table, manual install on a server, talk, tune with replay; no claims of consciousness or of being for non-technical users); Apache 2.0 LICENSE.
 
-- [ ] T1 The owner alone for a few days with replay checks after each change.
-- [ ] T2 One real group the owner knows well, with the owner policy on.
-- [ ] T3 Release gate: end-to-end with a real model, a real database, long multi-day conversations and real people; per-model replay report; recommended models.
-- [ ] T4 README for technical self-hosters (brain table, manual install on a server, talk, tune with replay; no claims of consciousness or of being for non-technical users); Apache 2.0 LICENSE.
-
-**Done when.** The release gate passes and the report lists recommended models.
-
-**Notes.**
-
----
-
-## 015 — Project: honest human-likeness evaluation
-Status: todo | Depends on: 014
+## Part 3 — Honest human-likeness evaluation
 Read first: [project.md](../project.md) §4
 May touch: `docs/` results file (new), `scripts/`
 
-**Goal.** Per-behavior parity against a human baseline in the same group.
+- [ ] 3.1 Pre-register the metrics.
+- [ ] 3.2 Measure reply timing, messages per hour vs 1/n, when-to-speak precision/recall, promise keeping, recall after 1/7/30 days, blind "which one is the bot".
+- [ ] 3.3 Publish results as "≥ X% of human baseline on these N behaviors".
 
-- [ ] T1 Pre-register the metrics.
-- [ ] T2 Measure reply timing, messages per hour vs 1/n, when-to-speak precision/recall, promise keeping, recall after 1/7/30 days, blind "which one is the bot".
+## Part 4 — Stable contracts for developers
+Read first: [plugins.md](../plugins.md), [middleware.md](../middleware.md), [bodies.md](../bodies.md)
+May touch: `docs/` (contribution guide, examples)
 
-**Done when.** Results published as "≥ X% of human baseline on these N behaviors".
+Only after the contracts have not changed for a while.
+
+- [ ] 4.1 Version the contracts for bodies, plugins and the middleware API.
+- [ ] 4.2 Examples and a contribution guide.
+
+**Done when.** The release gate passes with recommended models, evaluation results are
+published, and the contracts are documented with examples.
 
 **Notes.**

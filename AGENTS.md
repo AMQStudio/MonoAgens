@@ -3,8 +3,7 @@
 This project is **MonoAgens**: an AI agent built as one persistent self that lives in many
 bodies, with a small core organised like an OS kernel (see README).
 Status: prototype. Before touching code read [docs/constitution.md](docs/constitution.md), the
-task section you were given in [docs/tasks/](docs/tasks/README.md) (`## NNN — …` inside a stage
-file), and the spec sections it links (the core: [docs/core.md](docs/core.md)). Work ONLY on that task.
+task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec sections its parts link (the core: [docs/core.md](docs/core.md)). Work ONLY on that task.
 
 ## Who writes code
 - All implementation work is delegated to an **Orca Orchestration** worker running
@@ -15,8 +14,8 @@ file), and the spec sections it links (the core: [docs/core.md](docs/core.md)). 
 - The coordinator does not write implementation code itself. If the worker fails twice on
   the same step, stop and report to the owner instead of taking over.
 - Specifications (every `docs/*.md`) and this file are owned by the architect. Workers may tick
-  boxes and write under **Notes** in their own task section in `docs/tasks/`; they never edit a
-  specification, another task's section, or the status table.
+  boxes and write under **Notes** in their own task file in `docs/tasks/`; they never edit a
+  specification or the status table.
 - **The core's contract is frozen and its formulas change only with evidence**
   (`docs/constitution.md` §1). No task, worker or plugin changes the core design; a need the
   core cannot meet stops and goes to the owner.
@@ -30,9 +29,10 @@ file), and the spec sections it links (the core: [docs/core.md](docs/core.md)). 
 - If a secret is exposed anyway, stop and tell the owner which one, so it can be rotated.
 
 ## How to work
-- One session = one task (or one listed sub-task) = one commit.
-- Do not start the next step. Do not add features that were not asked for.
-- A step is done only when all tests pass (`uv run pytest`). Tick it in the task section.
+- One coordinator prompt = one task file. Work through its parts in order; one commit per item
+  when practical. Do not start the next task. Do not add features that were not asked for.
+- An item is done only when all tests pass (`uv run pytest`) and the fake replay passes. Tick it
+  in the task file.
 - If a design question comes up, STOP and write the question down. Do not guess.
 
 ## Language
@@ -102,13 +102,14 @@ violation, not a fix.
 Going over budget means the design is wrong. Stop and report; do not force it.
 
 ## Parallel tasks
-- A task touches only the files its **May touch** line names (task 001 may create `hooks.py`,
-  `jobs.py` and `migrate.py`). Shared files (`kernel.py`,
+- A task touches only the files its **May touch** line names Shared files (`kernel.py`,
   `store.py`, `sql/migrations/`, `soul.yaml`) are changed only by a
   task whose **May touch** line says so explicitly; other tasks that need a change there stop and report.
 - Always `git pull --rebase` before starting and before pushing.
 
 ## Tests
 - Tests use a real Postgres (the container from `compose.yaml`), never a mocked database.
-- The LLM and HTTP are always fake in tests (scripted FakeLLM, `httpx.MockTransport`).
+- The LLM and HTTP are always fake in tests (scripted FakeLLM, `httpx.MockTransport`). The real
+  model from `.env` is used only in a task's last part, through `scripts/replay.py` without
+  `--fake` and a live session.
 - The clock is always a fake clock that tests can advance.
