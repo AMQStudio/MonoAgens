@@ -85,6 +85,7 @@ steps:
     who: person:tg:7004
     place: space:tg:-1004
     text: "Dokumennya sudah selesai kok."
+    should: answer
 model_answers:
   - step: 7
     tool: decide

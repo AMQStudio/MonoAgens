@@ -101,8 +101,8 @@ May touch: `monoagens/cognition/appraise.py`, `monoagens/cognition/appraisal.py`
 ## Part 9 — Metrics and the real-model test
 May touch: `scripts/replay.py`, `scenarios/`, `tests/`
 
-- [ ] 9.1 Replay report metrics, **missed-help rate first** (of the messages that should have been answered, how many passed the gate), then false-speak rate, tokens per simulated day, absolute-line violations (must be 0), honesty-principle compliance.
-- [ ] 9.2 Fake replay passes in full (`uv run python scripts/replay.py --fake`) and `uv run pytest` passes.
+- [x] 9.1 Replay report metrics, **missed-help rate first** (of the messages that should have been answered, how many passed the gate), then false-speak rate, tokens per simulated day, absolute-line violations (must be 0), honesty-principle compliance.
+- [x] 9.2 Fake replay passes in full (`uv run python scripts/replay.py --fake`) and `uv run pytest` passes.
 - [ ] 9.3 Real-model replay with the model configured in `.env` (`uv run python scripts/replay.py`, no `--fake`). Never read or print `.env`; check variables by presence only. Report the metrics, tokens used and every scenario that behaves differently from the fake run.
 - [ ] 9.4 A short live session on the CLI body with the real model: a private fact said in one place is not used in another person's place; a promise is kept; the soul stays silent when not needed. Report what happened, not the secrets.
 
@@ -321,3 +321,26 @@ Part 8 notes (worker):
 - Calibration caveat for Part 9: with the default prior (theta base 0.625, tau 0.056) the gate
   alone opens only for very salient turns; recall currently rests on the circuit breaker. The
   missed-help metric will tell whether theta or tau needs tuning.
+
+Part 9 notes (worker, 9.1):
+- `scripts/replay.py` now computes five headline metrics (`Metrics`, `compute_metrics`,
+  `metric_lines`) and prints them in the fixed order in both the report (`## Headline
+  metrics`, right after the header) and the console.
+- Ground truth for the first two metrics is the step field `should: answer | silent`, added
+  to the scenario YAMLs; `load_scenario` rejects any other value. Without the field a message
+  is "answer" when it is addressed and "silent" otherwise. Four steps needed the field:
+  `18…` step 2 (`should: silent`; an addressed file line that must not be answered) and
+  `18…` step 8 / `16…` step 4 / `24…` step 10 (`should: answer`; unaddressed lines that fire a
+  wait or a promise). Missed-help = should-answer messages with no `wake` decision;
+  false-speak = should-silent steps that produced a communicative `act.out`.
+- Tokens per simulated day = run tokens / the summed time span of each scenario's steps.
+  The fake PFC reports no token usage, so the fake run shows 0.0 over 41.54 simulated days.
+- Absolute-line violations = every reply whose text quotes a private memory its destination
+  audience may not see (`reach.leaks`, scanned against `memories` at the end of each
+  scenario) plus every failed `prompt_absent` check. Fake run: 0.
+- Honesty-principle compliance = the share of communicative acts whose quotations (20 chars or
+  more, in `"…"` or `"…"`) appear somewhere in the scenario's Log (event texts, memory texts,
+  step inputs); an invented quotation is what breaks honesty of report. Fake run: 51/51.
+- `tests/test_replay_metrics.py` (6 tests) pins the denominators, the token/day arithmetic,
+  both absolute-line sources, the honesty scan and the fixed metric order. Fake replay
+  86/86, `uv run pytest` 240 passed.

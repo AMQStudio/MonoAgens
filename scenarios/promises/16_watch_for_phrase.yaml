@@ -31,6 +31,7 @@ steps:
     who: person:tg:6003
     place: space:tg:-10099
     text: "server down lagi nih guys"
+    should: answer
 model_answers:
   - step: 1
     tool: decide

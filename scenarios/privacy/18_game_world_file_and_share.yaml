@@ -109,6 +109,7 @@ steps:
     place: space:wa:628110001@s.whatsapp.net
     text: "[file: sketsa_logo.png] Ini versi barunya ya, warnanya sudah kuperbaiki."
     addressed: true
+    should: silent
   - at: "2026-11-11T08:06:00+07:00"
     who: person:fulan
     place: space:wa:628220002@s.whatsapp.net
@@ -137,6 +138,7 @@ steps:
     who: person:budi
     place: space:wa:628110001@s.whatsapp.net
     text: "Cocok kok, cuma warnanya agak terlalu terang."
+    should: answer
   - at: "2026-11-11T08:40:00+07:00"
     who: person:owner
     place: space:game:dm:owner
