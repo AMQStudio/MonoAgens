@@ -51,10 +51,10 @@ Replaces the per-place privacy filter from Task 1 with the audience rule.
 Read first: [core.md](../core.md) §7, [core-math.md](../core-math.md) §5
 May touch: `monoagens/memory.py`, `tests/test_memory.py`, `scenarios/`
 
-- [ ] 4.1 Base-level activation B = ln(n/(1−d)) − d·ln(L) from the injected clock; d from `memory_persistence`.
-- [ ] 4.2 Total activation A = B + w_ctx·cos + w_imp·importance; candidates top 40 by vector ∪ top 20 by text; update `use_count`.
-- [ ] 4.3 Feeling-of-knowing helper (max activation among candidates, recent messages included) for Part 5.
-- [ ] 4.4 Check: frequently used memories outrank newer unused ones; activation is reproducible under a fake clock.
+- [x] 4.1 Base-level activation B = ln(n/(1−d)) − d·ln(L) from the injected clock; d from `memory_persistence`.
+- [x] 4.2 Total activation A = B + w_ctx·cos + w_imp·importance; candidates top 40 by vector ∪ top 20 by text; update `use_count`.
+- [x] 4.3 Feeling-of-knowing helper (max activation among candidates, recent messages included) for Part 5.
+- [x] 4.4 Check: frequently used memories outrank newer unused ones; activation is reproducible under a fake clock.
 
 ## Part 5 — The five signals and habituation
 Read first: [core.md](../core.md) §6, [core-math.md](../core-math.md) §2–3, §15
@@ -165,3 +165,29 @@ Part 3 notes (worker, implementation):
   now renders `recent_elsewhere` too, so `prompt_contains` can see the desk.
 - `middleware.py`'s old place-based context filter is now dead code; that file is outside this
   part's May-touch list, so it was left for the architect.
+
+Part 4 notes (worker):
+- `memory.py` (257 lines, budget 260): `base_level(uses, age_hours, d)` is the ACT-R
+  approximation `ln(n/(1-d)) - d*ln(L)` with `n = use_count + 1` and `L = now - created_at`
+  (lifetime, Petrov 2006), the clock injected; `decay_d(settings)` maps `memory_persistence`
+  through the prior's `persistence_decay_d` pair (0.5 knob -> d = 0.5). `L` is floored at
+  1e-3 h so a just-written memory has a finite activation.
+- `retrieve` now takes the settings, loads the top 40 by vector union top 20 by text
+  (`coalesce(1 - (embedding <=> %s), 0)`), ranks by
+  `A = B + context_weight*cos + importance_weight*importance`, breaks ties by id descending
+  (reproducible), and increments `use_count` with `last_accessed_at`. `MemoryHit` carries
+  `activation` for the FOK helper. The old RRF/decay ranking is gone; `_payload_text` lost
+  its loop and the now unused `cosine` and `Embedder` protocol were removed to stay in budget.
+- `best_activation` (4.3) is the FOK input: the max activation over the candidates plus the
+  place's last `recent_messages` events, scored as one-presentation items
+  (`base_level(0, age) + context_weight*cos`). Part 5 applies `fok_threshold`/`fok_scale`.
+- Out-of-list edits, both forced by the signature: `tests/support.py` gained the prior's
+  `persistence_decay_d`, `context_weight`, `importance_weight`, `recent_messages` and the
+  `memory_persistence` knob (it mirrors `prior/dispositions.yaml`), and the two
+  `memory.retrieve` calls in `tests/test_cognition.py` pass `settings` instead of the removed
+  `decay`/`rrf_k` arguments.
+- Scenario `scenarios/memory/20_act_r_activation.yaml`: one memory (importance 0.01) is
+  retrieved twelve times, then sleep writes eight never-used memories with importance 0.9,
+  and a later question must still show the used memory on the desk (`importance 0.01` in the
+  step-17 prompt). It failed 1/2 before the code and passes 2/2 after; fake replay 65/65,
+  `uv run pytest` 201 passed.

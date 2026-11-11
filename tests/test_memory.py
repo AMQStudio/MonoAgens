@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -13,9 +14,9 @@ from monoagens import expect, memory
 from monoagens.clock import FakeClock
 from monoagens.kernel import Kernel
 from monoagens.embedding import FakeEmbedder
-from monoagens.memory import cosine
+from monoagens.memory import base_level, decay_d
 from monoagens.pfc import PFC, ToolCall
-from monoagens.store import append_event, read_state
+from monoagens.store import append_event, insert_event_vector, read_state
 from monoagens.types import Event
 from tests.support import settings
 
@@ -81,12 +82,14 @@ def _pfc(fake: FakeLLM) -> PFC:
                settings=SETTINGS, transport=httpx.MockTransport(fake.handler))
 
 
-async def _add_memory(conn, text: str, *, importance=0.5, accessed=START, valid_to=None) -> int:
+async def _add_memory(conn, text: str, *, importance=0.5, accessed=START, valid_to=None,
+                      created=None, uses=0) -> int:
     vector = (await FakeEmbedder().embed([text]))[0]
     cur = await conn.execute(
-        "INSERT INTO memories (who, place, text, embedding, importance, last_accessed_at, valid_to) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
-        ("person:owner", PLACE, text, vector, importance, accessed, valid_to))
+        "INSERT INTO memories (who, place, text, embedding, importance, last_accessed_at, "
+        "valid_to, created_at, use_count) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+        ("person:owner", PLACE, text, vector, importance, accessed, valid_to,
+         created or accessed, uses))
     return (await cur.fetchone())[0]
 
 
@@ -107,37 +110,115 @@ async def _feed(kernel: Kernel, event: Event) -> Event:
     return stored
 
 
+async def _add_vector_memory(conn, text: str, vector: list[float], *, importance=0.9,
+                             created=START, uses=0) -> int:
+    cur = await conn.execute(
+        "INSERT INTO memories (who, place, text, embedding, importance, last_accessed_at, "
+        "created_at, use_count) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+        ("person:owner", PLACE, text, vector, importance, created, created, uses))
+    return (await cur.fetchone())[0]
+
+
+def _dot(a, b) -> float:
+    return sum(x * y for x, y in zip(a, b))
+
+
 async def test_fake_embedder_is_deterministic_and_word_sensitive():
     embedder = FakeEmbedder()
     first, again, other = await embedder.embed(["kopi tubruk", "kopi tubruk", "anjing bruno"])
     assert first == again and len(first) == 384 and first != other
     message_vector = await embedder.embed(["kopi tubruk manis"])
-    assert cosine(message_vector[0], first) > cosine(first, other)
+    assert _dot(message_vector[0], first) > _dot(first, other)
 
 
-async def test_retrieval_fuses_ranks_and_weighs_importance_and_recency(aconn):
-    old = START - timedelta(hours=100)
-    fresh = await _add_memory(aconn, "Kopi tubruk tanpa gula", importance=0.9, accessed=old)
-    weak = await _add_memory(aconn, "Kopi tubruk tanpa gula", importance=0.1, accessed=old)
-    await _add_memory(aconn, "Kopi instan", importance=0.9, accessed=START - timedelta(hours=2000))
-    recent = await _add_memory(aconn, "Kopi susu", importance=0.9, accessed=START)
-    await _add_memory(aconn, "Anjing bernama Bruno", importance=1.0)
-    invalid = await _add_memory(aconn, "Kopi hitam", importance=1.0, valid_to=START - timedelta(hours=1))
+async def test_retrieval_ranks_by_act_r_activation_and_counts_each_use(aconn):
+    created = START - timedelta(days=10)
+    used = await _add_memory(aconn, "Kopi tubruk tanpa gula", importance=0.30,
+                             accessed=created, created=created, uses=20)
+    fresh = await _add_memory(aconn, "Kopi tubruk tanpa gula", importance=0.31,
+                              accessed=START - timedelta(hours=1),
+                              created=START - timedelta(hours=1))
+    await _add_memory(aconn, "Anjing bernama Bruno", importance=1.0,
+                      created=START - timedelta(hours=1))
+    await _add_memory(aconn, "Kopi hitam", importance=1.0,
+                      created=START - timedelta(hours=1),
+                      valid_to=START - timedelta(hours=1))
 
-    results = await memory.retrieve(aconn, FakeEmbedder(), "kopi", k=4, decay=VALUES["decay"],
-                              rrf_k=VALUES["rrf_k"], now=START)
+    # B(used) = ln(21/0.5) - d*ln(240h) = 1.00; B(fresh unused) = ln(1.5) = 0.41.
+    results = await memory.retrieve(aconn, FakeEmbedder(), "kopi", now=START, k=2,
+                                    settings=SETTINGS)
 
-    assert len(results) == 4
-    assert results[0].startswith("- Kopi susu")          # recency beats an older equal rank
-    strong = next(r for r in results if "importance 0.90" in r and "tubruk" in r)
-    weak_line = next(r for r in results if "importance 0.10" in r)
-    assert results.index(strong) < results.index(weak_line)  # importance breaks ties
-    assert all("Kopi hitam" not in line for line in results)  # valid_to IS NULL only
-    accessed = await (await aconn.execute("SELECT last_accessed_at FROM memories WHERE id = %s",
-                                          (fresh,))).fetchone()
-    assert accessed[0] == START                            # retrieval refreshes last_accessed_at
-    assert (await (await aconn.execute("SELECT count(*) FROM memories WHERE id = %s",
-                                          (invalid,))).fetchone())[0] == 1
+    assert len(results) == 2
+    assert "importance 0.30" in results[0]           # frequent use outranks a newer unused memory
+    assert "importance 0.31" in results[1]
+    assert not any("Kopi hitam" in line for line in results)  # valid_to IS NULL only
+    assert results[0].activation > results[1].activation
+    rows = await (await aconn.execute(
+        "SELECT id, last_accessed_at, use_count FROM memories ORDER BY id")).fetchall()
+    assert [(row[1], row[2]) for row in rows if row[0] == used] == [(START, 21)]
+    assert [(row[1], row[2]) for row in rows if row[0] == fresh] == [(START, 1)]
+
+
+def test_base_level_is_reproducible_under_a_fake_clock():
+    clock = FakeClock(START)
+    d = decay_d(SETTINGS)
+    age = (clock.now() - (START - timedelta(hours=5))).total_seconds() / 3600.0
+    expected = math.log(4 / (1 - d)) - d * math.log(5.0)
+    assert base_level(3, age, d) == base_level(3, age, d) == pytest.approx(expected)
+    clock.advance(timedelta(hours=5))
+    older = (clock.now() - (START - timedelta(hours=5))).total_seconds() / 3600.0
+    assert base_level(3, older, d) < base_level(3, age, d)  # the same item, later, is weaker
+    assert decay_d(settings(knobs={"memory_persistence": 0})) == pytest.approx(0.7)
+    assert decay_d(settings(knobs={"memory_persistence": 1})) == pytest.approx(0.3)
+
+
+class FixedEmbedder:
+    """An embedder that returns vectors chosen by the test."""
+
+    def __init__(self, vectors: dict[str, list[float]]) -> None:
+        self.vectors = vectors
+
+    async def embed(self, texts):
+        return [self.vectors[text] for text in texts]
+
+
+async def test_candidates_are_top_40_by_vector_union_top_20_by_text(aconn):
+    query = [1.0] + [0.0] * 383
+    for index in range(24):
+        vector = [0.9, math.sqrt(1 - 0.9**2)] + [0.0] * 382
+        vector[2] = float(index) * 0.0001
+        await _add_vector_memory(aconn, f"kunci cadangan {index}", vector, uses=0,
+                                 created=START - timedelta(days=1))
+    # Vector rank 25 of 40: outside the old top-20 window and no text match.
+    target = [0.5, math.sqrt(1 - 0.5**2)] + [0.0] * 382
+    await _add_vector_memory(aconn, "barang penting di meja kerja", target, uses=40,
+                             created=START - timedelta(hours=10))
+
+    results = await memory.retrieve(aconn, FixedEmbedder({"cari": query}), "cari",
+                                    now=START, k=1, settings=SETTINGS)
+
+    assert len(results) == 1 and "meja kerja" in results[0]
+
+
+async def test_best_activation_covers_candidates_and_recent_messages(aconn):
+    created = START - timedelta(days=1)
+    await _add_memory(aconn, "Kunci cadangan di meja kerja", importance=0.5,
+                      created=created, uses=20)
+    source = await append_event(aconn, ts=START - timedelta(minutes=1), kind="percept",
+                                who="person:owner", place=PLACE, body="telegram",
+                                payload={"description": "Kunci cadangan di meja kerja"})
+    await insert_event_vector(aconn, source.id,
+                              (await FakeEmbedder().embed(["Kunci cadangan di meja kerja"]))[0])
+    event = Event(id=source.id, ts=START, kind="percept", who="person:owner", place=PLACE,
+                  payload={"description": "kunci cadangan"})
+
+    peak = await memory.best_activation(aconn, FakeEmbedder(), event, now=START,
+                                        settings=SETTINGS)
+
+    d = decay_d(SETTINGS)
+    memory_a = base_level(20, 24.0, d) + 1.0 + 0.5 * 0.5
+    message_a = base_level(0, 1 / 60, d) + 1.0
+    assert peak == pytest.approx(max(memory_a, message_a), abs=0.02)
 
 
 async def test_sleep_writes_memories_core_memory_and_never_touches_raw_events(aconn):
@@ -180,8 +261,8 @@ async def test_sleep_writes_memories_core_memory_and_never_touches_raw_events(ac
 
 async def test_sleep_drops_expired_expectations(aconn):
     source_id = await _seed_events(aconn)
-    source = Event(id=source_id, ts=START, kind="percept", who="person:owner", place=PLACE, body="telegram",
-                   payload={"text": "remind me"})
+    source = Event(id=source_id, ts=START, kind="percept", who="person:owner",
+                   place=PLACE, body="telegram", payload={"text": "remind me"})
     await expect.create(aconn, {"about": "rapat pagi", "cue_time": {"every": "1d"},
                                 "expect": {"none": True},
                                 "expires_at": (START - timedelta(days=1)).isoformat()},
@@ -306,8 +387,8 @@ async def test_internal_events_never_make_sleep_due(aconn):
 async def test_retrieval_ignores_an_empty_query(aconn):
     await _add_memory(aconn, "Kopi tubruk kesukaan Muqsith", importance=0.9)
     assert await memory.retrieve(aconn, FakeEmbedder(), "   ", now=START,
-                                 k=VALUES["retrieve_k"], decay=VALUES["decay"],
-                                 rrf_k=VALUES["rrf_k"]) == []
+                                 k=VALUES["retrieve_k"],
+                                 settings=SETTINGS) == []
 
 
 async def test_memory_query_falls_back_to_the_expectation_about(aconn):

@@ -231,12 +231,10 @@ async def test_kernel_encodes_a_message_once_and_retrieval_reuses_the_vector(aco
 
     values = SETTINGS["constants"]
     await memory.retrieve(aconn, embedder, "halo", now=START, event_id=stored.id,
-                          k=values["retrieve_k"], decay=values["decay"],
-                          rrf_k=values["rrf_k"])
+                          k=values["retrieve_k"], settings=SETTINGS)
     assert embedder.calls == 1
     await memory.retrieve(aconn, embedder, "halo", now=START,
-                          k=values["retrieve_k"], decay=values["decay"],
-                          rrf_k=values["rrf_k"])
+                          k=values["retrieve_k"], settings=SETTINGS)
     assert embedder.calls == 2
 
 

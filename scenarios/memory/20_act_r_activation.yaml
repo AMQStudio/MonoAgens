@@ -1,0 +1,151 @@
+name: 20_act_r_activation
+description: >-
+  ACT-R activation: one memory is used many times (its use_count climbs with
+  every retrieval), then sleep stores eight newer, never-used memories with a
+  much higher importance. A later question must be answered from the used
+  memory: by total activation A = B + w_ctx*cos + w_imp*importance the used
+  memory outranks the newer unused ones, so it must be on the desk
+  (top retrieve_k). A ranking by importance and exponential recency would drop
+  it, because its importance is 0.01.
+expectations:
+  - type: sleep_done
+    label: sleep.done recorded
+  - type: prompt_contains
+    step: 17
+    text: importance 0.01
+    label: the frequently used memory reaches the desk
+steps:
+  - at: "2026-11-10T20:00:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Mona, kunci cadanganku kusimpan di laci meja kerja, catat ya."
+    addressed: true
+  - at: "2026-11-10T20:00:00+07:00"
+    advance: "35m"
+  - at: "2026-11-10T20:36:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Mona, kunci cadanganku masih aman kan?"
+    addressed: true
+  - at: "2026-11-10T20:37:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Kunci cadanganku tadi kupakai, sudah kukembalikan."
+    addressed: true
+  - at: "2026-11-10T20:38:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Kunci cadanganku jangan sampai hilang ya."
+    addressed: true
+  - at: "2026-11-10T20:39:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Aku cek kunci cadanganku tadi pagi."
+    addressed: true
+  - at: "2026-11-10T20:40:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Kunci cadanganku masih di tempatnya."
+    addressed: true
+  - at: "2026-11-10T20:41:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Kunci cadanganku kupinjam ke adikku sebentar."
+    addressed: true
+  - at: "2026-11-10T20:42:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Kunci cadanganku sudah kembali ke tanganku."
+    addressed: true
+  - at: "2026-11-10T20:43:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Kunci cadanganku satu-satunya, jadi hati-hati."
+    addressed: true
+  - at: "2026-11-10T20:44:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Kunci cadanganku kupakai kalau kunci utama hilang."
+    addressed: true
+  - at: "2026-11-10T20:45:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Kunci cadanganku masih kuingat letaknya."
+    addressed: true
+  - at: "2026-11-10T20:46:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Kunci cadanganku aman, tenang saja."
+    addressed: true
+  - at: "2026-11-10T20:47:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    text: "Kunci cadanganku sudah kucek dua kali hari ini."
+    addressed: true
+  - at: "2026-11-10T20:47:00+07:00"
+    advance: "35m"
+  - at: "2026-11-10T21:22:00+07:00"
+    advance: "1h"
+  - at: "2026-11-10T22:23:00+07:00"
+    who: person:owner
+    place: space:cli
+    text: "Mona, kunci cadanganku disimpan di mana ya?"
+    addressed: true
+model_answers:
+  - step: 2
+    tool: call
+    calls:
+      - name: store_memories
+        arguments:
+          items:
+            - text: "Kunci cadangan owner disimpan di laci meja kerja."
+              importance: 0.01
+              who: person:owner
+              place: space:tg:1001
+          core_memory: "Owner menyimpan kunci cadangan."
+  - step: 15
+    tool: call
+    calls:
+      - name: store_memories
+        arguments:
+          items:
+            - text: "Kunci cadangan owner ada di kantor."
+              importance: 0.9
+              who: person:owner
+              place: space:tg:1001
+            - text: "Kunci cadangan owner ada di rumah."
+              importance: 0.9
+              who: person:owner
+              place: space:tg:1001
+            - text: "Kunci cadangan owner ada di tas."
+              importance: 0.9
+              who: person:owner
+              place: space:tg:1001
+            - text: "Kunci cadangan owner ada di motor."
+              importance: 0.9
+              who: person:owner
+              place: space:tg:1001
+            - text: "Kunci cadangan owner ada di lemari."
+              importance: 0.9
+              who: person:owner
+              place: space:tg:1001
+            - text: "Kunci cadangan owner ada di kantong."
+              importance: 0.9
+              who: person:owner
+              place: space:tg:1001
+            - text: "Kunci cadangan owner ada di gudang."
+              importance: 0.9
+              who: person:owner
+              place: space:tg:1001
+            - text: "Kunci cadangan owner ada di loker."
+              importance: 0.9
+              who: person:owner
+              place: space:tg:1001
+          core_memory: "Owner menyimpan kunci cadangan."
+  - step: 17
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: cli.say
+          arguments: {text: "Di laci meja kerja."}

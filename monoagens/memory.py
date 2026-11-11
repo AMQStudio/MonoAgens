@@ -1,11 +1,11 @@
-"""Memory: embeddings, hybrid retrieval, and sleep consolidation."""
+"""Memory: embeddings, ACT-R retrieval, and sleep consolidation."""
 
 from __future__ import annotations
 
 import math
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -19,9 +19,10 @@ from monoagens.store import (active_expectation_lines, append_event,
                              read_state, resolve_expectation, write_state)
 from monoagens.types import RECENT_KINDS, Event
 
-_ROWS = "id, text, who, place, importance, last_accessed_at, private"
+_ROWS = ("id, text, who, place, importance, last_accessed_at, private, use_count, created_at, "
+         "coalesce(1 - (embedding <=> %s), 0) AS similarity")
 _VECTOR_SQL = (f"SELECT {_ROWS} FROM memories WHERE valid_to IS NULL AND embedding IS NOT NULL "
-               "ORDER BY embedding <=> %s LIMIT 20")
+               "ORDER BY embedding <=> %s LIMIT 40")
 _TEXT_SQL = (f"SELECT {_ROWS} FROM memories WHERE valid_to IS NULL AND "
              "(tsv @@ plainto_tsquery('simple', %s) OR word_similarity(%s, text) > 0.2) "
              "ORDER BY word_similarity(%s, text) DESC LIMIT 20")
@@ -36,74 +37,64 @@ STORE_MEMORIES = {"type": "function", "function": {
             "private": {"type": "boolean"}}}},
         "core_memory": {"type": "string"}}}}}
 SLEEP_SYSTEM = (
-    "You are {name}'s memory, asleep; nobody sees this. Summarize the events into "
-    "durable memories in {language}, one item per fact, preference, or promise worth "
-    "keeping, each with importance 0..1. Rewrite core_memory as the short "
-    "always-visible summary of who the owner is and what matters now. Use "
-    "store_memories. Never invent facts."
+    "You are {name}'s memory, asleep; nobody sees this. Summarize the events into durable "
+    "memories in {language}, one item per fact, preference, or promise worth keeping, each "
+    "with importance 0..1. Rewrite core_memory as the short always-visible summary of who "
+    "the owner is and what matters now. Use store_memories. Never invent facts."
 )
-
-
-class Embedder(Protocol):
-    """Anything that turns texts into vectors."""
-
-    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
-        """Return one vector per input text."""
 
 
 def _payload_text(payload: dict[str, Any]) -> str:
     """Return the human-readable text of one event payload."""
-    for key in ("description", "text", "reason", "about"):
-        if payload.get(key):
-            return str(payload[key])
-    return ""
+    return str(next((payload[key] for key in ("description", "text", "reason", "about")
+                     if payload.get(key)), ""))
 
 
-def cosine(a: Sequence[float], b: Sequence[float]) -> float:
-    """Return the cosine similarity of two vectors (0.0 for a zero vector)."""
-    dot = sum(x * y for x, y in zip(a, b))
-    norm = math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))
-    return dot / norm if norm else 0.0
+def decay_d(settings: dict[str, Any]) -> float:
+    """Return ACT-R's d from memory_persistence (0 -> 0.7, 1 -> 0.3)."""
+    low, high = constants(settings)["persistence_decay_d"]
+    return float(low) + (float(high) - float(low)) * float(settings["knobs"]["memory_persistence"])
+
+
+def base_level(uses: int, age_hours: float, d: float) -> float:
+    """Return ACT-R base-level activation ln(n/(1-d)) - d*ln(L), L in hours."""
+    return math.log((max(0, uses) + 1) / (1.0 - d)) - d * math.log(max(age_hours, 1e-3))
 
 
 class MemoryHit(str):
-    """A retrieved memory line that carries its place and privacy flag."""
+    """A retrieved memory line that carries its place, privacy flag and activation."""
 
-    def __new__(cls, line: str, *, place: str | None, private: bool) -> MemoryHit:
-        """Build one line the context policy can filter."""
+    def __new__(cls, line: str, *, place: str | None, private: bool,
+                activation: float = 0.0) -> MemoryHit:
         hit = super().__new__(cls, line)
-        hit.place, hit.private = place, private
+        hit.place, hit.private, hit.activation = place, private, activation
         return hit
 
 
 async def retrieve(conn: psycopg.AsyncConnection[Any], embedder: Any, query: str, *,
-                   now: datetime, k: int, decay: float, rrf_k: float,
+                   now: datetime, k: int, settings: dict[str, Any],
                    event_id: int | None = None) -> list[str]:
-    """Retrieve up to k memories by hybrid RRF search with importance and decay."""
+    """Retrieve up to k memories by total ACT-R activation, and count each use."""
     if not query.strip():
         return []
     vector = await read_event_vector(conn, event_id) if event_id is not None else None
     if vector is None:
         vector = (await embedder.embed([query]))[0]
-    vec_rows = await (await conn.execute(_VECTOR_SQL, (Vector(vector),))).fetchall()
-    txt_rows = await (await conn.execute(_TEXT_SQL, (query, query, query))).fetchall()
-    vec = {row[0]: row for row in vec_rows}
-    txt = {row[0]: row for row in txt_rows}
-    scores: dict[int, float] = {}
-    for ranked in (list(vec), list(txt)):
-        for rank, row_id in enumerate(ranked, 1):
-            scores[row_id] = scores.get(row_id, 0.0) + 1.0 / (rrf_k + rank)
-    rows = {**vec, **txt}
-    scored = []
-    for row_id, score in scores.items():
-        hours = max(0.0, (now - rows[row_id][5]).total_seconds() / 3600.0)
-        scored.append((score * float(rows[row_id][4]) * decay ** hours, row_id))
-    chosen = [rows[row_id] for _, row_id in sorted(scored, reverse=True)[:k]]
-    if chosen:
-        await conn.execute("UPDATE memories SET last_accessed_at = %s WHERE id = ANY(%s)",
-                           (now, [row[0] for row in chosen]))
+    vec_rows = await (await conn.execute(_VECTOR_SQL, (Vector(vector), Vector(vector)))).fetchall()
+    txt_rows = await (await conn.execute(_TEXT_SQL,
+                                         (Vector(vector), query, query, query))).fetchall()
+    rows = {row[0]: row for row in (*vec_rows, *txt_rows)}
+    values, d = constants(settings), decay_d(settings)
+    scored = [(base_level(int(row[7]), max(0.0, (now - row[8]).total_seconds() / 3600.0), d)
+               + float(values["context_weight"]) * float(row[9])
+               + float(values["importance_weight"]) * float(row[4]), row) for row in rows.values()]
+    ranked = sorted(scored, key=lambda pair: (pair[0], pair[1][0]), reverse=True)[:k]
+    if ranked:
+        await conn.execute("UPDATE memories SET last_accessed_at = %s, use_count = use_count + 1 "
+                           "WHERE id = ANY(%s)", (now, [row[0] for _, row in ranked]))
     return [MemoryHit(f"- {row[1]} ({row[2] or '?'} at {row[3] or '?'}; importance {row[4]:.2f})",
-                      place=row[3], private=bool(row[6])) for row in chosen]
+                      place=row[3], private=bool(row[6]), activation=activation)
+            for activation, row in ranked]
 
 
 async def candidates(conn: psycopg.AsyncConnection[Any], embedder: Any, event: Event, *,
@@ -114,7 +105,28 @@ async def candidates(conn: psycopg.AsyncConnection[Any], embedder: Any, event: E
     if embedder is None or not query.strip():
         return ()
     return tuple(await retrieve(conn, embedder, query, now=now, event_id=event.id,
-                                **retrieval(settings)))
+                                settings=settings, k=int(retrieval(settings)["k"])))
+
+
+async def best_activation(conn: psycopg.AsyncConnection[Any], embedder: Any, event: Event, *,
+                          now: datetime, settings: dict[str, Any]) -> float:
+    """Return the highest activation among candidates, recent messages included (FOK)."""
+    lines = await candidates(conn, embedder, event, now=now, settings=settings)
+    peak = max((line.activation for line in lines), default=0.0)
+    vector = await read_event_vector(conn, event.id) if event.id is not None else None
+    if vector is None or not event.place:
+        return peak
+    cur = await conn.execute(
+        "SELECT 1 - (v.embedding <=> %s), e.ts FROM event_vectors v "
+        "JOIN events e ON e.id = v.event_id WHERE e.place = %s AND e.kind = ANY(%s) "
+        "ORDER BY e.id DESC LIMIT %s",
+        (Vector(vector), event.place, list(RECENT_KINDS),
+         int(constants(settings)["recent_messages"])))
+    values, d = constants(settings), decay_d(settings)
+    scores = [base_level(0, max(0.0, (now - ts).total_seconds() / 3600.0), d)
+              + float(values["context_weight"]) * float(similarity)
+              for similarity, ts in await cur.fetchall()]
+    return max([peak, *scores])
 
 
 async def recent_lines(conn: psycopg.AsyncConnection[Any], exclude_place: str,
