@@ -112,7 +112,7 @@ May touch: `monoagens/` (all), `scripts/replay.py`, `scenarios/`, `tests/`, `pri
 
 Found in the architect's review of Parts 1–9.
 
-- [ ] 10.1 `place_kind` (direct | group) comes from the organ in every percept (Telegram, CLI and the replay's test organs set it); `reach.py` uses it and no longer reads the shape of any id; unknown is treated as a group. Grep proves no platform name or id format in the core.
+- [ ] 10.1 `place_kind` (direct | shared) comes from the organ in every percept (Telegram, CLI and the replay's test organs set it); `reach.py` uses it and no longer reads the shape of any id; unknown is treated as shared. Grep proves no platform name or id format in the core.
 - [ ] 10.2 Speaking elsewhere: a communicative act aimed at another place becomes an intent and one more wake in the target place, with that place's desk; the message is written there. `reach.leaks` stays as a second check. Test: a fake model that paraphrases Fulan's private line when asked to message Budi cannot leak it, because the line is not on Budi's desk. Scenarios 18 and 19 follow the new flow.
 - [ ] 10.3 Split `identity.py`: `self.recall` and the task desk move to a new `recall.py` (≤ 160); `identity.py` ≤ 120; whole package ≤ 3,800.
 - [ ] 10.4 Wire the circuit breaker's "goal continued" arm (`act.result`) in the kernel loop.
