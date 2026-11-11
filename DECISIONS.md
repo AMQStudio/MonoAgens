@@ -441,6 +441,31 @@ from the books at every wake, so nothing is ever compacted and no detail is lost
 5. **Desk budgets** are constants of the prior (not knobs): recent messages, memory candidates,
    the verbatim result in a thread, the whole volatile part, and the catch-up window.
 
+**D38 — Knowing, not knowing and misremembering: one generic mechanism.**
+No phrasing, scenario or case is written into the core. The core gives the PFC honest material;
+the PFC words it as a person would.
+1. **Every piece of knowledge carries its basis.** Memories gain `basis`: `observed` (seen in the
+   soul's own log), `told` (someone reported it; weighed by that person's reliability, D24) or
+   `inferred` (the soul's own conclusion). Sleep summaries are `inferred` gist with lower
+   credence than the events they come from. `<memories>` shows basis, source, absolute date and
+   age.
+2. **Recall reports its scope.** A `recall` result says what was searched (places, time range)
+   and what was found, including "nothing", so not finding is itself information the PFC can
+   use.
+3. **The source outranks the gist.** When a summary and its original events disagree, the
+   events win and the summary is revised (`revise`), which can become a lesson. Stored times
+   are always absolute; relative words are resolved against `<now>` only at recall. Sleep
+   merges episodes only when people, place and time agree, never on similarity alone.
+4. **The soul's view of the world is partial.** It knows only what reached it through its organs.
+   No record is not evidence that something did not happen; a reference to something absent
+   from the log, or a jump in state, is a prediction error that suggests a blind spot.
+5. **Honesty principles in the stable prompt, general and few:** speak as a person about what
+   you know — sure, unsure, don't know, don't remember — and do not describe your own
+   machinery (memory, log, database) unless asked; check before asserting anything with
+   consequences; do not agree only to please, and do not insist when you may simply not have
+   seen it; ask about a gap only when it matters.
+Fits the complexity budget: one column and a few principle lines, no new primitive.
+
 ## Accepted in principle, details pending
 
 (None. P1 was detailed as D27.)

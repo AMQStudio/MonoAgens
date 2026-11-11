@@ -55,8 +55,8 @@ direct clock or random call in the core.
 | C | the five signals + habituation | "lupa nama tempatnya apa ya" scores high only when the answer is known; repeated stickers fade |
 | D | dynamic θ, seeded go/no-go, decision outcomes | same events + seed → same decisions; talk rate ≤ 1/n in a busy group |
 | E | `wait` Expectations (patience), `not_who` | someone else answers → silent; nobody → one reply |
-| F | `think` with motivation/confidence, principles, person cards, self-model | proactive replies always have a recorded thought; "what can you do?" matches `<self>` |
-| H | `revise`, `guard` facts checked in sleep, lessons and procedures with credence (α/β) | a correction supersedes the old memory; a contradicted fact is revised at the next sleep |
+| F | `think` with motivation/confidence, principles, person cards, self-model, D38 honesty principles | proactive replies always have a recorded thought; "what can you do?" matches `<self>`; a false claim about the past is not confirmed, and a missing record is not called proof |
+| H | `revise`, `guard` facts checked in sleep, lessons and procedures with credence (α/β), `basis` on memories, source-over-gist, merge only on same people/place/time (D38) | a correction supersedes the old memory; a contradicted fact is revised at the next sleep |
 | I | wake gate; free-text conditions with cosine filter + classifier; `lo` learning | a fulfilled promise wakes no one; a question on the same topic never resolves a promise |
 | J | attribution and reliability (α/β) per domain; fade with a fixed threshold; soft and hard forgetting | a stranger cannot override an owner fact; hard forget leaves only `{"forgotten": true}` and metadata |
 | K | the desk (D37): section token budgets, work thread in `<doing>` with pointers, the `self` organ with `recall` (query, time range, lineage, text search on events), back-fill handling and `catch_up` wakes | a 15-step task keeps a flat prompt size; "what did we do last month?" lists that month's episodes and details come from the original events, also after the vector faded and when sleep failed; 40 unread messages produce one catch-up wake |

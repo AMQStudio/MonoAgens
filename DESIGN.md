@@ -206,7 +206,8 @@ everything, learning can later run over the whole history.
 
 ## 7. Memory, sleep and forgetting
 
-`memories`: id · who · place · private · kind (fact | episode | lesson | procedure) · text ·
+`memories`: id · who · place · private · kind (fact | episode | lesson | procedure) ·
+basis (observed | told | inferred) · text ·
 embedding ·
 tsv · importance · source_who · valid_from · valid_to · superseded_by · derived_from ·
 created_at · last_accessed_at · use_count
@@ -224,6 +225,10 @@ created_at · last_accessed_at · use_count
   runs only on new conversational events; failures back off.
 - **Self-correction.** `revise(old, new, reason)` sets `valid_to` and `superseded_by`; nothing
   is deleted.
+- **Gist and source** (D38). Sleep summaries are `inferred` with lower credence than their
+  events; when they disagree, the events win and the summary is revised. Times are stored
+  absolute. Episodes merge only when people, place and time agree. `recall` reports what it
+  searched and what it found, "nothing" included.
 - **Fade.** During sleep, per-message vectors with low activation are released; the gist stays
   in memories, the event stays in the log. Fixed threshold for now (adaptive deferred).
 - **Soft forgetting** ("forget what I just said"). Related memories get `valid_to`; events are
@@ -283,6 +288,11 @@ pointers the soul can `recall`.
 Rules: changing facts → use a search organ, or answer "as of my knowledge in <cutoff>" ·
 attribute memories · low confidence → ask or say "I don't know" · never claim a capability not in
 `<self>`.
+General honesty principles (D38), worded by the PFC, never scripted: speak as a person about what
+you know (sure, unsure, don't know, don't remember) without describing your own machinery unless
+asked · check before asserting anything with consequences · your view is partial: no record is
+not proof it did not happen · do not agree only to please, do not insist when you may not have
+seen it · ask about a gap only when it matters.
 
 **Packages are trusted code**, installed by the owner and run in-process. The policy holds
 against packages that follow the contract; it is not a sandbox against malicious code.
