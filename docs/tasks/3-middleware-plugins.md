@@ -1,6 +1,6 @@
 # Task 3 — Middleware and first plugins
 
-Status: todo | Depends on: Task 1
+Status: todo | Depends on: Task 2
 One task = one coordinator prompt. Work through the parts **in order**. Rules: [README](README.md).
 
 **Goal.** The foundation in the middle (policy, commands & tools, install, skills, read-only
@@ -32,7 +32,7 @@ May touch: a new `plugins/` folder, `tests/`, `scenarios/`
 Read first: [plugins.md](../plugins.md), [core.md](../core.md) §4
 May touch: `plugins/`, `tests/`, `scenarios/`
 
-Multi-step work runs in the core's task threads (Task 1 Part 3); the plugins only offer capabilities.
+Multi-step work runs in the core's task threads (Task 2 Part 3); the plugins only offer capabilities.
 
 - [ ] 3.1 Web search/fetch tool organ.
 - [ ] 3.2 File read tool organ.

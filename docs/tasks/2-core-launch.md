@@ -1,6 +1,6 @@
-# Task 1 — Core: launch
+# Task 2 — Core: launch
 
-Status: todo | Depends on: Task 0 (done)
+Status: todo | Depends on: Task 1 (done)
 One task = one coordinator prompt. Work through the parts **in order**; one part may be split
 into several commits, one per item when practical. Rules: [README](README.md).
 
@@ -15,7 +15,7 @@ enough, stop and report.
 
 ---
 
-## Part 1 — Follow-ups from Task 0
+## Part 1 — Follow-ups from Task 1
 Read first: [core.md](../core.md) §3 (watchdog), [AGENTS.md](../../AGENTS.md) (secrets)
 May touch: `monoagens/jobs.py`, `monoagens/config.py`, `tests/`
 
@@ -26,7 +26,7 @@ May touch: `monoagens/jobs.py`, `monoagens/config.py`, `tests/`
 Read first: [core-math.md](../core-math.md) §13
 May touch: `scenarios/`, `scripts/replay.py`, `tests/`
 
-- [ ] 2.1 Bring the fake replay to 25/25: the 8 scenarios failing since before Task 0 (reminders and `recall` with the scripted FakeLLM) are fixed by recording the model answers they need, not by changing the core.
+- [ ] 2.1 Bring the fake replay to 25/25: the 8 scenarios failing since before Task 1 (reminders and `recall` with the scripted FakeLLM) are fixed by recording the model answers they need, not by changing the core.
 - [ ] 2.2 Folder layout by brain function: `scenarios/<function>/` (memory, silence, turn-taking, promises, privacy, cross-body, learning, honesty); one scenario tests one behavior; model answers recorded so a fake replay is deterministic.
 - [ ] 2.3 From here on, every part below adds its scenarios here, written to fail before the part lands.
 
@@ -34,7 +34,7 @@ May touch: `scenarios/`, `scripts/replay.py`, `tests/`
 Read first: [core.md](../core.md) §8 (absolute line 2), §4 (reaching a person, `self.share`, task threads), §7 (memories: who, place, private)
 May touch: `monoagens/hooks.py`, `monoagens/memory.py`, `monoagens/pfc.py`, `monoagens/organs.py`, `monoagens/store.py` (audience lookup only), new `monoagens/reach.py`, new `monoagens/threads.py`, `monoagens/kernel.py` (only calls into the new modules), `tests/`, `scenarios/`
 
-Replaces the per-place privacy filter from Task 0 with the audience rule.
+Replaces the per-place privacy filter from Task 1 with the audience rule.
 
 - [ ] 3.1 Audience of a place: the set of person ids present there (after the alias map); for a direct chat, that one person.
 - [ ] 3.2 Context-hook filter: a private memory or line enters only if audience(context) ⊆ audience(source), or the context is the owner's direct chat; content from non-private places is unrestricted.

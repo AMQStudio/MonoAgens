@@ -1,6 +1,6 @@
-# Task 2 — Core: depth of mind
+# Task 4 — Core: depth of mind
 
-Status: todo | Depends on: Task 1, and the owner using the soul daily for a while
+Status: todo | Depends on: Task 3, and the owner using the soul daily for some weeks
 One task = one coordinator prompt. Work through the parts **in order**. Rules: [README](README.md).
 
 **Goal.** The soul thinks before it speaks, knows itself honestly, corrects itself, keeps beliefs
@@ -43,7 +43,7 @@ May touch: `monoagens/expect.py`, `tests/test_expect.py`, `scenarios/`
 Read first: [core.md](../core.md) §7–8
 May touch: `monoagens/memory.py`, `monoagens/forget.py`, `tests/`, `scenarios/`
 
-The fade and hard-forget paths exist since Task 0; this part adds the policy around them.
+The fade and hard-forget paths exist since Task 1; this part adds the policy around them.
 
 - [ ] 4.1 Attribution and reliability (α/β) per domain; a non-owner never supersedes an owner fact.
 - [ ] 4.2 Fade with a fixed threshold during sleep.
@@ -53,7 +53,7 @@ The fade and hard-forget paths exist since Task 0; this part adds the policy aro
 
 ## Part 5 — Real-model test
 - [ ] 5.1 `uv run pytest` and the fake replay pass in full.
-- [ ] 5.2 Real-model replay with the model in `.env` (never read or print it); report metrics against Task 1's numbers: missed-help rate, false-speak rate, tokens per simulated day, absolute-line violations (0).
+- [ ] 5.2 Real-model replay with the model in `.env` (never read or print it); report metrics against Task 2's numbers: missed-help rate, false-speak rate, tokens per simulated day, absolute-line violations (0).
 
 **Done when.** All parts are ticked, tests and both replays reported, every file within budget.
 

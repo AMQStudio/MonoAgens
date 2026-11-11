@@ -1,6 +1,6 @@
-# Task 4 — Bodies, first users and release
+# Task 5 — Bodies, first users and release
 
-Status: todo | Depends on: Task 3
+Status: todo | Depends on: Task 4
 One task = one coordinator prompt. Work through the parts **in order**. Rules: [README](README.md).
 
 **Goal.** One soul across many bodies and providers, then real users, a release, an honest
