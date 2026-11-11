@@ -62,6 +62,10 @@ The one middleware that is always present.
   plugin the owner installed and configured for it. Such a plugin sends numbers (counts,
   tokens, timings, decisions), not conversation content; sending content outside counts as
   showing it to people who were not part of it and is held to absolute line 2.
+- **Privacy rules narrow, never widen.** The core enforces absolute line 2 on its own (D45).
+  Middleware may only add stricter rules (a mode that keeps health topics out even of the
+  person's own chat, an organization rule that a past meeting stays with its board); it can
+  never let private content reach someone the core would refuse.
 - **Default owner policy**, active out of the box: the two absolute lines, the daily model
   budget, quiet hours. Budget and quiet hours are owner settings (starting values in `config.yaml`, later changes in
   chat as events) the owner may tighten or loosen;
@@ -118,7 +122,8 @@ Steps …
   hook; the core never sees raw accounts (D10).
 - Every mapping is an event and can be undone. Only the owner, or the person via a verification
   code sent from the second account, may link two accounts; the soul may suspect and ask the
-  owner, never links silently, because linking lets memories flow between places (D10).
+  owner, never links silently, because linking makes two accounts one person, and private
+  context then follows that person across bodies (D10, D45). A wrong link is a privacy leak.
 - Needed when a second chat app arrives; deferred until then (D32.9).
 
 ## 8. RBAC
