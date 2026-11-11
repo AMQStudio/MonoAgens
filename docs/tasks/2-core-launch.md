@@ -20,7 +20,7 @@ Read first: [core.md](../core.md) §3 (watchdog), [AGENTS.md](../../AGENTS.md) (
 May touch: `monoagens/jobs.py`, `monoagens/config.py`, `tests/`
 
 - [x] 1.1 The job timeout comes from `prior/dispositions.yaml` (`job_timeout_seconds`, 120); remove the hard-coded 60 s default.
-- [ ] 1.2 Sleep's private connection rebuilds its DSN from `conn.info`: prove with a test that the DSN and password never reach a log, an event, an error message or a report.
+- [x] 1.2 Sleep's private connection rebuilds its DSN from `conn.info`: prove with a test that the DSN and password never reach a log, an event, an error message or a report.
 
 ## Part 2 — Replay baseline
 Read first: [core-math.md](../core-math.md) §13

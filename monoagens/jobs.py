@@ -16,7 +16,7 @@ from typing import Any
 import psycopg
 from pgvector.psycopg import register_vector_async
 
-from monoagens import memory
+from monoagens import config, memory
 from monoagens.pfc import ToolCall
 from monoagens.types import Event
 
@@ -81,7 +81,8 @@ class JobRunner:
         except asyncio.TimeoutError:
             job.outcome = {"error": f"{job.name} timed out after {self.timeout:g}s"}
         except Exception as exc:  # a broken job reports it; the loop lives on
-            job.outcome = {"error": str(exc)}
+            error = config.redact_connection_secrets(str(exc), self.kernel.conn)
+            job.outcome = {"error": error}
         payload = {"job": job.name, "place": job.place, "key": job.key,
                    "started": started.id, "result": _view(job)}
         self.kernel.enqueue(Event(
@@ -96,9 +97,8 @@ class JobRunner:
 
     async def sleep(self, now: datetime) -> dict[str, Any]:
         """Consolidate on a private connection, so the consumer never waits on it."""
-        info = self.kernel.conn.info
-        dsn = psycopg.conninfo.make_conninfo(info.dsn, password=info.password or None)
-        conn = await psycopg.AsyncConnection.connect(dsn, autocommit=True)
+        conn = await psycopg.AsyncConnection.connect(config.private_dsn(self.kernel.conn),
+                                                     autocommit=True)
         try:
             await register_vector_async(conn)
             done = await memory.sleep(conn, pfc=self.kernel.pfc,

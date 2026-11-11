@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 from typing import Any
 
+import psycopg
 import yaml
 
 DEFAULT_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -58,3 +60,24 @@ def load_llm_config(env_path: pathlib.Path = DEFAULT_ENV_PATH) -> dict[str, str]
     file_values = load_env_file(env_path)
     return {name: os.environ.get(key) or file_values.get(key) or ""
             for name, key in _LLM_KEYS}
+
+
+_PASSWORD_TOKEN = re.compile(
+    r"(?i)\b(password|passfile|sslpassword)\s*=\s*(?:'[^']*'|\"[^\"]*\"|\S+)")
+_URL_CREDENTIALS = re.compile(r"([a-z][a-z0-9+.-]*://[^:/@\s]*:)[^@\s]*@")
+
+
+def private_dsn(conn: Any) -> str:
+    """Rebuild a connection string that carries its password, for a private connection."""
+    info = conn.info
+    return psycopg.conninfo.make_conninfo(info.dsn, password=info.password or None)
+
+
+def redact_connection_secrets(text: str, conn: Any) -> str:
+    """Return text with a connection's password, DSN and URL credentials masked."""
+    info = conn.info
+    for secret in (private_dsn(conn), info.dsn, info.password):
+        if secret:
+            text = text.replace(secret, "***")
+    text = _PASSWORD_TOKEN.sub(r"\1=***", text)
+    return _URL_CREDENTIALS.sub(r"\1***@", text)

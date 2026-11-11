@@ -7,10 +7,13 @@ per place is in flight; a wake that arrives meanwhile re-wakes the place once.
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 
+import psycopg
 import pytest
 
+from monoagens import config
 from monoagens.clock import FakeClock
 from monoagens.kernel import Kernel
 from monoagens.embedding import FakeEmbedder
@@ -161,6 +164,65 @@ async def test_embedding_job_timeout_returns_a_job_result_error(aconn):
     assert result["job"] == "encode" and "timed out" in result["result"]["error"]
     assert await read_event_vector(aconn, stored.id) is None
     assert (await _rows(aconn, "error"))[0]["error"].startswith("encode timed out")
+
+
+async def _all_payloads(conn) -> str:
+    rows = await (await conn.execute("SELECT payload::text FROM events ORDER BY id")).fetchall()
+    return "\n".join(row[0] for row in rows)
+
+
+def _assert_no_secrets(text: str, *secrets: str) -> None:
+    for secret in secrets:
+        assert secret and secret not in text
+
+
+async def _tick_sleep(aconn, kernel) -> None:
+    """Drive one tick that starts the sleep job, then let the job finish."""
+    await kernel.put(Event(id=None, ts=kernel.clock.now(), kind="tick"))
+    await kernel.step()
+    assert kernel.jobs.busy("sleep")
+    await kernel.run_until_idle()
+
+
+async def test_sleep_success_never_records_its_dsn_or_password(aconn, caplog):
+    await append_event(aconn, ts=START, kind="percept", who=WHO, place=PLACE, body="telegram",
+                       payload={"text": "Muqsith suka kopi tubruk"})
+    clock = FakeClock(START + timedelta(minutes=45))
+    kernel = Kernel(aconn, clock=clock, pfc=SleepPFC(SLEEP_ARGS), settings=SETTINGS,
+                    embedder=FakeEmbedder())
+
+    with caplog.at_level(logging.DEBUG):
+        await _tick_sleep(aconn, kernel)
+
+    assert await _rows(aconn, "sleep.done")
+    secrets = (aconn.info.password, config.private_dsn(aconn))
+    _assert_no_secrets(await _all_payloads(aconn), *secrets)
+    _assert_no_secrets(caplog.text, *secrets)
+
+
+async def test_sleep_failure_scrubs_its_dsn_and_password_from_every_record(
+        aconn, caplog, monkeypatch):
+    await append_event(aconn, ts=START, kind="percept", who=WHO, place=PLACE, body="telegram",
+                       payload={"text": "Muqsith suka kopi tubruk"})
+    clock = FakeClock(START + timedelta(minutes=45))
+    kernel = Kernel(aconn, clock=clock, pfc=SleepPFC(SLEEP_ARGS), settings=SETTINGS,
+                    embedder=FakeEmbedder())
+    password = aconn.info.password
+    dsn = config.private_dsn(aconn)
+    assert password in dsn  # the rebuilt DSN really carries the secret
+
+    def refuse(*args, **kwargs):
+        raise psycopg.OperationalError(f"connection failed: {dsn} (password={password})")
+
+    monkeypatch.setattr(psycopg.AsyncConnection, "connect", refuse)
+    with caplog.at_level(logging.DEBUG):
+        await _tick_sleep(aconn, kernel)
+
+    errors = await _rows(aconn, "error")
+    assert errors and "connection failed" in errors[0]["error"]
+    assert await _rows(aconn, "sleep.failed")
+    _assert_no_secrets(await _all_payloads(aconn), password, dsn)
+    _assert_no_secrets(caplog.text, password, dsn)
 
 
 async def test_sleep_runs_as_a_job_and_records_sleep_done(aconn):
