@@ -32,7 +32,7 @@ def upcast(event: Event) -> Event:
 
 
 def is_valid_event_kind(kind: Any) -> bool:
-    """True for a lower-case dotted kind (`percept`, `act.out`, `telegram.say`)."""
+    """True for a lower-case dotted kind (`percept`, `act.out`, `plugin.hint`)."""
     return isinstance(kind, str) and _KIND.match(kind) is not None
 
 

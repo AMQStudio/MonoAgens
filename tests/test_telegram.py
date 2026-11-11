@@ -165,7 +165,7 @@ async def test_group_chat_mention_and_non_mention():
 
     plain, mentioned = events
     assert plain.payload["addressed"] is False
-    assert plain.payload["place_kind"] == "group"
+    assert plain.payload["place_kind"] == "shared"
     assert plain.who == "person:tg:999"
     assert mentioned.payload["addressed"] is True
     assert mentioned.payload["cursor"] == 601

@@ -557,7 +557,7 @@ OTHER = "person:tg:4002"
 def _group_msg(text: str, *, who: str = OTHER, addressed: bool = False) -> Event:
     return Event(id=None, ts=START, kind="percept", who=who, place=GROUP, body="telegram",
                  payload={"description": text, "addressed": addressed,
-                          "place_kind": "group"})
+                          "place_kind": "shared"})
 
 
 def _say(text: str) -> list[tuple[str, dict]]:

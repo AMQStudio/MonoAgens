@@ -420,8 +420,8 @@ async def test_private_memories_follow_people_not_places(aconn):
 
     # The memory lives in a private chat with Fulan; the owner was never part of it.
     await said("person:fulan", "space:tg:9", "direct")
-    await said("person:charlie", "space:tg:2", "group")
-    await _feed(kernel, await said("person:owner", "space:tg:2", "group"))
+    await said("person:charlie", "space:tg:2", "shared")
+    await _feed(kernel, await said("person:owner", "space:tg:2", "shared"))
     assert "tato rahasia" not in memories()
 
     # The owner's direct chat is a view: allowed.

@@ -79,7 +79,7 @@ async def test_a_private_chat_follows_the_person_across_bodies_once_linked(aconn
 
 async def test_a_private_chat_is_never_visible_in_a_group_with_anyone_else(aconn):
     await _said(aconn, "person:fulan", FULAN_A, "direct")
-    await _said(aconn, "person:charlie", GROUP, "group")
+    await _said(aconn, "person:charlie", GROUP, "shared")
     assert not await reach.visible(aconn, context=GROUP, source=FULAN_A)
 
     await _said(aconn, "person:fulan", FULAN_B, "direct")
@@ -87,8 +87,8 @@ async def test_a_private_chat_is_never_visible_in_a_group_with_anyone_else(aconn
 
 
 async def test_a_private_group_flows_to_a_direct_chat_with_one_member(aconn):
-    await _said(aconn, "person:fulan", GROUP, "group")
-    await _said(aconn, "person:charlie", GROUP, "group")
+    await _said(aconn, "person:fulan", GROUP, "shared")
+    await _said(aconn, "person:charlie", GROUP, "shared")
     await _said(aconn, "person:fulan", FULAN_A, "direct")
     assert await reach.visible(aconn, context=FULAN_A, source=GROUP)
     await _said(aconn, "person:charlie", FULAN_B, "direct")
@@ -101,7 +101,7 @@ async def test_the_owner_direct_chat_is_a_view_but_a_group_is_not(aconn):
     assert await reach.owner_direct(aconn, "space:tg:owner")
     assert await reach.visible(aconn, context="space:tg:owner", source=FULAN_A)
 
-    await _say(conn=aconn, who="person:charlie", place=GROUP, kind="group")
+    await _say(conn=aconn, who="person:charlie", place=GROUP, kind="shared")
     assert not await reach.visible(aconn, context=GROUP, source=FULAN_A)
     assert owner_dm
 
@@ -112,7 +112,7 @@ async def _say(*, conn, who: str, place: str, kind: str) -> int:
 
 async def test_context_hook_keeps_private_lines_and_memories_inside_the_audience(aconn):
     trigger_id = await _said(aconn, "person:fulan", FULAN_A, "direct", "aku di-PHK")
-    await _said(aconn, "person:charlie", GROUP, "group")
+    await _said(aconn, "person:charlie", GROUP, "shared")
     context = await memory.build_context(
         aconn, _trigger(trigger_id, GROUP), GROUP, "test", now=START, settings=SETTINGS,
         memories=(), capabilities=())
@@ -128,8 +128,8 @@ async def test_context_hook_keeps_private_lines_and_memories_inside_the_audience
 
 
 async def test_share_with_a_person_records_consent_and_counts_as_audience(aconn):
-    at = await _said(aconn, OWNER, GROUP, "group", "ini hasil kerjaan kita")
-    await _said(aconn, "person:fulan", GROUP, "group")
+    at = await _said(aconn, OWNER, GROUP, "shared", "ini hasil kerjaan kita")
+    await _said(aconn, "person:fulan", GROUP, "shared")
     await _said(aconn, "person:charlie", "space:tg:charlie", "direct")
     assert await reach.visible(aconn, context="space:tg:charlie", source=GROUP) is False
     kernel = await _kernel(aconn)
@@ -144,7 +144,7 @@ async def test_share_with_a_person_records_consent_and_counts_as_audience(aconn)
 
 async def test_only_a_person_who_was_part_of_it_can_share_it(aconn):
     fulan = await _said(aconn, "person:fulan", FULAN_A, "direct", "aku di-PHK")
-    await _said(aconn, OWNER, GROUP, "group", "ini hasil kerjaan kita")
+    await _said(aconn, OWNER, GROUP, "shared", "ini hasil kerjaan kita")
     kernel = await _kernel(aconn)
     seen: list[Any] = []
 
@@ -173,8 +173,8 @@ async def test_only_a_person_who_was_part_of_it_can_share_it(aconn):
 
 
 async def test_share_with_a_place_grants_everyone_present(aconn):
-    at = await _said(aconn, OWNER, GROUP, "group")
-    await _said(aconn, "person:fulan", GROUP, "group")
+    at = await _said(aconn, OWNER, GROUP, "shared")
+    await _said(aconn, "person:fulan", GROUP, "shared")
     kernel = await _kernel(aconn)
     await kernel._apply(_trigger(at, GROUP), ToolCall("act", {
         "capability": "self.share", "arguments": {"item": "kode", "to": GROUP}}))
@@ -186,7 +186,7 @@ async def test_share_with_a_place_grants_everyone_present(aconn):
 async def test_act_reaches_a_person_on_their_direct_place(aconn):
     await _said(aconn, "person:budi", BUDI, "direct", body="whatsapp")
     kernel = await _kernel(aconn)
-    at = await _said(aconn, OWNER, GROUP, "group")
+    at = await _said(aconn, OWNER, GROUP, "shared")
     await kernel._apply(_trigger(at, GROUP), ToolCall("act", {
         "capability": "whatsapp.say",
         "arguments": {"text": "halo Budi", "to": "person:budi", "via": "whatsapp"}}))
@@ -198,7 +198,7 @@ async def test_act_reaches_a_person_on_their_direct_place(aconn):
 
 async def test_act_to_an_unreachable_person_fails_honestly(aconn):
     kernel = await _kernel(aconn)
-    at = await _said(aconn, OWNER, GROUP, "group")
+    at = await _said(aconn, OWNER, GROUP, "shared")
     await kernel._apply(_trigger(at, GROUP), ToolCall("act", {
         "capability": "whatsapp.say", "arguments": {"text": "halo", "to": "person:budi"}}))
     row = await (await aconn.execute(
@@ -217,7 +217,7 @@ async def test_a_message_to_another_place_is_gated_by_that_places_audience(aconn
     await aconn.execute(
         "INSERT INTO memories (who, place, text, importance, private) "
         "VALUES (%s, %s, %s, 0.9, true)", ("person:fulan", FULAN_A, "aku di-PHK"))
-    await _said(aconn, "person:charlie", GROUP, "group")
+    await _said(aconn, "person:charlie", GROUP, "shared")
     kernel = await _kernel(aconn)
     await kernel._apply(_trigger(fulan, FULAN_A), ToolCall("act", {
         "capability": "whatsapp.say",
@@ -230,7 +230,7 @@ async def test_a_message_to_another_place_is_gated_by_that_places_audience(aconn
 
 async def test_a_long_action_opens_a_task_thread_and_it_closes_when_done(aconn):
     kernel = await _kernel(aconn)
-    at = await _said(aconn, OWNER, GROUP, "group")
+    at = await _said(aconn, OWNER, GROUP, "shared")
     await kernel._apply(_trigger(at, GROUP), ToolCall("act", {
         "capability": "dev.run", "arguments": {"command": "pytest"}}))
     opened = await (await aconn.execute(
@@ -256,7 +256,7 @@ async def test_a_long_action_opens_a_task_thread_and_it_closes_when_done(aconn):
 
 async def test_open_task_threads_are_limited_by_the_prior(aconn):
     kernel = await _kernel(aconn, settings_value=settings(constants={"max_open_tasks": 0}))
-    at = await _said(aconn, OWNER, GROUP, "group")
+    at = await _said(aconn, OWNER, GROUP, "shared")
     await kernel._apply(_trigger(at, GROUP), ToolCall("act", {
         "capability": "dev.run", "arguments": {"command": "pytest"}}))
     assert await (await aconn.execute(
@@ -265,7 +265,7 @@ async def test_open_task_threads_are_limited_by_the_prior(aconn):
 
 async def test_a_chain_that_exceeds_max_task_steps_closes(aconn):
     kernel = await _kernel(aconn, settings_value=settings(constants={"max_task_steps": 1}))
-    at = await _said(aconn, OWNER, GROUP, "group")
+    at = await _said(aconn, OWNER, GROUP, "shared")
     await kernel._apply(_trigger(at, GROUP), ToolCall("act", {
         "capability": "dev.run", "arguments": {"command": "pytest"}}))
     task_place = (await (await aconn.execute(

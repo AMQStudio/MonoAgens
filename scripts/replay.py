@@ -474,13 +474,13 @@ def should_field(raw: dict[str, Any]) -> str:
 
 
 def place_kind(place: str) -> str:
-    """Guess direct vs group from the neutral place id."""
+    """Guess direct vs shared from the neutral place id (test organs only)."""
     if ":dm:" in place:
         return "direct"
     if place.startswith("space:tg:-") or place.endswith("@g.us"):
-        return "group"
+        return "shared"
     if ":group:" in place or place.startswith(f"space:{GAME_BODY}:"):
-        return "group"
+        return "shared"
     return "direct"
 
 

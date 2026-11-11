@@ -147,7 +147,7 @@ async def test_mvp_b_silence_and_mention(aconn):
 
     for i in range(20):
         await _feed(kernel, _msg(f"obrolan {i}", message_id=i + 1, who=f"person:tg:{i}",
-                                 place=GROUP, place_kind="group", addressed=False))
+                                 place=GROUP, place_kind="shared", addressed=False))
 
     assert fake.requests == []
     kinds = await _kinds(aconn)
@@ -171,7 +171,7 @@ async def test_mvp_b_silence_and_mention(aconn):
             "own_name", "info_gap", "feeling_of_knowing", "relevance", "social_cost",
         }
 
-    await _feed(kernel, _msg("mona, halo?", message_id=99, place=GROUP, place_kind="group",
+    await _feed(kernel, _msg("mona, halo?", message_id=99, place=GROUP, place_kind="shared",
                              addressed=True))
 
     assert len(fake.requests) == 1
@@ -236,7 +236,7 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
     exp_id = int(created.payload["expectation_id"])
 
     await _feed(restarted, _msg("saya sudah WORKOUT hari ini", message_id=2, place=GROUP,
-                                place_kind="group", addressed=False))
+                                place_kind="shared", addressed=False))
 
     fired = await (await aconn.execute(
         "SELECT count(*) FROM events WHERE kind = 'expectation.fired' "

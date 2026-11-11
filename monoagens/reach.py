@@ -18,17 +18,6 @@ SHARE_CAPABILITY = {
         "required": ["to"]},
     "communicative": False, "long_running": False, "identity_changing": False,
 }
-_DIRECT = (":dm:", "@s.whatsapp.net")
-_GROUP = ("@g.us", ":group:")
-
-
-def looks_direct(place: str) -> bool:
-    """Return whether a neutral place id names a 1:1 chat."""
-    if any(token in place for token in _GROUP):
-        return False
-    if place.startswith("space:tg:"):
-        return not place.startswith("space:tg:-")
-    return any(token in place for token in _DIRECT)
 
 
 async def aliases(conn) -> dict[str, str]:
@@ -38,13 +27,13 @@ async def aliases(conn) -> dict[str, str]:
 
 
 async def direct(conn, place: str | None) -> bool:
-    """Return whether a place is a 1:1 chat, by its recorded kind or its id."""
+    """Return whether a place is a 1:1 chat, by the kind its organ reported."""
     if not place:
         return False
     row = await (await conn.execute(
         "SELECT payload->>'place_kind' FROM events WHERE place = %s "
         "AND payload ? 'place_kind' ORDER BY id DESC LIMIT 1", (place,))).fetchone()
-    return row[0] == "direct" if row and row[0] in ("direct", "group") else looks_direct(place)
+    return bool(row and row[0] == "direct")
 
 
 async def audience(conn, place: str | None, before: int | None = None) -> frozenset[str]:
@@ -112,7 +101,7 @@ async def direct_place(conn, who: str, via: str | None = None) -> str | None:
     for native, place, body, kind in await cur.fetchall():
         if mapping.get(native, native) != who or (via and str(body or "").lower() != via.lower()):
             continue
-        if kind == "direct" or (kind is None and looks_direct(place)):
+        if kind == "direct":
             return place
     return None
 

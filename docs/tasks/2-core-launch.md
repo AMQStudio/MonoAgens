@@ -112,7 +112,7 @@ May touch: `monoagens/` (all), `scripts/replay.py`, `scenarios/`, `tests/`, `pri
 
 Found in the architect's review of Parts 1–9.
 
-- [ ] 10.1 `place_kind` (direct | shared) comes from the organ in every percept (Telegram, CLI and the replay's test organs set it); `reach.py` uses it and no longer reads the shape of any id; unknown is treated as shared. Grep proves no platform name or id format in the core.
+- [x] 10.1 `place_kind` (direct | shared) comes from the organ in every percept (Telegram, CLI and the replay's test organs set it); `reach.py` uses it and no longer reads the shape of any id; unknown is treated as shared. Grep proves no platform name or id format in the core.
 - [ ] 10.2 Speaking elsewhere: a communicative act aimed at another place becomes an intent and one more wake in the target place, with that place's desk; the message is written there. `reach.leaks` stays as a second check. Test: a fake model that paraphrases Fulan's private line when asked to message Budi cannot leak it, because the line is not on Budi's desk. Scenarios 18 and 19 follow the new flow.
 - [ ] 10.3 Split `identity.py`: `self.recall` and the task desk move to a new `recall.py` (≤ 160); `identity.py` ≤ 120; whole package ≤ 3,800.
 - [ ] 10.4 Wire the circuit breaker's "goal continued" arm (`act.result`) in the kernel loop.
@@ -387,3 +387,10 @@ Part 9 notes (coordinator/worker, 9.4 live session):
   expectation (`due`), the clock advanced to 11:00, and the reminder fired as expected (`promise_kept = True`).
 - Step 3 (Silence preserved): Charlie sent unaddressed casual chitchat in a Telegram group. The gate
   stayed closed and the soul stayed silent (`stayed_silent = True`).
+
+Part 10 notes (worker/coordinator, 10.1):
+- `monoagens/bodies/telegram.py` sets `place_kind = "direct" if chat.get("type") == "private" else "shared"`.
+- `scripts/replay.py`'s `place_kind(place)` helper updated to return `"direct"` or `"shared"`. Test organs set `place_kind` on every percept.
+- `monoagens/reach.py` dropped `_DIRECT`, `_GROUP`, and `looks_direct`. `direct(conn, place)` returns True only when recorded `place_kind == "direct"`; unknown or other values default to shared (False). `direct_place` matches `kind == "direct"`.
+- Grep of `monoagens/` excluding `bodies/` and `__main__.py` confirms zero platform names and zero id shapes in core.
+- `monoagens/reach.py` is at 136 lines (budget 150). Tests: 240 passed; fake replay: 86/86 passed.

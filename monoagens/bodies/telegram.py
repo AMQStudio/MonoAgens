@@ -126,7 +126,7 @@ class TelegramBody:
         chat = message["chat"]
         sender_id = (message.get("from") or {}).get("id")
         who = f"person:tg:{sender_id}"
-        place_kind = "direct" if chat.get("type") == "private" else "group"
+        place_kind = "direct" if chat.get("type") == "private" else "shared"
         return Event(id=None, ts=self._clock.now(), kind="percept", who=who,
                      place=f"space:tg:{chat['id']}", body=self.name,
                      payload={"cursor": update_id,

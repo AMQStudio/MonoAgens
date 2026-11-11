@@ -415,7 +415,7 @@ async def test_a_gate_go_on_an_unaddressed_turn_creates_a_wait_instead_of_waking
 
     fake = FakeLLM()
     kernel = GateKernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
-    await _feed(kernel, _msg("obrolan grup", place=GROUP, place_kind="group",
+    await _feed(kernel, _msg("obrolan grup", place=GROUP, place_kind="shared",
                              addressed=False))
 
     assert fake.requests == []
@@ -556,7 +556,7 @@ async def test_kernel_encodes_the_reply_once_too(aconn):
 async def test_silent_decision_event_carries_the_full_appraisal(aconn):
     fake = FakeLLM()
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
-    await _feed(kernel, _msg("obrolan biasa", place=GROUP, place_kind="group",
+    await _feed(kernel, _msg("obrolan biasa", place=GROUP, place_kind="shared",
                              addressed=False))
 
     assert await _kinds(aconn) == ["percept", "decision.silent"]
