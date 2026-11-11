@@ -77,6 +77,13 @@ interruptions where it should be quiet, promise keeping, recall after 1/7/30 day
 one is the bot" (target ≈ 50%). Pre-registered metrics. Public claims phrased as "≥ X% of human
 baseline on these N behaviors".
 
+**Scenarios are the capability record** (D48). Each scenario states one capability in one
+line and the brain function it belongs to. The replay script writes `scenarios/README.md` from
+the latest runs: per capability, whether it holds with the fake model and with the real model
+(passes over repeated runs, model name, date). Nothing is claimed in the README or anywhere else
+that this record does not show. A capability that fails with the real model is listed as such,
+not hidden.
+
 ## 5. Later ideas (not scheduled)
 - A small learned classifier for the gate from recorded decisions (> 10k labeled).
 - Multi-process deployment (inbox table with `FOR UPDATE SKIP LOCKED`).

@@ -1,6 +1,6 @@
 # Task 2 — Core: launch
 
-Status: todo | Depends on: Task 1 (done)
+Status: in progress (Parts 1–9 done, Part 10 open) | Depends on: Task 1 (done)
 One task = one coordinator prompt. Work through the parts **in order**; one part may be split
 into several commits, one per item when practical. Rules: [README](README.md).
 
@@ -106,7 +106,24 @@ May touch: `scripts/replay.py`, `scenarios/`, `tests/`
 - [x] 9.3 Real-model replay with the model configured in `.env` (`uv run python scripts/replay.py`, no `--fake`). Never read or print `.env`; check variables by presence only. Report the metrics, tokens used and every scenario that behaves differently from the fake run.
 - [x] 9.4 A short live session on the CLI body with the real model: a private fact said in one place is not used in another person's place; a promise is kept; the soul stays silent when not needed. Report what happened, not the secrets.
 
-**Done when.** All parts are ticked; `uv run pytest` and the fake replay pass in full; the
+## Part 10 — Review follow-ups and the capability record (D48)
+Read first: [core.md](../core.md) §4 (speaking elsewhere), §8 (absolute line 2), §9.2 (`place_kind`), [project.md](../project.md) §4 (capability record), [AGENTS.md](../../AGENTS.md) (size budget)
+May touch: `monoagens/` (all), `scripts/replay.py`, `scenarios/`, `tests/`, `prior/dispositions.yaml` (values only)
+
+Found in the architect's review of Parts 1–9.
+
+- [ ] 10.1 `place_kind` (direct | group) comes from the organ in every percept (Telegram, CLI and the replay's test organs set it); `reach.py` uses it and no longer reads the shape of any id; unknown is treated as a group. Grep proves no platform name or id format in the core.
+- [ ] 10.2 Speaking elsewhere: a communicative act aimed at another place becomes an intent and one more wake in the target place, with that place's desk; the message is written there. `reach.leaks` stays as a second check. Test: a fake model that paraphrases Fulan's private line when asked to message Budi cannot leak it, because the line is not on Budi's desk. Scenarios 18 and 19 follow the new flow.
+- [ ] 10.3 Split `identity.py`: `self.recall` and the task desk move to a new `recall.py` (≤ 160); `identity.py` ≤ 120; whole package ≤ 3,800.
+- [ ] 10.4 Wire the circuit breaker's "goal continued" arm (`act.result`) in the kernel loop.
+- [ ] 10.5 Feeling-of-knowing: the cue's own vector is never one of its candidates.
+- [ ] 10.6 Unaddressed help: at least five scenarios where an unaddressed group line should be answered because the soul knows something useful ("lupa nama tempatnya apa ya" with the answer in memory), and five where it should stay silent. If the gate misses them, tune prior values only, and write the evidence under Notes.
+- [ ] 10.7 Every scenario gets `capability:` (one line: what it proves) and its brain function. Checks test behavior — spoke or stayed silent, in which place, which events and capabilities — never the model's exact wording. Every changed check is listed under Notes with its reason; a check that catches a real failure is never loosened.
+- [ ] 10.8 Classify each of the 35 real-model failures from 9.3 as (a) check too strict → rewritten per 10.7, or (b) the soul behaved wrongly → fixed by brain function, never by a rule for that case. List all 35 under Notes.
+- [ ] 10.9 `scripts/replay.py` writes `scenarios/README.md`, the capability record: per brain function, each capability with its fake result and its real-model result (passes over runs, model, date). Generated, never hand-edited.
+- [ ] 10.10 Final run: `uv run pytest` on the real Postgres; the fake replay in full; the real-model replay **three times**, with every scenario passing in all three runs and absolute-line violations 0 in every run; a live session with the real model that also covers "send this to Budi" (shared, written at Budi's desk, delivered). The capability record is regenerated from these runs and committed.
+
+**Done when.** All parts are ticked; every scenario passes with the real model in three runs out of three; the capability record is committed; `uv run pytest` and the fake replay pass in full; the
 real-model replay and live session are reported with the missed-help rate; absolute-line
 violations are 0; every file is within its size budget.
 

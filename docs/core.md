@@ -216,10 +216,16 @@ the log and the alias map — on the named body, or by default the body where th
 active — before the action hook; a middleware hint may suggest another route (lever 2). When
 several places fit an instruction ("send it to the group"), the soul asks which one instead of
 guessing, because a message sent to the wrong place cannot be taken back. No known direct place → the act fails with
-an honest `act.result` ("no way to reach Budi yet"). A communicative act aimed at a place other
-than the current one is drafted with a desk built for the target place's audience (§8, absolute
-line 2), never with the current desk, so what the soul says to Budi is written as it would be
-written in Budi's chat.
+an honest `act.result` ("no way to reach Budi yet").
+
+**Speaking elsewhere** (D48). A communicative act aimed at a place other than the current one is
+never sent with text written at the current desk. The core turns it into an intent — what to
+say, to whom, why — and wakes the PFC once more in the target place, with that place's desk
+(§8, absolute line 2); the message is written there, as it would be written in Budi's chat.
+This costs one extra model call and only for messages to another place. A paraphrase of private
+content cannot leak, because the content was never on the target's desk. A check that a reply
+quotes no private content its audience may not see stays as a second line of defence and as a
+replay metric.
 
 **History and catching up** (D37, D40). An organ may offer `history(place, before, limit)` for
 messages the log lacks. On connect it back-fills what it missed as `percept` with
@@ -381,7 +387,8 @@ loads a prior and never exports or shares learned state (D25).
    map, so one person's linked accounts count as one) — or the context is a direct chat with the
    owner. So what Fulan said in a private chat on one body may be used in Fulan's private chat on
    another body, but never in a group where anyone else is present. Content from places that are
-   not private flows freely. Content reaches someone new only by consent (D46): a person in its
+   not private flows freely. Whether a place is a direct chat comes from the organ (`place_kind`,
+   §9.2), never from the shape of an id (D48). Content reaches someone new only by consent (D46): a person in its
    audience shares it (`self.share`, recorded as `share.granted`), and the new person then counts
    as part of its audience. Each person speaks only for what they were part of: the owner can share
    work done with the soul, but cannot share what Fulan said in private; the owner's view of
@@ -463,6 +470,8 @@ body: telegram              # organ name
 who: telegram:123           # native id; the alias map turns it into a person id
 place: telegram:chat:-100   # native space id; becomes a neutral place
 addressed: false            # the turn is allocated to the soul (direct chat, reply, tag)
+place_kind: group           # optional (D48): direct | group, reported by the organ; the core never
+                            # infers it from an id. Unknown → treated as a group (the safer side)
 description: "Budi: anyone know where the meeting is?"   # short, in language; what the PFC reads
 data: { message_id: 812 }   # optional raw data for organs or plugins; never interpreted by the core
 sent_at: 2026-11-11T13:20:05+07:00   # optional; the sense's own clock (back-fill)

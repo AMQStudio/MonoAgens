@@ -42,7 +42,7 @@ uv run python scripts/replay.py
 uv run python scripts/replay.py --fake
 
 # One scenario only.
-uv run python scripts/replay.py scenarios/01_group_chitchat_greeting.yaml
+uv run python scripts/replay.py scenarios/silence/01_group_chitchat_greeting.yaml
 ```
 
 The replay database comes from `REPLAY_DATABASE_URL` and its name must end with `_replay`;

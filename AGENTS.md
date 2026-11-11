@@ -93,9 +93,11 @@ kernel.py ≤ 280 lines · hooks.py ≤ 150 (hook lists, ordering, watchdog) · 
 (background jobs and their timeouts) · migrate.py ≤ 120 (numbered migrations, backup) ·
 store.py ≤ 240 · expect.py ≤ 240 · memory.py ≤ 260 · pfc.py ≤ 280 ·
 reach.py ≤ 150 (audience, consent, reaching a person) · threads.py ≤ 120 (task threads) ·
+identity.py ≤ 120 (birth, identity) · recall.py ≤ 160 (`self.recall`, the task desk) ·
 bodies/telegram.py ≤ 180 ·
 bodies/cli.py ≤ 120 · cli.py ≤ 60 · cognition/ ≤ 600 in total, each file ≤ 160 ·
-middleware.py ≤ 150 · whole package ≤ 3,500 lines.
+middleware.py ≤ 150 · whole package ≤ 3,800 lines (3,500 + the two modules added for D45–D47).
+From here on the core grows only by removing code elsewhere.
 Counted on readable code: lines ≤ 100 characters, one statement per line, blank lines between
 functions and classes, docstrings on public functions. Compressing code to fit the budget is a
 violation, not a fix.
