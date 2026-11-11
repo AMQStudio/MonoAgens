@@ -114,7 +114,9 @@ async def direct_place(conn, who: str, via: str | None = None) -> str | None:
 async def resolve_to(conn, to: str, via: str | None = None) -> tuple[str | None, str | None]:
     """Resolve an act's `to:` into a target place; a missing route is an honest error."""
     if not str(to).startswith("person:"):
-        return str(to), None
+        found = await (await conn.execute(
+            "SELECT 1 FROM events WHERE place = %s LIMIT 1", (str(to),))).fetchone()
+        return (str(to), None) if found else (None, f"no such place: {to}")
     place = await direct_place(conn, str(to), via)
     if place is None:
         return None, f"no way to reach {str(to).removeprefix('person:')} yet"

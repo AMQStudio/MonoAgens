@@ -214,6 +214,18 @@ async def test_act_to_an_unreachable_person_fails_honestly(aconn):
     assert "no way to reach budi yet" in row[0]["result"]["error"]
 
 
+async def test_a_message_to_an_unknown_place_fails_honestly(aconn):
+    kernel = await _kernel(aconn)
+    at = await _said(aconn, OWNER, GROUP, "shared")
+    await kernel._apply(_trigger(at, GROUP), ToolCall("act", {
+        "capability": "whatsapp.say", "arguments": {"text": "halo", "to": "budi_dm"}}))
+    row = await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'act.result'")).fetchone()
+    assert "no such place: budi_dm" in row[0]["result"]["error"]
+    assert await (await aconn.execute(
+        "SELECT count(*) FROM events WHERE kind = 'act.out'")).fetchone() == (0,)
+
+
 async def test_act_offers_the_capabilities_of_every_running_organ(aconn):
     kernel = await _kernel(aconn)
     assert {"whatsapp.say", "telegram.say", "dev.run", "self.share"} <= set(

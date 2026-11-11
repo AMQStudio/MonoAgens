@@ -132,7 +132,7 @@ async def test_mvp_a_restart_preserves_conversation_context(aconn):
     recent = _recent(second_fake)
     assert "besok kita bahas apa?" in recent
     assert "Mona: kita bahas kopi ya" in recent
-    assert "<event>owner: lanjut</event>" in volatile
+    assert "<event>person:owner: lanjut</event>" in volatile
     assert body.actions == [Action(kind="say", place=PLACE, payload={"text": "lanjut soal kopi"},
                                    body="telegram")]
     assert (await _kinds(aconn)).count("act.out") == 2

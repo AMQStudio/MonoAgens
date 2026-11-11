@@ -19,8 +19,8 @@ expectations:
     step: 4
     count: 1
     label: exactly one answer in the group
-  - type: mentions
-    text: "empat sore"
+  - type: mentions_any
+    texts: ["empat sore", "4 sore", "jam 16"]
     step: 4
     label: the answer gives the clinic hours from memory
 steps:

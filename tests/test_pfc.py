@@ -163,6 +163,9 @@ async def test_layered_prompt_structure(aconn):
     capability = act_tool["function"]["parameters"]["properties"]["capability"]
     assert capability["enum"] == ["self.set_identity", "self.recall", "self.share",
                                  "telegram.say", "telegram.react"]
+    description = act_tool["function"]["description"]
+    assert "telegram.say(text, to?, via?):" in description
+    assert "telegram.react(emoji, message_id):" in description
     expect_tool = next(tool for tool in request["tools"]
                        if tool["function"]["name"] == "expect")
     kind = expect_tool["function"]["parameters"]["properties"]["kind"]
@@ -188,9 +191,9 @@ async def test_layered_prompt_structure(aconn):
     assert "Asia/Jakarta" in volatile
     assert f"<place>{PLACE} (direct)</place>" in volatile
     assert "<recent>\n" in volatile
-    assert "15:00 owner: halo" in volatile
+    assert "15:00 person:owner: halo" in volatile
     assert "15:00 Mona: hai" in volatile
-    assert "<event>owner: lagi?</event>" in volatile
+    assert "<event>person:owner: lagi?</event>" in volatile
 
 
 async def test_recent_shows_only_conversational_events(aconn):
@@ -218,13 +221,13 @@ async def test_recent_shows_only_conversational_events(aconn):
 
     volatile = fake.last_messages[2]["content"]
     recent = volatile.split("<recent>", 1)[1].split("</recent>", 1)[0]
-    assert "15:00 owner: halo pagi" in recent
+    assert "15:00 person:owner: halo pagi" in recent
     assert "15:00 Mona: pagi juga" in recent
     assert "15:00 expectation: minum air" in recent
     for internal in ("internal-silence", "internal-error", "internal-sleep",
                      "internal-expectation"):
         assert internal not in recent
-    assert "<event>owner: masih di sana?</event>" in volatile
+    assert "<event>person:owner: masih di sana?</event>" in volatile
 
 
 async def test_say_is_recorded_before_the_body_acts(aconn):
@@ -414,7 +417,7 @@ async def test_mvp_a_restart_keeps_the_conversation_context(aconn):
     recent = volatile.split("<recent>", 1)[1].split("</recent>", 1)[0]
     assert "besok kita bahas apa?" in recent
     assert "Mona: kita bahas kopi ya" in recent
-    assert "<event>owner: lanjut</event>" in volatile
+    assert "<event>person:owner: lanjut</event>" in volatile
     assert body.actions[0].payload == {"text": "lanjut soal kopi"}
 
 
@@ -491,13 +494,13 @@ async def test_recent_includes_other_places_prefixed(aconn):
 
     volatile = fake.last_messages[2]["content"]
     recent = volatile.split("<recent>", 1)[1].split("</recent>", 1)[0]
-    assert "15:00 owner: di sini" in recent
-    assert "[space:cli] 15:00 owner: dari cli" in recent
+    assert "15:00 person:owner: di sini" in recent
+    assert "[space:cli] 15:00 person:owner: dari cli" in recent
     assert "[space:cli] 15:00 expectation: minum air" in recent
-    assert "[space:cli] 15:00 alice: bukan owner" in recent  # allowed: owner-only context
+    assert "[space:cli] 15:00 person:alice: bukan owner" in recent  # allowed: owner-only context
     assert "internal-elsewhere" not in recent
     assert f"[{PLACE}]" not in recent
-    assert recent.index("di sini") < recent.index("[space:cli] 15:00 owner: dari cli")
+    assert recent.index("di sini") < recent.index("[space:cli] 15:00 person:owner: dari cli")
 
 
 async def test_recent_is_nothing_yet_when_both_parts_are_empty(aconn):
@@ -541,7 +544,7 @@ def test_middleware_notes_are_rendered_with_their_event():
                   payload={"description": "halo", "notes": ["alias: Fulan = person:fulan"]})
     pfc = PFC("https://llm.test/v1", "k", "m", settings=SETTINGS)
     volatile = pfc.build_messages(_desk(trigger=event))[2]["content"]
-    assert "<event>owner: halo\nnote: alias: Fulan = person:fulan</event>" in volatile
+    assert "<event>person:owner: halo\nnote: alias: Fulan = person:fulan</event>" in volatile
 
 
 async def test_a_task_desk_shows_goal_steps_and_the_latest_result(aconn):

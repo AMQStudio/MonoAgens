@@ -66,7 +66,9 @@ TOOL_NAMES = frozenset(tool["function"]["name"] for tool in TOOLS)
 
 
 def _args(cap: dict[str, Any]) -> str:
-    return "(" + ", ".join((cap.get("schema") or {}).get("properties") or {}) + ")"
+    names = list((cap.get("schema") or {}).get("properties") or {})
+    names += ["to?", "via?"] if cap.get("communicative") else []
+    return "(" + ", ".join(names) + ")"
 
 
 def tools_for(capabilities: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -226,13 +228,13 @@ class PFC:
             return self.name, (event.payload.get("arguments") or {}).get("text")
         if event.kind == "expectation.fired":
             return "expectation", (event.payload.get("text") or event.payload.get("about"))
-        return str(event.who or "?").removeprefix("person:"), event.payload.get("description")
+        return str(event.who or "?"), event.payload.get("description")
 
     def _event_text(self, event: Event | None) -> str:
         if event is None:
             return "(no trigger event)"
         text = event.payload.get("description") or event.payload.get("text")
-        who = str(event.who or "?").removeprefix("person:")
+        who = str(event.who or "?")
         line = f"{who}: {text}" if text else f"[{event.kind}]"
         notes = event.payload.get("notes")
         if notes:
@@ -273,7 +275,5 @@ def _duration(now: datetime, then: datetime | None) -> str:
     minutes = max(0, int((now - then).total_seconds() // 60))
     days, rest = divmod(minutes, 1440)
     hours, mins = divmod(rest, 60)
-    if days:
-        return f"{days}d {hours}h"
-    return f"{hours}h {mins}m" if hours else f"{minutes}m"
+    return f"{days}d {hours}h" if days else f"{hours}h {mins}m" if hours else f"{minutes}m"
 

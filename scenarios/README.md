@@ -10,8 +10,8 @@ from the scripted fake model; real results come from the saved reports in
 `reports/`. A capability that fails with the real model is listed as FAIL, not
 hidden.
 
-Generated 2026-11-11 17:10 UTC from 29 capabilities across 8 brain functions.
-Pooled per capability: its latest runs among 109 saved fake and 16 saved real-model reports.
+Generated 2026-11-11 18:03 UTC from 29 capabilities across 8 brain functions.
+Pooled per capability: its latest runs among 113 saved fake and 22 saved real-model reports.
 
 ## cross-body
 
@@ -34,13 +34,13 @@ _No scenario yet._
 | A restart keeps the conversation's context because the same Log is read again. | 07_dm_restart_continuity | PASS 3/3 · 2026-11-11 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
 | An idle stretch triggers sleep, which stores memories and records sleep.done. | 11_sleep_memory_consolidation | PASS 3/3 · 2026-11-11 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
 | A preference said once is recalled later from another body after sleep. | 12_topic_recall_after_sleep | PASS 3/3 · 2026-11-11 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
-| A frequently used memory outranks newer, more important unused ones (ACT-R activation) and answers the question. | 20_act_r_activation | PASS 3/3 · 2026-11-11 | FAIL 1/2 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
-| A month's episodes are recalled from the Log, with details from the original events. | 23_recall_episodes | PASS 3/3 · 2026-11-11 | FAIL 0/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
-| An unaddressed question is answered with a fact the soul remembers. | 25_help_place_name | PASS 3/3 · 2026-11-11 | FAIL 2/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
-| An unaddressed question in a group is answered with a time said in the owner's direct chat. | 26_help_meeting_time | PASS 3/3 · 2026-11-11 | FAIL 0/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
-| An unaddressed question is answered with a password the soul learned in that group. | 27_help_wifi_password | PASS 3/3 · 2026-11-11 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
-| An unaddressed question from a new speaker is answered with a remembered location. | 28_help_package_location | PASS 3/3 · 2026-11-11 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
-| An unaddressed question is answered with the clinic hours the soul remembers. | 29_help_clinic_hours | PASS 3/3 · 2026-11-11 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
+| A frequently used memory outranks newer, more important unused ones (ACT-R activation) and answers the question. | 20_act_r_activation | PASS 3/3 · 2026-11-11 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
+| A month's episodes are recalled from the Log, with details from the original events. | 23_recall_episodes | PASS 3/3 · 2026-11-11 | FAIL 1/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
+| An unaddressed question is answered with a fact the soul remembers. | 25_help_place_name | PASS 3/3 · 2026-11-11 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
+| An unaddressed question in a group is answered with a time said in the owner's direct chat. | 26_help_meeting_time | PASS 3/3 · 2026-11-11 | FAIL 1/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
+| An unaddressed question is answered with a password the soul learned in that group. | 27_help_wifi_password | PASS 3/3 · 2026-11-11 | FAIL 2/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
+| An unaddressed question from a new speaker is answered with a remembered location. | 28_help_package_location | PASS 3/3 · 2026-11-11 | FAIL 2/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
+| An unaddressed question is answered with the clinic hours the soul remembers. | 29_help_clinic_hours | PASS 3/3 · 2026-11-11 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
 
 ## privacy
 
@@ -56,7 +56,7 @@ _No scenario yet._
 | A reminder asked for a time fires exactly once at that time. | 08_reminder_at_time | PASS 3/3 · 2026-11-11 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
 | A follow-up asked for one hour later fires once while the owner stays silent. | 09_reminder_ask_again | PASS 3/3 · 2026-11-11 | FAIL 2/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
 | A recurring reminder fires again on the next day under its policy. | 10_reminder_recurring_nudge | PASS 3/3 · 2026-11-11 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
-| A reminder fires in the direct place it was made in, not in a busy group. | 13_fired_reminder_different_place | PASS 3/3 · 2026-11-11 | FAIL 2/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
+| A reminder fires in the direct place it was made in, not in a busy group. | 13_fired_reminder_different_place | PASS 3/3 · 2026-11-11 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
 | A watch for a phrase stays silent through ordinary chatter and reports once when the phrase is said. | 16_watch_for_phrase | PASS 3/3 · 2026-11-11 | FAIL 0/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
 
 ## silence
@@ -67,15 +67,15 @@ _No scenario yet._
 | Unaddressed lunch chatter in a group gets no reply. | 02_group_chitchat_lunch | PASS 3/3 · 2026-11-11 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
 | An unaddressed traffic complaint in a group gets no reply. | 03_group_chitchat_weather | PASS 3/3 · 2026-11-11 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
 | An unaddressed urgent line that is not the soul's business gets no reply. | 15_urgent_unaddressed_group | PASS 3/3 · 2026-11-11 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
-| The soul's name captures attention without allocating the turn, so no reply follows. | 21_own_name_capture | PASS 3/3 · 2026-11-11 | PASS 2/2 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
+| The soul's name captures attention without allocating the turn, so no reply follows. | 21_own_name_capture | PASS 3/3 · 2026-11-11 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
 
 ## turn-taking
 
 | Capability | Scenario | Fake result | Real model |
 |---|---|---|---|
-| A direct mention in a group is answered there. | 04_group_mention | PASS 3/3 · 2026-11-11 | FAIL 2/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
+| A direct mention in a group is answered there. | 04_group_mention | PASS 3/3 · 2026-11-11 | FAIL 1/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
 | A group reply to the soul is treated as addressed and answered. | 05_group_reply_to_bot | PASS 3/3 · 2026-11-11 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
 | A direct message is answered. | 06_dm_conversation | PASS 3/3 · 2026-11-11 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
-| Addressed mentions in a busy group are answered despite the crowd penalty. | 14_busy_group_repeated_mention | PASS 3/3 · 2026-11-11 | FAIL 0/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
+| Addressed mentions in a busy group are answered despite the crowd penalty. | 14_busy_group_repeated_mention | PASS 3/3 · 2026-11-11 | FAIL 2/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
 | Patience holds the floor: chatter stays silent, the sender's follow-up does not cancel the wait, another person's answer does, and an expired window yields one reply. | 22_patience_turn_taking | PASS 3/3 · 2026-11-11 | FAIL 0/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
 | The gate keeps a busy group silent, an addressed line always wakes, and the decision event stores its terms. | 24_gate_threshold | PASS 3/3 · 2026-11-11 | FAIL 0/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 |
