@@ -11,7 +11,7 @@ Bring the merged Track A code in line with the frozen core spec. This is the onl
 - [x] T2 Three hooks (inbound, context, action) with owner-policy slots first and last, shared vs organ-own scope, collision check at boot.
 - [x] T3 Provenance and privacy: `origin_actor` on events (inherited along `caused_by`), `identity_changing` check in the action hook; `place` + `private` on memories and the context-hook filter.
 - [x] T4 Lineage: `derived_from` on memories, expectations and vectors; replace the `event_vectors` no-delete trigger with the two dedicated paths (fade, hard forget) — stubs that write their events are fine.
-- [ ] T5 Budget: `model.call` for every model call; the budget term in θ and `budget.exhausted` (no thrift mode).
+- [x] T5 Budget: `model.call` for every model call; the budget term in θ and `budget.exhausted` (no thrift mode).
 - [ ] T6 Expectation schema with the four kinds (`promise`, `wait`, `predict`, `guard`).
 - [ ] T7 Injected clock everywhere (no `datetime.now()` in the core); replay uses event times.
 - [ ] T8 Slow work off the loop: PFC, classifier, embedding and sleep as background jobs whose results return as events; one PFC job per place; re-wake once if a new event arrived meanwhile.
@@ -51,3 +51,11 @@ All tests and replay pass; grep shows no platform name, no world action and no d
   `derived_from` lineage (vectors, memories, expectations), then writes `forget.hard`; `fade()`
   releases vectors older than a caller-given cutoff that no memory or expectation derives from
   and writes `fade.done` (nothing eligible → no event).
+- T5: `monoagens/budget.py` owns the accounting. `budget.record_call()` is called right after
+  every LLM call (`pfc.decide` in the kernel, `sleep.consolidate` in sleep); it appends
+  `model.call` with `{purpose, model, usage}` caused by the prompting event, adds the tokens to
+  `budget:<local-date>`, and writes `budget.exhausted` once per local day when the daily limit is
+  reached (payload: date, used, budget). `appraise()` reads that state key and sets
+  `theta = threshold.budget * min(1, total_tokens / daily_token_budget)`; `daily_token_budget`
+  comes from the cognition config, so no budget means no term. Sleep's input query now ignores
+  `model.call`/`budget.exhausted` bookkeeping events.

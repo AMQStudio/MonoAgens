@@ -7,14 +7,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from monoagens import expect, memory
+from monoagens import budget, expect, memory
 from monoagens.clock import Clock
 from monoagens.cognition import Appraisal, appraise, validate_signals
 from monoagens.config import load_soul
 from monoagens.middleware import HookRegistry, owner_policy
 from monoagens.organs import OrganRegistry
 from monoagens.pfc import PFC, PFCContext, ToolCall
-from monoagens.store import (active_expectation_lines, add_budget_usage, append_event,
+from monoagens.store import (active_expectation_lines, append_event,
                              cursor as store_cursor, insert_event_vector, project_event,
                              read_last_events, read_last_events_elsewhere, read_state)
 from monoagens.types import RECENT_KINDS, Event
@@ -164,11 +164,8 @@ class Kernel:
         if context is None:
             return
         calls = await self.pfc.decide(context)
-        usage = getattr(self.pfc, "last_usage", None)
-        if usage and any(usage.values()) and event.id is not None:
-            await add_budget_usage(self.conn, now=self.clock.now(),
-                                   timezone=str(self.soul.get("timezone") or "UTC"),
-                                   usage=usage, updated_by_event=event.id)
+        await budget.record_call(self.conn, event.id, self.pfc, purpose="pfc.decide",
+                                 now=self.clock.now(), soul=self.soul)
         acted, thought = False, ""
         for call in calls:
             acted = await self._apply(event, call) or acted

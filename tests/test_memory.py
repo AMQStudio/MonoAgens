@@ -49,9 +49,13 @@ class FakePFC:
     def __init__(self, arguments: dict) -> None:
         self.arguments = arguments
         self.requests: list[tuple[list[dict], list[dict]]] = []
+        self.model = "fake-model"
+        self.last_usage: dict[str, int] = {}
 
     async def call(self, messages, tools, *, tool_choice="required"):
         self.requests.append((messages, tools))
+        self.last_usage = {"prompt_tokens": 7, "cached_tokens": 2, "completion_tokens": 3,
+                           "total_tokens": 10}
         return [ToolCall("store_memories", self.arguments)]
 
 
@@ -168,6 +172,13 @@ async def test_sleep_writes_memories_core_memory_and_never_touches_raw_events(ac
     assert all(max_before in row[3] for row in rows)
     assert (await read_state(aconn, "core_memory"))["text"] == SLEEP_ARGS["core_memory"]
     assert (await read_state(aconn, "sleep:last_event"))["id"] == max_before
+
+    call = await (await aconn.execute(
+        "SELECT payload, caused_by FROM events WHERE kind = 'model.call'")).fetchone()
+    assert call[0] == {"purpose": "sleep.consolidate", "model": "fake-model",
+                       "usage": {"prompt_tokens": 7, "cached_tokens": 2,
+                                 "completion_tokens": 3, "total_tokens": 10}}
+    assert call[1] == max_before
 
     # Nothing new since the last sleep: sleep does nothing.
     assert await memory.sleep(aconn, pfc=FakePFC(SLEEP_ARGS), embedder=FakeEmbedder(),

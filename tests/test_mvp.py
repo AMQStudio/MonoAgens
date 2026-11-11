@@ -201,7 +201,7 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
     kernel.register_body(body)
 
     await _feed(kernel, _msg("ingatkan saya jam 7"))
-    assert await _kinds(aconn) == ["percept", "expectation.created", "decision.silent"]
+    assert await _kinds(aconn) == ["percept", "model.call", "expectation.created", "decision.silent"]
 
     clock.set_time(SEVEN - timedelta(minutes=10))
     await _tick(kernel, clock)

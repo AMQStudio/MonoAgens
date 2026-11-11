@@ -141,14 +141,15 @@ async def write_state(conn, key, value, updated_by_event) -> None:
 
 
 async def add_budget_usage(conn, *, now: datetime, timezone: str, usage: dict[str, int],
-                           updated_by_event: int) -> None:
-    """Add one LLM call's token usage to the budget state key of its local date."""
+                           updated_by_event: int) -> dict[str, int]:
+    """Add one LLM call's token usage to the budget key of its local date; return totals."""
     key = f"budget:{now.astimezone(ZoneInfo(timezone)).date().isoformat()}"
     current = await read_state(conn, key) or {}
     totals = {name: int(current.get(name) or 0) + int(usage.get(name) or 0)
               for name in ("prompt_tokens", "cached_tokens", "completion_tokens",
                            "total_tokens")}
     await write_state(conn, key, totals, updated_by_event)
+    return totals
 
 
 async def project_event(conn, event: Event) -> None:

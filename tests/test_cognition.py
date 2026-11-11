@@ -291,6 +291,44 @@ async def test_llm_token_usage_lands_in_the_daily_budget_key(aconn):
     key = f"budget:{START.astimezone(JAKARTA).date().isoformat()}"
     assert await read_state(aconn, key) == {"prompt_tokens": 10, "cached_tokens": 4,
                                             "completion_tokens": 5, "total_tokens": 15}
+    call, caused_by = await (await aconn.execute(
+        "SELECT payload, caused_by FROM events WHERE kind = 'model.call'")).fetchone()
+    percept = await (await aconn.execute(
+        "SELECT id FROM events WHERE kind = 'percept'")).fetchone()
+    assert call == {"purpose": "pfc.decide", "model": "fake-model",
+                    "usage": {"prompt_tokens": 10, "cached_tokens": 4,
+                              "completion_tokens": 5, "total_tokens": 15}}
+    assert caused_by == percept[0]
+
+
+async def test_the_budget_spent_raises_theta(aconn):
+    soul = {**SOUL, "cognition": {**SOUL["cognition"], "daily_token_budget": 100,
+                                  "threshold": {"budget": 0.3}}}
+    event = Event(42, START, "percept", who=WHO, place=PLACE, payload={"text": "obrolan"})
+    key = f"budget:{START.astimezone(JAKARTA).date().isoformat()}"
+    source = await append_event(aconn, ts=START, kind="percept", payload={"text": "obrolan"})
+    assert (await appraise(event, soul=soul)).theta == 0.0
+
+    await write_state(aconn, key, {"total_tokens": 50}, source.id)
+    assert (await appraise(event, conn=aconn, now=START, soul=soul)).theta == pytest.approx(0.15)
+
+    await write_state(aconn, key, {"total_tokens": 250}, source.id)
+    assert (await appraise(event, conn=aconn, now=START, soul=soul)).theta == pytest.approx(0.3)
+
+
+async def test_budget_exhausted_is_recorded_once_per_day(aconn):
+    soul = {**SOUL, "cognition": {**SOUL["cognition"], "daily_token_budget": 10}}
+    fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=soul)
+    kernel.register_body(RecordingBody())
+
+    await _feed(kernel, _msg("halo"))
+    assert (await _kinds(aconn)).count("budget.exhausted") == 1
+    assert await _payload(aconn, "budget.exhausted") == {
+        "date": START.astimezone(JAKARTA).date().isoformat(), "used": 15, "budget": 10.0}
+
+    await _feed(kernel, _msg("lagi", message_id=2))
+    assert (await _kinds(aconn)).count("budget.exhausted") == 1
 
 
 # --- middleware hooks --------------------------------------------------------
@@ -521,4 +559,4 @@ async def test_identity_changing_capability_passes_for_the_owner(aconn):
     await _feed(kernel, _msg("ubah dirimu"))
 
     assert len(body.actions) == 1
-    assert await _kinds(aconn) == ["percept", "act.out"]
+    assert await _kinds(aconn) == ["percept", "model.call", "act.out"]

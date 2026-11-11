@@ -233,7 +233,7 @@ async def test_say_is_recorded_before_the_body_acts(aconn):
 
     trigger = await _feed(kernel, _msg("halo"))
 
-    assert await _kinds(aconn) == ["percept", "act.out"]
+    assert await _kinds(aconn) == ["percept", "model.call", "act.out"]
     cur = await aconn.execute("SELECT who, place, body, payload, caused_by FROM events WHERE kind='act.out'")
     who, place, body_name, payload, caused_by = await cur.fetchone()
     assert (who, place, body_name) == ("person:owner", PLACE, "telegram")
@@ -241,7 +241,7 @@ async def test_say_is_recorded_before_the_body_acts(aconn):
     assert caused_by == trigger.id
 
     # act.out is already in the Log when act() is called.
-    assert body.log_at_act == [["percept", "act.out"]]
+    assert body.log_at_act == [["percept", "model.call", "act.out"]]
     assert body.actions == [
         Action(kind="say", place=PLACE, payload={"text": "halo juga"}, body="telegram")
     ]
@@ -257,11 +257,11 @@ async def test_react_is_recorded_before_the_body_acts(aconn):
 
     await _feed(kernel, _msg("mantap", message_id=42))
 
-    assert await _kinds(aconn) == ["percept", "act.out"]
+    assert await _kinds(aconn) == ["percept", "model.call", "act.out"]
     cur = await aconn.execute("SELECT payload FROM events WHERE kind='act.out'")
     assert (await cur.fetchone())[0] == {
         "capability": "telegram.react", "arguments": {"emoji": "👍"}}
-    assert body.log_at_act == [["percept", "act.out"]]
+    assert body.log_at_act == [["percept", "model.call", "act.out"]]
     assert body.actions == [
         Action(kind="react", place=PLACE, payload={"emoji": "👍"}, body="telegram")
     ]
@@ -275,7 +275,7 @@ async def test_an_organ_result_is_recorded_as_act_result(aconn):
 
     await _feed(kernel, _msg("halo"))
 
-    assert await _kinds(aconn) == ["percept", "act.out", "act.result"]
+    assert await _kinds(aconn) == ["percept", "model.call", "act.out", "act.result"]
     cur = await aconn.execute("SELECT payload FROM events WHERE kind='act.result'")
     assert (await cur.fetchone())[0] == {"capability": "telegram.say",
                                          "result": {"message_id": 7}}
@@ -289,7 +289,7 @@ async def test_a_wake_without_act_is_recorded_as_silent(aconn):
 
     await _feed(kernel, _msg("hm"))
 
-    assert await _kinds(aconn) == ["percept", "decision.silent"]
+    assert await _kinds(aconn) == ["percept", "model.call", "decision.silent"]
     cur = await aconn.execute("SELECT payload FROM events WHERE kind='decision.silent'")
     assert (await cur.fetchone())[0] == {"reason": "no act"}
     assert body.actions == []
@@ -303,7 +303,7 @@ async def test_think_is_recorded_and_silence_keeps_its_reason(aconn):
 
     await _feed(kernel, _msg("hm"))
 
-    assert await _kinds(aconn) == ["percept", "decision.note", "decision.silent"]
+    assert await _kinds(aconn) == ["percept", "model.call", "decision.note", "decision.silent"]
     cur = await aconn.execute("SELECT payload FROM events WHERE kind='decision.note'")
     assert (await cur.fetchone())[0] == {
         "act": "think", "thought": "nothing to add", "motivation": 2, "confidence": 0.4}
@@ -330,7 +330,7 @@ async def test_invalid_tool_call_becomes_an_error_event_and_the_loop_lives(aconn
     await _feed(kernel, _msg("second", message_id=2))
 
     kinds = await _kinds(aconn)
-    assert kinds == ["percept", "error", "decision.silent", "percept", "act.out"]
+    assert kinds == ["percept", "model.call", "error", "decision.silent", "percept", "model.call", "act.out"]
     cur = await aconn.execute("SELECT payload FROM events WHERE kind='error'")
     error = (await cur.fetchone())[0]
     assert "invalid tool call: shout" in error["error"]
@@ -428,7 +428,7 @@ async def test_dm_gets_a_reply_through_the_telegram_body(aconn):
         await asyncio.gather(*tasks, return_exceptions=True)
 
     assert sent == [{"chat_id": "111", "text": "halo!"}]
-    assert await _kinds(aconn) == ["percept", "act.out"]
+    assert await _kinds(aconn) == ["percept", "model.call", "act.out"]
 
 
 async def test_recent_includes_other_places_prefixed(aconn):

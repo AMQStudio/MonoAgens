@@ -13,7 +13,8 @@ from zoneinfo import ZoneInfo
 import psycopg
 from pgvector import Vector
 
-from monoagens.store import (add_budget_usage, append_event, read_event_vector,
+from monoagens import budget
+from monoagens.store import (append_event, read_event_vector,
                              read_expectations, read_state, resolve_expectation,
                              write_state)
 from monoagens.types import Event
@@ -185,7 +186,8 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
     """Summarize new events into memories, refresh core_memory, record sleep.done."""
     last_id = int((await read_state(conn, "sleep:last_event") or {}).get("id") or 0)
     cur = await conn.execute("SELECT id, ts, kind, who, place, payload FROM events WHERE id > %s "
-                             "AND kind NOT IN ('sleep.done', 'tick') ORDER BY id", (last_id,))
+                             "AND kind NOT IN ('sleep.done', 'tick', 'model.call', "
+                             "'budget.exhausted') ORDER BY id", (last_id,))
     rows = await cur.fetchall()
     if not rows:
         return None
@@ -200,6 +202,8 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
         {"role": "user", "content": f"<core_memory>{old_core}</core_memory>\n<events>\n"
                                     + "\n".join(lines) + "\n</events>"}]
     calls = await pfc.call(messages, [STORE_MEMORIES])
+    await budget.record_call(conn, int(rows[-1][0]), pfc, purpose="sleep.consolidate",
+                             now=now, soul=soul)
     args = next((call.arguments for call in calls if call.name == "store_memories"), {})
     items = [item for item in args.get("items") or []
              if isinstance(item, dict) and item.get("text")]
@@ -222,9 +226,5 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
                                   caused_by=payload["last_event_id"])
     await write_state(conn, "core_memory", {"text": core}, done.id)
     await write_state(conn, "sleep:last_event", {"id": payload["last_event_id"]}, done.id)
-    usage = getattr(pfc, "last_usage", None)
-    if usage and any(usage.values()):
-        await add_budget_usage(conn, now=now, timezone=str(soul.get("timezone") or "UTC"),
-                               usage=usage, updated_by_event=done.id)
     return done
 
