@@ -276,6 +276,21 @@ Loading rules: different embedder → vector-dependent values (band edges, FOK t
 back to defaults; different LLM family → load, but lower skill and lesson credence slightly
 until proven again; unknown major format version → refuse with a clear message.
 
+**D31 — Hierarchy: permission is middleware, social understanding is brain knowledge.
+Refines D6 and D24.**
+- Hierarchy as **permission** (roles, RBAC, who may do what) is enforced by owner policy or
+  package middleware in the hooks. The core never sees it.
+- Facts about roles reported by a platform ("admin of this group") come from organs or
+  middleware and are recorded as facts about that person.
+- Hierarchy as **social understanding** is knowledge in the person card, updated during sleep:
+  *closeness* (ACT-R-style activation of interactions), *reliability per domain* (how often
+  their claims proved right, from corrections and guarded facts), *standing* (role or authority
+  in a place). It replaces D6's three fixed trust levels with computed values; the owner stays
+  absolute.
+- Signals (`social_cost`) and the PFC read these values to weigh claims, requests, timing and
+  tone. No new core primitive (D26) and no emotions. Standing never buys dishonesty or a breach
+  of principles.
+
 ## Accepted in principle, details pending
 
 (None. P1 was detailed as D27.)
