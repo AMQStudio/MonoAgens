@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import math
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
@@ -118,12 +118,11 @@ class MemoryHit(str):
 
 
 async def retrieve(conn: psycopg.AsyncConnection[Any], embedder: Any, query: str, *,
-                   k: int = 5, now: datetime | None = None,
+                   now: datetime, k: int = 5,
                    event_id: int | None = None) -> list[str]:
     """Retrieve up to k memories by hybrid RRF search with importance and decay."""
     if not query.strip():
         return []
-    now = now or datetime.now(timezone.utc)
     vector = await read_event_vector(conn, event_id) if event_id is not None else None
     if vector is None:
         vector = (await embedder.embed([query]))[0]

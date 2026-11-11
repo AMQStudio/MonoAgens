@@ -13,7 +13,7 @@ Bring the merged Track A code in line with the frozen core spec. This is the onl
 - [x] T4 Lineage: `derived_from` on memories, expectations and vectors; replace the `event_vectors` no-delete trigger with the two dedicated paths (fade, hard forget) — stubs that write their events are fine.
 - [x] T5 Budget: `model.call` for every model call; the budget term in θ and `budget.exhausted` (no thrift mode).
 - [x] T6 Expectation schema with the four kinds (`promise`, `wait`, `predict`, `guard`).
-- [ ] T7 Injected clock everywhere (no `datetime.now()` in the core); replay uses event times.
+- [x] T7 Injected clock everywhere (no `datetime.now()` in the core); replay uses event times.
 - [ ] T8 Slow work off the loop: PFC, classifier, embedding and sleep as background jobs whose results return as events; one PFC job per place; re-wake once if a new event arrived meanwhile.
 - [ ] T9 Numbered SQL migrations with a version table and a backup before migrating; pairing code for the first owner.
 - [ ] T10 Identity as birth content: `soul.yaml` becomes the birth certificate; cognition numbers move to the default prior in `prior/` as knobs / calibration / constants (core.md §9.4); the rest of today's `soul.yaml` splits by project.md §2: `timezone`, sleep, clock, budget and enabled bodies go to a new `config.yaml`; memory and expectation numbers go to the prior's constants; owner ids are replaced by pairing; secrets stay in `.env`; identity stored in `state: identity` after birth; an `identity_changing` capability for owner changes.
@@ -63,3 +63,8 @@ All tests and replay pass; grep shows no platform name, no world action and no d
   `expect` was renamed to `condition` and old databases are migrated in place. Expectations
   record `origin_actor` from the source event. `guard` rows are skipped by `due()`, so they never
   fire or wake the PFC. The `expect` tool schema exposes `kind` with the four-value enum.
+- T7: the only `datetime.now()` left in the package is `Clock.now()`; `assemble_situation`
+  and `memory.retrieve` take a required `now` (no wall-clock fallback), `appraise` falls back
+  to `event.ts`, and `CLIBody`/`TelegramBody` accept an optional `Clock` for their percept
+  timestamps. `RecordingKernel.put` pins the replay `FakeClock` to each event's `ts`, so
+  appraisal, situation assembly, expectations and memory lookups use event times.

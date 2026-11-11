@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
@@ -23,12 +23,11 @@ class Situation:
     now: datetime | None = None
 
 
-async def assemble_situation(conn, event: Event, *, embedder: Any = None,
-                             now: datetime | None = None,
+async def assemble_situation(conn, event: Event, *, now: datetime,
+                             embedder: Any = None,
                              soul: dict[str, Any] | None = None) -> Situation:
-    """Assemble once what the signals may read about this event."""
+    """Assemble once what the signals may read about this event (at `now`)."""
     soul = soul or {}
-    now = now or datetime.now(timezone.utc)
     zone = ZoneInfo(str(soul.get("timezone") or "UTC"))
     memory_soul = soul.get("memory") or {}
     recent = await read_last_events(conn, event.place,

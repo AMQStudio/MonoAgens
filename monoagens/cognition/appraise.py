@@ -19,6 +19,7 @@ async def appraise(event: Event, *, conn: Any = None, situation: Situation | Non
                    soul: dict[str, Any] | None = None) -> Appraisal:
     """Return the decision for one event (no LLM, no writes)."""
     soul = soul if soul is not None else load_soul()
+    now = now or event.ts
     config = soul.get("cognition") or {}
     u = seeded_rng(config.get("seed", 1), event.id).random()
     signals = {name: 0.0 for name in SIGNALS}

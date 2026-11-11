@@ -267,6 +267,11 @@ class RecordingKernel(Kernel):
         self.appraisals.append(appraisal)
         return appraisal
 
+    async def put(self, event: Event) -> None:
+        """Pin the replayed clock to each event's timestamp before it is processed."""
+        self.clock.set_time(event.ts)
+        await super().put(event)
+
 
 # ------------------------------------------------------------------ scenario
 

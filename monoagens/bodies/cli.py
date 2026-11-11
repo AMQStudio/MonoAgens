@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
 from functools import partial
 
+from monoagens.clock import Clock
 from monoagens.types import Action, Event
 
 DEFAULT_SOCKET = "/tmp/monoagens.sock"
@@ -37,9 +37,10 @@ class CLIBody:
 
     name = "cli"
 
-    def __init__(self, path: str | None = None) -> None:
+    def __init__(self, path: str | None = None, clock: Clock | None = None) -> None:
         """Store the socket path; the file is created when the server starts."""
         self.path = path or socket_path()
+        self._clock = clock or Clock()
         self._writers: set[asyncio.StreamWriter] = set()
 
     def capabilities(self) -> tuple[dict[str, Any], ...]:
@@ -86,7 +87,7 @@ class CLIBody:
                 writer.close()
 
     def _event(self, text: str) -> Event:
-        return Event(id=None, ts=datetime.now(timezone.utc), kind="percept",
+        return Event(id=None, ts=self._clock.now(), kind="percept",
                      who="person:owner", place="space:cli", body=self.name,
                      payload={"description": text, "addressed": True, "place_kind": "direct"})
 

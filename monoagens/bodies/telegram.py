@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
 from typing import Any
 
 import httpx
 
+from monoagens.clock import Clock
 from monoagens.types import Action, Event
 
 Put = Callable[[Event], Awaitable[None]]
@@ -36,9 +36,11 @@ class TelegramBody:
     def __init__(self, token: str, *, owner_ids: set[int] | frozenset[int] = frozenset(),
                  get_cursor: GetCursor | None = None, poll_timeout: float = 30.0,
                  transport: httpx.AsyncBaseTransport | None = None,
-                 api_base: str = "https://api.telegram.org", retry_base: float = 1.0) -> None:
+                 api_base: str = "https://api.telegram.org", retry_base: float = 1.0,
+                 clock: Clock | None = None) -> None:
         """Store the token, the owner ids, and the polling settings."""
         self._token = token
+        self._clock = clock or Clock()
         self._owner_ids = set(owner_ids)
         self._get_cursor = get_cursor
         self._poll_timeout = poll_timeout
@@ -126,7 +128,7 @@ class TelegramBody:
         sender_id = (message.get("from") or {}).get("id")
         who = "person:owner" if sender_id in self._owner_ids else f"person:tg:{sender_id}"
         place_kind = "direct" if chat.get("type") == "private" else "group"
-        return Event(id=None, ts=datetime.now(timezone.utc), kind="percept", who=who,
+        return Event(id=None, ts=self._clock.now(), kind="percept", who=who,
                      place=f"space:tg:{chat['id']}", body=self.name,
                      payload={"cursor": update_id,
                               "data": {"message_id": message["message_id"]},
