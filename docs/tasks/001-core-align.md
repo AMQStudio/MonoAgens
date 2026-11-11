@@ -8,7 +8,7 @@ Bring the merged Track A code in line with the frozen core spec. This is the onl
 
 ## Tasks
 - [x] T1 Thought acts `think, act, expect, resolve, revise`; `say`/`react` become Telegram and CLI capabilities (core.md §9.1); silence = a wake without `act`; `msg.in` becomes `percept` with a description and optional data (§9.2); `act.out`/`act.result` replace `msg.out`/`react.out` in code, tests and replay.
-- [ ] T2 Three hooks (inbound, context, action) with owner-policy slots first and last, shared vs organ-own scope, collision check at boot.
+- [x] T2 Three hooks (inbound, context, action) with owner-policy slots first and last, shared vs organ-own scope, collision check at boot.
 - [ ] T3 Provenance and privacy: `origin_actor` on events (inherited along `caused_by`), `identity_changing` check in the action hook; `place` + `private` on memories and the context-hook filter.
 - [ ] T4 Lineage: `derived_from` on memories, expectations and vectors; replace the `event_vectors` no-delete trigger with the two dedicated paths (fade, hard forget) — stubs that write their events are fine.
 - [ ] T5 Budget: `model.call` for every model call; the budget term in θ and `budget.exhausted` (no thrift mode).
@@ -28,3 +28,9 @@ All tests and replay pass; grep shows no platform name, no world action and no d
   declared by each body (`monoagens/organs.py`); a wake without `act` writes
   `decision.silent`; percepts carry `description` + optional `data`; `act.out`/`act.result`
   replace the old message kinds across code, tests and replay.
+- T2: `monoagens/middleware.py` holds `HookRegistry` with `inbound`, `context` and `action`
+  pipelines; each `HookPipeline` keeps an owner policy (`set_policy`) that runs first and last,
+  three slots (`first`, `middle`, `last`), and shared versus organ-own scope (`organ=None` is
+  shared). Duplicate names and the reserved owner-policy name fail at registration. The kernel
+  keeps only the registry and routes the action hook before an organ acts; the old `tool` and
+  `outbound` hooks are gone.

@@ -11,7 +11,7 @@ from monoagens import expect, memory
 from monoagens.clock import Clock
 from monoagens.cognition import Appraisal, appraise, validate_signals
 from monoagens.config import load_soul
-from monoagens.middleware import Middleware, run_hooks
+from monoagens.middleware import HookRegistry
 from monoagens.organs import OrganRegistry
 from monoagens.pfc import PFC, PFCContext, ToolCall
 from monoagens.store import (active_expectation_lines, add_budget_usage, append_event,
@@ -37,10 +37,7 @@ class Kernel:
         self.embedder = embedder
         self.queue: asyncio.Queue[_Queued] = asyncio.Queue()
         self.organs = OrganRegistry()
-        self.hooks_inbound: list[Middleware] = []
-        self.hooks_context: list[Middleware] = []
-        self.hooks_tool: list[Middleware] = []
-        self.hooks_outbound: list[Middleware] = []
+        self.hooks = HookRegistry()
         validate_signals((self.soul.get("cognition") or {}).get("weights") or {})
 
     async def put(self, event: Event) -> None:
@@ -92,7 +89,8 @@ class Kernel:
             await self._encode(stored)
             if stored.kind != "tick":
                 ctx = {"conn": self.conn, "now": self.clock.now()}
-                stored = await self._run_hooks("inbound", self.hooks_inbound, stored, ctx, stored)
+                stored = await self._run_hooks("inbound", stored, ctx, stored,
+                                               organ=stored.body)
                 if stored is None:
                     return item.event
             await self._wake(stored)
@@ -102,8 +100,8 @@ class Kernel:
             self.queue.task_done()
         return stored
 
-    async def _run_hooks(self, name: str, hooks: list[Middleware], item: Any, ctx: Any,
-                         trigger: Event) -> Any | None:
+    async def _run_hooks(self, name: str, item: Any, ctx: Any, trigger: Event, *,
+                         organ: str | None = None) -> Any | None:
         async def stopped(reason: str) -> None:
             await self._emit(trigger, "guard.stopped", {"hook": name, "reason": reason})
 
@@ -111,7 +109,8 @@ class Kernel:
             await self._record_error(trigger, exc)
             await stopped(str(exc))
 
-        return await run_hooks(hooks, item, ctx, on_stop=stopped, on_error=failed)
+        return await self.hooks.get(name).run(item, ctx, organ=organ, on_stop=stopped,
+                                              on_error=failed)
 
     async def _appraise(self, event: Event) -> Appraisal:
         """Ask the cognition layer for one decision (no LLM)."""
@@ -159,7 +158,7 @@ class Kernel:
             recent_elsewhere=recent_elsewhere, trigger=event, last_interaction=last,
             capabilities=self.organs.descriptors())
         ctx = {"conn": self.conn, "event": event, "now": self.clock.now()}
-        context = await self._run_hooks("context", self.hooks_context, context, ctx, event)
+        context = await self._run_hooks("context", context, ctx, event, organ=event.body)
         if context is None:
             return
         calls = await self.pfc.decide(context)
@@ -208,10 +207,6 @@ class Kernel:
             await self._expect_wake(item)
 
     async def _apply(self, event: Event, call: ToolCall) -> bool:
-        ctx = {"conn": self.conn, "event": event, "now": self.clock.now()}
-        call = await self._run_hooks("tool", self.hooks_tool, call, ctx, event)
-        if call is None:
-            return False
         args = call.arguments
         if call.name == "think":
             await self._emit(event, "decision.note", {"act": "think", **args})
@@ -239,8 +234,10 @@ class Kernel:
         stored = await self._emit(event, "act.out",
                                   {"capability": capability, "arguments": arguments})
         await self._encode(stored, str(arguments.get("text") or "") or None)
-        ctx = {"conn": self.conn, "event": event, "now": self.clock.now()}
-        payload = await self._run_hooks("outbound", self.hooks_outbound, arguments, ctx, event)
+        ctx = {"conn": self.conn, "event": event, "now": self.clock.now(),
+               "capability": capability}
+        payload = await self._run_hooks("action", arguments, ctx, event,
+                                        organ=capability.partition(".")[0])
         if payload is not None:
             result = await self.organs.act(event, capability, payload)
             if result is not None:

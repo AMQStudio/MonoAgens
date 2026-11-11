@@ -17,7 +17,7 @@ from monoagens.cognition import (SIGNALS, Appraisal, Situation, appraise,
                                  assemble_situation, seeded_rng, validate_signals)
 from monoagens.kernel import Kernel
 from monoagens.memory import FakeEmbedder
-from monoagens.middleware import Continue, Replace, Stop
+from monoagens.middleware import Continue, HookPipeline, HookRegistry, Replace, Stop
 from monoagens.pfc import PFC
 from monoagens.store import (append_event, insert_event_vector, read_event_vector,
                              read_state, write_state)
@@ -303,7 +303,7 @@ async def test_inbound_stop_records_guard_stopped_and_skips_cognition(aconn):
         return Stop("not now")
 
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
-    kernel.hooks_inbound.append(block)
+    kernel.hooks.inbound.add("block", block)
     await _feed(kernel, _msg("halo"))
 
     assert fake.requests == []
@@ -316,7 +316,7 @@ async def test_inbound_exception_fails_closed_with_an_error_and_a_stop(aconn):
         raise RuntimeError("nope")
 
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM()), soul=SOUL)
-    kernel.hooks_inbound.append(boom)
+    kernel.hooks.inbound.add("boom", boom)
     await _feed(kernel, _msg("halo"))
 
     assert await _kinds(aconn) == ["percept", "error", "guard.stopped"]
@@ -331,7 +331,7 @@ async def test_inbound_replace_swaps_the_event_before_appraisal(aconn):
 
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
     kernel.register_body(RecordingBody())
-    kernel.hooks_inbound.append(rewrite)
+    kernel.hooks.inbound.add("rewrite", rewrite)
     await _feed(kernel, _msg("halo", addressed=False))
 
     assert len(fake.requests) == 1
@@ -346,31 +346,13 @@ async def test_context_hook_can_replace_the_pfc_context(aconn):
 
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
     kernel.register_body(RecordingBody())
-    kernel.hooks_context.append(rewrite)
+    kernel.hooks.context.add("rewrite", rewrite)
     await _feed(kernel, _msg("halo"))
 
     assert "<why_awake>rewritten by middleware</why_awake>" in _volatile(fake)
 
 
-async def test_tool_hook_stops_a_call_before_it_runs(aconn):
-    fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
-
-    async def block(item, ctx):
-        return Stop("tools are closed")
-
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
-    body = RecordingBody()
-    kernel.register_body(body)
-    kernel.hooks_tool.append(block)
-    await _feed(kernel, _msg("halo"))
-
-    assert body.actions == []
-    assert "act.out" not in await _kinds(aconn)
-    assert await _payload(aconn, "guard.stopped") == {"hook": "tool",
-                                                      "reason": "tools are closed"}
-
-
-async def test_outbound_hook_replaces_the_payload_and_continue_passes(aconn):
+async def test_action_hook_replaces_the_payload_and_continue_passes(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
 
     async def rewrite(item, ctx):
@@ -382,7 +364,8 @@ async def test_outbound_hook_replaces_the_payload_and_continue_passes(aconn):
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
     body = RecordingBody()
     kernel.register_body(body)
-    kernel.hooks_outbound.extend([note, rewrite])
+    kernel.hooks.action.add("note", note)
+    kernel.hooks.action.add("rewrite", rewrite)
     await _feed(kernel, _msg("halo"))
 
     assert body.actions == [Action(kind="say", place=PLACE,
@@ -390,7 +373,7 @@ async def test_outbound_hook_replaces_the_payload_and_continue_passes(aconn):
     assert (await _payload(aconn, "act.out"))["arguments"]["text"] == "hai"
 
 
-async def test_outbound_stop_keeps_the_logged_message_but_never_acts(aconn):
+async def test_action_hook_stop_keeps_the_logged_message_but_never_acts(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
 
     async def block(item, ctx):
@@ -399,12 +382,104 @@ async def test_outbound_stop_keeps_the_logged_message_but_never_acts(aconn):
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
     body = RecordingBody()
     kernel.register_body(body)
-    kernel.hooks_outbound.append(block)
+    kernel.hooks.action.add("block", block)
     await _feed(kernel, _msg("halo"))
 
     assert body.actions == []
     assert (await _payload(aconn, "act.out"))["arguments"]["text"] == "hai"
-    assert await _payload(aconn, "guard.stopped") == {"hook": "outbound", "reason": "privacy"}
+    assert await _payload(aconn, "guard.stopped") == {"hook": "action", "reason": "privacy"}
+
+
+async def test_organ_own_action_hook_runs_only_for_its_organ(aconn):
+    fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
+
+    async def block(item, ctx):
+        return Stop("telegram only")
+
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), soul=SOUL)
+    body = RecordingBody()
+    kernel.register_body(body)
+    kernel.hooks.action.add("other-organ", block, organ="cli")
+    await _feed(kernel, _msg("halo"))
+
+    assert len(body.actions) == 1
+
+
+async def test_inbound_organ_own_hook_skips_events_from_another_organ(aconn):
+    async def block(item, ctx):
+        return Stop("telegram only")
+
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM()), soul=SOUL)
+    kernel.hooks.inbound.add("other-organ", block, organ="cli")
+    await _feed(kernel, _msg("halo"))
+
+    assert "guard.stopped" not in await _kinds(aconn)
+
+
+def test_owner_policy_runs_first_and_last_around_every_hook():
+    order: list[str] = []
+
+    async def policy(item, ctx):
+        order.append("policy")
+        return Continue()
+
+    async def middle(item, ctx):
+        order.append("middle")
+        return Continue()
+
+    async def ignore(reason):
+        pass
+
+    async def loop_hook():
+        registry = HookRegistry()
+        for pipeline in registry:
+            pipeline.add("middle", middle)
+            pipeline.set_policy(policy)
+            assert await pipeline.run("item", {}, on_stop=ignore, on_error=ignore) == "item"
+        return order
+
+    assert asyncio.run(loop_hook()) == ["policy", "middle", "policy"] * 3
+
+
+def test_hook_slots_order_middleware_and_scope_by_organ():
+    async def early(item, ctx):
+        return Continue()
+
+    async def mid(item, ctx):
+        return Continue()
+
+    async def late(item, ctx):
+        return Continue()
+
+    async def own(item, ctx):
+        return Continue()
+
+    pipeline = HookPipeline("action")
+    pipeline.add("late", late, slot="last")
+    pipeline.add("mid", mid)
+    pipeline.add("early", early, slot="first")
+    pipeline.add("own", own, organ="telegram")
+
+    assert pipeline.middlewares() == (early, mid, late)
+    assert pipeline.middlewares("telegram") == (early, mid, own, late)
+    assert pipeline.middlewares("cli") == (early, mid, late)
+
+
+def test_duplicate_middleware_names_fail_at_registration():
+    async def middleware(item, ctx):
+        return Continue()
+
+    pipeline = HookPipeline("inbound")
+    pipeline.add("alias-map", middleware)
+    with pytest.raises(ValueError, match="name collision"):
+        pipeline.add("alias-map", middleware)
+    with pytest.raises(ValueError, match="name collision"):
+        pipeline.add("policy", middleware)
+    pipeline.set_policy(middleware)
+    with pytest.raises(ValueError, match="owner policy already set"):
+        pipeline.set_policy(middleware)
+    with pytest.raises(ValueError, match="unknown hook"):
+        HookPipeline("outbound")
 
 
 def test_kernel_refuses_a_soul_whose_signal_weights_do_not_match(conn):
