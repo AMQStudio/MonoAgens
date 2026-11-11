@@ -158,7 +158,7 @@ gate · `act.result` of the soul's own actions.
 **Signals** — pure functions `(Situation) -> [0, 1]`, at most 10 (now 5). `Situation` holds the
 event, its vector, recent messages here, memory candidates with activation, and relevant state.
 - `name_mentioned`
-- `info_gap` — cosine to reference sentences in soul.yaml (not keywords)
+- `info_gap` — cosine to reference sentences in the prior (not keywords)
 - `feeling_of_knowing` — σ((max activation − τ)/s), recent messages included
 - `relevance` — to active promises and core memory
 - `social_cost` — spoke recently, busy place, someone already replied, closeness to the speaker
@@ -181,7 +181,7 @@ treated as "no", `budget.exhausted` recorded.
 
 **Learning.** Active now: the wake-gate edge `lo` follows classifier verdicts within bounds;
 credence and reliability update as α/β counts. Deferred until weeks of real logs exist (D32.9):
-learned signal weights and dispositions. Until then they come from soul.yaml or the prior. When
+learned signal weights and dispositions. Until then they come from the prior. When
 enabled, only the owner's reactions and classifier verdicts move them, in bounded steps that each
 store their own delta, with an evidence minimum, a daily cap, and freeze-and-report at bounds
 (D29, D32.7). Behavior in a given place or with a given person adapts from those people's

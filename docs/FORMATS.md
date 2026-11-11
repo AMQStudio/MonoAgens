@@ -28,7 +28,7 @@ prior/
 
 Loading rules:
 - Different embedder → vector-dependent values (wake-gate edges, feeling-of-knowing threshold)
-  fall back to soul.yaml defaults.
+  fall back to the default prior shipped with the repository.
 - Different LLM family → load, but scale procedure and lesson credence down (halve alpha and beta)
   until proven again.
 - Unknown major `format_version` → refuse with a clear message.
