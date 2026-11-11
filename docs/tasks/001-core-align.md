@@ -17,6 +17,8 @@ Bring the merged Track A code in line with the frozen core spec. This is the onl
 - [ ] T8 Slow work off the loop: PFC, classifier, embedding and sleep as background jobs whose results return as events; one PFC job per place; re-wake once if a new event arrived meanwhile.
 - [ ] T9 Numbered SQL migrations with a version table and a backup before migrating; pairing code for the first owner.
 - [ ] T10 Identity as birth content: `soul.yaml` becomes the birth certificate; cognition numbers move to the default prior in `prior/` as knobs / calibration / constants (core.md §9.4); the rest of today's `soul.yaml` splits by project.md §2: `timezone`, sleep, clock, budget and enabled bodies go to a new `config.yaml`; memory and expectation numbers go to the prior's constants; owner ids are replaced by pairing; secrets stay in `.env`; identity stored in `state: identity` after birth; an `identity_changing` capability for owner changes.
+- [ ] T11 Stability contract: `schema_version` on every event with upcasting on read; plugin event kinds under `<plugin>.<kind>`; readers ignore unknown fields (core.md §3).
+- [ ] T12 Watchdog: `hook_timeout_ms` on every hook call (timeout = Stop + `error`), `job_timeout_seconds` on background jobs; a test where a hanging hook does not stop the loop.
 
 ## Done when
 All tests and replay pass; grep shows no platform name, no world action and no direct clock or random call in the core.

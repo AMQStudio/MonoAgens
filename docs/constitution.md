@@ -44,8 +44,10 @@ plugin:
 
 ## 6. Engineering invariants
 Append-only log · record first, then act · one queue, one consumer; slow work as background jobs
-· all time from the injected clock, all randomness seeded · every model call gated, recorded and
-counted in the budget · configuration outside code. The coding rules that follow from these are
+· a watchdog on every hook and job, so nothing installed can freeze the soul · all time from the
+injected clock, all randomness seeded · every model call gated, recorded and counted in the
+budget · configuration outside code · a stable contract for everything outside the core:
+additive changes only within a major version, versioned events ([core.md §3](core.md)). The coding rules that follow from these are
 in [AGENTS.md](../AGENTS.md).
 
 ## 7. Honesty and claims

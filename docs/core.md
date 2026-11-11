@@ -119,6 +119,11 @@ in `think` and the decision event.
 **Three hooks** (D9, D32): **inbound** (after recording), **context** (before any model call),
 **action** (before an organ acts). Contract: `async (item, ctx) -> Continue | Replace | Stop`.
 Every Stop writes `guard.stopped`; an exception stops the item and writes `error` (fail closed).
+**Watchdog** (D42): every hook call has a time limit (`hook_timeout_ms`); a hook that exceeds it
+counts as Stop and writes `error`, and the loop goes on. Background jobs (PFC, classifier,
+embedding, sleep) have their own limit (`job_timeout_seconds`); a job that exceeds it returns
+`job.result` with an error. Organs never block the loop: `act` is handed over and answered by
+`act.result`. One plugin can fail; it cannot freeze the soul.
 One ordered list per hook: owner policy first and last, everything else in between, *shared*
 (every organ that opts in) or *organ-own*. Name collisions fail at boot.
 
@@ -144,7 +149,29 @@ book.
 **Schema changes** are numbered SQL migrations with a version table, applied at start after an
 automatic backup; no migration framework (D33).
 
-**Event kinds.** percept · command · act.out · act.result · decision.silent · decision.note ·
+**Snapshots** (D42). `state` is a projection of the log; rebuilding it from the first event gets
+slow over years. The core periodically writes a snapshot of `state` with the id of the last event
+it includes (every `snapshot_every_events`); a rebuild loads the latest snapshot and replays only
+later events. Snapshots are caches: deleting them loses nothing. Hard forgetting invalidates every
+snapshot that contains the forgotten data; a new one is written from the cleaned log.
+
+**Stability contract** (D42). What middleware, bodies and plugins may rely on, like a kernel's
+user-space ABI:
+- *Stable surfaces*: the percept (§9.2), the capability descriptor (§9.1), the hook contract
+  (Continue / Replace / Stop, fail closed, watchdog), the six levers, event kinds and their
+  payloads, `recall`, the birth certificate (§9.3) and the prior format (§9.4).
+- *Within v1, changes are additive only*: new optional fields, new event kinds, new constants.
+  Readers ignore fields they do not know. Nothing that exists is renamed, removed or given a new
+  meaning.
+- *Events are versioned*: every event carries a `schema_version`; readers upgrade old versions on
+  read (upcasting); stored events are never rewritten, except by hard forgetting.
+- Plugins put their own events under their own namespace (`<plugin>.<kind>`); only the core
+  defines unprefixed kinds.
+- *Not part of the contract*: code modules and functions, database tables and indexes, prompt
+  wording, the values in a prior. They may change at any time.
+- A change that breaks a stable surface is a core v2 ([constitution §1](constitution.md)).
+
+**Event kinds** (each with a `schema_version`; plugins use `<plugin>.<kind>`). percept · command · act.out · act.result · decision.silent · decision.note ·
 decision.wake · model.call · budget.exhausted · expectation.created · expectation.fired ·
 expectation.resolved · job.started · job.result · classifier.verdict · credence.updated ·
 disposition.updated · guard.stopped · forget.soft · forget.hard · fade.done · sleep.done ·

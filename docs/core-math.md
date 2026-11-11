@@ -1,7 +1,7 @@
 # Core math — formulas and their sources
 
 Every formula the core uses, what each symbol means, why it was chosen, and where the idea
-comes from. [core.md](core.md) states *what* the core does; this file states *how* and *why*, so a
+comes from; §16 lists the systems principles behind the core's shape. [core.md](core.md) states *what* the core does; this file states *how* and *why*, so a
 scientist can check it and a new session does not have to rediscover it.
 
 Source tags: **[PR]** peer-reviewed · **[PP]** preprint · **[IND]** industry documentation or
@@ -291,6 +291,31 @@ already used for credence (§7). One rule replaces every hand-picked count.
 **Learning from outcomes.** Dopamine neurons signal reward prediction error, the quantity the
 delta rule uses [Schultz, Dayan & Montague 1997, PR]; it underlies §8.
 
+## 16. Engineering principles behind the core's shape (D42)
+Not formulas, but the systems principles the architecture follows, so it can be checked like a
+kernel.
+- **Minimality.** A concept stays in the core only if moving it outside would prevent required
+  functionality [Liedtke 1995, PR] — hence the complexity budget and everything else in middleware
+  and plugins.
+- **Mechanism, not policy.** The kernel provides mechanisms; policies live outside [Levin et al.
+  1975 (Hydra), PR; Wulf et al. 1974, PR] — the core gives hooks, organs and the gate; roles,
+  RBAC and modes are middleware.
+- **Hooks before every access.** Modules mediate access by hooks placed just ahead of the access
+  [Wright et al. 2002 (Linux Security Modules), PR] — the three hooks with the policy first and
+  last.
+- **Protection principles.** Economy of mechanism, fail-safe defaults, complete mediation, least
+  privilege [Saltzer & Schroeder 1975, PR] — small core, fail-closed hooks, every percept, desk
+  and action mediated.
+- **Event sourcing.** All changes are events; state can be rebuilt and queried in time
+  [Fowler 2005, IND]; snapshots and versioned events keep it workable over years.
+- **Ports and adapters.** The core is isolated from its devices behind ports [Cockburn 2005, IND]
+  — percept and capability descriptor are the ports, bodies and plugin organs the adapters.
+- **Stable user-space contract.** Internals change freely, the interface to the outside does not
+  break [Linux kernel ABI policy, IND] — the stability contract in core.md §3.
+- **Capability-based isolation** (not adopted in v1): every access through an unforgeable token
+  [Klein et al. 2009 (seL4), PR]. Plugins are trusted in-process code for now; per-plugin lever
+  declarations in the manifest are the path toward least privilege without changing the core.
+
 ---
 
 ## References
@@ -343,6 +368,18 @@ delta rule uses [Schultz, Dayan & Montague 1997, PR]; it underlies §8.
   *JAMA*, 249(13), 1743–1745. [PR]
 - Schultz, W., Dayan, P., & Montague, P. R. (1997). A neural substrate of prediction and reward.
   *Science*, 275, 1593–1599. [PR]
+- Liedtke, J. (1995). On µ-Kernel Construction. *SOSP*. [PR]
+- Wulf, W., et al. (1974). HYDRA: The Kernel of a Multiprocessor Operating System. *CACM*,
+  17(6). [PR]
+- Levin, R., et al. (1975). Policy/Mechanism Separation in Hydra. *SOSP*. [PR]
+- Wright, C., Cowan, C., Smalley, S., Morris, J., & Kroah-Hartman, G. (2002). Linux Security
+  Modules: General Security Support for the Linux Kernel. *USENIX Security*. [PR]
+- Saltzer, J. H., & Schroeder, M. D. (1975). The Protection of Information in Computer Systems.
+  *Proceedings of the IEEE*, 63(9). [PR]
+- Klein, G., et al. (2009). seL4: Formal Verification of an OS Kernel. *SOSP*. [PR]
+- Fowler, M. (2005). Event Sourcing. martinfowler.com. [IND]
+- Cockburn, A. (2005). Hexagonal Architecture (Ports and Adapters). [IND]
+- Linux kernel documentation, Documentation/ABI/README. [IND]
 - Park, J. S., et al. (2023). Generative Agents: Interactive Simulacra of Human Behavior.
   *UIST*. arXiv 2304.03442. [PR]
 - Liu, X. B., et al. (2025). Proactive Conversational Agents with Inner Thoughts. *CHI*.

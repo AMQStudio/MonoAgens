@@ -37,6 +37,10 @@ constants:        # engineering values; change only with replay evidence
   importance_weight: 0.5
   learning_rate: 0.02
   rule_of_three_epsilon: 0.06
+  # robustness
+  hook_timeout_ms: 500
+  job_timeout_seconds: 120
+  snapshot_every_events: 10000
   # the desk: what one wake's prompt may hold
   recent_messages: 20          # roughly one phone screen; older lines via recall
   recent_tokens: 2000
