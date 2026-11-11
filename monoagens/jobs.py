@@ -21,7 +21,6 @@ from monoagens.pfc import ToolCall
 from monoagens.types import Event
 
 INTERNAL_KINDS = ("job.started", "job.result")
-DEFAULT_TIMEOUT_SECONDS = 60.0
 JobWork = Callable[[], Awaitable[Any]]
 
 
@@ -44,7 +43,7 @@ class JobRunner:
         """Read the timeout from the prior and start with nothing in flight."""
         self.kernel = kernel
         values = (kernel.settings.get("constants") or {})
-        self.timeout = float(values.get("job_timeout_seconds") or DEFAULT_TIMEOUT_SECONDS)
+        self.timeout = float(values["job_timeout_seconds"])
         self.in_flight: dict[str, Job] = {}
         self.tasks: set[asyncio.Task[None]] = set()
 

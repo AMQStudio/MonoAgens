@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from monoagens.clock import FakeClock
 from monoagens.kernel import Kernel
 from monoagens.embedding import FakeEmbedder
@@ -130,6 +132,18 @@ async def test_one_pfc_per_place_and_one_re_wake_with_the_newest_event(aconn):
     assert pfc.contexts[1].trigger.id == third.id  # newest event wins; second collapsed
     assert not kernel.jobs.in_flight
     assert len(await _rows(aconn, "decision.note")) == 2
+
+
+async def test_job_timeout_comes_from_the_prior(aconn):
+    kernel = Kernel(aconn, clock=FakeClock(START),
+                    settings=settings(constants={"job_timeout_seconds": 120}),
+                    embedder=FakeEmbedder())
+    assert kernel.jobs.timeout == 120.0
+
+    without = settings()
+    del without["constants"]["job_timeout_seconds"]
+    with pytest.raises(KeyError):
+        Kernel(aconn, clock=FakeClock(START), settings=without, embedder=FakeEmbedder())
 
 
 async def test_embedding_job_timeout_returns_a_job_result_error(aconn):

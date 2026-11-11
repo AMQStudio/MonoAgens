@@ -546,7 +546,7 @@ def test_duplicate_middleware_names_fail_at_registration():
 
 def test_kernel_refuses_settings_whose_signal_weights_do_not_match(conn):
     broken = settings()
-    broken["constants"] = {}
+    broken["constants"] = {"job_timeout_seconds": 5.0}
     with pytest.raises(ValueError, match="signal weights missing"):
         Kernel(conn, settings=broken)
 
