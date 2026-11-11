@@ -59,7 +59,7 @@ direct clock or random call in the core.
 | H | `revise`, `guard` facts checked in sleep, lessons and procedures with credence (α/β) | a correction supersedes the old memory; a contradicted fact is revised at the next sleep |
 | I | wake gate; free-text conditions with cosine filter + classifier; `lo` learning | a fulfilled promise wakes no one; a question on the same topic never resolves a promise |
 | J | attribution and reliability (α/β) per domain; fade with a fixed threshold; soft and hard forgetting | a stranger cannot override an owner fact; hard forget leaves only `{"forgotten": true}` and metadata |
-| K | the desk (D37): section token budgets, work thread in `<doing>` with pointers, the `self` organ with `recall`, back-fill handling and `catch_up` wakes | a 15-step task keeps a flat prompt size; "what did we say last month about X?" is answered via recall; 40 unread messages produce one catch-up wake |
+| K | the desk (D37): section token budgets, work thread in `<doing>` with pointers, the `self` organ with `recall` (query, time range, lineage, text search on events), back-fill handling and `catch_up` wakes | a 15-step task keeps a flat prompt size; "what did we do last month?" lists that month's episodes and details come from the original events, also after the vector faded and when sleep failed; 40 unread messages produce one catch-up wake |
 | R | replay scenarios for B–J, plus report metrics: false-speak rate, missed-help rate, tokens per simulated day, absolute-line violations (must be 0), honesty-rule compliance | each new scenario fails before its track lands and passes after |
 
 **Deferred until weeks of real logs exist (D32.9):** learned signal weights, learned

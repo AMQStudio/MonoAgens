@@ -124,8 +124,10 @@ Present organs: Telegram (long polling; owner via `owner.telegram_ids`) and CLI 
 inside the main process, thin client).
 
 **The `self` organ** (D37) is built into the core and offers one capability, `recall`
-(non-communicative): a deeper search of the soul's own log and memories by query or event id,
-under absolute line 2. It is how the soul "thinks harder" to remember.
+(non-communicative): a deeper search of the soul's own log and memories by query, event id and
+time range (`from`/`to`; no query lists the episodes in that range), following `derived_from` to
+the original events, with text search over event payloads so faded or unsummarized messages are
+still found; under absolute line 2. It is how the soul "thinks harder" to remember.
 
 **History and catching up** (D37). A body may offer `history(place, before, limit)` for messages
 the log lacks. On connect it back-fills what it missed as `msg.in` with `backfill: true` and

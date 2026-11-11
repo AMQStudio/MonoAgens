@@ -415,9 +415,17 @@ from the books at every wake, so nothing is ever compacted and no detail is lost
    step and the latest result verbatim. Older results appear as pointers (event id, what it is,
    its size) and are re-read on demand.
 2. **Recall ("let me think, I know this").** The core ships one internal organ, `self`, with a
-   non-communicative capability `recall(query | event_id, place?, before?)` that searches the
+   non-communicative capability `recall(query | event_id, place?, from?, to?)` that searches the
    soul's own log and memories deeper than the automatic candidates. It obeys absolute line 2
    and returns as `act.result`. No new thought act: it is used through `act`.
+   - **By time.** `from`/`to` (resolved against `<now>`, e.g. "a month ago") restrict the search;
+     with no query it lists the episodes in that range, oldest first.
+   - **Down the lineage.** A hit on an episode or fact can be followed through `derived_from` to
+     the original events, read verbatim.
+   - **Never only by vector.** Recall also runs text search (`pg_trgm`) over event payloads, so
+     a message whose vector faded, or whose episode sleep failed to write, is still found.
+   Nothing is lost except by hard forgetting; what can fail is noticing, which is why the soul
+   says "let me check" and recalls instead of guessing.
 3. **Scrolling up and catching up.** The soul's own log is its first "scroll up": everything
    since it joined a place is recorded. A body *may* add a capability `history(place, before,
    limit)` for messages the log lacks (before joining, while offline). When a body connects, it
