@@ -55,7 +55,9 @@ brain.**
 3. **Inbound hook** (alias map, commands, owner policy). A Stop ends the turn (recorded).
 4. Check Expectations (time path on ticks, event path on events) through the wake gate.
 5. **Appraise** without any model call: reflexes, or signals → salience → threshold → draw.
-6. If the PFC wakes: assemble the layered context, pass the **context hook**, call the model.
+6. If the PFC wakes: assemble the layered context, pass the **context hook**, and start the
+   model call as a background job. Its result returns as an event and is handled in a later
+   turn (D33). At most one PFC job per place is in flight.
 7. For each `act`: pass the **action hook**, record `act.out`, hand it to the organ, create a
    `predict` Expectation.
 8. On ticks: maybe sleep.
@@ -85,15 +87,20 @@ The loader builds one ordered list per hook: owner policy first and last, packag
 between. Package middleware is *shared* (every organ that opts in) or *organ-own*. Name
 collisions fail at boot.
 
-**Invariants.** Append-only log · record first, then act · one queue, one consumer · all time
+**Invariants.** Append-only log · record first, then act · one queue, one consumer that only
+records and decides; slow work (model calls, embedding, sleep) runs as background jobs whose
+results return as events · all time
 from the injected clock (replay uses event times) · all randomness from a generator seeded by
 hash(seed, event.id) · every model call is a gate decision, recorded as `model.call` with its
 purpose and tokens, and counted in the daily budget · the complexity budget (D26, D32): 4 books,
 5 thought acts, 3 hooks, at most 10 signals, 3 drives, one gate formula.
 
+**Schema changes** are numbered SQL migrations with a version table, applied at start after an
+automatic backup (D33).
+
 **Event kinds.** msg.in · command · act.out · act.result · decision.silent · decision.note ·
 decision.wake · model.call · budget.exhausted · expectation.created · expectation.fired ·
-expectation.resolved · classifier.verdict · credence.updated · disposition.updated ·
+expectation.resolved · job.started · job.result · classifier.verdict · credence.updated · disposition.updated ·
 guard.stopped · forget.soft · forget.hard · fade.done · sleep.done · sleep.failed · error.
 
 ## 4. Organs and capabilities
@@ -158,7 +165,8 @@ event, its vector, recent messages here, memory candidates with activation, and 
 
 **Gate.**
 - S = clamp(Σ wₖ·sₖ); habituation per (place, who): h ← h·γ^Δminutes + 1; S_eff = S/(1+h).
-- θ = base + a·talk_rate + b·budget_used − c·promise_debt.
+- θ = base + a·talk_rate + b·budget_used − c·promise_debt + newcomer(place), where newcomer
+  starts small and relaxes to 0 as interactions in that place accumulate (D33).
 - P = σ((S_eff − θ)/τ); draw u from the seeded generator; go if u < P.
 - A non-reflex go first creates a `wait` Expectation (patience).
 Every number is stored in the decision event.
@@ -176,7 +184,9 @@ credence and reliability update as α/β counts. Deferred until weeks of real lo
 learned signal weights and dispositions. Until then they come from soul.yaml or the prior. When
 enabled, only the owner's reactions and classifier verdicts move them, in bounded steps that each
 store their own delta, with an evidence minimum, a daily cap, and freeze-and-report at bounds
-(D29, D32.7). Because the log keeps everything, learning can later run over the whole history.
+(D29, D32.7). Behavior in a given place or with a given person adapts from those people's
+suggestions, criticism and reactions, stored as layer 3 tuning (D33). Because the log keeps
+everything, learning can later run over the whole history.
 
 ## 7. Memory, sleep and forgetting
 
@@ -222,6 +232,10 @@ learned state (D25).
 2. **Private content never enters another place.** Enforced in the context hook: private
    memories and lines enter a context only in their own place or in a direct chat with the
    owner.
+
+**Becoming the owner.** On first start the soul shows a short pairing code; the first person
+who sends it from any organ becomes the owner. Changing the owner later needs the current
+owner (D33).
 
 **Default owner policy** (out of the box): the two lines, the daily budget, quiet hours.
 Packages may add rules inside it (for example official roles); they can never remove it.

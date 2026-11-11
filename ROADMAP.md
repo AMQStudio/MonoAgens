@@ -38,6 +38,10 @@ LLMs are a prefrontal cortex without the rest of the brain. MonoAgens is the res
 5. Budget: `model.call` for every model call; thrift mode and `budget.exhausted`.
 6. Expectation schema with the four kinds (`promise`, `wait`, `predict`, `guard`).
 7. Injected clock everywhere (no `datetime.now()` in the core); replay uses event times.
+8. Slow work off the loop (D33): PFC, classifier, embedding and sleep as background jobs whose
+   results return as events; one PFC job per place.
+9. Numbered SQL migrations with a version table and a backup before migrating; pairing code
+   for the first owner.
 Done when: all tests and replay pass; grep shows no platform name, no world action and no
 direct clock or random call in the core.
 
@@ -70,9 +74,11 @@ soul into it; a reasonable request from a group member is helped; a package cann
 policy;
 `/help` is identical on Telegram and CLI.
 
-## Phase 4 — First users (D13)
+## Phase 4 — First users and the release gate (D13, D33)
 - **The owner alone** for a few days with replay checks after each change.
 - **One real group** the owner knows well, with the owner policy on.
+- Release gate: end-to-end tests with a real model, a real database, long multi-day
+  conversations and real people; a per-model replay report and a list of recommended models.
 - Installer (one command from clone to a talking soul) and README (brain table, install, talk,
   tune with replay; no claims of consciousness or "% human").
 
