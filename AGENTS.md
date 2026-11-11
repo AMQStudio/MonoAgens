@@ -1,6 +1,7 @@
 # AGENTS.md — Standing Rules for Coding Agents
 
-This project is **MonoAgens**: a tiny kernel for one persistent AI self that lives in many bodies.
+This project is **MonoAgens**: an AI agent built as one persistent self that lives in many
+bodies, with a small core organised like an OS kernel (see README).
 Status: prototype. Before touching code read [docs/constitution.md](docs/constitution.md), the
 task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec sections it links
 (the core: [docs/core.md](docs/core.md)). Work ONLY on that task.

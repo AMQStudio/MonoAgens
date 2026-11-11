@@ -1,11 +1,27 @@
 # MonoAgens
 
-A tiny kernel for one persistent AI self that lives in many bodies. The kernel records
-everything it sees, holds Expectations about the world, and only thinks hard (calls the LLM)
-when the cognition layer's appraisal decides an event matters.
+MonoAgens is an AI agent built as **one persistent self that lives in many bodies** — chat
+apps, a terminal, later devices and robots. Most agent frameworks start from "a message
+arrived, run the model". MonoAgens starts from "something happened, record it, then decide
+whether it is worth thinking about": it remembers across bodies and time, keeps its promises,
+knows when to stay quiet in a group, and can replay every decision it made.
+
+**Built like the Linux kernel.** A small core holds only the mechanisms of a mind — perception,
+attention, memory, expectations, a cheap decision to act — and the LLM is woken only when a
+moment deserves it. Everything else lives around the core, as in an operating system:
+**middleware** (policy, commands and tools, install, identity, roles) is the system layer,
+**bodies** (Telegram, CLI, …) are the drivers, and **plugins** are the applications. The core
+keeps a stable contract with all of them: it can improve inside without breaking what is built
+on top.
+
+> **Note, to avoid confusion.** "Kernel" here is an analogy for how the code is organised, not a
+> literal one: MonoAgens is not an operating system, not a scheduler that serves many agents, and
+> not an SDK for building other agents. It is one agent that persists. Words borrowed from the
+> brain ("memory", "attention", "sleep", "soul") name engineering mechanisms; they are not claims
+> of consciousness or feelings. *Agens* is Latin for "the one who acts", the root of *agent*.
 
 - [`docs/constitution.md`](docs/constitution.md) — the rules that never change (read first).
-- [`docs/core.md`](docs/core.md) — the core specification (final, frozen); formulas and sources
+- [`docs/core.md`](docs/core.md) — the core specification (contract frozen); formulas and sources
   in [`docs/core-math.md`](docs/core-math.md).
 - [`docs/`](docs/README.md) — one specification per layer: middleware, bodies, plugins, project.
 - [`prior/`](prior/) — the default instincts (knob values) a new soul is born with; tune with replay.
