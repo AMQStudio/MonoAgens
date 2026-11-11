@@ -91,7 +91,7 @@ The one middleware that is always present.
 - The installed plugins are listed in `config.yaml` ([project.md §2](project.md)).
 - Uninstalling removes a plugin's organs, middleware, rules and knob offsets; its events stay in
   the log as history.
-- **Draft**: installed by the owner through the one-command installer or a command; a local
+- **Draft**: installed by the owner by listing it in `config.yaml` or with a command; a local
   catalog; semantic versions; stable, versioned contracts only after they have not changed for a
   while.
 

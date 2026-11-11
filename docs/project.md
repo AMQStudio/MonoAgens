@@ -9,7 +9,10 @@ and may change without a new decision. Nothing here may change the core
 - Open source under Apache 2.0; public documents mention no hosted service (D8).
 - BYOK; one deployment is one soul with its own database; keys only from the environment; the
   embedder is a replaceable port (D7).
-- Out of the box for non-technical people: no configuration panel; a soul is born from a prior
+- **Who this repository is for**: people who can run their own server. Self-hosted on a VPS or
+  a home machine, configured by hand (`.env`, `config.yaml`, `soul.yaml`), BYOK. It ships a
+  basic hand-tuned default prior and no role templates; it never ships priors learned from
+  other people's souls. A soul still needs no tuning to start: it is born from the default prior
   and adapts (D20).
 - Order of users: the owner alone, then one real group the owner knows well (also the honest
   human-likeness evaluation), then developers once contracts are stable (D13).
@@ -18,8 +21,9 @@ and may change without a new decision. Nothing here may change the core
   (D33.6).
 - Never described as conscious or as "% human"; claims are per behavior against a human
   baseline.
-- **Draft**: installer (one command from clone to a talking soul); README with the brain table,
-  install, talk, tune with replay; compressed daily backups with an owner-set retention (D14).
+- **Draft**: README with the brain table, manual install on a server (Docker for Postgres,
+  `.env`, `config.yaml`, `soul.yaml`), talk, tune with replay; compressed daily backups with an
+  owner-set retention (D14).
 
 ## 2. Deployment files
 Four files, each with one job; none holds what belongs to another (D7, D35, D36).

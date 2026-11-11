@@ -15,7 +15,8 @@ Words: *organ* = anything that senses or acts (bodies and the tool organs plugin
 
 **Goal.** One persistent self (a *soul*) that lives in many bodies — chat apps, a terminal,
 later devices and robots — remembers, knows when to stay quiet, keeps its promises, is honest
-about what it knows, learns from experience, and works out of the box for non-technical people.
+about what it knows, and learns from experience — starting from a basic default prior, with no
+tuning needed to begin.
 
 **LLMs are a prefrontal cortex without the rest of the brain. MonoAgens is the rest of the
 brain.**
