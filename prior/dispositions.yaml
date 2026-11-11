@@ -41,6 +41,9 @@ constants:        # engineering values; change only with replay evidence
   hook_timeout_ms: 500
   job_timeout_seconds: 120
   snapshot_every_events: 10000
+  # work
+  max_task_steps: 30
+  max_open_tasks: 3
   # the desk: what one wake's prompt may hold
   recent_messages: 20          # roughly one phone screen; older lines via recall
   recent_tokens: 2000

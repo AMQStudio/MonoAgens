@@ -89,7 +89,7 @@ tests against the map, never new rows.
    salience → threshold → draw.
 6. If the PFC wakes: lay out the desk, pass the **context hook**, and start the model call as a
    background job. Its result returns as an event and is handled in a later turn. At most one
-   PFC job per place is in flight; if a new event arrived there meanwhile, the result is applied
+   PFC job per place (a task thread is its own place) is in flight; if a new event arrived there meanwhile, the result is applied
    and the PFC is woken once more with the newest context (D33).
 7. For each `act`: pass the **action hook**, record `act.out`, hand it to the organ, create a
    `predict` Expectation.
@@ -179,7 +179,7 @@ user-space ABI:
 **Event kinds** (each with a `schema_version`; plugins use `<plugin>.<kind>`). percept · command · act.out · act.result · decision.silent · decision.note ·
 decision.wake · model.call · budget.exhausted · expectation.created · expectation.fired ·
 expectation.resolved · job.started · job.result · classifier.verdict · credence.updated ·
-disposition.updated · share.granted · guard.stopped · forget.soft · forget.hard · fade.done · sleep.done ·
+disposition.updated · share.granted · task.opened · task.closed · guard.stopped · forget.soft · forget.hard · fade.done · sleep.done ·
 sleep.failed · error.
 
 ## 4. Organs and capabilities
@@ -194,8 +194,14 @@ the prompt cache holds (D2, D32, D46). The soul can act in any body from any bod
   Fine control stays inside the organ (D2).
 - Long actions report progress and completion as `act.result` events; the core never waits (D3).
 - Multi-step work is a chain: result → circuit breaker (it continues an active goal) → next
-  `act`, limited by steps per task and the budget. Every step is logged, so tasks resume after a
-  restart and can be interrupted (D3).
+  `act`, limited by steps per task (`max_task_steps`) and the budget. Every step is logged, so
+  tasks resume after a restart and can be interrupted (D3).
+- **Task threads** (D47). A chain that needs more than one step opens its own task thread: a
+  place of kind `task` with a parent place, the parent's audience (so absolute line 2 holds
+  unchanged), and its own slot for one PFC job. The conversation in the parent place never waits
+  for the work. The thread reports to the parent when it finishes, fails, or needs to ask, and
+  closes. Open threads are limited (`max_open_tasks`); one more waits as a promise. One soul,
+  one log: threads are lines of work, not copies of the self.
 - Organs map native accounts to person ids (alias map) and native command syntax to a neutral
   `command` event; one shared command registry makes `/help` identical everywhere (D9).
 - Organs report `addressed` (direct chat, reply, tag) as a neutral event field (D40).
