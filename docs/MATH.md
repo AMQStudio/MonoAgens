@@ -7,7 +7,7 @@ scientist can check it and a new session does not have to rediscover it.
 Source tags: **[PR]** peer-reviewed · **[PP]** preprint · **[IND]** industry documentation or
 standard. Many 2025–2026 agent papers are preprints; treat their numbers as the authors' claims.
 Parameters named in `code font` are knobs, calibration values or constants of the prior
-(docs/FORMATS.md §2).
+(docs/FORMATS.md §3).
 
 ---
 

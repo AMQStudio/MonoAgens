@@ -26,8 +26,9 @@ brain.**
 | Birth inputs | birth certificate (who I am) and prior (my instincts) | — |
 
 **Non-goals.**
-- No emotions, moods or simulated feelings. The core imitates cognitive *functions*:
-  perception, attention, memory, expectation, judgment, learning, restraint (D20).
+- No emotions, moods or simulated feelings in the core. The core imitates cognitive
+  *functions*: perception, attention, memory, expectation, judgment, learning, restraint (D20).
+  A package may add any behavior on top, emotions included (D41).
 - Not a hosted service. One deployment is one soul with its own database; the owner brings
   their own model key (BYOK) (D7, D8).
 - No roles or installed skills in the core; they come from packages (D20, D34).
@@ -94,6 +95,10 @@ against the map, never new rows.
   inherited along the causal chain. `event_vectors` (event_id, embedding) is the log's index;
   rows leave only by fading or hard forgetting, each through one dedicated path that writes an
   event.
+- **One door, one language, one way to remember** (D41): everything sensed is a `percept`
+  carrying a short natural-language description plus optional raw data, whatever the sense; the
+  core knows no modalities. Everything that persists, in the core or in a package, persists as
+  events; state is their projection.
 - `state` — a namespaced key/value projection that can be rebuilt from events: `identity`,
   `last_seen:*`, `last_spoke:*`, `core_memory`, `self_summary`, `habit:*`, `person:*`,
   `alias:*`, `credence:*`, `cognition:weights`, `cognition:dispositions`, `budget:<date>`.
@@ -110,6 +115,13 @@ The loader builds one ordered list per hook: owner policy first and last, packag
 between. Package middleware is *shared* (every organ that opts in) or *organ-own*. Name
 collisions fail at boot.
 
+**Middleware levers** (D41) — the same for every case, from RBAC to modes to simulated emotions:
+pass, replace or stop an item · annotate it (the note travels with the item to the PFC, inside
+its token budget) · declare standing rules (shown in `<self>`) · remember only by putting events
+(state under its own namespace) · sense and act through its own organs · steer knobs by a
+bounded, temporary offset recorded as `disposition.updated`. It cannot cross the two absolute
+lines or add a thought act, signal or book.
+
 **Invariants.**
 - Append-only log; record first, then act.
 - One queue, one consumer that only records and decides; slow work (model calls, embedding,
@@ -124,7 +136,7 @@ collisions fail at boot.
 **Schema changes** are numbered SQL migrations with a version table, applied at start after an
 automatic backup (D33).
 
-**Event kinds.** msg.in · command · act.out · act.result · decision.silent · decision.note ·
+**Event kinds.** percept · command · act.out · act.result · decision.silent · decision.note ·
 decision.wake · model.call · budget.exhausted · expectation.created · expectation.fired ·
 expectation.resolved · job.started · job.result · classifier.verdict · credence.updated ·
 disposition.updated · guard.stopped · forget.soft · forget.hard · fade.done · sleep.done ·
@@ -146,11 +158,13 @@ the organs present now, listed in a fixed order so the prompt cache holds.
 - Organs map native accounts to person ids (alias map) and native command syntax to a neutral
   `command` event; one shared command registry makes `/help` identical everywhere (D9).
 - Organs report `addressed` (direct chat, reply, tag) as a neutral event field (D40).
+- What an organ senses enters as a `percept` (format in docs/FORMATS.md): the organ, like a
+  sensory cortex, turns its signal into a short description, with raw data attached (D41).
 - On start an organ asks for `cursor(organ)`, so input is never lost or duplicated.
 - `communicative` capabilities count as speaking for the talk-rate drive and the forward model.
 
 **History and catching up** (D37, D40). A body may offer `history(place, before, limit)` for
-messages the log lacks. On connect it back-fills what it missed as `msg.in` with
+messages the log lacks. On connect it back-fills what it missed as `percept` with
 `backfill: true` and `sent_at`. A backlog of one place is appraised once, as one percept with
 every signal discounted by age (ACT-R decay); an addressed message still trips the circuit
 breaker.
@@ -325,11 +339,13 @@ from the books at every wake and never compacted. Three layers, ordered for cach
 - *Stable*: who I am, how I work (memories can be incomplete; I can be wrong; I act only through
   organs), honesty principles, knowledge cutoff (from per-model configuration, set slightly
   earlier than claimed), principles, thought acts and capability schemas.
-- *Semi-stable*: `<self>` (capabilities, commands, installed skills; closed-world — what is not
-  listed cannot be done), core memory, person cards of people present.
+- *Semi-stable*: `<self>` (capabilities, commands, installed skills, packages' standing rules;
+  closed-world — what is not listed cannot be done), core memory, person cards of people
+  present.
 - *Volatile, last*: `<now>` (local time, timezone, time since the last interaction), `<place>`,
   `<why_awake>`, `<doing>`, `<next>`, `<memories>` with basis, source and age, `<recent>`,
-  `<event>`. Messages from non-owners are delimited as quoted data.
+  `<event>` with any middleware notes attached to it. Messages from non-owners are delimited
+  as quoted data.
 Each volatile section has a token budget (prior constants). In a multi-step chain `<doing>`
 holds the goal, one line per step and the latest result verbatim; older results are pointers the
 soul can `recall`.

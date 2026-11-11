@@ -28,7 +28,8 @@ LLMs are a prefrontal cortex without the rest of the brain. MonoAgens is the res
 ## Phase 1 — Align the code with DESIGN (one track, first)
 **Track A2** — bring the merged Track A in line with DESIGN (D32). Sub-steps, one commit each:
 1. Thought acts `think, act, expect, resolve, revise`; `say`/`react` become Telegram and CLI
-   capabilities (descriptor in docs/FORMATS.md); silence = a wake without `act`;
+   capabilities (descriptor in docs/FORMATS.md); silence = a wake without `act`; `msg.in`
+   becomes `percept` with a description and optional data (D41);
    `act.out`/`act.result` replace `msg.out`/`react.out` in code, tests and replay.
 2. Three hooks (inbound, context, action) with owner-policy slots first and last, shared vs
    organ-own scope, collision check at boot.
@@ -71,7 +72,8 @@ dispositions (D16, D29), adaptive fade threshold (D14), social standing (D31), i
 (D10), package suggestions (D28).
 
 ## Phase 3 — Packages and the default owner policy
-- Loader for packages (organs + middleware + skills + dependencies), shared/organ-own scope.
+- Loader for packages (organs + middleware + skills + dependencies) from one manifest, with
+  shared/organ-own scope and the six middleware levers (D41).
 - Default owner policy, active out of the box (D22, D24): the two absolute lines (only the owner
   changes who the soul is; private content never enters another place), budget, quiet hours.
   Everything else is weighed by the PFC.

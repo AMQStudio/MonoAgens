@@ -54,6 +54,11 @@ Layers:
   - `expectations` (§1.6) and `memories` (§1.7).
 - Every event and memory has a neutral `place`; `who` is a person id (after the alias map);
   `origin_actor` is inherited along `caused_by` (D32.3–4).
+- **One door, one language, one way to remember** (D41). Everything that reaches the brain is an
+  event; every sensed thing is a `percept` carrying a short natural-language description plus
+  optional raw data, whatever the sense (a message, speech, a camera, a thermometer); everything
+  that must persist — in the core or in a package — persists as events, and any state is a
+  projection of them. The core knows no modalities.
 - **Five thought acts**: `think`, `act`, `expect`, `resolve`, `revise`. `act` uses any organ
   capability, speaking included. Silence is a wake without `act`; its reason is in `think` and
   the decision event (D2, D32.1).
@@ -111,6 +116,9 @@ Layers:
   memory, person cards present), *volatile last* (`<now>`, `<place>`, `<why_awake>`, `<doing>`,
   `<next>`, `<memories>` with basis/source/date/age, `<recent>`, `<event>`). `<now>` holds local
   time, timezone and time since the last interaction (D12).
+- Middleware speaks to the PFC only in two ways (D41): standing declarations appear in `<self>`
+  (sorted, cached); per-turn notes travel with the item they annotate and are rendered with it,
+  inside that item's token budget, before the owner policy's last pass.
 - Each volatile section has a token budget (prior constants). In a chain, `<doing>` holds the
   goal, one line per step and the latest result verbatim; older results are pointers.
 - Messages from non-owners are delimited as quoted data (spotlighting); the absolute lines never
@@ -220,8 +228,11 @@ Layers:
 - Organs translate native accounts into neutral ids (through the alias map) and native command
   syntax into a neutral `command` event, adding presentation only (menus, buttons) (D9).
 - Organs report `addressed` (direct chat, reply, tag) as a neutral field (D40).
+- What an organ senses enters as a `percept`: who, place, `addressed`, a short description in
+  language, optional raw data, and `sent_at` when the sense has its own clock. The organ, like a
+  sensory cortex, turns its signal into that description (D41).
 - A body may offer `history(place, before, limit)`; on connect it back-fills what it missed as
-  `msg.in` with `backfill: true` and `sent_at`. The core appraises a backlog per place once, as
+  `percept` with `backfill: true` and `sent_at`. The core appraises a backlog per place once, as
   one age-discounted percept; an addressed message still trips the circuit breaker (D37, D40).
 - Tools are organs too (search, files, email) (D35). The only organ inside the core is `self`.
 - Present: Telegram (long polling) and CLI (Unix socket, thin client).
@@ -231,6 +242,20 @@ Layers:
 
 ## 3. Middleware (static; runs in the hooks; never learns)
 - Middleware adds capabilities and rules the owner chooses; it does not learn (D34).
+- **Open to any behavior** (D41). The core never knows the case — modes ("daily" vs
+  "professional"), a persona layer, simulated emotions, RBAC, moderation. Every middleware uses
+  the same levers:
+  1. *Pass, replace or stop* any item at the three doors (percepts, the desk, actions).
+  2. *Annotate* an item; the note travels with it to the PFC.
+  3. *Declare* standing rules, which appear in `<self>`.
+  4. *Remember* only by putting events; its state is a projection under its own namespace
+     (`<package>:*`), so replay and hard forgetting still work.
+  5. *Sense and act* through organs of its own package (a timer, a `set_mode` capability).
+  6. *Steer the knobs* by a bounded, temporary offset recorded as `disposition.updated` with the
+     package as source; learning never moves an offset, and removing the package removes it.
+  Limits: it cannot cross the two absolute lines (the owner policy runs first and last), add a
+  thought act, signal or book, or write core books except through events. The core's "no
+  emotions" non-goal is about the core; a package may simulate them.
 - **Owner policy** wraps every package middleware (first and last) and cannot be removed by a
   package (D9).
 - **Default owner policy**, active out of the box: the two absolute lines, the daily model
@@ -261,7 +286,10 @@ Layers:
 ## 4. Packages (plugins)
 - A package bundles organs, middleware, installed skills and dependencies. A loader outside the
   core assembles them; the core sees only senses, organs and hooks (D9).
-- Name collisions (two packages claiming the same command or organ) fail at boot (D9).
+- Name collisions (two packages claiming the same command, organ or state namespace) fail at boot
+  (D9, D41).
+- A package declares what it brings — organs, middleware, commands, installed skills, standing
+  rules, its state namespace — in one manifest (format in docs/FORMATS.md, Draft) (D41).
 - Packages are trusted code installed by the owner and run in-process (the Home Assistant model).
   The owner policy holds against packages that follow the contract; it is not a sandbox against
   malicious code, and the docs say so (D32.11).
@@ -276,8 +304,9 @@ Layers:
   language. Read once at birth (D35).
 - **Prior**: a local folder loaded at birth — `manifest.yaml` (format version, date, embedder,
   LLM family, language), `dispositions.yaml` (knobs, calibration, constants),
-  `references.yaml`, `lessons.yaml`, `procedures.yaml` (with credence), `scenarios/` (replay
-  proof). A default prior ships with the repository (D25, D30, D34, D36).
+  `references.yaml`, `lessons.yaml`, `procedures.yaml` (with credence). Replay scenarios that
+  prove a prior live in the repository's `scenarios/`, not inside it. A default prior ships with
+  the repository (D25, D30, D34, D36).
 - **Knobs**: about ten values named by behavior — talkativeness, restraint after speaking,
   spontaneity, helpfulness, boredom with repeats, patience, reserve when unfamiliar, speaking
   bar, certainty bar, memory persistence — each with an "if the soul is too X" guide. One

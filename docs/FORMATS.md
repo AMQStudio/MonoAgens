@@ -14,7 +14,26 @@ long_running: false         # true → progress and completion arrive as act.res
 identity_changing: false    # true → passes the action hook only when origin_actor is the owner
 ```
 
-## 2. Prior (format version 1)
+## 2. Percept (format version 1)
+What an organ puts into the queue when it senses something (D41). The core reads the same fields
+for every sense; it knows no modalities.
+
+```yaml
+kind: percept
+body: telegram              # organ name
+who: telegram:123           # native id; the alias map turns it into a person id
+place: telegram:chat:-100   # native space id; becomes a neutral place
+addressed: false            # the turn is allocated to the soul (direct chat, reply, tag)
+description: "Budi: anyone know where the meeting is?"   # short, in language; what the PFC reads
+data: { message_id: 812 }   # optional raw data for the organ or packages; never interpreted by the core
+sent_at: 2026-11-11T13:20:05+07:00   # optional; the sense's own clock (back-fill)
+backfill: false             # true when an organ catches up on what it missed
+```
+
+Other senses use the same shape: `description: "kitchen temperature 31 °C"` with
+`data: { celsius: 31 }`, or `description: "someone entered through the front door"`.
+
+## 3. Prior (format version 1)
 A soul is born from a prior: a plain folder with layers 1–2 of learned state. Never contains
 layer 3 (episodic memory, people, places, personal details). End users never see it; developers
 tune it with replay reports, not by guessing numbers (D36).
@@ -28,7 +47,7 @@ prior/
   procedures.yaml     # list of {about, steps, lessons, credence: {alpha, beta}}
 ```
 
-### 2.1 dispositions.yaml
+### 3.1 dispositions.yaml
 Three sections, from "tune this" to "leave this alone":
 
 ```yaml
@@ -75,7 +94,7 @@ Every knob is in [0, 1] unless stated, has a floor and a ceiling, and is what le
 (`disposition.updated talkativeness 0.45 → 0.44`). The mapping from knobs to the gate's internal
 values lives in one function in the code; nothing else reads knobs directly.
 
-### 2.2 The knobs
+### 3.2 The knobs
 
 | Knob | What it means | Drives (internally) | If the soul is… |
 |---|---|---|---|
@@ -92,7 +111,7 @@ values lives in one function in the code; nothing else reads knobs directly.
 
 The daily model budget and quiet hours are owner settings (owner policy), not knobs.
 
-### 2.3 Loading rules
+### 3.3 Loading rules
 - Different embedder → `calibration` falls back to the default prior shipped with the repository.
 - Different LLM family → load, but scale procedure and lesson credence down (halve alpha and beta)
   until proven again.
@@ -100,7 +119,7 @@ The daily model budget and quiet hours are owner settings (owner policy), not kn
 - Replay scenarios that prove the prior are kept in the repository's `scenarios/`, not inside
   the prior (they are tests, not learned state).
 
-## 3. Installed skill (SKILL.md)
+## 4. Installed skill (SKILL.md)
 Installed skills come from packages; they are static and never learned (D34). The common
 SKILL.md format: YAML front matter, then the instructions in Markdown.
 
@@ -115,3 +134,22 @@ Steps …
 
 Only `name` and `description` enter the prompt; the body is loaded when the PFC asks for it.
 What the soul learns by itself is stored as `procedure` and `lesson` memories, not as SKILL.md.
+
+## 5. Package manifest (Draft)
+One file at the root of a package declares everything it brings (D41). The loader reads it; the
+core never does.
+
+```yaml
+name: work-modes
+version: 0.1.0
+state_namespace: work-modes          # its state keys are work-modes:* (projected from its events)
+organs: [modes_organ]                # e.g. offers a `set_mode` capability
+middleware:
+  - { hook: context, scope: shared, entry: modes.annotate }   # attaches "mode: professional"
+commands: [mode]
+skills: []
+rules:                               # standing rules shown in <self>, in this order
+  - "In professional mode, keep replies short and formal."
+knob_offsets:                        # bounded, temporary; recorded as disposition.updated
+  talkativeness: { min: -0.2, max: 0.0 }
+```
