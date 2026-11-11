@@ -496,6 +496,60 @@ rigid. So:
 4. A new row is added only when a whole brain function is missing, and it must fit the
    complexity budget (D26).
 
+**D40 — Generalization pass: every case rule becomes a brain function (applies D39).**
+An audit of D1–D39 found rules that were written for one situation. Each is replaced by the
+brain function that produces it; formulas and sources in docs/MATH.md §15.
+1. **Reflexes = the circuit breaker on commitments** (ventral attention network). Instead of a
+   list (addressed, due promise, own results), one principle: an event bypasses the draw when it
+   engages a commitment the soul holds — the turn was allocated to it (selected by the speaker:
+   a direct chat, a reply, a tag; conversational obligation), it fires or answers an active
+   Expectation, or it continues an active goal (a result of its own action). The organ reports
+   `addressed` as a neutral event field.
+2. **Own name is attention capture, not obligation.** `name_mentioned` becomes `own_name`: it
+   raises salience (cocktail-party effect) but does not allocate the turn; "Mona said earlier…"
+   is heard, not answered by force.
+3. **Patience is the self-selection rule of turn-taking.** When the turn was not allocated to the
+   soul, it may self-select only if nobody else takes the floor first (the `wait` Expectation).
+   When it was selected, it answers (possibly "I don't know"); no waiting.
+4. **`social_cost` is "the floor belongs to someone else"**: another person was selected, or
+   someone already answered; lowered by closeness to the speaker. The soul's own share of talk
+   lives only in θ (talk_rate), so the two no longer overlap.
+5. **Newcomer shyness becomes reserve in unfamiliar context.** familiarity = σ(B) of the ACT-R
+   base-level activation of the soul's interactions with this place and the people present
+   (0 when none). θ gains `reserve_when_unfamiliar` · (1 − familiarity). It covers new places,
+   new people, and a place it has not visited for a long time. `newcomer_interactions` is
+   removed.
+6. **Catching up is ordinary perception.** No `catch_up` wake and no `catch_up_hours`.
+   Back-filled events of one place form one percept (a chunk) and are appraised once, with every
+   signal discounted by age through the same ACT-R decay ((1 + L_hours)^(−d)). The circuit
+   breaker still applies: a message addressed to the soul while it was away still holds the turn.
+7. **Thrift is not a mode.** As the budget is spent, θ's budget term rises, so only salient
+   events pass; the circuit breaker still fires (a tired person still answers when called).
+   Classifier calls are model calls under the same budget; when none is affordable a free-text
+   condition stays unresolved. `budget.exhausted` is still recorded.
+8. **The wake gate checks only relevance and staleness.** "Allowed now?" is gone from the core:
+   quiet hours are owner policy in the hooks, the budget is θ, and "nudge caps" are replaced by
+   the Expectation's own `policy` (cooldown, max fires) and habituation.
+9. **One rule for "enough evidence".** Every evidence threshold uses the beta posterior's 95%
+   bound. The wake gate's "clearly yes" band opens when zero false resolutions have been seen in
+   n ≥ 3/ε verdicts (rule of three; ε = 0.06 gives the old 50). A knob moves only when the 95%
+   interval of its evidence excludes "no change" (replaces "at least 10 events").
+10. **Honesty rules fold into D38.** The model's own knowledge counts as `told`, dated at the
+    knowledge cutoff; volatile facts are then handled by the reality filter and report control
+    like any old memory (use a search organ if one is present, or answer as of that date). The
+    hand-written "cannot do" list is removed: `<self>` is closed-world — what is not listed
+    cannot be done.
+11. **Guarded facts are prediction errors.** An important memory is a prediction; a contradicting
+    event is a prediction error weighted by precision (the belief's credence × the new source's
+    reliability) and enters through the same salience path: relevant now → the PFC sees it live;
+    otherwise it is settled in sleep. No separate queueing rule.
+12. **Not brain functions, so not core:** package suggestions (D28) and identity linking (D10)
+    are middleware; social standing (D31) stays person-card knowledge (deferred).
+Brain map rows added: circuit breaker (ventral attention), turn-taking, goal maintenance
+(prefrontal), learning from outcomes (dopamine prediction error), context familiarity.
+Status: D12 honesty list, D15 "allowed now", D21/D29 evidence counts, D27 guard queueing, D32.6
+thrift mode, D33.2 newcomer term and D37 catch-up are replaced by D40. D28 moves to middleware.
+
 ## Accepted in principle, details pending
 
 (None. P1 was detailed as D27.)

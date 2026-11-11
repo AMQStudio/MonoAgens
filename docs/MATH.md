@@ -23,7 +23,8 @@ the cheap machinery judges a moment worth it.
 ## 2. Signals
 Each signal is a pure function of the current situation with a value in [0, 1].
 
-- **name_mentioned** ∈ {0, 1}: the soul's name appears in the text without a tag.
+- **own_name** ∈ {0, 1}: the soul's name appears without the turn being allocated to it
+  (attention capture, §15).
 - **info_gap** = max_r cos(v, r) over reference sentences r for the language
   (`references.yaml`), where v is the event's embedding. Rationale: curiosity and helping start
   from a perceived information gap [Loewenstein 1994, PR]; embeddings instead of keywords keep it
@@ -33,15 +34,16 @@ Each signal is a pure function of the current situation with a value in [0, 1].
   metamemory's feeling-of-knowing predicts whether recall will succeed [Nelson & Narens 1990, PR];
   LLMs show usable FOK/JOL signals when they are used for control [arXiv 2605.14186, PP].
 - **relevance** = max cos(v, u) over vectors u of active promises and core memory.
-- **social_cost** ∈ [0, 1]: combines having spoken recently here, how busy the place is, whether
-  someone else already replied after the message, and closeness to the speaker (§7).
+- **social_cost** ∈ [0, 1]: the floor belongs to someone else — another person was selected, or
+  someone already answered — lowered by closeness to the speaker (§7). The soul's own share of
+  talk is only in θ (§15).
 
 σ(x) = 1 / (1 + e^(−x)) throughout.
 
 ## 3. Salience, habituation, threshold and the go / no-go gate
 
 **Salience.** S = clamp(Σₖ wₖ·sₖ, 0, 1) over the signals sₖ with weights wₖ (from knobs and
-constants: `helpfulness` → info_gap and FOK weights; `name_mentioned_weight`, `relevance_weight`;
+constants: `helpfulness` → info_gap and FOK weights; `own_name_weight`, `relevance_weight`;
 `restraint_after_speaking` → the social_cost weight, which is negative).
 Rationale: the salience network selects the most relevant stimuli and switches between
 inward and outward processing [Menon & Uddin 2010, PR; Menon 2011, PR].
@@ -52,15 +54,16 @@ Rationale: repeated stimuli without consequence lose their pull — the most bas
 learning in behavior.
 
 **Threshold (drives, no emotion).**
-θ = θ₀ + a · talk_rate + b · budget_used − c · promise_debt + newcomer(place)
+θ = θ₀ + a · talk_rate + b · budget_used − c · promise_debt + r · (1 − familiarity)
 - θ₀ from `talkativeness` (0 → 0.85, 1 → 0.35).
 - talk_rate = the soul's communicative acts in this place over the last
   `talk_rate_window_minutes`, divided by max(1, active participants). The 1/n reference rate is
   how a fair participant behaves in group chat [Eckhaus et al. 2025, "Time to Talk", PR].
 - budget_used = tokens spent today / daily budget (owner setting).
 - promise_debt = share of the soul's promises due within the next hour.
-- newcomer(place) = `shyness_in_new_places` · max(0, 1 − interactions_here /
-  `newcomer_interactions`).
+- familiarity = σ(B_ctx), B_ctx the ACT-R base-level activation (§5) of the soul's interactions
+  with this place and the people present (familiarity = 0 when there are none);
+  r = `reserve_when_unfamiliar` (§15).
 - a from `restraint_after_speaking`; b = `budget_weight`; c = `promise_debt_weight`.
 Rationale: homeostatic drives shift the willingness to act without simulating feelings
 [Wang et al. 2023, "Humanoid Agents", PR — we keep their basic-needs idea and drop emotion].
@@ -73,18 +76,18 @@ go / no-go) gives natural variation without if-else rules, and the seed makes ev
 exactly reproducible in replay. A small non-LLM trigger deciding *when* to act outperforms an
 LLM deciding it on every event, at a fraction of the cost [arXiv 2605.30152, PP].
 
-**Reflexes** bypass the draw: addressed events, a due promise that passed the wake gate, and
-results of the soul's own actions.
+**Circuit breaker** (§15) bypasses the draw: the event engages a commitment — the turn was
+allocated to the soul, it fires or answers an active Expectation, or it continues an active goal.
 
 ## 4. Patience and inner thought
 
-**Patience.** A non-reflex go creates a `wait` Expectation: if someone other than the sender
+**Patience.** A go on a turn not allocated to the soul creates a `wait` Expectation: if someone other than the sender
 replies in this place within `patience_seconds`, the decision ends as silent; otherwise the PFC
 wakes. Rationale: in multi-party chat the agent should not take the floor when someone else is
 about to answer; silent abstention and interruption are the two failure modes to measure
 [arXiv 2609.03923 (CAPA), PP; arXiv 2607.03730 (ProACT), PP].
 
-**Inner thought.** On non-reflex wakes the PFC calls think(thought, motivation m ∈ 1..5,
+**Inner thought.** When the soul self-selects, the PFC calls think(thought, motivation m ∈ 1..5,
 confidence c ∈ [0, 1]). A communicative act passes only if m ≥ `speaking_bar` and
 c ≥ `certainty_bar`. The criteria offered to the PFC are the eight heuristics of
 [Liu et al. 2025, "Inner Thoughts", CHI, PR]: relevance, information gap, expected impact,
@@ -125,8 +128,8 @@ typed records whose lifecycle lives in code works better than leaving them to th
 **Free-text conditions.** m = cos(event vector, condition vector).
 - m < `wake_gate_lo` → ignore.
 - m ≥ `wake_gate_lo` → one classifier call; its verdict is recorded with m.
-- `wake_gate_hi` = 1 (no "clearly yes" band) until at least 50 recorded verdicts with m above a
-  proposed hi contain no "no".
+- `wake_gate_hi` = 1 (no "clearly yes" band) until zero "no" verdicts are seen in n ≥ 3/ε
+  verdicts with m above a proposed hi (rule of three, §15; ε = 0.06 → n = 50).
 Rationale: similarity measures "about the same thing", not "answers it" — a question on the
 same topic is as similar as its answer (D21).
 
@@ -152,7 +155,7 @@ wₖ ← clamp(wₖ + α_learn · (r − P) · sₖ), r = 1 if the outcome was g
 [Rescorla & Wagner 1972, PR]. α_learn = `learning_rate`.
 
 **Bounded updates** (for knobs, when enabled, D29/D32.7):
-- move only after at least N consistent pieces of evidence (start: 10);
+- move only when the 95% interval of the evidence excludes "no change" (§15);
 - each step ≤ a small share of the knob's range; total daily change ≤ 5% of the range;
 - every knob has a floor and a ceiling; a knob that sits at a bound for several days freezes
   and is reported to the owner;
@@ -255,6 +258,39 @@ hypothesis, as episodic memory does for simulation [Schacter & Addis 2007, PR]; 
 is `inferred` and said as a guess. For now the PFC judges q from context; learning q per place
 and topic is deferred (D32.9).
 
+## 15. Generalization: one function instead of many rules (D40)
+
+**Circuit breaker on commitments.** The ventral attention network interrupts ongoing processing
+for behaviorally relevant stimuli, acting as a "circuit breaker" for the goal-directed dorsal
+system [Corbetta & Shulman 2002, PR]. Relevance here is a commitment the soul holds: the turn was
+allocated to it, an active Expectation fires or is answered, or an active goal continues. Goals
+held in prefrontal cortex bias processing toward what serves them [Miller & Cohen 2001, PR].
+
+**Turn-taking.** Conversation allocates turns: the current speaker may select the next speaker,
+who then has the right and obligation to speak; otherwise the first to self-select takes the
+turn [Sacks, Schegloff & Jefferson 1974, PR]. Mapping: `addressed` = selected → circuit breaker;
+not selected → patience (`wait`) as the self-selection rule; `social_cost` = the floor is
+someone else's.
+
+**Own name.** One's own name breaks through unattended input [Moray 1959, PR; replicated by
+Röer & Cowan 2021, PR]: salience, not obligation.
+
+**Context familiarity.** Caution under unfamiliar context follows from report control (§14): in a
+new place or company the soul's estimate that a contribution is welcome is uncertain, so the
+criterion rises. Familiarity reuses ACT-R base-level activation (§5), so a place left long ago
+becomes unfamiliar again without any new constant.
+
+**Chunking a backlog.** Working memory holds about four chunks [Cowan 2001, PR]; a backlog of
+missed messages in one place is appraised as one chunk, with each signal discounted by age as
+(1 + L_hours)^(−d), the same decay as §5.
+
+**Enough evidence.** With zero failures in n trials, the 95% upper bound of the failure rate is
+about 3/n [Hanley & Lippman-Hand 1983, PR]; in general the bound comes from the beta posterior
+already used for credence (§7). One rule replaces every hand-picked count.
+
+**Learning from outcomes.** Dopamine neurons signal reward prediction error, the quantity the
+delta rule uses [Schultz, Dayan & Montague 1997, PR]; it underlies §8.
+
 ---
 
 ## References
@@ -291,6 +327,22 @@ and topic is deferred (D32.9).
   recognition. *Quarterly Journal of Experimental Psychology*, 29(3), 461–473. [PR]
 - Schacter, D. L., & Addis, D. R. (2007). The cognitive neuroscience of constructive memory:
   remembering the past and imagining the future. *Phil. Trans. R. Soc. B*, 362, 773–786. [PR]
+- Corbetta, M., & Shulman, G. L. (2002). Control of goal-directed and stimulus-driven attention
+  in the brain. *Nature Reviews Neuroscience*, 3, 201–215. [PR]
+- Miller, E. K., & Cohen, J. D. (2001). An integrative theory of prefrontal cortex function.
+  *Annual Review of Neuroscience*, 24, 167–202. [PR]
+- Sacks, H., Schegloff, E. A., & Jefferson, G. (1974). A simplest systematics for the
+  organization of turn-taking for conversation. *Language*, 50(4), 696–735. [PR]
+- Moray, N. (1959). Attention in dichotic listening: affective cues and the influence of
+  instructions. *Quarterly Journal of Experimental Psychology*, 11(1), 56–60. [PR]
+- Röer, J. P., & Cowan, N. (2021). A preregistered replication and extension of the cocktail
+  party phenomenon. *JEP: Learning, Memory, and Cognition*. [PR]
+- Cowan, N. (2001). The magical number 4 in short-term memory. *Behavioral and Brain Sciences*,
+  24(1), 87–114. [PR]
+- Hanley, J. A., & Lippman-Hand, A. (1983). If nothing goes wrong, is everything all right?
+  *JAMA*, 249(13), 1743–1745. [PR]
+- Schultz, W., Dayan, P., & Montague, P. R. (1997). A neural substrate of prediction and reward.
+  *Science*, 275, 1593–1599. [PR]
 - Park, J. S., et al. (2023). Generative Agents: Interactive Simulacra of Human Behavior.
   *UIST*. arXiv 2304.03442. [PR]
 - Liu, X. B., et al. (2025). Proactive Conversational Agents with Inner Thoughts. *CHI*.

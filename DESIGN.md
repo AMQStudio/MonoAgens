@@ -50,6 +50,11 @@ the map, never new rows.
 | Recognition (hippocampus, perirhinal) | familiarity vs recollection; pattern separation (D38) | core / sleep |
 | Reality filter (orbitofrontal) | superseded memories suppressed; absolute time (D38) | core |
 | Salience network, habituation | salience over signals; per-source dampening | core |
+| Ventral attention (circuit breaker) | commitments bypass the draw (D40) | core |
+| Turn-taking (social) | `addressed`, `social_cost`, patience as self-selection (D40) | core |
+| Goal maintenance (prefrontal) | active goals and the work thread hold attention | core |
+| Context familiarity | reserve in unfamiliar places and company (D40) | core |
+| Learning from outcomes (dopamine prediction error) | delta rule; α/β credence | core / sleep |
 | Cognitive drives (no emotion) | threshold: talk rate, budget, promise debt | core |
 | Basal ganglia (go / no-go) | seeded probabilistic gate | core |
 | Theory of mind | person cards (closeness, reliability) | sleep |
@@ -61,7 +66,8 @@ the map, never new rows.
 2. Record it and update state in one transaction; release the intake ack; embed its text.
 3. **Inbound hook** (alias map, commands, owner policy). A Stop ends the turn (recorded).
 4. Check Expectations (time path on ticks, event path on events) through the wake gate.
-5. **Appraise** without any model call: reflexes, or signals → salience → threshold → draw.
+5. **Appraise** without any model call: the circuit breaker on commitments, or signals →
+   salience → threshold → draw.
 6. If the PFC wakes: assemble the layered context, pass the **context hook**, and start the
    model call as a background job. Its result returns as an event and is handled in a later
    turn (D33). At most one PFC job per place is in flight.
@@ -120,8 +126,8 @@ the organs present now, listed in a fixed order so the prompt cache holds.
 - The brain decides intent and content; the organ decides how (chat bubbles, TTS, gestures).
   Fine control stays inside the organ.
 - Long actions report progress and completion as `act.result` events; the core never waits.
-- Multi-step work is a chain: result → reflex wake → next `act`, limited by steps per task and
-  the budget. Every step is logged, so tasks resume after a restart and can be interrupted.
+- Multi-step work is a chain: result → circuit breaker (it continues an active goal) → next
+  `act`, limited by steps per task and the budget. Every step is logged, so tasks resume after a restart and can be interrupted.
 - Organs translate native command syntax into a neutral `command` event; one shared command
   registry makes `/help` identical everywhere (D9).
 - On start an organ asks for `cursor(organ)`, so input is never lost or duplicated.
@@ -138,9 +144,9 @@ still found; under absolute line 2. It is how the soul "thinks harder" to rememb
 
 **History and catching up** (D37). A body may offer `history(place, before, limit)` for messages
 the log lacks. On connect it back-fills what it missed as `msg.in` with `backfill: true` and
-`sent_at`. Back-filled events are recorded and indexed, never gated one by one; unread ones
-(newer than the soul's last activity there, younger than `catch_up_hours`) produce one
-`catch_up` wake per place.
+`sent_at`. Back-filled events of one place form one percept and are appraised once, every
+signal discounted by age with the ACT-R decay; a message addressed to the soul while it was away
+still trips the circuit breaker (D40).
 
 ## 5. Expectations
 
@@ -162,44 +168,51 @@ fire_count · origin_actor · derived_from · expires_at (required) · created_a
 - `policy`: once, or cooldown + max_fires. A fifth kind needs a new decision.
 
 **Wake gate** (no PFC call): *still relevant?* (condition already met → resolve) · *stale?*
-(past expiry → drop) · *allowed now?* (quiet hours, budget, nudge caps).
+(past expiry → drop). Quiet hours are owner policy in the hooks; the budget acts through θ;
+repeats are limited by the Expectation's `policy` and habituation (D40).
 
 **Free-text conditions.** m = cosine(event vector, condition vector). m < lo → ignore.
 m ≥ lo → one classifier call, recorded as `classifier.verdict` with m. The "clearly yes" band
-is off (hi = 1) until at least 50 verdicts above a proposed hi contain no "no" (D21).
+is off (hi = 1) until zero false resolutions are seen in n ≥ 3/ε verdicts above a proposed hi
+(rule of three; D21, D40).
 A woken PFC re-judges the situation; it never replays a promise blindly.
 
 ## 6. Cognition
 
-**Reflexes** (wake without a draw): addressed events · a due `promise` that passed the wake
-gate · `act.result` of the soul's own actions.
+**Circuit breaker** (D40; wake without a draw): the event engages a commitment the soul holds —
+the turn was allocated to it (`addressed`: direct chat, reply, tag), it fires or answers an
+active Expectation, or it continues an active goal (a result of its own action).
 
 **Signals** — pure functions `(Situation) -> [0, 1]`, at most 10 (now 5). `Situation` holds the
 event, its vector, recent messages here, memory candidates with activation, and relevant state.
-- `name_mentioned`
+- `own_name` — its name appears (attention capture, not a turn allocation)
 - `info_gap` — cosine to reference sentences in the prior (not keywords)
 - `feeling_of_knowing` — σ((max activation − τ)/s), recent messages included
 - `relevance` — to active promises and core memory
-- `social_cost` — spoke recently, busy place, someone already replied, closeness to the speaker
+- `social_cost` — the floor belongs to someone else (another person selected, or already
+  answered), lowered by closeness to the speaker; the soul's own share of talk is in θ only
 
 **Gate.**
 - S = clamp(Σ wₖ·sₖ); habituation per (place, who): h ← h·γ^Δminutes + 1; S_eff = S/(1+h).
-- θ = base + a·talk_rate + b·budget_used − c·promise_debt + newcomer(place), where newcomer
-  starts small and relaxes to 0 as interactions in that place accumulate (D33).
+- θ = base + a·talk_rate + b·budget_used − c·promise_debt + r·(1 − familiarity), where
+  familiarity is σ of the ACT-R activation of the soul's interactions with this place and the
+  people present (D40).
 - P = σ((S_eff − θ)/τ); draw u from the seeded generator; go if u < P.
-- A non-reflex go first creates a `wait` Expectation (patience).
+- A go on a turn not allocated to the soul first creates a `wait` Expectation: it self-selects
+  only if nobody else takes the floor (patience).
 Every number is stored in the decision event.
 
-**Inner thought.** On non-reflex wakes the PFC calls `think(thought, motivation 1..5,
+**Inner thought.** When the soul self-selects, the PFC calls `think(thought, motivation 1..5,
 confidence 0..1)` before any communicative `act`; the act passes only above `motivation_min`
 and `confidence_min`. Criteria (Inner Thoughts, CHI 2025): relevance, information gap, expected
 impact, urgency, coherence, originality, balance, dynamics.
 
-**Thrift mode.** When the daily budget is spent: reflexes only, classifier calls skipped and
-treated as "no", `budget.exhausted` recorded.
+**Budget.** Not a mode (D40): as the daily budget is spent θ rises, so only salient events pass;
+the circuit breaker still fires; a free-text condition with no affordable classifier call stays
+unresolved; `budget.exhausted` is recorded.
 
 **Knobs.** All tunable behavior is expressed as about ten named knobs in the prior
-(talkativeness, patience, shyness in new places, …); one function maps them to θ, τ, γ and the
+(talkativeness, patience, reserve when unfamiliar, …); one function maps them to θ, τ, γ and the
 weights above (D36, docs/FORMATS.md).
 
 **Learning.** Active now: the wake-gate edge `lo` follows classifier verdicts within bounds;
@@ -286,7 +299,8 @@ that domain. Standing never buys dishonesty.
 - *Stable*: who I am, how I work (memories can be incomplete; I can be wrong; I act only through
   organs), honesty rules, knowledge cutoff (from per-model configuration, set slightly earlier
   than claimed), principles, thought acts and capability schemas.
-- *Semi-stable*: `<self>` (capabilities, commands, installed skills; a short "cannot do" list),
+- *Semi-stable*: `<self>` (capabilities, commands, installed skills; closed-world: what is not
+  listed cannot be done),
   core memory, person cards of people present.
 - *Volatile, last*: `<now>` (date and time), `<place>`, `<why_awake>`, `<doing>`, `<next>`,
   `<memories>` with source and age, `<recent>`, `<event>`. Messages from non-owners are delimited
@@ -295,9 +309,9 @@ The prompt is a desk, not the memory (D37): it is rebuilt from the books at ever
 compacted. Each volatile section has a token budget (prior constants). In a multi-step chain
 `<doing>` holds the goal, one line per step and the latest result verbatim; older results are
 pointers the soul can `recall`.
-Rules: changing facts → use a search organ, or answer "as of my knowledge in <cutoff>" ·
-attribute memories · low confidence → ask or say "I don't know" · never claim a capability not in
-`<self>`.
+The model's own knowledge counts as `told`, dated at the knowledge cutoff, so changing facts fall
+under the same reality filter and report control as any old memory (D40): use a search organ if
+present, or answer as of that date.
 General honesty principles (D38), worded by the PFC, never scripted: speak as a person about what
 you know (sure, unsure, don't know, don't remember) without describing your own machinery unless
 asked · the more an answer matters, the surer you must be before stating it; otherwise be less

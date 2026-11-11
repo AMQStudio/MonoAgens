@@ -38,7 +38,8 @@ LLMs are a prefrontal cortex without the rest of the brain. MonoAgens is the res
 4. Lineage: `derived_from` on memories, expectations and vectors; replace the `event_vectors`
    no-delete trigger with the two dedicated paths (fade, hard forget) — stubs that write their
    events are fine.
-5. Budget: `model.call` for every model call; thrift mode and `budget.exhausted`.
+5. Budget: `model.call` for every model call; the budget term in θ and `budget.exhausted`
+   (no thrift mode, D40).
 6. Expectation schema with the four kinds (`promise`, `wait`, `predict`, `guard`).
 7. Injected clock everywhere (no `datetime.now()` in the core); replay uses event times.
 8. Slow work off the loop (D33): PFC, classifier, embedding and sleep as background jobs whose
@@ -56,13 +57,13 @@ direct clock or random call in the core.
 |---|---|---|
 | B | ACT-R activation, `use_count`, feeling-of-knowing helper | frequently used memories outrank newer unused ones |
 | C | the five signals + habituation | "lupa nama tempatnya apa ya" scores high only when the answer is known; repeated stickers fade |
-| D | dynamic θ, seeded go/no-go, decision outcomes | same events + seed → same decisions; talk rate ≤ 1/n in a busy group |
-| E | `wait` Expectations (patience), `not_who` | someone else answers → silent; nobody → one reply |
+| D | dynamic θ (incl. familiarity), seeded go/no-go, circuit breaker on commitments, decision outcomes (D40) | same events + seed → same decisions; talk rate ≤ 1/n in a busy group |
+| E | `wait` Expectations as the self-selection rule, `addressed` from organs, `not_who` | not addressed: someone else answers → silent, nobody → one reply; addressed: answers without waiting |
 | F | `think` with motivation/confidence, principles, person cards, self-model, D38 honesty principles | proactive replies always have a recorded thought; "what can you do?" matches `<self>`; a false claim about the past is not confirmed, and a missing record is not called proof |
 | H | `revise`, `guard` facts checked in sleep, lessons and procedures with credence (α/β), `basis` on memories, source-over-gist, merge only on same people/place/time (D38) | a correction supersedes the old memory; a contradicted fact is revised at the next sleep |
 | I | wake gate; free-text conditions with cosine filter + classifier; `lo` learning | a fulfilled promise wakes no one; a question on the same topic never resolves a promise |
 | J | attribution and reliability (α/β) per domain; fade with a fixed threshold; soft and hard forgetting | a stranger cannot override an owner fact; hard forget leaves only `{"forgotten": true}` and metadata |
-| K | the desk (D37): section token budgets, work thread in `<doing>` with pointers, the `self` organ with `recall` (query, time range, lineage, text search on events), back-fill handling and `catch_up` wakes | a 15-step task keeps a flat prompt size; "what did we do last month?" lists that month's episodes and details come from the original events, also after the vector faded and when sleep failed; 40 unread messages produce one catch-up wake |
+| K | the desk (D37): section token budgets, work thread in `<doing>` with pointers, the `self` organ with `recall` (query, time range, lineage, text search on events), back-fill appraised as one age-discounted percept per place | a 15-step task keeps a flat prompt size; "what did we do last month?" lists that month's episodes and details come from the original events, also after the vector faded and when sleep failed; 40 unread messages are appraised once |
 | R | replay scenarios for B–J, plus report metrics: false-speak rate, missed-help rate, tokens per simulated day, absolute-line violations (must be 0), honesty-rule compliance | each new scenario fails before its track lands and passes after |
 
 **Deferred until weeks of real logs exist (D32.9):** learned signal weights, learned

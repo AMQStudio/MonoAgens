@@ -39,7 +39,7 @@ knobs:            # behavior, in plain words; the only values a developer normal
   helpfulness: 0.6
   boredom_with_repeats: 0.5
   patience_seconds: 90
-  shyness_in_new_places: 0.3
+  reserve_when_unfamiliar: 0.3
   speaking_bar: 4            # 1..5
   certainty_bar: 0.5
   memory_persistence: 0.5
@@ -51,13 +51,12 @@ calibration:      # measured per embedder/model by tools; never set by hand
   wake_gate_hi: 1.0          # 1.0 = "clearly yes" band off (D21)
 
 constants:        # stable engineering values; change only with a decision
-  name_mentioned_weight: 0.5
+  own_name_weight: 0.5
   relevance_weight: 0.2
   talk_rate_window_minutes: 10
   promise_debt_weight: 0.1
   budget_weight: 0.3
   note_band: 0.2
-  newcomer_interactions: 30
   forward_window_minutes: 30
   context_weight: 1.0
   importance_weight: 0.5
@@ -70,7 +69,6 @@ constants:        # stable engineering values; change only with a decision
   thread_result_tokens: 3000   # latest result shown verbatim in <doing>
   volatile_tokens_max: 8000    # whole volatile part; trimmed oldest-first within each section
   recall_results: 10
-  catch_up_hours: 6
 ```
 
 Every knob is in [0, 1] unless stated, has a floor and a ceiling, and is what learning moves
@@ -87,7 +85,7 @@ values lives in one function in the code; nothing else reads knobs directly.
 | `helpfulness` | how strongly a question it can answer pulls it in | `info_gap` and `feeling_of_knowing` weights | misses chances to help → raise; answers what nobody asked → lower |
 | `boredom_with_repeats` | how fast repeated stimuli fade | habituation γ: 0 → 0.99/min, 1 → 0.8/min | reacts to every sticker or repeat → raise |
 | `patience_seconds` | how long it waits for someone else to answer first | the `wait` Expectation window | jumps in too fast → raise; answers too late → lower |
-| `shyness_in_new_places` | how reserved it is in a new group | the newcomer term of θ at the start | too forward in new groups → raise |
+| `reserve_when_unfamiliar` | how reserved it is with unfamiliar places and people | r in θ, times (1 − familiarity) | too forward in new company → raise; too stiff with new people → lower |
 | `speaking_bar` | how strong a thought must be before saying it (1..5) | `motivation_min` | says weak things → raise |
 | `certainty_bar` | how sure it must be before stating something | `confidence_min` | states shaky things → raise; hedges too much → lower |
 | `memory_persistence` | how long unused memories stay strong | ACT-R decay d: 0 → 0.7, 1 → 0.3 | forgets too fast → raise; drags up old trivia → lower |
