@@ -5,45 +5,47 @@ description: >-
   The gate and the circuit breaker (core.md §6, core-math.md §3, §15). A busy
   group of six people stays silent: the soul's share of talk stays below the
   fair share 1/n, and the three log-derived terms of theta (talk_rate,
-  promise_debt, budget_used) are stored in every decision event. An addressed
-  message always wakes the PFC, an active promise fired by an unaddressed
-  message wakes it too, and once Mona knows the answer to a group question the
-  gate opens and the kernel's wait answers it once, after the patience window.
+  promise_debt, budget_used) are stored in every decision event. Two group
+  lines name the document under review before the request, so the request about
+  "dokumennya" has a referent. An addressed message always wakes the PFC, an
+  active promise fired by an unaddressed message wakes it too, and once Mona
+  knows the answer to a group question the gate opens and the kernel's wait
+  answers it once, after the patience window.
 expectations:
   - type: no_reply
-    steps: [1, 2, 3, 4, 5, 6, 8, 9, 12]
+    steps: [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 14]
     label: unaddressed chatter in a busy group stays silent
   - type: event_seen
     kind: model.call
-    step: 7
+    step: 9
     count: 1
     label: an addressed message always wakes
   - type: event_seen
     kind: decision.silent
     payload: {talk_rate: 0.0}
-    steps: [1, 2, 3, 4, 5, 6]
-    count: 6
+    steps: [1, 2, 3, 4, 5, 6, 7, 8]
+    count: 8
     label: the gate stores its talk rate in the decision event
   - type: event_seen
     kind: decision.silent
     payload: {promise_debt: 0.0}
-    steps: [1, 2, 3, 4, 5, 6]
-    count: 6
+    steps: [1, 2, 3, 4, 5, 6, 7, 8]
+    count: 8
     label: the gate stores the promise debt in the decision event
   - type: event_seen
     kind: decision.silent
     payload: {budget_used: 0.0}
-    steps: [1, 2, 3, 4, 5, 6]
-    count: 6
+    steps: [1, 2, 3, 4, 5, 6, 7, 8]
+    count: 8
     label: the gate stores the budget used in the decision event
   - type: event_seen
     kind: expectation.fired
-    step: 10
+    step: 12
     count: 1
     label: an active promise fires on an unaddressed message
   - type: reply_in
     place: space:tg:-1004
-    step: 10
+    step: 12
     count: 1
     label: the fired promise wakes the PFC
   - type: sleep_done
@@ -51,17 +53,17 @@ expectations:
   - type: event_seen
     kind: expectation.created
     payload: {kind: wait}
-    step: 13
+    step: 15
     count: 1
     label: the gate's go on an answerable question creates the wait
   - type: reply_in
     place: space:tg:-1004
-    step: 14
+    step: 16
     count: 1
     label: the patience window wakes the soul exactly once
   - type: mentions_any
     texts: ["jam lima", "lima sore", "17:00", "17.00", "5 sore", "pukul 17"]
-    step: 14
+    step: 16
     label: the answer names the stored report hour in any of its formats
 steps:
   - at: "2026-11-10T13:00:00+07:00"
@@ -93,6 +95,16 @@ steps:
     who: person:tg:7006
     place: space:tg:-1004
     text: "Aku ikut rapat."
+    should: silent
+  - at: "2026-11-10T13:02:40+07:00"
+    who: person:tg:7002
+    place: space:tg:-1004
+    text: "Proposal anggaran Q4 masih di-review Bu Rina."
+    should: silent
+  - at: "2026-11-10T13:02:50+07:00"
+    who: person:tg:7003
+    place: space:tg:-1004
+    text: "Iya, proposal anggaran Q4 itu yang kita tunggu minggu ini."
     should: silent
   - at: "2026-11-10T13:03:00+07:00"
     who: person:tg:7001
@@ -127,7 +139,7 @@ steps:
     should: answer
   - advance: "2m"
 model_answers:
-  - step: 7
+  - step: 9
     tool: decide
     calls:
       - name: expect
@@ -139,7 +151,7 @@ model_answers:
           intent: beri tahu bahwa dokumennya sudah selesai
           weight: 0.7
           policy: {once: true}
-  - step: 10
+  - step: 12
     tool: decide
     calls:
       - name: act
@@ -148,7 +160,7 @@ model_answers:
           arguments: {text: "Dokumennya sudah selesai, sesuai janjiku."}
       - name: resolve
         arguments: {id: 1, status: satisfied}
-  - step: 14
+  - step: 16
     tool: decide
     calls:
       - name: act

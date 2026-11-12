@@ -1815,3 +1815,50 @@ Part 12 notes (worker, 12.10):
   --fake`: 30 scenarios, 131/131 checks, missed-help 0.0% (0/65), false-speak 0.0% (0/71),
   absolute-line violations 0, honesty 100.0% (62/62). `scenarios/README.md` regenerated and
   committed. No real-model replay was started, as the task says. Commits 9f48281 and 8c28eb4.
+
+Part 12 notes (worker, 24/30 material):
+- **Evidence.** `reports/replay-20261112-085343.md` (flash, effort high) and
+  `reports/replay-20261112-085711.md` (Pro 0813, effort high): in both models the owner request
+  "kabari aku ya kalau dokumennya sudah selesai" (24 step 7, 30 step 1) drew a clarifying
+  question ("Dokumen yang mana, dan bagaimana aku tahu kalau sudah selesai?") and created no
+  expectation. Material check per D54: the Log held neither which document was meant nor the
+  place where its news would appear — in 30 the group `space:tg:-1004` had no line at all before
+  the request (its first line was the question at old step 2), and in 24 the request was the
+  group's first mention of a document. The soul's question was right for that desk, so the
+  scenarios were fixed and `monoagens/` was not touched.
+- **Material added to 24** (same place as the watched line, before the request): new steps 7
+  and 8 at 13:02:40/13:02:50 by `person:tg:7002` and `person:tg:7003` — "Proposal anggaran Q4
+  masih di-review Bu Rina." and "Iya, proposal anggaran Q4 itu yang kita tunggu minggu ini." The
+  request at step 9 keeps "dokumennya" and now has a referent on the desk.
+- **Material added to 30**: new steps 1 and 2 at 08:50/08:55 in `space:tg:-1004` by
+  `person:tg:7002` and `person:tg:7003` — "Proposal anggaran Q4 masih di-review Bu Rina." and
+  "Iya, kabar selesainya nanti diumumkan di grup ini." The owner's DM request at step 3 points at
+  that document, so both the referent and the watch place are in the Log before the promise.
+- **Desk evidence** (fake replay desks, built by the same `memory.build_context` +
+  `hooks.audience_policy` as the real run; dumped by a throwaway script, not committed):
+
+  | Wake | Desk |
+  |---|---|
+  | 24 step 9 (request) | `recent` #21 "Aku ikut rapat.", #25 "Proposal anggaran Q4 masih di-review Bu Rina.", #29 "Iya, proposal anggaran Q4 itu yang kita tunggu minggu ini." |
+  | 24 step 12 (statement fires) | same lines plus #33 request, #42 "Dokumennya masih di review.", #46 report hour, #50 "Dokumennya sudah selesai kok."; `<expectations>` holds the promise |
+  | 30 step 3 (owner DM request) | `elsewhere` #1 "Proposal anggaran Q4 masih di-review Bu Rina.", #5 "Iya, kabar selesainya nanti diumumkan di grup ini." |
+  | 30 step 4 (question) | `elsewhere` #18 "dokumen sudah selesai ya?" plus #1/#5; `<expectations>` holds the promise |
+  | 30 step 5 (statement) | `elsewhere` #28 "dokumennya sudah selesai kok."; promise still active |
+
+- **Changed checks.** 24: `no_reply` `[1,2,3,4,5,6,8,9,12]` → `[1..8,10,11,14]`; `model.call`
+  7 → 9; the three gate-term checks `decision.silent` `steps [1..6] count 6` → `steps [1..8]
+  count 8`; `expectation.fired` and `reply_in` 10 → 12; the wait's `expectation.created` 13 → 15;
+  `reply_in` and `mentions_any` 14 → 16. 30: new `no_reply steps [1,2]` (ordinary group chatter);
+  the question's `no_reply` and `no_event` 2 → 4; `reply_in` 3 → 5. Every check stays behavioral
+  (steps, places, counts, event kinds, hour formats); none was removed or loosened.
+- **Recorded answers.** 24: `decide` steps 7/10/14 → 9/12/16. 30: `decide` steps 1/2/3 →
+  3/4/5. The calls themselves are unchanged: `expect` stays a free-text promise
+  (`expect: {text: "dokumen sudah selesai"}`), the question's wake records only a `think`, and
+  the statement's wake acts and resolves. The fake replay stays deterministic.
+- **Descriptions** of 24 and 30 now say the earlier lines name the document; both capability
+  lines are unchanged.
+- **Runs.** `uv run pytest`: 289 passed (real Postgres). `uv run python scripts/replay.py
+  --fake`: 30 scenarios, 132/132 checks (131 before; the new 30 chatter check), missed-help
+  0.0% (0/65), false-speak 0.0% (0/75), absolute-line violations 0, honesty 100.0% (62/62).
+  `scenarios/README.md` regenerated (its real-model rows pool the 085343 and 085711 reports).
+  No real-model replay was started here, as the task says.
