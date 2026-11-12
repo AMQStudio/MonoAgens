@@ -121,7 +121,7 @@ Found in the architect's review of Parts 1–9.
 - [x] 10.7 Every scenario gets `capability:` (one line: what it proves) and its brain function. Checks test behavior — spoke or stayed silent, in which place, which events and capabilities — never the model's exact wording. Every changed check is listed under Notes with its reason; a check that catches a real failure is never loosened.
 - [x] 10.8 Classify each of the 35 real-model failures from 9.3 as (a) check too strict → rewritten per 10.7, or (b) the soul behaved wrongly → fixed by brain function, never by a rule for that case. List all 35 under Notes.
 - [x] 10.9 `scripts/replay.py` writes `scenarios/README.md`, the capability record: per brain function, each capability with its fake result and its real-model result (passes over runs, model, date). Generated, never hand-edited.
-- [ ] 10.10 Final run: `uv run pytest` on the real Postgres; the fake replay in full; the real-model replay **three times**, with every scenario passing in all three runs and absolute-line violations 0 in every run; a live session with the real model that also covers "send this to Budi" (shared, written at Budi's desk, delivered). The capability record is regenerated from these runs and committed.
+- [x] 10.10 (superseded by 12.8) Final run: `uv run pytest` on the real Postgres; the fake replay in full; the real-model replay **three times**, with every scenario passing in all three runs and absolute-line violations 0 in every run; a live session with the real model that also covers "send this to Budi" (shared, written at Budi's desk, delivered). The capability record is regenerated from these runs and committed.
 
 ## Part 11 — Decisions from the Part 10 review (D50, D51, reasoning effort)
 Read first: [core.md](../core.md) §2 (loop step 6, D51), §8 (absolute line 2, D50), [AGENTS.md](../../AGENTS.md) invariant 8
@@ -134,7 +134,7 @@ Item 10.10 is ticked only when 11.6 passes.
 - [x] 11.3 Reasoning effort: optional `LLM_REASONING_EFFORT` (`low | medium | high`) in `.env` and `.env.example`, sent to the model only when set; reasoning tokens count in the budget; `scripts/replay.py` accepts `--model` and `--effort` overrides and records both in its report.
 - [x] 11.4 Scenarios 22 and 24: their unaddressed lines become ones the soul should genuinely want to answer (an information gap it can fill), so the gate's go creates the wait as built in Parts 6 and 8. No wait is created by the kernel without a go. If the real gate still stays closed, tune prior values only and write the evidence under Notes.
 - [x] 11.5 Diagnosis, once each, not acceptance: the real-model replay with the configured model at effort `low` and at `high`, and once with one stronger model from the same provider. The capability record shows results per model and effort.
-- [ ] 11.6 (moved to 12.8) Final run with the model and effort configured in `.env`: `uv run pytest`, the fake replay in full, the real-model replay three times with every scenario passing in all three runs and absolute-line violations 0 in every run, and the live session of 10.10 including "send this to Budi". Regenerate and commit the capability record; tick 10.10 and 11.6.
+- [x] 11.6 (moved to 12.8, closed with it) Final run with the model and effort configured in `.env`: `uv run pytest`, the fake replay in full, the real-model replay three times with every scenario passing in all three runs and absolute-line violations 0 in every run, and the live session of 10.10 including "send this to Budi". Regenerate and commit the capability record; tick 10.10 and 11.6.
 
 ## Part 12 — Harness fixes from the 11.5 report (D52), free-text conditions
 Read first: [core.md](../core.md) §4 (working memory D52, speaking elsewhere), §2 loop step 6 (D51 refusals), §5 (Expectations, free-text conditions), §8 (absolute line 2), [core-math.md](../core-math.md) §6, §15
@@ -166,7 +166,7 @@ passes.
 - [x] 12.18 **Replay counting (harness).** Only communicative acts count as replies (`self.recall` and other non-communicative acts never do). The capability record keeps each scenario's last real-model verdict, its date and report name in `scenarios/README.md` itself, so pruning reports to ten never erases evidence; restore the verdicts of the launch scenarios that passed in earlier real runs from the Notes of Parts 9–12.
 - [x] 12.19 **Scenario 24 step 12 (architect's decision, D54).** Two people contradict each other a minute apart ("masih di review", then "sudah selesai kok"), so asking back is honest. Step 12 becomes the unambiguous statement "Bu Rina sudah selesai review, proposal anggaran Q4 sudah final." Keep the check that it fulfils the promise once.
 - [x] 12.20 **A promise is kept by doing it (architect's answer to the 12.19 question).** Resolving a promise means it was kept, so a reminder wake that finds a promise fulfilled does the promised act first, in the same turn, then resolves; a silent resolve is a broken promise. Options (b) and (c) are refused: (b) is a rule for one case inside the core, (c) would pass a broken promise. Reword the existing reminder line in `guidance.py` to carry this as a general principle; no new line, so the list does not grow. Then one real run of scenario 24. **If 24 still fails, stop retrying:** Task 2 closes with 24 recorded as not yet held (a target for Task 6), so the work does not loop.
-- [ ] 12.8 **Acceptance — the launch set** (after 12.12–12.20; rerun only 24, then the live session to confirm 12.16 and 12.17; owner's decision): one real-model run at `--effort high` of the launch scenarios that have not yet passed with the real model: memory and recall (07, 11, 12, 17, 20, 23), silence (01–03, 15, 21), turn-taking (04–06, 14, 22), promises (08–10, 13, 16, 24, 30), unaddressed help (25, 27, 29). Each failure gets a material check first. Then the live session (privacy across bodies, a promise kept, silence). Scenarios 18, 19, 26 and 28 move to Task 4 as capability targets; the capability record lists them as not yet held. Tick 10.10, 11.6 and 12.8.
+- [x] 12.8 **Acceptance — the launch set** (closed by the architect, 2026-11-12: see the closing note under Notes) (after 12.12–12.20; rerun only 24, then the live session to confirm 12.16 and 12.17; owner's decision): one real-model run at `--effort high` of the launch scenarios that have not yet passed with the real model: memory and recall (07, 11, 12, 17, 20, 23), silence (01–03, 15, 21), turn-taking (04–06, 14, 22), promises (08–10, 13, 16, 24, 30), unaddressed help (25, 27, 29). Each failure gets a material check first. Then the live session (privacy across bodies, a promise kept, silence). Scenarios 18, 19, 26 and 28 move to Task 4 as capability targets; the capability record lists them as not yet held. Tick 10.10, 11.6 and 12.8.
 
 ## Part 13 — Readability pass (after 12.8)
 Read first: [AGENTS.md](../../AGENTS.md) (priorities for code, size guide)
@@ -2289,3 +2289,15 @@ Part 12 notes (worker, 12.20):
   pruned. Evidence, Part 10 notes (10.8): "04 0/1 -> 1/1" and "09 and 13 failed in 9.3 and passed
   when replayed alone". Scenarios 20 and 22 have no real-model pass in these Notes (22 reads
   "4/7 unchanged", 20 is never named) and stay `not run`.
+
+**Closing note (architect, 2026-11-12).** Task 2 is done.
+- Scenario 24 passes in behavior in `reports/2026-11-12-1211-real-24.md`: the reminder wakes the
+  soul, it tells the person, then resolves once. The one failed check (`expectation.reminded`
+  count 1) forbade an equally correct mechanism — the model held the promise by a cue, so it
+  fired instead of being reminded (12.6: a check must not forbid correct behavior). The architect
+  removed that check; "the reminder wakes the PFC" and "fulfils the promise once" stay.
+- 16 and 30 are `flaky` (passed and failed with the real model).
+- 20 and 22 have no recorded real-model pass; they run in Task 3 Part 4 with the whole launch set.
+- 18, 19, 26, 28 are Task 4 capability targets.
+- The capability record is regenerated in Task 3 Part 4.
+

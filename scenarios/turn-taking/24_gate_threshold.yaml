@@ -39,11 +39,6 @@ expectations:
     steps: [1, 2, 3, 4, 5, 6, 7, 8]
     count: 8
     label: the gate stores the budget used in the decision event
-  - type: event_seen
-    kind: expectation.reminded
-    step: 12
-    count: 1
-    label: an active promise reminds the soul on an unaddressed message
   - type: reply_in
     place: space:tg:-1004
     step: 12

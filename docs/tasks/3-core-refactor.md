@@ -60,7 +60,7 @@ May touch: `monoagens/core/`, `monoagens/middleware/`, `monoagens/infra/`, `test
 
 ## Part 4 — Real-model parity
 - [ ] 4.1 `uv run pytest` and the fake replay pass in full.
-- [ ] 4.2 One real-model run at `--effort high` of the launch set of Task 2 (12.8) and a short live CLI session (the model in `.env`; never read or print it). Every scenario that passed at the end of Task 2 still passes; absolute-line violations 0. A scenario that now fails is a refactor bug: find the move that caused it and fix it there.
+- [ ] 4.2 One real-model run at `--effort high` of the launch set of Task 2 (12.8) and a short live CLI session (the model in `.env`; never read or print it). Every scenario that passed at the end of Task 2 still passes; absolute-line violations 0. Scenarios 20 and 22 run with the real model here for the first time; 16 and 30 are flaky (Task 2 closing note). Regenerate and commit the capability record. A scenario that now fails is a refactor bug: find the move that caused it and fix it there.
 
 **Done when.** All parts are ticked; the same scenarios pass as at the end of Task 2; the core
 holds only mechanisms and the Notes list every move; the code is readable (AGENTS.md size

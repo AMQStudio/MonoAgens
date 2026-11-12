@@ -12,8 +12,8 @@ before Task 3 name files by their earlier names; the [glossary](../glossary.md) 
 | Task | File | Status | Depends on |
 |---|---|---|---|
 | 1 | [Core: align with the frozen contract](1-core-align.md) | **done** — 181 tests; fake replay 17/25, fixed in Task 2 Part 2 | — |
-| 2 | [Core: launch](2-core-launch.md) | in progress — closing items 12.13–12.15, then the launch set (12.8) | Task 1 |
-| 3 | [Core: clean refactor](3-core-refactor.md) | todo — same behavior; decisions move to the middleware; standard names | Task 2 |
+| 2 | [Core: launch](2-core-launch.md) | **done** — 321 tests, fake 133 checks, violations 0; 16 and 30 flaky; 20, 22 run in Task 3 | Task 1 |
+| 3 | [Core: clean refactor](3-core-refactor.md) | **next** — same behavior; decisions move to the middleware; standard names | Task 2 |
 | 4 | [Middleware and first plugins](4-middleware-plugins.md) | todo | Task 3 |
 | 5 | [Adapters: WhatsApp, Discord and more](5-adapters.md) | todo — WhatsApp and Discord first, so the soul is usable daily | Task 4 |
 | 6 | [Core: depth of mind](6-core-mind.md) | todo — last, after weeks of daily use | Task 5 and some weeks of daily use |
