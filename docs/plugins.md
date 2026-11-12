@@ -20,7 +20,7 @@ the middleware's six levers ([middleware.md §2](middleware.md)) (D9, D41).
 ## 2. Catalog
 | Plugin | Kind | Status | What it brings |
 |---|---|---|---|
-| **Soul Tuning** | behavior | Task 4 | modes, example conversations, a line per role or person on person cards (§5.1) |
+| **Soul Tuning** | behavior | Task 4 | modes and example conversations (§5.1) |
 | **Web Search** | tool | Task 4 | `web_search`, `web_fetch` over many providers (§5.2) |
 | **Workspace** | tool | Task 4, on by default | `read`, `write`, `edit`, `grep`, `glob`, `run` in a sandbox (§5.3) |
 | **PDF Reader** | extension of Workspace | Task 4 | a native reader for `.pdf` (§5.4) |
@@ -78,13 +78,19 @@ knob_offsets: {}                     # bounded, temporary; recorded as dispositi
 |---|---|---|
 | `plugins/<name>/plugin.yaml` | the plugin | every default; never edited by the owner |
 | `config.yaml` | the owner | which plugins are on (`plugins:`), `roles:`, `people:` ([project.md §2](project.md)) |
-| `config.d/<plugin>.yaml` | the owner | how one plugin works: `features`, `options`; only what was changed |
+| `config.d/<plugin>.yaml` | the owner | one plugin: `features`, `options`, and `permissions` / `role_settings` (written by `/plugin enable`) |
 
 ```yaml
-# config.d/workspace.yaml
+# config.d/workspace.yaml — written by /plugin enable from workspace 0.1.0
 version: 1
 features: { run: true }
-options: { timeout_seconds: 300 }
+options:  { timeout_seconds: 300 }
+permissions:                   # lowest tier per permission; edit to move a permission
+  workspace.read:  guest
+  workspace.write: member
+  workspace.run:   trusted
+role_settings:
+  quota: { guest: 0, member: 1G, trusted: 5G }
 ```
 
 - **Merge rules** (as Helm values): maps merge, lists replace whole, `[]` switches everything
@@ -93,11 +99,13 @@ options: { timeout_seconds: 300 }
   plugin that is not installed is reported and ignored; it stays, so the settings return if the
   plugin does.
 - A feature switched off is removed from the registry, not hidden.
-- The program never writes these files. `/plugin show <name>` prints the defaults as YAML to
-  copy; `/roles show <role>` prints the merged permissions per role.
+- The files are the source of truth. The program writes them only through `/plugin
+  enable|disable|update` and `/role add|remove`, narrowly and after a backup; plugin updates
+  follow the dpkg rule ([middleware.md §5](middleware.md)). `/plugin show <name>` prints the
+  defaults; `/roles show <role>` prints the merged permissions per role.
 - Every file carries `version:` (D58); see [middleware.md §5](middleware.md).
-- Who may use what is never in `config.d/`: permissions are declared in the manifest and granted
-  by roles in `config.yaml`.
+- Which tier gets a permission is in `config.d/`; which roles exist and who holds them is in
+  `config.yaml` (`roles:`, `people:`).
 
 ## 5. First plugins
 
@@ -106,10 +114,8 @@ Tunes expression, never identity; only the owner changes it (absolute line 1).
 - **Modes** (daily, professional, …): standing rules in `<self>`, knob offsets within bounds,
   the `/mode` command.
 - **Example conversations**: short exchanges in the stable prompt, in a fixed order.
-- **A line per role or person** (setting `soul-tuning.prompt` on a role or in `people:`, e.g.
-  "You are talking with a customer; help with orders"): attached to the card of each person
-  present (lever 2), in the volatile part, so a mixed group gets one line per person and the
-  stable prefix stays cached. The person's own line wins over a role's.
+- Who a person is to the soul ("a customer; help with orders") is not here: it is each role's
+  and person's `context` in `roles.py` ([middleware.md §8](middleware.md)).
 
 ### 5.2 Web Search
 - Tools `web_search` and `web_fetch`; permissions `web-search.search` and `web-search.fetch`,

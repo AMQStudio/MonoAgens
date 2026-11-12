@@ -158,8 +158,23 @@ person (a command).
 - **Format versions** (D58): every YAML file carries its format version. An older version is
   upcast in memory and the boot report names it; the file is never rewritten. A newer version
   than supported fails at boot. A file without `version:` is read as version 1 with a warning.
-- The program never writes the owner's YAML files; `/plugin show <name>` prints a plugin's
-  defaults as YAML to copy.
+- **The files are the source of truth** (D59): no copy in the database, nothing to keep in
+  sync. The program writes them only on the owner's command, narrowly, after a backup, and
+  applies the change without a restart; every other line is left as it is:
+  - `/plugin enable <name>`: `plugins.<name>.enabled: true` in `config.yaml`, and, if it does
+    not exist yet, `config.d/<name>.yaml` with the manifest's `permissions` and
+    `role_settings`, marked with the plugin's version;
+  - `/plugin disable <name>`: `enabled: false` only;
+  - `/plugin update <name>`: the lines still equal to the old defaults (below);
+  - `/role add|remove <person> <role>`: `people.<id>.roles` only (`roles.py`, §8).
+  Uninstalling removes nothing from the owner's files; the boot report names what is unused.
+  `/plugin show <name>` prints a plugin's defaults as YAML.
+- **History, not source**: every change, by command or by hand (seen at boot or reload), is
+  recorded as an event (`plugin.config_changed`, `roles.changed`: who, from what, to what).
+- **Plugin updates, the dpkg way**: the values `enable` wrote are recorded. When an update
+  changes a default, the boot report compares the old default, the file and the new default:
+  a line never touched is offered for `/plugin update`; a line the owner changed is only
+  reported, never changed.
 - Adapters are loaded by the same module, from the `bodies:` section of `config.yaml` (the key
   keeps its name), through each adapter's `create(options, env)` factory ([adapters.md §2](adapters.md), D49).
 - Uninstalling removes a plugin's tools, middleware, rules and knob offsets; its events stay in
@@ -199,7 +214,7 @@ Steps …
   current owner. The core never knows who the owner is; the owner policy does.
 - **Person cards** (D55): through the context hook it adds, for the people present or named in
   the trigger, their name and where they can be reached, next to what the soul has learned of
-  them. Plugins may annotate a card (lever 2), e.g. Soul Tuning's line for the person's role;
+  them. Plugins may annotate a card (lever 2); `roles.py` adds each role's and the person's `context`;
   the card is in the volatile part, so the stable prefix stays cached.
 - Linking accounts arrives with the second chat app (Task 5).
 
@@ -222,21 +237,38 @@ their permissions to the bases automatically).
   - a **tier role** has a `base` and says how much a person may do;
   - a **group role** has no `base` and only marks where a person belongs (a shop, a team); it
     gives nothing but what it lists;
-  - either may add `allow`, `deny`, `settings` and an `approval` mode.
+  - either may add `allow`, `deny`, `settings`, an `approval` mode, a `label` (display name,
+    free to change; the key is the stable id) and a `context` (§8, person cards).
   A new role works in every plugin at once, and a newly installed plugin reaches every role
   through its tier. There is no inheritance between roles; a person simply holds several (Budi =
-  `member` + `toko-a`). `people:` overrides one person's `allow`, `deny` and `settings`.
-- **Which value wins**: the person, then all of the person's roles together (a `deny` beats an
-  `allow`), then the manifest's tier defaults. `fallback:` names the role everyone holds
+  `member` + `toko-a`). An exception for one person is a small role (`runner: { allow:
+  [workspace.run] }`) given to that person.
+- **Permission tiers per plugin** live in `config.d/<plugin>.yaml` → `permissions:` (written by
+  `/plugin enable` from the manifest): changing `workspace.run: member` gives it to every role
+  with `base: member`. `role_settings:` sits next to it.
+- **People** (`config.yaml` → `people:`, optional), keyed by the person id of `identity.py`,
+  the one stable address across accounts and adapters:
+  `p_7f3a: { label: "Budi", roles: [member, toko-a], context: "The owner's brother." }`.
+  - `roles` is the **only** record of who holds which role; a person not listed holds the
+    fallback role.
+  - `label` is for people reading the file or a panel; the soul's name for the person stays in
+    identity. `/whois <name or account>` shows the id and its linked accounts.
+  - No `allow`, `deny` or `settings` per person: those come only from roles.
+  - An unknown id is reported at boot and ignored; after two accounts are linked, the old id
+    stays an alias in identity, so its entry still applies and the boot report suggests the
+    new id.
+- **Context on person cards**: through the context hook each person present gets one line per
+  role's `context`, then their own `context`, in the volatile part, within a per-card length
+  cap. It is for the soul to understand who it is talking with, not something to announce.
+- **Which value wins**: all of the person's roles together (a `deny` beats an `allow`), then
+  the tiers in `config.d/<plugin>.yaml`, then the manifest's tiers. `fallback:` names the role everyone holds
   (`@everyone`, tier `guest` unless set). A place may override with the same `allow` and `deny`
   (as Discord's channel overrides).
 - **Approval modes**, per role, default `default`: `yolo` passes everything except calls marked
   `sensitive`; `default` passes reading and editing and asks before `runs_code` or `changes`
   outside the person's own workspace; `strict` asks before every step. The owner answers.
-- **Who holds which role is an event**, set with `/role add Budi toko-a` and undone the same
-  way, like identity links and pairing; definitions stay in the file. `/roles show <role>`
-  prints the merged result across plugins, each line marked with its source (manifest or
-  `config.yaml`).
+- `/roles show <role>` prints the merged result across plugins, each line marked with its
+  source (manifest, `config.d/` or `config.yaml`).
 - Role facts reported by a platform ("admin of this group") are recorded as facts about that
   person, so the soul's social understanding can use them; they grant nothing by themselves
   (D31). Mapping Discord's own roles arrives in Task 5.

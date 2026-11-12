@@ -31,7 +31,7 @@ Five files and folders, each with one job; none holds what belongs to another (D
 | File | Holds | Read | Changed by |
 |---|---|---|---|
 | `.env` | secrets and endpoints: model keys and URLs, bot tokens, database URL | every start | owner or technician |
-| `config.yaml` | this deployment's non-secret settings: timezone, owner settings, runtime, adapters, plugins on, roles | every start | owner; owner settings and role holders also in chat |
+| `config.yaml` | this deployment's non-secret settings: timezone, owner settings, runtime, adapters, plugins on, roles | every start | owner; owner settings in chat; `/plugin` and `/role` write their own lines |
 | `config.d/` | one file per plugin: its features and options | every start | owner |
 | `soul.yaml` | the birth certificate: name, language, persona, principles ([core.md §9.3](core.md)) | once, at birth | nobody afterwards; identity changes in chat |
 | `prior/` | instincts: knobs, calibration, constants ([core.md §9.4](core.md)) | once, at birth | developers, with replay |
@@ -56,13 +56,14 @@ plugins:                            # which plugins are on; their settings live 
   web-search:  { enabled: true }
   soul-tuning: { enabled: true }
 roles:                              # middleware.md §8; empty = owner free, everyone else only talks
-  fallback: customer
-  customer:  { base: guest }
-  member:    { base: member }
-  moderator: { base: member, allow: [workspace.run] }
-  toko-a:    { settings: { workspace.shared: toko-a } }   # a group role: no base
-people:
-  budi:      { settings: { workspace.quota: 5G } }
+  fallback: unverified
+  unverified: { base: guest,  label: "Unverified", context: "Not known yet; be kind, share nothing about the owner." }
+  customer:   { base: guest,  label: "Customer",   context: "A shop customer; help with products and orders." }
+  member:     { base: member }
+  runner:     { allow: [workspace.run] }             # a small role for an exception
+  toko-a:     { label: "Toko A", settings: { workspace.shared: toko-a } }   # a group role: no base
+people:                             # optional; keyed by person id; the only record of who holds which role
+  p_7f3a:     { label: "Budi", roles: [member, toko-a, runner], context: "The owner's brother." }
 ```
 
 **`config.d/<plugin>.yaml`**: one per plugin, only what the owner changed ([plugins.md §4](plugins.md)).
