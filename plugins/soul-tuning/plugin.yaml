@@ -1,0 +1,22 @@
+manifest_version: 1
+name: soul-tuning
+version: 0.1.0
+description: Modes and example conversations that tune how the soul speaks.
+dependencies: []
+optional_dependencies: []
+state_namespace: soul-tuning
+features:
+  commands: [mode]
+  middleware: [tuning]
+tools: {}
+settings:
+  mode: {type: string, default: daily}
+permissions:
+  soul-tuning.mode: {label: "Switch the mode",
+                     description: "Only the owner tunes how it speaks."}
+role_settings: {}
+extension_points: {opens: [], fills: []}
+skills: []
+rules: []
+knob_offsets:
+  talkativeness: [-0.2, 0.2]

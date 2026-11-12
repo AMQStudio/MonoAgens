@@ -59,6 +59,8 @@ def install(kernel: Any) -> None:
     privacy.register(kernel.tools)
     registry.install_own(kernel.tools)
     kernel.roles = roles.RoleBook.empty()
+    kernel.prior_knobs = prior_knobs(kernel.settings)
+    kernel.knob_bounds = {}
     kernel.intake = identity.intake(kernel.conn)
     kernel.budget_limit = daily_limit(kernel.settings)
     kernel.after_model_call = enforce(kernel)
@@ -368,3 +370,51 @@ def _config_path(kernel: Any) -> Any:
     if root is None:
         raise RuntimeError("this kernel has no deployment root to write to")
     return pathlib.Path(root) / "config.yaml"
+
+
+# ------------------------------------------------------------- knob offsets
+
+
+def prior_knobs(settings: Mapping[str, Any]) -> dict[str, float]:
+    """Return the prior's own knob values, before any plugin offset."""
+    return {str(name): float(value) for name, value in (settings.get("knobs") or {}).items()
+            if isinstance(value, (int, float)) and not isinstance(value, bool)}
+
+
+async def offsets(conn: Any, plugin: str) -> dict[str, float]:
+    """Return the latest offset per knob one plugin recorded in `disposition.updated`."""
+    cur = await conn.execute(
+        "SELECT payload FROM events WHERE kind = 'disposition.updated' "
+        "AND payload->>'source' = %s ORDER BY id", (plugin,))
+    found: dict[str, float] = {}
+    for (payload,) in await cur.fetchall():
+        knob = str((payload or {}).get("knob") or "")
+        if knob:
+            found[knob] = float((payload or {}).get("offset") or 0.0)
+    return found
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    """Return one value kept inside two bounds."""
+    return max(low, min(high, value))
+
+
+async def apply_offsets(kernel: Any) -> None:
+    """Recompute the effective knobs from the prior plus every installed plugin's offsets.
+
+    One pass, never a snapshot: the bounds come from the installed manifests (a plugin that
+    left has none), each offset is clamped to its manifest's bounds and to [-1, 1], the
+    offsets are summed and the total is clamped to [0, 1]. The prior stays the base, never an
+    effective value, so nothing feeds back on itself.
+    """
+    base = dict(getattr(kernel, "prior_knobs", None) or prior_knobs(kernel.settings))
+    total = dict(base)
+    for plugin, bounds in (getattr(kernel, "knob_bounds", None) or {}).items():
+        for knob, offset in (await offsets(kernel.conn, plugin)).items():
+            low, high = (bounds.get(knob) or (-1.0, 1.0))[:2]
+            total[knob] = total.get(knob, 0.0) + _clamp(offset, max(-1.0, low),
+                                                       min(1.0, high))
+    kernel.settings["knobs"] = {
+        knob: _clamp(value, 0.0, 1.0) if 0.0 <= base.get(knob, 0.0) <= 1.0
+        else max(0.0, value)
+        for knob, value in total.items()}

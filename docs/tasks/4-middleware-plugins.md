@@ -349,3 +349,29 @@ tool (the real plugin arrives in Part 4):
     `share.granted`.
 Part 1 was green at the end of every item: the suite (`339` after 1.0 → `477` after 1.11) and
 the fake replay (`133/133`) were run after each of them.
+
+**Part 2 — Soul Tuning (`plugins/soul-tuning/`).** Manifest exactly as planned (`settings:
+{mode: daily}`, `permissions: {soul-tuning.mode}` **without a base**, so only the owner has
+it, `knob_offsets: {talkativeness: [-0.2, 0.2]}`). `modes.py` holds the two modes and reads
+`examples.yaml` (three exchanges per mode, refused if a mode is missing or more than five
+exchanges). The context block is **volatile** (order 1, so before the core's `now` at 10),
+carrying `mode`, the rule and the examples in file order; the stable prefix is identical with
+and without the plugin and after a mode switch (test hashes the first message in all three
+states). **Effective knobs, computed by the middleware**: `kernel.prior_knobs` is captured once
+at install and never replaced; `Loader.install` sets `kernel.knob_bounds` from the installed
+manifests and calls `policy.apply_offsets`, which recomputes from the prior plus the **latest**
+`disposition.updated` per (plugin, knob), clamping each offset to its manifest bounds and
+[-1, 1], summing, and clamping the total. A knob whose prior value is between 0 and 1 is
+normalized and clamped to [0, 1]; another (`patience_seconds` 90, `speaking_bar` 4) only never
+goes negative — clamping it to [0, 1] would have changed the gate, which the first measurement
+showed and this note records. `/mode` (owner, permission `soul-tuning.mode`; a guest's call is
+answered `/mode is not allowed for you`) shows `mode: daily (daily|professional)`, and on a
+switch records `soul_tuning.mode_changed` plus one `disposition.updated` per knob and calls
+`apply_offsets` at once; a second `/mode professional` changes nothing and `/mode daily` moves
+the knob back. Uninstalling (folder and `config.d/` gone, reload) drops the block, the command
+and the bounds, and the knobs return to the prior (`0.45` in the test).
+**Deviation**: an event kind holds only lower-case words and dots, so the plugin's kind is
+`soul_tuning.mode_changed` (the hyphen becomes an underscore); the payload still names the
+plugin `soul-tuning` as the source. Ledger: with `soul-tuning` installed,
+`talkativeness` = prior + 0.05 (daily) or − 0.05 (professional); two plugins' offsets sum;
+removing the second returns prior + the remaining offset.

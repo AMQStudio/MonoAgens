@@ -145,7 +145,6 @@ class Loader:
         """Point the loader at one deployment root and one environment."""
         self.root = pathlib.Path(root)
         self.env = dict(env or {})
-        self._slots: dict[tuple[str, str], _Slot] = {}
 
     # ------------------------------------------------------------- loading
 
@@ -513,7 +512,7 @@ class Loader:
             for hook, name, middleware in api.middleware:
                 self._slot(kernel, hook, f"{api.name}-{name}").target = middleware
                 touched.add((hook, f"{api.name}-{name}"))
-        for key, slot in self._slots.items():
+        for key, slot in kernel.__dict__.get("hook_slots", {}).items():
             if key not in touched:
                 slot.target = None  # the plugin that owned this place is gone
         for adapter in loaded.adapters:
@@ -523,6 +522,8 @@ class Loader:
             kernel.register_adapter(adapter)
         if loaded.roles is not None:
             kernel.roles = loaded.roles
+        kernel.knob_bounds = loaded.knob_bounds
+        await policy.apply_offsets(kernel)
         kernel.deployment_root = self.root
         kernel.loaded_plugins = loaded.plugins
         kernel.plugin_versions = {api.name: str(api.manifest.get("version") or "")
@@ -533,14 +534,15 @@ class Loader:
         """Return the stable slot of one plugin middleware, registering it the first time.
 
         A reload swaps what a slot calls instead of adding a second middleware, so the
-        pipeline's name (and its order) never changes without a restart.
+        pipeline's name (and its order) never changes without a restart. The slots live on
+        the kernel, not on one loader, so a new `Loader` (a reload, a command) reuses them.
         """
+        slots = kernel.__dict__.setdefault("hook_slots", {})
         key = (hook, name)
-        slot = self._slots.get(key)
-        if slot is not None:
-            return slot
+        if key in slots:
+            return slots[key]
         slot = _Slot()
-        self._slots[key] = slot
+        slots[key] = slot
         kernel.hooks.get(hook).add(name, slot)
         return slot
 
