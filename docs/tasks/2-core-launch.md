@@ -1064,3 +1064,91 @@ Part 12 notes (worker, 12.4):
   (0/63), false-speak 0.0% (0/66), honesty 61/61. Commits 64cce56 (12.2), 96d6ce4 (12.3) and
   3852a14 (12.4); each commit's own state was run with pytest and the fake replay before it was
   made (265/124, 265/127, 266/127).
+
+Part 12 notes (worker, 12.5 — **blocked by the package budget**):
+- 12.5 is **not ticked**. A complete, verified implementation was drafted, wired and tested,
+  then preserved as a local stash (`git stash list` → "task2(12.5) draft: free-text conditions
+  (blocked: package 3920/3800)"); nothing is committed and the worktree is back at HEAD
+  (3,753 lines). `git stash pop` restores the draft for review.
+- What the draft implements. `monoagens/condition.py` (185 lines, stated budget ≤ 200) owns
+  everything a condition is: the exact fast paths (`none`, `event_seen`, `state`) and their
+  `parse_duration` (moved out of `expect.py`, which keeps re-exporting `expect.parse_duration`),
+  the free-text arm (`operator` accepts `expect: {text: ...}`, stored in `condition_text` and
+  the `condition` JSON), and the wake gate. Gate: `m = cosine(event vector, condition vector)`
+  from `read_event_vector` or a thread-pool embed of the event text; the condition vector is
+  embedded once and cached in the new `condition_vector` column. `m < wake_gate_lo` → ignore;
+  `m ≥ wake_gate_hi` (the clearly-yes band) → fire at once; otherwise exactly one
+  `classify:{expectation}:{event}` background job under the job watchdog whose single
+  `pfc.call` (a general "does this event fulfil this condition?" prompt, one `classify` tool)
+  is recorded through `budget.record_call` as `model.call {purpose: "classifier"}` with its
+  token usage, and whose result becomes `classifier.verdict {expectation_id, m, verdict}`.
+  Yes → `fire_expectation` + `_expect_wake`, so the PFC re-judges with its own desk; no → the
+  expectation stays active (the classifier never resolves). `expect.due` gained the stale arm
+  (a tick now also selects active expectations whose `expires_at <= now` and drops them) and
+  the free-text arm (the gate runs before firing). Bands live in `state: condition:bands` and
+  move by core-math §8: 50 verdicts (3/ε = 50) of evidence before either edge moves, `lo`
+  toward the lowest yes `m` minus `wake_gate_margin`, one `wake_gate_step` at a time, at most
+  `wake_gate_daily` per day, inside `[wake_gate_floor, wake_gate_ceiling]`, never closer than
+  `wake_gate_min_gray` to `hi`; `hi` opens only when the top 50 verdicts by `m` are all yes and
+  at or above the gray band's top, and reverts to 1.0 when a no appears in them; each change
+  (and a first freeze at a bound per day) is a `disposition.updated` event with its delta.
+  Every number is in `prior/dispositions.yaml` (`wake_gate_*`, `rule_of_three_epsilon` already
+  existed); `tests/support.py` mirrors them.
+- One behavioral fix the replay forced, in `cognition/appraise.py`: `_engaged` counted any
+  active expectation whose cue matched as "answered", so a broad free-text cue made the
+  circuit breaker wake on every line of the place (observed in 16/24/30) and the classifier
+  never got to judge. `_engaged` now skips expectations with a free-text condition: only the
+  classifier decides whether the cue was answered.
+- Size (measured on the draft): `condition.py` 185 (≤ 200 stated), `expect.py` 219/240
+  (the 31 moved lines pay for the new arms), `kernel.py` 280/280 (the classify result branch
+  is routed as `expect.condition.finish(self, job)` to stay at budget — flagged for review),
+  `store.py` 219/240 (+1: `condition_vector` is selected), `cognition/appraise.py` 105/160,
+  `jobs.py` 148/150, `reach.py` 150/150, `memory.py` 260/260, cognition total 543/600.
+  **Package 3,920 vs 3,800 = +120 over** (net +167 over HEAD: `condition.py` +185, `expect.py`
+  -21, `store.py` +1, `appraise.py` +2; roughly 30 of `condition.py` are moved from `expect.py`,
+  roughly 155 are new).
+- Why it cannot fit, with the exact arithmetic: HEAD had 47 lines of package headroom. The
+  free-text gate is ~155 new lines with docstrings, blank lines and one statement per line
+  (cosine + vector cache 26, one classifier job/prompt/verdict path 40, the two learned bands
+  with bounds/step/daily/gray/freeze 36, the wake-gate arms and wiring 14, the module header
+  and helpers 39). Paying for it by deleting unrelated code would mean deleting
+  spec mechanisms: `forget.fade` is unwired (20 lines), the `versioning` namespace helpers are
+  the plugin contract (12 + a test), `store.read_state_entry`/`rebuild_state` are the
+  projection reads (7 + tests); the only honest dedupe found is the four identical text
+  accessors (`work._text`, `recall._payload_text`, `memory._payload_text`, `pairing._text`,
+  ~19 lines). That is not 120, and 12.5 forbids compressing the new code. Per the item's
+  instruction, nothing was compressed and nothing over budget was committed.
+- Options for the architect (one decision needed):
+  - **A (recommended)** Raise the package limit to 3,950 for this module; every per-file budget
+    already holds and the draft is green: `uv run pytest` 274 passed, fake replay 30 scenarios
+    131/131, missed-help 0/65, false-speak 0/67, absolute-line 0, honesty 62/62.
+  - **B** Name ~120 lines of code to delete. The full honest candidate set (text-accessor
+    dedupe 19, `fade` 20, versioning 12, rebuild helpers 7) reaches ~58 and loses spec paths;
+    B alone still leaves 12.5 unticked.
+  - **C** Defer `hi` learning + freeze (25) and the lazy condition-vector cache (10): ~85 still
+    over, so C does not make 12.5 landable either.
+- Changed checks/answers in the draft, each with its reason:
+  - `scenarios/promises/16_watch_for_phrase.yaml`: the `expect` answer now asks for
+    `expect: {text: "server down"}` with `cue_event: {kind: percept}` (the free-text path
+    instead of the substring cue) and records one `classify` answer (verdict yes) at step 4;
+    the checks are unchanged. It fires through the gate at step 4.
+  - `scenarios/turn-taking/24_gate_threshold.yaml`: same shape (`text: "dokumen sudah selesai"`,
+    `cue_event` keeps the group place) plus one `classify` yes at step 10; no check changed.
+    The extra patience wait the gate creates on the same line is settled silently by the next
+    speaker's line, so the recorded event sequence and all 11 checks hold.
+  - New `scenarios/promises/30_same_topic_question.yaml` (one behavior: a same-topic question
+    never fulfils the condition): the question is judged no and wakes no one, the statement is
+    judged yes and the owner hears once; four behavioral checks, the classifier answers
+    recorded. No check was loosened; no existing answer was removed beyond the two cue changes.
+  - New `tests/test_condition.py` (8 tests): below-`lo` ignore with no classifier call; one
+    recorded classifier call with its budget entry, `m` and a yes that fires; a no leaves the
+    promise active; the clearly-yes band skips the classifier; an already-met condition
+    resolves with no wake; an expired expectation drops on a tick; `lo` moves one bounded step
+    toward the lowest yes with the gray width kept; `hi` opens after 50 clean verdicts and
+    reverts on a no.
+  - `scripts/replay.py`: `FakePFC.call` replays `model_answers` with `tool: classify` and
+    defaults an unscripted classify answer to "no"; fake mode only, no check semantics changed.
+- Verification of the draft (before it was stashed): `uv run pytest` 274 passed; `uv run python
+  scripts/replay.py --fake` 30 scenarios, 131/131 checks, missed-help 0/65, false-speak 0/67,
+  absolute-line violations 0, honesty 62/62. The real-model replay was not run (12.5 does not
+  ask for it).
