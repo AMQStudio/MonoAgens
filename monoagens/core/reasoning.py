@@ -120,7 +120,8 @@ class Reasoning:
                  settings: dict[str, Any] | None = None,
                  identity: dict[str, Any] | None = None,
                  transport: httpx.AsyncBaseTransport | None = None,
-                 client: httpx.AsyncClient | None = None, timeout: float = 30.0) -> None:
+                 client: httpx.AsyncClient | None = None, timeout: float = 30.0,
+                 parallel_tool_calls: bool = True) -> None:
         """Store the endpoint, the key, the model, the optional effort, and the identity."""
         self.base_url, self.api_key, self.model = base_url.rstrip("/"), api_key, model
         self.effort = effort.strip().lower()
@@ -130,6 +131,7 @@ class Reasoning:
         self.timezone = ZoneInfo(str(self.settings.get("timezone") or "UTC"))
         self.name = str(self.identity.get("name") or "")
         self.last_usage: dict[str, int] = {}
+        self.parallel_tool_calls = parallel_tool_calls
         self._transport, self._client, self._timeout = transport, client, timeout
 
     def _http(self) -> httpx.AsyncClient:
@@ -161,6 +163,8 @@ class Reasoning:
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         body = {"model": self.model, "messages": messages, "tools": tools,
                 "tool_choice": tool_choice}
+        if self.parallel_tool_calls:
+            body["parallel_tool_calls"] = True
         if self.effort:
             body["reasoning_effort"] = self.effort
         response = await self._post(body, headers)

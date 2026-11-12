@@ -455,6 +455,8 @@ class Scenario:
     zone: ZoneInfo
     function: str = ""
     capability: str = ""
+    plugins: dict[str, Any] = field(default_factory=dict)
+    bodies_extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -532,11 +534,18 @@ def load_scenario(path: pathlib.Path, zone: ZoneInfo) -> Scenario:
     capability = str(data.get("capability") or "").strip()
     if not capability or "\n" in capability:
         raise ValueError(f"{path}: capability must be one line naming what it proves")
+    plugins = data.get("plugins") or {}
+    if not isinstance(plugins, dict):
+        raise ValueError(f"{path}: plugins must be a map of plugin name to settings")
+    bodies_extra = data.get("bodies_extra") or {}
+    if not isinstance(bodies_extra, dict):
+        raise ValueError(f"{path}: bodies_extra must be a map of body name to settings")
     return Scenario(path=path, name=str(data.get("name") or path.stem),
                     description=str(data.get("description") or ""), steps=steps,
                     expectations=list(data.get("expectations") or []),
                     answers=load_answers(path, data), zone=zone,
-                    function=function, capability=capability)
+                    function=function, capability=capability,
+                    plugins=dict(plugins), bodies_extra=dict(bodies_extra))
 
 
 def load_answers(path: pathlib.Path,
@@ -637,6 +646,9 @@ class ReplayRunner:
         self.conn: psycopg.AsyncConnection[Any] | None = None
         self.kernel: RecordingKernel | None = None
         self.answers: dict[tuple[int, str], list[list[ToolCall]]] = {}
+        self.selected: dict[str, Any] = {}
+        self.extra_bodies: dict[str, Any] = {}
+        self.loaded: Any = None
         self._last_id = 0
         self._message_id = 0
 
@@ -650,16 +662,33 @@ class ReplayRunner:
                           self.llm["model"], effort=self.llm.get("effort") or "",
                           settings=self.settings, client=client, timeout=90.0)
 
-    def _make_kernel(self) -> Kernel:
-        """Build a fresh kernel that records its appraisals."""
+    async def _make_kernel(self) -> Kernel:
+        """Build a fresh kernel that records its appraisals and the scenario's plugins."""
         pfc = self._make_pfc()
+        settings_now = self._scenario_settings()
         kernel = RecordingKernel(self.conn, clock=self.clock, pfc=pfc,
-                                 settings=self.settings, embedder=self.embedder)
+                                 settings=settings_now, embedder=self.embedder)
         install(kernel)
         for name in (BODY_NAME, CLI_BODY, GAME_BODY, WHATSAPP_BODY, DEV_BODY):
             kernel.register_adapter(FakeBody(name))
+        if self.selected:
+            loader = self._loader()
+            self.loaded = loader.load(settings_now)
+            await loader.install(kernel, self.loaded)
         self.kernel = kernel
         return kernel
+
+    def _scenario_settings(self) -> dict[str, Any]:
+        """Return the settings of this scenario: its plugins and extra bodies when named."""
+        if not self.selected and not self.extra_bodies:
+            return self.settings
+        return {**self.settings, "plugins": self.selected, "bodies": self.extra_bodies}
+
+    def _loader(self) -> Any:
+        """Return the loader for this scenario's selection (the repo's plugin folders)."""
+        from monoagens.middleware.loader import Loader
+
+        return Loader(ROOT, env=dict(os.environ))
 
     async def run(self, scenario: Scenario) -> ScenarioResult:
         """Reset the schema and replay one scenario from the first step."""
@@ -668,6 +697,8 @@ class ReplayRunner:
         self.tracker.desks.clear()
         self.tracker.answers_used.clear()
         self.answers = scenario.answers
+        self.selected = dict(scenario.plugins)
+        self.extra_bodies = dict(scenario.bodies_extra)
         self._last_id = 0
         self._message_id = 0
         self.clock = FakeClock(initial_time=self._initial_time(scenario))
@@ -677,7 +708,7 @@ class ReplayRunner:
             await conn.execute("CREATE SCHEMA public")
             await migrate(conn, backup_dir=REPORT_DIR / "backups")
             await register_vector_async(conn)
-            self._make_kernel()
+            await self._make_kernel()
             await self.kernel.recover()
             await self.kernel.run_until_idle()
             steps = [await self._run_step(index, raw)
@@ -728,7 +759,7 @@ class ReplayRunner:
             pfc = self.kernel.pfc
             if pfc is not None and hasattr(pfc, "aclose"):
                 await pfc.aclose()
-            self._make_kernel()
+            await self._make_kernel()
             await self.kernel.recover()
             await self.kernel.run_until_idle()
         if kind == "message":

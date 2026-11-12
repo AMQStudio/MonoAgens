@@ -39,7 +39,8 @@ async def main() -> None:
         settings["identity"] = await identity.ensure(conn, settings["identity"],
                                                     now=clock.now())
         pfc = Reasoning(llm["base_url"], llm["api_key"], llm["model"], effort=llm["effort"],
-                        settings=settings)
+                        settings=settings,
+                        parallel_tool_calls=llm["parallel_tool_calls"])
         kernel = build(conn, clock=clock, pfc=pfc, settings=settings, embedder=FastEmbedder())
         await warm(kernel)
         code = await ensure_pairing(conn, now=clock.now())

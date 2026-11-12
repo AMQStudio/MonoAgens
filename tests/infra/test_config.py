@@ -41,7 +41,16 @@ def test_llm_config_from_file(tmp_path):
         "api_key": "file-key",
         "model": "file-model",
         "effort": "",
+        "parallel_tool_calls": True,
     }
+
+
+def test_parallel_tool_calls_can_be_switched_off(tmp_path, monkeypatch):
+    path = tmp_path / ".env"
+    path.write_text("LLM_PARALLEL_TOOL_CALLS=false\n", encoding="utf-8")
+    monkeypatch.delenv("LLM_PARALLEL_TOOL_CALLS", raising=False)
+
+    assert load_llm_config(path)["parallel_tool_calls"] is False
 
 
 def test_pfc_variables_are_ignored(tmp_path, monkeypatch):
@@ -55,7 +64,7 @@ def test_pfc_variables_are_ignored(tmp_path, monkeypatch):
     monkeypatch.setenv("PFC_MODEL", "env-legacy-model")
 
     assert load_llm_config(path) == {"base_url": "", "api_key": "", "model": "",
-                                     "effort": ""}
+                                     "effort": "", "parallel_tool_calls": True}
 
 
 def test_environment_wins_over_file(tmp_path, monkeypatch):
@@ -72,7 +81,8 @@ def test_environment_wins_over_file(tmp_path, monkeypatch):
 def test_missing_file_and_env_yield_empty_strings(tmp_path):
     assert os.environ.get("LLM_MODEL") is None
     assert load_llm_config(tmp_path / "absent") == {"base_url": "", "api_key": "",
-                                                    "model": "", "effort": ""}
+                                                    "model": "", "effort": "",
+                                                    "parallel_tool_calls": True}
 
 
 def test_config_yaml_holds_only_deployment_settings():

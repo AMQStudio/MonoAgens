@@ -46,6 +46,7 @@ class ToolEntry:
     facts: frozenset[str]
     permission: str  # empty only for an adapter's talking capability
     output_cap: int
+    result: bool = True  # False for a capability the middleware handles itself
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,21 +123,22 @@ class ToolRegistry:
                       output_cap=int(spec.get("output_cap") or DEFAULT_OUTPUT_CAP))
 
     def add_capability(self, full: str, descriptor: dict[str, Any], *, facts: Any = (),
-                       permission: str, output_cap: int = DEFAULT_OUTPUT_CAP) -> None:
+                       permission: str, output_cap: int = DEFAULT_OUTPUT_CAP,
+                       result: bool = True) -> None:
         """Declare a capability the middleware dispatches itself, like `self.share`."""
         if not permission:
             raise ValueError(f"{full}: an entry without a permission")
         self._add(full, full.partition(".")[0], descriptor, facts=tuple(facts),
-                  permission=permission, output_cap=output_cap)
+                  permission=permission, output_cap=output_cap, result=result)
 
     def _add(self, full: str, owner: str, capability: Mapping[str, Any], *, facts: Any,
-             permission: str, output_cap: int) -> None:
+             permission: str, output_cap: int, result: bool = True) -> None:
         if full in self.capabilities:
             raise ValueError(f"Capability collision: {full}")
         descriptor = {"organ": owner, **capability}
         self.capabilities[full] = descriptor
         self.entries[full] = ToolEntry(full, owner, descriptor, frozenset(facts),
-                                       permission, output_cap)
+                                       permission, output_cap, result)
 
     @staticmethod
     def _permission(full: str, capability: Mapping[str, Any], given: str | None) -> str:

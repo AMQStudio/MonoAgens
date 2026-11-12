@@ -83,11 +83,15 @@ class PluginAPI:
     features: dict[str, list[str]]
     log: Any = None
     files: Any = None
+    roles: Any = None
+    deployment_root: Any = None
+    env: dict[str, Any] = field(default_factory=dict)
     points: dict[str, dict[str, Any]] = field(default_factory=dict)
     tools: list[tuple[Any, dict[str, Any]]] = field(default_factory=list)
     commands: list[CommandEntry] = field(default_factory=list)
     skills: list[SkillEntry] = field(default_factory=list)
     rules: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
     middleware: list[tuple[str, str, Middleware]] = field(default_factory=list)
     checks: list[Any] = field(default_factory=list)
 
@@ -131,6 +135,14 @@ class PluginAPI:
         """Return whether one address is private, reserved or otherwise off limits."""
         return policy.is_blocked_address(address)
 
+    def role_settings(self, who: str) -> dict[str, Any]:
+        """Return one person's role settings (a plugin reads `workspace.quota` and the like)."""
+        return dict(self.roles.settings(who)) if self.roles is not None else {}
+
+    def roles_can(self, who: str, permission: str, place: str | None = None) -> bool:
+        """Return whether one person holds one permission (the roles book's answer)."""
+        return bool(self.roles is not None and self.roles.can(who, permission, place))
+
     async def open_file(self, ref: str, *, context: str | None) -> tuple[bytes, dict[str, Any]]:
         """Open one attachment the requester's context may see (middleware.md §10)."""
         if self.files is None:
@@ -169,7 +181,8 @@ class Loader:
             effective = self._features(name, manifest, config_d.get(name) or {}, report)
             api = PluginAPI(name=name, manifest=manifest, points=self._points,
                             options=self._options(name, manifest, config_d.get(name) or {}),
-                            features=effective, log=contract.LogView())
+                            features=effective, log=contract.LogView(), env=dict(self.env),
+                            deployment_root=self.root)
             for point in (manifest.get("extension_points") or {}).get("opens") or ():
                 api.open_point(str(point))
             self._register(name, api, report)
@@ -402,6 +415,8 @@ class Loader:
         if not callable(register):
             raise ValueError(f"plugin {name}: no register function")
         register(api)
+        for line in api.notes:
+            report.add(line)
         for tool, facts in api.tools:
             owner = getattr(tool, "name", None) or name
             self._validate_tool(owner, tool, facts, api.manifest.get("permissions") or {})
@@ -501,6 +516,7 @@ class Loader:
             if isinstance(api.log, contract.LogView):
                 api.log._bind(kernel.conn)
             api.files = door
+            api.roles = loaded.roles
             for tool, facts in api.tools:
                 kernel.tools.add_tool(tool, facts, owner=getattr(tool, "name", None) or api.name)
             for entry in api.commands:

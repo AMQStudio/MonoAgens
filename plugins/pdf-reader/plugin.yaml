@@ -1,0 +1,17 @@
+manifest_version: 1
+name: pdf-reader
+version: 0.1.0
+description: Read PDF files for the Workspace plugin.
+dependencies: [workspace]
+optional_dependencies: []
+state_namespace: pdf-reader
+features: {}
+tools: {}
+settings: {}
+permissions: {}
+role_settings: {}
+extension_points: {opens: [], fills: [reader]}
+skills: []
+rules: []
+knob_offsets: {}
+requires: [pypdf]

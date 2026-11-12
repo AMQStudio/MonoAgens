@@ -59,6 +59,7 @@ constants:        # engineering values; change only with replay evidence
   max_task_steps: 30
   max_open_tasks: 3
   max_thought_rounds: 3        # model rounds inside one wake before the turn must end (D51)
+  batch_wake_timeout_ms: 2000  # one round's tool results are awaited together this long
   model_call_retries: 1        # immediate retries of a transport failure inside one model call
   # the desk: what one wake's prompt may hold
   recent_messages: 20          # roughly one phone screen; older lines via recall

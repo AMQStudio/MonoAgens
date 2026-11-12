@@ -399,3 +399,98 @@ a name resolving to 192.168.1.10, a public page with its scripts dropped, the in
 redirect hop refused, a server error) and `tests/plugins/test_web_search_check.py`: with the
 plugin a scripted `web-search.web_search` call records a `model.call` and one `act.out`; without
 it the capability is absent and the honest "as of my knowledge" reply is the only output.
+
+**Part 4 — Workspace, sandbox and PDF Reader.** `plugins/workspace/`: `plugin.yaml` exactly as
+planned (facts and permissions per tool, `role_settings` with the quota and the shared lists,
+`extension_points: {opens: [reader]}`), `paths.py` (own workspace `<root>/<person id with ":"→
+"_">`, `shared/<name>` for each folder a role names; `resolve` refuses `..`, an absolute path
+and a symlink that leaves the folder), `tools.py` (read with an `offset`/`limit` window or an
+attachment `ref`, write, edit with exactly-one-match, grep in `matches|count|files` mode sorted
+by path and line, glob, run), `guard.py`, `sandbox.py`, `base.py`, `quota.py`, `prepare.py`.
+`plugins/pdf-reader/`: `dependencies: [workspace]`, `requires: [pypdf]`, fills `reader` for
+`.pdf` with `pages: N` and the text of every page; with pypdf absent the plugin is "unavailable"
+(boot note) and `read` of a `.pdf` answers `no reader for .pdf: install one for this file type`.
+Every tool answers a refusal as a value (`{"error": …}`), never a crash.
+**1. Files.** `read` also reads one attachment through the one door and the `reader` point by
+suffix; a suffix with no reader names the extension. A legacy text extension or no suffix reads
+as UTF-8; a file with control bytes is `that file is not text`. Ownership: the workspace of
+`person:owner` is `var/workspaces/person_owner`, so another person's files are not reachable even
+by name.
+**2. Sandbox.** `run` (long_running, so a task thread opens and typing shows) is composed by
+`sandbox.argv`: pasta with `--config-net --no-map-gw -t none -u none -T none -U none`, then a
+shell wrapper that adds the blackhole routes (the blocked table plus this machine's own
+addresses) and execs bubblewrap with `--die-with-parent --unshare-all --share-net
+--new-session --hostname sandbox --clearenv`, an overlay on the shared base (one layer per
+person under `var/sandbox/layers/<person>`), `--bind <own workspace> /work`, a shared folder
+`--ro-bind` unless the person holds `workspace.write`, `--tmpfs /tmp --tmpfs /run --proc /proc
+--dev /dev`, `--ro-bind /etc/resolv.conf`, a fixed PATH/HOME/LANG/TERM, `--cap-drop ALL` and
+`bash -lc`. Limits: `RLIMIT_AS`, `RLIMIT_CPU`, `RLIMIT_NPROC`, `RLIMIT_CORE` in a preexec hook,
+`start_new_session`, `wait_for(timeout)` then `killpg(SIGKILL)`; output capped at 8000. The
+environment is computed, never inherited (no `LLM_API_KEY`, no `DATABASE_URL`). Fail-closed: no
+pasta → `--unshare-net` (no network at all); no bubblewrap, no `ip` or no prepared base → `run`
+answers `workspace: run unavailable (<reason>)` and the boot report/rule says why.
+**Preparation is a command, not a boot step** (`uv run python plugins/workspace/prepare.py
+--root .`): boot must not wait minutes on a download, and `run` stays unavailable until the
+marker `base.json` exists. The base comes from `base_rootfs` when given, else `podman create` +
+`export` (or docker), else `base_tarball`; the tree is extracted with absolute names, `..`,
+links and devices refused, moved into place with `os.replace`, then the one install pass runs
+python3/pip/venv, git, curl, CA certificates and iproute2 inside the sandbox with the base
+writable.
+**4. Guard** (`guard.screen`) is deterministic, two stages: the deny list (container runtime,
+mount/namespace, firewall, download-and-execute, `nc -e`, `/dev/tcp/`, decode-and-execute,
+`chmod 777 /`, `chown /`, sudo/su, user management, cron/systemd, `kill -9 1`), then the hidden
+forms (`$IFS`, `{a,b}`, `$(`, backticks), the allow list of plainly safe heads and a recursive
+`shlex` walk that peels shell wrappers and re-screens what they run. `deny` → the act is
+refused (`sandbox command blocked: <reason>`, nothing sent); `pending` (a wide or hidden
+command) → `sensitive` with reason `the command is not plainly safe`, so the owner is asked even
+in `yolo`. **No model call**: a classifier here would bypass the gate and the daily budget
+(invariant 5), so stage 2 is deterministic — recorded as the deliberate deviation the plan
+allowed.
+**4.6 Scenario** (`tests/plugins/test_workspace_scenario.py`): the owner asks to send the
+finished work to Budi; the scripted soul reads `laporan.md` from the workspace, shares it with
+Budi and sends it through a test adapter that can attach files (`filetest`, 2 per message). The
+first send is refused with `waiting for the owner's approval` and `approval.requested` carries
+reason `forwarding a file`; after the owner's `yes` one `intent` goes to Budi's place, the send
+is carried out there and the recorded `act.out` carries the file's ref. `share.granted` comes
+before any send.
+**4.7 Batch tool calls.** `LLM_PARALLEL_TOOL_CALLS` (default true; `false`/`0` disables) reaches
+`Reasoning.parallel_tool_calls` and the request body (`parallel_tool_calls: true`), named in
+`.env.example`. Measurement with a scripted model and the real Workspace tool over three files,
+one round of three `workspace.grep` calls: **before the core fix — 3 wakes, 3 model calls, 5
+`act.out`; after — 2 wakes, 2 model calls, 4 `act.out`** (one round, then exactly one follow-up
+round; the second `act.out` was the duplicated answer). The fix, only in `core/kernel.py` (no
+other core file needed): `Kernel._finish_job` records one entry per round keyed by
+`(job.trigger.id, job.place)` with the number of results it awaits and a deadline from the new
+prior constant `batch_wake_timeout_ms: 2000`; `Kernel._wake` decrements that entry for an
+`act.result` (finding the round through `act.out.caused_by`) and returns without appraising
+while results are still due; the last one wakes once. A round with a slow
+(`long_running`) act or a message (`communicative`) act is never held by it: those wake as they
+always did. A late result is flushed by `_flush_batches` when a tick or any event of that place
+arrives after the deadline, so nothing can stall a place. `tests/core/test_batch.py` covers one
+round/one wake, two places never cross-counting, the timeout flush, an unknown capability not
+being counted, and a round with a slow act.
+**4.8 Checks** (`tests/plugins/test_workspace_checks.py`): `run` asks the owner in `default`,
+passes in `yolo` and asks in `strict`; a guest is not offered `workspace.run` and is refused by
+name; "finish my code, then send it to Budi" opens a task thread, runs and delivers. The sandbox
+end-to-end checks (host home, `.env`, the database port unreachable; another person's workspace
+and the host `/tmp` invisible; the internet reachable) are marked
+`skipif(not MONOAGENS_SANDBOX_E2E)`: they need a prepared base, which needs an image export or a
+download; the machine has `bwrap 0.13.1`, `pasta`, `ip`, `podman` and `docker`, but the base was
+not prepared in this session, so `run` is reported unavailable and the e2e checks were not run.
+Note for the owner: `RLIMIT_NPROC` counts the host user's processes, so a busy host can hit it
+before the sandbox limit; time, memory and CPU still bound the run and bwrap's PID namespace
+isolates the process tree.
+
+**4.7 follow-up.** A round's count must include only calls that really produce a result:
+counting a call the middleware handles itself (`self.share` records `share.granted` and
+returns nothing) held the round open and its timeout flush woke the soul in a place where
+nothing had happened (scenario 18 grew a spurious "ok"). `ToolEntry` now carries
+`result: bool` (`False` for `self.share`, declared through `add_capability(..., result=False)`),
+and `_track_batch` skips an unknown capability, a slow tool, a message and a handled
+capability. Scenario 18 is back to 19/19.
+
+**Part 5 support.** `scripts/replay.py` reads two optional keys per scenario: `plugins:`
+(a map of name → settings; the scenario's selection replaces `config.yaml`'s for that run) and
+`bodies_extra:` (extra adapters through `module:`), and builds the kernel through the same
+`Loader` (the repo's plugin folders, never the repo's `config.yaml`). A scenario without them
+behaves exactly as before (the five `FakeBody`s).

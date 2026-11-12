@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
+from datetime import timedelta
 from functools import partial
 from typing import Any
 
@@ -49,6 +50,8 @@ class Kernel:
         self.budget_limit: float = 0.0
         self.after_model_call: Callable[[int, Mapping[str, int]], Awaitable[None]] | None = None
         self.hooks = hooks.HookRegistry(self.settings)
+        self._batches: dict[tuple[int, str], dict[str, Any]] = {}
+        self._results_this_round = 0
         validate_signals(signal_weights(self.settings))
 
     def require_installed(self) -> None:
@@ -144,6 +147,9 @@ class Kernel:
                               daily_limit=self.budget_limit)
 
     async def _wake(self, event: Event) -> None:
+        if event.kind == "act.result" and await self._batch_holds(event):
+            return
+        await self._flush_batches(event.place or "")
         if event.kind == "job.result":
             await self._finish_job(event)
             return
@@ -182,6 +188,66 @@ class Kernel:
                                         settings=self.settings):
                 return
         await self._think(event, appraisal.reason, event.place or "")
+
+    async def _batch_holds(self, event: Event) -> bool:
+        """Hold one result of a round whose other results have not arrived yet.
+
+        A round's results are awaited together, keyed by the round (the event that started
+        the reasoning job and its place), so one round wakes reasoning once. A result from
+        another round, place or thread never matches a key, so it never counts here.
+        """
+        if event.caused_by is None or not self._batches:
+            return False
+        row = await (await self.conn.execute(
+            "SELECT caused_by FROM events WHERE id = %s", (event.caused_by,))).fetchone()
+        if row is None or row[0] is None:
+            return False
+        key = (int(row[0]), event.place or "")
+        batch = self._batches.get(key)
+        if batch is None:
+            return False
+        batch["remaining"] -= 1
+        if batch["remaining"] > 0 and self.clock.now() < batch["deadline"]:
+            return True
+        self._batches.pop(key, None)
+        return False
+
+    async def _flush_batches(self, place: str) -> None:
+        """Wake once for a round whose results are late; a result cannot stall a place."""
+        now = self.clock.now()
+        for key in [key for key, batch in self._batches.items()
+                    if key[1] == place and now >= batch["deadline"]]:
+            batch = self._batches.pop(key)
+            await self._think(batch["trigger"], "the results of one round are in",
+                              str(key[1]))
+
+    def _track_batch(self, job: Any, acts: list[tuple[dict[str, Any], Any]]) -> None:
+        """Remember how many results one finished round still awaits, and until when.
+
+        Only a call that produces a result counts: a slow tool (it reports later by design
+        and wakes as it always did), a message (complete once sent) and a capability the
+        middleware handles itself (`share` records its own outcome) never hold a round open,
+        so no place ever waits on a result that cannot arrive.
+        """
+        results = 0
+        for raw, _labels in acts:
+            capability = str((raw.get("arguments") or {}).get("capability") or "")
+            entry = self.tools.entry(capability)
+            if entry is None:
+                continue  # no such tool, so no result will come
+            if not entry.result:
+                continue  # the middleware handled it and recorded its own outcome
+            declared = self.tools.get(capability) or {}
+            if declared.get("long_running") or declared.get("communicative"):
+                continue
+            results += 1
+        if results <= 0:
+            return
+        values = self.settings.get("constants") or {}
+        milliseconds = int(values.get("batch_wake_timeout_ms") or 2000)
+        self._batches[(int(job.trigger.id or 0), str(job.place))] = {
+            "trigger": job.trigger, "remaining": results,
+            "deadline": self.clock.now() + timedelta(milliseconds=milliseconds)}
 
     async def _think(self, event: Event, reason: str, place: str) -> None:
         """Lay out the desk, pass the context hook, start one reasoning job per place."""
@@ -223,6 +289,7 @@ class Kernel:
                     await self.after_model_call(call.id, totals)
             calls = [call for item in rounds for call in item.get("calls") or []]
             acts = await jobs.apply_calls(self, job.trigger, calls)
+            self._track_batch(job, acts)
             await threads.after_step(self, job, event, acts)
         elif job.name == "encode" and isinstance(result.get("vector"), list):
             await insert_event_vector(self.conn, int(result["event_id"]), result["vector"])

@@ -1,0 +1,38 @@
+manifest_version: 1
+name: workspace
+version: 0.1.0
+description: Read, write and run code in a sandboxed folder per person.
+dependencies: []
+optional_dependencies: []
+state_namespace: workspace
+features:
+  tools: [read, write, edit, grep, glob, run]
+  commands: [workspace]
+tools:
+  read:  {facts: [reads], output_cap: 20000, permission: workspace.read}
+  write: {facts: [changes], output_cap: 2000, permission: workspace.write}
+  edit:  {facts: [changes], output_cap: 2000, permission: workspace.write}
+  grep:  {facts: [reads], output_cap: 4000, permission: workspace.read}
+  glob:  {facts: [reads], output_cap: 4000, permission: workspace.read}
+  run:   {facts: [runs_code, network], output_cap: 8000, permission: workspace.run}
+settings:
+  root: {type: string, default: ""}
+  sandbox: {type: string, default: ""}
+  base_rootfs: {type: string, default: ""}
+  base_tarball: {type: string, default: ""}
+  timeout_seconds: {type: int, default: 120}
+  max_file_bytes: {type: int, default: 2000000}
+  memory_mb: {type: int, default: 1024}
+  cpus: {type: int, default: 1}
+  pids: {type: int, default: 256}
+permissions:
+  workspace.read:  {label: "Read files", base: guest}
+  workspace.write: {label: "Write and edit", base: member}
+  workspace.run:   {label: "Run code", base: trusted}
+role_settings:
+  workspace.quota: {guest: "0", member: "1G", trusted: "5G"}
+  workspace.shared: {guest: [], member: [], trusted: []}
+extension_points: {opens: [reader], fills: []}
+skills: []
+rules: []
+knob_offsets: {}

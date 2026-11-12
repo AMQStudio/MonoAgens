@@ -24,6 +24,7 @@ PRIOR_VERSION = 1
 LOGGER = logging.getLogger(__name__)
 _LLM_KEYS = (("base_url", "LLM_BASE_URL"), ("api_key", "LLM_API_KEY"),
              ("model", "LLM_MODEL"), ("effort", "LLM_REASONING_EFFORT"))
+OFF_VALUES = ("false", "0")
 
 
 def read_yaml(path: pathlib.Path) -> dict[str, Any]:
@@ -135,6 +136,9 @@ def load_llm_config(env_path: pathlib.Path = DEFAULT_ENV_PATH) -> dict[str, str]
     config["effort"] = config["effort"].strip().lower()
     if config["effort"] and config["effort"] not in EFFORTS:
         raise ValueError(f"LLM_REASONING_EFFORT must be one of {', '.join(EFFORTS)}")
+    parallel = (os.environ.get("LLM_PARALLEL_TOOL_CALLS")
+                or file_values.get("LLM_PARALLEL_TOOL_CALLS") or "true")
+    config["parallel_tool_calls"] = parallel.strip().lower() not in OFF_VALUES
     return config
 
 

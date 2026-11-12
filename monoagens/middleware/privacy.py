@@ -33,7 +33,8 @@ SHARE_CAPABILITY = {
 
 def register(registry: Any) -> None:
     """Declare the middleware's own `self.share` capability on the kernel's registry."""
-    registry.add_capability(SHARE, SHARE_CAPABILITY, facts=(), permission="privacy.share")
+    registry.add_capability(SHARE, SHARE_CAPABILITY, facts=(), permission="privacy.share",
+                            result=False)  # the guard records the grant itself
 
 
 async def aliases(conn) -> dict[str, str]:
