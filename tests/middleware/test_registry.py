@@ -141,7 +141,7 @@ async def test_help_is_byte_identical_on_telegram_and_cli(aconn):
     cli = await _help_on(aconn, _Body("cli", CLI_CAPABILITIES))
 
     assert telegram == cli
-    assert telegram.startswith("Commands:\n/help — ")
+    assert telegram.startswith("Commands:\n/budget — ")
     assert "self.recall(" in telegram and "/help" in telegram
     assert "telegram.say" not in telegram and "cli.say" not in telegram
 
@@ -191,7 +191,7 @@ async def test_a_skill_enters_the_self_block_by_name_only(aconn):
     text = "\n".join(part.text for part in outcome.item.blocks if part.layer == VOLATILE)
 
     assert "<self>" in text and "</self>" in text
-    assert "Commands: /help, /plugin" in text
+    assert "Commands: /budget, /help, /plugin, /quiet, /role, /roles, /whoami, /whois" in text
     assert "coffee-brewing — How to brew coffee well." in text
     assert "tax-filing" not in text
     assert "SECRET BODY" not in text

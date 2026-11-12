@@ -226,3 +226,37 @@ records `roles.changed`. `/roles show <role>` prints each permission with its ba
 `config.yaml`. Each role's and person's `context` reaches the person card, one line each, capped
 at 200 characters. The book is installed by `Loader.install` (`kernel.roles`); a kernel built
 without a loader keeps the empty book, so the owner is free and everyone else only talks.
+
+**1.7 Policy.** The action hook composes, first: `identity.identity_line` → `permission_line` →
+`privacy.guard("first")`; last: `privacy.guard("last")` → `quiet_line` → `approval_line`. The
+context and inbound hooks keep the policy they had (identity line, the privacy filter, the
+approval answer). `permission_line` refuses with `you may not use <capability>` (a Stop, so it
+is recorded); `approval_line` decides pass/ask/refuse from the registry facts, the call facts a
+plugin may add and the requester's approval mode — `sensitive` always asks, `yolo` passes
+otherwise, `strict` always asks, `default` asks only for `runs_code`; a network call is refused
+first by the privacy guard if an argument carries a memory this place may not see
+(`that would send private content off the machine`); forwarding a file to someone who was not
+part of it marks the call `sensitive` with reason `forwarding a file`.
+**Approval lifecycle** (events, nothing in memory): asking writes `approval.requested`
+(`capability`, `arguments`, `who`, `place`, `reason`, plus `retried_from` when it is the second
+question), sets `ctx["refusal"] = "waiting for the owner's approval"` and sends the owner the
+question in their direct chat (buttons where the adapter can show them, text otherwise). An
+answer is an ordinary percept: a button callback carries `{"approval": id, "answer": bool}`, and
+the owner's whole-message `yes|ya|no` answers the newest open request. The answerer must be the
+owner or hold `approval.answer`; `approval.answered` records `request`, `allowed`, `who`, `by`.
+A `yes` enqueues one `intent` in the request's place carrying `approved` = the request id; the
+retry passes when capability **and** arguments equal what was approved, asks exactly once more
+when they differ, and a second difference is refused with `the approved call was different; ask
+the owner again` (no third question). A second identical call after a retry asks again.
+**Quiet hours** are read in the last pass, after the route is resolved: a communicative act
+outside the owner's direct chat during the window is refused with
+`quiet hours: the owner asked for silence until HH:MM`. `/budget` (owner only) shows today's
+total and cap, `/budget <n>` writes `owner_settings.daily_token_budget`; `/quiet 22:00 06:00`
+and `/quiet off` write `owner_settings.quiet_hours`; both go through
+`loader.edit_config` (backup, only their line) and record `plugin.config_changed`.
+**Route hints** (lever 2): the person card's reach line now carries the last-active time
+(`telegram at space:tg:1 (last 2026-01-01 03:00)`), so reasoning can pick `via:` without the
+middleware choosing for it.
+**Narrower rules** in `privacy.py`: `topic_rule(kernel, topics)` / `narrowing(kernel, topics)`
+drop recent lines and memories that mention a topic word and add one withheld count labelled
+`a topic you keep out of this mode`; they can only remove.

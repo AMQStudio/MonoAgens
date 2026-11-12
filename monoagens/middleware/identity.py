@@ -7,7 +7,7 @@ import re
 import secrets
 from collections.abc import Mapping
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from monoagens.core.hooks import Continue, Middleware, Replace, Stop
@@ -247,24 +247,25 @@ def _named(name: str, text: str) -> bool:
 async def _card(conn, who: str, card: dict[str, Any], *, roles: Any = None) -> str:
     """Render one person card: name, person id, reachable adapters, closeness, role context."""
     places = await _direct_places(conn, card["natives"])
-    reach = "; ".join(f"{adapter} at {place}" for adapter, place in sorted(places.items()))
+    reach = "; ".join(f"{adapter} at {place} (last {seen.astimezone(timezone.utc):%Y-%m-%d %H:%M})"
+                      for adapter, (place, seen) in sorted(places.items()))
     label = f"{card['name']} ({who})" if card["name"] else who
     line = f"- {label}: {reach or 'no direct place known yet'}; closeness {card['closeness']:.2f}"
     contexts = [str(context)[:CONTEXT_CAP] for context in (roles.contexts(who) if roles else ())]
     return "\n".join([line, *[f"  {context}" for context in contexts if context]])
 
 
-async def _direct_places(conn, natives: set[str]) -> dict[str, str]:
-    """Return the direct place where each adapter last saw one of a person's ids."""
+async def _direct_places(conn, natives: set[str]) -> dict[str, tuple[str, datetime]]:
+    """Return the direct place, and when it was last active, per adapter for one person."""
     if not natives:
         return {}
     cur = await conn.execute(
-        "SELECT body, place FROM events WHERE kind = 'percept' AND place IS NOT NULL "
+        "SELECT body, place, ts FROM events WHERE kind = 'percept' AND place IS NOT NULL "
         "AND who = ANY(%s) AND payload->>'place_kind' = 'direct' ORDER BY id DESC",
         (sorted(natives),))
-    places: dict[str, str] = {}
-    for body, place in await cur.fetchall():
-        places.setdefault(str(body or "?"), place)
+    places: dict[str, tuple[str, datetime]] = {}
+    for body, place, seen in await cur.fetchall():
+        places.setdefault(str(body or "?"), (place, seen))
     return places
 
 

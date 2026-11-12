@@ -580,7 +580,7 @@ async def test_person_cards_show_people_present_and_named_but_never_their_messag
     cards = "\n".join(desk.people)
     assert "person:charlie" in cards
     assert "Budi (person:budi)" in cards
-    assert "whatsapp at space:wa:budi" in cards
+    assert "whatsapp at space:wa:budi (last " in cards
     assert "closeness 0.40" in cards
     assert "sketsa_logo" not in cards
 

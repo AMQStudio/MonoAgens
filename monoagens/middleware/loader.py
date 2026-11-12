@@ -411,7 +411,7 @@ class Loader:
         for capability in getattr(tool, "capabilities", lambda: ())():
             full = f"{owner}.{capability['name']}"
             spec = declared.get(str(capability["name"]))
-            if not spec or not spec.get("facts"):
+            if not spec or "facts" not in spec:
                 raise ValueError(f"{full}: a tool without facts")
             permission = str(spec.get("permission") or full)
             if permission not in catalog:

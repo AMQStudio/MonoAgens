@@ -114,7 +114,7 @@ class ToolRegistry:
             short = str(capability["name"])
             full = f"{name}.{short}"
             spec = declared.get(short)
-            if not spec or not spec.get("facts"):
+            if not spec or "facts" not in spec:
                 raise ValueError(f"{full}: a tool without facts")
             permission = str(spec.get("permission") or full)
             self._add(full, name, capability, facts=tuple(spec["facts"]),

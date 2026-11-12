@@ -7,11 +7,13 @@ never enters the desk, and sharing needs the consent of someone who was part of 
 
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
 from monoagens.core.hooks import Continue, Middleware, Replace, Stop
-from monoagens.infra.store import read_state
+from monoagens.infra.store import payload_text, read_state
 from monoagens.types import Event
 
 OWNER = "person:owner"
@@ -257,6 +259,13 @@ def guard(kernel: Any, when: str) -> Middleware:
             ctx["handled"] = True
             return Continue()
         if when == "first":
+            leaving_refusal = await leaving(kernel, ctx, item)
+            if leaving_refusal:
+                ctx["refusal"] = leaving_refusal
+                return Stop(leaving_refusal)
+            if await forward_needs_confirmation(ctx["conn"], ctx, item):
+                ctx["call_facts"] = set(ctx.get("call_facts") or ()) | {"sensitive"}
+                ctx["approval_reason"] = FORWARDING
             return Continue()
         place = ctx.get("place") or ctx["event"].place
         if ctx.get("long_running"):
@@ -269,3 +278,104 @@ def guard(kernel: Any, when: str) -> Middleware:
         return Continue()
 
     return rule
+
+
+# ------------------------------------------------------- narrower rules
+
+
+TOPIC_LABEL = "a topic you keep out of this mode"
+LEAVING = "that would send private content off the machine"
+FORWARDING = "forwarding a file"
+
+
+def topic_rule(kernel: Any, topics: Sequence[str]) -> Middleware:
+    """Return a context rule that drops lines and memories about these topics.
+
+    A plugin may only narrow: the rule removes what it matches and adds one withheld
+    count; it never puts anything back.
+    """
+    return _narrowing(topics)
+
+
+def narrowing(kernel: Any, topics: Sequence[str]) -> Middleware:
+    """The same rule under the name plugin code uses when it registers a middleware."""
+    return _narrowing(topics)
+
+
+def _narrowing(topics: Sequence[str]) -> Middleware:
+    """Build the one topic rule; a topic must be a word to match, never a pattern."""
+    words = [str(topic).strip().lower() for topic in topics if str(topic).strip()]
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        """Drop what mentions a topic, and count what was dropped."""
+        if not words:
+            return Continue()
+        recent = tuple(line for line in item.recent if not _mentions(line.payload, words))
+        elsewhere = tuple(line for line in item.recent_elsewhere
+                          if not _mentions(line.payload, words))
+        memories = tuple(memory for memory in item.memories
+                         if not _mentions_text(str(memory), words))
+        dropped = ((len(item.recent) - len(recent))
+                   + (len(item.recent_elsewhere) - len(elsewhere))
+                   + (len(item.memories) - len(memories)))
+        if not dropped:
+            return Continue()
+        counts = dict(item.withheld)
+        counts[TOPIC_LABEL] = counts.get(TOPIC_LABEL, 0) + dropped
+        return Replace(replace(item, recent=recent, recent_elsewhere=elsewhere,
+                               memories=memories, withheld=tuple(sorted(counts.items()))))
+
+    return rule
+
+
+def _mentions(payload: Any, words: Sequence[str]) -> bool:
+    """Return whether one event's text mentions a topic word."""
+    return _mentions_text(payload_text(payload or {}), words)
+
+
+def _mentions_text(text: str, words: Sequence[str]) -> bool:
+    """Return whether a text holds a topic word as a whole word."""
+    lowered = str(text).lower()
+    return any(re.search(rf"(?<!\w){re.escape(word)}(?!\w)", lowered) for word in words)
+
+
+def _strings(value: Any) -> list[str]:
+    """Return every string inside one argument value, at any depth."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [found for item in value.values() for found in _strings(item)]
+    if isinstance(value, (list, tuple)):
+        return [found for item in value for found in _strings(item)]
+    return []
+
+
+def carries_file(arguments: Any, descriptor: Any) -> bool:
+    """Return whether one act carries a file attachment with a communicative capability."""
+    if not (descriptor or {}).get("communicative"):
+        return False
+    values = arguments or {}
+    return any(values.get(key) for key in ("attachment", "attachments", "file"))
+
+
+async def leaving(kernel: Any, ctx: Any, arguments: Any) -> str | None:
+    """Return the refusal when a network call would carry content this place may not see."""
+    if "network" not in kernel.tools.facts(str(ctx.get("capability") or "")):
+        return None
+    for value in _strings(arguments):
+        if await leaks(kernel.conn, ctx["event"].place, value):
+            return LEAVING
+    return None
+
+
+async def forward_needs_confirmation(conn: Any, ctx: Any, arguments: Any) -> bool:
+    """Return whether forwarding this file reaches someone who was not part of it (D46)."""
+    if not carries_file(arguments, ctx.get("descriptor")):
+        return False
+    to = str(ctx.get("to") or "")
+    if not to:
+        return False  # the same place: the audience already has it
+    source = set(await audience(conn, ctx["event"].place))
+    if to.startswith("person:"):
+        return to not in source
+    return not set(await audience(conn, to)) <= source
