@@ -62,6 +62,11 @@ from monoagens.types import Action, Event
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCENARIO_DIR = ROOT / "scenarios"
 REPORT_DIR = ROOT / "reports"
+LATEST_NAME = "latest.md"
+REPORT_KEEP = 10
+REPORT_FILE_RE = re.compile(r"^(?:\d{4}-\d{2}-\d{2}-\d{4}-(?:real|fake)-.+|replay-\d{8}-\d{6})\.md$")
+REPORT_STAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-(\d{4})-(?:real|fake)-.+\.md$")
+LEGACY_STAMP_RE = re.compile(r"^replay-(\d{8})-(\d{6})\.md$")
 DEFAULT_BASE_URL = "https://api.deepinfra.com/v1/openai"
 DEFAULT_MODEL = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
 DEFAULT_START = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -1515,12 +1520,29 @@ def render_report(results: Sequence[ScenarioResult], usage: Usage, mode: str,
     return "\n".join(lines)
 
 
-def write_report(text: str, when: datetime) -> pathlib.Path:
-    """Write the report under reports/ and return its path."""
+def report_label(paths: Sequence[pathlib.Path]) -> str:
+    """Name a report by the scenarios it covers: `all`, or their numbers in order."""
+    if len(paths) == len(scenario_paths([])):
+        return "all"
+    return "-".join(path.name.split("_", 1)[0] for path in paths)
+
+
+def write_report(text: str, when: datetime, *, fake: bool, label: str) -> pathlib.Path:
+    """Write the report and a copy under latest.md, prune old ones, return the path."""
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    path = REPORT_DIR / f"replay-{when:%Y%m%d-%H%M%S}.md"
+    path = REPORT_DIR / f"{when:%Y-%m-%d-%H%M}-{'fake' if fake else 'real'}-{label}.md"
     path.write_text(text, encoding="utf-8")
+    (REPORT_DIR / LATEST_NAME).write_text(text, encoding="utf-8")
+    _prune_reports()
     return path
+
+
+def _prune_reports(keep: int = REPORT_KEEP) -> None:
+    """Delete every report beyond the newest `keep`; latest.md and backups stay."""
+    reports = [path for path in REPORT_DIR.glob("*.md") if REPORT_FILE_RE.match(path.name)]
+    reports.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    for path in reports[keep:]:
+        path.unlink()
 
 
 # ------------------------------------------------------- capability record
@@ -1533,7 +1555,6 @@ REPORT_MODE_RE = re.compile(r"^- Mode: \*\*(.+)\*\*$")
 REPORT_MODEL_RE = re.compile(r"^- Model: `([^`]+)`$")
 REPORT_EFFORT_RE = re.compile(r"^- Effort: `([^`]+)`$")
 REPORT_WHEN_RE = re.compile(r"^- Report generated: (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
-REPORT_STAMP_RE = re.compile(r"replay-(\d{8})-(\d{6})\.md$")
 REPORT_CHECK_RE = re.compile(r"^- \*\*(PASS|FAIL)\*\* — ")
 REPORT_SKIP = {"Headline metrics", "Cognition configuration", "Summary"}
 
@@ -1574,9 +1595,13 @@ def _report_when(path: pathlib.Path, lines: Sequence[str]) -> datetime:
         if match:
             stamp = datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")
             return stamp.replace(tzinfo=timezone.utc)
-    match = REPORT_STAMP_RE.search(path.name)
+    match = REPORT_STAMP_RE.match(path.name)
     if match:
-        stamp = datetime.strptime(match.group(1) + match.group(2), "%Y%m%d%H%M%S")
+        stamp = datetime.strptime(match.group(1) + match.group(2), "%Y-%m-%d%H%M")
+        return stamp.replace(tzinfo=timezone.utc)
+    legacy = LEGACY_STAMP_RE.match(path.name)
+    if legacy:
+        stamp = datetime.strptime(legacy.group(1) + legacy.group(2), "%Y%m%d%H%M%S")
         return stamp.replace(tzinfo=timezone.utc)
     return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
 
@@ -1618,7 +1643,9 @@ def parse_report(path: pathlib.Path) -> ReportRun | None:
 def saved_reports(reports_dir: pathlib.Path, before: datetime) -> list[ReportRun]:
     """Read the saved reports older than this run, newest first."""
     runs = []
-    for path in sorted(reports_dir.glob("replay-*.md")):
+    for path in sorted(reports_dir.glob("*.md")):
+        if not REPORT_FILE_RE.match(path.name):
+            continue
         run = parse_report(path)
         if run is not None and run.when < before:
             runs.append(run)
@@ -1787,7 +1814,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     mode = "fake LLM (free)" if args.fake else "real LLM"
     text = render_report(results, usage, mode, llm["model"], settings, when, zone,
                          llm["effort"])
-    path = write_report(text, when)
+    path = write_report(text, when, fake=args.fake, label=report_label(paths))
     record = capability_record(results, mode, llm["model"], when, llm["effort"])
     record_path = write_capability_record(record)
     failed = [check.label for result in results for check in result.checks if not check.passed]

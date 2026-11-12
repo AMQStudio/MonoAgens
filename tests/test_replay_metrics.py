@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import pathlib
 import sys
 from datetime import datetime, timedelta, timezone
@@ -259,3 +260,57 @@ async def test_person_cards_are_not_private_items_on_the_desk(aconn):
     await tracker.record_desk(desk)
     assert [item.source for item in tracker.desks[0].items] == [group]
     assert await replay.desk_violations(aconn, tracker.desks) == []
+
+
+# ------------------------------------------------ report files (12.15)
+
+def test_a_report_is_named_for_its_mode_and_scenarios(tmp_path, monkeypatch):
+    monkeypatch.setattr(replay, "REPORT_DIR", tmp_path)
+    when = datetime(2026, 11, 12, 10, 3, tzinfo=timezone.utc)
+
+    path = replay.write_report("body\n", when, fake=False, label="24-30")
+
+    assert path.name == "2026-11-12-1003-real-24-30.md"
+    assert (tmp_path / "latest.md").read_text() == "body\n"
+    assert path.read_text() == "body\n"
+
+
+def test_only_the_newest_ten_reports_are_kept(tmp_path, monkeypatch):
+    monkeypatch.setattr(replay, "REPORT_DIR", tmp_path)
+    (tmp_path / "notes.txt").write_text("keep me")
+    for minute in range(12):
+        when = datetime(2026, 11, 12, 10, minute, tzinfo=timezone.utc)
+        path = replay.write_report("body\n", when, fake=True, label="all")
+        os.utime(path, (minute * 60, minute * 60))
+        os.utime(tmp_path / "latest.md", (minute * 60, minute * 60))
+
+    kept = sorted(path.name for path in tmp_path.glob("*.md")
+                  if replay.REPORT_FILE_RE.match(path.name))
+
+    assert len(kept) == 10
+    assert kept[0] == "2026-11-12-1002-fake-all.md" and kept[-1] == "2026-11-12-1011-fake-all.md"
+    assert (tmp_path / "latest.md").is_file()
+    assert (tmp_path / "notes.txt").read_text() == "keep me"
+
+
+def test_the_label_is_all_for_the_full_set_and_ids_otherwise():
+    assert replay.report_label(replay.scenario_paths([])) == "all"
+    assert replay.report_label([ROOT / "scenarios/turn-taking/24_gate_threshold.yaml",
+                                ROOT / "scenarios/promises/30_same_topic_question.yaml"]) == "24-30"
+
+
+def test_a_new_style_report_is_read_back(tmp_path):
+    path = tmp_path / "2026-11-12-1003-real-24-30.md"
+    path.write_text("\n".join([
+        "- Mode: **real LLM**",
+        "- Model: `m`",
+        "- Report generated: 2026-11-12 10:03:00",
+        "## 24_gate_threshold",
+        "- **PASS** — x",
+        ""]))
+
+    run = replay.parse_report(path)
+
+    assert run is not None and run.mode == "real"
+    assert run.results["24_gate_threshold"] == replay.CapabilityVerdict(1, 1)
+    assert replay._report_when(path, []) == datetime(2026, 11, 12, 10, 3, tzinfo=timezone.utc)
