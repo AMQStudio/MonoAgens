@@ -92,3 +92,26 @@ def test_capability_descriptors():
     assert set(caps) == {"say", "react"}
     assert caps["say"]["communicative"] is True
     assert caps["react"]["communicative"] is False
+
+
+def test_a_typed_command_becomes_a_command_event():
+    from monoagens.adapters.cli.format import command_event
+    from monoagens.infra.clock import FakeClock
+
+    clock = FakeClock()
+    slash = command_event("/mode professional", clock=clock)
+    colon = command_event(":help", clock=clock)
+
+    assert slash.kind == "command" and slash.payload["command"] == "mode"
+    assert slash.payload["arguments"] == ["professional"]
+    assert colon.payload["command"] == "help"
+    assert command_event("halo", clock=clock) is None
+
+
+async def test_the_cli_body_sends_a_command_as_a_command():
+    from monoagens.adapters.cli import CLIBody
+
+    body = CLIBody("/tmp/monoagens-cli-test.sock")
+    event = await body._event("/whoami")
+
+    assert event.kind == "command" and event.payload["command"] == "whoami"

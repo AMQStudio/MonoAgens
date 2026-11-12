@@ -10,7 +10,7 @@ from typing import Any
 
 from monoagens.adapters.cli import receive, send
 from monoagens.adapters.cli.capabilities import CAPABILITIES, SHOWS
-from monoagens.adapters.cli.format import event, split_line
+from monoagens.adapters.cli.format import command_event, event, split_line
 from monoagens.infra.clock import Clock
 from monoagens.types import Action, Event
 
@@ -82,7 +82,10 @@ class CLIBody:
         return str(found) if found is not None else str(ref)
 
     async def _event(self, line: str) -> Event:
-        """Turn one typed line into a percept, storing any files it names."""
+        """Turn one typed line into a command or a percept, storing any files it names."""
+        found = command_event(line, clock=self._clock, name=self.name)
+        if found is not None:
+            return found
         paths, text = split_line(line)
         attachments = []
         for path in paths:

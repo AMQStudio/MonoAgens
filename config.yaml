@@ -13,6 +13,7 @@ plugins:                            # which plugins are on; settings live in con
   workspace:   { enabled: true }
   web-search:  { enabled: true }
   soul-tuning: { enabled: true }
+  pdf-reader:  { enabled: true }
 interaction:                        # what the soul shows; /show writes these lines
   thinking: owner_direct
   steps: long

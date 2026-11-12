@@ -25,6 +25,20 @@ def event(text: str, *, clock: Clock, name: str = "cli",
                  payload=payload)
 
 
+def command_event(line: str, *, clock: Clock, name: str = "cli") -> Event | None:
+    """Return a command event when one typed line is a command (`/help` or `:help`)."""
+    text = str(line).strip()
+    if not text or text[0] not in "/:":
+        return None
+    parts = text[1:].split()
+    if not parts:
+        return None
+    command = parts[0].partition("@")[0].lower()
+    return Event(id=None, ts=clock.now(), kind="command", who=OWNER, place=PLACE, body=name,
+                 payload={"command": command, "arguments": parts[1:], "description": text,
+                          "place_kind": "direct", "addressed": True})
+
+
 def split_line(line: str) -> tuple[list[str], str]:
     """Split `@a.txt|@b.txt|please read` into its paths and its text."""
     if not str(line).startswith("@"):
