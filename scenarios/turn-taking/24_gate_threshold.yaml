@@ -130,7 +130,7 @@ steps:
   - at: "2026-11-10T13:05:00+07:00"
     who: person:tg:7004
     place: space:tg:-1004
-    text: "Dokumennya sudah selesai kok."
+    text: "Bu Rina sudah selesai review, proposal anggaran Q4 sudah final."
     should: answer
   - at: "2026-11-10T13:06:00+07:00"
     who: person:tg:7006
