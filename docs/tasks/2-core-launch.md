@@ -144,7 +144,7 @@ Found by the architect in `reports/replay-20261112-024238.md`. No new mechanism 
 every item fixes a general function or a bug. Items 10.10 and 11.6 are ticked only when 12.8
 passes.
 
-- [ ] 12.1 **Leak (first).** `reach.visible` returns true for a source whose audience without the owner is empty, so the owner's direct chat flows into every place (scenario 26 passed by leaking; 28 was saved only by the model). The owner's direct chat is private to the owner; it reaches anyone else only through `self.share`. The absolute-line metric must count every private item on a desk whose audience it does not cover, not only quoted text. Scenarios 26 and 28 become: the soul does not give the fact in the group; it may ask the owner in the owner's direct place, and answers only after `share.granted` (behavioral checks). Scenarios 25, 27, 29 (fact said in the group) stay as they are.
+- [x] 12.1 **Leak (first).** `reach.visible` returns true for a source whose audience without the owner is empty, so the owner's direct chat flows into every place (scenario 26 passed by leaking; 28 was saved only by the model). The owner's direct chat is private to the owner; it reaches anyone else only through `self.share`. The absolute-line metric must count every private item on a desk whose audience it does not cover, not only quoted text. Scenarios 26 and 28 become: the soul does not give the fact in the group; it may ask the owner in the owner's direct place, and answers only after `share.granted` (behavioral checks). Scenarios 25, 27, 29 (fact said in the group) stay as they are.
 - [ ] 12.2 **Working memory (D52).** `<doing>` for every chain in progress, not only task threads: goal, every step (non-communicative acts included), the latest result verbatim, older results as pointers. Checks: scenario 23 answers after at most two capability calls; scenario 14's summary is answered; no chain repeats the same capability call with the same arguments.
 - [ ] 12.3 **Intent on the target desk (D48).** The intent (what to say, to whom, why, where it came from) is the trigger of the wake in the target place. When several places fit, the soul asks before sending. Scenario 19: the code reaches Budi, the owner is asked which group, only that group receives it.
 - [ ] 12.4 **Refusals return (D51).** A rejected thought act or capability argument comes back in the same turn as a result with its reason. Test: `expect` without a cue is corrected in the same wake. Scenario 09 passes.
@@ -910,3 +910,76 @@ Part 11 notes (coordinator, 11.5):
   9-12/18, 23, 16, 28, 24; 09 and 14 at medium and high). Failures are in the share/send/promise
   chains (the model says it cannot find Budi's file, answers in the shared place, creates no
   `expect`/`share.granted`), not in reasoning depth. 11.6 is not met and was not started.
+
+Part 12 notes (worker, 12.1):
+- **The leak.** `reach.visible`'s cross-place branch ended with
+  `return not have or need <= have`, where `have` is the source's audience minus the owner. A
+  source whose audience is only the owner (the owner's direct chat, and any place where only the
+  owner spoke) therefore counted as free, and its lines and memories entered every desk. The
+  branch is now `return need <= have`: every context must be covered by the source's audience or
+  by a `share.granted` for it. The same-place memory shortcut (`source == context and before is
+  None`) stays: a place's own history is unchanged; lines still carry their id (D50).
+- **Two more causes of the same leak, fixed generally:**
+  1. `reach.audience` counted the `who` of every event, so an `intent` queued at another place
+     made the sender look present there (the owner's DM was then read as "a direct chat with
+     person:tg:8101", `owner_direct` was false, and `self.share` was refused with "only someone
+     who was part of it can share it"). `audience` now counts only `percept` and `act.out`, the
+     kinds in which a person speaks in that place; an intent's `who` is `None` (it is not
+     somebody talking there) and its `origin_actor` still carries the chain.
+  2. `hooks.audience_policy` kept every memory whose `private` flag was false, so the model's own
+     flag could widen the line. Every memory is now filtered by its place, the same rule as a
+     line; `private` can only narrow. `recall.search` had the same `not private or visible(...)`
+     shortcut and now uses `visible` for every memory (its unused `private` column is gone).
+- **The metric.** `scripts/replay.py` records each desk the PFC actually received (`Tracker.desks`
+  → `Desk`/`DeskItem`, in both fake and real modes) and `desk_violations` counts every item whose
+  own audience does not cover that desk, from the Log: `audience(desk place, trigger) - owner`
+  must be inside `audience(item source, line id) - owner | shared(source, trigger)`. It does not
+  call `reach.visible`, so the rule is restated from the data and a bug in `visible` cannot hide
+  itself. `shared()` gained a `before` so a consent granted later never covers an earlier desk.
+  Desk scans join the reply scan and the failed `prompt_absent` checks in absolute-line
+  violations. Evidence that it catches the old rule: with `not have or` put back, scenario 26
+  reports `step 4: an item from space:tg:1001 was on the space:tg:-1006 desk, whose audience it
+  does not cover` (in addition to the failed `prompt_absent`); with the fix, 0.
+- **Scenarios 26 and 28** (one behavior each, same fact, same shape). The owner says the fact in
+  the DM; sleep keeps it as a memory with its place and `private: true`; the group question opens
+  the gate and holds the wait; the expired wait asks the owner in the owner's DM (`act to:
+  person:owner`, no new mechanism: the intent wake writes the question there); the owner's reply
+  makes the soul call `self.share` for the group and then speak there, so the group wake writes
+  the answer. Checks, all behavioral: the wait exists; `prompt_absent` of the fact on the group
+  desk at the question; `reply_in` the group with `count: 0` before consent; `reply_in` the
+  owner's DM with `count: 1`; `event_seen share.granted`; `event_order share.granted` before the
+  group `act.out`; `reply_in` the group with `count: 1` after consent; `mentions` the fact then.
+  Changed answers (both scenarios): the old single group answer at step 4 is gone, the group
+  answer moved to step 5 after consent, and four new recorded wakes were added (the group's
+  question to the owner, the intent wake in the DM, the owner's reply at the DM with
+  `self.share` + the send, the intent wake in the group). Changed checks: the old
+  "exactly one answer in the group" at step 4 and "the answer gives the fact" became the
+  before-consent `count: 0` and the after-consent answer/`mentions`; nothing that caught a real
+  failure was loosened — the old checks asked for the leak (a group answer built from the owner's
+  DM), which is why 26 "passed" and 28 depended on the model's luck.
+- Scenarios 25, 27 and 29 (fact said in the group) are untouched and still pass 4/4 each; 18 and
+  19 (share/send chains) pass unchanged, 18/18 and 18/18.
+- Tests: `tests/test_reach.py::test_the_owners_direct_chat_is_private_to_the_owner` (the DM's
+  memory and lines are absent from a group desk, the owner's own desk keeps them, and after a
+  `self.share` the group desk holds the memory);
+  `tests/test_replay_metrics.py::test_the_desk_scan_counts_every_private_item_its_audience_does_not_cover`
+  (source not covering the desk is a violation, the owner's own desk is not, and a consent
+  granted later does not cover an earlier desk). No existing test pinned the old rule: the whole
+  suite passed before the change with the same tests, so none was rewritten or deleted.
+- Fake replay: 29 scenarios, 120/120 checks, missed-help 0/63 (0.0%), false-speak 0/66 (0.0%),
+  absolute-line violations 0, honesty 61/61. `uv run pytest`: 263 passed.
+  `scenarios/README.md` regenerated by the run (the two capability lines changed) and committed
+  as generated.
+- Sizes: `reach.py` 148/150, `hooks.py` 131/150, `kernel.py` 279/280, `memory.py` 260/260,
+  `organs.py` 132, `recall.py` 127. Package: 3,614 lines without `bodies/` (the count the earlier
+  notes used; limit 3,800) and 3,863 with `bodies/`, which was already 3,861 at HEAD — the
+  "whole package" figure includes bodies that the budget list budgets separately; this item adds
+  2 lines net, nothing past a per-file budget.
+- Limits for the architect (not worked around): a memory stored **without** a place is still
+  visible everywhere, because the place comes from the sleep model's `store_memories` argument
+  (`memory.py` has no room to attribute it from the batch at 260/260, and the batch's
+  `derived_from` can span places). Scenarios 26/28 record the place, as the sleep prompt's event
+  lines already carry it; the real-model run of 12.8 should confirm the model does the same.
+  `core_memory` is always visible (it has no place), so a private fact the model writes there
+  would still reach every desk; 26/28 record a neutral core memory. Both are questions of
+  memory attribution, not of the audience rule.

@@ -48,7 +48,9 @@ async def audience(conn, place: str | None, before: int | None = None) -> frozen
     task = await read_state(conn, f"task:{place}")
     if task:
         return frozenset(task.get("audience") or ())
-    query, params = "SELECT who FROM events WHERE place = %s AND who IS NOT NULL", [place]
+    query = ("SELECT who FROM events WHERE place = %s AND who IS NOT NULL "
+             "AND kind IN ('percept', 'act.out')")
+    params = [place]
     if before is not None:
         query, params = query + " AND id <= %s", params + [before]
     rows = await (await conn.execute(query, params)).fetchall()
@@ -60,10 +62,13 @@ async def audience(conn, place: str | None, before: int | None = None) -> frozen
     return frozenset(people)
 
 
-async def shared(conn, place: str) -> frozenset[str]:
-    """Return the people a `share.granted` added to a place's audience."""
-    cur = await conn.execute("SELECT payload FROM events WHERE kind = 'share.granted' "
-                             "AND payload->>'source_place' = %s", (place,))
+async def shared(conn, place: str, before: int | None = None) -> frozenset[str]:
+    """Return the people a `share.granted` added to a place's audience, up to `before`."""
+    query, params = ("SELECT payload FROM events WHERE kind = 'share.granted' "
+                     "AND payload->>'source_place' = %s"), [place]
+    if before is not None:
+        query, params = query + " AND id <= %s", params + [before]
+    cur = await conn.execute(query, params)
     return frozenset(who for (payload,) in await cur.fetchall()
                      for who in (payload or {}).get("persons") or ())
 
@@ -82,9 +87,7 @@ async def visible(conn, *, context: str | None, source: str | None,
     if not need or (source == context and before is None):
         return True
     have = (set(await audience(conn, source, before)) - {OWNER}) | set(await shared(conn, source))
-    if source == context:
-        return need <= have
-    return not have or need <= have
+    return need <= have
 
 
 async def leaks(conn, source: str | None, target: str | None, text: str) -> bool:

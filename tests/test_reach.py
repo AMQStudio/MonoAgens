@@ -111,6 +111,42 @@ async def _say(*, conn, who: str, place: str, kind: str) -> int:
     return await _said(conn, who, place, kind)
 
 
+OWNER_DM = "space:tg:owner"
+
+
+async def _desk(conn, *, place: str, trigger: int, memories: tuple = ()):
+    """Lay out one desk and pass it through the core's context hook."""
+    context = await memory.build_context(
+        conn, _trigger(trigger, place), place, "test", now=START, settings=SETTINGS,
+        memories=memories, capabilities=())
+    return await hooks.audience_policy()(context, {"conn": conn, "now": START})
+
+
+async def test_the_owners_direct_chat_is_private_to_the_owner(aconn):
+    dm = await _said(aconn, OWNER, OWNER_DM, "direct", "rapat jam sembilan")
+    asked = await _said(aconn, "person:budi", GROUP, "shared", "rapat jam berapa?")
+    fact = memory.MemoryHit("- rapat jam sembilan (owner at space:tg:owner)",
+                            place=OWNER_DM, private=True)
+
+    assert await reach.visible(aconn, context=GROUP, source=OWNER_DM) is False
+    assert await reach.visible(aconn, context=OWNER_DM, source=OWNER_DM) is True
+
+    group_desk = await _desk(aconn, place=GROUP, trigger=asked, memories=(fact,))
+    assert group_desk.item.memories == ()
+    assert all(line.place != OWNER_DM for line in group_desk.item.recent_elsewhere)
+
+    owner_desk = await _desk(aconn, place=OWNER_DM, trigger=dm, memories=(fact,))
+    assert owner_desk.item.memories == (fact,)
+
+    kernel = await _kernel(aconn)
+    await kernel._apply(_trigger(dm, OWNER_DM), ToolCall("act", {
+        "capability": "self.share",
+        "arguments": {"item": "rapat jam sembilan", "to": GROUP}}))
+    assert await reach.visible(aconn, context=GROUP, source=OWNER_DM) is True
+    shared_desk = await _desk(aconn, place=GROUP, trigger=asked, memories=(fact,))
+    assert shared_desk.item.memories == (fact,)
+
+
 async def test_context_hook_keeps_private_lines_and_memories_inside_the_audience(aconn):
     trigger_id = await _said(aconn, "person:fulan", FULAN_A, "direct", "aku di-PHK")
     await _said(aconn, "person:charlie", GROUP, "shared")

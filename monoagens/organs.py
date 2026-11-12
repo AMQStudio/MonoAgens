@@ -124,7 +124,7 @@ async def _intend(kernel: Any, event: Event, capability: str, arguments: dict[st
         "capability": capability, "arguments": arguments, "to": to, "target": place,
         "why": event.payload.get("text") or event.payload.get("description")})
     kernel.enqueue(Event(
-        id=None, ts=kernel.clock.now(), kind="intent", who=event.who, place=place,
+        id=None, ts=kernel.clock.now(), kind="intent", who=None, place=place,
         caused_by=intent.id, origin_actor=event.origin_actor,
         payload={"description": f"carry out intent #{intent.id}: a message for "
                                 f"{to or place}",

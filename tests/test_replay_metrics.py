@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from monoagens.cognition import Appraisal
+from monoagens.store import append_event
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 _SPEC = importlib.util.spec_from_file_location("replay_script", ROOT / "scripts" / "replay.py")
@@ -103,6 +104,26 @@ def test_honesty_scan_catches_only_quotes_absent_from_the_log() -> None:
                      log_texts=["Cocok kok, warnanya agak terlalu terang."], expectations=[])
     metrics = replay.compute_metrics([result], replay.Usage())
     assert metrics.honesty_compliance() == 0.5
+
+
+async def test_the_desk_scan_counts_every_private_item_its_audience_does_not_cover(aconn):
+    dm, group = "space:tg:owner", "space:tg:-500"
+    said = await append_event(aconn, ts=NOW, kind="percept", who="person:owner", place=dm,
+                              payload={"description": "rapat jam sembilan", "place_kind": "direct"})
+    asked = await append_event(aconn, ts=NOW, kind="percept", who="person:budi", place=group,
+                               payload={"description": "rapat jam berapa?", "place_kind": "shared"})
+    leaked = replay.Desk(3, group, asked.id, (replay.DeskItem(dm, None),))
+    assert await replay.desk_violations(aconn, [leaked]) == [
+        f"step 3: an item from `{dm}` was on the `{group}` desk, "
+        "whose audience it does not cover"]
+    assert await replay.desk_violations(
+        aconn, [replay.Desk(3, dm, said.id, (replay.DeskItem(dm, None),))]) == []
+
+    grant = await append_event(aconn, ts=NOW, kind="share.granted", place=dm,
+                               payload={"source_place": dm, "persons": ["person:budi"]})
+    assert await replay.desk_violations(aconn, [leaked])
+    assert await replay.desk_violations(
+        aconn, [replay.Desk(4, group, grant.id, (replay.DeskItem(dm, None),))]) == []
 
 
 def test_report_metrics_are_ordered_missed_help_first() -> None:

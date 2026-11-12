@@ -29,8 +29,7 @@ def audience_policy() -> Middleware:
             return await reach.visible(conn, context=place, source=source, before=before)
 
         memories = [memory for memory in item.memories
-                    if not getattr(memory, "private", False)
-                    or await allowed(getattr(memory, "place", None))]
+                    if await allowed(getattr(memory, "place", None))]
         lines = [line for line in item.recent_elsewhere
                  if await allowed(getattr(line, "place", None), getattr(line, "id", None))]
         recent = [line for line in item.recent

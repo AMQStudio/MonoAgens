@@ -53,10 +53,10 @@ async def search(conn, action) -> dict[str, Any]:
               "place": row[4], "text": _payload_text(row[5])}
              for row in rows
              if await reach.visible(conn, context=context, source=row[4], before=row[0])]
-    memory_sql = ("SELECT id, text, place, private, derived_from FROM memories "
+    memory_sql = ("SELECT id, text, place, derived_from FROM memories "
                   "WHERE valid_to IS NULL" + (" AND text ILIKE %s" if query else "")
                   + " ORDER BY id DESC LIMIT %s")
-    for memory_id, text, place, private, derived in await _rows(
+    for memory_id, text, place, derived in await _rows(
             conn, memory_sql, ((f"%{query}%",) if query else ()) + (limit * 4,)):
         details = [{"event_id": row[0], "ts": row[1].isoformat(),
                     "text": _payload_text(row[4])}
@@ -65,7 +65,7 @@ async def search(conn, action) -> dict[str, Any]:
                              "WHERE id = ANY(%s) ORDER BY id", (derived,))
                    if _inside(row[1], start, end)
                    and await reach.visible(conn, context=context, source=row[3])]
-        allowed = not private or await reach.visible(conn, context=context, source=place)
+        allowed = await reach.visible(conn, context=context, source=place)
         if allowed and (details or not (start or end)):
             found.append({"kind": "memory", "memory_id": memory_id, "text": text,
                           "place": place, "details": details})
