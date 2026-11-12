@@ -41,6 +41,7 @@ pairing the owner, person cards), `privacy.py` (audience, the withheld note, `sh
 (daily budget limit, quiet hours), `tools.py` (registry and routing, from Part 1). The loader and
 the command registry come in Task 4.
 
+- [ ] 2.0 **The core never imports the middleware** (D57, invariant 1). The composition root (`monoagens/__main__.py`, and one helper the tests and `scripts/replay.py` share) builds the kernel, then installs the middleware into it: the owner policy in the three hooks, the inbound intake, the tool registry, and any number the core needs from a setting (for example the daily budget limit the gate divides by) as a plain injected value. The kernel refuses to start its loop until the policy is installed in all three hooks (fail-closed). What the soul learned about a source stays core memory under its id (`state: person:<id>` keeps its frozen key name; read through one core helper whose comment names it as frozen data).
 - [ ] 2.1 Labels: the core stores the labels a hook outcome attaches and passes them on (memory from its sources, thread from its parent); no core module reads what a label means.
 - [ ] 2.2 Privacy: the audience rule (`reach.visible` and every caller in context and recall), the audience label at inbound (D50) and the withheld note (D56) move to `privacy.py`.
 - [ ] 2.3 Sharing: the `share` capability leaves the core's self tool and becomes the middleware's (`privacy.py`); it records `share.granted` through a hook outcome.
