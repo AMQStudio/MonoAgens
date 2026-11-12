@@ -26,7 +26,7 @@ import yaml
 from monoagens.core.hooks import Continue, Middleware
 from monoagens.infra import config as config_module
 from monoagens.infra.store import append_event
-from monoagens.middleware import policy, registry
+from monoagens.middleware import contract, policy, registry
 from monoagens.middleware.registry import CommandEntry, SkillEntry
 
 MANIFEST_VERSION = 1
@@ -166,7 +166,8 @@ class Loader:
                 api.open_point(str(point))
             self._register(name, api, report)
             apis.append(api)
-        loaded = Loaded(report=report, plugins=tuple(api.name for api in apis), adapters=(),
+        loaded = Loaded(report=report, plugins=tuple(api.name for api in apis),
+                        adapters=self.adapters(settings, report),
                         permissions=self._permissions(manifests, config_d),
                         knob_bounds=self._knob_bounds(manifests), apis=tuple(apis))
         if unavailable:
@@ -319,6 +320,50 @@ class Loader:
                 raise ValueError(f"config.d/{name}.yaml: features.{key}: expected list or map")
         return declared
 
+    def adapters(self, settings: Mapping[str, Any], report: BootReport) -> tuple[Any, ...]:
+        """Create every enabled adapter from `bodies:` through its `create(options, env)`."""
+        bodies = settings.get("bodies") or {}
+        found: list[Any] = []
+        for name in sorted(bodies):
+            options = bodies[name] or {}
+            if not isinstance(options, dict):
+                raise ValueError(f"bodies.{name}: expected a map")
+            if not bool(options.get("enabled", False)):
+                report.add(f"adapter {name}: off")
+                continue
+            module_name = str(options.get("module") or f"monoagens.adapters.{name}")
+            module = importlib.import_module(module_name)
+            factory = getattr(module, "create", None)
+            if not callable(factory):
+                raise ValueError(f"adapter {name}: {module_name} has no create function")
+            env = {str(key): str(self.env.get(str(key)) or "")
+                   for key in getattr(module, "REQUIRES", ())}
+            for key, value in env.items():
+                if not value:
+                    raise ValueError(f"{name}: {key} is not set")
+            adapter = factory({key: value for key, value in options.items() if key != "module"},
+                              env)
+            self._check_adapter(name, adapter, report)
+            found.append(adapter)
+        return tuple(found)
+
+    @staticmethod
+    def _check_adapter(name: str, adapter: Any, report: BootReport) -> None:
+        """Refuse an adapter that cannot do its job; report what it can additionally do."""
+        for part in ("capabilities", "run", "act"):
+            if not callable(getattr(adapter, part, None)):
+                raise ValueError(f"adapter {name}: missing required part {part!r}")
+        if not isinstance(getattr(adapter, "name", None), str) or not adapter.name:
+            raise ValueError(f"adapter {name}: missing required part 'name'")
+        shows = tuple(getattr(adapter, "shows", ()) or ())
+        unknown = [kind for kind in shows if kind not in contract.SHOWS]
+        if unknown:
+            raise ValueError(f"adapter {name}: cannot show {unknown[0]!r}")
+        report.add(f"adapter {name}: shows {', '.join(shows) or 'nothing'}")
+        for part in ("history", "place_info", "get_cursor"):
+            if getattr(adapter, part, None) is not None:
+                report.add(f"adapter {name}: has {part}")
+
     # ---------------------------------------------------------- registering
 
     def _register(self, name: str, api: PluginAPI, report: BootReport) -> None:
@@ -416,6 +461,7 @@ class Loader:
 
     async def install(self, kernel: Any, loaded: Loaded) -> None:
         """Install everything one load produced onto a kernel, in load order."""
+        install_commands(self, kernel)
         touched: set[tuple[str, str]] = set()
         for previous in getattr(kernel, "loaded_plugins", ()):
             kernel.tools.discard_owner(previous)
@@ -434,6 +480,10 @@ class Loader:
         for key, slot in self._slots.items():
             if key not in touched:
                 slot.target = None  # the plugin that owned this place is gone
+        for adapter in loaded.adapters:
+            if hasattr(adapter, "get_cursor"):
+                adapter.get_cursor = _cursor_for(kernel, adapter.name)
+            kernel.register_adapter(adapter)
         kernel.loaded_plugins = loaded.plugins
         kernel.plugin_versions = {api.name: str(api.manifest.get("version") or "")
                                   for api in loaded.apis}
@@ -469,6 +519,15 @@ class _Slot:
         if self.target is None:
             return Continue()
         return await self.target(item, ctx)
+
+
+def _cursor_for(kernel: Any, name: str) -> Callable[[], Any]:
+    """Return the cursor reader one adapter asks for before its first poll."""
+
+    async def cursor() -> Any:
+        return await kernel.cursor(name)
+
+    return cursor
 
 
 def _owned(entry: CommandEntry, owner: str) -> CommandEntry:

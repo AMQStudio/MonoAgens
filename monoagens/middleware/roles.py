@@ -8,7 +8,8 @@ label and the lowest tier that gets them, and `config.d/<plugin>.yaml` may move 
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
 
 TIERS = ("guest", "member", "trusted", "admin")
@@ -83,11 +84,61 @@ class RoleBook:
     people: Mapping[str, Person] = field(default_factory=dict)
     fallback: str = ""
     bases: Mapping[str, str | None] = field(default_factory=dict)
+    places: Mapping[str, Mapping[str, frozenset[str]]] = field(default_factory=dict)
+    role_settings: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    sources: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def empty(cls) -> "RoleBook":
         """Return the default book: the owner may do everything, everyone else only talks."""
         return cls(bases=dict(CORE_PERMISSIONS))
+
+    @classmethod
+    def build(cls, config: Mapping[str, Any], catalog: Mapping[str, str | None],
+              manifests: Mapping[str, Mapping[str, Any]],
+              config_d: Mapping[str, Mapping[str, Any]], report: Any) -> "RoleBook":
+        """Resolve config.yaml's roles and people against every declared permission."""
+        bases, sources = _bases(catalog, manifests, config_d, report)
+        settings_by_tier = _role_settings(manifests, config_d)
+        definitions = dict(config.get("roles") or {})
+        fallback = str(definitions.pop("fallback", "") or "")
+        found: dict[str, Role] = {}
+        for name, raw in definitions.items():
+            values = dict(raw or {})
+            found[str(name)] = Role(
+                name=str(name), base=values.get("base"),
+                allow=_expand(values.get("allow") or (), bases, report),
+                deny=_expand(values.get("deny") or (), bases, report),
+                settings=dict(values.get("settings") or {}),
+                approval=values.get("approval"), label=values.get("label"),
+                context=values.get("context"))
+        if fallback and fallback not in found:
+            report.add(f"role {fallback} is not defined; ignored")
+            fallback = ""
+        people: dict[str, Person] = {}
+        for who, raw in (config.get("people") or {}).items():
+            values = dict(raw or {})
+            if not str(who).startswith("person:"):
+                report.add(f"people.{who}: unknown; ignored")
+                continue
+            held = []
+            for role in values.get("roles") or ():
+                if str(role) in found:
+                    held.append(str(role))
+                else:
+                    report.add(f"role {role} is not defined; ignored")
+            people[str(who)] = Person(str(who), values.get("label"), tuple(held),
+                                      values.get("context"))
+        places = {str(place): {"allow": frozenset((values or {}).get("allow") or ()),
+                               "deny": frozenset((values or {}).get("deny") or ())}
+                  for place, values in (config.get("places") or {}).items()}
+        return cls(roles=found, people=people, fallback=fallback, bases=bases, places=places,
+                   role_settings=settings_by_tier, sources=sources)
+
+    def with_person(self, who: str, held: Sequence[str]) -> "RoleBook":
+        """Return the book with one person's roles replaced (the running book, no restart)."""
+        person = self.people.get(who) or Person(who)
+        return replace(self, people={**self.people, who: replace(person, roles=tuple(held))})
 
     def held(self, who: str) -> tuple[Role, ...]:
         """Return the roles one person holds, in the order the configuration names them."""
@@ -116,7 +167,7 @@ class RoleBook:
         return frozenset(held)
 
     def can(self, who: str, permission: str, place: str | None = None) -> bool:
-        """Return whether one person may use one permission here (place overrides later).
+        """Return whether one person may use one permission here (a place may override).
 
         The owner is always free, including for a permission this book does not know yet
         (a plugin tool's own name): nothing may stop the owner from using their own tools.
@@ -125,13 +176,31 @@ class RoleBook:
             return True  # a talking capability of an adapter belongs to everyone
         if str(who) == "person:owner":
             return True
+        override = self.places.get(str(place)) if place else None
+        if override:
+            if permission in override["deny"]:
+                return False
+            if permission in override["allow"]:
+                return True
         return permission in self.permissions(who)
 
     def settings(self, who: str) -> dict[str, Any]:
-        """Return one person's role settings, later roles overriding earlier ones."""
+        """Return one person's role settings: the tier's, then each role's (lists merge)."""
+        tier = self.tier(who)
         resolved: dict[str, Any] = {}
+        for name in TIERS:
+            if _rank(name) <= _rank(tier):
+                resolved.update(dict(self.role_settings.get(name) or {}))
         for role in self.held(who):
-            resolved.update(role.settings)
+            for key, value in role.settings.items():
+                if key.endswith("shared"):
+                    merged = list(resolved.get(key) or [])
+                    for item in value if isinstance(value, list) else [value]:
+                        if item not in merged:
+                            merged.append(item)
+                    resolved[key] = merged
+                else:
+                    resolved[key] = value
         return resolved
 
     def approval(self, who: str) -> str:

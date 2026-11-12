@@ -8,32 +8,34 @@ from typing import Any
 
 import httpx
 
+from monoagens.adapters.telegram import receive, send
+from monoagens.adapters.telegram.capabilities import CAPABILITIES, SHOWS
+from monoagens.adapters.telegram.format import addressed, event
 from monoagens.infra.clock import Clock
 from monoagens.types import Action, Event
 
 Put = Callable[[Event], Awaitable[None]]
 GetCursor = Callable[[], Awaitable[Any | None]]
+REQUIRES = ("TELEGRAM_BOT_TOKEN",)
 
-CAPABILITIES = (
-    {"name": "say", "description": "Send a text message in the current place.",
-     "schema": {"type": "object", "properties": {"text": {"type": "string"}},
-                "required": ["text"]},
-     "communicative": True, "long_running": False, "identity_changing": False,
-     "permission": None},
-    {"name": "react", "description": "React to a message with one emoji.",
-     "schema": {"type": "object",
-                "properties": {"emoji": {"type": "string"},
-                               "message_id": {"type": "integer"}},
-                "required": ["emoji"]},
-     "communicative": False, "long_running": False, "identity_changing": False,
-     "permission": None},
-)
+
+def create(options: dict[str, Any], env: dict[str, str]) -> "TelegramBody":
+    """Build the adapter from config.yaml's options and the environment (D49)."""
+    token = str(env.get("TELEGRAM_BOT_TOKEN") or "")
+    if not token:
+        raise RuntimeError("telegram: TELEGRAM_BOT_TOKEN is not set")
+    return TelegramBody(
+        token,
+        api_base=str(options.get("api_base") or "https://api.telegram.org"),
+        poll_timeout=float(options.get("poll_timeout") or 30.0),
+    )
 
 
 class TelegramBody:
     """Eyes and hands for Telegram: getUpdates in, sendMessage and reactions out."""
 
     name = "telegram"
+    shows = SHOWS
 
     def __init__(self, token: str, *,
                  get_cursor: GetCursor | None = None, poll_timeout: float = 30.0,
@@ -43,7 +45,7 @@ class TelegramBody:
         """Store the token and the polling settings."""
         self._token = token
         self._clock = clock or Clock()
-        self._get_cursor = get_cursor
+        self.get_cursor = get_cursor
         self._poll_timeout = poll_timeout
         self._transport = transport
         self._api_base = api_base.rstrip("/")
@@ -81,25 +83,23 @@ class TelegramBody:
         return data.get("result")
 
     async def run(self, put: Put) -> None:
-        """Poll Telegram forever, putting one event per text message."""
+        """Poll Telegram forever, putting one event per incoming message."""
         try:
             me = await self._call("getMe")
             self.bot_id, self.bot_username = me["id"], me.get("username")
-            cursor = await self._get_cursor() if self._get_cursor is not None else None
+            cursor = await self.get_cursor() if self.get_cursor is not None else None
             offset = cursor + 1 if cursor is not None else None
             backoff = self._retry_base
             while True:
-                params: dict[str, Any] = {"timeout": self._poll_timeout}
-                params.update({"offset": offset} if offset is not None else {})
                 try:
-                    updates = await self._call("getUpdates", **params)
+                    found = await receive.updates(self._call, offset, self._poll_timeout)
                 except (httpx.HTTPError, RuntimeError):
                     # A flaky network or a Telegram hiccup never kills the adapter.
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 30.0)
                     continue
                 backoff = self._retry_base
-                for update in updates:
+                for update in found:
                     update_id = update["update_id"]
                     message = update.get("message")
                     text = message.get("text") if message else None
@@ -112,41 +112,27 @@ class TelegramBody:
         finally:
             await self.aclose()
 
-    async def act(self, action: Action) -> None:
+    async def act(self, action: Action) -> Any:
         """Perform one say or react action in a Telegram chat."""
-        chat_id = action.place.removeprefix("space:tg:")
         if action.kind == "say":
-            await self._call("sendMessage", chat_id=chat_id, text=action.payload["text"])
-        elif action.kind == "react":
-            await self._call("setMessageReaction", chat_id=chat_id,
-                             message_id=action.payload["message_id"],
-                             reaction=[{"type": "emoji", "emoji": action.payload["emoji"]}])
-        else:
-            raise ValueError(f"Unsupported action kind: {action.kind!r}")
+            return await send.say(self._call, action.place, str(action.payload["text"]))
+        if action.kind == "react":
+            return await send.react(self._call, action.place, str(action.payload["emoji"]),
+                                    int(action.payload.get("message_id") or 0))
+        raise ValueError(f"Unsupported action kind: {action.kind!r}")
+
+    async def show(self, place: str, kind: str, **data: Any) -> Any:
+        """Show one non-message thing where the adapter can; unknown kinds are refused."""
+        return await send.show(self._call, place, kind, **data)
+
+    async def place_info(self, place: str) -> dict[str, Any]:
+        """Return what Telegram reports about one chat."""
+        return await send.place_info(self._call, place)
 
     def _event(self, update_id: int, message: dict[str, Any], text: str) -> Event:
-        chat = message["chat"]
-        sender_id = (message.get("from") or {}).get("id")
-        who = f"person:tg:{sender_id}"
-        place_kind = "direct" if chat.get("type") == "private" else "shared"
-        return Event(id=None, ts=self._clock.now(), kind="percept", who=who,
-                     place=f"space:tg:{chat['id']}", body=self.name,
-                     payload={"cursor": update_id,
-                              "data": {"message_id": message["message_id"]},
-                              "description": text, "place_kind": place_kind,
-                              "addressed": self._addressed(chat, message, text)})
+        return event(update_id, message, text, clock=self._clock, name=self.name,
+                     bot_id=self.bot_id, bot_username=self.bot_username)
 
     def _addressed(self, chat: dict[str, Any], message: dict[str, Any], text: str) -> bool:
-        if chat.get("type") == "private":
-            return True
-        reply_from = (message.get("reply_to_message") or {}).get("from") or {}
-        if reply_from.get("id") == self.bot_id:
-            return True
-        if not self.bot_username:
-            return False
-        handle = f"@{self.bot_username}".lower()
-        return any(
-            entity.get("type") == "mention"
-            and text[entity["offset"]:entity["offset"] + entity["length"]].lower() == handle
-            for entity in message.get("entities") or []
-        )
+        return addressed(chat, message, text, bot_id=self.bot_id,
+                         bot_username=self.bot_username)

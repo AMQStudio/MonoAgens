@@ -179,3 +179,24 @@ running process keeps the old modules. Uninstalling is the owner removing the fo
 rewritten from the new manifest only where the value still equals the one `/plugin enable`
 recorded (`plugin.config_changed` with `key: config.d/<name>.yaml:<section>.<key>`); a value the
 owner changed is kept and named. Every change is an event for history only.
+
+**1.5 Adapters.** One folder per adapter split by job: `telegram/{capabilities,format,receive,
+send,__init__}.py` and `cli/{same}`. `capabilities.py` holds the descriptors (each with
+`facts: ()` and an explicit `permission: None`), `format.py` turns one raw message into one
+neutral event and decides "addressed", `receive.py` owns getting input (one `getUpdates` call;
+the Unix-socket server), `send.py` owns output (`say`, `react`, `show`, `place_info`) and
+`__init__.py` the class, `shows`, `REQUIRES` and `create(options, env)`. `show` and
+`place_info` land here because the vocabulary of §9 and the place facts belong to the adapter;
+`interaction.py` (1.8) only chooses what to show. The loader builds each enabled `bodies:`
+entry: `module` defaults to `monoagens.adapters.<name>`, `REQUIRES` names the variables it
+needs (Telegram: `TELEGRAM_BOT_TOKEN`, refused with `<name>: <KEY> is not set`), the required
+parts are `name`, `capabilities`, `run` and `act` (`adapter <name>: missing required part
+'<part>'`), the optional ones are `shows`, `history`, `place_info`, `get_cursor` and are named
+in the boot report; a `shows` value outside `contract.SHOWS` fails at boot. The cursor reader
+is set by the loader (`adapter.get_cursor() -> kernel.cursor(name)`) right before
+registration, and an adapter name already taken (by a plugin tool or another adapter) fails
+with `adapter collision: <name>`. `__main__.py` imports no adapter: build, `warm`, pairing
+code, `Loader.load`/`install`, print the report, then `kernel.run`, every `adapter.run` and
+the clock; every adapter with `aclose` is closed on shutdown. An adapter outside the package
+loads from `config.yaml` alone (`module: tests.fixtures.echo_adapter`, proved in
+`tests/adapters/test_loader.py`).

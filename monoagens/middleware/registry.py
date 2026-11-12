@@ -88,6 +88,8 @@ class ToolRegistry:
         name = getattr(adapter, "name", None)
         if not name:
             raise ValueError("An adapter must expose a name")
+        if name in self.adapters:
+            raise ValueError(f"adapter collision: {name}")
         self.adapters[name] = adapter
         given = dict(permissions or {})
         for capability in getattr(adapter, "capabilities", lambda: ())():
@@ -104,6 +106,8 @@ class ToolRegistry:
         name = owner or getattr(tool, "name", None)
         if not name:
             raise ValueError("A tool must expose a name")
+        if name in self.adapters:
+            raise ValueError(f"adapter collision: {name}")
         self.adapters[name] = tool
         declared = dict(facts or {})
         for capability in getattr(tool, "capabilities", lambda: ())():

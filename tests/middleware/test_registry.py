@@ -87,7 +87,7 @@ def test_a_capability_collision_fails_at_boot():
     tools = ToolRegistry()
     tools.register(_Body("telegram", TELEGRAM_CAPABILITIES))
 
-    with pytest.raises(ValueError, match="Capability collision: telegram.say"):
+    with pytest.raises(ValueError, match="adapter collision: telegram"):
         tools.register(_Body("telegram", TELEGRAM_CAPABILITIES))
 
 
