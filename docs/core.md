@@ -95,7 +95,9 @@ tests against the map, never new rows.
    `resolve` and `revise` go back to the model, which continues until it acts, ends without a
    tool call, or reaches `max_thought_rounds` (prior). A refusal (a thought act or an argument
    the core rejects) comes back as a result with its reason, so the model can correct it in the
-   same turn. Every round is a recorded `model.call` and counts in the budget. Thinking, then doing, is one turn, as it is for a person.
+   same turn. A turn says at most one message per place: a second communicative act to a place
+   the turn already spoke to is refused as already said. Every round is a recorded `model.call`
+   and counts in the budget. Thinking, then doing, is one turn, as it is for a person.
 7. For each `act`: pass the **action hook**, record `act.out`, hand it to the organ, create a
    `predict` Expectation.
 8. On ticks: maybe sleep.
@@ -409,7 +411,10 @@ loads a prior and never exports or shares learned state (D25).
    not private flows freely. Whether a place is direct (one person) or shared comes from the organ (`place_kind`,
    §9.2), never from the shape of an id (D48). Audience is fixed when a line is said (D50): a
    line in a place that is not public stays with the people present at that moment, even on the
-   same place's desk, so a newcomer never receives what was said before they arrived. Content reaches someone new only by consent (D46): a person in its
+   same place's desk, so a newcomer never receives what was said before they arrived.
+   When the context hook withholds private items that were relevant, it leaves one line without
+   content — how many, and whose private place they came from — so the soul knows it knows and
+   can say so honestly or ask the person in private, instead of claiming it has no record (D56). Content reaches someone new only by consent (D46): a person in its
    audience shares it (`self.share`, recorded as `share.granted`), and the new person then counts
    as part of its audience. Each person speaks only for what they were part of: the owner can share
    work done with the soul, but cannot share what Fulan said in private; the owner's view of
@@ -443,7 +448,10 @@ from the books at every wake and never compacted. Three layers, ordered for cach
   earlier than claimed; D32.13), principles, thought acts and capability schemas.
 - *Semi-stable*: `<self>` (capabilities, commands, installed skills, plugins' standing rules;
   assembled from the registries; closed-world — what is not listed cannot be done), core memory,
-  person cards of people present.
+  person cards of people present or named in the trigger. A person card holds who someone is to
+  the soul — name, person id, the bodies where they can be reached, closeness — never what they
+  said; knowing someone is not private content, so a card is never withheld by absolute line 2
+  (D55). This is how the soul can reach Budi from a place where Budi's messages may not appear.
 - *Volatile, last*: `<now>` (local time, timezone, time since the last interaction), `<place>`,
   `<why_awake>`, `<doing>`, `<next>`, `<memories>` with basis, source and age, `<recent>`,
   `<event>` with any middleware notes attached to it. Messages from non-owners are delimited as
