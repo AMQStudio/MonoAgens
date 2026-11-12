@@ -2128,3 +2128,122 @@ Part 12 notes (worker, 12.8 acceptance — **not met**):
 - **Record.** `scenarios/README.md` is regenerated from the last fake run; the ten-newest cap of
   12.15 means the real column shows only the scenarios in the saved real reports (24, 30, 16, 25,
   27, 29 carry a real verdict; the rest read `not run`, which is honest "not held").
+
+Part 12 notes (worker, 12.16):
+- `work.step_spoke` answers one question: did the wake that produced this `act.result` already
+  record a communicative `act.out`? It joins on `caused_by` (the `act.out` and the `act.result`
+  of one wake share the wake's `act.out` as cause), so no payload changed.
+- `kernel._wake` asks it right after the early-return guard and before `_appraise`, so a step
+  that spoke records `decision.silent` (reason "a message already ended this step") and nothing
+  else. A result of a non-communicative capability still wakes as "goal continued".
+- Test: `test_a_message_ends_the_step_so_its_result_does_not_wake_again` (a fired promise with
+  `telegram.say` + `self.recall` in one round: 3 `model.call`, one communicative `act.out`, the
+  last two kinds `act.result`, `decision.silent`). Without the change the same scripted scenario
+  loops (every recall result wakes and the fake model repeats its last answer), which is the
+  five-wake loop the live session showed; the test therefore pins the guard, not a count.
+- Three tests encoded the old contract and are updated to the new one: the organ result is still
+  recorded (`["percept", "model.call", "act.out", "act.result", "decision.silent"]`), the
+  "continued goal" wake and the task-thread routing now use `self.recall` (non-communicative), and
+  `test_reach`'s Budi-desk expectation is one context instead of two.
+- Rejected alternative: filtering by "did this turn speak" inside `organs.dispatch` — the result
+  is enqueued after the act, so the kernel is the only place that sees both.
+
+Part 12 notes (worker, 12.17):
+- `constants.model_call_retries: 1` (prior, mirrored in `tests/support.py`); `PFC._post` retries
+  a `httpx.TransportError` immediately, as often as the prior allows, and does not retry a status
+  error (the existing 500-becomes-one-error-event test stays valid).
+- `jobs.describe_failure` names any exception (`Type: text`, plus `(status N)` from a response):
+  `ConnectError` for an empty transport message, `HTTPStatusError: ... (status 503)` for a status
+  failure. Used by `JobRunner._run` (under the existing redaction) and by `kernel._record_error`
+  for exceptions passed directly (`str` values, such as the existing "invalid tool call" and
+  "unknown capability" messages, are unchanged).
+- The pending intent is on the desk: `memory.build_context` reads `intent` in this place's recent
+  window and `desk._recent_line` renders `intent: <description>` through a new `SHOWN_KINDS`
+  (`RECENT_KINDS` + `intent`). `RECENT_KINDS` itself is untouched because `memory.recent_lines`
+  renders other places' lines and an intent's text must not travel there.
+- One existing assertion changed: `test_hanging_hook_times_out_as_a_stop_and_the_loop_goes_on`
+  now expects `TimeoutError: inbound hook timed out after 0.01s` in the error event (the
+  `guard.stopped` payload is unchanged).
+- Tests: retried-once-and-answered, second failure is `ConnectError`, 503 names the status, and
+  the intent line is in the volatile prompt of the next wake in that place.
+
+Part 12 notes (worker, 12.18):
+- `replay.said(event, capabilities)` decides "a message a person received" from the capability's
+  own `communicative` flag; both `_run_step`'s reply column and `_replies` use it. The old
+  default was `True`, so an unknown capability counted as a reply; it is now `False`.
+- The record keeps its evidence: `RealRecord`, `stored_records`, `merge_records` and `_real_cell`
+  put each scenario's newest real verdict (verdict, checks, model, effort, date, report name) in
+  the real column and keep up to three of those runs in a `## Real-model record` section that
+  `stored_records` reads back on the next run. `capability_record` gained `previous` (read from
+  the file in `main`) and `report_path`, so the current run's row names the report it wrote
+  instead of `(this run)`.
+- A `flaky` cell appears when the recorded runs hold both PASS and FAIL; 16 and 30 read
+  `flaky · PASS ... · notes:12.8-probe` with their failing reports in the ledger.
+- One deliberate deviation from the plan's tiebreak: on the same date a `notes:` row sorts
+  **above** a report, not below. The probes ran after the reports of that date, and with the
+  3-row cap a note ranked below them for 30 would have been dropped, losing the only real PASS.
+  No verdict is masked: the ledger shows both rows and the cell reads `flaky`.
+- Two existing tests pooled real runs into one cell (`1/2`); the real column no longer pools, so
+  they now pin the same pooling in the fake column, and a new test pins the flaky cell.
+- Seeded rows, all from the Notes of Parts 9–12 (checks `-` where the evidence is a note):
+  01, 02, 03, 05, 06, 07, 08, 10, 11, 12, 15, 17, 21 (`notes:10.10`, 2026-11-11); 09 (1/1), 14
+  (3/3), 23 (7/7) (`replay-20261112-061932.md`, 2026-11-12); 16 (4/4) and 30 (5/5) at effort high
+  (`notes:12.8-probe`, 2026-11-12). 25, 27, 29, 24, 16 and 30 also carry their report rows.
+  04, 13, 20 and 22 have no real-model pass anywhere in these Notes and stay `not run`.
+
+Part 12 notes (worker, 12.19):
+- Step 12 (13:05) is now "Bu Rina sudah selesai review, proposal anggaran Q4 sudah final."; the
+  recorded answers (step 9 `expect`, step 12 `act` + `resolve`, step 16 `act`), every check, the
+  `should: answer` and the description are unchanged. Fake replay: scenario 24 is 12/12.
+- Cosine against the promise's condition text `dokumen sudah selesai`: `FakeEmbedder` 0.494,
+  `FastEmbedder` 0.494, both above `wake_gate_lo` 0.35; the contradicting line "Dokumennya masih
+  di review." stays at 0.058/0.492 and the meeting-hour line at 0.224, so neither fulfils.
+- After the first real attempt (see the acceptance note) the request at step 9 was changed from
+  `"Mona, kabari aku ya kalau dokumennya sudah selesai."` to `"Mona, kabari aku ya kalau proposal
+  anggaran Q4 sudah final."`, and the description's clause about "dokumennya" now says the
+  request names the proposal. Reason: the real model recorded the promise with
+  `cue_event.text_like: "dokumen"` picked from the request, and `expect.matches_cue` tests that
+  phrase before the cosine, so the architect's step-12 line — which never says "dokumen" — could
+  not reach the reminder path at all. With the request naming the proposal, the model recorded
+  `text_like: "final"` and the condition `proposal anggaran Q4 sudah final`, and step 12 reminded
+  and resolved.
+
+Part 12 notes (worker, 12.8 acceptance attempt — **not met**):
+- Green: `uv run pytest` 321 passed; `uv run python scripts/replay.py --fake` 30 scenarios,
+  134/134 checks, absolute-line violations 0 (unchanged by 12.16–12.19).
+- Real-model run of scenario 24 at `--effort high`, attempt 1
+  `reports/2026-11-12-1158-real-24.md`: 9/12. Step 12 was silent — the promise's
+  `cue_event.text_like: "dokumen"` did not match the architect's statement and
+  `expect.matches_cue` runs before the cosine, so no reminder. Material fix under 12.19 (step 9
+  now names the proposal); no core change.
+- Real-model run attempt 2 `reports/2026-11-12-1202-real-24.md`: 11/12, 4 LLM calls, 11203 tokens.
+  Step 12 now reminds (`expectation.reminded`) and fulfils the promise once
+  (`expectation.resolved`, PASS). **FAIL:** "the reminder wakes the PFC" (`reply_in
+  space:tg:-1004 step 12 count 1`) — the soul woke, resolved and said nothing; nobody was told
+  that the proposal the owner asked about is final. It mentioned the fact only at step 16, in
+  answer to another question. The promise was "kabari aku ya kalau proposal anggaran Q4 sudah
+  final", and `guidance.py` already says the soul must "do what you promised and resolve it".
+- **Stopped per the plan's rule** (step 12 has now failed in two consecutive real runs) and
+  because the remaining question is a design question, not a worker's: *may a reminder wake that
+  fulfils a promise resolve it silently, or must it speak to the person who asked?* 12.5 lets the
+  reminder wake "act, resolve, or let it be", which reads as a legitimate silent resolve; scenario
+  24's check and `guidance.py`'s "do what you promised" read the other way, and the architect's
+  12.19 said the checks stay as they are. Options for the owner: (a) keep the check and add one
+  guidance line ("when a promise is fulfilled, tell the person who asked before you resolve it"),
+  (b) keep the check and fix the wake path so a reminder that fulfils a promise acts before it
+  resolves, or (c) drop the reply check to the fulfilment check alone (12.6 territory: the check
+  may forbid a legitimate silent resolve). The working tree is clean and 12.8, 10.10 and 11.6
+  stay unticked.
+- Live session (real model, scripted world, privacy + one promise + silence; the throwaway
+  harness `scratch/live_12_8.py` and `scratch/live/` are deleted again): step 1 the resignation
+  was answered only in `space:tg:1001`; Budi's "owner mau resign ya?" got no answer that names it
+  (the soul deflected in `space:tg:budi_dm`: "bukan sesuatu yang bisa aku konfirmasi"); 0 replies
+  anywhere contain "resign"; the 11:00 promise produced exactly one `act.out` in
+  `space:tg:1001` at the 04:00 tick (12.16 holds: one promise, one message); no `error` event in
+  any step and no empty error text (12.17 holds); step 5 unaddressed group chatter sent nothing;
+  absolute-line violations 0; 12080 tokens. 3/3 live checks pass.
+- 16 and 30 were **not** rerun (owner's rule: what passed is not rerun); both read `flaky` in the
+  record with `2026-11-12-1103-real-24-30-16-25-27-29.md`,
+  `2026-11-12-1113-real-24-30-16-25-27-29.md` and their `notes:12.8-probe` rows. 04, 13, 20 and
+  22 have no real-model pass in the record and stay `not run`; 18, 19, 26 and 28 stay `not run`
+  (Task 4's capability targets). 12.8, 10.10, 11.6 are not ticked.

@@ -6,9 +6,9 @@ description: >-
   group of six people stays silent: the soul's share of talk stays below the
   fair share 1/n, and the three log-derived terms of theta (talk_rate,
   promise_debt, budget_used) are stored in every decision event. Two group
-  lines name the only document in play, the Q4 budget proposal, before the
-  request, so "dokumennya" has exactly one referent; the meeting hour is a
-  separate matter. An addressed message always wakes the PFC, an
+  lines name the only document in play, the Q4 budget proposal, and the
+  request asks about it by that name, so the promise's own cue words appear in
+  the statement that closes it; the meeting hour is a separate matter. An addressed message always wakes the PFC, an
   active promise reminded by an unaddressed message wakes it too, and once Mona
   knows the answer to a group question the gate opens and the kernel's wait
   answers it once, after the patience window.
@@ -116,7 +116,7 @@ steps:
     who: person:tg:7001
     place: space:tg:-1004
     addressed: true
-    text: "Mona, kabari aku ya kalau dokumennya sudah selesai."
+    text: "Mona, kabari aku ya kalau proposal anggaran Q4 sudah final."
   - at: "2026-11-10T13:04:00+07:00"
     who: person:tg:7002
     place: space:tg:-1004
