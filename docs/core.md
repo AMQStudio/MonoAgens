@@ -276,10 +276,13 @@ fire_count · origin_actor · derived_from · expires_at (required) · created_a
 repeats are limited by `policy` and habituation (D40).
 
 **Free-text conditions** (D21, D29, D40). m = cosine(event vector, condition vector). Cosine only
-filters: m < `lo` → ignore; m ≥ `lo` → one classifier call, recorded as `classifier.verdict` with
-m. The "clearly yes" band is off (hi = 1) until zero false resolutions are seen in n ≥ 3/ε
-verdicts above a proposed hi (rule of three). `lo` moves toward the lowest m with a "yes" minus a
-margin, within bounds; the gray band keeps a minimum width.
+filters: m < `lo` → ignore; m ≥ `lo` → the Expectation is *reminded*: the PFC wakes once with
+the line and the Expectation as its trigger, and judges — act on it, resolve it, or let it be
+(D53). A person hears something, is reminded of a promise and thinks for a moment; there is no
+separate judge. `lo` comes from the prior.
+**Deferred until real logs** (D53): a cheaper classifier call in place of the PFC wake, when logs
+show the cost matters; the "clearly yes" band (hi, opened only by the rule of three); learning
+`lo`; caching condition vectors.
 A woken PFC re-judges the situation; it never replays a promise blindly.
 
 ## 6. Cognition
@@ -314,7 +317,7 @@ confidence 0..1)` before any communicative `act`; the act passes only at or abov
 information gap, expected impact, urgency, coherence, originality, balance, dynamics.
 
 **Budget.** Not a mode (D32.6, D40): as the daily budget is spent θ rises, so only salient events
-pass; the circuit breaker still fires; a free-text condition with no affordable classifier call
+pass; the circuit breaker still fires; a free-text condition with no affordable wake
 stays unresolved; `budget.exhausted` is recorded.
 
 **Knobs.** All tunable behavior is about ten named knobs in the prior (talkativeness, patience,
@@ -340,6 +343,12 @@ reserve when unfamiliar, …); one function maps them to θ, τ, γ and the weig
 `memories`: id · who · place · private · kind (fact | episode | lesson | procedure) · basis
 (observed | told | inferred) · text · embedding · tsv · importance · source_who · valid_from ·
 valid_to · superseded_by · derived_from · created_at · last_accessed_at · use_count
+
+- **A memory's audience comes from its sources** (D53). The core, not the model, sets `place`
+  and `private` from `derived_from`: a memory is private when any of its source events is, and
+  its audience is the people every private source was said to. A memory with no known source is
+  private to the owner. The same holds for core memory. Absolute line 2 never depends on a model
+  filling in an argument.
 
 - **Activation (ACT-R).** B = ln(n/(1−d)) − d·ln(L); A = B + w_ctx·cos(context, memory) +
   w_imp·importance; L in hours from the injected clock. Candidates: top 40 by vector ∪ top 20 by
