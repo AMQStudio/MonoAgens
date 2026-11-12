@@ -1,105 +1,83 @@
 name: 22_patience_turn_taking
 function: turn-taking
-capability: "Patience holds the floor: chatter stays silent, the sender's follow-up does not cancel the wait, another person's answer does, and an expired window yields one reply."
+capability: "Patience holds the floor: the gate's go on an answerable question creates the wait, the sender's follow-up does not cancel it, another person's answer settles it as silence, and an expired window yields one reply."
 description: >-
-  Patience in a busy group (core-math.md §4). Mona holds a `wait` Expectation
-  after a turn, so she only speaks when nobody else takes the floor: the
-  sender's own follow-up does not cancel the wait (not_who), another person's
-  answer ends it as silence, and only an expired window wakes her for exactly
-  one reply.
+  Patience in a group (core.md §6, core-math.md §4). Mona menyimpan fakta kafe
+  dari obrolan grup; ketika seseorang bertanya di kafe mana rapatnya, gate
+  terbuka dan kernel menahan lantai dengan satu `wait`: follow-up pengirim yang
+  sama tidak membatalkannya, jawaban orang lain menyelesaikannya sebagai diam,
+  dan saat jendela kesabaran habis Mona menjawab tepat sekali dengan fakta itu.
 expectations:
+  - type: sleep_done
+    label: the cafe fact is stored before the first question
   - type: no_reply
-    steps: [1, 2, 3]
-    label: unaddressed chatter passes silently
+    steps: [1, 4, 5, 6, 7, 8]
+    label: chatter and the sender's own follow-up pass silently
   - type: event_seen
     kind: expectation.created
     payload: {kind: wait}
+    steps: [3, 8]
     count: 2
-    label: a wait Expectation holds the floor twice
-  - type: no_reply
-    step: 5
-    label: the sender's own follow-up does not cancel patience
-  - type: reply_in
-    place: space:tg:-1002
-    step: 6
-    count: 1
-    label: exactly one answer after the patience window expires
-  - type: no_reply
-    step: 8
-    label: silent when someone else takes the floor first
+    label: the gate's go on an answerable question creates the wait
   - type: event_seen
     kind: expectation.resolved
     payload: {status: satisfied}
-    step: 8
-    count: 1
+    steps: [5]
     label: the wait settles as satisfied when another person answers
   - type: no_reply
+    step: 3
+    label: the soul does not answer the first question before the window ends
+  - type: reply_in
+    place: space:tg:-1002
     step: 9
-    label: no late answer once another person answered
+    count: 1
+    label: exactly one answer after the patience window expires
+  - type: mentions
+    text: "Senja"
+    step: 9
+    label: the answer names the stored fact
 steps:
   - at: "2026-11-10T12:00:00+07:00"
     who: person:tg:4001
     place: space:tg:-1002
-    text: "Ada yang sudah baca dokumen versi baru?"
-  - at: "2026-11-10T12:00:20+07:00"
-    who: person:tg:4001
-    place: space:tg:-1002
-    text: "Bagian dua masih kurang jelas menurutku."
-  - at: "2026-11-10T12:00:40+07:00"
+    text: "Rapat minggu ini pindah ke kafe Kopi Senja jam sepuluh ya."
+  - advance: "35m"
+  - at: "2026-11-10T12:36:00+07:00"
     who: person:tg:4002
     place: space:tg:-1002
-    text: "Bagian dua memang perlu dirapikan."
-  - at: "2026-11-10T12:01:00+07:00"
-    who: person:tg:4001
-    place: space:tg:-1002
-    addressed: true
-    text: "Mona, tolong jelaskan bagian dua ya."
-  - at: "2026-11-10T12:01:20+07:00"
-    who: person:tg:4001
-    place: space:tg:-1002
-    text: "Maksudku bagian dua dan tiga."
-  - advance: "2m"
-  - at: "2026-11-10T12:03:30+07:00"
+    text: "Eh, rapatnya di kafe apa ya? Aku lupa."
+    should: answer
+  - at: "2026-11-10T12:36:20+07:00"
     who: person:tg:4002
     place: space:tg:-1002
-    addressed: true
-    text: "Mona, terima kasih sudah menjelaskan tadi."
-  - at: "2026-11-10T12:03:50+07:00"
+    text: "Maksudku rapat minggu ini yang dipindah itu."
+    should: silent
+  - at: "2026-11-10T12:36:50+07:00"
     who: person:tg:4003
     place: space:tg:-1002
-    text: "Sama-sama, aku juga sudah cek bagian tiga."
-  - advance: "3m"
+    text: "Kopi Senja kayaknya."
+    should: silent
+  - at: "2026-11-10T12:37:10+07:00"
+    who: person:tg:4001
+    place: space:tg:-1002
+    text: "Iya, Kopi Senja jam sepuluh."
+    should: silent
+  - at: "2026-11-10T12:37:40+07:00"
+    who: person:tg:4002
+    place: space:tg:-1002
+    text: "Oke, makasih ya."
+    should: silent
+  - at: "2026-11-10T12:38:10+07:00"
+    who: person:tg:4003
+    place: space:tg:-1002
+    text: "Eh, aku lupa lagi: rapatnya di kafe mana ya?"
+    should: answer
+  - advance: "2m"
 model_answers:
-  - step: 4
-    tool: decide
-    calls:
-      - name: expect
-        arguments:
-          about: menunggu orang lain menjawab dulu
-          kind: wait
-          cue_time: {at: "2026-11-10T12:02:30+07:00"}
-          cue_event: {kind: percept, place: "space:tg:-1002", not_who: person:tg:4001}
-          expect: {none: true}
-          intent: jawab bagian dua kalau tidak ada yang menjawab
-          weight: 0.6
-          policy: {once: true}
-  - step: 6
+  - step: 9
     tool: decide
     calls:
       - name: act
         arguments:
           capability: telegram.say
-          arguments: {text: "Bagian dua soal alur data; versi barunya sudah aku cek."}
-  - step: 7
-    tool: decide
-    calls:
-      - name: expect
-        arguments:
-          about: menunggu orang lain menjawab dulu
-          kind: wait
-          cue_time: {at: "2026-11-10T12:05:00+07:00"}
-          cue_event: {kind: percept, place: "space:tg:-1002", not_who: person:tg:4002}
-          expect: {none: true}
-          intent: balas terima kasih kalau tidak ada yang menjawab
-          weight: 0.6
-          policy: {once: true}
+          arguments: {text: "Kopi Senja, jam sepuluh."}

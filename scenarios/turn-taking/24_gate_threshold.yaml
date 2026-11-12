@@ -1,16 +1,17 @@
 name: 24_gate_threshold
 function: turn-taking
-capability: "The gate keeps a busy group silent, an addressed line always wakes, and the decision event stores its terms."
+capability: "The gate keeps a busy group silent, an addressed line always wakes, the decision event stores its terms, and its go on an answerable question holds a wait that wakes the soul once."
 description: >-
   The gate and the circuit breaker (core.md §6, core-math.md §3, §15). A busy
   group of six people stays silent: the soul's share of talk stays below the
   fair share 1/n, and the three log-derived terms of theta (talk_rate,
   promise_debt, budget_used) are stored in every decision event. An addressed
-  message always wakes the PFC, and an active promise fired by an unaddressed
-  message wakes it too.
+  message always wakes the PFC, an active promise fired by an unaddressed
+  message wakes it too, and once Mona knows the answer to a group question the
+  gate opens and the kernel's wait answers it once, after the patience window.
 expectations:
   - type: no_reply
-    steps: [1, 2, 3, 4, 5, 6, 8, 9]
+    steps: [1, 2, 3, 4, 5, 6, 8, 9, 12]
     label: unaddressed chatter in a busy group stays silent
   - type: event_seen
     kind: model.call
@@ -45,6 +46,23 @@ expectations:
     step: 10
     count: 1
     label: the fired promise wakes the PFC
+  - type: sleep_done
+    label: the answer to the group's question is stored
+  - type: event_seen
+    kind: expectation.created
+    payload: {kind: wait}
+    step: 13
+    count: 1
+    label: the gate's go on an answerable question creates the wait
+  - type: reply_in
+    place: space:tg:-1004
+    step: 14
+    count: 1
+    label: the patience window wakes the soul exactly once
+  - type: mentions
+    text: "lima"
+    step: 14
+    label: the answer names the stored fact
 steps:
   - at: "2026-11-10T13:00:00+07:00"
     who: person:tg:7001
@@ -89,13 +107,25 @@ steps:
   - at: "2026-11-10T13:04:30+07:00"
     who: person:tg:7003
     place: space:tg:-1004
-    text: "Nanti sore selesai."
+    text: "Nanti selesai jam lima sore kayaknya."
     should: silent
   - at: "2026-11-10T13:05:00+07:00"
     who: person:tg:7004
     place: space:tg:-1004
     text: "Dokumennya sudah selesai kok."
     should: answer
+  - at: "2026-11-10T13:06:00+07:00"
+    who: person:tg:7006
+    place: space:tg:-1004
+    text: "Katanya selesai jam lima sore."
+    should: silent
+  - advance: "40m"
+  - at: "2026-11-10T13:50:00+07:00"
+    who: person:tg:7005
+    place: space:tg:-1004
+    text: "Eh, dokumennya selesai jam berapa ya? Aku lupa."
+    should: answer
+  - advance: "2m"
 model_answers:
   - step: 7
     tool: decide
@@ -116,3 +146,10 @@ model_answers:
         arguments:
           capability: telegram.say
           arguments: {text: "Dokumennya sudah selesai, sesuai janjiku."}
+  - step: 14
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: telegram.say
+          arguments: {text: "Jam lima sore, sudah selesai."}
