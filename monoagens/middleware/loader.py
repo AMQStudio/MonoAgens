@@ -24,6 +24,7 @@ from typing import Any
 import yaml
 
 from monoagens.core.hooks import Continue, Middleware
+from monoagens.infra import attachments as attachments_module
 from monoagens.infra import config as config_module
 from monoagens.infra.store import append_event
 from monoagens.middleware import contract, policy, registry, roles
@@ -81,6 +82,7 @@ class PluginAPI:
     options: dict[str, Any]
     features: dict[str, list[str]]
     log: Any = None
+    files: Any = None
     points: dict[str, dict[str, Any]] = field(default_factory=dict)
     tools: list[tuple[Any, dict[str, Any]]] = field(default_factory=list)
     commands: list[CommandEntry] = field(default_factory=list)
@@ -128,6 +130,12 @@ class PluginAPI:
     def is_blocked_address(self, address: str) -> bool:
         """Return whether one address is private, reserved or otherwise off limits."""
         return policy.is_blocked_address(address)
+
+    async def open_file(self, ref: str, *, context: str | None) -> tuple[bytes, dict[str, Any]]:
+        """Open one attachment the requester's context may see (middleware.md §10)."""
+        if self.files is None:
+            raise RuntimeError("the attachment door is not bound yet")
+        return await self.files.open(ref, context=context)
 
 
 class Loader:
@@ -378,6 +386,10 @@ class Loader:
         if unknown:
             raise ValueError(f"adapter {name}: cannot show {unknown[0]!r}")
         report.add(f"adapter {name}: shows {', '.join(shows) or 'nothing'}")
+        limits = getattr(adapter, "FILES", None)
+        if isinstance(limits, dict):
+            report.add(f"adapter {name}: files {limits.get('per_message')} per message, "
+                       f"up to {limits.get('max_bytes')} bytes each")
         for part in ("history", "place_info", "get_cursor"):
             if getattr(adapter, part, None) is not None:
                 report.add(f"adapter {name}: has {part}")
@@ -483,9 +495,13 @@ class Loader:
         touched: set[tuple[str, str]] = set()
         for previous in getattr(kernel, "loaded_plugins", ()):
             kernel.tools.discard_owner(previous)
+        door = contract.AttachmentDoor(
+            attachments_module.AttachmentStore(self.root / "var" / "attachments"), kernel.conn)
+        kernel.attachments = door.store
         for api in loaded.apis:
             if isinstance(api.log, contract.LogView):
                 api.log._bind(kernel.conn)
+            api.files = door
             for tool, facts in api.tools:
                 kernel.tools.add_tool(tool, facts, owner=getattr(tool, "name", None) or api.name)
             for entry in api.commands:
@@ -501,6 +517,7 @@ class Loader:
             if key not in touched:
                 slot.target = None  # the plugin that owned this place is gone
         for adapter in loaded.adapters:
+            adapter.files = door
             if hasattr(adapter, "get_cursor"):
                 adapter.get_cursor = _cursor_for(kernel, adapter.name)
             kernel.register_adapter(adapter)

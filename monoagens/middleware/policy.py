@@ -79,10 +79,25 @@ def modules_for(hook: str, kernel: Any) -> tuple[tuple[str, Middleware], ...]:
     return {"inbound": (("identity-pairing", identity.claim(kernel.conn)),
                         ("approval-answer", interaction.answer(kernel)),
                         ("commands", registry.commands(kernel)),
-                        ("narrate", interaction.narrate(kernel))),
+                        ("narrate", interaction.narrate(kernel)),
+                        ("attachment-sweep", attachment_sweep(kernel))),
             "context": (("identity-cards", identity.cards(kernel.conn, roles=kernel.roles)),
                         ("self-block", registry.self_block(kernel))),
-            "action": (("identity-route", identity.route(kernel.conn)),)}.get(hook, ())
+            "action": (("identity-route", identity.route(kernel.conn)),
+                       ("attachments-split", interaction.split(kernel)))}.get(hook, ())
+
+
+def attachment_sweep(kernel: Any) -> Middleware:
+    """Inbound rule: hard forgetting deletes the files no surviving event carries."""
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        """Sweep the attachment store when a `forget.hard` arrives."""
+        store = getattr(kernel, "attachments", None)
+        if getattr(item, "kind", "") == "forget.hard" and store is not None:
+            await store.sweep(kernel.conn)
+        return Continue()
+
+    return rule
 
 
 def policy_for(hook: str, when: str, kernel: Any) -> Middleware:

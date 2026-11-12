@@ -295,3 +295,33 @@ The class docstring carries the rule the plan asks for: any plugin tool that sho
 to people passes it through `privacy.visible` (or `memory_visible`) first, and a filtered line
 becomes the withheld count, never a shown line. The policy rule on data leaving the machine is
 in 1.7 (`privacy.leaving`).
+
+**1.10 Attachments.** `infra/attachments.py` keeps files on disk under
+`var/attachments/<2 hex>/<ref>/<safe name>`, content-addressed: `ref = "att_" + sha256[:24]`,
+so the same bytes always get one ref and one copy however many places they are sent to. `put`
+refuses a file over `MAX_BYTES` (50 MiB) with `file too large: N`, writes `.tmp` then
+`os.replace` (never half a file) and sanitises the name (`safe_filename`: basename, printable,
+≤120 chars, `attachment` when empty). **Why the origin is derived from the Log**: nothing about
+an attachment is stored in a table — `contract.attachment_origins(ref)` returns every
+non-forgotten event whose `payload.data.attachments` carries the ref (oldest first), so hard
+forgetting erases the origin as it scrubs the payload, and the audience check is the same
+`privacy.visible` every other content check uses. `open` allows a file when **any** such event
+is visible to the requester's context (a file sent in several places is one stored file) and
+refuses otherwise with `that file came with content this place may not see`. **Sweep trigger**:
+at boot (`boot.warm`, after the connection check and the embedder warm-up) and whenever an
+inbound `forget.hard` is seen; it deletes a file only when no carrier event remains (and the
+empty folders), and returns how many files it removed. Adapters get one `AttachmentDoor`
+(`put`, `open`); plugins get `api.open_file(ref, context=...)`.
+**CLI**: a line starting with `@` names existing paths joined by `|` with optional text
+(`@a.txt|@b.txt|please read`) and becomes one percept with every attachment (a missing path is
+reported inside the percept's text, never a crash); `say` writes `[file] <name> <path>` per
+attachment. **Telegram**: one message may carry a document, the largest photo, audio, video or
+voice; updates that share `media_group_id` are collected for 1 s and become one percept with
+every file; uploading uses `sendPhoto` for images and `sendDocument` otherwise; a button press
+becomes a percept carrying `{"approval": id, "answer": bool}`.
+`FILES = {"per_message": 10, "max_bytes": 50_000_000, "mimes": ()}` on Telegram and
+`{"per_message": 1, …}` on CLI, named in the boot report. `interaction.split` splits a
+communicative act whose `attachments` exceed the adapter's limit: the first part keeps the text,
+the later ones carry `(part i/n)`, one `act.out` per part, and one `interaction.split` event
+records the count. `contract.describe_attachments` renders the one line reasoning sees
+(`Budi sent 3 files: report.pdf, photo.jpg, data.xlsx`).

@@ -2,24 +2,33 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from monoagens.infra.clock import Clock
+from monoagens.middleware.contract import describe_attachments
 from monoagens.types import Event
 
 
 def event(update_id: int, message: dict[str, Any], text: str, *, clock: Clock,
           name: str = "telegram", bot_id: int | None = None,
-          bot_username: str | None = None) -> Event:
+          bot_username: str | None = None,
+          attachments: Sequence[Mapping[str, Any]] = ()) -> Event:
     """Build the percept of one incoming message; ids stay opaque, nothing is interpreted."""
     chat = message["chat"]
     sender_id = (message.get("from") or {}).get("id")
+    who = f"person:tg:{sender_id}"
     place_kind = "direct" if chat.get("type") == "private" else "shared"
-    return Event(id=None, ts=clock.now(), kind="percept", who=f"person:tg:{sender_id}",
+    data: dict[str, Any] = {"message_id": message["message_id"]}
+    description = text
+    if attachments:
+        data["attachments"] = [dict(item) for item in attachments]
+        summary = describe_attachments(attachments, sent_by=who)
+        description = f"{text} {summary}".strip() if text else summary
+    return Event(id=None, ts=clock.now(), kind="percept", who=who,
                  place=f"space:tg:{chat['id']}", body=name,
-                 payload={"cursor": update_id,
-                          "data": {"message_id": message["message_id"]},
-                          "description": text, "place_kind": place_kind,
+                 payload={"cursor": update_id, "data": data, "description": description,
+                          "place_kind": place_kind,
                           "addressed": addressed(chat, message, text, bot_id=bot_id,
                                                  bot_username=bot_username)})
 

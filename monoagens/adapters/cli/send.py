@@ -20,6 +20,11 @@ async def broadcast(writers: set[asyncio.StreamWriter], line: str) -> None:
             writer.close()
 
 
+async def file(writers: set[asyncio.StreamWriter], info: dict[str, Any], path: str) -> None:
+    """Write one attachment line: its name and where it sits on disk."""
+    await broadcast(writers, f"[file] {info.get('name') or 'file'} {path}\n")
+
+
 async def show(writers: set[asyncio.StreamWriter], kind: str, **data: Any) -> None:
     """Render one non-message thing as a line: typing, a step, or an approval question."""
     if kind == "typing":

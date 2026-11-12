@@ -171,7 +171,8 @@ async def test_layered_prompt_structure(aconn):
     assert capability["enum"] == ["registry.describe", "self.recall", "self.set_identity",
                                  "self.share", "telegram.react", "telegram.say"]
     description = act_tool["function"]["description"]
-    assert "telegram.say(text, to? (a speaker or a place), via? (a tool)):" in description
+    assert ("telegram.say(text, attachments, to? (a speaker or a place), via? (a tool)):"
+            in description)
     assert "telegram.react(emoji, message_id):" in description
     expect_tool = next(tool for tool in request["tools"]
                        if tool["function"]["name"] == "expect")

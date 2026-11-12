@@ -37,3 +37,6 @@ async def warm(kernel: Kernel) -> None:
     embed = getattr(kernel.embedder, "embed", None)
     if embed is not None:
         await embed(["warm-up"])
+    store = getattr(kernel, "attachments", None)
+    if store is not None:
+        await store.sweep(kernel.conn)

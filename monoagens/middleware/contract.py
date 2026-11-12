@@ -21,7 +21,7 @@ The action hook carries one act in a context dict. The keys the core sets are fi
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from monoagens.types import Event
@@ -39,7 +39,9 @@ SHOWS = ("typing", "edit", "buttons", "reactions")
 # The one marker for a cut tool output; a tool never invents a second one.
 OUTPUT_MARKER = "\n...[truncated: output exceeds {limit} chars; next: continue from character {n}]"
 
-__all__ = ["CALL_FACTS", "FACTS", "OUTPUT_MARKER", "OWNER_POLICY", "SHOWS", "SLOTS", "LogView",
+__all__ = ["CALL_FACTS", "FACTS", "OUTPUT_MARKER", "OWNER_POLICY", "SHOWS", "SLOTS",
+           "AttachmentDoor", "LogView", "attachment_origins", "describe_attachments",
+           "find_attachment", "open_attachment",
            "Continue", "HookOutcome", "Middleware", "Registration", "Replace", "Stop",
            "compose"]
 
@@ -140,3 +142,69 @@ class LogView:
         rows = await cur.fetchall()
         found = [event_from_row(row) for row in rows]
         return found if not newest_first else list(reversed(found))
+
+
+# ------------------------------------------------------------ attachments
+
+
+def describe_attachments(attachments: Sequence[Mapping[str, Any]], *,
+                         sent_by: str = "someone") -> str:
+    """Render the one line reasoning sees: `Budi sent 3 files: report.pdf, photo.jpg`."""
+    found = list(attachments or ())
+    names = [str(item.get("name") or f"{int(item.get('size') or 0)} bytes")
+             for item in found]
+    if not names:
+        return f"{sent_by} sent no file"
+    plural = "" if len(names) == 1 else "s"
+    return f"{sent_by} sent {len(names)} file{plural}: " + ", ".join(names)
+
+
+class AttachmentDoor:
+    """The one door adapters and plugins use: `put` a file, `open` one they may see."""
+
+    def __init__(self, store: Any, conn: Any) -> None:
+        """Keep the store and the connection the audience check runs on."""
+        self.store = store
+        self._conn = conn
+
+    async def put(self, data: bytes, *, name: str,
+                  mime: str = "application/octet-stream") -> dict[str, Any]:
+        """Store one received file and return its attachment."""
+        return await self.store.put(data, name=name, mime=mime)
+
+    async def open(self, ref: str, *, context: str | None) -> tuple[bytes, dict[str, Any]]:
+        """Return one file's bytes when this context may see where it came from."""
+        return await open_attachment(self._conn, self.store, ref, context=context)
+
+
+async def attachment_origins(conn: Any, ref: str) -> list[tuple[int, str]]:
+    """Return every non-forgotten event that carried one attachment, oldest first."""
+    cur = await conn.execute(
+        "SELECT id, place FROM events WHERE payload @> jsonb_build_object('data', "
+        "jsonb_build_object('attachments', jsonb_build_array("
+        "jsonb_build_object('ref', %s::text)))) "
+        "AND payload <> '{\"forgotten\": true}'::jsonb ORDER BY id", (ref,))
+    return [(int(found), str(place or "")) for found, place in await cur.fetchall()]
+
+
+async def find_attachment(conn: Any, ref: str, *, context: str | None
+                          ) -> tuple[int, str] | None:
+    """Return the first event carrying one attachment whose place this context may see."""
+    from monoagens.middleware import privacy  # local: privacy reads the Log, not this module
+
+    for event_id, place in await attachment_origins(conn, ref):
+        if await privacy.visible(conn, context=context, source=place, before=event_id):
+            return event_id, place
+    return None
+
+
+async def open_attachment(conn: Any, store: Any, ref: str, *, context: str | None
+                          ) -> tuple[bytes, dict[str, Any]]:
+    """Return one file and its name when the requester's context may see where it came from."""
+    if await find_attachment(conn, ref, context=context) is None:
+        raise PermissionError("that file came with content this place may not see")
+    found = store.find(ref)
+    if found is None:
+        raise FileNotFoundError(f"no stored file for {ref}")
+    return await store.read(ref), {"ref": ref, "name": found.name,
+                                   "size": found.stat().st_size}

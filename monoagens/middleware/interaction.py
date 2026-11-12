@@ -279,3 +279,59 @@ def _config_path(kernel: Any) -> Any:
     if root is None:
         return None
     return pathlib.Path(root) / "config.yaml"
+
+
+# -------------------------------------------------------------- attachments
+
+SPLIT = "interaction.split"
+
+
+def split_attachments(adapter: Any, arguments: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return one argument dict per message the adapter can send."""
+    limit = int((getattr(adapter, "FILES", {}) or {}).get("per_message") or 0) or 1
+    found = [str(ref) for ref in arguments.get("attachments") or ()]
+    total = -(-len(found) // limit)
+    parts: list[dict[str, Any]] = []
+    for index in range(total):
+        chunk = found[index * limit:(index + 1) * limit]
+        part: dict[str, Any] = {**{key: value for key, value in arguments.items()
+                                   if key != "attachments"}, "attachments": chunk}
+        if index == 0:
+            if arguments.get("text"):
+                part["text"] = arguments["text"]
+        else:
+            part["text"] = f"(part {index + 1}/{total})"
+        parts.append(part)
+    return parts
+
+
+def split(kernel: Any) -> Middleware:
+    """Action rule: send the files in as many messages as the adapter needs."""
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        """Record one `act.out` per part and hand each part to the adapter."""
+        if ctx.get("refusal") or ctx.get("handled"):
+            return Continue()
+        descriptor = ctx.get("descriptor") or {}
+        arguments = dict(item or {})
+        attachments = list(arguments.get("attachments") or ())
+        adapter = kernel.tools.adapters.get(str(ctx["event"].body))
+        if adapter is None or not descriptor.get("communicative") or not attachments:
+            return Continue()
+        limit = int((getattr(adapter, "FILES", {}) or {}).get("per_message") or 0)
+        if not limit or len(attachments) <= limit:
+            return Continue()
+        parts = split_attachments(adapter, arguments)
+        await kernel._emit(ctx["event"], SPLIT, {
+            "capability": ctx["capability"], "parts": len(parts),
+            "attachments": len(attachments)})
+        for part in parts:
+            passed = {key: value for key, value in part.items() if key not in registry.ROUTING}
+            await kernel._emit(ctx["event"], "act.out", {
+                "capability": ctx["capability"], "arguments": passed,
+                "communicative": True}, place=ctx["event"].place)
+            await kernel.tools.act(ctx["event"], str(ctx["capability"]), passed)
+        ctx["handled"] = True
+        return Continue()
+
+    return rule

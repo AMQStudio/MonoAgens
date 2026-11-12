@@ -53,3 +53,20 @@ async def place_info(call: Call, place: str) -> dict[str, Any]:
     except Exception:  # a chat that reports no count simply has none
         info["member_count"] = None
     return info
+
+
+async def document(http: Any, base_url: str, token: str, place: str, data: bytes,
+                   info: dict[str, Any]) -> Any:
+    """Send one stored file: a photo for images, a document for everything else."""
+    mime = str(info.get("mime") or "application/octet-stream")
+    method = "sendPhoto" if mime.startswith("image/") else "sendDocument"
+    field = "photo" if method == "sendPhoto" else "document"
+    response = await http.post(
+        f"{base_url}/bot{token}/{method}",
+        data={"chat_id": chat_id(place)},
+        files={field: (str(info.get("name") or "file"), data, mime)})
+    response.raise_for_status()
+    payload = response.json()
+    if not payload.get("ok"):
+        raise RuntimeError(f"Telegram {method} failed: {payload.get('description')}")
+    return payload.get("result")

@@ -6,8 +6,11 @@ from typing import Any
 
 # An adapter's talking capabilities declare no permission (middleware.md §4, D59).
 CAPABILITIES: tuple[dict[str, Any], ...] = (
-    {"name": "say", "description": "Write a text line to the terminal.",
-     "schema": {"type": "object", "properties": {"text": {"type": "string"}},
+    {"name": "say", "description": "Write a text line to the terminal, with files.",
+     "schema": {"type": "object",
+                "properties": {"text": {"type": "string"},
+                               "attachments": {"type": "array", "items": {"type": "string"},
+                                               "description": "Attachment references."}},
                 "required": ["text"]},
      "communicative": True, "long_running": False, "identity_changing": False,
      "facts": (), "permission": None},
