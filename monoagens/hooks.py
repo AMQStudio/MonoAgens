@@ -22,7 +22,7 @@ def audience_policy() -> Middleware:
     """Absolute line 2 (D45): private content enters only an allowed audience."""
 
     async def policy(item: Any, ctx: Any) -> HookOutcome:
-        """Keep only the memories and foreign lines this context's audience may see."""
+        """Keep only the memories and lines this context's audience may see."""
         conn, place = ctx["conn"], item.place
 
         async def allowed(source: str | None, before: int | None = None) -> bool:
@@ -33,7 +33,10 @@ def audience_policy() -> Middleware:
                     or await allowed(getattr(memory, "place", None))]
         lines = [line for line in item.recent_elsewhere
                  if await allowed(getattr(line, "place", None), getattr(line, "id", None))]
-        return Replace(replace(item, memories=tuple(memories), recent_elsewhere=tuple(lines)))
+        recent = [line for line in item.recent
+                  if await allowed(getattr(line, "place", None), getattr(line, "id", None))]
+        return Replace(replace(item, memories=tuple(memories), recent_elsewhere=tuple(lines),
+                               recent=tuple(recent)))
 
     return policy
 

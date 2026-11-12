@@ -128,6 +128,28 @@ async def test_context_hook_keeps_private_lines_and_memories_inside_the_audience
     assert any(line.place == FULAN_A for line in filtered.item.recent_elsewhere)
 
 
+async def test_a_newcomer_never_receives_a_line_said_before_they_arrived(aconn):
+    said = await _said(aconn, OWNER, GROUP, "shared", "Budi mengirim sketsa_logo.png")
+    asked = await _said(aconn, OWNER, GROUP, "shared", "Budi kirim file apa ya?")
+    assert await reach.visible(aconn, context=GROUP, source=GROUP, before=said) is True
+    context = await memory.build_context(
+        aconn, _trigger(asked, GROUP), GROUP, "test", now=START, settings=SETTINGS,
+        memories=(), capabilities=())
+    desk = await hooks.audience_policy()(context, {"conn": aconn, "now": START})
+    assert [line.id for line in desk.item.recent] == [said]
+
+    joined = await _said(aconn, "person:charlie", GROUP, "shared", "eh aku juga di sini")
+    later = await _said(aconn, OWNER, GROUP, "shared", "Budi kirim file apa tadi?")
+    assert await reach.visible(aconn, context=GROUP, source=GROUP, before=said) is False
+    assert await reach.visible(aconn, context=GROUP, source=GROUP, before=joined) is True
+    assert await reach.visible(aconn, context=GROUP, source=GROUP, before=later) is True
+    context = await memory.build_context(
+        aconn, _trigger(later, GROUP), GROUP, "test", now=START, settings=SETTINGS,
+        memories=(), capabilities=())
+    desk = await hooks.audience_policy()(context, {"conn": aconn, "now": START})
+    assert [line.id for line in desk.item.recent] == [joined]
+
+
 async def test_share_with_a_person_records_consent_and_counts_as_audience(aconn):
     at = await _said(aconn, OWNER, GROUP, "shared", "ini hasil kerjaan kita")
     await _said(aconn, "person:fulan", GROUP, "shared")

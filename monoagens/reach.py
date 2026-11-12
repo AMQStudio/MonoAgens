@@ -75,13 +75,15 @@ async def owner_direct(conn, place: str | None) -> bool:
 
 async def visible(conn, *, context: str | None, source: str | None,
                   before: int | None = None) -> bool:
-    """Return whether content from `source` may enter a context at `context`."""
-    if not source or source == context or await owner_direct(conn, context):
+    """Return whether content from `source` may enter a context at `context` (D45, D50)."""
+    if not source or await owner_direct(conn, context):
         return True
     need = set(await audience(conn, context)) - {OWNER}
-    if not need:
+    if not need or (source == context and before is None):
         return True
     have = (set(await audience(conn, source, before)) - {OWNER}) | set(await shared(conn, source))
+    if source == context:
+        return need <= have
     return not have or need <= have
 
 
