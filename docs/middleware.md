@@ -55,17 +55,31 @@ install order] → [policy — last]`. Scope is **shared** (every body that opts
 ## 3. Policy
 The one middleware that is always present.
 - Wraps every module and plugin, first and last, and cannot be removed (D9).
-- Enforces the core's two absolute lines deterministically: the `identity_changing` check on
-  `origin_actor` in the action hook, and the private-content filter in the context hook
-  (D24, D32.3–4).
+- Enforces the two absolute lines deterministically: the `identity_changing` check on
+  `origin_actor` in the action hook, and the private-content rules below in the context and
+  action hooks (D24, D32.3–4). The core only carries the ids and labels these rules read and
+  refuses to run without this policy (fail-closed, D57).
+- **Private content (absolute line 2, D45).** Privacy follows people, not places. In the inbound
+  hook the policy labels every line with its audience: the people present where it was said,
+  after the alias map, fixed at that moment (D50), so a newcomer never receives what was said
+  before they arrived. Whether a place is direct or shared comes from the adapter
+  (`place_kind`), never from the shape of an id (D48). A private item may enter a context only if
+  every person who will see the result is in its audience, or the context is the owner's direct
+  chat; content from places that are not private flows freely. A memory's audience comes from the
+  labels of the events it was derived from (D53). When the policy withholds relevant items it
+  leaves one line without content — how many, and whose private place they came from (D56).
+- **Sharing by consent (D46).** The policy offers the `share(item | episode, to)` capability: it
+  passes only when the chain's `origin_actor` is in the item's audience, and records
+  `share.granted`, after which the new person is in the audience. Each person speaks only for
+  what they were part of: the owner can share work done with the soul, not what Fulan said in
+  private; the owner's view of everything is a view, not ownership.
 - **Data leaving the machine** (D43): by default nothing does. Data goes out only through a
   plugin the owner installed and configured for it. Such a plugin sends numbers (counts,
   tokens, timings, decisions), not conversation content; sending content outside counts as
   showing it to people who were not part of it and is held to absolute line 2.
-- **Privacy rules narrow, never widen.** The core enforces absolute line 2 on its own (D45).
-  Middleware may only add stricter rules (a mode that keeps health topics out even of the
+- **Privacy rules narrow, never widen.** Other middleware and plugins may only add stricter rules (a mode that keeps health topics out even of the
   person's own chat, an organization rule that a past meeting stays with its board); it can
-  never let private content reach someone the core would refuse. It may also ask for more than
+  never let private content reach someone the owner policy would refuse. It may also ask for more than
   consent before sharing (confirm before forwarding any file; internal documents never go
   outside the organization) (D46).
 - **Routes to a person** (D46): a hint via lever 2, used only when the owner did not name a body, when the default (the body where the person
@@ -123,14 +137,20 @@ version: 1
 Steps …
 ```
 
-## 7. Identity (alias map)
+## 7. Identity (alias map, owner, person cards)
 - Maps every native account (`telegram:123`, `whatsapp:628…`) to one person id in the inbound
   hook; the core never sees raw accounts (D10).
 - Every mapping is an event and can be undone. Only the owner, or the person via a verification
   code sent from the second account, may link two accounts; the soul may suspect and ask the
   owner, never links silently, because linking makes two accounts one person, and private
   context then follows that person across bodies (D10, D45). A wrong link is a privacy leak.
-- Needed when a second chat app arrives; deferred until then (D32.9).
+- **Becoming the owner** (D33). On first start the soul shows a short pairing code; the first
+  person who sends it from any adapter becomes the owner. Changing the owner later needs the
+  current owner. The core never knows who the owner is; the owner policy does.
+- **Person cards** (D55): through the context hook it adds, for the people present or named in
+  the trigger, their name and where they can be reached, next to what the soul has learned of
+  them.
+- Linking accounts arrives with the second chat app (Task 5).
 
 ## 8. RBAC
 - **Hierarchy as permission** (roles, who may do what, "only admins may run /settings") is

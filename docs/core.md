@@ -106,8 +106,8 @@ tests against the map, never new rows.
 
 **Four books** (D26, D32).
 - `events` — the log: id · ts · kind · who · place · body · origin_actor · payload · caused_by.
-  INSERT-only by trigger; the single exception is hard forgetting (§7). `who` is a person id
-  (after the alias map), `place` a neutral space id, `body` the organ name; `origin_actor` is
+  INSERT-only by trigger; the single exception is hard forgetting (§7). `who` is an opaque source id
+  (the inbound hook may map accounts to one id per person, D57), `place` an opaque space id, `body` the organ name; `origin_actor` is
   inherited along `caused_by`. `event_vectors` (event_id, embedding) is the log's index; rows
   leave only by fading or hard forgetting, each through one dedicated path that writes an event.
 - `state` — a namespaced key/value projection that can be rebuilt from events: `identity`,
@@ -208,26 +208,28 @@ the prompt cache holds (D2, D32, D46). The soul can act in any body from any bod
   own acts included, also those that say nothing), the latest result verbatim, older results as
   pointers. The soul always knows what it has just done and what came back.
 - **Task threads** (D47). A chain that needs more than one step opens its own task thread: a
-  place of kind `task` with a parent place, the parent's audience (so absolute line 2 holds
+  place of kind `task` with a parent place, the parent's labels (so absolute line 2 holds
   unchanged), and its own slot for one PFC job. The conversation in the parent place never waits
   for the work. The thread reports to the parent when it finishes, fails, or needs to ask, and
   closes. Open threads are limited (`max_open_tasks`); one more waits as a promise. One soul,
   one log: threads are lines of work, not copies of the self.
-- Organs map native accounts to person ids (alias map) and native command syntax to a neutral
-  `command` event; one shared command registry makes `/help` identical everywhere (D9).
+- `who`, `place` and `origin_actor` are opaque strings to the core (D57). The inbound hook
+  (middleware) may rewrite them — for example one id per person across accounts — and attach
+  labels; the core stores them as given and never reads their meaning. Commands are handled
+  in the middleware; one command registry makes `/help` identical everywhere (D9).
 - Organs report `addressed` (direct chat, reply, tag) as a neutral event field (D40).
 - What an organ senses enters as a `percept`: the organ, like a sensory cortex, turns its signal
   into a short description, with raw data attached (D41).
 - On start an organ asks for `cursor(organ)`, so input is never lost or duplicated.
 - `communicative` capabilities count as speaking for the talk-rate drive and the forward model.
 
-**Reaching a person** (D46). A communicative act may name a person instead of a place
-(`to: person`, optionally `via: body`). The core resolves it to that person's direct place from
-the log and the alias map — on the named body, or by default the body where the person was last
-active — before the action hook; a middleware hint may suggest another route (lever 2). When
-several places fit an instruction ("send it to the group"), the soul asks which one instead of
-guessing, because a message sent to the wrong place cannot be taken back. No known direct place → the act fails with
-an honest `act.result` ("no way to reach Budi yet").
+**Reaching a target** (D46, D57). A communicative act may name a target that is not a place
+(`to:`, optionally `via:`). The middleware's action hook resolves it to a place — for a person,
+their direct place on the named adapter or where they were last active — or refuses with its
+reason; the core only delivers to a place. When several places fit an instruction ("send it to
+the group"), the soul asks which one instead of guessing, because a message sent to the wrong
+place cannot be taken back. No place → the act fails with an honest `act.result` ("no way to
+reach Budi yet").
 
 **Speaking elsewhere** (D48). A communicative act aimed at a place other than the current one is
 never sent with text written at the current desk. The core turns it into an intent — what to
@@ -249,10 +251,9 @@ breaker.
 non-communicative capability, `recall(query | event_id, place?, from?, to?)`: a deeper search of
 the soul's own log and memories — by time range (no query lists the episodes in that range),
 along `derived_from` to the original events, and by text search over event payloads, so faded or
-unsummarized messages are still found. It obeys absolute line 2 and reports what it searched and
-found, "nothing" included. Its second capability, `share(item | episode, to: person | place)` (D46; a place means everyone present there), records
-consent to show private content to someone new (§8, absolute line 2); it passes the action hook
-only when the chain's `origin_actor` is part of that content's audience.
+unsummarized messages are still found. Its results pass the context hook like everything else,
+and it reports what it searched and found, "nothing" included. Sharing private content with
+someone new (`share`, D46) is a middleware capability, not the core's (§8).
 
 ## 5. Expectations
 
@@ -397,52 +398,43 @@ people?" — otherwise it is layer 3. Installed skills are not learned state; th
 plugins. A soul is born from a **prior** (layers 1–2, §9.4); this repository only
 loads a prior and never exports or shares learned state (D25).
 
-## 8. Trust, identity and the self-model
+## 8. What the core knows, the absolute lines and the self-model
 
-**Two absolute lines** (D24, D32.3–4), held by the owner policy and never decided by the PFC:
-1. **Only the owner changes who the soul is** (principles, settings, access to the owner's
-   data). Enforced in the action hook: a capability flagged `identity_changing` passes only when
-   the chain's `origin_actor` is the owner.
-2. **Private content never reaches anyone who was not part of it** (D45). Privacy follows people,
-   not places. A private memory or line may enter a context only if every person who will see
-   the result was part of its audience — the people present where it was said (after the alias
-   map, so one person's linked accounts count as one) — or the context is a direct chat with the
-   owner. So what Fulan said in a private chat on one body may be used in Fulan's private chat on
-   another body, but never in a group where anyone else is present. Content from places that are
-   not private flows freely. Whether a place is direct (one person) or shared comes from the organ (`place_kind`,
-   §9.2), never from the shape of an id (D48). Audience is fixed when a line is said (D50): a
-   line in a place that is not public stays with the people present at that moment, even on the
-   same place's desk, so a newcomer never receives what was said before they arrived.
-   When the context hook withholds private items that were relevant, it leaves one line without
-   content — how many, and whose private place they came from — so the soul knows it knows and
-   can say so honestly or ask the person in private, instead of claiming it has no record (D56). Content reaches someone new only by consent (D46): a person in its
-   audience shares it (`self.share`, recorded as `share.granted`), and the new person then counts
-   as part of its audience. Each person speaks only for what they were part of: the owner can share
-   work done with the soul, but cannot share what Fulan said in private; the owner's view of
-   everything is a view, not ownership. Enforced by the owner policy in the context hook, which is always installed: the
-   core refuses to run without it (fail-closed), so the line holds even with no other
-   middleware. The core records the labels (who was present, `derived_from`, `share.granted`,
-   `place_kind`); the policy judges them. Middleware decides who is the same person (the alias
-   map) and may add stricter rules (narrow); nothing can widen what this line allows.
+**Only opaque ids, labels and numbers** (D57). The core does not know what a person, the owner, a
+group or a role is. It carries:
+- **ids** — `who`, `place`, `origin_actor` (the source a chain started from), as strings;
+- **labels** — attached by the middleware in the inbound hook (for example who was present when
+  a line was said, D50, and `place_kind`, D48) or by a hook outcome (for example `share.granted`,
+  D46), stored with the event and never read by the core. A memory carries the labels of every
+  event it was derived from (`derived_from`, D53); a thread carries its parent's labels;
+- **numbers** — what the gate needs, such as how many distinct sources are active in a place and
+  whether a line is addressed.
+What the soul learns about a source in sleep (closeness, reliability: theory of mind) is its own
+memory, kept under that opaque id. Everything that gives ids and labels a meaning — people and the
+alias map, the owner and pairing, audience, privacy, consent, routes, names and where someone can
+be reached — is middleware ([middleware.md](middleware.md) §3, §7).
 
-**Everything else is weighed by the PFC** (D24, D31). Anyone may ask; requests are judged
+**Two absolute lines** ([constitution.md](constitution.md) §5), held deterministically by the
+owner policy, never decided by the reasoning:
+1. **Only the owner changes who the soul is** — checked in the action hook on capabilities
+   flagged `identity_changing`.
+2. **Private content never reaches anyone who was not part of it** (D45, D46, D50, D56) —
+   checked in the context and action hooks from the labels; the rules are in
+   [middleware.md](middleware.md) §3.
+The owner policy is always installed, first and last in every hook; the core refuses to run
+without it (fail-closed), so both lines hold with no other middleware. Other middleware and
+plugins may only narrow them.
+
+**Everything else is weighed by the reasoning** (D24, D31). Anyone may ask; requests are judged
 against the owner's interests and the principles. Learned procedures and lessons carry credence
-that the PFC sees. Claims are weighed by the speaker's reliability in that domain. Standing never
-buys dishonesty.
+that the reasoning sees. Claims are weighed by the speaker's reliability in that domain.
+Standing never buys dishonesty.
 
-**Identity** (D35). A soul is born from a birth certificate (§9.3; a neutral default if none)
-and a prior (§9.4). After birth, identity lives in
-`state: identity`; the owner changes it in conversation through an `identity_changing`
-capability; without a birth certificate the soul may ask the owner what to be called. Role
-plugins may provide a birth certificate, used only at birth.
-
-**Becoming the owner** (D33). On first start the soul shows a short pairing code; the first
-person who sends it from any organ becomes the owner. Changing the owner later needs the current
-owner.
-
-**Default owner policy** (D22, D24): the two lines, the daily budget, quiet hours — active out of
-the box. The owner may tighten or loosen budget and quiet hours; plugins may add rules inside the
-policy, never remove it.
+**The soul's own identity** (D35). A soul is born from a birth certificate (§9.3; a neutral
+default if none) and a prior (§9.4). After birth, identity lives in `state: identity` and changes
+only through an `identity_changing` capability, which the owner policy lets only the owner use;
+without a birth certificate the soul may ask what to be called. Role plugins may provide a birth
+certificate, used only at birth.
 
 **The desk and the self-model** (D12, D37). The prompt is a desk, not the memory: it is rebuilt
 from the books at every wake and never compacted. Three layers, ordered for caching:
@@ -451,10 +443,11 @@ from the books at every wake and never compacted. Three layers, ordered for cach
   earlier than claimed; D32.13), principles, thought acts and capability schemas.
 - *Semi-stable*: `<self>` (capabilities, commands, installed skills, plugins' standing rules;
   assembled from the registries; closed-world — what is not listed cannot be done), core memory,
-  person cards of people present or named in the trigger. A person card holds who someone is to
-  the soul — name, person id, the bodies where they can be reached, closeness — never what they
-  said; knowing someone is not private content, so a card is never withheld by absolute line 2
-  (D55). This is how the soul can reach Budi from a place where Budi's messages may not appear.
+  cards of the sources present or named in the trigger (D55): what the soul has learned of them,
+  under their id, plus what the middleware adds through the context hook — name and where they
+  can be reached. A card is never what someone said; knowing someone is not private content, so a
+  card is never withheld by absolute line 2. This is how the soul can reach Budi from a place
+  where Budi's messages may not appear.
 - *Volatile, last*: `<now>` (local time, timezone, time since the last interaction), `<place>`,
   `<why_awake>`, `<doing>`, `<next>`, `<memories>` with basis, source and age, `<recent>`,
   `<event>` with any middleware notes attached to it. Messages from non-owners are delimited as
@@ -489,7 +482,7 @@ description: Send a text reply in the current place.
 schema: { type: object, properties: { text: { type: string } }, required: [text] }
 communicative: true         # counts as speaking for the talk-rate drive
 long_running: false         # true → progress and completion arrive as act.result events
-identity_changing: false    # true → passes the action hook only when origin_actor is the owner
+identity_changing: false    # read by the owner policy: passes only when origin_actor is the owner
 ```
 
 ### 9.2 Percept (format version 1)
@@ -499,13 +492,13 @@ for every sense.
 ```yaml
 kind: percept
 body: telegram              # organ name
-who: telegram:123           # native id; the alias map turns it into a person id
+who: telegram:123           # opaque to the core; the inbound hook may map it (alias map)
 place: telegram:chat:-100   # native space id; becomes a neutral place
 addressed: false            # the turn is allocated to the soul (direct chat, reply, tag)
-place_kind: shared          # optional (D48): direct (only this one person can perceive it) |
+place_kind: shared          # optional (D48), a label for the middleware: direct (only this one person can perceive it) |
                             # shared (others may: a chat group, a Discord channel, a room a robot
                             # stands in, a game world). Reported by the organ; the core never infers
-                            # it from an id. Unknown → shared (the safer side)
+                            # it from an id; the core never reads it. Unknown → shared (the safer side)
 description: "Budi: anyone know where the meeting is?"   # short, in language; what the PFC reads
 data: { message_id: 812 }   # optional raw data for organs or plugins; never interpreted by the core
 sent_at: 2026-11-11T13:20:05+07:00   # optional; the sense's own clock (back-fill)

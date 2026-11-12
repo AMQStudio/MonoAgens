@@ -4,8 +4,8 @@ Status: todo | Depends on: Task 2
 One task = one worker prompt, done by one worker. Work through the parts **in order**. Rules: [README](README.md).
 
 **Goal.** The same behavior, with everything in its right place. The core keeps only mechanisms;
-every decision about right and wrong, about who is who and about what may be shared moves to
-the middleware. **The middleware decides, the core records and carries out**
+every decision moves to the middleware, and the core knows only opaque ids, labels and numbers
+(D57). **The middleware decides, the core records and carries out**
 ([constitution.md](../constitution.md) §4). Names become standard engineering terms
 ([glossary](../glossary.md)).
 
@@ -29,19 +29,26 @@ May touch: `monoagens/` (all), `tests/`, `scripts/`, `pyproject.toml`, `AGENTS.m
 - [ ] 1.3 Check: pytest and the fake replay pass unchanged. List every old → new path and every renamed public name under Notes; the architect renames the spec terms from that list.
 
 ## Part 2 — Decisions out of the core
-Read first: [core.md](../core.md) §8 (absolute lines, D45, D46, D50, D55, D56), [middleware.md](../middleware.md)
+Read first: [constitution.md](../constitution.md) §4, [core.md](../core.md) §8 (D57), [middleware.md](../middleware.md) §3, §7
 May touch: `monoagens/core/`, `monoagens/middleware/`, `monoagens/__main__.py`, `tests/`
 
-The core keeps the **labels**: who was present when a line was said (D50), `derived_from`,
-`share.granted`, `place_kind`, the person id on every event. The middleware owns every **rule**
-that reads them. The owner policy is the middleware component that is always installed.
+The core keeps only **opaque ids, labels and numbers** (D57): `who`, `place`, `origin_actor` as
+strings; labels attached by the middleware and carried unread (a memory carries its sources'
+labels, a thread its parent's); counts for the gate. Everything that gives them meaning moves to
+the middleware. Middleware files: `contract.py` (hook outcomes and registration), `owner_policy.py`
+(always installed, first and last in every hook, composes the rest), `identity.py` (alias map,
+pairing the owner, person cards), `privacy.py` (audience, the withheld note, `share`), `limits.py`
+(daily budget limit, quiet hours), `tools.py` (registry and routing, from Part 1). The loader and
+the command registry come in Task 4.
 
-- [ ] 2.1 Privacy: the audience rule (`reach.visible` and every caller in context and recall) becomes the owner policy in the context hook. The withheld note (D56) and person cards (D55) are produced there. The core only hands the policy each item with its labels and drops what the policy drops.
-- [ ] 2.2 Identity: deciding which account is which person (the alias map) and pairing the first owner run in the middleware's inbound hook, before the event is recorded; the core records the person id it is given.
-- [ ] 2.3 Sharing: whether a person may share an item (each person speaks only for what they were part of, D46) is checked by the owner policy in the action hook; the core records `share.granted` when the policy allows it.
-- [ ] 2.4 Budget and quiet hours: the core keeps counting every model call (invariant 5); the daily limit and quiet hours are the owner policy.
-- [ ] 2.5 Anything else in the core that decides right or wrong for a role, place or person: list it under Notes with file and line. Move it only when it is plainly policy; otherwise stop and ask the owner.
-- [ ] 2.6 Check: pytest and the fake replay pass unchanged, absolute-line violations 0. Tests that said "holds with an empty middleware pipeline" now say "holds with only the owner policy"; list them under Notes.
+- [ ] 2.1 Labels: the core stores the labels a hook outcome attaches and passes them on (memory from its sources, thread from its parent); no core module reads what a label means.
+- [ ] 2.2 Privacy: the audience rule (`reach.visible` and every caller in context and recall), the audience label at inbound (D50) and the withheld note (D56) move to `privacy.py`.
+- [ ] 2.3 Sharing: the `share` capability leaves the core's self tool and becomes the middleware's (`privacy.py`); it records `share.granted` through a hook outcome.
+- [ ] 2.4 Identity: the alias map, pairing the first owner and every "is this the owner" check move to `identity.py` and `owner_policy.py`; person cards split into what the soul learned (core memory, under the id) and name and routes (added by `identity.py` through the context hook).
+- [ ] 2.5 Routes: resolving `to:` / `via:` to a place moves to the action hook; the core only delivers to a place.
+- [ ] 2.6 Limits: the core keeps counting every model call (invariant 5); the daily limit and quiet hours move to `limits.py`.
+- [ ] 2.7 Anything else in the core that means "person", "owner", "group" or decides right or wrong for a role, place or person: list it under Notes with file and line. Move it when it is plainly a decision; otherwise stop and ask the owner.
+- [ ] 2.8 Check: pytest and the fake replay pass unchanged, absolute-line violations 0. `grep` of `monoagens/core/` finds no "person", "owner", "alias" or platform name outside comments that point to the middleware. Tests that said "holds with an empty middleware pipeline" now say "holds with only the owner policy"; list them under Notes.
 
 ## Part 3 — Fail-closed and the mechanisms the middleware needs
 Read first: [middleware.md](../middleware.md), [core.md](../core.md) §3

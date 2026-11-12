@@ -30,20 +30,20 @@ Like a kernel: the interface to the outside never breaks, the inside may improve
 The core holds at most 4 books, 5 thought acts, 3 hooks, 10 signals, 3 drives and one gate
 formula. A new primitive must replace one or be refused.
 
-## 4. Layers (D35, D41)
-- **Core** — the soul, a generic brain, including what it is born with (birth certificate and
-  prior). **Middleware** — the foundation in the middle: policy, commands & tools, install,
-  skills, identity, RBAC. **Bodies** — organs for platforms and devices. **Plugins** — features
-  built on the middleware.
-- **The middleware decides, the core records and carries out.** The core holds mechanisms
-  and the labels in the log (who was present, where a memory came from, who shared what); every
-  rule that reads those labels — privacy, who is which person, who may share, budget limits,
-  quiet hours — is middleware. The owner policy is the middleware that is always installed; the
-  core refuses to run without it (fail-closed).
-- Bodies and plugins reach the core only through the middleware: the three hooks and the organ
-  contract. The standard names (adapter, tool, context, reasoning) are in
-  [glossary.md](glossary.md). Everything that reaches the brain is a `percept`; everything that persists is an
-  event.
+## 4. Layers (D35, D41, D57)
+- **Core** — neutral and primitive: only a brain. It knows no case; it provides mechanisms and
+  assembles them. It knows only **opaque ids, labels and numbers**: who and where are strings,
+  labels are attached by the middleware and carried without being read, numbers feed the gate.
+  It does not know what a person, an owner, a group or a role is. The soul's own identity (birth
+  certificate and prior) is the one thing it holds as its own.
+- **Middleware** — the regulator, like drivers: it decides, it is the only path between the core
+  and everything else, and it may limit or add what reaches the core. People, the owner,
+  privacy, sharing, routes, commands, the tool registry, budget limits and quiet hours live
+  here. The owner policy is the middleware that is always installed; the core refuses to run
+  without it (fail-closed).
+- **Adapters and plugins** — talk only to the middleware: they give it data and ask it for
+  data. Standard names are in [glossary.md](glossary.md).
+- Everything that reaches the brain is a `percept`; everything that persists is an event.
 - Middleware and plugins never learn; the soul does (D34). They may add any behavior, emotions
   included, through the six levers ([middleware.md](middleware.md)); the core itself has no
   emotions.
