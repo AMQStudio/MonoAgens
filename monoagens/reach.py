@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
-from monoagens.store import read_state
+from monoagens.store import payload_text, read_state
 from monoagens.types import Event
 
 OWNER = "person:owner"
@@ -117,6 +118,80 @@ async def leaks(conn, target: str | None, text: str) -> bool:
                 conn, context=target, sources=sources):
             return True
     return False
+
+
+async def person_cards(conn, place: str | None, event: Event | None) -> tuple[str, ...]:
+    """Return one card per person present here or named in the trigger (D55)."""
+    present = set(await audience(conn, place)) if place else set()
+    known = await _known_people(conn)
+    text = payload_text(event.payload) if event is not None else ""
+    named = {who for who, card in known.items()
+             if card["name"] and _named(card["name"], text)}
+    people = sorted((present | named) - {OWNER})
+    return tuple([await _card(conn, who, known.get(who) or {"name": None, "closeness": 0.0,
+                                                            "natives": {who}})
+                  for who in people])
+
+
+async def _known_people(conn) -> dict[str, dict[str, Any]]:
+    """Return the card data of every person the alias map or the Log has seen."""
+    mapping = await aliases(conn)
+    cur = await conn.execute("SELECT DISTINCT who FROM events WHERE who IS NOT NULL")
+    rows = await cur.fetchall()
+    states = await _person_states(conn)
+    known = {}
+    for who in {mapping.get(native, native) for (native,) in rows} | set(mapping.values()):
+        state = states.get(who) or {}
+        known[who] = {"name": _name(who, state),
+                      "closeness": float(state.get("closeness") or 0.0),
+                      "natives": {who}}
+    for native, who in mapping.items():
+        known.setdefault(who, {"name": None, "closeness": 0.0, "natives": set()})
+        known[who]["natives"].add(native)
+    return known
+
+
+async def _person_states(conn) -> dict[str, dict[str, Any]]:
+    """Return the `state: person:*` entries by person id."""
+    cur = await conn.execute("SELECT key, value FROM state WHERE key LIKE 'person:%'")
+    return {str(key): value or {} for key, value in await cur.fetchall()}
+
+
+def _name(who: str, state: dict[str, Any]) -> str | None:
+    """Return the name a card knows: the state's, else the last id segment if it is a word."""
+    name = str(state.get("name") or "").strip()
+    if name:
+        return name
+    part = who.removeprefix("person:").rpartition(":")[2]
+    return part if part.isalpha() else None
+
+
+def _named(name: str, text: str) -> bool:
+    """Return whether a card name appears in the trigger as a whole word."""
+    return bool(text) and re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text,
+                                    re.IGNORECASE) is not None
+
+
+async def _card(conn, who: str, card: dict[str, Any]) -> str:
+    """Render one person card: name, person id, reachable bodies, closeness."""
+    places = await _direct_places(conn, card["natives"])
+    reach = "; ".join(f"{body} at {place}" for body, place in sorted(places.items()))
+    label = f"{card['name']} ({who})" if card["name"] else who
+    return f"- {label}: {reach or 'no direct place known yet'}; closeness {card['closeness']:.2f}"
+
+
+async def _direct_places(conn, natives: set[str]) -> dict[str, str]:
+    """Return the direct place where each body last saw one of a person's ids."""
+    if not natives:
+        return {}
+    cur = await conn.execute(
+        "SELECT body, place FROM events WHERE kind = 'percept' AND place IS NOT NULL "
+        "AND who = ANY(%s) AND payload->>'place_kind' = 'direct' ORDER BY id DESC",
+        (sorted(natives),))
+    places: dict[str, str] = {}
+    for body, place in await cur.fetchall():
+        places.setdefault(str(body or "?"), place)
+    return places
 
 
 async def direct_place(conn, who: str, via: str | None = None) -> str | None:

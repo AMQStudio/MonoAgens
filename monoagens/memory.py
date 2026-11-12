@@ -150,6 +150,7 @@ async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place:
                                        sources=(core or {}).get("derived_from"))
     task = await read_state(conn, "task:" + place) if place.startswith("space:task:") else None
     doing = await doing_lines(conn, place, task, values, trigger=event)
+    people = await reach.person_cards(conn, place, event)
     last = None
     for key in (f"last_spoke:{place}", f"last_seen:{event.who}"):
         value = await read_state(conn, key)
@@ -159,6 +160,7 @@ async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place:
     return PFCContext(
         now=now, place=place, place_kind=str(event.payload.get("place_kind") or "shared"),
         reason=reason, core_memory=str((core or {}).get("text") or "") if shown else "",
+        people=people,
         expectations=await active_expectation_lines(conn, place), memories=memories,
         recent=[seen for seen in recent if seen.id != event.id],
         recent_elsewhere=recent_elsewhere, doing=doing, trigger=event, last_interaction=last,

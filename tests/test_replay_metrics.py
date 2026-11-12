@@ -8,9 +8,11 @@ import sys
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from monoagens import hooks, memory
 from monoagens.cognition import Appraisal
 from monoagens.desk import PFCContext
 from monoagens.store import append_event, write_state
+from tests.support import settings
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 _SPEC = importlib.util.spec_from_file_location("replay_script", ROOT / "scripts" / "replay.py")
@@ -211,3 +213,26 @@ def test_report_metrics_are_ordered_missed_help_first() -> None:
     for line, name in zip(lines, names):
         assert name in line.lower()
     assert metrics.missed_help_rate() == 0.0 and metrics.false_speak_rate() is None
+
+
+async def test_person_cards_are_not_private_items_on_the_desk(aconn):
+    """D55: a card is not content, so the desk scan counts none of it."""
+    group = "space:tg:-500"
+    await append_event(aconn, ts=NOW, kind="percept", who="person:budi",
+                       place="space:wa:budi", body="whatsapp",
+                       payload={"description": "ini sketsa_logo.png", "place_kind": "direct"})
+    await append_event(aconn, ts=NOW, kind="percept", who="person:charlie", place=group,
+                       body="telegram",
+                       payload={"description": "halo semua", "place_kind": "shared"})
+    asked = await append_event(aconn, ts=NOW, kind="percept", who="person:owner", place=group,
+                               body="telegram",
+                               payload={"description": "kirim ke Budi", "place_kind": "shared"})
+    context = await memory.build_context(aconn, asked, group, "test", now=NOW,
+                                         settings=settings(), memories=(), capabilities=())
+    desk = (await hooks.audience_policy()(context, {"conn": aconn, "now": NOW})).item
+    assert any("person:budi" in card for card in desk.people)
+
+    tracker = replay.Tracker(conn=aconn)
+    await tracker.record_desk(desk)
+    assert [item.source for item in tracker.desks[0].items] == [group]
+    assert await replay.desk_violations(aconn, tracker.desks) == []

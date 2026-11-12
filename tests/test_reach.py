@@ -65,9 +65,10 @@ async def _kernel(conn, *, settings_value=None, pfc=None, embedder=None) -> Kern
     return kernel
 
 
-def _trigger(event_id: int, place: str, who: str = OWNER) -> Event:
+def _trigger(event_id: int, place: str, who: str = OWNER,
+             text: str = "kerjakan") -> Event:
     return Event(id=event_id, ts=START, kind="percept", who=who, place=place,
-                 payload={"description": "kerjakan"}, origin_actor=who)
+                 payload={"description": text}, origin_actor=who)
 
 
 async def test_a_private_chat_follows_the_person_across_bodies_once_linked(aconn):
@@ -132,11 +133,12 @@ async def _say(*, conn, who: str, place: str, kind: str) -> int:
 OWNER_DM = "space:tg:owner"
 
 
-async def _desk(conn, *, place: str, trigger: int, memories: tuple = ()):
+async def _desk(conn, *, place: str, trigger: int, memories: tuple = (),
+                text: str = "kerjakan"):
     """Lay out one desk and pass it through the core's context hook."""
     context = await memory.build_context(
-        conn, _trigger(trigger, place), place, "test", now=START, settings=SETTINGS,
-        memories=memories, capabilities=())
+        conn, _trigger(trigger, place, text=text), place, "test", now=START,
+        settings=SETTINGS, memories=memories, capabilities=())
     return await hooks.audience_policy()(context, {"conn": conn, "now": START})
 
 
@@ -479,3 +481,28 @@ async def test_a_memory_without_a_known_source_is_private_to_the_owner(aconn):
     assert group_desk.item.memories == ()
     owner_desk = await _desk(aconn, place=OWNER_DM, trigger=owner, memories=(fact,))
     assert owner_desk.item.memories == (fact,)
+
+
+async def test_person_cards_show_people_present_and_named_but_never_their_messages(aconn):
+    """D55: Charlie present and Budi named; a card says how to reach Budi, not what he said."""
+    await _said(aconn, "person:budi", "space:wa:budi", "direct",
+                "ini sketsa_logo.png yang baru", body="whatsapp")
+    await _said(aconn, "person:charlie", GROUP, "shared", "eh Mona juga ada di world ini")
+    asked = await _said(aconn, OWNER, GROUP, "shared",
+                        "Tolong kirim hasil kerjaan kita ke Budi")
+    await write_state(aconn, "person:budi", {"name": "Budi", "closeness": 0.4}, asked)
+
+    desk = (await _desk(aconn, place=GROUP, trigger=asked,
+                        text="Tolong kirim hasil kerjaan kita ke Budi")).item
+    cards = "\n".join(desk.people)
+    assert "person:charlie" in cards
+    assert "Budi (person:budi)" in cards
+    assert "whatsapp at space:wa:budi" in cards
+    assert "closeness 0.40" in cards
+    assert "sketsa_logo" not in cards
+
+    prompt = "\n".join(message["content"] for message in
+                       PFC("http://unused", "", "fake", settings=SETTINGS)
+                       .build_messages(desk))
+    assert "<people>" in prompt and "person:budi" in prompt
+    assert "sketsa_logo" not in prompt

@@ -20,6 +20,7 @@ class PFCContext:
     place_kind: str
     reason: str
     core_memory: str = ""
+    people: Sequence[str] = ()
     expectations: Sequence[str] = ()
     memories: Sequence[str] = ()
     recent: Sequence[Event] = ()
@@ -32,12 +33,20 @@ class PFCContext:
 
 
 def messages(soul: Any, context: PFCContext) -> list[dict[str, Any]]:
-    """Build the layered prompt: stable, core memory, volatile."""
+    """Build the layered prompt: stable, core memory with person cards, volatile."""
     return [
         {"role": "system", "content": stable(soul)},
-        {"role": "system", "content": f"<core_memory>{context.core_memory}</core_memory>"},
+        {"role": "system", "content": _semi_stable(context)},
         {"role": "user", "content": volatile(soul, context)},
     ]
+
+
+def _semi_stable(context: PFCContext) -> str:
+    """Return the semi-stable message: core memory, then the person cards (D55)."""
+    block = f"<core_memory>{context.core_memory}</core_memory>"
+    if context.people:
+        block += "\n<people>\n" + "\n".join(context.people) + "\n</people>"
+    return block
 
 
 def stable(soul: Any) -> str:

@@ -291,7 +291,8 @@ class UsageTransport(httpx.AsyncBaseTransport):
 
 def _fake_context_text(context: PFCContext) -> str:
     """Render a fake-mode prompt from the pieces the kernel handed over."""
-    parts: list[str] = [context.core_memory, *context.memories, *context.doing]
+    parts: list[str] = [context.core_memory, *context.people, *context.memories,
+                        *context.doing]
     parts.extend(str(event.payload.get("description") or "") for event in context.recent)
     parts.extend(str(event.payload.get("description") or "") for event in context.recent_elsewhere)
     if context.trigger is not None:
