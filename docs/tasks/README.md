@@ -41,7 +41,10 @@ moment is a failure.
 4. An item is done only when `uv run pytest` and the fake replay pass. Tests always use the fake
    LLM; the real model is used only in the last part, through the replay script and a live
    session.
-5. Every behavior change ships with at least one replay scenario that shows it.
+5. Every behavior change ships with at least one replay scenario that shows it. The scenario
+   carries all its material as synthetic data (facts, people, artifacts, realistic results from
+   every test organ); a failure is the soul's only after a material check shows the material was
+   there ([project.md §4](../project.md), D54).
 6. Design by brain function, not by scenario: never add a rule for one case to the core.
 7. Do only what the item asks; no machinery for later.
 8. Workers may tick boxes and write under **Notes**; nothing else in the task file.

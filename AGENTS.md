@@ -117,3 +117,6 @@ Going over budget means the design is wrong. Stop and report; do not force it.
   model from `.env` is used only in a task's last part, through `scripts/replay.py` without
   `--fake` and a live session.
 - The clock is always a fake clock that tests can advance.
+- Scenarios carry all their material as synthetic data the worker writes: facts, people, artifacts
+  and realistic results from every test organ. Before reporting a failure as the soul's, check
+  that what it needed was in the Log and on its desk; if not, fix the scenario (D54).
