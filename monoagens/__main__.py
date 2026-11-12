@@ -29,7 +29,8 @@ async def main() -> None:
             "PFC is not configured: set LLM_BASE_URL and LLM_MODEL (and LLM_API_KEY) in .env"
         )
     settings = load_settings()
-    async with await psycopg.AsyncConnection.connect(os.environ["DATABASE_URL"]) as conn:
+    async with await psycopg.AsyncConnection.connect(os.environ["DATABASE_URL"],
+                                                     autocommit=True) as conn:
         await migrate(conn)
         await register_vector_async(conn)
         clock = Clock(tick_seconds=tick_seconds(settings))

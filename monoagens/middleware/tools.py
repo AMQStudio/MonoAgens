@@ -1,4 +1,8 @@
-"""The tool registry: what is present now, and the routing vocabulary of one act."""
+"""The tool registry: what is present now, and the routing vocabulary of one act.
+
+A capability descriptor keeps its frozen key `organ`; the value is the name of the adapter
+or plugin that declares the capability (docs/core.md §8).
+"""
 
 from __future__ import annotations
 
@@ -50,10 +54,10 @@ class ToolRegistry:
     async def act(self, event: Event, capability: str, payload: dict[str, Any], *,
                   event_id: int | None = None) -> Any:
         """Hand one action to the adapter or plugin that declared the capability."""
-        organ, _, name = capability.partition(".")
-        adapter = self.adapters.get(organ)
+        declared_by, _, name = capability.partition(".")
+        adapter = self.adapters.get(declared_by)
         if adapter is None:
-            raise RuntimeError(f"No adapter registered for {organ!r}")
-        action = Action(kind=name, place=event.place or "", payload=payload, adapter=organ,
-                        event_id=event_id)
+            raise RuntimeError(f"No adapter registered for {declared_by!r}")
+        action = Action(kind=name, place=event.place or "", payload=payload,
+                        adapter=declared_by, event_id=event_id)
         return await adapter.act(action)

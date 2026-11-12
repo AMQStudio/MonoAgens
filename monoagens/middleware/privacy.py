@@ -190,6 +190,8 @@ def filter_context(conn) -> Middleware:
 
     async def rule(item: Any, ctx: Any) -> Any:
         """Keep only what the audience may see, and note the private items withheld."""
+        if ctx.get("filtered") is item:
+            return Continue()  # the desk this rule produced, still unfiltered by anyone else
         place = item.place
         counts = dict(item.withheld)
 
@@ -223,7 +225,9 @@ def filter_context(conn) -> Middleware:
             label = await withheld_source(conn, context=place, sources=sources)
             counts[label] = counts.get(label, 0) + 1
             filtered = replace(filtered, core_memory="")
-        return Replace(replace(filtered, withheld=tuple(sorted(counts.items()))))
+        filtered = replace(filtered, withheld=tuple(sorted(counts.items())))
+        ctx["filtered"] = filtered
+        return Replace(filtered)
 
     return rule
 

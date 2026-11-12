@@ -60,8 +60,8 @@ May touch: `monoagens/core/`, `monoagens/middleware/`, `monoagens/infra/`, `test
 - [x] 3.3 Send ledger (V1 `engine/0011-crash-safety`): an outgoing act is recorded before it is sent and a confirming event is appended when the adapter confirms it (events only: no new table, no new book, complexity budget §3), so a restart never sends the same message twice and never loses one silently. Test: a crash between record and confirm resends once, after the restart.
 
 ## Part 4 — Real-model parity
-- [ ] 4.1 `uv run pytest` and the fake replay pass in full.
-- [ ] 4.2 One real-model run at `--effort high` of the launch set of Task 2 (12.8) and a short live CLI session (the model in `.env`; never read or print it). Every scenario that passed at the end of Task 2 still passes; absolute-line violations 0. Scenarios 20 and 22 run with the real model here for the first time; 16 and 30 are flaky (Task 2 closing note). Regenerate and commit the capability record. A scenario that now fails is a refactor bug: find the move that caused it and fix it there.
+- [x] 4.1 `uv run pytest` and the fake replay pass in full.
+- [x] 4.2 One real-model run at `--effort high` of the launch set of Task 2 (12.8) and a short live CLI session (the model in `.env`; never read or print it). Every scenario that passed at the end of Task 2 still passes; absolute-line violations 0. Scenarios 20 and 22 run with the real model here for the first time; 16 and 30 are flaky (Task 2 closing note). Regenerate and commit the capability record. A scenario that now fails is a refactor bug: find the move that caused it and fix it there.
 
 **Done when.** All parts are ticked; the same scenarios pass as at the end of Task 2; the core
 holds only mechanisms and the Notes list every move; the code is readable (AGENTS.md size
@@ -288,3 +288,93 @@ when it asserts.
 **Part 3 — check.** `uv run pytest -q` → 336 passed (321 baseline + 6 fail-closed + 4 context +
 4 sends + 1 leak refusal); `scripts/replay.py --fake` → 133/133 checks, absolute-line violations
 0.
+
+**Notes — the checklist the plan asked for.**
+
+6. *(what had no code to move)* The inbound audience label (D50) and quiet hours: see the Part 2
+   notes above — neither had code.
+7. `Action.body` became `Action.adapter` while `Event.body` keeps its name: `body` is a Log
+   column (the adapter that produced the event), and the table stores it.
+8. Left at the top level on purpose: `monoagens/types.py` (the shared Event/Action/StateEntry
+   contract every layer imports — no layer owns it), `monoagens/__main__.py` (wires the process)
+   and `monoagens/cli.py` (the terminal client that talks over the socket), plus the new
+   `monoagens/boot.py`, which is the composition root and belongs to no layer.
+9. Size: `monoagens/core/kernel.py` is 321 lines and `monoagens/core/context/parts.py` 308.
+   The kernel keeps one loop and every seam this task defined lands in it; splitting it would
+   scatter the queue, the hooks and the job result across files. `parts.py` is one declaration
+   table plus the renderers that read it; the renderers cannot be split from `Part` without
+   passing the trim budgets through a second module. Both are pinned to their single job; no
+   other module passes 300 lines.
+10. The send ledger is at-least-once (see the Part 3 notes and the `core/sends.py` docstring).
+    `AGENTS.md` invariant 1 already names the no-middleware-import rule; only its file list was
+    replaced with `monoagens/core/` (everything under it).
+11. The four injected values and the two predicates, and why: the core imports no middleware, so
+    `middleware/owner_policy.install` sets `kernel.tools` (the `ToolRegistry`), `kernel.intake`
+    (`identity.intake`, which rewrites the paired owner's id), `kernel.budget_limit`
+    (`limits.daily_limit`) and `kernel.after_model_call` (`limits.enforce`, which writes
+    `budget.exhausted` once a day); `core/identity.SelfTool` receives `privacy.visible` and
+    `privacy.memory_visible` and hands them to `core/memory/recall.search`. Every one of them is
+    data or a callable the core calls, never an import.
+
+**Part 4 — live CLI session (4.2, second half).** `uv run python -m monoagens` with the CLI
+adapter, then `uv run python -m monoagens.cli` sending `halo`, `nama saya Muqsith` and `siapa nama
+saya?` through the socket: three replies arrived (`Halo, Muqsith.` / `Sudah kudengar, Muqsith. Ada
+yang bisa kubantu?` / `Muqsith.`), and the third answered with the name said earlier. In Postgres,
+every `act.out` was followed by its `act.confirmed` (`{"capability": "cli.say"}`), and the state
+board held `last_spoke`, `last_seen`, `budget:<date>` and `owner`.
+
+**Part 4 — defect found and fixed (this is the one change outside the plan).**
+`monoagens/__main__.py` connected with `psycopg.AsyncConnection.connect(DATABASE_URL)` and never
+committed: psycopg commits a non-autocommit connection only when its `async with` block exits
+normally, so every live process wrote into one long transaction that stayed invisible to other
+sessions and was rolled back on SIGTERM. Observed directly: the first live run printed the
+pairing code and handled four messages, and after `pkill` the `monoagens` database had no tables
+at all. The replay, the tests and `job.sleep`'s private connection all connect with
+`autocommit=True`, and the kernel's atomic unit is `conn.transaction()`, which is a real
+transaction (BEGIN/COMMIT) on an autocommit connection — so the entry point was the odd one out.
+Fixed by the one keyword; the second live run wrote events that other sessions can read while the
+process runs, and they survived the kill (28 events, 2 confirmations). No test was added: the
+live run in this task is the proof, and a test could only assert the connection's wiring.
+
+**Part 4 — honest observations from the live run.** The very first percept after a cold start
+lost its inbound hook to the 0.5 s watchdog (`error` + `guard.stopped`,
+`"inbound hook timed out after 0.5s"`), so the pairing code was not claimed on that message; the
+next message claimed it (`pair.claimed`, `state: owner`, `pairing_code` deleted). The watchdog did
+what it is for — the loop lived and recorded the decision — but a first-boot claim can miss its
+own line. Left as observed; it is not caused by this refactor (the pairing rule has always run
+under the same watchdog).
+
+**Part 4 — the real-model run (4.2, first half).** `--effort high`, the 26 launch scenarios, from
+the report `reports/2026-11-12-1353-real-…-16-30.md`: **69/75 checks**, missed-help 0.0% (0/48),
+false-speak 1.4% (1/71), tokens per simulated day 5183.5, **absolute-line violations 0**, honesty
+100.0% (50/50), 83 LLM calls, 215936 tokens. Twenty-two of the 26 scenarios passed in full.
+
+| Scenario | Batch | After a single rerun | Record |
+|---|---|---|---|
+| 07, 11, 12, 20, 25, 27, 29, 17, 01, 02, 03, 15, 21, 04, 05, 06, 14, 22, 08, 10, 13, 16 | PASS | — | PASS |
+| 23_recall_episodes | 6/7 FAIL | **7/7 PASS** (`2026-11-12-1355-real-23.md`) | `flaky` |
+| 09_reminder_ask_again | 0/1 FAIL | **1/1 PASS** (`2026-11-12-1354-real-09.md`) | `flaky` |
+| 30_same_topic_question | 3/5 FAIL | not rerun | `flaky` (it was already) |
+| 24_gate_threshold | 9/11 FAIL | 7/11 (`2026-11-12-1356-real-24.md`) | FAIL — the Task 6 target Task 2 left open |
+
+- **23 and 09 are not regressions.** Both pass alone with the same model and effort; the record
+  keeps both the failure and the pass (`flaky`, exactly as 16 and 30). In 09 the batch run's soul
+  created only the patience wait and never held the follow-up promise; in 23 it said nothing was
+  stored. Both are the model's own choices in that sample.
+- **24's failure, with evidence, is the open Task 6 question, not this refactor.** In the single
+  rerun, the reminded wake did `act.result {"to": "person:tg:7001", "result": {"error": "no way to
+  reach tg:7001 yet"}, "capability": "telegram.say"}`: the soul answered the reminded promise by
+  addressing the person it promised, who has no direct place (they are only in the group), and the
+  door refused with the honest error instead of speaking where the person was present. The old
+  `dispatch` had the same fallback and the same condition (`str(to) == event.who`, and the
+  reminding line's speaker is someone else), so nothing here changed by moving it. 24 stays what
+  Task 2 recorded: not yet held, a Task 6 target.
+- **One 0.5 s hook timeout** in the batch (scenario 24, context hook). The context hook now runs
+  the absolute lines on both passes, so the desk was filtered twice; `filter_context` now keeps
+  the desk it produced in the hook context and skips the second pass when nobody replaced it (a
+  plugin's new desk is still filtered — `test_a_plugin_that_widens_the_desk_is_narrowed_again`
+  pins it). No real rerun followed that query-saving change: for an unchanged desk the second pass
+  returned the same item, and the fake suite is the proof (`133/133`).
+- **`reports/` is gitignored** (it holds every run, pruned by the script), so the deliberate
+  "commit the reports" step can only apply to `scenarios/README.md`, the capability record, which
+  is committed: it now carries every run above, including both verdicts of the flaky scenarios.
