@@ -325,3 +325,27 @@ communicative act whose `attachments` exceed the adapter's limit: the first part
 the later ones carry `(part i/n)`, one `act.out` per part, and one `interaction.split` event
 records the count. `contract.describe_attachments` renders the one line reasoning sees
 (`Budi sent 3 files: report.pdf, photo.jpg, data.xlsx`).
+
+**1.11 The twelve checks** (`tests/middleware/test_foundation_check.py`), all passing on a
+kernel built with `boot.build`, the empty-ish role book of the gate and a stand-in Workspace
+tool (the real plugin arrives in Part 4):
+1. a private line from the owner's chat is absent from a group desk, and a say quoting a
+   memory from there is refused (`that place may not see this content`), nothing sent;
+2. a context middleware that appends a private line is narrowed again by the policy's last
+   pass, with a withheld note;
+3. a guest is not offered `workspace.run` (the registry's `allowed`) and, if the model asks
+   anyway, the act is refused with `you may not use workspace.run` — no promise, no send;
+4. an addressed question from a group member wakes reasoning and is answered in that group;
+5. `HookPipeline` has no way to remove or replace the policy;
+6. `/help` is byte-identical on Telegram and CLI (both record the same `act.out` text);
+7. a thought shows in the owner's direct chat and never in a group;
+8. a role with only `base: member` holds every member-tier permission of the catalog;
+9. an admin cannot grant an admin-tier role (`only the owner may change admin`) and can
+   grant a lower one;
+10. `/whoami` in a group shows no linked accounts;
+11. three attachments in one message are present in `data.attachments`, read through the
+    tools (through the one door), and forwarded in one `act.out` carrying all three refs;
+12. a file from a private chat is refused by `open_attachment` in a group and allowed after
+    `share.granted`.
+Part 1 was green at the end of every item: the suite (`339` after 1.0 → `477` after 1.11) and
+the fake replay (`133/133`) were run after each of them.
