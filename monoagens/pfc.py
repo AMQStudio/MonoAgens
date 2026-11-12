@@ -48,8 +48,13 @@ TOOLS: list[dict[str, Any]] = [
                         "description": '{"at": ISO}, {"every": "2d"} or {"daily": "07:00"}.'},
            "cue_event": {"type": "object", "description": "Pattern: kind, who, place, text_like."},
            "expect": {"type": "object",
-                      "description": '{"none": true}, {"event_seen": pattern, "within": "2d"} '
-                      'or {"state": key, "op": "eq|gt|lt", "value": x}.'},
+                      "description": '{"none": true}: the cue alone wakes you. '
+                      '{"text": "what you are waiting to hear"}: a watch on free text, so a '
+                      'line that sounds like it reminds you wakes you once to judge it '
+                      '(cue_event narrows where and who). '
+                      '{"event_seen": pattern, "within": "2d"}: fires when no matching event '
+                      'was seen within the window. '
+                      '{"state": key, "op": "eq|gt|lt", "value": x}.'},
            "intent": _text("What to do if it is missed."),
            "weight": {"type": "number", "description": "Importance 0..1."},
            "policy": {"type": "object",

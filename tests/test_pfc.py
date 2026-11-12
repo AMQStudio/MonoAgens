@@ -14,7 +14,7 @@ from monoagens.cognition import Situation, appraise
 from monoagens.identity import SelfOrgan
 from monoagens.kernel import Kernel
 from monoagens.desk import PFCContext
-from monoagens.pfc import PFC, TOOL_NAMES
+from monoagens.pfc import PFC, TOOLS, TOOL_NAMES, ToolCall, turn_check
 from monoagens.store import append_event, read_state, write_state
 from monoagens.bodies.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
@@ -680,6 +680,22 @@ async def test_recent_is_nothing_yet_when_both_parts_are_empty(aconn):
 
 async def test_tool_names_are_the_five_tools():
     assert TOOL_NAMES == {"think", "act", "expect", "resolve", "revise"}
+
+
+def test_the_expect_tool_offers_the_free_text_watch():
+    expect_tool = next(tool for tool in TOOLS if tool["function"]["name"] == "expect")
+    description = expect_tool["function"]["parameters"]["properties"]["expect"]["description"]
+    assert '{"text": ' in description
+    assert "the cue alone wakes you" in description
+    assert "no matching event was seen" in description
+
+
+async def test_the_expect_tool_accepts_a_free_text_condition():
+    check = turn_check(_desk(), START, SETTINGS)
+    call = ToolCall("expect", {"about": "tell the owner when the document is finished",
+                               "cue_event": {"place": PLACE, "text_like": "dokumen"},
+                               "expect": {"text": "the document is finished"}})
+    assert await check(call) is None
 
 
 def _doing(steps: int) -> tuple[str, ...]:

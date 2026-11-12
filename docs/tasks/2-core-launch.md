@@ -1862,3 +1862,47 @@ Part 12 notes (worker, 24/30 material):
   0.0% (0/65), false-speak 0.0% (0/75), absolute-line violations 0, honesty 100.0% (62/62).
   `scenarios/README.md` regenerated (its real-model rows pool the 085343 and 085711 reports).
   No real-model replay was started here, as the task says.
+
+Part 12 notes (worker, expect tool text condition):
+- **Evidence.** `reports/replay-20261112-091633.md`, scenarios 24 and 30. 30 created
+  `cue_event={"place": "space:tg:-1004", "text_like": "selesai"}` with
+  `condition={"event_seen": {"place": "space:tg:-1004", "text_like": "selesai"}, "within":
+  "5d"}`; 24 created `cue_event={"text_like": "proposal anggaran Q4 selesai|dokumen
+  selesai|dokumennya selesai|review selesai"}` with
+  `condition={"event_seen": {"text_like": "proposal anggaran Q4 sudah selesai|dokumen sudah
+  selesai|dokumennya selesai"}, "within": "14d"}`. In both the model encoded "tell me when
+  this is said" as `event_seen`, a predicate the wake gate evaluates as *already seen*.
+- **Verified, not inferred.** A throwaway probe (not committed) created that 30-shaped
+  promise through `expect.create` and fed the watched line to `expect.due`: `fired: []`, and
+  the row ended `satisfied` — with no `|` in the pattern the watched line itself satisfies
+  the condition, so the gate reads "condition already met" (`docs/core.md` §5) and resolves
+  instead of firing. 24's `|` lists are read by `expect.matches_cue`/`expect.is_met` as
+  literal characters (see the observation below), so there neither cue nor condition matched
+  any line. In the report 30 kept the promise engaged without firing it and the owner never
+  heard (checks "the question does not resolve the promise" and "the owner hears once");
+  24 recorded 0 `expectation.fired`. A free-text condition has neither failure mode:
+  `condition.reminded` compares cosines and the PFC wakes once to judge (12.5).
+- **The gap was visibility.** `condition.operator` accepts `{"text": ...}` and both fake
+  scenarios already script it; the `expect` tool's description listed only `none`,
+  `event_seen` and `state`, so the model could not see the form. Fixed in `monoagens/pfc.py`
+  (244 → 249 lines): the condition's description now names every form with the behavior
+  `condition.py` and `expect.is_met` actually implement — `{"none": true}` = the cue alone
+  wakes you; `{"text": "what you are waiting to hear"}` = a watch on free text, so a line that
+  sounds like it reminds you wakes you once to judge it (cue_event narrows where and who);
+  `{"event_seen": pattern, "within": "2d"}` = fires when no matching event was seen within the
+  window; `{"state": ...}` as before. No scenario rule, no platform name, no new primitive.
+  `guidance.py` is untouched (24 lines): its "hold it with expect and a cue" bullet already
+  covers the cue, and the missing piece was the condition menu, which belongs to the tool it
+  describes.
+- **Tests.** `tests/test_pfc.py` +2: `test_the_expect_tool_offers_the_free_text_watch` pins the
+  `{"text": ...}` form and the two firing meanings in the schema;
+  `test_the_expect_tool_accepts_a_free_text_condition` drives `pfc.turn_check` with an `expect`
+  carrying `{"text": ...}` and asserts no refusal, so the tool path reaches `expect.validate`
+  → `condition.operator` and the form is accepted.
+- **Observation, not built.** 24's `text_like` uses `|` for alternatives, which the matcher
+  reads literally, so that cue and condition match nothing. Whether `text_like` should accept
+  alternatives is a core behavior question; this item changed no matcher.
+- **Runs.** `uv run pytest`: 293 passed (real Postgres). `uv run python scripts/replay.py
+  --fake`: 30 scenarios, 132/132 checks, missed-help 0.0% (0/65), false-speak 0.0% (0/75),
+  absolute-line violations 0, honesty 100.0% (62/62). `scenarios/README.md` regenerated. No
+  real-model replay was started here.
