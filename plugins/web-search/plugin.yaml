@@ -1,0 +1,27 @@
+manifest_version: 1
+name: web-search
+version: 0.1.0
+description: Search the web and read public pages.
+dependencies: []
+optional_dependencies: []
+state_namespace: web-search
+features:
+  tools: [web_search, web_fetch]
+tools:
+  web_search: {facts: [network], output_cap: 6000, permission: web-search.search}
+  web_fetch:  {facts: [network, reads], output_cap: 12000, permission: web-search.fetch}
+settings:
+  providers: {type: array, default: [searxng, tavily, brave, exa, serper, google, ddgs]}
+  searxng_url: {type: string, default: ""}
+  timeout_seconds: {type: int, default: 20}
+  allow_ports: {type: array, default: [80, 443]}
+  max_redirects: {type: int, default: 3}
+permissions:
+  web-search.search: {label: "Search the web", base: guest}
+  web-search.fetch:  {label: "Read a web page", base: guest}
+role_settings: {}
+extension_points: {opens: [], fills: []}
+skills: []
+rules: []
+knob_offsets: {}
+requires: [ddgs]

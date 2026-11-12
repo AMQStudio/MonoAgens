@@ -375,3 +375,27 @@ and the bounds, and the knobs return to the prior (`0.45` in the test).
 plugin `soul-tuning` as the source. Ledger: with `soul-tuning` installed,
 `talkativeness` = prior + 0.05 (daily) or − 0.05 (professional); two plugins' offsets sum;
 removing the second returns prior + the remaining offset.
+
+**Part 3 — Web Search (`plugins/web-search/`).** `providers.py` keeps the chain in the order the
+options name (SearXNG, Tavily, Brave, Exa, Serper, Google, DDGS last by default), one function
+per provider and one normalizer per payload shape (`normalize.py` → `{title, url, snippet,
+published_at}`). A provider whose key or URL is missing is skipped with `missing_key`; an HTTP
+error is `http_<status>`, a timeout `timeout`, a transport failure `transport_error`, any other
+exception its class name; a success with no rows is `empty` and the chain goes on; every failure
+is returned in `tried`, so `web_search` never crashes and reports exactly why nothing answered.
+`ddgs` runs in a worker thread with three retries 1.5 s apart and reports `ddgs_unavailable`
+when its package is missing (the plugin keeps its other providers; the manifest declares
+`requires: [ddgs]` and the folder ships `requirements.txt`). `web_fetch` (`fetch.py`) runs in a
+worker thread: only `http`/`https`, only the allowed ports, the host resolved and **every**
+address checked against the middleware's one blocked table, then a pinned connection
+(`_Pinned.connect` to the checked address, `Host` header and `server_hostname` the real name) so
+DNS rebinding cannot slip through; at most three redirect hops, each parsed, resolved and
+checked again (a hop to a private address is refused); only text types, ≤ 1 MB downloaded; the
+page extracted with the stdlib parser (scripts, styles, templates dropped, whitespace
+collapsed) behind a `fetched: <url> (text, untrusted)` header, and the injection marker when the
+text reads like an instruction. Every refusal is a structured result, never a crash. Tests:
+`tests/plugins/test_web_search.py` (chain order and reasons, each normalizer, the six refusals,
+a name resolving to 192.168.1.10, a public page with its scripts dropped, the injection flag, a
+redirect hop refused, a server error) and `tests/plugins/test_web_search_check.py`: with the
+plugin a scripted `web-search.web_search` call records a `model.call` and one `act.out`; without
+it the capability is absent and the honest "as of my knowledge" reply is the only output.
