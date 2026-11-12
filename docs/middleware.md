@@ -40,9 +40,9 @@ The middleware runs in the core's three hooks (inbound, context, action) and off
 ## 2. The API: six levers (D41)
 Every plugin and adapter uses the same levers, so the core never knows the case — modes ("daily" vs
 "professional"), a persona layer, simulated emotions, RBAC and moderation all fit:
-1. **Pass, replace or stop** an item at a door (percepts, the desk, actions). Every Stop is
+1. **Pass, replace or stop** an item at a door (percepts, the context, actions). Every Stop is
    recorded.
-2. **Annotate** an item; the note travels with it to the PFC, inside its token budget, before the
+2. **Annotate** an item; the note travels with it to reasoning, inside its token budget, before the
    policy's last pass.
 3. **Declare** standing rules, shown in `<self>` in a fixed order (cache-friendly).
 4. **Remember and observe**: write only by putting events (state is a projection under
@@ -57,7 +57,7 @@ core books except through events. The core's "no emotions" non-goal is about the
 may simulate them.
 
 **Order in each hook** (D9): `[policy — first] → [middleware modules] → [plugin middleware, in
-install order] → [policy — last]`. Scope is **shared** (every body that opts in) or **body-own**
+install order] → [policy — last]`. Scope is **shared** (every adapter that opts in) or **adapter-own**
 (unique to one platform). Name collisions fail at boot.
 
 ## 3. Policy
@@ -128,7 +128,7 @@ The one middleware that is always present.
   malicious code, and the docs say so (D32.11).
 - The installed plugins are listed in `config.yaml` ([project.md §2](project.md)).
 - Adapters are loaded by the same module, from the `bodies:` section of `config.yaml` (the key
-  keeps its name), through each adapter's `create(options, env)` factory ([bodies.md §2](bodies.md), D49).
+  keeps its name), through each adapter's `create(options, env)` factory ([adapters.md §2](adapters.md), D49).
 - Uninstalling removes a plugin's tools, middleware, rules and knob offsets; its events stay in
   the log as history.
 - **Draft**: installed by the owner by listing it in `config.yaml` or with a command; a local
@@ -159,7 +159,7 @@ Steps …
 - Every mapping is an event and can be undone. Only the owner, or the person via a verification
   code sent from the second account, may link two accounts; the soul may suspect and ask the
   owner, never links silently, because linking makes two accounts one person, and private
-  context then follows that person across bodies (D10, D45). A wrong link is a privacy leak.
+  context then follows that person across adapters (D10, D45). A wrong link is a privacy leak.
 - **Becoming the owner** (D33). On first start the soul shows a short pairing code; the first
   person who sends it from any adapter becomes the owner. Changing the owner later needs the
   current owner. The core never knows who the owner is; the owner policy does.

@@ -1,8 +1,7 @@
 # Glossary — standard names
 
-The code uses standard engineering names. Older specs and task notes still use the earlier,
-biological ones; this table maps them. Task 3 moves the code to these names and the architect
-then renames the terms in the specs.
+The specs use standard engineering names. The code moves to them in Task 3; until then, and in
+the notes of Tasks 1–2, the earlier biological names appear; this table maps them.
 
 ## Terms
 

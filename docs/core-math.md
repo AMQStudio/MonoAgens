@@ -82,14 +82,14 @@ allocated to the soul, it fires or answers an active Expectation, or it continue
 ## 4. Patience and inner thought
 
 **Patience.** A go on a turn not allocated to the soul creates a `wait` Expectation: if someone other than the sender
-replies in this place within `patience_seconds`, the decision ends as silent; otherwise the PFC
+replies in this place within `patience_seconds`, the decision ends as silent; otherwise reasoning
 wakes. Rationale: in multi-party chat the agent should not take the floor when someone else is
 about to answer; silent abstention and interruption are the two failure modes to measure
 [arXiv 2609.03923 (CAPA), PP; arXiv 2607.03730 (ProACT), PP].
 
-**Inner thought.** When the soul self-selects, the PFC calls think(thought, motivation m ∈ 1..5,
+**Inner thought.** When the soul self-selects, reasoning calls think(thought, motivation m ∈ 1..5,
 confidence c ∈ [0, 1]). A communicative act passes only if m ≥ `speaking_bar` and
-c ≥ `certainty_bar`. The criteria offered to the PFC are the eight heuristics of
+c ≥ `certainty_bar`. The criteria offered to reasoning are the eight heuristics of
 [Liu et al. 2025, "Inner Thoughts", CHI, PR]: relevance, information gap, expected impact,
 urgency, coherence, originality, balance, dynamics. Their own score is
 Σᵢ p(sᵢ) · sᵢ · λ^(t − τ_p) with λ = 1.02 (motivation grows while silent and resets after
@@ -119,7 +119,7 @@ the gist remains in memories and the event remains in the log (D14, D32.5).
 ## 6. Expectations and the wake gate
 
 **Prediction error.** An Expectation is a prediction about the world; a miss is a prediction
-error that may wake the PFC. This is the engineering core of predictive processing and active
+error that may wake reasoning. This is the engineering core of predictive processing and active
 inference [Friston et al. 2016, PR], without the full free-energy machinery. Prospective memory
 (remembering to act later) is the least solved part of agent memory, and storing intentions as
 typed records whose lifecycle lives in code works better than leaving them to the model
@@ -178,7 +178,9 @@ In replay with a real model, about 88% of prompt tokens were served from cache.
   from untrusted data [Debenedetti et al., CaMeL, arXiv 2503.18813, PP; SaTML 2026, PR].
 - **Absolute line 2** (private content never reaches anyone who was not part of it: the
   audience of the context must be a subset of the audience of the content) is information-flow
-  control in the context hook: what is not in the prompt cannot leak. Sharing is declassification
+  control in the context hook: what is not in the prompt cannot leak. The core carries the
+  labels; the owner policy in the middleware judges them (D57), like a reference monitor that
+  sees every access [Anderson 1972, IND]. Sharing is declassification
   by owners in the decentralized label model [Myers & Liskov 1997]: each person in the audience
   may extend the audience of what they were part of, and only that.
 - Messages from non-owners are delimited as quoted data (spotlighting) [Hines et al. 2024,
@@ -248,7 +250,7 @@ set by the payoffs (higher cost of error → higher criterion); otherwise the pe
 ("don't know") or reports at a coarser grain [Koriat & Goldsmith 1996, PR; Goldsmith & Koriat
 2008]. In utility form, choose the answer and grain g that maximize
   U(g) = c(g) · value(g) − (1 − c(g)) · cost_error,
-where finer grain has more value and lower c. Mapping: P_rc starts at `certainty_bar` and the PFC
+where finer grain has more value and lower c. Mapping: P_rc starts at `certainty_bar` and reasoning
 raises it with the stakes; a criterion above the current c is what triggers `recall` first.
 
 **Reasoning from absence; filling gaps.** People reject an item confidently when they judge they
@@ -258,7 +260,7 @@ Monk 1977, PR]. In Bayesian form, with coverage q = P(recorded | it happened):
 High q (things here are said in chat) → absence is strong evidence; low q (things like this are
 said face to face) → absence says little. Gaps are filled by recombining nearby episodes into a
 hypothesis, as episodic memory does for simulation [Schacter & Addis 2007, PR]; the hypothesis
-is `inferred` and said as a guess. For now the PFC judges q from context; learning q per place
+is `inferred` and said as a guess. For now reasoning judges q from context; learning q per place
 and topic is deferred (D32.9).
 
 ## 15. Generalization: one function instead of many rules (D40)
@@ -301,18 +303,18 @@ kernel.
   functionality [Liedtke 1995, PR] — hence the complexity budget and everything else in middleware
   and plugins.
 - **Mechanism, not policy.** The kernel provides mechanisms; policies live outside [Levin et al.
-  1975 (Hydra), PR; Wulf et al. 1974, PR] — the core gives hooks, organs and the gate; roles,
+  1975 (Hydra), PR; Wulf et al. 1974, PR] — the core gives hooks, the dispatch door and the gate; people, privacy, sharing, roles,
   RBAC and modes are middleware.
 - **Hooks before every access.** Modules mediate access by hooks placed just ahead of the access
   [Wright et al. 2002 (Linux Security Modules), PR] — the three hooks with the policy first and
   last.
 - **Protection principles.** Economy of mechanism, fail-safe defaults, complete mediation, least
-  privilege [Saltzer & Schroeder 1975, PR] — small core, fail-closed hooks, every percept, desk
+  privilege [Saltzer & Schroeder 1975, PR] — small core, fail-closed hooks, every percept, context
   and action mediated.
 - **Event sourcing.** All changes are events; state can be rebuilt and queried in time
   [Fowler 2005, IND]; snapshots and versioned events keep it workable over years.
 - **Ports and adapters.** The core is isolated from its devices behind ports [Cockburn 2005, IND]
-  — percept and capability descriptor are the ports, bodies and plugin organs the adapters.
+  — percept and capability descriptor are the ports; adapters and plugin tools are the adapters.
 - **Stable user-space contract.** Internals change freely, the interface to the outside does not
   break [Linux kernel ABI policy, IND] — the stability contract in core.md §3.
 - **Capability-based isolation** (not adopted in v1): every access through an unforgeable token
@@ -322,6 +324,8 @@ kernel.
 ---
 
 ## References
+- Anderson, J. P. (1972). *Computer Security Technology Planning Study* (the reference
+  monitor). ESD-TR-73-51, US Air Force. [IND]
 - Anderson, J. R., & Schooler, L. J. (1991). Reflections of the environment in memory.
   *Psychological Science*. [PR]
 - Anderson, J. R. (2007). *How Can the Human Mind Occur in the Physical Universe?* Oxford UP.

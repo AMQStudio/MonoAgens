@@ -26,7 +26,7 @@ May touch: `docs/` results file (new), `scripts/`
 - [ ] 2.3 Publish results as "≥ X% of human baseline on these N behaviors".
 
 ## Part 3 — Stable contracts for developers
-Read first: [plugins.md](../plugins.md), [middleware.md](../middleware.md), [bodies.md](../bodies.md)
+Read first: [plugins.md](../plugins.md), [middleware.md](../middleware.md), [adapters.md](../adapters.md)
 May touch: `docs/` (contribution guide, examples)
 
 Only after the contracts have not changed for a while.

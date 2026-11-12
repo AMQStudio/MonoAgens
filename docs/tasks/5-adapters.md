@@ -10,7 +10,7 @@ model providers.
 ---
 
 ## Part 1 — Identity linking, WhatsApp and Discord (first)
-Read first: [bodies.md](../bodies.md), [middleware.md](../middleware.md) §7 (identity), [core.md](../core.md) §4, §8
+Read first: [adapters.md](../adapters.md), [middleware.md](../middleware.md) §7 (identity), [core.md](../core.md) §4, §8
 May touch: `monoagens/adapters/`, `monoagens/middleware/` (identity part), provider adapters, `tests/`, `scenarios/`
 
 V1 (branch `archived`) already has working WhatsApp (media, history sync, identity), Discord,
@@ -28,7 +28,7 @@ link is a leak.
 - [ ] 1.5 Real-model test (this task's one exception to the last-part rule, because WhatsApp is needed daily): the replay launch set passes on the new adapters, then a live session on WhatsApp in the owner's direct chat and one group (the model in `.env`; never read or print it). Report what happened and the metrics. From here the owner uses the soul daily on WhatsApp.
 
 ## Part 2 — More adapters and models
-Read first: [bodies.md](../bodies.md)
+Read first: [adapters.md](../adapters.md)
 May touch: `monoagens/adapters/`, provider adapters, `tests/`, `scenarios/`
 
 - [ ] 2.1 Voice (STT/TTS).

@@ -25,7 +25,7 @@ The architect updates this table and each file's `Status:` line; workers never d
 "Launch" means: the owner uses the soul every day in a direct chat and one group. Task 2 is the
 whole path there; Task 3 then cleans the core without changing what it does. The first number is the **missed-help rate**: of the group messages that
 should have been answered, how many passed the gate. The gate is tuned for recall, not
-precision: a needless wake costs a few tokens and the PFC can still stay silent; a missed
+precision: a needless wake costs a few tokens and reasoning can still stay silent; a missed
 moment is a failure.
 
 **Deferred until weeks of real logs** (the spec stays; only the work waits):
@@ -47,7 +47,7 @@ moment is a failure.
    session.
 5. Every behavior change ships with at least one replay scenario that shows it. The scenario
    carries all its material as synthetic data (facts, people, artifacts, realistic results from
-   every test organ); a failure is the soul's only after a material check shows the material was
+   every test tool); a failure is the soul's only after a material check shows the material was
    there ([project.md §4](../project.md), D54).
 6. Design by brain function, not by scenario: never add a rule for one case to the core.
 7. Do only what the item asks; no machinery for later.

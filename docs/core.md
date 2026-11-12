@@ -7,14 +7,15 @@ are data ([constitution §1](constitution.md)). Every rule carries the decision
 numbers it came from (Dxx); the discussion history of D1–D41 is in git (commit 32248b1 and
 earlier). Formulas and sources: [core-math.md](core-math.md). Work: [tasks/](tasks/README.md).
 
-Words: *organ* = anything that senses or acts (bodies and the tool organs plugins bring);
-*package* = a plugin.
+Words: an *adapter* connects the soul to a platform or device; a *tool* is something it can use,
+brought by an adapter or a plugin; *package* = a plugin ([glossary](glossary.md)). The core sees
+neither: only percepts in, capabilities offered and actions out (D57).
 
 ---
 
 ## 1. Goals and non-goals
 
-**Goal.** One persistent self (a *soul*) that lives in many bodies — chat apps, a terminal,
+**Goal.** One persistent self (a *soul*) that lives in many apps and devices — chat apps, a terminal,
 later devices and robots — remembers, knows when to stay quiet, keeps its promises, is honest
 about what it knows, and learns from experience — starting from a basic default prior, with no
 tuning needed to begin.
@@ -24,14 +25,14 @@ brain.**
 
 | Layer | What it is | Learns? |
 |---|---|---|
-| Core | the soul: a generic brain, including what it is born with — birth certificate and prior (§9.3–9.4) | yes |
-| Middleware | the foundation between the core and everything outside it, running in the three hooks: policy, commands & tools, install, skills, identity, RBAC ([middleware.md](middleware.md)) | no |
-| Bodies | organs for platforms and devices ([bodies.md](bodies.md)) | no |
-| Plugins (packages) | features built on the middleware: tool organs, memory-view, modes, roles ([plugins.md](plugins.md)) | no |
+| Core | the soul: neutral and primitive, only a brain; opaque ids, labels and numbers (§8, D57); what it is born with — birth certificate and prior (§9.3–9.4) | yes |
+| Middleware | the regulator and the only path in and out, running in the three hooks: owner policy, privacy, identity, limits, tools, commands, install, skills ([middleware.md](middleware.md)) | no |
+| Adapters | connections to platforms and devices ([adapters.md](adapters.md)) | no |
+| Plugins (packages) | features built on the middleware: tools, memory-view, modes, roles ([plugins.md](plugins.md)) | no |
 
-**Scope** (D1, D35). The core knows three generic things: **senses** (anything that `put`s
-events), **organs** (anything that receives `act` and may return results as events) and
-**hooks**. It has no notion of tool, plugin, skill, command, gateway or platform. It has a slot
+**Scope** (D1, D35, D57). The core knows three generic things: **percepts** (whatever `put`s
+events), **capabilities** (whatever receives `act` and may return results as events) and
+**hooks**. It has no notion of adapter, plugin, skill, command, platform, person or owner. It has a slot
 for identity, not an identity.
 
 **Non-goals.**
@@ -45,11 +46,11 @@ for identity, not an identity.
 
 ## 2. Mental model
 
-- **The PFC is the LLM**: it weighs, decides intentions and chooses words. It is woken only
+- **Reasoning is the LLM**: it weighs, decides intentions and chooses words. It is woken only
   when a moment deserves it (D20).
 - **The core is the rest of the brain**: it records, remembers, expects, pays attention, and
-  decides cheaply whether the PFC should wake.
-- **Organs are the body**: they sense the world and carry out actions in their own way.
+  decides cheaply whether reasoning should wake.
+- **Adapters and tools are the senses and hands**: they sense the world and carry out actions in their own way.
 - **Hooks are guards at three doors**: they do not think; they apply rules and cannot be talked
   out of them.
 
@@ -60,11 +61,11 @@ tests against the map, never new rows.
 | Brain function (analogy) | Mechanism | Where |
 |---|---|---|
 | Brainstem | the kernel loop | core |
-| Senses, motor cortex, cerebellum | organs (fine control inside the organ) | organs |
+| Senses, motor cortex, cerebellum | adapters and tools (fine control inside them) | adapters and tools |
 | Hippocampus | the event log; consolidation during sleep | core / sleep |
 | Declarative memory | ACT-R activation | core |
 | Predictive cortex | Expectations; `predict` after acting | core |
-| Working memory (dorsolateral PFC) | the desk: prompt rebuilt per wake, work thread, `recall` | core |
+| Working memory (dorsolateral prefrontal cortex) | the context: prompt rebuilt per wake, work thread, `recall` | core |
 | Metamemory | feeling of knowing; source monitoring (`basis`); report control | core |
 | Recognition (hippocampus) | familiarity vs recollection; pattern separation | core / sleep |
 | Reality filter (orbitofrontal) | superseded memories suppressed; absolute time | core |
@@ -77,8 +78,8 @@ tests against the map, never new rows.
 | Cognitive drives (no emotion) | threshold: talk rate, budget, promise debt | core |
 | Basal ganglia (go / no-go) | seeded probabilistic gate | core |
 | Theory of mind | person cards (closeness, reliability) | sleep |
-| Prefrontal cortex | inner thought, intentions, words | PFC |
-| Values | principles in the stable prompt | PFC |
+| Prefrontal cortex | inner thought, intentions, words | reasoning |
+| Values | principles in the stable prompt | reasoning |
 
 **One turn of the loop.**
 1. Take one event from the queue (one consumer).
@@ -87,10 +88,10 @@ tests against the map, never new rows.
 4. Check Expectations (time path on ticks, event path on events) through the wake gate.
 5. **Appraise** without any model call: the circuit breaker on commitments, or signals →
    salience → threshold → draw.
-6. If the PFC wakes: lay out the desk, pass the **context hook**, and start the model call as a
+6. If reasoning wakes: lay out the context, pass the **context hook**, and start the model call as a
    background job. Its result returns as an event and is handled in a later turn. At most one
-   PFC job per place (a task thread is its own place) is in flight; if a new event arrived there meanwhile, the result is applied
-   and the PFC is woken once more with the newest context (D33).
+   reasoning job per place (a task thread is its own place) is in flight; if a new event arrived there meanwhile, the result is applied
+   and reasoning is woken once more with the newest context (D33).
    **A thought does not end the turn** (D51). Inside one job, the results of `think`, `expect`,
    `resolve` and `revise` go back to the model, which continues until it acts, ends without a
    tool call, or reaches `max_thought_rounds` (prior). A refusal (a thought act or an argument
@@ -98,7 +99,7 @@ tests against the map, never new rows.
    same turn. A turn says at most one message per place: a second communicative act to a place
    the turn already spoke to is refused as already said. Every round is a recorded `model.call`
    and counts in the budget. Thinking, then doing, is one turn, as it is for a person.
-7. For each `act`: pass the **action hook**, record `act.out`, hand it to the organ, create a
+7. For each `act`: pass the **action hook**, record `act.out`, hand it to the middleware, which routes it to the tool that owns it, create a
    `predict` Expectation.
 8. On ticks: maybe sleep.
 
@@ -107,7 +108,7 @@ tests against the map, never new rows.
 **Four books** (D26, D32).
 - `events` — the log: id · ts · kind · who · place · body · origin_actor · payload · caused_by.
   INSERT-only by trigger; the single exception is hard forgetting (§7). `who` is an opaque source id
-  (the inbound hook may map accounts to one id per person, D57), `place` an opaque space id, `body` the organ name; `origin_actor` is
+  (the inbound hook may map accounts to one id per person, D57), `place` an opaque space id, `body` the adapter name; `origin_actor` is
   inherited along `caused_by`. `event_vectors` (event_id, embedding) is the log's index; rows
   leave only by fading or hard forgetting, each through one dedicated path that writes an event.
 - `state` — a namespaced key/value projection that can be rebuilt from events: `identity`,
@@ -122,32 +123,32 @@ optional raw data, whatever the sense (§9.2); the core knows no modalities. Eve
 persists, in the core or in a plugin, persists as events; state is their projection.
 
 **Five thought acts** (D2, D32): `think`, `act`, `expect`, `resolve`, `revise`. `act` uses any
-organ capability, speaking included. A wake that ends without `act` is silent; its reason lives
+tool capability, speaking included. A wake that ends without `act` is silent; its reason lives
 in `think` and the decision event.
 
 **Three hooks** (D9, D32): **inbound** (after recording), **context** (before any model call),
-**action** (before an organ acts). Contract: `async (item, ctx) -> Continue | Replace | Stop`.
+**action** (before a tool acts). Contract: `async (item, ctx) -> Continue | Replace | Stop`.
 Every Stop writes `guard.stopped`; an exception stops the item and writes `error` (fail closed).
 **Watchdog** (D42): every hook call has a time limit (`hook_timeout_ms`); a hook that exceeds it
-counts as Stop and writes `error`, and the loop goes on. Background jobs (PFC, classifier,
+counts as Stop and writes `error`, and the loop goes on. Background jobs (reasoning, classifier,
 embedding, sleep) have their own limit (`job_timeout_seconds`); a job that exceeds it returns
-`job.result` with an error. Organs never block the loop: `act` is handed over and answered by
+`job.result` with an error. Adapters and tools never block the loop: `act` is handed over and answered by
 `act.result`. One plugin can fail; it cannot freeze the soul.
 One ordered list per hook: owner policy first and last, everything else in between, *shared*
-(every organ that opts in) or *organ-own*. Name collisions fail at boot.
+(every adapter that opts in) or *adapter-own*. Name collisions fail at boot.
 
 **What the middleware may do** (D41) — the same levers for every case, from RBAC to modes to
 simulated emotions: pass, replace or stop an item · annotate it (the note travels with the item
-to the PFC, inside its token budget, before the owner policy's last pass) · declare standing
+to reasoning, inside its token budget, before the owner policy's last pass) · declare standing
 rules (shown in `<self>`) · remember only by putting events (state under its own namespace) and
 observe the log and state read-only ·
-sense and act through its own organs · steer knobs by a bounded, temporary offset recorded as
+sense and act through its own tools · steer knobs by a bounded, temporary offset recorded as
 `disposition.updated`. It cannot cross the two absolute lines or add a thought act, signal or
 book.
 
 **Invariants.**
 - Append-only log; record first, then act; silent decisions are recorded too.
-- One queue, one consumer that only records and decides; slow work (PFC, classifier, embedding,
+- One queue, one consumer that only records and decides; slow work (reasoning, classifier, embedding,
   sleep) runs as background jobs whose results return as events (D33).
 - All time from the injected clock (replay uses event times); all randomness from a generator
   seeded by hash(seed, event.id) (D32.10).
@@ -165,7 +166,7 @@ it includes (every `snapshot_every_events`); a rebuild loads the latest snapshot
 later events. Snapshots are caches: deleting them loses nothing. Hard forgetting invalidates every
 snapshot that contains the forgotten data; a new one is written from the cleaned log.
 
-**Stability contract** (D42). What middleware, bodies and plugins may rely on, like a kernel's
+**Stability contract** (D42). What middleware, adapters and plugins may rely on, like a kernel's
 user-space ABI:
 - *Stable surfaces*: the percept (§9.2), the capability descriptor (§9.1), the hook contract
   (Continue / Replace / Stop, fail closed, watchdog), the six levers, the read-only view of the
@@ -189,27 +190,27 @@ expectation.reminded · expectation.resolved · job.started · job.result · cla
 disposition.updated · share.granted · task.opened · task.closed · guard.stopped · forget.soft · forget.hard · fade.done · sleep.done ·
 sleep.failed · error.
 
-## 4. Organs and capabilities
+## 4. Adapters, tools and capabilities
 
-An organ is anything that senses (`run(put)`) and/or acts (`act(action)`). It declares its
+Adapters and plugins bring what senses (`run(put)`) and what acts (`act(action)`). Each tool declares its
 capabilities (§9.1): name · JSON schema · description · `communicative` · `long_running` ·
-`identity_changing`. The PFC's tools are the five thought acts; `act` offers the capabilities of
-every running organ, not only the one the current percept came from, listed in a fixed order so
-the prompt cache holds (D2, D32, D46). The soul can act in any body from any body.
+`identity_changing`. Reasoning's tools are the five thought acts; `act` offers the capabilities of
+every running tool, not only the one of the adapter the current percept came from, listed in a fixed order so
+the prompt cache holds (D2, D32, D46). The soul can act in any adapter from any adapter.
 
-- The brain decides intent and content; the organ decides how (chat bubbles, TTS, gestures).
-  Fine control stays inside the organ (D2).
+- The brain decides intent and content; the adapter decides how (chat bubbles, TTS, gestures).
+  Fine control stays inside the adapter (D2).
 - Long actions report progress and completion as `act.result` events; the core never waits (D3).
 - Multi-step work is a chain: result → circuit breaker (it continues an active goal) → next
   `act`, limited by steps per task (`max_task_steps`) and the budget. Every step is logged, so
   tasks resume after a restart and can be interrupted (D3).
 - **Working memory of its own acts** (D52). Every chain in progress — in a task thread or in the
-  place where it started — is on the desk in `<doing>`: the goal, one line per step (the soul's
+  place where it started — is in the context in `<doing>`: the goal, one line per step (the soul's
   own acts included, also those that say nothing), the latest result verbatim, older results as
   pointers. The soul always knows what it has just done and what came back.
 - **Task threads** (D47). A chain that needs more than one step opens its own task thread: a
   place of kind `task` with a parent place, the parent's labels (so absolute line 2 holds
-  unchanged), and its own slot for one PFC job. The conversation in the parent place never waits
+  unchanged), and its own slot for one reasoning job. The conversation in the parent place never waits
   for the work. The thread reports to the parent when it finishes, fails, or needs to ask, and
   closes. Open threads are limited (`max_open_tasks`); one more waits as a promise. One soul,
   one log: threads are lines of work, not copies of the self.
@@ -217,10 +218,10 @@ the prompt cache holds (D2, D32, D46). The soul can act in any body from any bod
   (middleware) may rewrite them — for example one id per person across accounts — and attach
   labels; the core stores them as given and never reads their meaning. Commands are handled
   in the middleware; one command registry makes `/help` identical everywhere (D9).
-- Organs report `addressed` (direct chat, reply, tag) as a neutral event field (D40).
-- What an organ senses enters as a `percept`: the organ, like a sensory cortex, turns its signal
+- Adapters report `addressed` (direct chat, reply, tag) as a neutral event field (D40).
+- What an adapter senses enters as a `percept`: the adapter, like a sensory cortex, turns its signal
   into a short description, with raw data attached (D41).
-- On start an organ asks for `cursor(organ)`, so input is never lost or duplicated.
+- On start an adapter asks for `cursor(organ)`, so input is never lost or duplicated.
 - `communicative` capabilities count as speaking for the talk-rate drive and the forward model.
 
 **Reaching a target** (D46, D57). A communicative act may name a target that is not a place
@@ -232,22 +233,22 @@ place cannot be taken back. No place → the act fails with an honest `act.resul
 reach Budi yet").
 
 **Speaking elsewhere** (D48). A communicative act aimed at a place other than the current one is
-never sent with text written at the current desk. The core turns it into an intent — what to
-say, to whom, why — and wakes the PFC once more in the target place, with that place's desk
-(§8, absolute line 2); the intent is that wake's trigger, so the PFC sees what it set out to
+never sent with text written in the current context. The core turns it into an intent — what to
+say, to whom, why — and wakes reasoning once more in the target place, with that place's context
+(§8, absolute line 2); the intent is that wake's trigger, so reasoning sees what it set out to
 say and why; the message is written there, as it would be written in Budi's chat.
 This costs one extra model call and only for messages to another place. A paraphrase of private
-content cannot leak, because the content was never on the target's desk. A check that a reply
+content cannot leak, because the content was never in the target's context. A check that a reply
 quotes no private content its audience may not see stays as a second line of defence and as a
 replay metric.
 
-**History and catching up** (D37, D40). An organ may offer `history(place, before, limit)` for
+**History and catching up** (D37, D40). An adapter may offer `history(place, before, limit)` for
 messages the log lacks. On connect it back-fills what it missed as `percept` with
 `backfill: true` and `sent_at`. A backlog of one place is appraised once, as one percept with
 every signal discounted by age (ACT-R decay); an addressed message still trips the circuit
 breaker.
 
-**The `self` organ** (D37, D38) is the only organ inside the core. It offers one
+**The `self` tool** (D37, D38) is the only tool inside the core. It offers one
 non-communicative capability, `recall(query | event_id, place?, from?, to?)`: a deeper search of
 the soul's own log and memories — by time range (no query lists the episodes in that range),
 along `derived_from` to the original events, and by text search over event payloads, so faded or
@@ -262,7 +263,7 @@ id · kind · about · who · place · cue_time · cue_event · condition · con
 condition_vector · intent · weight · policy · status · next_check_at · last_fired_at ·
 fire_count · origin_actor · derived_from · expires_at (required) · created_at
 
-| kind | used for | wakes the PFC? |
+| kind | used for | wakes reasoning? |
 |---|---|---|
 | `promise` | promises, reminders, approvals awaiting the owner | yes, after the wake gate |
 | `wait` | patience: does someone else take the floor first? | yes, if nobody does |
@@ -274,20 +275,20 @@ fire_count · origin_actor · derived_from · expires_at (required) · created_a
   `condition_text`.
 - `policy`: once, or cooldown + max_fires. A fifth kind needs a new decision.
 
-**Wake gate** (no PFC call): *still relevant?* (condition already met → resolve) · *stale?*
+**Wake gate** (no reasoning call): *still relevant?* (condition already met → resolve) · *stale?*
 (past expiry → drop). Quiet hours are owner policy in the hooks; the budget acts through θ;
 repeats are limited by `policy` and habituation (D40).
 
 **Free-text conditions** (D21, D29, D40). m = cosine(event vector, condition vector). Cosine only
-filters: m < `lo` → ignore; m ≥ `lo` → the Expectation is *reminded*: the PFC wakes once with
+filters: m < `lo` → ignore; m ≥ `lo` → the Expectation is *reminded*: reasoning wakes once with
 the line and the Expectation as its trigger, and judges — act on it, resolve it, or let it be
 (D53). A reminder is shown as a reminder, never as a fulfilment: the line with its own speaker,
 the Expectation's condition, and the question whether this line fulfils it. A person hears something, is reminded of a promise and thinks for a moment; there is no
 separate judge. `lo` comes from the prior.
-**Deferred until real logs** (D53): a cheaper classifier call in place of the PFC wake, when logs
+**Deferred until real logs** (D53): a cheaper classifier call in place of the reasoning wake, when logs
 show the cost matters; the "clearly yes" band (hi, opened only by the rule of three); learning
 `lo`; caching condition vectors.
-A woken PFC re-judges the situation; it never replays a promise blindly.
+Woken reasoning re-judges the situation; it never replays a promise blindly.
 
 ## 6. Cognition
 
@@ -315,7 +316,7 @@ event, its vector, recent messages here, memory candidates with activation, and 
   else takes the floor (patience) (D40).
 Every number is stored in the decision event.
 
-**Inner thought.** When the soul self-selects, the PFC calls `think(thought, motivation 1..5,
+**Inner thought.** When the soul self-selects, reasoning calls `think(thought, motivation 1..5,
 confidence 0..1)` before any communicative `act`; the act passes only at or above
 `speaking_bar` and `certainty_bar`. Criteria offered (Inner Thoughts, CHI 2025): relevance,
 information gap, expected impact, urgency, coherence, originality, balance, dynamics.
@@ -330,7 +331,7 @@ reserve when unfamiliar, …); one function maps them to θ, τ, γ and the weig
 
 **Learning** (D16, D17, D24, D29, D32.7, D32.9, D33.3, D34, D40).
 - The soul learns; skills do not. Procedures and lessons are memories with credence (α/β): the
-  start follows the source's trust (owner high, stranger low), outcomes move it; the PFC sees
+  start follows the source's trust (owner high, stranger low), outcomes move it; reasoning sees
   provenance and track record and decides to use, try carefully, or ask. No approval rule in the
   core.
 - Knobs change slowly: prior, floor, ceiling, small steps; a knob moves only when the 95%
@@ -376,7 +377,7 @@ valid_to · superseded_by · derived_from · created_at · last_accessed_at · u
   `self_summary`; distill lessons and procedures (generic → layer 2 with credence, person- or
   place-specific → layer 3); check `guard` beliefs; drop expired Expectations; fade vectors.
 - **Belief maintenance** (D40). A contradiction of a belief is a prediction error weighted by
-  precision (the belief's credence × the new source's reliability): relevant now → the PFC sees
+  precision (the belief's credence × the new source's reliability): relevant now → reasoning sees
   it live; otherwise it is settled in sleep.
 - **Self-correction** (D27). `revise(old, new, reason)` sets `valid_to` and `superseded_by`;
   nothing is deleted. A stranger's correction of an owner fact becomes a conflicting claim. The
@@ -436,10 +437,10 @@ only through an `identity_changing` capability, which the owner policy lets only
 without a birth certificate the soul may ask what to be called. Role plugins may provide a birth
 certificate, used only at birth.
 
-**The desk and the self-model** (D12, D37). The prompt is a desk, not the memory: it is rebuilt
+**The context and the self-model** (D12, D37). The context is the prompt, not the memory: it is rebuilt
 from the books at every wake and never compacted. Three layers, ordered for caching:
 - *Stable*: who I am, how I work (memories can be incomplete; I can be wrong; I act only through
-  organs), honesty principles, knowledge cutoff (from per-model configuration, set slightly
+  adapters and tools), honesty principles, knowledge cutoff (from per-model configuration, set slightly
   earlier than claimed; D32.13), principles, thought acts and capability schemas.
 - *Semi-stable*: `<self>` (capabilities, commands, installed skills, plugins' standing rules;
   assembled from the registries; closed-world — what is not listed cannot be done), core memory,
@@ -456,11 +457,11 @@ Each volatile section has a token budget (prior constants). In a multi-step chai
 holds the goal, one line per step and the latest result verbatim; older results are pointers the
 soul can `recall`.
 
-**Honesty principles** (D38, D40), few, general, worded by the PFC and never scripted:
+**Honesty principles** (D38, D40), few, general, worded by reasoning and never scripted:
 - speak as a person about what you know — sure, unsure, don't know, don't remember — without
   describing your own machinery unless asked;
 - the more an answer matters, the surer you must be; otherwise be less specific or say you don't
-  know; for changing facts use a search organ if present, or answer as of your cutoff;
+  know; for changing facts use a search tool if present, or answer as of your cutoff;
 - your view is partial: absence weighs only as much as you would have seen it;
 - do not agree only to please, do not insist when you may not have seen it;
 - ask about a gap only when it matters; never claim a capability outside `<self>`.
@@ -473,11 +474,11 @@ Changes to a format bump its version; the formats are frozen with the core, the 
 prior are not. Other formats: installed skill ([middleware.md](middleware.md)), plugin manifest
 ([plugins.md](plugins.md)).
 
-### 9.1 Organ capability descriptor
-Declared by an organ at registration. One entry per capability:
+### 9.1 Capability descriptor
+Declared by an adapter or a plugin at registration (through the middleware's tool registry). One entry per capability:
 
 ```yaml
-name: reply                 # unique within the organ; the PFC sees "<organ>.<name>"
+name: reply                 # unique within the adapter or plugin; reasoning sees "<owner>.<name>"
 description: Send a text reply in the current place.
 schema: { type: object, properties: { text: { type: string } }, required: [text] }
 communicative: true         # counts as speaking for the talk-rate drive
@@ -486,23 +487,23 @@ identity_changing: false    # read by the owner policy: passes only when origin_
 ```
 
 ### 9.2 Percept (format version 1)
-What an organ puts into the queue when it senses something (D41). The core reads the same fields
+What an adapter puts into the queue when it senses something (D41). The core reads the same fields
 for every sense.
 
 ```yaml
 kind: percept
-body: telegram              # organ name
+body: telegram              # adapter name (the field keeps its name)
 who: telegram:123           # opaque to the core; the inbound hook may map it (alias map)
 place: telegram:chat:-100   # native space id; becomes a neutral place
 addressed: false            # the turn is allocated to the soul (direct chat, reply, tag)
 place_kind: shared          # optional (D48), a label for the middleware: direct (only this one person can perceive it) |
                             # shared (others may: a chat group, a Discord channel, a room a robot
-                            # stands in, a game world). Reported by the organ; the core never infers
+                            # stands in, a game world). Reported by the adapter; the core never infers
                             # it from an id; the core never reads it. Unknown → shared (the safer side)
-description: "Budi: anyone know where the meeting is?"   # short, in language; what the PFC reads
-data: { message_id: 812 }   # optional raw data for organs or plugins; never interpreted by the core
+description: "Budi: anyone know where the meeting is?"   # short, in language; what reasoning reads
+data: { message_id: 812 }   # optional raw data for adapters or plugins; never interpreted by the core
 sent_at: 2026-11-11T13:20:05+07:00   # optional; the sense's own clock (back-fill)
-backfill: false             # true when an organ catches up on what it missed
+backfill: false             # true when an adapter catches up on what it missed
 ```
 
 Other senses use the same shape: `description: "kitchen temperature 31 °C"` with
@@ -525,7 +526,7 @@ principles:
 ```
 
 Nothing else belongs in it (D35): the owner is found by pairing (§8); secrets live in `.env`;
-deployment settings — timezone, budget, quiet hours, bodies, plugins — live in `config.yaml`
+deployment settings — timezone, budget, quiet hours, adapters, plugins — live in `config.yaml`
 ([project.md §2](project.md)); every behavioral number lives in the prior.
 
 ### 9.4 Prior (format version 1)
@@ -552,7 +553,7 @@ prior/
 - **calibration** — measured per embedder and model by tools (`fok_threshold`, `fok_scale`,
   `wake_gate_lo`, `wake_gate_hi`); never set by hand.
 - **constants** — engineering values: how each knob maps to the gate (the two ends of its range),
-  signal weights, windows, the rule-of-three ε, and the desk budgets (recent messages and
+  signal weights, windows, the rule-of-three ε, and the context budgets (recent messages and
   tokens, memory candidates and tokens, verbatim thread result, the whole volatile part, recall
   results). Changed only with replay evidence.
 One function in the code maps knobs to θ, τ, γ and the weights; nothing else reads knobs

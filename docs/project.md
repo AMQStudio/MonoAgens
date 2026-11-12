@@ -31,7 +31,7 @@ Four files, each with one job; none holds what belongs to another (D7, D35, D36)
 | File | Holds | Read | Changed by |
 |---|---|---|---|
 | `.env` | secrets and endpoints: model keys and URLs, bot tokens, database URL | every start | owner or technician |
-| `config.yaml` | this deployment's non-secret settings: timezone, owner settings, runtime, bodies and plugins | every start | owner; owner settings also in chat |
+| `config.yaml` | this deployment's non-secret settings: timezone, owner settings, runtime, adapters and plugins | every start | owner; owner settings also in chat |
 | `soul.yaml` | the birth certificate: name, language, persona, principles ([core.md §9.3](core.md)) | once, at birth | nobody afterwards; identity changes in chat |
 | `prior/` | instincts: knobs, calibration, constants ([core.md §9.4](core.md)) | once, at birth | developers, with replay |
 
@@ -45,7 +45,7 @@ owner_settings:                     # initial values; changes made in chat are e
 runtime:
   tick_seconds: 30
   sleep: { idle_minutes: 30, retry_minutes: 30, hour: 2 }
-bodies:                             # non-secret options only; tokens stay in .env
+bodies:                             # adapters (the key keeps its name); non-secret options only; tokens in .env
   telegram: { enabled: true }
   cli: { enabled: true }
 plugins: []                         # installed plugins, e.g. [work-modes]
@@ -61,7 +61,7 @@ The rule for every setting: the file gives the starting value; what the soul's b
 | `docs/constitution.md` | everyone | the rules that never change |
 | `docs/core.md` | everyone | the core specification (contract frozen) |
 | `docs/core-math.md` | scientists | every formula, why it was chosen, sources |
-| `docs/middleware.md`, `bodies.md`, `plugins.md`, `project.md` | everyone | one specification per layer |
+| `docs/middleware.md`, `adapters.md`, `plugins.md`, `project.md` | everyone | one specification per layer |
 | `prior/` (root) | developers | default prior values: data, tuned with replay |
 | `config.yaml`, `soul.yaml`, `.env.example` (root) | owners | deployment files (§2) |
 | `docs/tasks/` | workers | one file per work package, in order |
@@ -77,7 +77,7 @@ interruptions where it should be quiet, promise keeping, recall after 1/7/30 day
 one is the bot" (target ≈ 50%). Pre-registered metrics. Public claims phrased as "≥ X% of human
 baseline on these N behaviors".
 
-**Every scenario carries its own material** (D54). A scenario holds, as synthetic data the worker writes, everything the behavior needs: the facts, the people and their accounts, the artifacts (a file, a piece of work, code and its test output), realistic results from every test organ it uses, and the capabilities the behavior needs (mentioning a file is not enough: reading it and sending it must be capabilities a test organ offers). A failure is called the soul's failure only after a material check shows that what the soul needed was in the Log and reachable on its desk; otherwise the scenario is fixed, never the soul. The material check is written under the task's Notes.
+**Every scenario carries its own material** (D54). A scenario holds, as synthetic data the worker writes, everything the behavior needs: the facts, the people and their accounts, the artifacts (a file, a piece of work, code and its test output), realistic results from every test tool it uses, and the capabilities the behavior needs (mentioning a file is not enough: reading it and sending it must be capabilities a test tool offers). A failure is called the soul's failure only after a material check shows that what the soul needed was in the Log and reachable in its context; otherwise the scenario is fixed, never the soul. The material check is written under the task's Notes.
 
 **Scenarios are the capability record** (D48). Each scenario states one capability in one
 line and the brain function it belongs to. The replay script writes `scenarios/README.md` from

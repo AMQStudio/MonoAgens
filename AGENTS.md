@@ -1,7 +1,7 @@
 # AGENTS.md — Standing Rules for Coding Agents
 
 This project is **MonoAgens**: an AI agent built as one persistent self that lives in many
-bodies, with a small core organised like an OS kernel (see README).
+apps and devices, with a small core organised like an OS kernel (see README).
 Status: prototype. Before touching code read [docs/constitution.md](docs/constitution.md), the
 task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec sections its parts link (the core: [docs/core.md](docs/core.md)). Work ONLY on that task.
 
@@ -41,14 +41,17 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
 
 ## Invariants (never break these)
 1. **The core is only a brain** (D1, D2, D32). `monoagens/kernel.py`, `hooks.py`, `jobs.py`,
-   `migrate.py`, `store.py`, `expect.py`, `memory.py`, `pfc.py`, `desk.py`, `guidance.py`, `reach.py`, `threads.py`, `recall.py`, `identity.py` and `monoagens/cognition/` (after Task 3: everything under `monoagens/core/`) know only senses, organs, hooks and thought
-   acts. They never import from `monoagens/bodies/` or packages, never mention a platform, and
-   never hard-code a world action (speaking included) — those are organ capabilities.
+   `migrate.py`, `store.py`, `expect.py`, `memory.py`, `pfc.py`, `desk.py`, `guidance.py`, `reach.py`, `threads.py`, `recall.py`, `identity.py` and `monoagens/cognition/` (after Task 3: everything under `monoagens/core/`) know only percepts, capabilities, hooks and thought
+   acts. They never import from `monoagens/bodies/` (`monoagens/adapters/` after Task 3) or
+   plugins, never mention a platform, and never hard-code a world action (speaking included) —
+   those are tool capabilities. From Task 3 on (D57) the core also knows only opaque ids, labels
+   and numbers: it never imports from `monoagens/middleware/` and never means a person, the owner
+   or a group.
 2. **The log is immutable.** The `events` table is INSERT-only, enforced by a trigger. The only
    exception is hard forgetting (`docs/core.md` §7), through one dedicated function that the trigger
    recognizes. `event_vectors` rows are deleted only by fading or hard forgetting, each
    through its own dedicated path that writes an event.
-3. **One queue, one consumer.** Every source (bodies, clock) only `put`s into the queue.
+3. **One queue, one consumer.** Every source (adapters, clock) only `put`s into the queue.
    Only the kernel loop processes events, one at a time, in order.
 4. **Record first, then act.** Incoming events are written to `events` before they are
    processed. Decisions to stay silent are written too.
@@ -56,7 +59,7 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
    message or per tick by default; each call is a gate decision, is recorded as an event with
    its purpose and token usage, and counts toward the daily budget.
 6. **No scenario features.** No "reminder", "monitor", or "habit tracker" modules. All of them
-   are Expectations (see `docs/core.md` §5). If an idea cannot be an Expectation, a state key, or a body
+   are Expectations (see `docs/core.md` §5). If an idea cannot be an Expectation, a state key, or an adapter
    adapter, it does not go in.
 7. **Pure async.** No blocking calls inside `async def`. CPU work (embedding) goes through
    `asyncio.to_thread`. Every hook call and background job runs under its watchdog timeout
@@ -122,6 +125,6 @@ line count. Line numbers are only a signal for review:
   `--fake` and a live session.
 - The clock is always a fake clock that tests can advance.
 - Scenarios carry all their material as synthetic data the worker writes: facts, people, artifacts,
-  realistic results from every test organ, and the capabilities the behavior needs (if the task
-  is "send the file", a test organ must be able to read and send that file). Before reporting a failure as the soul's, check
-  that what it needed was in the Log and on its desk; if not, fix the scenario (D54).
+  realistic results from every test tool, and the capabilities the behavior needs (if the task
+  is "send the file", a test tool must be able to read and send that file). Before reporting a failure as the soul's, check
+  that what it needed was in the Log and in its context; if not, fix the scenario (D54).

@@ -10,19 +10,19 @@ Like a kernel: the interface to the outside never breaks, the inside may improve
   format — plus the two absolute lines, the complexity budget and the list of brain functions
   (the brain map). Breaking any of these is a core v2, which only the owner can open.
 - **Provisional** — the internal formulas: how each signal is computed, the terms of θ, the
-  ACT-R parameters, the desk layout. They may change **only with evidence** (replay scenarios
+  ACT-R parameters, the context layout. They may change **only with evidence** (replay scenarios
   plus real logs showing the change is better), recorded as a decision with that evidence, never
   by a task, plugin or worker on its own.
 - **Data** — the values in the default prior (`prior/`), tuned with replay at any time.
 - Always allowed: fixing a bug, a vulnerability, an inconsistency, a typo or a broken
-  reference, and clarifications or refactors that change no behavior. Everything else belongs to another layer — middleware, bodies, plugins.
+  reference, and clarifications or refactors that change no behavior. Everything else belongs to another layer — middleware, adapters, plugins.
 
 ## 2. Design by brain function, not by scenario (D39, D40)
 - The core is a closed list of brain functions: the brain map in [core.md §2](core.md). Each row
   is a brain region, a studied model with its formula and sources ([core-math.md](core-math.md))
   and one core mechanism.
 - Human scenarios are tests, not design inputs: a new situation becomes a replay scenario
-  checked against the map. The PFC (the LLM) fills the gaps between functions.
+  checked against the map. Reasoning (the LLM) fills the gaps between functions.
 - No rule is ever written to close a single case. A behavior that keeps failing means a weak
   function; role-, place- or preference-specific behavior belongs to middleware or a plugin.
 
@@ -56,7 +56,7 @@ Enforced deterministically by the owner policy, never decided by the model, neve
 plugin; another plugin can only narrow them:
 1. Only the owner changes who the soul is.
 2. Private content never reaches anyone who was not part of it (D45): it follows the people
-   it belongs to, across bodies and places, and reaches someone new only when one of those
+   it belongs to, across adapters and places, and reaches someone new only when one of those
    people shares it (D46).
 
 ## 6. Engineering invariants
