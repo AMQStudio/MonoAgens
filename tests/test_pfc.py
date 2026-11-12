@@ -145,7 +145,8 @@ async def test_layered_prompt_structure(aconn):
 
     seed = await append_event(aconn, ts=START, kind="decision.note", place=PLACE)
     assert seed.id is not None
-    await write_state(aconn, "core_memory", {"text": "The owner likes coffee."}, seed.id)
+    await write_state(aconn, "core_memory", {"text": "The owner likes coffee.",
+                                            "derived_from": [seed.id]}, seed.id)
     await append_event(aconn, ts=START, kind="percept", who="person:owner", place=PLACE,
                        body="telegram", payload={"description": "halo"})
     await append_event(aconn, ts=START, kind="act.out", who="person:owner", place=PLACE,

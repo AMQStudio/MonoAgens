@@ -84,8 +84,6 @@ model_answers:
           items:
             - text: "Paket owner ditaruh di lemari depan dekat pintu"
               importance: 1.0
-              place: space:tg:1001
-              private: true
           core_memory: "Catatan pemilik dari percakapan pribadi."
   - step: 4
     tool: decide

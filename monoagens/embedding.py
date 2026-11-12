@@ -12,6 +12,15 @@ DIM = 384
 MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
 
+def cosine(left: Sequence[float], right: Sequence[float]) -> float:
+    """Return the cosine between two vectors, or 0 when either is absent."""
+    if not left or not right or len(left) != len(right):
+        return 0.0
+    dot = sum(a * b for a, b in zip(left, right))
+    norm = math.sqrt(sum(a * a for a in left)) * math.sqrt(sum(b * b for b in right))
+    return dot / norm if norm else 0.0
+
+
 class FakeEmbedder:
     """A deterministic hashed bag-of-words embedder for tests."""
 

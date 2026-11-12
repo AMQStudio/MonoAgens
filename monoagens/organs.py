@@ -58,10 +58,12 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any]) -> bool:
     if cap is None:
         await kernel._record_error(event, f"unknown capability: {capability!r}")
         return False
-    arguments = args.get("arguments") if isinstance(args.get("arguments"), dict) else {}
-    arguments = dict(arguments)
+    arguments = dict(args["arguments"]) if isinstance(args.get("arguments"), dict) else {}
     routed = cap.get("communicative") or capability == reach.SHARE
     to, via = (arguments.pop("to", None), arguments.pop("via", None)) if routed else (None, None)
+    ctx = {"conn": kernel.conn, "event": event, "now": kernel.clock.now(),
+           "capability": capability, "origin_actor": event.origin_actor, "to": to,
+           "identity_changing": cap.get("identity_changing")}
     if capability == reach.SHARE:
         allowed, source = await reach.consent(kernel.conn, event, arguments)
         if not allowed:
@@ -69,9 +71,6 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any]) -> bool:
                                "result": {"error": "only someone who was part of it can "
                                                    "share it"}})
             return True
-        ctx = {"conn": kernel.conn, "event": event, "now": kernel.clock.now(),
-               "capability": capability, "origin_actor": event.origin_actor, "to": to,
-               "identity_changing": cap.get("identity_changing")}
         payload = await kernel._run_hooks("action", arguments, ctx, event, organ="self")
         if payload is not None:
             await reach.grant(kernel, event, payload, to, source)
@@ -87,7 +86,7 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any]) -> bool:
     if place != event.place and cap.get("communicative"):
         await _intend(kernel, event, capability, arguments, to, place)
         return True
-    if await reach.leaks(kernel.conn, event.place, place, str(arguments.get("text") or "")):
+    if await leaks(kernel.conn, place, str(arguments.get("text") or "")):
         await kernel._emit(event, "act.result", {"capability": capability, "to": to, "result": {
             "error": "that place may not see this content; say it where it belongs"}})
         return True
@@ -96,9 +95,6 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any]) -> bool:
     stored = await kernel._emit(event, "act.out", {**record, "to": to} if to else record,
                                 place=place)
     await kernel._encode(stored, str(arguments.get("text") or "") or None)
-    ctx = {"conn": kernel.conn, "event": event, "now": kernel.clock.now(),
-           "capability": capability, "origin_actor": event.origin_actor, "to": to,
-           "identity_changing": cap.get("identity_changing")}
     payload = await kernel._run_hooks("action", arguments, ctx, event,
                                       organ=capability.partition(".")[0])
     if payload is None:
@@ -127,7 +123,7 @@ async def _intend(kernel: Any, event: Event, capability: str, arguments: dict[st
         "capability": capability, "arguments": arguments, "to": to, "target": place,
         "why": goal})
     reason = f"you set out to say {said!r} to {to or place}"
-    if await reach.leaks(kernel.conn, event.place, place, f"{said}\n{goal}"):
+    if await leaks(kernel.conn, place, f"{said}\n{goal}"):
         reason = f"you set out to send a message to {to or place}; its words cannot appear here"
     elif goal:
         reason += f", because {goal}"
@@ -137,3 +133,15 @@ async def _intend(kernel: Any, event: Event, capability: str, arguments: dict[st
         payload={"description": f"{reason} (from {event.place})",
                  "capability": capability, "to": to, "intent": intent.id,
                  "place_kind": await reach.place_kind(kernel.conn, place)}))
+
+
+async def leaks(conn, target: str | None, text: str) -> bool:
+    """Return whether a message would carry private content the target may not see (D45)."""
+    if not text or not target:
+        return False
+    cur = await conn.execute("SELECT text, derived_from FROM memories WHERE valid_to IS NULL")
+    for line, sources in await cur.fetchall():
+        if line and line in text and not await reach.memory_visible(
+                conn, context=target, sources=sources):
+            return True
+    return False

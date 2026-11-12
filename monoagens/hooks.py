@@ -25,15 +25,12 @@ def audience_policy() -> Middleware:
         """Keep only the memories and lines this context's audience may see."""
         conn, place = ctx["conn"], item.place
 
-        async def allowed(source: str | None, before: int | None = None) -> bool:
-            return await reach.visible(conn, context=place, source=source, before=before)
-
-        memories = [memory for memory in item.memories
-                    if await allowed(getattr(memory, "place", None))]
-        lines = [line for line in item.recent_elsewhere
-                 if await allowed(getattr(line, "place", None), getattr(line, "id", None))]
-        recent = [line for line in item.recent
-                  if await allowed(getattr(line, "place", None), getattr(line, "id", None))]
+        memories = [memory for memory in item.memories if await reach.memory_visible(
+            conn, context=place, sources=getattr(memory, "sources", ()))]
+        lines = [line for line in item.recent_elsewhere if await reach.visible(
+            conn, context=place, source=line.place, before=line.id)]
+        recent = [line for line in item.recent if await reach.visible(
+            conn, context=place, source=line.place, before=line.id)]
         return Replace(replace(item, memories=tuple(memories), recent_elsewhere=tuple(lines),
                                recent=tuple(recent)))
 

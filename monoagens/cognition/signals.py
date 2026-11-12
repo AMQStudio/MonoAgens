@@ -5,9 +5,9 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
 
 from monoagens.cognition.situation import Situation
+from monoagens.embedding import cosine
 
 Signal = Callable[[Situation], float]
 SIGNALS: dict[str, Signal] = {}
@@ -36,19 +36,10 @@ def _clamp(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
 
 
-def _cosine(left: Sequence[float] | None, right: Sequence[float] | None) -> float:
-    """Return the cosine between two vectors, or 0 when either is absent."""
-    if not left or not right or len(left) != len(right):
-        return 0.0
-    dot = sum(a * b for a, b in zip(left, right))
-    norm = math.sqrt(sum(a * a for a in left)) * math.sqrt(sum(b * b for b in right))
-    return dot / norm if norm else 0.0
-
-
 def _best_cosine(vector: Sequence[float] | None,
                  others: Sequence[Sequence[float]]) -> float:
     """Return the highest cosine between `vector` and any of `others`."""
-    return max((_cosine(vector, other) for other in others), default=0.0)
+    return max((cosine(vector, other) for other in others), default=0.0)
 
 
 @register_signal("own_name")

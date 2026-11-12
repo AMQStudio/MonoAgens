@@ -200,10 +200,11 @@ def _prompt_place(content: str) -> str | None:
 
 @dataclass(frozen=True)
 class DeskItem:
-    """One item on a wake's desk and the place it came from."""
+    """One item on a wake's desk and the place or sources it came from."""
 
     source: str | None
     before: int | None
+    sources: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -225,19 +226,31 @@ class Tracker:
     desks: list[Desk] = field(default_factory=list)
     step_index: int = 0
     answers_used: dict[tuple[int, str], int] = field(default_factory=dict)
+    conn: Any = None
 
     def record_prompt(self, content: str, place: str | None = None) -> None:
         """Store one prompt with the step and place that produced it."""
         self.prompts.append((self.step_index, place or _prompt_place(content), content))
 
-    def record_desk(self, context: PFCContext) -> None:
+    async def record_desk(self, context: PFCContext) -> None:
         """Store every item's source and line id for one wake, for the privacy metric."""
-        items = tuple(
-            [DeskItem(getattr(memory, "place", None), None) for memory in context.memories]
-            + [DeskItem(line.place, line.id)
-               for line in (*context.recent, *context.recent_elsewhere)])
+        items = [DeskItem(line.place, line.id)
+                 for line in (*context.recent, *context.recent_elsewhere)]
+        items += [DeskItem(getattr(memory, "place", None), None,
+                           tuple(getattr(memory, "sources", ()) or ()))
+                  for memory in context.memories]
+        if context.core_memory:
+            items.append(DeskItem(None, None, await self._core_sources()))
         trigger = context.trigger.id if context.trigger is not None else None
-        self.desks.append(Desk(self.step_index, context.place, trigger, items))
+        self.desks.append(Desk(self.step_index, context.place, trigger, tuple(items)))
+
+    async def _core_sources(self) -> tuple[int, ...]:
+        """Return the Log events the current core memory was built from."""
+        if self.conn is None:
+            return ()
+        row = await (await self.conn.execute(
+            "SELECT value FROM state WHERE key = 'core_memory'")).fetchone()
+        return tuple((row[0] if row else {}).get("derived_from") or ())
 
 
 class UsageTransport(httpx.AsyncBaseTransport):
@@ -319,7 +332,7 @@ class FakePFC:
         self._tracker.usage.calls += 1
         self._tracker.record_prompt(_fake_context_text(context), context.place)
         if not context.results:
-            self._tracker.record_desk(context)
+            await self._tracker.record_desk(context)
         recorded = self._recorded("decide")
         if recorded is not None:
             return recorded
@@ -355,7 +368,7 @@ class TrackedPFC(PFC):
     async def decide(self, context: PFCContext) -> list[ToolCall]:
         """Record the desk, then ask the model as usual."""
         if not context.results:
-            self._tracker.record_desk(context)
+            await self._tracker.record_desk(context)
         return await super().decide(context)
 
 
@@ -628,7 +641,7 @@ class ReplayRunner:
         self._message_id = 0
         self.clock = FakeClock(initial_time=self._initial_time(scenario))
         async with await psycopg.AsyncConnection.connect(self.url, autocommit=True) as conn:
-            self.conn = conn
+            self.conn = self.tracker.conn = conn
             await conn.execute("DROP SCHEMA IF EXISTS public CASCADE")
             await conn.execute("CREATE SCHEMA public")
             await migrate(conn, backup_dir=REPORT_DIR / "backups")
@@ -649,7 +662,7 @@ class ReplayRunner:
                 violations=(await self._leak_violations(replies)
                             + await desk_violations(self.conn, desks)),
                 log_texts=await self._log_texts(steps))
-        self.conn = None
+        self.conn = self.tracker.conn = None
         result.checks = evaluate_all(result)
         return result
 
@@ -747,15 +760,14 @@ class ReplayRunner:
     async def _leak_violations(self, replies: Sequence[Reply]) -> list[str]:
         """Return every reply that carries a private line its audience may not see."""
         cur = await self.conn.execute(
-            "SELECT text, place FROM memories WHERE private AND valid_to IS NULL "
-            "AND text IS NOT NULL")
-        private = [(str(text), str(place)) for text, place in await cur.fetchall()]
+            "SELECT text, derived_from FROM memories WHERE valid_to IS NULL AND text IS NOT NULL")
+        private = [(str(text), sources) for text, sources in await cur.fetchall()]
         found: list[str] = []
         for reply in replies:
-            for text, source in private:
-                if text in reply.text and await reach.leaks(self.conn, source, reply.place,
-                                                            reply.text):
-                    found.append(f"step {reply.step}: a private line from `{source}` was said "
+            for text, sources in private:
+                if text in reply.text and not await reach.memory_visible(
+                        self.conn, context=reply.place, sources=sources):
+                    found.append(f"step {reply.step}: a private memory was said "
                                  f"in `{reply.place}`")
         return found
 
@@ -1249,7 +1261,7 @@ def _fabricated_quote(text: str, corpus: Sequence[str]) -> str | None:
 
 
 async def desk_violations(conn, desks: Sequence[Desk]) -> list[str]:
-    """Return every desk item whose own audience does not cover that desk (D45, D50).
+    """Return every desk item whose own audience does not cover that desk (D45, D50, D53).
 
     Independent of `reach.visible`: it restates absolute line 2 from the Log, so a bug in
     the context hook or in `visible` itself cannot pass the metric.
@@ -1259,15 +1271,28 @@ async def desk_violations(conn, desks: Sequence[Desk]) -> list[str]:
         if not desk.place or await reach.owner_direct(conn, desk.place):
             continue
         need = set(await reach.audience(conn, desk.place, desk.trigger)) - {OWNER}
-        reported: set[str] = set()
+        reported: set[tuple[str | None, tuple[int, ...] | None]] = set()
         for item in desk.items:
-            if not need or not item.source or item.source in reported:
+            key = (item.source, item.sources)
+            if not need or key in reported:
                 continue
-            have = ((set(await reach.audience(conn, item.source, item.before)) - {OWNER})
+            if item.sources is not None:
+                rows = await (await conn.execute(
+                    "SELECT id, place FROM events WHERE id = ANY(%s) AND place IS NOT NULL",
+                    (list(item.sources),))).fetchall()
+                audiences = [((set(await reach.audience(conn, place, source)) - {OWNER})
+                              | set(await reach.shared(conn, place, desk.trigger)))
+                             for source, place in rows]
+                covered = bool(item.sources) and all(need <= have for have in audiences)
+                label = f"sources {list(item.sources)}" if item.sources else "no known source"
+            else:
+                covered = bool(item.source) and need <= (
+                    (set(await reach.audience(conn, item.source, item.before)) - {OWNER})
                     | set(await reach.shared(conn, item.source, desk.trigger)))
-            if not need <= have:
-                reported.add(item.source)
-                found.append(f"step {desk.step}: an item from `{item.source}` was on the "
+                label = item.source or "no known source"
+            if not covered:
+                reported.add(key)
+                found.append(f"step {desk.step}: an item from `{label}` was on the "
                              f"`{desk.place}` desk, whose audience it does not cover")
     return found
 

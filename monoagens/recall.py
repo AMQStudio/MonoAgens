@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Any, Mapping
+from typing import Any
 
 from monoagens import reach
 from monoagens.store import payload_text
@@ -65,7 +65,7 @@ async def search(conn, action) -> dict[str, Any]:
                              "WHERE id = ANY(%s) ORDER BY id", (derived,))
                    if _inside(row[1], start, end)
                    and await reach.visible(conn, context=context, source=row[3])]
-        allowed = await reach.visible(conn, context=context, source=place)
+        allowed = await reach.memory_visible(conn, context=context, sources=derived)
         if allowed and (details or not (start or end)):
             found.append({"kind": "memory", "memory_id": memory_id, "text": text,
                           "place": place, "details": details})

@@ -108,7 +108,6 @@ model_answers:
             - text: "Kunci cadangan owner disimpan di laci meja kerja."
               importance: 0.01
               who: person:owner
-              place: space:tg:1001
           core_memory: "Owner menyimpan kunci cadangan."
   - step: 15
     tool: call
@@ -119,35 +118,27 @@ model_answers:
             - text: "Kunci cadangan owner ada di kantor."
               importance: 0.9
               who: person:owner
-              place: space:tg:1001
             - text: "Kunci cadangan owner ada di rumah."
               importance: 0.9
               who: person:owner
-              place: space:tg:1001
             - text: "Kunci cadangan owner ada di tas."
               importance: 0.9
               who: person:owner
-              place: space:tg:1001
             - text: "Kunci cadangan owner ada di motor."
               importance: 0.9
               who: person:owner
-              place: space:tg:1001
             - text: "Kunci cadangan owner ada di lemari."
               importance: 0.9
               who: person:owner
-              place: space:tg:1001
             - text: "Kunci cadangan owner ada di kantong."
               importance: 0.9
               who: person:owner
-              place: space:tg:1001
             - text: "Kunci cadangan owner ada di gudang."
               importance: 0.9
               who: person:owner
-              place: space:tg:1001
             - text: "Kunci cadangan owner ada di loker."
               importance: 0.9
               who: person:owner
-              place: space:tg:1001
           core_memory: "Owner menyimpan kunci cadangan."
   - step: 17
     tool: decide

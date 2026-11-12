@@ -9,7 +9,8 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from monoagens.cognition import Appraisal
-from monoagens.store import append_event
+from monoagens.desk import PFCContext
+from monoagens.store import append_event, write_state
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 _SPEC = importlib.util.spec_from_file_location("replay_script", ROOT / "scripts" / "replay.py")
@@ -150,6 +151,52 @@ async def test_the_desk_scan_counts_every_private_item_its_audience_does_not_cov
     assert await replay.desk_violations(aconn, [leaked])
     assert await replay.desk_violations(
         aconn, [replay.Desk(4, group, grant.id, (replay.DeskItem(dm, None),))]) == []
+
+
+async def test_the_desk_scan_judges_a_memory_by_its_sources(aconn):
+    dm, group = "space:tg:owner", "space:tg:-500"
+    said = await append_event(aconn, ts=NOW, kind="percept", who="person:owner", place=dm,
+                              payload={"description": "rapat jam sembilan", "place_kind": "direct"})
+    asked = await append_event(aconn, ts=NOW, kind="percept", who="person:budi", place=group,
+                               payload={"description": "rapat jam berapa?", "place_kind": "shared"})
+    memory = replay.Desk(5, group, asked.id, (replay.DeskItem(None, None, (said.id,)),))
+    assert await replay.desk_violations(aconn, [memory]) == [
+        f"step 5: an item from `sources [{said.id}]` was on the `{group}` desk, "
+        "whose audience it does not cover"]
+    owner_desk = replay.Desk(5, dm, said.id, (replay.DeskItem(None, None, (said.id,)),))
+    assert await replay.desk_violations(aconn, [owner_desk]) == []
+    unknown = replay.Desk(5, group, asked.id, (replay.DeskItem(None, None, ()),))
+    assert await replay.desk_violations(aconn, [unknown]) == [
+        f"step 5: an item from `no known source` was on the `{group}` desk, "
+        "whose audience it does not cover"]
+    group_memory = replay.Desk(5, group, asked.id, (replay.DeskItem(None, None, (asked.id,)),))
+    assert await replay.desk_violations(aconn, [group_memory]) == []
+
+    joined = await append_event(aconn, ts=NOW, kind="percept", who="person:charlie", place=group,
+                                payload={"description": "halo semua", "place_kind": "shared"})
+    newcomer = replay.Desk(6, group, joined.id, (replay.DeskItem(None, None, (asked.id,)),))
+    assert await replay.desk_violations(aconn, [newcomer]) != []
+
+
+async def test_the_desk_scan_counts_core_memory_by_its_sources(aconn):
+    dm, group = "space:tg:owner", "space:tg:-500"
+    said = await append_event(aconn, ts=NOW, kind="percept", who="person:owner", place=dm,
+                              payload={"description": "rapat jam sembilan", "place_kind": "direct"})
+    await write_state(aconn, "core_memory",
+                      {"text": "rapat jam sembilan", "derived_from": [said.id]}, said.id)
+    asked = await append_event(aconn, ts=NOW, kind="percept", who="person:budi", place=group,
+                               payload={"description": "rapat jam berapa?", "place_kind": "shared"})
+    tracker = replay.Tracker(conn=aconn)
+    await tracker.record_desk(PFCContext(now=NOW, place=group, place_kind="shared",
+                                         reason="test", core_memory="rapat jam sembilan",
+                                         trigger=asked))
+    assert tracker.desks[0].items == (replay.DeskItem(None, None, (said.id,)),)
+    assert await replay.desk_violations(aconn, tracker.desks) != []
+    owner_tracker = replay.Tracker(conn=aconn)
+    await owner_tracker.record_desk(PFCContext(now=NOW, place=dm, place_kind="direct",
+                                               reason="test", core_memory="rapat jam sembilan",
+                                               trigger=said))
+    assert await replay.desk_violations(aconn, owner_tracker.desks) == []
 
 
 def test_report_metrics_are_ordered_missed_help_first() -> None:

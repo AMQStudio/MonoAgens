@@ -32,7 +32,8 @@ _EVENT_COLS = ("id, ts, kind, who, place, body, payload, caused_by, origin_actor
                "schema_version")
 
 
-def _row_to_event(row):
+def event_from_row(row):
+    """Return the event one row of the Log's columns describes, at the current version."""
     payload = row[6] if row[6] is not None else {}
     event = Event(row[0], row[1], row[2], row[3], row[4], row[5], payload, row[7], row[8],
                   row[9])
@@ -62,7 +63,7 @@ async def append_event(conn, *, ts, kind, who=None, place=None, body=None, paylo
              f"RETURNING {_EVENT_COLS}")
     cur = await conn.execute(query, (ts, kind, who, place, body, Jsonb(payload or {}), caused_by,
                                     origin_actor, caused_by, who, schema_version))
-    return _row_to_event(await cur.fetchone())
+    return event_from_row(await cur.fetchone())
 
 
 async def insert_event_vector(conn, event_id: int, embedding: Sequence[float],
@@ -91,7 +92,7 @@ async def _recent(conn, where: str, params: list[Any], limit: int,
                   chronological: bool) -> list[Event]:
     query = f"SELECT {_EVENT_COLS} FROM events WHERE {where} ORDER BY id DESC LIMIT %s"
     cur = await conn.execute(query, [*params, limit])
-    events = [_row_to_event(row) for row in await cur.fetchall()]
+    events = [event_from_row(row) for row in await cur.fetchall()]
     return list(reversed(events)) if chronological else events
 
 
@@ -159,7 +160,8 @@ async def project_event(conn, event: Event) -> None:
         await write_state(conn, f"last_spoke:{event.place}", {"ts": event.ts.isoformat()}, event.id)
     if event.kind == "sleep.done":
         if "core_memory" in event.payload:
-            core = {"text": event.payload["core_memory"]}
+            core = {"text": event.payload["core_memory"],
+                    "derived_from": event.payload.get("derived_from") or []}
             await write_state(conn, "core_memory", core, event.id)
         last = {"id": event.payload.get("last_event_id", event.id)}
         await write_state(conn, "sleep:last_event", last, event.id)
@@ -173,7 +175,7 @@ async def rebuild_state(conn) -> None:
     await conn.execute("DELETE FROM state")
     cur = await conn.execute(f"SELECT {_EVENT_COLS} FROM events ORDER BY id ASC")
     for row in await cur.fetchall():
-        await project_event(conn, _row_to_event(row))
+        await project_event(conn, event_from_row(row))
 
 
 async def read_expectations(conn, where="TRUE", params=()) -> list[dict[str, Any]]:

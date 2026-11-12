@@ -22,6 +22,7 @@ def new_code(draw=secrets.randbelow) -> str:
     digits = "".join(str(draw(10)) for _ in range(6))
     return f"{digits[:3]}-{digits[3:]}"
 
+
 async def ensure(conn, *, now: datetime) -> str | None:
     """Create and show the pairing code when the soul has no owner yet."""
     if await read_state(conn, OWNER_KEY) is not None:

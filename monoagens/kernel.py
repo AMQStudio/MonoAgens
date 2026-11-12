@@ -144,12 +144,11 @@ class Kernel:
                                       partial(self.jobs.sleep, now))
         if fired or self.pfc is None or event.kind not in ("percept", "act.result"):
             return
+        appraisal = await self._appraise(event)
         if event.kind == "act.result":
-            appraisal = await self._appraise(event)
             if appraisal.decision == "wake":
                 await self._think(event, appraisal.reason, event.place or "")
             return
-        appraisal = await self._appraise(event)
         if appraisal.decision != "wake":
             await self._emit(event, f"decision.{appraisal.decision}", appraisal.payload())
             return

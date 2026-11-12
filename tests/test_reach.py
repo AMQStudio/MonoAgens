@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from monoagens import hooks, memory, reach, threads
+from monoagens import hooks, memory, organs, reach, threads
 from monoagens.clock import FakeClock
+from monoagens.embedding import FakeEmbedder
 from monoagens.kernel import Kernel
 from monoagens.pfc import PFC, ToolCall
 from monoagens.store import append_event, read_state, write_state
@@ -96,6 +97,23 @@ async def test_a_private_group_flows_to_a_direct_chat_with_one_member(aconn):
     assert await reach.visible(aconn, context=FULAN_B, source=GROUP)
 
 
+async def test_a_memory_needs_every_source_to_cover_the_place(aconn):
+    second_group, dewi_dm, budi_dm = "space:tg:-600", "space:tg:dewi", "space:tg:budi"
+    await _said(aconn, "person:charlie", GROUP, "shared", "rapat jam sembilan")
+    one = await _said(aconn, "person:dewi", GROUP, "shared", "rapat jam sembilan")
+    await _said(aconn, "person:budi", second_group, "shared", "rapat jam sembilan")
+    two = await _said(aconn, "person:dewi", second_group, "shared", "rapat jam sembilan")
+    await _said(aconn, "person:dewi", dewi_dm, "direct")
+    await _said(aconn, "person:budi", budi_dm, "direct")
+    await _said(aconn, OWNER, OWNER_DM, "direct")
+
+    assert await reach.memory_visible(aconn, context=GROUP, sources=(one,)) is True
+    assert await reach.memory_visible(aconn, context=GROUP, sources=(one, two)) is False
+    assert await reach.memory_visible(aconn, context=dewi_dm, sources=(one, two)) is True
+    assert await reach.memory_visible(aconn, context=budi_dm, sources=(one, two)) is False
+    assert await reach.memory_visible(aconn, context=OWNER_DM, sources=(one, two)) is True
+
+
 async def test_the_owner_direct_chat_is_a_view_but_a_group_is_not(aconn):
     await _said(aconn, "person:fulan", FULAN_A, "direct")
     owner_dm = await _said(aconn, OWNER, "space:tg:owner", "direct")
@@ -126,7 +144,7 @@ async def test_the_owners_direct_chat_is_private_to_the_owner(aconn):
     dm = await _said(aconn, OWNER, OWNER_DM, "direct", "rapat jam sembilan")
     asked = await _said(aconn, "person:budi", GROUP, "shared", "rapat jam berapa?")
     fact = memory.MemoryHit("- rapat jam sembilan (owner at space:tg:owner)",
-                            place=OWNER_DM, private=True)
+                            place=OWNER_DM, sources=(dm,))
 
     assert await reach.visible(aconn, context=GROUP, source=OWNER_DM) is False
     assert await reach.visible(aconn, context=OWNER_DM, source=OWNER_DM) is True
@@ -336,7 +354,7 @@ async def test_a_paraphrase_of_a_private_line_is_not_on_the_other_places_desk(ac
         "SELECT place, payload FROM events WHERE kind = 'act.out'")).fetchone()
     assert spoken[0] == BUDI
     assert "di-PHK" not in spoken[1]["arguments"]["text"]
-    assert await reach.leaks(aconn, FULAN_A, BUDI, "Fulan bilang: aku di-PHK") is True
+    assert await organs.leaks(aconn, BUDI, "Fulan bilang: aku di-PHK") is True
 
 
 async def test_a_long_action_opens_a_task_thread_and_it_closes_when_done(aconn):
@@ -390,3 +408,74 @@ async def test_a_chain_that_exceeds_max_task_steps_closes(aconn):
     row = await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'task.closed'")).fetchone()
     assert row[0]["reason"] == "max_task_steps"
+
+
+class _SleepPFC:
+    """A sleep-only PFC that returns one recorded store_memories answer."""
+
+    model = "sleep-model"
+    last_usage: dict = {}
+
+    def __init__(self, arguments: dict) -> None:
+        """Keep the answer the fake model would return."""
+        self.arguments = arguments
+
+    async def call(self, messages, tools, *, tool_choice="required"):
+        """Return the recorded answer for the sleep prompt."""
+        return [ToolCall("store_memories", self.arguments)]
+
+
+async def test_sleep_derives_private_content_from_the_sources(aconn):
+    dm = await _said(aconn, "person:fulan", FULAN_A, "direct", "aku di-PHK")
+    answer = {"items": [{"text": "Fulan di-PHK", "importance": 1.0}],
+              "core_memory": "Fulan sedang di-PHK."}
+    done = await memory.sleep(aconn, pfc=_SleepPFC(answer), embedder=FakeEmbedder(),
+                              now=START + timedelta(minutes=35), settings=SETTINGS)
+    assert done is not None
+    row = await (await aconn.execute(
+        "SELECT place, private, derived_from FROM memories")).fetchone()
+    assert row == (FULAN_A, True, [dm])
+    core = await read_state(aconn, "core_memory")
+    assert core["derived_from"] == [dm]
+
+    hits = await memory.retrieve(aconn, FakeEmbedder(), "Fulan di-PHK",
+                                 now=START + timedelta(minutes=36), k=5, settings=SETTINGS)
+    assert [hit.sources for hit in hits] == [(dm,)]
+    group = await _said(aconn, "person:charlie", GROUP, "shared", "ada kabar?")
+    owner = await _said(aconn, OWNER, OWNER_DM, "direct")
+    group_desk = await _desk(aconn, place=GROUP, trigger=group, memories=tuple(hits))
+    assert group_desk.item.memories == ()
+    assert group_desk.item.core_memory == ""
+    owner_desk = await _desk(aconn, place=OWNER_DM, trigger=owner, memories=tuple(hits))
+    assert owner_desk.item.memories == tuple(hits)
+    assert owner_desk.item.core_memory == "Fulan sedang di-PHK."
+
+
+async def test_a_model_named_place_never_widens_a_memory(aconn):
+    dm = await _said(aconn, "person:fulan", FULAN_A, "direct", "aku di-PHK")
+    answer = {"items": [{"text": "Fulan di-PHK", "importance": 1.0,
+                         "place": GROUP, "private": False}],
+              "core_memory": "Fulan sedang di-PHK."}
+    await memory.sleep(aconn, pfc=_SleepPFC(answer), embedder=FakeEmbedder(),
+                       now=START + timedelta(minutes=35), settings=SETTINGS)
+    row = await (await aconn.execute(
+        "SELECT place, private, derived_from FROM memories")).fetchone()
+    assert row == (FULAN_A, True, [dm])
+    hits = await memory.retrieve(aconn, FakeEmbedder(), "Fulan di-PHK",
+                                 now=START + timedelta(minutes=36), k=5, settings=SETTINGS)
+    group = await _said(aconn, "person:charlie", GROUP, "shared", "ada kabar?")
+    group_desk = await _desk(aconn, place=GROUP, trigger=group, memories=tuple(hits))
+    assert group_desk.item.memories == ()
+    assert group_desk.item.core_memory == ""
+
+
+async def test_a_memory_without_a_known_source_is_private_to_the_owner(aconn):
+    owner = await _said(aconn, OWNER, OWNER_DM, "direct", "halo")
+    group = await _said(aconn, "person:charlie", GROUP, "shared", "halo semua")
+    fact = memory.MemoryHit("- tanpa sumber", place=None, sources=())
+    assert await reach.memory_visible(aconn, context=GROUP, sources=()) is False
+    assert await reach.memory_visible(aconn, context=OWNER_DM, sources=()) is True
+    group_desk = await _desk(aconn, place=GROUP, trigger=group, memories=(fact,))
+    assert group_desk.item.memories == ()
+    owner_desk = await _desk(aconn, place=OWNER_DM, trigger=owner, memories=(fact,))
+    assert owner_desk.item.memories == (fact,)

@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Sequence
-from zoneinfo import ZoneInfo
 
 from monoagens.guidance import work_guidance
 from monoagens.prior import constants

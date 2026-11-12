@@ -149,7 +149,7 @@ passes.
 - [x] 12.3 **Intent on the target desk (D48).** The intent (what to say, to whom, why, where it came from) is the trigger of the wake in the target place. When several places fit, the soul asks before sending. Scenario 19: the code reaches Budi, the owner is asked which group, only that group receives it.
 - [x] 12.4 **Refusals return (D51).** A rejected thought act or capability argument comes back in the same turn as a result with its reason. Test: `expect` without a cue is corrected in the same wake. Scenario 09 passes.
 - [x] 12.5 **Free-text conditions (moved from Task 4, simplified by D53).** Wake gate: still relevant, stale (quiet hours stay in the owner policy). Free text: cosine below `lo` ignored; at or above `lo` the Expectation is reminded and the PFC wakes once with the line and the Expectation as trigger, and judges (act, resolve, or let it be). No classifier module, no `hi` band, no `lo` learning, no vector cache (deferred, core.md §5). Keep the draft's change to `appraise._engaged`. Must fit the remaining package budget; if it does not, stop and report — the budget is not raised. Checks: a fulfilled promise wakes no one; a question on the same topic never resolves a promise; scenarios 16 and 24 fire on "server down lagi nih guys" and "dokumennya sudah selesai kok".
-- [ ] 12.5b **A memory's audience from its sources (D53, before any real-model run).** Sleep no longer takes `place`/`private` from the model: the core derives them from `derived_from` (private if any source is private; audience = the people every private source was said to; no known source → private to the owner). Core memory follows the same rule. Tests: a sleep answer that omits place for a summary of Fulan's direct chat never reaches a group; core memory built from a direct chat stays out of a group. If a file is at its budget, move code rather than compress; if the package cannot hold it, stop and report.
+- [x] 12.5b **A memory's audience from its sources (D53, before any real-model run).** Sleep no longer takes `place`/`private` from the model: the core derives them from `derived_from` (private if any source is private; audience = the people every private source was said to; no known source → private to the owner). Core memory follows the same rule. Tests: a sleep answer that omits place for a summary of Fulan's direct chat never reaches a group; core memory built from a direct chat stays out of a group. If a file is at its budget, move code rather than compress; if the package cannot hold it, stop and report.
 - [ ] 12.6 **Checks that forbid correct behavior.** 16: "model.call >= 2" forbids calling `expect` at once — the check is that the promise is held in the first wake. 24: the stored fact may be said in any format ("jam lima", "17:00"); its contradictory group lines are made consistent. List every changed check under Notes.
 - [ ] 12.7 **Guidance stays small.** `guidance.py` ≤ 30 lines of general principles; any line added in this part has its evidence under Notes.
 - [ ] 12.8 **Acceptance** (replaces 11.6): `uv run pytest`, the fake replay in full, the real-model replay three times with every scenario passing in all three runs and absolute-line violations 0 in every run (by the stricter metric of 12.1), and the live session including "send this to Budi". Regenerate and commit the capability record; tick 10.10, 11.6 and 12.8.
@@ -1210,3 +1210,98 @@ Part 12 notes (worker, 12.5):
   130/130 checks, missed-help 0.0% (0/65), false-speak 0.0% (0/67), absolute-line violations 0,
   honesty 62/62. `scenarios/README.md` regenerated. Commit `task2(12.5): free-text conditions
   remind the PFC once (no classifier)`.
+
+Part 12 notes (worker, 12.5b):
+- What the item does. `store_memories` no longer has `place` or `private` in its item schema
+  (only `text`, `importance`, `who`); `memory._consolidate` ignores any such argument a model
+  still sends. Each memory takes `derived_from` = the batch's event ids, `place` = the batch's
+  only place (else NULL), and `private` = any source has a place. v1 organs report only
+  `direct`/`shared` places, both non-public, so that is "any source is private"; the column is
+  written for the record and no longer decides anything.
+- The audience rule is `reach.memory_visible` (new; `leaks` moved out of `reach` to make room):
+  no sources -> the owner's direct chat only; else `need` = people present here minus the owner,
+  and for every source event with a place `have` = the people present when it was said (D50:
+  `audience(place, before=source id)`, after aliases) minus the owner, plus consent granted for
+  that place; visible iff `need` is inside every source's audience. A place-less source (a clock,
+  a job, bookkeeping) carries no audience and does not constrain. Therefore: any private source
+  hides the memory from anyone not in it, and the intersection over sources is the memory's
+  audience. Sources come from the events, never from `memories.place` or a model flag.
+- Core memory. `sleep.done` carries `derived_from` and `core_memory`; `store.project_event` and
+  `_consolidate` write `state: core_memory` with it, so a rebuilt status board keeps the
+  provenance. `memory.build_context` shows core memory only when `memory_visible(core sources)`
+  holds at this place: core built from the owner's DM is empty in every group desk and intact
+  in the owner's DM, and one built from non-private/non-DM sources stays where its sources reach.
+- The context hook (`hooks.audience_policy`) filters every memory by `memory_visible(...,
+  sources=memory.sources)`; `MemoryHit` now carries `sources` (derived_from) instead of the
+  `private` flag. `recall.search` uses `memory_visible` for the memory entry. `organs.leaks`
+  (dispatch and `_intend`) asks `memory_visible` for the target place over every valid memory;
+  the HEAD version still scanned only `private` memories at the act's source place, which the
+  12.3 notes described as fixed — this item now makes it so, and it is the general D45 rule.
+- Replay metric. `DeskItem` gains `sources`; `Tracker.record_desk` is async, records core memory
+  as an item whose sources it reads from `state: core_memory` at that moment, and records every
+  memory's sources; `desk_violations` restates D53 from the Log independently of
+  `memory_visible`: per source, the D50 audience (before that source) plus consent granted up to
+  the desk's trigger, a no-source item counted as owner-only. `_leak_violations` now judges every
+  memory (not only `private` ones) by `memory_visible` in the reply's place.
+- Draft kept and fixed. Kept from the interrupted draft: cosine moved to `embedding.cosine`
+  (signals/condition), `store.event_from_row` reused by `memory.recent_lines`,
+  `store.payload_text` in `memory.candidates`, `organs.dispatch` builds its ctx once,
+  `kernel` appraises once, `pairing`'s missing function blank line, and the EOF newlines in
+  `recall.py`/`work.py`. Fixed: `memory_visible` ignored each source's own time (no `before`),
+  so a newcomer would have received a memory of a line said before they arrived; the replay
+  metric had the same hole and did not count core memory.
+- Changed answers (behavior checks unchanged; none loosened):
+  - `scenarios/memory/26_help_meeting_time.yaml`: sleep answer drops `place:
+    space:tg:1001` and `private: true`; the core derives the same place/sources from the batch.
+    10/10 checks.
+  - `scenarios/memory/28_help_package_location.yaml`: same. 10/10 checks.
+  - `scenarios/memory/20_act_r_activation.yaml` (outside 25-29 but stale under the schema): the
+    nine `place: space:tg:1001` fields of its two sleep answers are removed; the batch place is
+    space:tg:1001 either way. Checks unchanged.
+  - 25, 27, 29 never carried `place`/`private`; untouched.
+- Changed tests, each with its reason:
+  - `tests/test_memory.py::test_private_memories_follow_people_not_places`: adds a `percept`
+    source at `space:tg:9` (direct) and sets `derived_from=[source.id]` beside `place`/`private`;
+    D53 now derives the audience from sources. Assertions unchanged.
+  - `tests/test_memory.py::test_the_sleep_tool_does_not_ask_for_place_or_private` (new): the
+    item's properties are exactly `text`, `importance`, `who`.
+  - `tests/test_pfc.py::test_layered_prompt_structure`: the seeded core memory gains
+    `derived_from: [seed.id]`; without a source D53 makes core memory owner-only, and the test's
+    place reports no `place_kind` (so it is not known as a direct chat). Assertion unchanged.
+  - `tests/test_reach.py::test_the_owners_direct_chat_is_private_to_the_owner`: `MemoryHit`
+    carries `sources=(dm,)` instead of `private=True`.
+  - `tests/test_reach.py::test_a_paraphrase_of_a_private_line_is_not_on_the_other_places_desk`:
+    calls `organs.leaks` (the check moved with the function). Assertion unchanged.
+  - `tests/test_reach.py` (new): `test_sleep_derives_private_content_from_the_sources` (a sleep
+    answer with no `place` for Fulan's DM: a memory and core memory carry the DM event, the
+    group desk is empty, the owner DM desk keeps both, and `retrieve` reports the sources);
+    `test_a_model_named_place_never_widens_a_memory` (the item names `space:tg:-500` and
+    `private: false`; stored place/private and the group desk stay the DM's);
+    `test_a_memory_without_a_known_source_is_private_to_the_owner` (empty `derived_from` is
+    hidden in a group, kept in the owner DM); `test_a_memory_needs_every_source_to_cover_the_place`
+    (two group sources, audiences {charlie, dewi} and {budi, dewi}: the memory is visible only in
+    dewi's DM and the owner's, and not in either group).
+  - `tests/test_replay_metrics.py` (new): `test_the_desk_scan_judges_a_memory_by_its_sources`
+    (a DM-sourced memory on a group desk is a violation, empty sources are owner-only, a
+    group-sourced memory passes where its people are, and a newcomer makes it fail — D50);
+    `test_the_desk_scan_counts_core_memory_by_its_sources` (the Tracker records core memory with
+    its `state` sources; group desk violation, owner desk none).
+- Sizes. Package 3,800/3,800 (`wc -l`; HEAD is 3,799 with `recall.py` and `work.py`
+  unterminated, so restoring their newlines plus the draft's moves and dedupes — `cosine` to
+  `embedding`, `leaks` to `organs`, `event_from_row` and `payload_text` reuse, one ctx/appraisal
+  each — net +1 and land exactly on the limit; 12.5b adds no line). `reach.py` 150/150,
+  `memory.py` 254/260, `kernel.py` 279/280, `hooks.py` 128/150,
+  `jobs.py` 148/150, `expect.py` 222/240, `store.py` 227/240, `organs.py` 147, `recall.py` 94,
+  `work.py` 93, `desk.py` 148/160, cognition 534/600. All files ≤100 columns.
+- Runs. `uv run pytest` 277 passed (real Postgres). `uv run python scripts/replay.py --fake`:
+  30 scenarios, 130/130 checks, missed-help 0.0% (0/65), false-speak 0.0% (0/67),
+  absolute-line violations 0 (now with core memory and memory sources counted), honesty 62/62.
+  `scenarios/README.md` regenerated. Commit `task2(12.5b): a memory's audience comes from its
+  sources`.
+- Limits for the architect (not worked around): (1) `derived_from` is the whole sleep batch,
+  because the model does not say which events each item came from; every memory of one batch
+  therefore shares one audience, and a batch spanning a DM and a group only tightens. Per-item
+  provenance would need a model argument, which D53 forbids. (2) D45's public-place exception is
+  unexercised: v1 organs report only `direct`/`shared`, so every source place counts as private;
+  when a `public` kind appears, `memory_visible` needs that exception (today's behaviour narrows,
+  never leaks).

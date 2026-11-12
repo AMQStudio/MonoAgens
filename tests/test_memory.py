@@ -427,8 +427,12 @@ async def test_memory_query_falls_back_to_the_expectation_about(aconn):
 
 
 async def test_private_memories_follow_people_not_places(aconn):
+    source = await append_event(aconn, ts=START, kind="percept", who="person:fulan",
+                                place="space:tg:9", body="telegram",
+                                payload={"place_kind": "direct", "description": "tato rahasia"})
     await _add_memory(aconn, "Muqsith punya tato rahasia", importance=0.9)
-    await aconn.execute("UPDATE memories SET private = true, place = 'space:tg:9'")
+    await aconn.execute("UPDATE memories SET private = true, place = 'space:tg:9', "
+                        "derived_from = %s", ([source.id],))
     fake = FakeLLM([[]])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS,
                     embedder=FakeEmbedder())
@@ -457,3 +461,9 @@ async def test_private_memories_follow_people_not_places(aconn):
     # Fulan's own private chat on any body is allowed.
     await _feed(kernel, await said("person:fulan", "space:tg:9", "direct"))
     assert "tato rahasia" in memories()
+
+
+def test_the_sleep_tool_does_not_ask_for_place_or_private():
+    """D53: the core derives a memory's audience; the model never fills it in."""
+    item = memory.STORE_MEMORIES["function"]["parameters"]["properties"]["items"]["items"]
+    assert set(item["properties"]) == {"text", "importance", "who"}

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import math
 import re
 from datetime import timedelta
 
+from monoagens.embedding import cosine
 from monoagens.store import append_event, payload_text, read_event_vector
 
 _UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -50,14 +50,6 @@ def text(condition):
     return str((condition or {}).get("text") or "").strip() or None
 
 
-def _cosine(left, right):
-    """Return the cosine of two vectors, 0.0 when either is empty."""
-    if not left or not right:
-        return 0.0
-    norm = math.sqrt(sum(x * x for x in left)) * math.sqrt(sum(x * x for x in right))
-    return sum(a * b for a, b in zip(left, right)) / norm if norm else 0.0
-
-
 async def reminded(kernel, row, event):
     """Return whether the line reminds the condition: cosine reaches `lo` from the prior."""
     query = payload_text(event.payload)
@@ -69,7 +61,7 @@ async def reminded(kernel, row, event):
     condition_text = row["condition_text"] or text(row["condition"])
     right = (await kernel.embedder.embed([condition_text]))[0]
     lo = float((kernel.settings.get("calibration") or {})["wake_gate_lo"])
-    return _cosine(left, right) >= lo
+    return cosine(left, right) >= lo
 
 
 async def reminder(conn, row, event, now):

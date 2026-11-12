@@ -11,17 +11,17 @@ from zoneinfo import ZoneInfo
 import psycopg
 from pgvector import Vector
 
-from monoagens import budget
+from monoagens import budget, reach
 from monoagens.desk import PFCContext
 from monoagens.prior import constants, retrieval
-from monoagens.store import (active_expectation_lines, append_event,
+from monoagens.store import (active_expectation_lines, append_event, event_from_row,
                              payload_text, read_event_vector, read_expectations, read_last_events,
                              read_state, resolve_expectation, write_state)
 from monoagens.types import RECENT_KINDS, Event
 from monoagens.work import doing_lines
 
 _ROWS = ("id, text, who, place, importance, last_accessed_at, private, use_count, created_at, "
-         "coalesce(1 - (embedding <=> %s), 0) AS similarity")
+         "derived_from, coalesce(1 - (embedding <=> %s), 0) AS similarity")
 _VECTOR_SQL = (f"SELECT {_ROWS} FROM memories WHERE valid_to IS NULL AND embedding IS NOT NULL "
                "ORDER BY embedding <=> %s LIMIT 40")
 _TEXT_SQL = (f"SELECT {_ROWS} FROM memories WHERE valid_to IS NULL AND "
@@ -34,8 +34,7 @@ STORE_MEMORIES = {"type": "function", "function": {
         "items": {"type": "array", "items": {"type": "object", "required": ["text"],
                                              "properties": {
             "text": {"type": "string"}, "importance": {"type": "number"},
-            "who": {"type": "string"}, "place": {"type": "string"},
-            "private": {"type": "boolean"}}}},
+            "who": {"type": "string"}}}},
         "core_memory": {"type": "string"}}}}}
 SLEEP_SYSTEM = (
     "You are {name}'s memory, asleep; nobody sees this. Summarize the events into durable "
@@ -43,6 +42,7 @@ SLEEP_SYSTEM = (
     "with importance 0..1. Rewrite core_memory as the short always-visible summary of who "
     "the owner is and what matters now. Use store_memories. Never invent facts."
 )
+
 
 def decay_d(settings: dict[str, Any]) -> float:
     """Return ACT-R's d from memory_persistence (0 -> 0.7, 1 -> 0.3)."""
@@ -56,12 +56,11 @@ def base_level(uses: int, age_hours: float, d: float) -> float:
 
 
 class MemoryHit(str):
-    """A retrieved memory line that carries its place, privacy flag and activation."""
-
-    def __new__(cls, line: str, *, place: str | None, private: bool,
+    """A retrieved memory line that carries its place, sources and activation."""
+    def __new__(cls, line: str, *, place: str | None, sources: Any = (),
                 activation: float = 0.0) -> MemoryHit:
         hit = super().__new__(cls, line)
-        hit.place, hit.private, hit.activation = place, private, activation
+        hit.place, hit.sources, hit.activation = place, tuple(sources), activation
         return hit
 
 
@@ -80,22 +79,21 @@ async def retrieve(conn: psycopg.AsyncConnection[Any], embedder: Any, query: str
     rows = {row[0]: row for row in (*vec_rows, *txt_rows)}
     values, d = constants(settings), decay_d(settings)
     scored = [(base_level(int(row[7]), max(0.0, (now - row[8]).total_seconds() / 3600.0), d)
-               + float(values["context_weight"]) * float(row[9])
+               + float(values["context_weight"]) * float(row[10])
                + float(values["importance_weight"]) * float(row[4]), row) for row in rows.values()]
     ranked = sorted(scored, key=lambda pair: (pair[0], pair[1][0]), reverse=True)[:k]
     if ranked:
         await conn.execute("UPDATE memories SET last_accessed_at = %s, use_count = use_count + 1 "
                            "WHERE id = ANY(%s)", (now, [row[0] for _, row in ranked]))
     return [MemoryHit(f"- {row[1]} ({row[2] or '?'} at {row[3] or '?'}; importance {row[4]:.2f})",
-                      place=row[3], private=bool(row[6]), activation=activation)
+                      place=row[3], sources=row[9], activation=activation)
             for activation, row in ranked]
 
 
 async def candidates(conn: psycopg.AsyncConnection[Any], embedder: Any, event: Event, *,
                      now: datetime, settings: dict[str, Any]) -> tuple[str, ...]:
     """Return the memory candidates for one event, using the prior's retrieval constants."""
-    query = str(event.payload.get("description") or event.payload.get("text")
-                or event.payload.get("about") or "")
+    query = payload_text(event.payload)
     if embedder is None or not query.strip():
         return ()
     return tuple(await retrieve(conn, embedder, query, now=now, event_id=event.id,
@@ -135,9 +133,7 @@ async def recent_lines(conn: psycopg.AsyncConnection[Any], exclude_place: str,
         "SELECT id, ts, kind, who, place, body, payload, caused_by, origin_actor, "
         "schema_version FROM lines WHERE rn <= 3 ORDER BY id",
         (exclude_place, list(RECENT_KINDS), max(1, limit // 2), list(RECENT_KINDS)))
-    return [Event(id=row[0], ts=row[1], kind=row[2], who=row[3], place=row[4], body=row[5],
-                  payload=row[6] or {}, caused_by=row[7], origin_actor=row[8],
-                  schema_version=row[9]) for row in await cur.fetchall()]
+    return [event_from_row(row) for row in await cur.fetchall()]
 
 
 async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place: str,
@@ -150,6 +146,8 @@ async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place:
                                     kinds=RECENT_KINDS)
     recent_elsewhere = await recent_lines(conn, place, limit=int(values["recent_elsewhere"]))
     core = await read_state(conn, "core_memory")
+    shown = await reach.memory_visible(conn, context=place,
+                                       sources=(core or {}).get("derived_from"))
     task = await read_state(conn, "task:" + place) if place.startswith("space:task:") else None
     doing = await doing_lines(conn, place, task, values, trigger=event)
     last = None
@@ -160,7 +158,7 @@ async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place:
             break
     return PFCContext(
         now=now, place=place, place_kind=str(event.payload.get("place_kind") or "shared"),
-        reason=reason, core_memory=str((core or {}).get("text") or ""),
+        reason=reason, core_memory=str((core or {}).get("text") or "") if shown else "",
         expectations=await active_expectation_lines(conn, place), memories=memories,
         recent=[seen for seen in recent if seen.id != event.id],
         recent_elsewhere=recent_elsewhere, doing=doing, trigger=event, last_interaction=last,
@@ -212,6 +210,9 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
     rows = await cur.fetchall()
     if not rows:
         return None
+    sources = [row[0] for row in rows]
+    places = {row[4] for row in rows if row[4]}
+    place = next(iter(places)) if len(places) == 1 else None
     zone = ZoneInfo(str(settings.get("timezone") or "UTC"))
     identity = settings.get("identity") or {}
     lines = [f"#{r[0]} {r[1].astimezone(zone):%Y-%m-%d %H:%M} [{r[2]}] {r[3] or '?'} @ "
@@ -232,22 +233,22 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
              if isinstance(item, dict) and item.get("text")]
     vectors = await embedder.embed([str(item["text"]) for item in items]) if items else []
     core = str(args.get("core_memory") or old_core)
-    payload = {"core_memory": core, "last_event_id": int(rows[-1][0]), "memories": len(items)}
+    payload = {"core_memory": core, "last_event_id": sources[-1], "derived_from": sources}
     async with conn.transaction():
         for item, vector in zip(items, vectors):
             await conn.execute(
                 "INSERT INTO memories (who, place, text, embedding, importance, private, "
                 "valid_from, last_accessed_at, derived_from) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                (item.get("who") or None, item.get("place") or None, str(item["text"]),
+                (item.get("who") or None, place, str(item["text"]),
                  Vector(vector), float(item.get("importance", 0.5)),
-                 bool(item.get("private", False)), now, now, [r[0] for r in rows]))
+                 bool(places), now, now, sources))
         for row in await read_expectations(conn, "ex.status = 'active' AND ex.expires_at <= %s",
                                            (now,)):
             await resolve_expectation(conn, row, now, "dropped")
         done = await append_event(conn, ts=now, kind="sleep.done", payload=payload,
                                   caused_by=payload["last_event_id"])
-    await write_state(conn, "core_memory", {"text": core}, done.id)
+    await write_state(conn, "core_memory", {"text": core, "derived_from": sources}, done.id)
     await write_state(conn, "sleep:last_event", {"id": payload["last_event_id"]}, done.id)
     return done
 

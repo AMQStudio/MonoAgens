@@ -84,8 +84,6 @@ model_answers:
           items:
             - text: "Rapat tim besok jam sembilan pagi di ruang rapat lantai tiga"
               importance: 1.0
-              place: space:tg:1001
-              private: true
           core_memory: "Catatan pemilik dari percakapan pribadi."
   - step: 4
     tool: decide

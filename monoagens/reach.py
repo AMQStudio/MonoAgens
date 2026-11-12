@@ -90,17 +90,17 @@ async def visible(conn, *, context: str | None, source: str | None,
     return need <= have
 
 
-async def leaks(conn, source: str | None, target: str | None, text: str) -> bool:
-    """Return whether a message would carry a private line the target may not see (D45)."""
-    if not text or not target:
-        return False
-    cur = await conn.execute("SELECT text, place FROM memories "
-                             "WHERE private AND valid_to IS NULL")
-    for line, place in await cur.fetchall():
-        if line and line in text and not await visible(conn, context=target,
-                                                       source=place or source):
-            return True
-    return False
+async def memory_visible(conn, *, context: str | None, sources: Any = None) -> bool:
+    """Return whether every source of a memory was said to the people here (D53, D50)."""
+    if not sources:
+        return await owner_direct(conn, context)
+    need = set(await audience(conn, context)) - {OWNER}
+    rows = await (await conn.execute(
+        "SELECT id, place FROM events WHERE id = ANY(%s) AND place IS NOT NULL",
+        (list(sources),))).fetchall()
+    audiences = [((set(await audience(conn, place, before=source)) - {OWNER})
+                  | set(await shared(conn, place))) for source, place in rows]
+    return all(need <= have for have in audiences)
 
 
 async def direct_place(conn, who: str, via: str | None = None) -> str | None:
