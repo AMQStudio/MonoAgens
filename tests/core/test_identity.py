@@ -18,7 +18,7 @@ from monoagens.infra.store import append_event, project_event, read_state, rebui
 from monoagens.types import Action, Event
 from monoagens.boot import build
 from monoagens.middleware import privacy
-from tests.support import settings
+from tests.support import open_book, settings
 
 SETTINGS = settings()
 START = datetime(2026, 11, 10, 8, 0, tzinfo=timezone.utc)
@@ -109,6 +109,7 @@ async def test_a_non_owner_cannot_change_the_identity(aconn):
     kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM({"name": "Hacked"})),
                     settings=SETTINGS, embedder=FakeEmbedder())
 
+    kernel.roles = open_book("person:other", "identity.set")  # so the guard is what refuses
     await _feed(kernel, _percept("person:other"))
 
     assert (await read_state(aconn, identity.KEY))["name"] == "Mona"

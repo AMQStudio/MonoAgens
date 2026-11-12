@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import secrets
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime
 from typing import Any
@@ -16,6 +17,7 @@ from monoagens.types import Event
 
 LOGGER = logging.getLogger(__name__)
 OWNER = "person:owner"
+CONTEXT_CAP = 200  # one role's or person's context line on a card (middleware.md §8)
 CODE_KEY = "pairing_code"
 OWNER_KEY = "owner"
 CREATED = "pair.created"
@@ -101,11 +103,12 @@ def claim(conn) -> Middleware:
     return rule
 
 
-def cards(conn) -> Middleware:
+def cards(conn, *, roles: Any = None) -> Middleware:
     """Context rule: add one card per person present here or named in the trigger (D55)."""
 
     async def rule(item: Any, ctx: Any) -> Any:
-        return Replace(replace(item, people=await person_cards(conn, item.place, item.trigger)))
+        return Replace(replace(item, people=await person_cards(conn, item.place, item.trigger,
+                                                               roles=roles)))
 
     return rule
 
@@ -150,7 +153,8 @@ def route(conn) -> Middleware:
     return rule
 
 
-async def person_cards(conn, place: str | None, event: Event | None) -> tuple[str, ...]:
+async def person_cards(conn, place: str | None, event: Event | None,
+                       roles: Any = None) -> tuple[str, ...]:
     """Return one card per person present here or named in the trigger (D55)."""
     present = set(await privacy.audience(conn, place)) if place else set()
     known = await _known_people(conn)
@@ -159,8 +163,46 @@ async def person_cards(conn, place: str | None, event: Event | None) -> tuple[st
              if card["name"] and _named(card["name"], text)}
     people = sorted((present | named) - {OWNER})
     return tuple([await _card(conn, who, known.get(who) or {"name": None, "closeness": 0.0,
-                                                            "natives": {who}})
+                                                            "natives": {who}}, roles=roles)
                   for who in people])
+
+
+async def name_of(conn, who: str) -> str | None:
+    """Return the name the soul knows for one person id, if it knows one."""
+    known = await _known_people(conn)
+    return (known.get(str(who)) or {}).get("name")
+
+
+async def accounts_of(conn, who: str) -> tuple[str, ...]:
+    """Return the native accounts linked to one person id, as `<body>:<native id>`."""
+    mapping = await privacy.aliases(conn)
+    found = [account for account, person in mapping.items() if person == str(who)]
+    if not found and str(who).startswith("person:"):
+        native = str(who).removeprefix("person:")
+        if native != "owner":
+            found.append(native)
+    return tuple(sorted(found))
+
+
+async def find_person(conn, query: str, *, labels: Mapping[str, str] | None = None,
+                      ) -> str | None:
+    """Return the person id matching an account, a person id or a known name."""
+    text = str(query).strip()
+    if not text:
+        return None
+    mapping = await privacy.aliases(conn)
+    if text in mapping:
+        return mapping[text]
+    known = await _known_people(conn)
+    if text in known:
+        return text
+    for who, label in (labels or {}).items():
+        if str(label).lower() == text.lower():
+            return who
+    for who, card in known.items():
+        if card["name"] and str(card["name"]).lower() == text.lower():
+            return who
+    return None
 
 
 async def _known_people(conn) -> dict[str, dict[str, Any]]:
@@ -202,12 +244,14 @@ def _named(name: str, text: str) -> bool:
                                     re.IGNORECASE) is not None
 
 
-async def _card(conn, who: str, card: dict[str, Any]) -> str:
-    """Render one person card: name, person id, reachable adapters, closeness."""
+async def _card(conn, who: str, card: dict[str, Any], *, roles: Any = None) -> str:
+    """Render one person card: name, person id, reachable adapters, closeness, role context."""
     places = await _direct_places(conn, card["natives"])
     reach = "; ".join(f"{adapter} at {place}" for adapter, place in sorted(places.items()))
     label = f"{card['name']} ({who})" if card["name"] else who
-    return f"- {label}: {reach or 'no direct place known yet'}; closeness {card['closeness']:.2f}"
+    line = f"- {label}: {reach or 'no direct place known yet'}; closeness {card['closeness']:.2f}"
+    contexts = [str(context)[:CONTEXT_CAP] for context in (roles.contexts(who) if roles else ())]
+    return "\n".join([line, *[f"  {context}" for context in contexts if context]])
 
 
 async def _direct_places(conn, natives: set[str]) -> dict[str, str]:

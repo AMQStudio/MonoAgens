@@ -26,7 +26,7 @@ import yaml
 from monoagens.core.hooks import Continue, Middleware
 from monoagens.infra import config as config_module
 from monoagens.infra.store import append_event
-from monoagens.middleware import contract, policy, registry
+from monoagens.middleware import contract, policy, registry, roles
 from monoagens.middleware.registry import CommandEntry, SkillEntry
 
 MANIFEST_VERSION = 1
@@ -69,6 +69,7 @@ class Loaded:
     permissions: dict[str, str | None]
     knob_bounds: dict[str, dict[str, tuple[float, float]]]
     apis: tuple["PluginAPI", ...] = ()
+    roles: Any = None
 
 
 @dataclass
@@ -169,7 +170,8 @@ class Loader:
         loaded = Loaded(report=report, plugins=tuple(api.name for api in apis),
                         adapters=self.adapters(settings, report),
                         permissions=self._permissions(manifests, config_d),
-                        knob_bounds=self._knob_bounds(manifests), apis=tuple(apis))
+                        knob_bounds=self._knob_bounds(manifests), apis=tuple(apis),
+                        roles=self._roles(settings, manifests, config_d, report))
         if unavailable:
             report.add(f"plugins unavailable: {', '.join(sorted(unavailable))}")
         return loaded
@@ -319,6 +321,22 @@ class Loader:
             else:
                 raise ValueError(f"config.d/{name}.yaml: features.{key}: expected list or map")
         return declared
+
+    @staticmethod
+    def _roles(settings: Mapping[str, Any], manifests: Mapping[str, Mapping[str, Any]],
+               config_d: Mapping[str, Mapping[str, Any]], report: BootReport) -> Any:
+        """Resolve the role book from config.yaml, the manifests and config.d."""
+        catalog = dict(roles.CORE_PERMISSIONS)
+        for manifest in manifests.values():
+            for name, spec in (manifest.get("permissions") or {}).items():
+                catalog.setdefault(str(name), (spec or {}).get("base"))
+        for values in config_d.values():
+            for name, base in (values.get("permissions") or {}).items():
+                catalog.setdefault(str(name), base)
+        return roles.RoleBook.build({"roles": settings.get("roles") or {},
+                                     "people": settings.get("people") or {},
+                                     "places": settings.get("places") or {}},
+                                    catalog, manifests, config_d, report)
 
     def adapters(self, settings: Mapping[str, Any], report: BootReport) -> tuple[Any, ...]:
         """Create every enabled adapter from `bodies:` through its `create(options, env)`."""
@@ -484,6 +502,9 @@ class Loader:
             if hasattr(adapter, "get_cursor"):
                 adapter.get_cursor = _cursor_for(kernel, adapter.name)
             kernel.register_adapter(adapter)
+        if loaded.roles is not None:
+            kernel.roles = loaded.roles
+        kernel.deployment_root = self.root
         kernel.loaded_plugins = loaded.plugins
         kernel.plugin_versions = {api.name: str(api.manifest.get("version") or "")
                                   for api in loaded.apis}
@@ -594,6 +615,47 @@ def set_plugin_enabled(text: str, name: str, enabled: bool) -> str:
     while insert_at > start + 1 and not lines[insert_at - 1].strip():
         insert_at -= 1
     lines.insert(insert_at, f"  {name}: {{enabled: {value}}}\n")
+    return "".join(lines)
+
+
+def set_person_roles(text: str, who: str, held: Sequence[str]) -> str:
+    """Return the text with only `people.<id>.roles` set; every other byte stays."""
+    key = json.dumps(who)  # the id holds colons, so it is written as a quoted YAML key
+    rendered = "[" + ", ".join(str(role) for role in held) + "]"
+    lines = text.splitlines(keepends=True)
+    head = re.compile(r"^people:\s*(\{\s*\})?(?:\s+#.*)?\s*$")
+    start = next((index for index, line in enumerate(lines)
+                  if head.match(line.rstrip("\n"))), None)
+    if start is None:
+        tail = "" if not text or text.endswith("\n") else "\n"
+        return f"{text}{tail}people:\n  {key}: {{roles: {rendered}}}\n"
+    if lines[start].rstrip("\n").split("#")[0].strip() != "people:":
+        lines[start] = "people:\n"  # `people: {}` becomes a block with this one entry
+    end = start + 1
+    while end < len(lines) and (lines[end].startswith((" ", "\t")) or not lines[end].strip()):
+        end += 1
+    entry = re.compile(rf"^(\s+)(?:{re.escape(key)}|'{re.escape(who)}'|"
+                       rf"{re.escape(who)}):\s*(.*)$")
+    for index in range(start + 1, end):
+        match = entry.match(lines[index].rstrip("\n"))
+        if match is None:
+            continue
+        rest, indent = match.group(2), match.group(1)
+        if "roles:" in rest:
+            lines[index] = (f"{indent}{key}: "
+                            + re.sub(r"roles:\s*\[[^\]]*\]", f"roles: {rendered}", rest,
+                                     count=1) + "\n")
+            return "".join(lines)
+        if rest.strip() in ("", "{}"):
+            for deeper in range(index + 1, end):  # a block-style entry
+                if re.match(rf"^{indent}\s+roles:", lines[deeper]):
+                    pad = re.match(r"^(\s+)", lines[deeper]).group(1)
+                    lines[deeper] = f"{pad}roles: {rendered}\n"
+                    return "".join(lines)
+    insert_at = end
+    while insert_at > start + 1 and not lines[insert_at - 1].strip():
+        insert_at -= 1
+    lines.insert(insert_at, f"  {key}: {{roles: {rendered}}}\n")
     return "".join(lines)
 
 

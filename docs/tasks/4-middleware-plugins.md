@@ -200,3 +200,29 @@ code, `Loader.load`/`install`, print the report, then `kernel.run`, every `adapt
 the clock; every adapter with `aclose` is closed on shutdown. An adapter outside the package
 loads from `config.yaml` alone (`module: tests.fixtures.echo_adapter`, proved in
 `tests/adapters/test_loader.py`).
+
+**1.6 Roles.** `RoleBook.build(config, catalog, manifests, config_d, report)` resolves one
+pass: bases per permission from `config.d` → manifest → the middleware catalog; roles with
+`base`/`allow`/`deny`/`settings`/`approval`/`label`/`context`; people keyed by person id. A
+role's **effective tier** is its base or the base of what it allows, and a permission without a
+base counts as owner, so a group role that carries one is an owner-tier role. A person's tier is
+the highest role held (the fallback included); `person:owner` is above every tier. A person
+holds every permission whose base is at or below their tier, plus the `allow`s of their roles,
+minus every `deny` (`deny` wins, also at a place). Wildcards (`*`, `workspace.*`) expand in
+`allow`/`deny` and as permission keys in `config.d`, never taking a core permission or one
+without a base, and each expansion is a boot-report line. `role_settings` resolve per tier
+(manifest, then `config.d`), role settings override them, and keys ending in `shared` merge as
+lists. `places:` gives allow/deny overrides; a place deny removes what the tier gave.
+`/whoami` (guest) shows id, label, roles with labels, tier and approval, and this place with
+what the adapter reports (`place_info`); accounts appear only in a direct chat — in a shared
+place they are sent to the asker's direct chat on that adapter and the group reply says
+"(accounts sent to your direct chat)", while without a direct place they are simply absent.
+`/whois` (admin) matches an account, a person id or a label. `/role add|remove` (admin) gives
+only roles strictly below the giver's tier (else `only the owner may change <role>`), edits only
+`people.<id>.roles` (backup; `people:` and the entry created when absent; the id written as a
+quoted YAML key because it holds colons), applies to the running book without a restart and
+records `roles.changed`. `/roles show <role>` prints each permission with its base and source
+(`middleware`/`manifest`/`config.d`) and the role's label, approval, context and settings from
+`config.yaml`. Each role's and person's `context` reaches the person card, one line each, capped
+at 200 characters. The book is installed by `Loader.install` (`kernel.roles`); a kernel built
+without a loader keeps the empty book, so the owner is free and everyone else only talks.

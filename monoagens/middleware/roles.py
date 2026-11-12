@@ -8,9 +8,15 @@ label and the lowest tier that gets them, and `config.d/<plugin>.yaml` may move 
 
 from __future__ import annotations
 
+import pathlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
+
+from monoagens.infra.store import append_event
+from monoagens.middleware import identity, privacy
+from monoagens.middleware.registry import CommandEntry
+from monoagens.types import Event
 
 TIERS = ("guest", "member", "trusted", "admin")
 OWNER_TIER = "owner"  # above admin: a permission without a base needs it
@@ -61,7 +67,8 @@ class Role:
         """Return the highest tier this role reaches: its base or the base of what it allows."""
         reached = [_rank(self.base)]
         for permission in self.allow:
-            reached.append(_rank(bases.get(permission)))
+            owner_only = permission in bases and bases[permission] is None
+            reached.append(_rank(OWNER_TIER if owner_only else bases.get(permission)))
         best = max(reached)
         return OWNER_TIER if best >= len(TIERS) else TIERS[max(best, 0)]
 
@@ -160,7 +167,8 @@ class RoleBook:
         if str(who) == "person:owner":
             return frozenset(self.bases)
         tier = _rank(self.tier(who))
-        held = {name for name, base in self.bases.items() if _rank(base) <= tier}
+        held = {name for name, base in self.bases.items()
+                if base is not None and _rank(base) <= tier}
         for role in self.held(who):
             held |= set(role.allow)
             held -= set(role.deny)
@@ -235,3 +243,244 @@ class RoleBook:
             return False
         mine, theirs = _rank(self.tier(giver)), _rank(role.effective_tier(self.bases))
         return self.tier(giver) == OWNER_TIER or theirs < mine
+
+
+# -------------------------------------------------------------- resolution
+
+
+def _bases(catalog: Mapping[str, str | None], manifests: Mapping[str, Mapping[str, Any]],
+           config_d: Mapping[str, Mapping[str, Any]],
+           report: Any) -> tuple[dict[str, str | None], dict[str, str]]:
+    """Return the effective base of every permission and where it came from."""
+    bases = {str(name): base for name, base in catalog.items()}
+    sources = {str(name): "middleware" for name in catalog}
+    for manifest in manifests.values():
+        for name, spec in (manifest.get("permissions") or {}).items():
+            bases[str(name)] = (spec or {}).get("base")
+            sources[str(name)] = "manifest"
+    for values in config_d.values():
+        for name, base in (values.get("permissions") or {}).items():
+            if name in bases and bases[name] != base:
+                report.add(f"permission {name}: {base or OWNER_TIER} (config.d)")
+            bases[str(name)] = base
+            sources[str(name)] = "config.d"
+    for pattern in [name for name in bases if _is_pattern(name)]:
+        matched = _wildcard(pattern, bases)
+        report.add(f"roles: {pattern} expands to {', '.join(sorted(matched))}")
+        for name in matched:
+            bases[name] = bases[pattern]
+            sources[name] = sources[pattern]
+        bases.pop(pattern, None)
+        sources.pop(pattern, None)
+    return bases, sources
+
+
+def _role_settings(manifests: Mapping[str, Mapping[str, Any]],
+                   config_d: Mapping[str, Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Return every role setting by tier: the manifests first, then config.d."""
+    by_tier: dict[str, dict[str, Any]] = {tier: {} for tier in TIERS}
+    sources = [manifest.get("role_settings") or {} for manifest in manifests.values()]
+    sources += [values.get("role_settings") or {} for values in config_d.values()]
+    for source in sources:
+        for key, per_tier in source.items():
+            for tier, value in (per_tier or {}).items():
+                if tier in TIERS:
+                    by_tier[tier][str(key)] = value
+    return by_tier
+
+
+def _is_pattern(name: str) -> bool:
+    """Return whether one permission name is a wildcard (`*` or `plugin.*`)."""
+    return name == "*" or name.endswith(".*")
+
+
+def _wildcard(pattern: str, bases: Mapping[str, str | None]) -> set[str]:
+    """Return every permission a wildcard stands for: declared, not core, never owner-only."""
+    candidates = [name for name, base in bases.items()
+                  if name not in CORE_PERMISSIONS and base is not None
+                  and not _is_pattern(name)]
+    if pattern == "*":
+        return set(candidates)
+    prefix = pattern.removesuffix("*")
+    return {name for name in candidates if name.startswith(prefix)}
+
+
+def _expand(names: Any, bases: Mapping[str, str | None], report: Any) -> frozenset[str]:
+    """Expand the wildcards of one role's allow or deny into the permission names."""
+    found: set[str] = set()
+    for name in names:
+        if _is_pattern(str(name)):
+            matched = _wildcard(str(name), bases)
+            report.add(f"roles: {name} expands to {', '.join(sorted(matched))}")
+            found |= matched
+        else:
+            found.add(str(name))
+    return frozenset(found)
+
+
+def describe_role(book: RoleBook, role_name: str) -> str:
+    """Render one role's merged permissions and settings, each line with its source."""
+    role = book.roles.get(role_name)
+    if role is None:
+        return f"no role called {role_name}"
+    tier = role.effective_tier(book.bases)
+    held = {name for name, base in book.bases.items() if _rank(base) <= _rank(tier)}
+    held = (held | set(role.allow)) - set(role.deny)
+    lines = [f"{name}: {book.bases.get(name) or OWNER_TIER} "
+             f"({book.sources.get(name, 'config.yaml')})" for name in sorted(held)]
+    for key, value in (("label", role.label), ("approval", role.approval),
+                       ("context", role.context)):
+        if value:
+            lines.append(f"{key}: {value} (config.yaml)")
+    for key, value in sorted(role.settings.items()):
+        lines.append(f"{key}: {value} (config.yaml)")
+    return "\n".join(lines) or f"{role_name} holds nothing"
+
+
+# ---------------------------------------------------------------- commands
+
+
+def install_commands(kernel: Any) -> None:
+    """Register the middleware's own role commands: /whoami, /whois, /role, /roles."""
+    tools = kernel.tools
+    for name, description, permission, handler in (
+            ("whoami", "Show who you are here, and what you may do.", "identity.whoami",
+             whoami),
+            ("whois", "Show one person's id and linked accounts.", "identity.whois", whois),
+            ("role", "Give or take a role: /role add|remove <person> <role>.",
+             "roles.manage", give_role),
+            ("roles", "Show what one role gets: /roles show <role>.", "roles.manage", show_role)):
+        if tools.command(name) is None:
+            tools.add_command(CommandEntry(name, description, permission, handler,
+                                           owner="roles"))
+
+
+def _book(kernel: Any) -> RoleBook:
+    """Return the kernel's role book, or the default one before a loader installed it."""
+    return getattr(kernel, "roles", None) or RoleBook.empty()
+
+
+async def whoami(kernel: Any, event: Event, arguments: list[str]) -> str:
+    """Show the asker's id, roles and this place; accounts only ever in a direct chat."""
+    conn, book = kernel.conn, _book(kernel)
+    who, place = str(event.origin_actor or event.who), str(event.place or "")
+    shared = not await privacy.direct(conn, place)
+    name = await identity.name_of(conn, who)
+    person = book.people.get(who)
+    label = (person.label if person is not None and person.label else None) \
+        or name or book.label(who)
+    lines = [f"you: {who}" + (f" ({label})" if label else "")]
+    accounts = await identity.accounts_of(conn, who)
+    if shared:
+        target = await identity.direct_place(conn, who, event.body)
+        if accounts and target:
+            await tell(kernel, event, target, "/whoami: your linked accounts: "
+                                              + ", ".join(accounts))
+            lines.append("(accounts sent to your direct chat)")
+    elif accounts:
+        lines.append("accounts: " + ", ".join(accounts))
+    held = ", ".join(role.name + (f" ({role.label})" if role.label else "")
+                     for role in book.held(who)) or "none"
+    lines.append(f"roles: {held}; tier {book.tier(who)}; approval {book.approval(who)}")
+    info = await place_info(kernel, event, place)
+    lines.append(f"place: {place} — {await privacy.place_kind(conn, place)}, {event.body}"
+                 + (f', "{info["name"]}"' if info.get("name") else "")
+                 + (f' ({info["member_count"]} members)' if info.get("member_count") else ""))
+    if info.get("role_facts"):
+        lines.append("platform: " + ", ".join(str(fact) for fact in info["role_facts"]))
+    return "\n".join(lines)
+
+
+async def whois(kernel: Any, event: Event, arguments: list[str]) -> str:
+    """Show one person's id, label and linked accounts (`identity.whois`)."""
+    query = " ".join(arguments).strip()
+    if not query:
+        return "usage: /whois <name or account>"
+    who = await identity.find_person(kernel.conn, query, labels=_labels(kernel))
+    if who is None:
+        return f"no one called {query}"
+    label = _labels(kernel).get(who) or await identity.name_of(kernel.conn, who)
+    lines = [f"{who}" + (f" ({label})" if label else "")]
+    accounts = await identity.accounts_of(kernel.conn, who)
+    if accounts:
+        lines.append("accounts: " + ", ".join(accounts))
+    return "\n".join(lines)
+
+
+async def give_role(kernel: Any, event: Event, arguments: list[str]) -> str:
+    """Give or take one role: only below the giver's own tier, one line in config.yaml."""
+    if len(arguments) < 3 or arguments[0].lower() not in ("add", "remove"):
+        return "usage: /role add|remove <person> <role>"
+    action, query, role_name = arguments[0].lower(), arguments[1], arguments[2]
+    book = _book(kernel)
+    if role_name not in book.roles:
+        return f"no role called {role_name}"
+    giver = str(event.origin_actor or event.who)
+    if not book.may_give(giver, role_name):
+        return f"only the owner may change {role_name}"
+    who = (await identity.find_person(kernel.conn, query, labels=_labels(kernel))
+           or (query if query.startswith("person:") else None))
+    if who is None:
+        return f"no one called {query}"
+    person = book.people.get(who)
+    held = list(person.roles if person is not None else ())
+    added = action == "add" and role_name not in held
+    if action == "add" and added:
+        held.append(role_name)
+    elif action == "remove":
+        held = [name for name in held if name != role_name]
+    await edit_people(kernel, event, who, held)
+    if added or action == "remove":
+        await append_event(kernel.conn, ts=kernel.clock.now(), kind="roles.changed",
+                           who=giver, place=event.place, body=event.body,
+                           caused_by=event.id,
+                           payload={"who": giver, "person": who, "role": role_name,
+                                    "added": added})
+    return f"{who} now holds {', '.join(held) or 'no role'}"
+
+
+async def show_role(kernel: Any, event: Event, arguments: list[str]) -> str:
+    """Print one role's merged permissions and settings with each line's source."""
+    if len(arguments) < 2 or arguments[0].lower() != "show":
+        return "usage: /roles show <role>"
+    return describe_role(_book(kernel), arguments[1])
+
+
+def _labels(kernel: Any) -> dict[str, str]:
+    """Return the labels `config.yaml` gives people, for matching a query."""
+    return {who: str(person.label) for who, person in _book(kernel).people.items()
+            if person.label}
+
+
+async def place_info(kernel: Any, event: Event, place: str) -> dict[str, Any]:
+    """Return what the adapter reports about one place, empty when it reports nothing."""
+    adapter = kernel.tools.adapters.get(str(event.body))
+    reader = getattr(adapter, "place_info", None)
+    if adapter is None or not callable(reader):
+        return {}
+    found = await reader(place) or {}
+    return dict(found) if isinstance(found, dict) else {}
+
+
+async def tell(kernel: Any, event: Event, place: str, text: str) -> None:
+    """Send one extra message in the place it belongs, and record it like any act."""
+    capability = f"{event.body}.say"
+    stored = await kernel._emit(event, "act.out", {
+        "capability": capability, "arguments": {"text": text}, "communicative": True},
+        place=place)
+    await kernel.tools.act(replace(event, place=place), capability, {"text": text},
+                           event_id=stored.id)
+
+
+async def edit_people(kernel: Any, event: Event, who: str, held: Sequence[str]) -> None:
+    """Write only `people.<id>.roles` in config.yaml, after a backup, and update the book."""
+    from monoagens.middleware import loader  # local: loader imports roles' siblings
+
+    root = getattr(kernel, "deployment_root", None)
+    if root is None:
+        kernel.roles = _book(kernel).with_person(who, held)
+        return
+    path = pathlib.Path(root) / "config.yaml"
+    loader.edit_config(path, lambda text: loader.set_person_roles(text, who, held),
+                       now=kernel.clock.now())
+    kernel.roles = _book(kernel).with_person(who, held)

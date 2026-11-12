@@ -66,13 +66,14 @@ def install(kernel: Any) -> None:
         for name, middleware in modules_for(pipeline.name, kernel):
             pipeline.add(name, middleware)
     registry.install_commands(kernel)
+    roles.install_commands(kernel)
 
 
 def modules_for(hook: str, kernel: Any) -> tuple[tuple[str, Middleware], ...]:
     """Return the scoped middleware of one hook, in the order it runs."""
     return {"inbound": (("identity-pairing", identity.claim(kernel.conn)),
                         ("commands", registry.commands(kernel))),
-            "context": (("identity-cards", identity.cards(kernel.conn)),
+            "context": (("identity-cards", identity.cards(kernel.conn, roles=kernel.roles)),
                         ("self-block", registry.self_block(kernel))),
             "action": (("identity-route", identity.route(kernel.conn)),)}.get(hook, ())
 
