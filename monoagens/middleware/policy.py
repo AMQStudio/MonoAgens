@@ -10,6 +10,7 @@ tool's facts into pass, ask or refuse.
 
 from __future__ import annotations
 
+import ipaddress
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, time
 from typing import Any
@@ -22,6 +23,27 @@ from monoagens.middleware import identity, privacy, registry, roles
 from monoagens.middleware.contract import compose
 
 IDENTITY_SET = "identity.set"  # the owner's alone: a permission without a base
+
+# The addresses nothing outside may reach: private, loopback, link-local, the container
+# ranges and the metadata service. One table for `web_fetch` and the sandbox (plugins.md §5).
+BLOCKED_NETWORKS = tuple(ipaddress.ip_network(value) for value in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8",
+    "169.254.0.0/16", "0.0.0.0/8", "::1/128", "fc00::/7", "fe80::/10"))
+
+
+def is_blocked_address(address: str) -> bool:
+    """Return whether one address is private, reserved or otherwise off limits (fail closed)."""
+    try:
+        value = ipaddress.ip_address(str(address).strip("[]").split("%")[0])
+    except ValueError:
+        return True
+    if isinstance(value, ipaddress.IPv6Address) and value.ipv4_mapped is not None:
+        value = value.ipv4_mapped
+    if (value.is_private or value.is_loopback or value.is_link_local or value.is_multicast
+            or value.is_reserved or value.is_unspecified):
+        return True
+    return any(network.version == value.version and value in network
+               for network in BLOCKED_NETWORKS)
 
 
 def install(kernel: Any) -> None:

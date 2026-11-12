@@ -152,3 +152,30 @@ bases, the owner always free, everyone else only the guest-tier permissions) rat
 the registry offers a turn only what its requester may use, so a kernel without a book would
 have offered nothing but talking capabilities and broken the fake replay and the core tests.
 1.6 adds `RoleBook.build`, the commands and the wildcards on top of the same API.
+
+**1.4 Loader.** `Loader.load(settings)` reads `config.yaml`'s plugins section (already
+upcast), every enabled plugin's `plugin.yaml`, and `config.d/<name>.yaml`; `Loader.install`
+adds what they brought and never touches the core. Refusals at boot, with the exact messages:
+an unknown/missing manifest key, a `state_namespace` that is not the plugin's name, an enabled
+plugin without its folder, an unknown `config.d` key or option, a wrong option type, a missing
+or cyclic dependency, a tool without facts, a tool whose permission the manifest does not
+declare, a command without a permission, two plugins claiming one command, an extension point
+opened twice or filled without being opened. `requires:` uses `importlib.util.find_spec` and a
+missing module makes the plugin unavailable (its tools are absent) with the exact
+`uv pip install -r plugins/<name>/requirements.txt` hint — never a boot failure.
+**Reload/uninstall semantics.** `/plugin enable|disable` edit only their own line (byte-compared
+in the test), copy `config.d/<name>.yaml` from the manifest the first time, keep a
+`config.yaml.bak-<UTC stamp>` backup, and then run the same `reload` path.
+`install` swaps middleware through one stable slot per `(hook, "<plugin>-<name>")` — the
+pipeline's names and order never change — so `/reload` never collides, and a slot whose plugin
+left stops running. It drops every owner's tools, commands and skills first
+(`ToolRegistry.discard_owner`), so a changed plugin set applies in place. `/reload` validates
+first (`reload refused: <error>` keeps the running configuration); it reports
+`restart needed: plugin <name> <old> -> <new>` when a manifest version changed, because the
+running process keeps the old modules. Uninstalling is the owner removing the folder and the
+`plugins:` entry by hand: the next reload drops its tools/commands/middleware/rules and reports
+`config.d/<name>.yaml: plugin <name> is not installed; ignored`; its events stay history.
+**`/plugin update`** follows the dpkg rule: config.d is a file the program wrote, so it is
+rewritten from the new manifest only where the value still equals the one `/plugin enable`
+recorded (`plugin.config_changed` with `key: config.d/<name>.yaml:<section>.<key>`); a value the
+owner changed is kept and named. Every change is an event for history only.

@@ -70,7 +70,10 @@ def settings(**sections: dict[str, Any]) -> dict[str, Any]:
         "manifest": {},
     }
     for name, patch in sections.items():
-        value[name] = {**value.get(name, {}), **patch}
+        if isinstance(patch, dict) and isinstance(value.get(name), dict):
+            value[name] = {**value[name], **patch}
+        else:
+            value[name] = patch
     return value
 
 

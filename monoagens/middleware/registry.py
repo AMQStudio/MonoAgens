@@ -56,6 +56,7 @@ class CommandEntry:
     description: str
     permission: str
     handler: Callable[[Any, Event, list[str]], Awaitable[str | None]]
+    owner: str = ""  # the plugin that registered it; empty for the middleware's own
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +66,7 @@ class SkillEntry:
     name: str
     description: str
     body: str
+    owner: str = ""
 
 
 class ToolRegistry:
@@ -145,11 +147,15 @@ class ToolRegistry:
         return permission
 
     def discard_owner(self, owner: str) -> None:
-        """Remove every capability one owner declared (a plugin that left the configuration)."""
+        """Remove everything one owner declared (a plugin that left the configuration)."""
         self.adapters.pop(owner, None)
         for full in [name for name, entry in self.entries.items() if entry.owner == owner]:
             self.entries.pop(full, None)
             self.capabilities.pop(full, None)
+        for name in [name for name, entry in self._commands.items() if entry.owner == owner]:
+            self._commands.pop(name, None)
+        for name in [name for name, entry in self._skills.items() if entry.owner == owner]:
+            self._skills.pop(name, None)
 
     def get(self, full: str) -> dict[str, Any] | None:
         """Return one capability's descriptor, or None when nothing declares it."""
