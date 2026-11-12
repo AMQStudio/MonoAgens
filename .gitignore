@@ -13,3 +13,6 @@ dist/
 scratch/
 reports/
 backups/
+
+# runtime data: sandbox base, workspaces, attachments
+var/
