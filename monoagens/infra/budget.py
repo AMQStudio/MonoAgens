@@ -1,6 +1,6 @@
 """Budget: every model call is recorded and counted for the day. The cap is middleware.
 
-The core counts (invariant 5); `monoagens/middleware/limits.py` owns the limit and the
+The core counts (invariant 5); `monoagens/middleware/policy.py` owns the limit and the
 one event it writes when the day's budget runs out.
 """
 
