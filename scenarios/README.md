@@ -10,8 +10,8 @@ from the scripted fake model; real results come from the saved reports in
 `reports/`. A capability that fails with the real model is listed as FAIL, not
 hidden.
 
-Generated 2026-11-12 03:50 UTC from 29 capabilities across 8 brain functions.
-Pooled per capability: its latest runs among 144 saved fake and 25 saved real-model reports.
+Generated 2026-11-12 03:51 UTC from 29 capabilities across 8 brain functions.
+Pooled per capability: its latest runs among 145 saved fake and 25 saved real-model reports.
 
 ## cross-body
 

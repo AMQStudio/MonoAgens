@@ -353,17 +353,17 @@ async def test_expect_tool_creates_an_expectation_and_records_it(aconn):
     assert expires == START + timedelta(days=30)
 
 
-async def test_expect_with_an_invalid_weight_becomes_an_error_event(aconn):
+async def test_expect_with_an_invalid_weight_is_refused_in_the_same_turn(aconn):
+    """D51: the refusal's reason is a result line, so the model can correct it at once."""
     fake = FakeLLM([[("expect", {"about": "bad", "cue_time": {"daily": "07:00"},
                                 "expect": {"none": True}, "weight": 2.0})], []])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
 
     await _feed(kernel, _msg("buat janji"))
 
-    kinds = await _kinds(aconn)
-    assert kinds == ["percept", "model.call", "model.call", "error"]
-    cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'error'")
-    assert "weight" in (await cur.fetchone())[0]["error"]
+    assert "<results>\nexpect refused: weight out of range: 2.0" in \
+        fake.requests[1]["messages"][-1]["content"]
+    assert await _kinds(aconn) == ["percept", "model.call", "model.call", "decision.silent"]
     cur = await aconn.execute("SELECT count(*) FROM expectations")
     assert (await cur.fetchone())[0] == 0
 

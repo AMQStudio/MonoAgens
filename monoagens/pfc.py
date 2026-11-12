@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Any, Sequence
 from zoneinfo import ZoneInfo
 
 import httpx
 
-from monoagens import desk
+from monoagens import desk, expect
 from monoagens.desk import PFCContext
 from monoagens.prior import load_settings
 
@@ -63,6 +64,7 @@ TOOLS: list[dict[str, Any]] = [
 ]
 TOOL_NAMES = frozenset(tool["function"]["name"] for tool in TOOLS)
 THOUGHT_ACTS = frozenset({"think", "expect", "resolve", "revise"})
+_PARAMETERS = {tool["function"]["name"]: tool["function"]["parameters"] for tool in TOOLS}
 
 
 def _args(cap: dict[str, Any]) -> str:
@@ -156,17 +158,69 @@ class PFC:
                                tool_choice="auto" if context.results else "required")
 
 
-async def turns(pfc: Any, context: PFCContext, limit: int) -> list[dict[str, Any]]:
+async def turns(pfc: Any, context: PFCContext, limit: int,
+                check: Callable[[ToolCall], Awaitable[str | None]] | None = None,
+                ) -> list[dict[str, Any]]:
     """Run one wake's rounds: a thought act's result returns to the model (D51)."""
     taken, made = [], []
     while len(made) < max(1, int(limit)):
         calls = await pfc.decide(replace(context, results=tuple(taken)))
-        raw = [{"name": call.name, "arguments": call.arguments} for call in calls]
+        raw, notes = [], []
+        for call in calls:
+            item = {"name": call.name, "arguments": call.arguments}
+            refused = await check(call) if check is not None else None
+            if refused:
+                item["refused"] = refused
+                notes.append(f"{call.name} refused: {refused}")
+            else:
+                notes.append(_recorded([item])[0])
+            raw.append(item)
         made.append({"calls": raw, "usage": dict(getattr(pfc, "last_usage", None) or {})})
-        if not raw or not all(call["name"] in THOUGHT_ACTS for call in raw):
+        if not raw or not all(item["name"] in THOUGHT_ACTS or item.get("refused")
+                              for item in raw):
             break
-        taken += _recorded(raw)
+        taken += notes
     return made
+
+
+def turn_check(context: PFCContext, now: Any, settings: dict[str, Any]) -> Callable[..., Any]:
+    """Return the check that refuses a bad thought act with its reason (D51)."""
+
+    async def check(call: ToolCall) -> str | None:
+        parameters = _PARAMETERS.get(call.name)
+        if parameters is None:
+            return None
+        missing = [name for name in parameters.get("required") or ()
+                   if name not in call.arguments]
+        unknown = [name for name in call.arguments if name not in parameters["properties"]]
+        if missing:
+            return f"missing {', '.join(missing)}"
+        if unknown:
+            return f"unknown argument {', '.join(unknown)}"
+        if call.name == "expect":
+            try:
+                expect.validate(call.arguments, now=now, settings=settings)
+            except (TypeError, ValueError, KeyError) as exc:
+                return str(exc)
+        if call.name == "resolve":
+            return _check_resolve(context, call.arguments)
+        return None
+
+    return check
+
+
+def _check_resolve(context: PFCContext, arguments: dict[str, Any]) -> str | None:
+    """Refuse a resolve that names no expectation on the desk, or a status outside two."""
+    status = str(arguments.get("status") or "")
+    if status not in ("satisfied", "dropped"):
+        return "status must be satisfied or dropped"
+    try:
+        exp_id = int(arguments["id"])
+    except (KeyError, TypeError, ValueError):
+        return "id must be an integer"
+    shown = {int(line[1:].split(" ", 1)[0]) for line in context.expectations
+             if line.startswith("#") and line[1:2].isdigit()}
+    return None if exp_id in shown else f"no expectation #{exp_id} on the desk"
 
 
 def _recorded(calls: list[dict[str, Any]]) -> list[str]:

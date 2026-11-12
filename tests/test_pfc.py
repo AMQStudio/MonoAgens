@@ -399,6 +399,28 @@ async def test_a_thought_then_an_act_is_one_wake(aconn):
     assert "<results>\nthink: " in fake.requests[1]["messages"][-1]["content"]
 
 
+async def test_an_expect_without_a_cue_is_corrected_in_the_same_wake(aconn):
+    """D51: a refused thought act's reason is a result line; the next round fixes it."""
+    fake = FakeLLM([[("expect", {"about": "ask again later", "expect": {"none": True}})],
+                    [("expect", {"about": "ask again later", "kind": "promise",
+                                 "cue_time": {"at": "2026-11-10T16:00:00+00:00"},
+                                 "expect": {"none": True}, "policy": {"once": True}})],
+                    []])
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel.register_body(RecordingBody())
+
+    await _feed(kernel, _msg("tanya lagi kalau aku belum jawab dalam 1 jam"))
+
+    assert "expect refused: expect needs cue_time or cue_event" in \
+        fake.requests[1]["messages"][-1]["content"]
+    assert [request["tool_choice"] for request in fake.requests] == \
+        ["required", "auto", "auto"]
+    assert await _kinds(aconn) == ["percept", "model.call", "model.call", "model.call",
+                                   "expectation.created", "decision.silent"]
+    cur = await aconn.execute("SELECT about, cue_event FROM expectations")
+    assert await cur.fetchall() == [("ask again later", None)]
+
+
 async def test_a_chain_in_a_place_shows_every_step_and_its_latest_result(aconn):
     """D52: <doing> follows the chain where it started, not only inside task threads."""
     root = await append_event(aconn, ts=START, kind="percept", who="person:owner", place=PLACE,

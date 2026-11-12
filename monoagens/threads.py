@@ -61,7 +61,7 @@ async def after_step(kernel, job, event, calls: Sequence[dict[str, Any]]) -> Non
     task = await read_state(conn, KEY + place)
     if not task or task.get("status") != OPEN:
         return
-    acts = [call for call in calls if call.get("name") == "act"]
+    acts = [call for call in calls if call.get("name") == "act" and not call.get("refused")]
     targets = [str(((call.get("arguments") or {}).get("arguments") or {}).get("to") or "")
                for call in acts]
     steps = int(task.get("steps") or 0) + len(acts)

@@ -17,7 +17,7 @@ import psycopg
 from pgvector.psycopg import register_vector_async
 
 from monoagens import config, memory
-from monoagens.pfc import ToolCall, turns
+from monoagens.pfc import ToolCall, turn_check, turns
 from monoagens.types import Event
 
 INTERNAL_KINDS = ("job.started", "job.result")
@@ -109,9 +109,10 @@ class JobRunner:
             await conn.close()
 
 
-async def decide(pfc: Any, context: Any, rounds: int) -> dict[str, Any]:
+async def decide(kernel: Any, pfc: Any, context: Any, rounds: int) -> dict[str, Any]:
     """Run one wake's PFC rounds in the background, each keeping its own usage (D51)."""
-    made = await turns(pfc, context, rounds)
+    check = turn_check(context, kernel.clock.now(), kernel.settings)
+    made = await turns(pfc, context, rounds, check=check)
     calls = [call for item in made for call in item["calls"]]
     return {"calls": calls, "rounds": made}
 
@@ -125,6 +126,8 @@ async def apply_calls(kernel: Any, trigger: Event, calls: list[dict[str, Any]]) 
     """Apply the tool calls of a finished PFC job; silence is recorded when none acts."""
     acted, thought = False, ""
     for raw in calls:
+        if raw.get("refused"):
+            continue
         call = ToolCall(str(raw.get("name")), dict(raw.get("arguments") or {}))
         acted = await kernel._apply(trigger, call) or acted
         if call.name == "think":

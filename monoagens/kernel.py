@@ -175,7 +175,8 @@ class Kernel:
         key = f"pfc:{place}"
         rounds = int(self.settings["constants"]["max_thought_rounds"])
         if not await self.jobs.start("pfc", key, event,
-                                     partial(jobs.decide, self.pfc, context, rounds), place=place):
+                                     partial(jobs.decide, self, self.pfc, context, rounds),
+                                     place=place):
             self.jobs.ask_re_wake(key, event, reason, place)
 
     async def _finish_job(self, event: Event) -> None:
