@@ -41,7 +41,7 @@ May touch: `monoagens/middleware/`, `monoagens/adapters/`, `monoagens/boot.py`, 
 Read first: [plugins.md](../plugins.md) §5.1, [middleware.md](../middleware.md) §2, §7
 May touch: `plugins/soul-tuning/`, `config.d/`, `tests/`, `scenarios/`
 
-- [ ] 2.1 Modes (daily / professional): rules in `<self>`, knob offsets within bounds, `/mode`.
+- [ ] 2.1 Modes (daily / professional): rules in `<self>`, knob offsets within bounds (recorded as `disposition.updated`; the middleware computes the effective knobs, middleware.md §2 lever 6), `/mode`.
 - [ ] 2.2 Example conversations in the stable prompt, in a fixed order.
 - [ ] 2.3 Check: installs, works and uninstalls without any core change; the stable prefix hash does not change when the mode is unchanged; only the owner changes it.
 

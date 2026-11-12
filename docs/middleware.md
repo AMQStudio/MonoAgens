@@ -62,7 +62,10 @@ Every plugin and adapter uses the same levers, so the core never knows the case 
    that shows it to people passes it through `privacy.visible` for the requester's place first.
 5. **Sense and act** through its own tools (a timer, a `set_mode` capability, a search tool).
 6. **Steer knobs** by a bounded, temporary offset recorded as `disposition.updated` with the
-   plugin as source; learning never moves an offset, and uninstalling removes it.
+   plugin as source; learning never moves an offset, and uninstalling removes it. The middleware
+   (not the plugin) computes the effective knobs: the prior's value (later the learned value)
+   plus every active plugin offset (the latest per plugin and knob), clamped to the manifest's
+   bounds and [0, 1], recomputed at boot, reload and on every new offset, never from a snapshot.
 
 Limits: nothing crosses the two absolute lines, adds a thought act, signal or book, or writes the
 core books except through events. The core's "no emotions" non-goal is about the core; a plugin

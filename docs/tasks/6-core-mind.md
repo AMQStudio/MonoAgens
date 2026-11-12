@@ -48,3 +48,7 @@ The fade and hard-forget paths exist since Task 1; this part adds the policy aro
 **Done when.** All parts are ticked, tests and both replays reported, the code readable (AGENTS.md size guide).
 
 **Notes.**
+
+**Carried from Task 4 (knob offsets).** When the core starts learning knobs, it keeps the learned
+value separate from plugin offsets: effective knob = learned value + active plugin offsets
+([middleware.md §2](../middleware.md) lever 6); learning never reads or moves an offset.
