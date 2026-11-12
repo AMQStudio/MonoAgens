@@ -157,7 +157,7 @@ passes.
 - [ ] 12.11 **One message per place per turn (D51).** A second communicative act to a place the same turn already spoke to is refused as already said. Test: a round with an act and a refused `expect` returns the refusal without sending the message twice.
 - [ ] 12.8a **Material check of every scenario still failing** (16, 18, 19, 24, 26, 27, 28, 30) — facts **and capabilities**. Scenario 18 step 7 still lacks them: the owner only mentions the finished work, no test organ can read the working folder, and the WhatsApp test organ cannot send a file; in Task 2 make the work text in the Log (what is tested here is share, send and wait, not files). Files are not the core's: receiving and sending them is a body capability (Task 5), reading a working folder is a plugin (Task 3), and rules about forwarding them are middleware policy (Task 3); a file version of this scenario belongs there. Per scenario: per scenario, what the soul needed and whether it was in the Log and on its desk; fix the scenario where material was missing. Write it under Notes before 12.8 runs.
 
-- [ ] 12.8 **Acceptance** (after 12.9–12.11 and 12.8a; replaces 11.6; the owner's decision): first a material check of every failing scenario (D54) and fixes to the scenarios that lacked material; then `uv run pytest`, the fake replay in full, **one** real-model run of only the scenarios that have not yet passed with the real model (09, 14, 23 have), absolute-line violations 0, and the live session including "send this to Budi". The capability record states one run. Tick 10.10, 11.6 and 12.8.
+- [ ] 12.8 **Acceptance — the launch set** (owner's decision): one real-model run at `--effort high` of the launch scenarios that have not yet passed with the real model: memory and recall (07, 11, 12, 17, 20, 23), silence (01–03, 15, 21), turn-taking (04–06, 14, 22), promises (08–10, 13, 16, 24, 30), unaddressed help (25, 27, 29). Each failure gets a material check first. Then the live session (privacy across bodies, a promise kept, silence). Scenarios 18, 19, 26 and 28 move to Task 3 as capability targets; the capability record lists them as not yet held. Tick 10.10, 11.6 and 12.8.
 
 ## Part 13 — Readability pass (after 12.8)
 Read first: [AGENTS.md](../../AGENTS.md) (priorities for code, size guide)
@@ -169,9 +169,7 @@ The old hard line budgets pushed code into odd places. Undo that, with no change
 - [x] 13.2 Refactor the ones to restore: clear names, one responsibility per module, docstrings, files ending with a newline. No new behavior, no removed behavior.
 - [x] 13.3 `uv run pytest` and the fake replay pass unchanged; list every refactor and its reason under Notes.
 
-**Done when.** All parts are ticked; every scenario passes with the real model in three runs out of three; the capability record is committed; `uv run pytest` and the fake replay pass in full; the
-real-model replay and live session are reported with the missed-help rate; absolute-line
-violations are 0; the code is readable (AGENTS.md size guide).
+**Done when.** Every launch scenario of 12.8 passes with the real model in one run; absolute-line violations are 0; `uv run pytest` and the fake replay pass in full; the capability record is committed and lists 18, 19, 26 and 28 honestly as not yet held; the code is readable (AGENTS.md size guide). After this task the core is paused: work moves to Task 3, and the core changes again only for a bug found there or in daily use.
 
 **Notes.**
 

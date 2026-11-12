@@ -41,6 +41,17 @@ Multi-step work runs in the core's task threads (Task 2 Part 3); the plugins onl
 - [ ] 3.3b Scenario: "send our finished work to Budi" where the work is a file in the working folder: the working-directory organ reads it, the soul shares it and sends it through a body that can attach files (a test organ until Task 5), and the forwarding policy of Part 1.1 applies.
 - [ ] 3.4 Check: "who is the president now?" triggers a search when the search plugin is installed, and an honest "as of my knowledge" answer when it is not; "finish my code, then send it to Budi" runs as a task thread and keeps its promise.
 
+## Part 3b — Capability targets carried over from Task 2
+Read first: [core.md](../core.md) §4, §8 (D45–D48, D55, D56), the Notes of Task 2 Part 12
+May touch: `scenarios/`, `scripts/replay.py`, `plugins/`, `monoagens/middleware.py`, `tests/`
+
+The core already has the mechanisms; these scenarios need middleware, plugins and real
+capabilities around them. A core change here is only for a bug, reported first.
+
+- [ ] 3b.1 Scenario 18 (game body, Budi's file, sharing to Budi with consent, Fulan never shared): passes with the real model, its material checked (facts and capabilities).
+- [ ] 3b.2 Scenario 19 (task thread, delivery to Budi, ask which group): passes with the real model, with the working-directory organ of 3.3.
+- [ ] 3b.3 Scenarios 26 and 28 (a fact from the owner's direct chat: ask the owner, answer after `share.granted`): pass with the real model, with the withheld note (D56).
+
 ## Part 4 — Real-model test
 - [ ] 4.1 `uv run pytest` and the fake replay pass in full.
 - [ ] 4.2 Real-model replay and a live CLI session with the model in `.env` (never read or print it), with both plugins installed: modes switch, memory-view lists and corrects, a search and a working-directory task run end to end. Report what happened and the metrics.
