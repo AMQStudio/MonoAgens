@@ -23,10 +23,10 @@ _EXPECTATIONS = ("SELECT " + ", ".join("ex." + column for column in EXPECTATION_
                  + ", s.body AS source_body FROM expectations ex"
                  " LEFT JOIN events s ON s.id = ex.source_event")
 _INSERT_EXPECTATION = (
-    "INSERT INTO expectations (kind, who, place, about, cue_time, cue_event, condition, intent, "
-    "weight, policy, status, next_check_at, source_event, derived_from, origin_actor, "
-    "expires_at) VALUES "
-    "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s, %s) RETURNING id"
+    "INSERT INTO expectations (kind, who, place, about, cue_time, cue_event, condition, "
+    "condition_text, intent, weight, policy, status, next_check_at, source_event, derived_from, "
+    "origin_actor, expires_at) VALUES "
+    "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s, %s) RETURNING id"
 )
 _EVENT_COLS = ("id, ts, kind, who, place, body, payload, caused_by, origin_actor, "
                "schema_version")
@@ -37,6 +37,13 @@ def _row_to_event(row):
     event = Event(row[0], row[1], row[2], row[3], row[4], row[5], payload, row[7], row[8],
                   row[9])
     return upcast(event)
+
+
+def payload_text(payload: dict[str, Any]) -> str:
+    """Return the human-readable text of one event payload."""
+    text = next((payload[key] for key in ("description", "text", "reason", "about")
+                 if payload.get(key)), "")
+    return str(text or (payload.get("arguments") or {}).get("text") or "")
 
 
 async def append_event(conn, *, ts, kind, who=None, place=None, body=None, payload=None,

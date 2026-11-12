@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from monoagens import reach
+from monoagens.store import payload_text
 from monoagens.types import RECENT_KINDS
 
 RECALL = {
@@ -49,7 +50,7 @@ async def search(conn, action) -> dict[str, Any]:
     lineage = args.get("event_id") is not None
     rows = await _rows(conn, sql, params if lineage else (*params, limit))
     found = [{"kind": "event", "event_id": row[0], "ts": row[1].isoformat(),
-              "place": row[4], "text": _payload_text(row[5])}
+              "place": row[4], "text": payload_text(row[5])}
              for row in rows
              if await reach.visible(conn, context=context, source=row[4], before=row[0])]
     memory_sql = ("SELECT id, text, place, derived_from FROM memories "
@@ -58,7 +59,7 @@ async def search(conn, action) -> dict[str, Any]:
     for memory_id, text, place, derived in await _rows(
             conn, memory_sql, ((f"%{query}%",) if query else ()) + (limit * 4,)):
         details = [{"event_id": row[0], "ts": row[1].isoformat(),
-                    "text": _payload_text(row[4])}
+                    "text": payload_text(row[4])}
                    for row in await _rows(
                        conn, "SELECT id, ts, kind, place, payload FROM events "
                              "WHERE id = ANY(%s) ORDER BY id", (derived,))
@@ -91,9 +92,3 @@ def _stamp(value: Any) -> datetime | None:
         return None
     stamp = datetime.fromisoformat(str(value))
     return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
-
-
-def _payload_text(payload: Mapping[str, Any]) -> str:
-    text = next((payload[key] for key in ("description", "text", "reason", "about")
-                 if payload.get(key)), "")
-    return str(text or (payload.get("arguments") or {}).get("text") or "")

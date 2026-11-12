@@ -134,7 +134,7 @@ class Kernel:
                                   event.place or "")
             return
         fired = await expect.due(self.conn, event, now=self.clock.now(),
-                                  settings=self.settings)
+                                  settings=self.settings, kernel=self)
         for item in fired:
             await self._expect_wake(item)
         if event.kind == "tick" and self.pfc is not None and self.embedder is not None:

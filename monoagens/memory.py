@@ -15,7 +15,7 @@ from monoagens import budget
 from monoagens.desk import PFCContext
 from monoagens.prior import constants, retrieval
 from monoagens.store import (active_expectation_lines, append_event,
-                             read_event_vector, read_expectations, read_last_events,
+                             payload_text, read_event_vector, read_expectations, read_last_events,
                              read_state, resolve_expectation, write_state)
 from monoagens.types import RECENT_KINDS, Event
 from monoagens.work import doing_lines
@@ -43,13 +43,6 @@ SLEEP_SYSTEM = (
     "with importance 0..1. Rewrite core_memory as the short always-visible summary of who "
     "the owner is and what matters now. Use store_memories. Never invent facts."
 )
-
-
-def _payload_text(payload: dict[str, Any]) -> str:
-    """Return the human-readable text of one event payload."""
-    return str(next((payload[key] for key in ("description", "text", "reason", "about")
-                     if payload.get(key)), ""))
-
 
 def decay_d(settings: dict[str, Any]) -> float:
     """Return ACT-R's d from memory_persistence (0 -> 0.7, 1 -> 0.3)."""
@@ -222,7 +215,7 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
     zone = ZoneInfo(str(settings.get("timezone") or "UTC"))
     identity = settings.get("identity") or {}
     lines = [f"#{r[0]} {r[1].astimezone(zone):%Y-%m-%d %H:%M} [{r[2]}] {r[3] or '?'} @ "
-             f"{r[4] or '?'}: {_payload_text(r[5])}"
+             f"{r[4] or '?'}: {payload_text(r[5])}"
              for r in rows]
     old_core = str((await read_state(conn, "core_memory") or {}).get("text") or "")
     messages = [

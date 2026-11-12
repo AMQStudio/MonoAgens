@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from monoagens.store import read_last_events
+from monoagens.store import payload_text, read_last_events
 from monoagens.types import Event
 
 
@@ -35,7 +35,7 @@ async def chain_root(conn, event_id: int | None) -> tuple[int | None, str]:
         "ON e.id = up.caused_by) "
         "SELECT id, payload FROM up WHERE caused_by IS NULL ORDER BY id LIMIT 1", (event_id,))
     row = await cur.fetchone()
-    return (int(row[0]), _text(row[1] or {})) if row else (None, "")
+    return (int(row[0]), payload_text(row[1] or {})) if row else (None, "")
 
 
 async def _task_lines(conn, place: str, task: Mapping[str, Any],
@@ -91,10 +91,3 @@ def _result_text(event: Event) -> str:
     if isinstance(result, dict):
         return str(result.get("text") or json.dumps(result, ensure_ascii=False, default=str))
     return str(result or "")
-
-
-def _text(payload: Mapping[str, Any]) -> str:
-    """Return the human-readable text of one event payload."""
-    text = next((payload[key] for key in ("description", "text", "reason", "about")
-                 if payload.get(key)), "")
-    return str(text or (payload.get("arguments") or {}).get("text") or "")

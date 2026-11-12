@@ -61,7 +61,7 @@ def settings(**sections: dict[str, Any]) -> dict[str, Any]:
         "knobs": {"memory_persistence": 0.5, "boredom_with_repeats": 0.5,
                   "talkativeness": 0.45, "restraint_after_speaking": 0.5, "spontaneity": 0.2,
                   "reserve_when_unfamiliar": 0.3, "patience_seconds": 90},
-        "calibration": {},
+        "calibration": {"wake_gate_lo": 0.35},
         "constants": dict(CONSTANTS),
         "references": {},
         "lessons": [],

@@ -8,7 +8,7 @@ from dataclasses import replace
 from datetime import datetime
 
 from monoagens.middleware import Continue
-from monoagens.store import append_event, read_state, write_state
+from monoagens.store import append_event, payload_text, read_state, write_state
 
 LOGGER = logging.getLogger(__name__)
 CODE_KEY = "pairing_code"
@@ -21,12 +21,6 @@ def new_code(draw=secrets.randbelow) -> str:
     """Return a six-digit code, split for readability (for example 123-456)."""
     digits = "".join(str(draw(10)) for _ in range(6))
     return f"{digits[:3]}-{digits[3:]}"
-
-
-def _text(event) -> str:
-    payload = event.payload or {}
-    return str(payload.get("description") or payload.get("text") or "")
-
 
 async def ensure(conn, *, now: datetime) -> str | None:
     """Create and show the pairing code when the soul has no owner yet."""
@@ -51,7 +45,7 @@ async def claim(conn, event, *, now: datetime):
         return None
     current = await read_state(conn, CODE_KEY) or {}
     code = str(current.get("code") or "")
-    if not code or code not in _text(event):
+    if not code or code not in payload_text(event.payload):
         return None
     async with conn.transaction():
         claimed = await append_event(conn, ts=now, kind=CLAIMED, who=event.who,

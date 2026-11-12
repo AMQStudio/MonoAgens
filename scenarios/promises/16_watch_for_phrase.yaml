@@ -52,8 +52,8 @@ model_answers:
         arguments:
           about: kabari owner kalau ada yang menyebut server down
           kind: promise
-          cue_event: {kind: percept, text_like: "server down"}
-          expect: {none: true}
+          cue_event: {kind: percept, place: "space:tg:-10099"}
+          expect: {text: "server down"}
           intent: beri tahu owner bahwa server down disebut di grup
           weight: 0.8
           policy: {once: true}
@@ -64,3 +64,5 @@ model_answers:
         arguments:
           capability: telegram.say
           arguments: {text: "Ada yang bilang server down di grup barusan."}
+      - name: resolve
+        arguments: {id: 1, status: satisfied}

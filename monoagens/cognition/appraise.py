@@ -29,7 +29,9 @@ async def _engaged(event: Event, conn: Any) -> bool:
     from monoagens import expect  # imported here: prior -> identity -> prior is a cycle
     rows = await read_expectations(conn, "ex.status = 'active' AND ex.kind <> 'guard' "
                                          "AND ex.cue_event IS NOT NULL")
-    return any(expect.matches_cue(row["cue_event"], event) for row in rows)
+    # A free-text condition is judged on its reminder wake, never by the cue alone.
+    return any(expect.matches_cue(row["cue_event"], event)
+               and not (row["condition"] or {}).get("text") for row in rows)
 
 
 async def reflex(event: Event, conn: Any = None) -> tuple[str, str] | None:

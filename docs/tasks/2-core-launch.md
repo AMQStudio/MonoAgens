@@ -148,7 +148,7 @@ passes.
 - [x] 12.2 **Working memory (D52).** `<doing>` for every chain in progress, not only task threads: goal, every step (non-communicative acts included), the latest result verbatim, older results as pointers. Checks: scenario 23 answers after at most two capability calls; scenario 14's summary is answered; no chain repeats the same capability call with the same arguments.
 - [x] 12.3 **Intent on the target desk (D48).** The intent (what to say, to whom, why, where it came from) is the trigger of the wake in the target place. When several places fit, the soul asks before sending. Scenario 19: the code reaches Budi, the owner is asked which group, only that group receives it.
 - [x] 12.4 **Refusals return (D51).** A rejected thought act or capability argument comes back in the same turn as a result with its reason. Test: `expect` without a cue is corrected in the same wake. Scenario 09 passes.
-- [ ] 12.5 **Free-text conditions (moved from Task 4, simplified by D53).** Wake gate: still relevant, stale (quiet hours stay in the owner policy). Free text: cosine below `lo` ignored; at or above `lo` the Expectation is reminded and the PFC wakes once with the line and the Expectation as trigger, and judges (act, resolve, or let it be). No classifier module, no `hi` band, no `lo` learning, no vector cache (deferred, core.md §5). Keep the draft's change to `appraise._engaged`. Must fit the remaining package budget; if it does not, stop and report — the budget is not raised. Checks: a fulfilled promise wakes no one; a question on the same topic never resolves a promise; scenarios 16 and 24 fire on "server down lagi nih guys" and "dokumennya sudah selesai kok".
+- [x] 12.5 **Free-text conditions (moved from Task 4, simplified by D53).** Wake gate: still relevant, stale (quiet hours stay in the owner policy). Free text: cosine below `lo` ignored; at or above `lo` the Expectation is reminded and the PFC wakes once with the line and the Expectation as trigger, and judges (act, resolve, or let it be). No classifier module, no `hi` band, no `lo` learning, no vector cache (deferred, core.md §5). Keep the draft's change to `appraise._engaged`. Must fit the remaining package budget; if it does not, stop and report — the budget is not raised. Checks: a fulfilled promise wakes no one; a question on the same topic never resolves a promise; scenarios 16 and 24 fire on "server down lagi nih guys" and "dokumennya sudah selesai kok".
 - [ ] 12.5b **A memory's audience from its sources (D53, before any real-model run).** Sleep no longer takes `place`/`private` from the model: the core derives them from `derived_from` (private if any source is private; audience = the people every private source was said to; no known source → private to the owner). Core memory follows the same rule. Tests: a sleep answer that omits place for a summary of Fulan's direct chat never reaches a group; core memory built from a direct chat stays out of a group. If a file is at its budget, move code rather than compress; if the package cannot hold it, stop and report.
 - [ ] 12.6 **Checks that forbid correct behavior.** 16: "model.call >= 2" forbids calling `expect` at once — the check is that the promise is held in the first wake. 24: the stored fact may be said in any format ("jam lima", "17:00"); its contradictory group lines are made consistent. List every changed check under Notes.
 - [ ] 12.7 **Guidance stays small.** `guidance.py` ≤ 30 lines of general principles; any line added in this part has its evidence under Notes.
@@ -1153,3 +1153,60 @@ Part 12 notes (worker, 12.5 — **blocked by the package budget**):
   scripts/replay.py --fake` 30 scenarios, 131/131 checks, missed-help 0/65, false-speak 0/67,
   absolute-line violations 0, honesty 62/62. The real-model replay was not run (12.5 does not
   ask for it).
+
+Part 12 notes (worker, 12.5):
+- What 12.5 does now. `monoagens/condition.py` (82 lines) owns a condition: `operator` (the exact
+  fast paths moved from `expect.py`, plus `{text: ...}` stored as `condition_text`), `text`, and
+  the wake gate. `reminded` computes m = cosine(event vector, condition text vector) with `lo =
+  calibration.wake_gate_lo` (0.35, already in `prior/dispositions.yaml`): below `lo` the line is
+  ignored; at or above `lo` `reminder` records `expectation.fired` with `{reminder: true, text:
+  <line>, expectation_id, about}`, so the line and the Expectation are the trigger, and leaves
+  the expectation `active`. The PFC wakes once through that fired trigger (`_expect_wake`), lays
+  out its own desk and judges: act, resolve, or let it be. No classifier, no `hi` band, no `lo`
+  learning, no vector cache: the event vector comes from `event_vectors` when the encode job has
+  written it, else is embedded on demand, and the condition text is embedded on demand each
+  time; both go through the embedder port, whose real implementation runs the model in a worker
+  thread (invariant 7).
+- Wake gate arms in `expect.due`: stale (`expires_at <= now` -> `dropped`, on a tick or any cue
+  match) and still-relevant (`is_met` -> resolve, unchanged) now sit before the free-text arm.
+  A tick selects `next_check_at <= now OR expires_at <= now`. `is_met` returns False for a
+  free-text condition.
+- `cognition/appraise._engaged` keeps the draft's exemption: an active expectation with a
+  free-text condition never counts as answered by its cue alone, so a broad cue cannot wake the
+  PFC on ordinary lines; only the reminder path decides. The kernel change is one argument
+  (`expect.due(..., kernel=self)`).
+- The PFC closes the promise itself: in each changed scenario's recorded answer it acts and
+  resolves (`resolve #1 satisfied`) in the same wake; a "let it be" wake (scenario 30's
+  question) records only a `think`, so the promise stays active. The core does not infer
+  resolution from an act.
+- Budget. Package 3,799/3,800 (was 3,753). `condition.py` is new (82 lines); `expect.py` 222/240
+  (-18: `parse_duration` and `operator` moved out, the wake gate added); `store.py` 225/240
+  (+7: `condition_text` in the INSERT and the shared `payload_text`); `memory.py` 253/260 (-7),
+  `work.py` 92 (-6), `recall.py` 93 (-5), `pairing.py` 71 (-5): the four private payload-text
+  accessors were replaced by `store.payload_text` to pay for the module (memory's sleep lines now
+  also fall back to `arguments.text`, the rule the desk and recall already used); kernel 280/280
+  (one argument); appraise 105/160; jobs 148/150; reach 150/150; guidance 21/30. Nothing was
+  compressed and no other code was deleted.
+- Scenarios/answers changed:
+  - `scenarios/promises/16_watch_for_phrase.yaml`: the `expect` answer now uses
+    `cue_event: {kind: percept, place: space:tg:-10099}` and `expect: {text: "server down"}`
+    (free text instead of the `text_like` cue and `{none: true}`), and step 4's answer acts and
+    resolves #1. No check changed; 4/4.
+  - `scenarios/turn-taking/24_gate_threshold.yaml`: the same change (`cue_event` keeps the group
+    place, `expect: {text: "dokumen sudah selesai"}`), step 10 acts and resolves #1. No check
+    changed; 11/11. The two later lines stay below `lo` (m 0.258 and 0.186 with the test
+    embedder), so there is no second reminder.
+  - New `scenarios/promises/30_same_topic_question.yaml`: the question "dokumen sudah selesai
+    ya?" (m 0.866) reminds the PFC, whose recorded answer is a `think`, so it neither replies
+    nor resolves; the statement "dokumennya sudah selesai kok." (m 0.577) reminds again, the PFC
+    acts and resolves #1, and the owner hears once in the DM. Three behavioral checks: no reply
+    at step 2, no `expectation.resolved` at step 2, one reply in the DM at step 3.
+- New `tests/test_condition.py` (4 tests, real Postgres): below `lo` no wake and no fired event;
+  at or above `lo` exactly one PFC request, its prompt holds the line, the `expectation.fired`
+  carries the line and the expectation id, and the expectation stays active; a resolved promise
+  wakes no one; a past expiry drops on a tick. `tests/support.py` mirrors `wake_gate_lo: 0.35`
+  under `calibration`.
+- Runs: `uv run pytest` 270 passed; `uv run python scripts/replay.py --fake` 30 scenarios,
+  130/130 checks, missed-help 0.0% (0/65), false-speak 0.0% (0/67), absolute-line violations 0,
+  honesty 62/62. `scenarios/README.md` regenerated. Commit `task2(12.5): free-text conditions
+  remind the PFC once (no classifier)`.
