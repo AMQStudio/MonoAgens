@@ -52,7 +52,10 @@ TOOLS: list[dict[str, Any]] = [
                          'who (person id), place (place id), not_who (person id to ignore), '
                          'text_like (a plain phrase the line contains, case-insensitive: NOT '
                          'a regex and no | alternation; for several phrasings make several '
-                         'expectations or pick the most distinctive word).'},
+                         'expectations or pick the most distinctive word). '
+                         'who and place are ids copied exactly as the desk and the recent '
+                         'lines show them, prefix included: a cue whose place does not match '
+                         'the line never fires.'},
            "expect": {"type": "object",
                       "description": '{"none": true}: the cue alone wakes you. '
                       '{"text": "what you are waiting to hear"}: a watch on free text, so a '

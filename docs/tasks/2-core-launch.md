@@ -158,9 +158,9 @@ passes.
 - [x] 12.8a **Material check of every scenario still failing** (16, 18, 19, 24, 26, 27, 28, 30) — facts **and capabilities**. Scenario 18 step 7 still lacks them: the owner only mentions the finished work, no test organ can read the working folder, and the WhatsApp test organ cannot send a file; in Task 2 make the work text in the Log (what is tested here is share, send and wait, not files). Files are not the core's: receiving and sending them is a body capability (Task 5), reading a working folder is a plugin (Task 4), and rules about forwarding them are middleware policy (Task 4); a file version of this scenario belongs there. Per scenario: per scenario, what the soul needed and whether it was in the Log and on its desk; fix the scenario where material was missing. Write it under Notes before 12.8 runs.
 
 - [x] 12.12 **A reminder is not a fulfilment (D53; bug found in the 24/30 reports).** `condition.reminder` records the reminder as `expectation.fired` with the promise owner as `who`, and the desk renders it exactly like a met condition, so the soul reports "done" on "masih di review". Fix: a reminder has its own event kind (`expectation.reminded`, additive), keeps the line's own speaker, and the desk shows it as "this line may relate to your expectation: <about>; condition: <text>; does this line fulfil it?" with the reason "reminded", not "fired expectation". No new guidance line. Checks: scenario 30's question line produces no message and the promise stays active (rewrite of the check that forbade the wake D53 requires); scenario 24's "masih di review" produces no message; the later "sudah selesai" fulfils the promise once. Also `scripts/replay.py` prints every communicative act that fails the honesty scan, with the quotation it could not find. `text_like` stays a plain substring (no `|`, no regex).
-- [ ] 12.13 **Tool input contract (bug in report 100338, scenario 30 step 5; mechanism adapted from V1 ADR-0024 on branch `archived`).** A thought act or capability whose arguments do not match its schema (a sentence where an id is expected) raised `invalid literal for int()` and the whole turn was lost, so the owner was never told. Fix: one door validates every argument against its declared schema before anything runs, and a mismatch comes back in the same turn as a refusal with its reason (D51), never an exception. Expectations on the desk show the id that `resolve` takes. Test: a `resolve` with a text id is refused and corrected in the same wake. Read the V1 ADR with `git show origin/archived:docs/archive/adr-pre-rebaseline/engine/0024-tool-input-contract.md`; take the mechanism, not its roles or approvals.
-- [ ] 12.14 **Scenario 24 is ambiguous (D54).** Step 9 asks "which document?", nobody answers, and step 11 brings a second document ("laporannya jam lima sore"), so on "Dokumennya sudah selesai kok" asking back is the honest act. Make the material unambiguous (one document named before the request, the report-hour lines about something else), and keep the check that the statement fulfils the promise once. List the change under Notes.
-- [ ] 12.15 **Report files.** `scripts/replay.py` names a report `reports/YYYY-MM-DD-HHMM-<real|fake>-<scenarios>.md` (for example `2026-11-12-1003-real-24-30.md`), also writes `reports/latest.md`, and keeps only the newest ten reports. `reports/` stays out of git; the committed record is `scenarios/README.md`.
+- [x] 12.13 **Tool input contract (bug in report 100338, scenario 30 step 5; mechanism adapted from V1 ADR-0024 on branch `archived`).** A thought act or capability whose arguments do not match its schema (a sentence where an id is expected) raised `invalid literal for int()` and the whole turn was lost, so the owner was never told. Fix: one door validates every argument against its declared schema before anything runs, and a mismatch comes back in the same turn as a refusal with its reason (D51), never an exception. Expectations on the desk show the id that `resolve` takes. Test: a `resolve` with a text id is refused and corrected in the same wake. Read the V1 ADR with `git show origin/archived:docs/archive/adr-pre-rebaseline/engine/0024-tool-input-contract.md`; take the mechanism, not its roles or approvals.
+- [x] 12.14 **Scenario 24 is ambiguous (D54).** Step 9 asks "which document?", nobody answers, and step 11 brings a second document ("laporannya jam lima sore"), so on "Dokumennya sudah selesai kok" asking back is the honest act. Make the material unambiguous (one document named before the request, the report-hour lines about something else), and keep the check that the statement fulfils the promise once. List the change under Notes.
+- [x] 12.15 **Report files.** `scripts/replay.py` names a report `reports/YYYY-MM-DD-HHMM-<real|fake>-<scenarios>.md` (for example `2026-11-12-1003-real-24-30.md`), also writes `reports/latest.md`, and keeps only the newest ten reports. `reports/` stays out of git; the committed record is `scenarios/README.md`.
 - [ ] 12.8 **Acceptance — the launch set** (after 12.12–12.15; owner's decision): one real-model run at `--effort high` of the launch scenarios that have not yet passed with the real model: memory and recall (07, 11, 12, 17, 20, 23), silence (01–03, 15, 21), turn-taking (04–06, 14, 22), promises (08–10, 13, 16, 24, 30), unaddressed help (25, 27, 29). Each failure gets a material check first. Then the live session (privacy across bodies, a promise kept, silence). Scenarios 18, 19, 26 and 28 move to Task 4 as capability targets; the capability record lists them as not yet held. Tick 10.10, 11.6 and 12.8.
 
 ## Part 13 — Readability pass (after 12.8)
@@ -2010,3 +2010,117 @@ Part 12 notes (worker, 12.12):
   --fake`: 30 scenarios, 134/134 checks, missed-help 0.0% (0/65), false-speak 0.0% (0/75),
   absolute-line violations 0, honesty 100.0% (62/62). `scenarios/README.md` regenerated. The
   real-model replay was not run (12.12 does not ask for it).
+
+Part 12 notes (worker, 12.13):
+- **One door.** `monoagens/contract.py` holds the single argument check: type, required,
+  unknown keys (`additionalProperties` absent means false), enum, minimum/maximum, array items,
+  and one level of nested object properties. `refusal` joins the messages with `; ` and cuts
+  the line at 500 characters. Booleans are not integers, and an object rule without `properties`
+  (the `act.arguments` property, every `expect` sub-object) accepts any keys.
+- **Two call sites.** `pfc.turn_check.check` runs it for every tool call before anything runs;
+  `act` is checked twice, once against the tool schema and once against the named capability's
+  schema (`to`/`via` allowed only on a communicative one). `organs.dispatch` repeats the
+  capability check before it touches the arguments, so a caller that bypasses the PFC door also
+  gets a refusal event instead of an exception.
+- **Refusal wording.** `id: expected integer, got string`, `arguments.event_id: expected
+  integer, got string`, `motivation: must be >= 1`, `kind: must be one of a`, `x: unknown`,
+  `x: required`; an unknown tool name is now `unknown tool: <name>` instead of reaching
+  `_apply`'s error branch (the non-matching branch in `kernel._apply` stays as the last defence).
+- **`resolve`.** The `id` property says "The number the desk shows as #N." and `_check_resolve`
+  no longer coerces: the door guarantees an integer, so the `int()`/`try` block is gone. The
+  desk-membership and status checks are unchanged. `expect`'s semantic checks are unchanged,
+  except that a bound the schema already declares now reports as the bound
+  (`weight: must be <= 1`) before `expect.validate` sees the call.
+- **Changed tests.** `tests/test_pfc.py`: `test_invalid_tool_call_becomes_an_error_event_and_
+  the_loop_lives` became `test_an_unknown_tool_is_refused_and_the_loop_lives` (the turn is not
+  lost, so no `error` event is written); four new tests cover the resolve id, a mistyped
+  capability argument, dispatch's own guard, and the desk id that `resolve` takes.
+  `tests/test_reach.py`: the `Body` stub declared `{"type": "object"}` with no properties, which
+  a strict door reads as "no arguments allowed"; it now declares `text`/`command` and their
+  required lists, as a real body does. `tests/test_expect.py`: the invalid-weight refusal
+  message is the new bound message. Level: `tests/test_contract.py` 8 cases, no database.
+- **Runs.** `uv run pytest`: 308 passed; `uv run python scripts/replay.py --fake`: 134/134
+  checks, absolute-line violations 0.
+
+Part 12 notes (worker, 12.14):
+- Four lines of `scenarios/turn-taking/24_gate_threshold.yaml` changed: step 11
+  ("Nanti rapat evaluasinya jam lima sore kayaknya."), step 13 ("Katanya rapat evaluasinya jam
+  lima sore."), step 15 ("Eh, rapat evaluasinya jam berapa ya? Aku lupa.") and step 16's
+  recorded reply ("Jam lima sore, rapat evaluasinya."). The `description` says why: two group
+  lines name the only document in play before the request, and the hour is a separate meeting.
+- No check and no prior changed: `expectation.resolved` count 1 at step 12 stays, and step 16's
+  "jam lima" match still holds. The real run of 12.8 showed the ambiguity was not only the
+  report: the soul also failed to bind "dokumennya" to the named proposal (see the 12.8 note).
+
+Part 12 notes (worker, 12.15):
+- `scripts/replay.py` now names a report `reports/YYYY-MM-DD-HHMM-<real|fake>-<scenarios>.md`
+  (`report_label`: `all` for the full set, else each scenario file's number in the given order),
+  writes the same text to `reports/latest.md`, and keeps the newest ten matching files
+  (`REPORT_KEEP`), legacy `replay-*.md` included, so the first run cleaned the directory to
+  ten. `latest.md` and `backups/` are never candidates.
+- `saved_reports` reads every `*.md` that matches `REPORT_FILE_RE` instead of globbing
+  `replay-*.md`, so `latest.md` is never read as a run; `_report_when` parses the new filename
+  stamp (`%Y-%m-%d%H%M`) before the legacy one (`%Y%m%d%H%M%S`), header first and mtime last.
+- Consequences for the committed record: the real column of `scenarios/README.md` now shows only
+  what the ten newest saved reports hold. After the 12.8 runs the real report of 12.8 is the
+  newest; scenarios it did not run read `not run` there, which is the honest value (not held),
+  not a claim about the model.
+- Tests: four in `tests/test_replay_metrics.py` (naming and `latest.md`, the ten-file cap with a
+  foreign file untouched, the label, and reading a new-style report back with its date).
+  `uv run pytest`: 312 passed; the fake replay writes `<date>-<HHMM>-fake-all.md`, `latest.md`
+  is byte-identical to it, and `ls reports/*.md` is 11.
+
+Part 12 notes (worker, 12.8 acceptance — **not met**):
+- **Runs.** `uv run pytest`: 312 passed (real Postgres). `uv run python scripts/replay.py --fake`:
+  30 scenarios, 134/134 checks, missed-help 0.0% (0/65), false-speak 0.0% (0/75),
+  absolute-line violations 0, honesty 100.0% (62/62). The fake replay is unchanged by this part.
+- **Real model, `--effort high`, the six scenarios the record still showed failing** (16, 24, 25,
+  27, 29, 30), twice, because the first run left three scenarios failing:
+  - Run 1 `reports/2026-11-12-1103-real-24-30-16-25-27-29.md`: 28/33 checks. Passed: 25, 27, 29
+    (4/4 each). Failed: 24 (10/12: step 10 spoke in the busy group, step 12 resolved nothing),
+    30 (3/5: the cue's `place` was written `tg:-1004` instead of `space:tg:-1004`, so no reminder
+    ever fired), 16 (3/4: one `act.result` and no message at the statement).
+  - No `error` event in any step of either run: the 12.13 door holds — the crash of report
+    100338 (scenario 30 step 5, `int()`) cannot happen anymore.
+  - Two general soul-side fixes were made between the runs, both with this evidence:
+    `guidance.py` gained one principle — "a line that may relate to an expectation is a question
+    you answer yourself: if it fulfils one, do what you promised and resolve it; if it does not,
+    let it be" (run 1's step 10 spoke in the group on a non-fulfilling reminder; run 2's step 10
+    thought and stayed silent) — 8 principles, 27 lines, inside 12.7's limit. The `expect`
+    tool's `cue_event` description now says `who` and `place` are ids copied exactly as the desk
+    and the recent lines show them, prefix included, and that a cue whose place does not match
+    never fires (run 1's step 3 mistyped the place).
+  - Run 2 `reports/2026-11-12-1113-real-24-30-16-25-27-29.md`: 29/33 checks, false-speak 0.0%
+    (0/23). Passed: 25, 27, 29; 24's step 10 now silent. Failed: 24 (step 12 asked the group
+    which document was finished, resolved nothing, created a second promise), 30 (the reminder
+    fired and the soul answered the owner in the DM on a later probe and in run 2 produced an
+    `act.result` instead — 0 act.out at step 5), 16 (the promise was created as a `guard` with
+    `text_like: "down"` and its cosine condition did not reach `lo` on "server down lagi nih
+    guys", so no reminder fired).
+  - **Stopped per the plan's rule:** scenario 24's step 12 fails the same way twice (asked back
+    instead of resolving), so this worker did not try a third run and did not touch the check
+    that 12.14 requires ("the statement fulfils the promise once"). Two observations for the
+    owner: the Log holds "Dokumennya masih di review." at 13:04 and "Dokumennya sudah selesai
+    kok." at 13:05, and the soul asks which is true; and at step 9 it did not bind "dokumennya"
+    to the proposal the two lines just named, so it held a vague promise. Both are the soul's
+    reading, not missing material (12.8a's check holds: the facts are in the Log and on the
+    desk). A third option is a material change (the step-10 line must not contradict step 12),
+    which is the architect's call, not a worker's.
+- **Live session** (real model, scripted world, privacy + a kept promise + silence; the throwaway
+  harness has been deleted): step 1 the owner's resignation was answered only in `space:tg:1001`;
+  step 2 Budi's "owner mau resign ya?" in `space:tg:budi_dm` stayed silent (no reply anywhere
+  names the resignation); step 3 the 11:00 promise was created and answered; step 4 the 11:00
+  tick fired it and the soul spoke in `space:tg:1001`; step 5 unaddressed group chatter sent
+  nothing (the gate opened and held a wait instead). Two defects seen, both older than this
+  part: the 04:00 tick woke five times (`expectation.fired`, then "goal continued" wakes off
+  each act.out) and the same place got three messages in one minute, so the promised reminder
+  is not one message; and the `intent` wake in `space:tg:budi_dm` wrote an `error` event with an
+  empty message (`{'error': '', 'event_id': 50}`), i.e. an LLM transport failure whose message
+  is empty and whose turn is lost. `reply` counting in the harness also treats every `act.out`
+  as a reply, so a `self.recall` recorded inside a wake shows as a "None" reply (this inflated
+  the live session's reply count; it is a harness accounting defect, not a core one).
+- **Not ticked:** 12.8, 10.10, 11.6 — the acceptance run does not pass. 12.13, 12.14 and 12.15
+  are done and ticked.
+- **Record.** `scenarios/README.md` is regenerated from the last fake run; the ten-newest cap of
+  12.15 means the real column shows only the scenarios in the saved real reports (24, 30, 16, 25,
+  27, 29 carry a real verdict; the rest read `not run`, which is honest "not held").
