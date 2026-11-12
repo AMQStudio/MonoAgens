@@ -29,8 +29,8 @@ keys, the `prior/` format and `config.yaml` keys. A rename touches code only.
 
 | Folder | Holds | Changes |
 |---|---|---|
-| `monoagens/core/` | Mechanisms only: kernel loop, gate, reasoning, context, memory, expectations, threads, the tool door, the three hooks, identity, the audience labels. | Rarely: evidence, bugs, vulnerabilities. |
-| `monoagens/middleware/` | Every decision: the owner policy (privacy rules, who may share, budget limit, quiet hours), identity (which account is which person), pairing the owner. | Often, as cases need. |
+| `monoagens/core/` | Mechanisms only: kernel loop, gate, reasoning, context, memory, expectations, threads, the tool door (`dispatch`), the three hooks, identity, the audience labels. | Rarely: evidence, bugs, vulnerabilities. |
+| `monoagens/middleware/` | Every decision and the wiring between adapters and plugins: the loader, the tool and command registries, the owner policy (privacy rules, who may share, budget limit, quiet hours), identity (which account is which person), pairing the owner. | Often, as cases need. |
 | `monoagens/adapters/` | One folder per adapter. | Per app or device. |
 | `monoagens/infra/` | Store, migrations, config, clock, budget counting, embedding, versioning. | With the stack. |
 | `plugins/` | Installable features on the middleware. | Per feature. |

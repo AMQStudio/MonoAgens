@@ -25,7 +25,7 @@ Read first: [glossary](../glossary.md), [AGENTS.md](../../AGENTS.md) (size guide
 May touch: `monoagens/` (all), `tests/`, `scripts/`, `pyproject.toml`, `AGENTS.md` (invariant 1's file list only)
 
 - [ ] 1.1 Packages per layer as in the glossary: `core/`, `middleware/`, `adapters/` (from `bodies/`), `infra/`; `plugins/` stays at the top. Tests mirror the same layout.
-- [ ] 1.2 Standard names (glossary): `pfc` → reasoning, `desk` and `work` → context, `organs` → tools, `cognition` → gate, `guidance` → principles. Near-duplicates merge into one module each: `appraisal`/`appraise`, `memory`/`recall`/`forget` (one `memory/` package), `expect`/`condition`. Event kinds, payload fields, `soul.yaml`, `prior/` and `config.yaml` keys keep their names (glossary, "What never changes").
+- [ ] 1.2 Standard names (glossary): `pfc` → reasoning, `desk` and `work` → context, `cognition` → gate, `guidance` → principles. `organs` splits in two: the door (check the arguments against the descriptor, record, hand to the action hook, record the result) stays in the core as `dispatch`; the registry of tools present, which tools a turn is offered, and routing a call to the adapter or plugin that owns it go to `middleware/tools.py`. Near-duplicates merge into one module each: `appraisal`/`appraise`, `memory`/`recall`/`forget` (one `memory/` package), `expect`/`condition`. Event kinds, payload fields, `soul.yaml`, `prior/` and `config.yaml` keys keep their names (glossary, "What never changes").
 - [ ] 1.3 Check: pytest and the fake replay pass unchanged. List every old → new path and every renamed public name under Notes; the architect renames the spec terms from that list.
 
 ## Part 2 — Decisions out of the core
