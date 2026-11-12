@@ -8,7 +8,7 @@ import pytest
 
 from monoagens.config import load_env_file, load_llm_config
 
-KEYS = ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL")
+KEYS = ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_REASONING_EFFORT")
 LEGACY_KEYS = ("PFC_BASE_URL", "PFC_API_KEY", "PFC_MODEL")
 
 
@@ -40,6 +40,7 @@ def test_llm_config_from_file(tmp_path):
         "base_url": "https://file.test/v1",
         "api_key": "file-key",
         "model": "file-model",
+        "effort": "",
     }
 
 
@@ -53,7 +54,8 @@ def test_pfc_variables_are_ignored(tmp_path, monkeypatch):
     monkeypatch.setenv("PFC_API_KEY", "env-legacy-key")
     monkeypatch.setenv("PFC_MODEL", "env-legacy-model")
 
-    assert load_llm_config(path) == {"base_url": "", "api_key": "", "model": ""}
+    assert load_llm_config(path) == {"base_url": "", "api_key": "", "model": "",
+                                     "effort": ""}
 
 
 def test_environment_wins_over_file(tmp_path, monkeypatch):
@@ -69,7 +71,8 @@ def test_environment_wins_over_file(tmp_path, monkeypatch):
 
 def test_missing_file_and_env_yield_empty_strings(tmp_path):
     assert os.environ.get("LLM_MODEL") is None
-    assert load_llm_config(tmp_path / "absent") == {"base_url": "", "api_key": "", "model": ""}
+    assert load_llm_config(tmp_path / "absent") == {"base_url": "", "api_key": "",
+                                                    "model": "", "effort": ""}
 
 
 def test_config_yaml_holds_only_deployment_settings():
@@ -115,3 +118,17 @@ def test_settings_join_config_certificate_and_prior():
     assert settings["owner_settings"]["daily_token_budget"] == 300000
     assert settings["runtime"]["sleep"]["hour"] == 2
     assert "cognition" not in settings and "memory" not in settings
+
+
+def test_reasoning_effort_is_read_and_checked(tmp_path, monkeypatch):
+    path = tmp_path / ".env"
+    path.write_text("LLM_REASONING_EFFORT=high\n", encoding="utf-8")
+    assert load_llm_config(path)["effort"] == "high"
+
+    monkeypatch.setenv("LLM_REASONING_EFFORT", "medium")
+    assert load_llm_config(path)["effort"] == "medium"
+
+    path.write_text("LLM_REASONING_EFFORT=ultra\n", encoding="utf-8")
+    monkeypatch.delenv("LLM_REASONING_EFFORT")
+    with pytest.raises(ValueError, match="LLM_REASONING_EFFORT"):
+        load_llm_config(path)

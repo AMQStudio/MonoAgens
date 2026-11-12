@@ -276,7 +276,8 @@ async def test_sleep_writes_memories_core_memory_and_never_touches_raw_events(ac
         "SELECT payload, caused_by FROM events WHERE kind = 'model.call'")).fetchone()
     assert call[0] == {"purpose": "sleep.consolidate", "model": "fake-model",
                        "usage": {"prompt_tokens": 7, "cached_tokens": 2,
-                                 "completion_tokens": 3, "total_tokens": 10}}
+                                 "completion_tokens": 3, "reasoning_tokens": 0,
+                                 "total_tokens": 10}}
     assert call[1] == max_before
 
     # Nothing new since the last sleep: sleep does nothing.

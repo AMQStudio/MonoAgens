@@ -586,18 +586,47 @@ async def test_llm_token_usage_lands_in_the_daily_budget_key(aconn):
     await _feed(kernel, _msg("halo"))
 
     assert pfc.last_usage == {"prompt_tokens": 10, "cached_tokens": 4,
-                              "completion_tokens": 5, "total_tokens": 15}
+                              "completion_tokens": 5, "reasoning_tokens": 0,
+                              "total_tokens": 15}
     key = f"budget:{START.astimezone(JAKARTA).date().isoformat()}"
     assert await read_state(aconn, key) == {"prompt_tokens": 10, "cached_tokens": 4,
-                                            "completion_tokens": 5, "total_tokens": 15}
+                                            "completion_tokens": 5, "reasoning_tokens": 0,
+                                            "total_tokens": 15}
     call, caused_by = await (await aconn.execute(
         "SELECT payload, caused_by FROM events WHERE kind = 'model.call'")).fetchone()
     percept = await (await aconn.execute(
         "SELECT id FROM events WHERE kind = 'percept'")).fetchone()
     assert call == {"purpose": "pfc.decide", "model": "fake-model",
                     "usage": {"prompt_tokens": 10, "cached_tokens": 4,
-                              "completion_tokens": 5, "total_tokens": 15}}
+                              "completion_tokens": 5, "reasoning_tokens": 0,
+                              "total_tokens": 15}}
     assert caused_by == percept[0]
+
+
+async def test_reasoning_tokens_are_recorded_and_counted_in_the_budget(aconn):
+    class ReasoningLLM(FakeLLM):
+        def handler(self, request):
+            response = super().handler(request)
+            payload = json.loads(response.content)
+            payload["usage"] = {"prompt_tokens": 100, "completion_tokens": 50,
+                                "total_tokens": 150,
+                                "completion_tokens_details": {"reasoning_tokens": 40}}
+            return httpx.Response(200, json=payload)
+
+    fake = ReasoningLLM([[("act", {"capability": "telegram.say",
+                                   "arguments": {"text": "hai"}})]])
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel.register_body(RecordingBody())
+
+    await _feed(kernel, _msg("halo"))
+
+    call = (await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'model.call'")).fetchone())[0]
+    assert call["usage"] == {"prompt_tokens": 100, "cached_tokens": 0,
+                             "completion_tokens": 50, "reasoning_tokens": 40,
+                             "total_tokens": 150}
+    key = f"budget:{START.astimezone(JAKARTA).date().isoformat()}"
+    assert await read_state(aconn, key) == call["usage"]
 
 
 async def test_the_budget_spent_raises_theta(aconn):

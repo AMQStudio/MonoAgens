@@ -97,13 +97,14 @@ class ToolCall:
 class PFC:
     """The LLM client: layered prompts and tool calls over chat completions."""
 
-    def __init__(self, base_url: str, api_key: str, model: str, *,
+    def __init__(self, base_url: str, api_key: str, model: str, *, effort: str = "",
                  settings: dict[str, Any] | None = None,
                  identity: dict[str, Any] | None = None,
                  transport: httpx.AsyncBaseTransport | None = None,
                  client: httpx.AsyncClient | None = None, timeout: float = 30.0) -> None:
-        """Store the endpoint, the key, the model, and the identity."""
+        """Store the endpoint, the key, the model, the optional effort, and the identity."""
         self.base_url, self.api_key, self.model = base_url.rstrip("/"), api_key, model
+        self.effort = effort.strip().lower()
         self.settings = settings if settings is not None else load_settings()
         self.identity = dict(identity if identity is not None
                              else self.settings.get("identity") or {})
@@ -129,6 +130,8 @@ class PFC:
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         body = {"model": self.model, "messages": messages, "tools": tools,
                 "tool_choice": tool_choice}
+        if self.effort:
+            body["reasoning_effort"] = self.effort
         response = await self._http().post(f"{self.base_url}/chat/completions",
                                            json=body, headers=headers)
         response.raise_for_status()
@@ -173,9 +176,11 @@ def _recorded(calls: list[dict[str, Any]]) -> list[str]:
 
 
 def _usage(raw: dict[str, Any]) -> dict[str, int]:
-    """Normalize one response's token usage into the four tracked counters."""
+    """Normalize one response's token usage into the five tracked counters."""
     details, prompt = raw.get("prompt_tokens_details") or {}, int(raw.get("prompt_tokens") or 0)
+    reasoning = raw.get("completion_tokens_details") or {}
     completion = int(raw.get("completion_tokens") or 0)
     return {"prompt_tokens": prompt, "cached_tokens": int(details.get("cached_tokens") or 0),
             "completion_tokens": completion,
+            "reasoning_tokens": int(reasoning.get("reasoning_tokens") or 0),
             "total_tokens": int(raw.get("total_tokens") or prompt + completion)}

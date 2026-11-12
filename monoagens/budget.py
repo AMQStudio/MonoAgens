@@ -9,7 +9,8 @@ from zoneinfo import ZoneInfo
 from monoagens.store import add_budget_usage, append_event
 from monoagens.types import Event
 
-COUNTERS = ("prompt_tokens", "cached_tokens", "completion_tokens", "total_tokens")
+COUNTERS = ("prompt_tokens", "cached_tokens", "completion_tokens", "reasoning_tokens",
+            "total_tokens")
 
 
 def _zone(settings: Mapping[str, Any]) -> ZoneInfo:

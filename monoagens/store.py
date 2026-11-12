@@ -136,7 +136,7 @@ async def add_budget_usage(conn, *, now: datetime, timezone: str, usage: dict[st
     current = await read_state(conn, key) or {}
     totals = {name: int(current.get(name) or 0) + int(usage.get(name) or 0)
               for name in ("prompt_tokens", "cached_tokens", "completion_tokens",
-                           "total_tokens")}
+                           "reasoning_tokens", "total_tokens")}
     await write_state(conn, key, totals, updated_by_event)
     return totals
 

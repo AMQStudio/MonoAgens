@@ -340,6 +340,20 @@ async def test_a_wake_without_act_is_recorded_as_silent(aconn):
     assert body.actions == []
 
 
+async def test_reasoning_effort_is_sent_only_when_it_is_set(aconn):
+    asked = FakeLLM()
+    kernel = Kernel(aconn, clock=FakeClock(START), settings=SETTINGS, pfc=PFC(
+        "https://llm.test/v1", "test-key", "fake-model", effort="high", settings=SETTINGS,
+        transport=httpx.MockTransport(asked.handler)))
+    await _feed(kernel, _msg("halo"))
+    assert asked.requests[0]["reasoning_effort"] == "high"
+
+    plain = FakeLLM()
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(plain), settings=SETTINGS)
+    await _feed(kernel, _msg("halo lagi", message_id=2))
+    assert "reasoning_effort" not in plain.requests[0]
+
+
 async def test_a_model_that_only_thinks_stops_after_max_thought_rounds(aconn):
     """D51: every round is recorded, and a model that never acts ends at the prior's limit."""
     fake = FakeLLM([[("think", {"thought": "nothing to add", "motivation": 2,

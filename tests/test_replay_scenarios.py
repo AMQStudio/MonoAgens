@@ -145,3 +145,30 @@ def test_write_capability_record_writes_the_given_path(tmp_path: pathlib.Path) -
     path = replay.write_capability_record("x\n", target)
     assert path == target
     assert target.read_text(encoding="utf-8") == "x\n"
+
+
+def test_the_report_records_model_and_effort(tmp_path: pathlib.Path) -> None:
+    when = datetime(2026, 11, 12, 9, 0, tzinfo=timezone.utc)
+    text = replay.render_report([], replay.Usage(), "real LLM", "some/real-model",
+                                {"constants": {}, "knobs": {}, "calibration": {}}, when,
+                                ZoneInfo("UTC"), "high")
+    assert "- Model: `some/real-model`" in text
+    assert "- Effort: `high`" in text
+
+    path = tmp_path / "replay-20261112-090000.md"
+    path.write_text(text.replace("## Headline metrics",
+                                 "## 01_group_chitchat_greeting\n\n- **PASS** — one: yes\n\n"
+                                 "## Headline metrics"), encoding="utf-8")
+    run = replay.parse_report(path)
+    assert run is not None and (run.model, run.effort) == ("some/real-model", "high")
+
+
+def test_the_capability_record_names_the_effort_of_a_real_run() -> None:
+    claim = replay.Capability("01_group_chitchat_greeting", "silence", "A greeting is ignored.")
+    day = datetime(2026, 11, 12, 10, 0, tzinfo=timezone.utc)
+    runs = [replay.ReportRun(pathlib.Path("a"), day, "real", "stronger/model",
+                             {"01_group_chitchat_greeting": replay.CapabilityVerdict(2, 2)},
+                             "low")]
+    text = replay.build_capability_record([claim], runs, day)
+    row = next(line for line in text.splitlines() if line.startswith("| A greeting"))
+    assert "stronger/model (effort low)" in row

@@ -15,8 +15,9 @@ DEFAULT_SOUL_PATH = DEFAULT_ROOT / "soul.yaml"
 DEFAULT_CONFIG_PATH = DEFAULT_ROOT / "config.yaml"
 DEFAULT_ENV_PATH = DEFAULT_ROOT / ".env"
 DEFAULT_TICK_SECONDS = 30.0
+EFFORTS = ("low", "medium", "high")
 _LLM_KEYS = (("base_url", "LLM_BASE_URL"), ("api_key", "LLM_API_KEY"),
-             ("model", "LLM_MODEL"))
+             ("model", "LLM_MODEL"), ("effort", "LLM_REASONING_EFFORT"))
 
 
 def read_yaml(path: pathlib.Path) -> dict[str, Any]:
@@ -58,8 +59,12 @@ def load_env_file(path: pathlib.Path = DEFAULT_ENV_PATH) -> dict[str, str]:
 def load_llm_config(env_path: pathlib.Path = DEFAULT_ENV_PATH) -> dict[str, str]:
     """Resolve the LLM settings from the environment, then the .env file."""
     file_values = load_env_file(env_path)
-    return {name: os.environ.get(key) or file_values.get(key) or ""
-            for name, key in _LLM_KEYS}
+    config = {name: os.environ.get(key) or file_values.get(key) or ""
+              for name, key in _LLM_KEYS}
+    config["effort"] = config["effort"].strip().lower()
+    if config["effort"] and config["effort"] not in EFFORTS:
+        raise ValueError(f"LLM_REASONING_EFFORT must be one of {', '.join(EFFORTS)}")
+    return config
 
 
 _PASSWORD_TOKEN = re.compile(

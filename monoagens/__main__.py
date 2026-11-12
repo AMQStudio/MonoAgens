@@ -36,7 +36,8 @@ async def main() -> None:
         clock = Clock(tick_seconds=tick_seconds(settings))
         settings["identity"] = await identity.ensure(conn, settings["identity"],
                                                      now=clock.now())
-        pfc = PFC(llm["base_url"], llm["api_key"], llm["model"], settings=settings)
+        pfc = PFC(llm["base_url"], llm["api_key"], llm["model"], effort=llm["effort"],
+                  settings=settings)
         kernel = Kernel(conn, clock=clock, pfc=pfc, settings=settings,
                         embedder=FastEmbedder())
         kernel.hooks.inbound.add("pairing", pairing_inbound)

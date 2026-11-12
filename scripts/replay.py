@@ -46,7 +46,7 @@ from monoagens.bodies.cli import CAPABILITIES as CLI_CAPABILITIES
 from monoagens.bodies.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.clock import FakeClock
 from monoagens.cognition import Appraisal
-from monoagens.config import DEFAULT_ENV_PATH, load_env_file, load_llm_config
+from monoagens.config import DEFAULT_ENV_PATH, EFFORTS, load_env_file, load_llm_config
 from monoagens.prior import constants, load_settings
 from monoagens.expect import parse_duration
 from monoagens.kernel import Kernel
@@ -145,14 +145,15 @@ def ensure_database(url: str) -> None:
 
 
 def llm_settings() -> dict[str, str]:
-    """Resolve LLM_BASE_URL, LLM_API_KEY, and LLM_MODEL with defaults."""
+    """Resolve LLM_BASE_URL, LLM_API_KEY, LLM_MODEL and the effort with defaults."""
     config = load_llm_config()
     base_url = config.get("base_url") or DEFAULT_BASE_URL
     model = config.get("model") or DEFAULT_MODEL
     api_key = config.get("api_key") or ""
     if not api_key:
         raise RuntimeError("LLM_API_KEY is required for a real-LLM replay (or use --fake)")
-    return {"base_url": base_url, "api_key": api_key, "model": model}
+    return {"base_url": base_url, "api_key": api_key, "model": model,
+            "effort": config.get("effort") or ""}
 
 
 # ------------------------------------------------------------------- usage
@@ -166,24 +167,27 @@ class Usage:
     prompt: int = 0
     cached: int = 0
     completion: int = 0
+    reasoning: int = 0
     total: int = 0
 
     def add_payload(self, payload: dict[str, Any]) -> None:
         """Add one chat completion response body's usage to the counters."""
         usage = payload.get("usage") or {}
         details = usage.get("prompt_tokens_details") or {}
+        reasoning = usage.get("completion_tokens_details") or {}
         prompt = int(usage.get("prompt_tokens") or 0)
         completion = int(usage.get("completion_tokens") or 0)
         self.prompt += prompt
         self.cached += int(details.get("cached_tokens") or 0)
         self.completion += completion
+        self.reasoning += int(reasoning.get("reasoning_tokens") or 0)
         self.total += int(usage.get("total_tokens") or (prompt + completion))
 
     def minus(self, other: Usage) -> Usage:
         """Return the counter difference (for per-scenario usage)."""
         return Usage(self.calls - other.calls, self.prompt - other.prompt,
                      self.cached - other.cached, self.completion - other.completion,
-                     self.total - other.total)
+                     self.reasoning - other.reasoning, self.total - other.total)
 
 
 def _prompt_place(content: str) -> str | None:
@@ -552,7 +556,8 @@ class ReplayRunner:
         client = httpx.AsyncClient(
             transport=UsageTransport(httpx.AsyncHTTPTransport(), self.tracker), timeout=90.0)
         return PFC(self.llm["base_url"], self.llm["api_key"], self.llm["model"],
-                   settings=self.settings, client=client, timeout=90.0)
+                   effort=self.llm.get("effort") or "", settings=self.settings, client=client,
+                   timeout=90.0)
 
     def _make_kernel(self) -> Kernel:
         """Build a fresh kernel that records its appraisals."""
@@ -1087,7 +1092,8 @@ def _scenario_section(result: ScenarioResult, zone: ZoneInfo) -> list[str]:
         lines.append(f"- **{mark}** — {check.label}: {check.detail}")
     usage = result.usage
     lines += ["", f"LLM calls: {usage.calls} · prompt {usage.prompt} · cached "
-              f"{usage.cached} · completion {usage.completion} · total {usage.total} tokens", ""]
+              f"{usage.cached} · completion {usage.completion} (reasoning {usage.reasoning})"
+              f" · total {usage.total} tokens", ""]
     return lines
 
 
@@ -1231,10 +1237,11 @@ def metric_lines(metrics: Metrics, *, markdown: bool = False) -> list[str]:
 
 def render_report(results: Sequence[ScenarioResult], usage: Usage, mode: str,
                   model: str, settings: dict[str, Any], when: datetime,
-                  zone: ZoneInfo) -> str:
-    """Build the full markdown report."""
+                  zone: ZoneInfo, effort: str = "") -> str:
+    """Build the full markdown report, with the model and the effort that answered."""
     lines = [f"# Replay report — {when:%Y-%m-%d %H:%M}", "",
-             f"- Mode: **{mode}**", f"- Model: `{model}`", f"- Timezone: `{zone.key}`",
+             f"- Mode: **{mode}**", f"- Model: `{model}`",
+             f"- Effort: `{effort or 'default'}`", f"- Timezone: `{zone.key}`",
              f"- Scenarios: {len(results)}", f"- Report generated: {when:%Y-%m-%d %H:%M:%S}",
              ""]
     metrics = compute_metrics(results, usage)
@@ -1254,7 +1261,7 @@ def render_report(results: Sequence[ScenarioResult], usage: Usage, mode: str,
     lines += [_summary_row(result) for result in results]
     lines += ["", f"**Total LLM calls:** {usage.calls}", "",
               f"**Tokens:** prompt {usage.prompt} · cached {usage.cached} · completion "
-              f"{usage.completion} · total {usage.total}", ""]
+              f"{usage.completion} (reasoning {usage.reasoning}) · total {usage.total}", ""]
     return "\n".join(lines)
 
 
@@ -1274,6 +1281,7 @@ GENERATED_MARK = "<!-- Generated by scripts/replay.py; do not edit by hand. -->"
 REPORT_HEADING_RE = re.compile(r"^## (.+)$")
 REPORT_MODE_RE = re.compile(r"^- Mode: \*\*(.+)\*\*$")
 REPORT_MODEL_RE = re.compile(r"^- Model: `([^`]+)`$")
+REPORT_EFFORT_RE = re.compile(r"^- Effort: `([^`]+)`$")
 REPORT_WHEN_RE = re.compile(r"^- Report generated: (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 REPORT_STAMP_RE = re.compile(r"replay-(\d{8})-(\d{6})\.md$")
 REPORT_CHECK_RE = re.compile(r"^- \*\*(PASS|FAIL)\*\* — ")
@@ -1299,13 +1307,14 @@ class CapabilityVerdict:
 
 @dataclass
 class ReportRun:
-    """One replay run: its mode, model, time, and per-scenario verdicts."""
+    """One replay run: its mode, model, effort, time, and per-scenario verdicts."""
 
     path: pathlib.Path
     when: datetime
     mode: str
     model: str
     results: dict[str, CapabilityVerdict]
+    effort: str = ""
 
 
 def _report_when(path: pathlib.Path, lines: Sequence[str]) -> datetime:
@@ -1325,7 +1334,7 @@ def _report_when(path: pathlib.Path, lines: Sequence[str]) -> datetime:
 def parse_report(path: pathlib.Path) -> ReportRun | None:
     """Read one saved replay report; None when it holds no scenario results."""
     lines = path.read_text(encoding="utf-8").splitlines()
-    mode, model, scenario = "fake", "unknown", ""
+    mode, model, effort, scenario = "fake", "unknown", "", ""
     results: dict[str, CapabilityVerdict] = {}
     for line in lines:
         header = REPORT_MODE_RE.match(line)
@@ -1335,6 +1344,10 @@ def parse_report(path: pathlib.Path) -> ReportRun | None:
         model_line = REPORT_MODEL_RE.match(line)
         if model_line and model == "unknown":
             model = model_line.group(1)
+            continue
+        effort_line = REPORT_EFFORT_RE.match(line)
+        if effort_line:
+            effort = "" if effort_line.group(1) == "default" else effort_line.group(1)
             continue
         heading = REPORT_HEADING_RE.match(line)
         if heading:
@@ -1349,7 +1362,7 @@ def parse_report(path: pathlib.Path) -> ReportRun | None:
     if not results:
         return None
     return ReportRun(path=path, when=_report_when(path, lines), mode=mode,
-                     model=model, results=results)
+                     model=model, results=results, effort=effort)
 
 
 def saved_reports(reports_dir: pathlib.Path, before: datetime) -> list[ReportRun]:
@@ -1363,7 +1376,7 @@ def saved_reports(reports_dir: pathlib.Path, before: datetime) -> list[ReportRun
 
 
 def current_run(results: Sequence[ScenarioResult], mode: str,
-                model: str, when: datetime) -> ReportRun:
+                model: str, when: datetime, effort: str = "") -> ReportRun:
     """Turn this run's finished scenarios into a report run of its own."""
     verdicts = {}
     for result in results:
@@ -1371,7 +1384,7 @@ def current_run(results: Sequence[ScenarioResult], mode: str,
         verdicts[result.scenario.name] = CapabilityVerdict(passed, len(result.checks))
     return ReportRun(path=pathlib.Path("(this run)"), when=when,
                      mode="real" if "real" in mode.lower() else "fake",
-                     model=model, results=verdicts)
+                     model=model, results=verdicts, effort=effort)
 
 
 def _record_pool(runs: Sequence[ReportRun], mode: str, name: str) -> list[ReportRun]:
@@ -1389,7 +1402,9 @@ def _record_cell(pool: Sequence[ReportRun], name: str) -> str:
     verdict = "PASS" if passes == len(pool) else "FAIL"
     if pool[0].mode == "fake":
         return f"{verdict} {passes}/{len(pool)} · {pool[0].when:%Y-%m-%d}"
-    models = ", ".join(dict.fromkeys(run.model for run in pool))
+    models = ", ".join(dict.fromkeys(
+        f"{run.model} (effort {run.effort or 'default'})" if run.effort else run.model
+        for run in pool))
     return f"{verdict} {passes}/{len(pool)} · {_cell(models)} · {pool[0].when:%Y-%m-%d}"
 
 
@@ -1435,7 +1450,8 @@ def build_capability_record(claims: Sequence[Capability], runs: Sequence[ReportR
 
 
 def capability_record(results: Sequence[ScenarioResult], mode: str, model: str,
-                      when: datetime, reports_dir: pathlib.Path = REPORT_DIR) -> str:
+                      when: datetime, effort: str = "",
+                      reports_dir: pathlib.Path = REPORT_DIR) -> str:
     """Build the capability record from this run and the saved reports."""
     claims = [Capability(result.scenario.name, result.scenario.function,
                          result.scenario.capability) for result in results]
@@ -1444,7 +1460,8 @@ def capability_record(results: Sequence[ScenarioResult], mode: str, model: str,
         scenario = load_scenario(path, ZoneInfo("UTC"))
         if scenario.name not in known:
             claims.append(Capability(scenario.name, scenario.function, scenario.capability))
-    runs = [current_run(results, mode, model, when), *saved_reports(reports_dir, when)]
+    runs = [current_run(results, mode, model, when, effort),
+            *saved_reports(reports_dir, when)]
     return build_capability_record(claims, runs, when)
 
 
@@ -1497,13 +1514,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("scenarios", nargs="*", help="scenario YAML files (default: all)")
     parser.add_argument("--fake", action="store_true",
                         help="use a scripted FakeLLM and FakeEmbedder (free)")
+    parser.add_argument("--model", help="override LLM_MODEL for this run")
+    parser.add_argument("--effort", choices=EFFORTS,
+                        help="override LLM_REASONING_EFFORT for this run")
     args = parser.parse_args(argv)
     load_environment()
     url = replay_url()
     settings = load_settings()
-    llm = {"base_url": DEFAULT_BASE_URL, "api_key": "", "model": DEFAULT_MODEL}
+    llm = {"base_url": DEFAULT_BASE_URL, "api_key": "", "model": DEFAULT_MODEL, "effort": ""}
     if not args.fake:
         llm = llm_settings()
+    if args.model:
+        llm["model"] = args.model
+    if args.effort:
+        llm["effort"] = args.effort
     paths = scenario_paths(args.scenarios)
     ensure_database(url)
     reset_schema(url)
@@ -1511,9 +1535,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     when = datetime.now(timezone.utc)
     zone = ZoneInfo(str(settings.get("timezone") or "UTC"))
     mode = "fake LLM (free)" if args.fake else "real LLM"
-    text = render_report(results, usage, mode, llm["model"], settings, when, zone)
+    text = render_report(results, usage, mode, llm["model"], settings, when, zone,
+                         llm["effort"])
     path = write_report(text, when)
-    record = capability_record(results, mode, llm["model"], when)
+    record = capability_record(results, mode, llm["model"], when, llm["effort"])
     record_path = write_capability_record(record)
     failed = [check.label for result in results for check in result.checks if not check.passed]
     print(f"\nreport: {path}")
@@ -1526,7 +1551,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if failed:
         print(f"failed: {len(failed)}")
     print(f"llm calls: {usage.calls} · tokens: prompt {usage.prompt}, cached {usage.cached}, "
-          f"completion {usage.completion}, total {usage.total}")
+          f"completion {usage.completion} (reasoning {usage.reasoning}), total {usage.total}")
     return 0
 
 
