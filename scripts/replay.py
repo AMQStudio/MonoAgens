@@ -8,7 +8,7 @@ Usage:
 
 Real mode talks to the OpenAI-compatible endpoint in .env and spends tokens;
 it prints a token report at the end. Fake mode is free: each scenario carries
-recorded model answers (`model_answers`) that the scripted PFC replays, so the
+recorded model answers (`model_answers`) that the scripted Reasoning replays, so the
 reminder and recall behaviors are deterministic without an LLM.
 
 The replay database must end with "_replay"; its schema is rebuilt for every
@@ -44,19 +44,19 @@ from psycopg import sql
 from pgvector.psycopg import register_vector_async
 import yaml
 
-from monoagens import reach
-from monoagens.bodies.cli import CAPABILITIES as CLI_CAPABILITIES
-from monoagens.bodies.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
-from monoagens.clock import FakeClock
-from monoagens.cognition import Appraisal
-from monoagens.config import DEFAULT_ENV_PATH, EFFORTS, load_env_file, load_llm_config
-from monoagens.prior import constants, load_settings
-from monoagens.duration import parse_duration
-from monoagens.kernel import Kernel
-from monoagens.embedding import FastEmbedder, FakeEmbedder
-from monoagens.migrate import migrate, migrate_url
-from monoagens.desk import PFCContext, withheld_note
-from monoagens.pfc import PFC, ToolCall
+from monoagens.middleware import privacy
+from monoagens.adapters.cli import CAPABILITIES as CLI_CAPABILITIES
+from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
+from monoagens.infra.clock import FakeClock
+from monoagens.core.gate import Appraisal
+from monoagens.infra.config import DEFAULT_ENV_PATH, EFFORTS, load_env_file, load_llm_config
+from monoagens.infra.prior import constants, load_settings
+from monoagens.infra.duration import parse_duration
+from monoagens.core.kernel import Kernel
+from monoagens.infra.embedding import FastEmbedder, FakeEmbedder
+from monoagens.infra.migrate import migrate, migrate_url
+from monoagens.core.context.layout import PFCContext, withheld_note
+from monoagens.core.reasoning import Reasoning, ToolCall
 from monoagens.types import Action, Event
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -216,7 +216,7 @@ class DeskItem:
 
 @dataclass(frozen=True)
 class Desk:
-    """One desk as the PFC received it: its place, its trigger and its items."""
+    """One desk as the Reasoning received it: its place, its trigger and its items."""
 
     step: int
     place: str | None
@@ -320,7 +320,7 @@ def _fake_sleep_arguments(messages: Sequence[dict[str, Any]]) -> dict[str, Any]:
 
 
 class FakePFC:
-    """A scripted PFC: replay recorded answers, else say "ok" and keep one memory."""
+    """A scripted Reasoning: replay recorded answers, else say "ok" and keep one memory."""
 
     def __init__(self, tracker: Tracker,
                  answers: dict[tuple[int, str], list[list[ToolCall]]] | None = None) -> None:
@@ -368,11 +368,11 @@ class FakePFC:
         """Nothing to close."""
 
 
-class TrackedPFC(PFC):
-    """A real PFC that records the desk of every wake for the privacy metric."""
+class TrackedPFC(Reasoning):
+    """A real Reasoning that records the desk of every wake for the privacy metric."""
 
     def __init__(self, tracker: Tracker, *args: Any, **kwargs: Any) -> None:
-        """Keep the tracker beside the real PFC."""
+        """Keep the tracker beside the real Reasoning."""
         super().__init__(*args, **kwargs)
         self._tracker = tracker
 
@@ -638,7 +638,7 @@ class ReplayRunner:
         self._message_id = 0
 
     def _make_pfc(self) -> Any:
-        """Build a fake PFC with the scenario's answers, or a real HTTP-tracked PFC."""
+        """Build a fake Reasoning with the scenario's answers, or a real HTTP-tracked Reasoning."""
         if self.fake:
             return FakePFC(self.tracker, self.answers)
         client = httpx.AsyncClient(
@@ -653,7 +653,7 @@ class ReplayRunner:
         kernel = RecordingKernel(self.conn, clock=self.clock, pfc=pfc,
                                  settings=self.settings, embedder=self.embedder)
         for name in (BODY_NAME, CLI_BODY, GAME_BODY, WHATSAPP_BODY, DEV_BODY):
-            kernel.register_body(FakeBody(name))
+            kernel.register_adapter(FakeBody(name))
         self.kernel = kernel
         return kernel
 
@@ -803,7 +803,7 @@ class ReplayRunner:
 
     def _said(self, event: dict[str, Any]) -> bool:
         """Return whether one act.out is a message, judged by its capability."""
-        capabilities = self.kernel.organs.capabilities if self.kernel is not None else {}
+        capabilities = self.kernel.tools.capabilities if self.kernel is not None else {}
         return said(event, capabilities)
 
     async def _leak_violations(self, replies: Sequence[Reply]) -> list[str]:
@@ -814,7 +814,7 @@ class ReplayRunner:
         found: list[str] = []
         for reply in replies:
             for text, sources in private:
-                if text in reply.text and not await reach.memory_visible(
+                if text in reply.text and not await privacy.memory_visible(
                         self.conn, context=reply.place, sources=sources):
                     found.append(f"step {reply.step}: a private memory was said "
                                  f"in `{reply.place}`")
@@ -1398,14 +1398,14 @@ def _fabricated_quote(text: str, corpus: Sequence[str]) -> str | None:
 async def desk_violations(conn, desks: Sequence[Desk]) -> list[str]:
     """Return every desk item whose own audience does not cover that desk (D45, D50, D53).
 
-    Independent of `reach.visible`: it restates absolute line 2 from the Log, so a bug in
+    Independent of `privacy.visible`: it restates absolute line 2 from the Log, so a bug in
     the context hook or in `visible` itself cannot pass the metric.
     """
     found: list[str] = []
     for desk in desks:
-        if not desk.place or await reach.owner_direct(conn, desk.place):
+        if not desk.place or await privacy.owner_direct(conn, desk.place):
             continue
-        need = set(await reach.audience(conn, desk.place, desk.trigger)) - {OWNER}
+        need = set(await privacy.audience(conn, desk.place, desk.trigger)) - {OWNER}
         reported: set[tuple[str | None, tuple[int, ...] | None]] = set()
         for item in desk.items:
             key = (item.source, item.sources)
@@ -1415,15 +1415,15 @@ async def desk_violations(conn, desks: Sequence[Desk]) -> list[str]:
                 rows = await (await conn.execute(
                     "SELECT id, place FROM events WHERE id = ANY(%s) AND place IS NOT NULL",
                     (list(item.sources),))).fetchall()
-                audiences = [((set(await reach.audience(conn, place, source)) - {OWNER})
-                              | set(await reach.shared(conn, place, desk.trigger)))
+                audiences = [((set(await privacy.audience(conn, place, source)) - {OWNER})
+                              | set(await privacy.shared(conn, place, desk.trigger)))
                              for source, place in rows]
                 covered = bool(item.sources) and all(need <= have for have in audiences)
                 label = f"sources {list(item.sources)}" if item.sources else "no known source"
             else:
                 covered = bool(item.source) and need <= (
-                    (set(await reach.audience(conn, item.source, item.before)) - {OWNER})
-                    | set(await reach.shared(conn, item.source, desk.trigger)))
+                    (set(await privacy.audience(conn, item.source, item.before)) - {OWNER})
+                    | set(await privacy.shared(conn, item.source, desk.trigger)))
                 label = item.source or "no known source"
             if not covered:
                 reported.add(key)

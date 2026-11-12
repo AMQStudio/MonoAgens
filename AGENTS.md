@@ -40,10 +40,9 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
 - Persona text in `soul.yaml` may be in any language.
 
 ## Invariants (never break these)
-1. **The core is only a brain** (D1, D2, D32). `monoagens/kernel.py`, `hooks.py`, `jobs.py`,
-   `migrate.py`, `store.py`, `expect.py`, `memory.py`, `pfc.py`, `desk.py`, `guidance.py`, `reach.py`, `threads.py`, `recall.py`, `identity.py` and `monoagens/cognition/` (after Task 3: everything under `monoagens/core/`) know only percepts, capabilities, hooks and thought
-   acts. They never import from `monoagens/bodies/` (`monoagens/adapters/` after Task 3) or
-   plugins, never mention a platform, and never hard-code a world action (speaking included) —
+1. **The core is only a brain** (D1, D2, D32). `monoagens/core/` (everything under it) knows only
+   percepts, capabilities, hooks and thought acts. It never imports from `monoagens/adapters/` or
+   plugins, never mentions a platform, and never hard-codes a world action (speaking included) —
    those are tool capabilities. From Task 3 on (D57) the core also knows only opaque ids, labels
    and numbers: it never imports from `monoagens/middleware/` and never means a person, the owner
    or a group.

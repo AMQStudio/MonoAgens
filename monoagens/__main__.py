@@ -1,4 +1,4 @@
-"""Entry point: wire the kernel, the clock, and the enabled bodies."""
+"""Entry point: wire the kernel, the clock, and the enabled adapters."""
 
 from __future__ import annotations
 
@@ -8,18 +8,18 @@ import os
 import psycopg
 from pgvector.psycopg import register_vector_async
 
-from monoagens.bodies.cli import CLIBody
-from monoagens.bodies.telegram import TelegramBody
-from monoagens.clock import Clock
-from monoagens.config import load_llm_config, tick_seconds
-from monoagens.kernel import Kernel
-from monoagens import identity
-from monoagens.embedding import FastEmbedder
-from monoagens.migrate import migrate
-from monoagens.pairing import ensure as ensure_pairing
-from monoagens.pairing import inbound as pairing_inbound
-from monoagens.pfc import PFC
-from monoagens.prior import load_settings
+from monoagens.adapters.cli import CLIBody
+from monoagens.adapters.telegram import TelegramBody
+from monoagens.core import identity
+from monoagens.core.kernel import Kernel
+from monoagens.core.reasoning import Reasoning
+from monoagens.infra.clock import Clock
+from monoagens.infra.config import load_llm_config, tick_seconds
+from monoagens.infra.embedding import FastEmbedder
+from monoagens.infra.migrate import migrate
+from monoagens.infra.prior import load_settings
+from monoagens.middleware.identity import ensure as ensure_pairing
+from monoagens.middleware.identity import inbound as pairing_inbound
 
 
 async def main() -> None:
@@ -36,7 +36,7 @@ async def main() -> None:
         clock = Clock(tick_seconds=tick_seconds(settings))
         settings["identity"] = await identity.ensure(conn, settings["identity"],
                                                      now=clock.now())
-        pfc = PFC(llm["base_url"], llm["api_key"], llm["model"], effort=llm["effort"],
+        pfc = Reasoning(llm["base_url"], llm["api_key"], llm["model"], effort=llm["effort"],
                   settings=settings)
         kernel = Kernel(conn, clock=clock, pfc=pfc, settings=settings,
                         embedder=FastEmbedder())
@@ -45,19 +45,19 @@ async def main() -> None:
         if code:
             print(f"pairing code: {code} — send it from any organ to become the owner",
                   flush=True)
-        bodies = []
+        adapters = []
         enabled = settings.get("bodies") or {}
         if (enabled.get("telegram") or {}).get("enabled"):
-            bodies.append(TelegramBody(os.environ["TELEGRAM_BOT_TOKEN"],
+            adapters.append(TelegramBody(os.environ["TELEGRAM_BOT_TOKEN"],
                                        get_cursor=lambda: kernel.cursor("telegram")))
         if (enabled.get("cli") or {}).get("enabled"):
-            bodies.append(CLIBody())
-        for body in bodies:
-            kernel.register_body(body)
+            adapters.append(CLIBody())
+        for adapter in adapters:
+            kernel.register_adapter(adapter)
         stop = asyncio.Event()
         tasks = [asyncio.create_task(coro) for coro in (
             kernel.run(stop),
-            *(body.run(kernel.put) for body in bodies),
+            *(adapter.run(kernel.put) for adapter in adapters),
             kernel.clock.run(kernel.put, stop))]
         try:
             await asyncio.gather(*tasks)

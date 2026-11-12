@@ -24,9 +24,9 @@ its roles, approvals, flows and multi-runner leases.
 Read first: [glossary](../glossary.md), [AGENTS.md](../../AGENTS.md) (size guide)
 May touch: `monoagens/` (all), `tests/`, `scripts/`, `pyproject.toml`, `AGENTS.md` (invariant 1's file list only)
 
-- [ ] 1.1 Packages per layer as in the glossary: `core/`, `middleware/`, `adapters/` (from `bodies/`), `infra/`; `plugins/` stays at the top. Tests mirror the same layout.
-- [ ] 1.2 Standard names (glossary): `pfc` → reasoning, `desk` and `work` → context, `cognition` → gate, `guidance` → principles. `organs` splits in two: the door (check the arguments against the descriptor, record, hand to the action hook, record the result) stays in the core as `dispatch`; the registry of tools present, which tools a turn is offered, and routing a call to the adapter or plugin that owns it go to `middleware/tools.py`. Near-duplicates merge into one module each: `appraisal`/`appraise`, `memory`/`recall`/`forget` (one `memory/` package), `expect`/`condition`. Event kinds, payload fields, `soul.yaml`, `prior/` and `config.yaml` keys keep their names (glossary, "What never changes").
-- [ ] 1.3 Check: pytest and the fake replay pass unchanged. List every old → new path and every renamed public name under Notes (the specs already use the standard terms; the architect updates any file path they name).
+- [x] 1.1 Packages per layer as in the glossary: `core/`, `middleware/`, `adapters/` (from `bodies/`), `infra/`; `plugins/` stays at the top. Tests mirror the same layout.
+- [x] 1.2 Standard names (glossary): `pfc` → reasoning, `desk` and `work` → context, `cognition` → gate, `guidance` → principles. `organs` splits in two: the door (check the arguments against the descriptor, record, hand to the action hook, record the result) stays in the core as `dispatch`; the registry of tools present, which tools a turn is offered, and routing a call to the adapter or plugin that owns it go to `middleware/tools.py`. Near-duplicates merge into one module each: `appraisal`/`appraise`, `memory`/`recall`/`forget` (one `memory/` package), `expect`/`condition`. Event kinds, payload fields, `soul.yaml`, `prior/` and `config.yaml` keys keep their names (glossary, "What never changes").
+- [x] 1.3 Check: pytest and the fake replay pass unchanged. List every old → new path and every renamed public name under Notes (the specs already use the standard terms; the architect updates any file path they name).
 
 ## Part 2 — Decisions out of the core
 Read first: [constitution.md](../constitution.md) §4, [core.md](../core.md) §8 (D57), [middleware.md](../middleware.md) §3, §7
@@ -68,3 +68,73 @@ holds only mechanisms and the Notes list every move; the code is readable (AGENT
 guide).
 
 **Notes.**
+
+**Baseline (before any edit, 2026-11-12).** `uv run pytest -q` → 321 passed (the architect's
+`--collect-only` count matched). `uv run python scripts/replay.py --fake` → `checks: 133/133
+passed`, absolute-line violations 0, report `reports/2026-11-12-1254-fake-all.md`.
+
+**Part 1 — every old → new path.**
+
+| Old | New |
+|---|---|
+| `monoagens/kernel.py` | `monoagens/core/kernel.py` |
+| `monoagens/hooks.py` | `monoagens/core/hooks.py` (also absorbs `middleware.py`) |
+| `monoagens/contract.py` | `monoagens/core/arguments.py` |
+| `monoagens/organs.py` | `monoagens/core/dispatch.py` (+ `monoagens/middleware/tools.py`) |
+| `monoagens/identity.py` | `monoagens/core/identity.py` |
+| `monoagens/threads.py` | `monoagens/core/threads.py` |
+| `monoagens/pfc.py` | `monoagens/core/reasoning.py` |
+| `monoagens/desk.py` | `monoagens/core/context/layout.py` (+ `build_context` from `memory.py`) |
+| `monoagens/work.py` | `monoagens/core/context/working.py` |
+| `monoagens/memory.py` | `monoagens/core/memory/retrieval.py` + `monoagens/core/memory/sleep.py` |
+| `monoagens/recall.py` | `monoagens/core/memory/recall.py` |
+| `monoagens/forget.py` | `monoagens/core/memory/forget.py` |
+| `monoagens/expect.py` | `monoagens/core/expectations.py` |
+| `monoagens/condition.py` | (deleted) appended to `monoagens/core/expectations.py` |
+| `monoagens/guidance.py` | `monoagens/core/principles.py` |
+| `monoagens/jobs.py` | `monoagens/core/jobs.py` |
+| `monoagens/cognition/__init__.py` | `monoagens/core/gate/__init__.py` |
+| `monoagens/cognition/appraisal.py` + `appraise.py` | `monoagens/core/gate/appraise.py` |
+| `monoagens/cognition/gate.py` | `monoagens/core/gate/formula.py` |
+| `monoagens/cognition/signals.py` | `monoagens/core/gate/signals.py` |
+| `monoagens/cognition/situation.py` | `monoagens/core/gate/situation.py` |
+| `monoagens/cognition/rng.py` | `monoagens/core/gate/rng.py` |
+| `monoagens/middleware.py` | merged into `monoagens/core/hooks.py` (the hook contract is the core's) |
+| `monoagens/pairing.py` | `monoagens/middleware/identity.py` |
+| `monoagens/reach.py` | `monoagens/middleware/privacy.py` |
+| `monoagens/budget.py` | `monoagens/infra/budget.py` |
+| `monoagens/store.py` | `monoagens/infra/store.py` |
+| `monoagens/migrate.py` | `monoagens/infra/migrate.py` |
+| `monoagens/versioning.py` | `monoagens/infra/versioning.py` |
+| `monoagens/config.py` | `monoagens/infra/config.py` |
+| `monoagens/clock.py` | `monoagens/infra/clock.py` |
+| `monoagens/embedding.py` | `monoagens/infra/embedding.py` |
+| `monoagens/duration.py` | `monoagens/infra/duration.py` |
+| `monoagens/prior.py` | `monoagens/infra/prior.py` |
+| `monoagens/bodies/*` | `monoagens/adapters/*` |
+
+**Part 1 — renamed public names.** `PFC` → `Reasoning`; `OrganRegistry` → `ToolRegistry`;
+`Kernel.organs` → `Kernel.tools`; `Kernel.register_body` → `Kernel.register_adapter`;
+`SelfOrgan` → `SelfTool`; `Action.body` → `Action.adapter` (`Event.body` keeps its name: it is the
+Log's column); the hook scope keyword `organ=` → `tool=` and `Registration.organ` →
+`Registration.tool`; modules `cognition` → `core.gate`, `pfc` → `core.reasoning`, `desk` →
+`core.context.layout`, `work` → `core.context.working`, `guidance` → `core.principles`,
+`contract` → `core.arguments`, `expect` → `core.expectations`, `reach` → `middleware.privacy`,
+`pairing` → `middleware.identity`. `ToolRegistry.bodies` → `ToolRegistry.adapters`.
+
+**Part 1 — deliberate deviations from the letter of the plan.**
+
+- `_args` and the description lines of the `act` tool stay in `core/reasoning.py`; only
+  `ToolRegistry.routing_keys` moved to `middleware/tools.py`. Reason: `tools_for(capabilities)`
+  renders the prompt, and from 2.0 on the core may not import the middleware, so the renderer
+  must stay core. `routing_keys` is reached as `kernel.tools.routing_keys(...)`, an injected
+  value, not an import.
+- `infra/prior.py` imports `core.identity` inside `load_settings()` (comment names the cycle:
+  identity → memory → prior). Moving `memory.py` into a package whose `__init__` re-exports the
+  submodules made the module-level import a cycle.
+
+**Part 1 — path constants fixed after the move.** `infra/config.py` `DEFAULT_ROOT`,
+`infra/prior.py` `DEFAULT_PRIOR_PATH`, `infra/migrate.py` `ROOT` all gained one `.parent`.
+
+**Part 1 — check.** `uv run pytest -q` → 321 passed; `scripts/replay.py --fake` → 133/133 checks,
+absolute-line violations 0 (report `reports/2026-11-12-1307-fake-all.md`).

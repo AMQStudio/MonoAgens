@@ -18,7 +18,7 @@ import sys
 
 import psycopg
 
-from monoagens.migrate import migrate_url
+from monoagens.infra.migrate import migrate_url
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_URL = "postgresql://monoagens:monoagens@localhost:5433/monoagens"

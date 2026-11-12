@@ -13,13 +13,13 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from monoagens import expect
-from monoagens.clock import FakeClock
-from monoagens.kernel import Kernel
-from monoagens.embedding import FakeEmbedder
-from monoagens.pfc import PFC
-from monoagens.store import append_event, read_state
-from monoagens.bodies.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
+from monoagens.core import expectations
+from monoagens.infra.clock import FakeClock
+from monoagens.core.kernel import Kernel
+from monoagens.infra.embedding import FakeEmbedder
+from monoagens.core.reasoning import Reasoning
+from monoagens.infra.store import append_event, read_state
+from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
 from tests.support import settings
 
@@ -57,8 +57,8 @@ class FakeLLM:
         return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "tool_calls": tool_calls}}]})
 
 
-def _pfc(fake: FakeLLM) -> PFC:
-    return PFC("https://llm.test/v1", "test-key", "fake-model", settings=SETTINGS,
+def _pfc(fake: FakeLLM) -> Reasoning:
+    return Reasoning("https://llm.test/v1", "test-key", "fake-model", settings=SETTINGS,
                transport=httpx.MockTransport(fake.handler))
 
 
@@ -117,14 +117,14 @@ async def test_mvp_a_restart_preserves_conversation_context(aconn):
 
     first_fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "kita bahas kopi ya"}})]])
     first = Kernel(aconn, clock=clock, pfc=_pfc(first_fake), settings=SETTINGS)
-    first.register_body(RecordingBody())
+    first.register_adapter(RecordingBody())
     await _feed(first, _msg("besok kita bahas apa?"))
 
-    # Restart: a brand-new Kernel and PFC on the same database.
+    # Restart: a brand-new Kernel and Reasoning on the same database.
     second_fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "lanjut soal kopi"}})]])
     second = Kernel(aconn, clock=clock, pfc=_pfc(second_fake), settings=SETTINGS)
     body = RecordingBody()
-    second.register_body(body)
+    second.register_adapter(body)
     await _feed(second, _msg("lanjut", message_id=2))
 
     assert len(second_fake.requests) == 1
@@ -134,7 +134,7 @@ async def test_mvp_a_restart_preserves_conversation_context(aconn):
     assert "Mona: kita bahas kopi ya" in recent
     assert "<event>person:owner: lanjut</event>" in volatile
     assert body.actions == [Action(kind="say", place=PLACE, payload={"text": "lanjut soal kopi"},
-                                   body="telegram")]
+                                   adapter="telegram")]
     assert (await _kinds(aconn)).count("act.out") == 2
 
 
@@ -143,7 +143,7 @@ async def test_mvp_b_silence_and_mention(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "iya, ada apa?"}})]])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
-    kernel.register_body(body)
+    kernel.register_adapter(body)
 
     for i in range(20):
         await _feed(kernel, _msg(f"obrolan {i}", message_id=i + 1, who=f"person:tg:{i}",
@@ -178,7 +178,7 @@ async def test_mvp_b_silence_and_mention(aconn):
     assert "<why_awake>addressed message</why_awake>" in _volatile(fake)
     assert (await _kinds(aconn)).count("act.out") == 1
     assert body.actions == [Action(kind="say", place=GROUP, payload={"text": "iya, ada apa?"},
-                                   body="telegram")]
+                                   adapter="telegram")]
 
 
 async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
@@ -193,7 +193,7 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
     ])
     kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
-    kernel.register_body(body)
+    kernel.register_adapter(body)
 
     await _feed(kernel, _msg("ingatkan saya jam 7"))
     assert await _kinds(aconn) == ["percept", "model.call", "model.call",
@@ -209,7 +209,7 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
     assert kinds.count("expectation.fired") == 1
     assert kinds.count("act.out") == 1
     assert body.actions == [Action(kind="say", place=PLACE, payload={"text": "sudah jam 7"},
-                                   body="telegram")]
+                                   adapter="telegram")]
     assert "expectation missed: remind the owner at 7" in _volatile(fake).split("<why_awake>")[1]
     assert "<event>[expectation.fired]</event>" in _volatile(fake)
 
@@ -219,7 +219,7 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
     # Restart around 7: the reminder already answered, so nothing fires again.
     restarted_fake = FakeLLM()
     restarted = Kernel(aconn, clock=clock, pfc=_pfc(restarted_fake), settings=SETTINGS)
-    restarted.register_body(RecordingBody())
+    restarted.register_adapter(RecordingBody())
     await restarted.recover()
     await restarted.run_until_idle()
     clock.advance(600)
@@ -231,7 +231,7 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
     pattern = {"kind": "percept", "who": WHO, "text_like": "workout"}
     source = await append_event(aconn, ts=clock.now(), kind="percept", who=WHO, place=GROUP,
                                 body="telegram", payload={"text": "source"})
-    created = await expect.create(
+    created = await expectations.create(
         aconn, {"about": "nudge me if I skip workouts", "cue_event": pattern,
                 "expect": {"event_seen": pattern, "within": "2d"},
                 "weight": 1.0, "policy": {"once": True}},
@@ -270,7 +270,7 @@ async def test_mvp_d_sleep_consolidation_and_retrieval(aconn):
 
     fake = FakeLLM([[("store_memories", SLEEP_ARGS)], []])
     kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), settings=SETTINGS, embedder=FakeEmbedder())
-    kernel.register_body(RecordingBody())
+    kernel.register_adapter(RecordingBody())
 
     # Idle for 45 minutes: the tick path runs sleep.
     clock.set_time(START + timedelta(minutes=45))

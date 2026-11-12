@@ -15,7 +15,7 @@ from pgvector.psycopg import register_vector_async
 import psycopg
 import pytest
 
-from monoagens.migrate import migrate
+from monoagens.infra.migrate import migrate
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 REFUSAL = (

@@ -31,12 +31,12 @@ class Event:
 
 @dataclass(frozen=True, slots=True)
 class Action:
-    """One thing a body should do in the world."""
+    """One thing an adapter should do in the world."""
 
     kind: str
     place: str
     payload: dict[str, Any] = field(default_factory=dict)
-    body: str | None = None
+    adapter: str | None = None
     event_id: int | None = field(default=None, compare=False)
 
 

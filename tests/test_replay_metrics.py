@@ -9,10 +9,11 @@ import sys
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from monoagens import hooks, memory
-from monoagens.cognition import Appraisal
-from monoagens.desk import PFCContext
-from monoagens.store import append_event, write_state
+from monoagens.core import hooks, memory
+from monoagens.core.context import layout
+from monoagens.core.gate import Appraisal
+from monoagens.core.context.layout import PFCContext
+from monoagens.infra.store import append_event, write_state
 from tests.support import settings
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -228,7 +229,7 @@ async def test_the_withheld_note_is_not_a_private_item_on_the_desk(aconn):
                                payload={"description": "rapat jam berapa?", "place_kind": "shared"})
     fact = memory.MemoryHit("- rapat jam sembilan (owner at space:tg:owner)",
                             place="space:tg:owner", sources=(dm.id,))
-    context = await memory.build_context(aconn, asked, group, "test", now=NOW,
+    context = await layout.build_context(aconn, asked, group, "test", now=NOW,
                                          settings=settings(), memories=(fact,), capabilities=())
     desk = (await hooks.audience_policy()(context, {"conn": aconn, "now": NOW})).item
     assert desk.withheld
@@ -251,7 +252,7 @@ async def test_person_cards_are_not_private_items_on_the_desk(aconn):
     asked = await append_event(aconn, ts=NOW, kind="percept", who="person:owner", place=group,
                                body="telegram",
                                payload={"description": "kirim ke Budi", "place_kind": "shared"})
-    context = await memory.build_context(aconn, asked, group, "test", now=NOW,
+    context = await layout.build_context(aconn, asked, group, "test", now=NOW,
                                          settings=settings(), memories=(), capabilities=())
     desk = (await hooks.audience_policy()(context, {"conn": aconn, "now": NOW})).item
     assert any("person:budi" in card for card in desk.people)
