@@ -12,13 +12,13 @@ import pytest
 from monoagens.clock import FakeClock
 from monoagens.cognition import Situation, appraise
 from monoagens.identity import SelfOrgan
-from monoagens.recall import doing_lines
 from monoagens.kernel import Kernel
 from monoagens.desk import PFCContext
 from monoagens.pfc import PFC, TOOL_NAMES
 from monoagens.store import append_event, read_state, write_state
 from monoagens.bodies.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
+from monoagens.work import doing_lines
 from tests.support import settings
 
 SETTINGS = settings()
@@ -243,7 +243,8 @@ async def test_say_is_recorded_before_the_body_acts(aconn):
     cur = await aconn.execute("SELECT who, place, body, payload, caused_by FROM events WHERE kind='act.out'")
     who, place, body_name, payload, caused_by = await cur.fetchone()
     assert (who, place, body_name) == ("person:owner", PLACE, "telegram")
-    assert payload == {"capability": "telegram.say", "arguments": {"text": "halo juga"}}
+    assert payload == {"capability": "telegram.say", "arguments": {"text": "halo juga"},
+                       "communicative": True}
     assert caused_by == trigger.id
 
     # act.out is already in the Log when act() is called.
@@ -266,7 +267,8 @@ async def test_react_is_recorded_before_the_body_acts(aconn):
     assert await _kinds(aconn) == ["percept", "model.call", "act.out"]
     cur = await aconn.execute("SELECT payload FROM events WHERE kind='act.out'")
     assert (await cur.fetchone())[0] == {
-        "capability": "telegram.react", "arguments": {"emoji": "👍"}}
+        "capability": "telegram.react", "arguments": {"emoji": "👍"},
+        "communicative": False}
     assert body.log_at_act == [["percept", "model.call", "act.out"]]
     assert body.actions == [
         Action(kind="react", place=PLACE, payload={"emoji": "👍"}, body="telegram")
@@ -395,6 +397,39 @@ async def test_a_thought_then_an_act_is_one_wake(aconn):
                                    "decision.note", "act.out"]
     assert [request["tool_choice"] for request in fake.requests] == ["required", "auto"]
     assert "<results>\nthink: " in fake.requests[1]["messages"][-1]["content"]
+
+
+async def test_a_chain_in_a_place_shows_every_step_and_its_latest_result(aconn):
+    """D52: <doing> follows the chain where it started, not only inside task threads."""
+    root = await append_event(aconn, ts=START, kind="percept", who="person:owner", place=PLACE,
+                              payload={"description": "apa yang kita lakukan bulan lalu?"})
+    recall = await append_event(aconn, ts=START, kind="act.out", place=PLACE,
+                                caused_by=root.id,
+                                payload={"capability": "self.recall", "communicative": False,
+                                         "arguments": {"from": "2026-10-01",
+                                                       "to": "2026-11-01"}})
+    result = await append_event(aconn, ts=START, kind="act.result", place=PLACE,
+                                caused_by=recall.id,
+                                payload={"capability": "self.recall",
+                                         "result": {"count": 1, "found": [{"text": "Kopi"}]}})
+    trigger = Event(id=result.id, ts=START, kind="act.result", place=PLACE,
+                    payload=result.payload)
+
+    lines = await doing_lines(aconn, PLACE, None, SETTINGS["constants"], trigger=trigger)
+
+    assert lines[0] == "goal: apa yang kita lakukan bulan lalu?"
+    assert 'step: self.recall {"to": "2026-11-01", "from": "2026-10-01"}' in lines
+    assert 'result: {"count": 1, "found": [{"text": "Kopi"}]}' in lines
+    said = await append_event(aconn, ts=START, kind="act.out", place=PLACE,
+                              caused_by=root.id,
+                              payload={"capability": "telegram.say",
+                                       "communicative": True,
+                                       "arguments": {"text": "Kita buka Kopi Senja."}})
+    later = await append_event(aconn, ts=START, kind="act.result", place=PLACE,
+                               caused_by=said.id,
+                               payload={"capability": "telegram.say", "result": {"ok": True}})
+    done = Event(id=later.id, ts=START, kind="act.result", place=PLACE, payload=later.payload)
+    assert await doing_lines(aconn, PLACE, None, SETTINGS["constants"], trigger=done) == ()
 
 
 async def test_unaddressed_message_does_not_wake_the_pfc(aconn):
@@ -604,7 +639,9 @@ async def test_a_task_desk_shows_goal_steps_and_the_latest_result(aconn):
 
     lines = await doing_lines(aconn, "space:task:1", task, SETTINGS["constants"])
     assert "goal: selesaikan kode" in lines
-    assert "step: langkah satu" in lines and "step: langkah dua" in lines
+    steps = [line for line in lines if line.startswith("step: ")]
+    assert steps == ['step: dev.run {"text": "langkah satu"}',
+                     'step: dev.run {"text": "langkah dua"}']
     assert f"earlier result #{first.id + 1} (recall it)" in lines
     assert "result: hasil dua" in lines
 

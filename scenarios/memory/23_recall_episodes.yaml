@@ -26,6 +26,18 @@ expectations:
     text: "Kopi Senja"
     step: 3
     label: the answer names the cafe from the recalled detail
+  - type: max_calls
+    capability: self.recall
+    step: 3
+    count: 2
+    label: the month is recalled before answering, without a search loop
+  - type: no_repeat_call
+    step: 3
+    label: the chain never repeats a capability call with the same arguments
+  - type: prompt_contains
+    text: "step: self.recall"
+    step: 3
+    label: the desk shows the recall step it already took
 steps:
   - at: "2026-10-03T10:00:00+07:00"
     who: person:owner
@@ -52,6 +64,9 @@ model_answers:
           arguments:
             from: "2026-10-01T00:00:00+07:00"
             to: "2026-11-01T00:00:00+07:00"
+  - step: 3
+    tool: decide
+    calls:
       - name: act
         arguments:
           capability: telegram.say

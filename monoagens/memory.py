@@ -12,13 +12,13 @@ import psycopg
 from pgvector import Vector
 
 from monoagens import budget
-from monoagens.recall import doing_lines
 from monoagens.desk import PFCContext
 from monoagens.prior import constants, retrieval
 from monoagens.store import (active_expectation_lines, append_event,
                              read_event_vector, read_expectations, read_last_events,
                              read_state, resolve_expectation, write_state)
 from monoagens.types import RECENT_KINDS, Event
+from monoagens.work import doing_lines
 
 _ROWS = ("id, text, who, place, importance, last_accessed_at, private, use_count, created_at, "
          "coalesce(1 - (embedding <=> %s), 0) AS similarity")
@@ -158,7 +158,7 @@ async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place:
     recent_elsewhere = await recent_lines(conn, place, limit=int(values["recent_elsewhere"]))
     core = await read_state(conn, "core_memory")
     task = await read_state(conn, "task:" + place) if place.startswith("space:task:") else None
-    doing = await doing_lines(conn, place, task, values) if task else ()
+    doing = await doing_lines(conn, place, task, values, trigger=event)
     last = None
     for key in (f"last_spoke:{place}", f"last_seen:{event.who}"):
         value = await read_state(conn, key)

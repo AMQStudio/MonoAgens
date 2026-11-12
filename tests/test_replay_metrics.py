@@ -82,6 +82,32 @@ def test_tokens_per_simulated_day_sums_the_scenario_spans() -> None:
     assert metrics.tokens_per_day() == 2880.0
 
 
+def test_call_checks_catch_a_search_loop_and_an_exact_repeat() -> None:
+    """D52: the chain's calls are counted, and the same call twice is a repeat."""
+    step = _step(1, at=NOW, should=replay.SHOULD_ANSWER, woke=True, replied=True)
+    step.events = [
+        {"id": 1, "kind": "act.out", "payload": {"capability": "self.recall",
+                                                 "arguments": {"query": "bulan lalu"}}},
+        {"id": 2, "kind": "act.out", "payload": {"capability": "self.recall",
+                                                 "arguments": {"query": "bulan lalu"}}},
+        {"id": 3, "kind": "act.out", "payload": {"capability": "telegram.say",
+                                                 "arguments": {"text": "Kopi Senja"}}},
+    ]
+    result = _result(
+        name="scenario", steps=[step], replies=[], violations=[], log_texts=[],
+        expectations=[
+            {"type": "max_calls", "capability": "self.recall", "count": 1, "steps": [1],
+             "label": "one recall"},
+            {"type": "no_repeat_call", "steps": [1], "label": "no exact repeat"}])
+    checks = replay.evaluate_all(result)
+    assert [check.passed for check in checks] == [False, False]
+    result.scenario.expectations = [
+        {"type": "max_calls", "capability": "self.recall", "count": 2, "steps": [1],
+         "label": "two recalls"},
+        {"type": "no_repeat_call", "steps": [9], "label": "no exact repeat"}]
+    assert [check.passed for check in replay.evaluate_all(result)] == [True, True]
+
+
 def test_absolute_line_violations_combine_leaks_and_failed_privacy_checks() -> None:
     failing = replay.CheckResult("file line stays out of the prompt", False, "seen in step 6")
     spec = {"type": "prompt_absent", "text": "sketsa_logo", "label": "file line"}

@@ -9,6 +9,9 @@ expectations:
     count: 2
     label: answers both mentions despite crowd
   - type: reply
+    step: 11
+    label: the request for a summary is answered
+  - type: reply
     step: 12
     label: second mention answered
 steps:

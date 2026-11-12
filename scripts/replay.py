@@ -276,7 +276,7 @@ class UsageTransport(httpx.AsyncBaseTransport):
 
 def _fake_context_text(context: PFCContext) -> str:
     """Render a fake-mode prompt from the pieces the kernel handed over."""
-    parts: list[str] = [context.core_memory, *context.memories]
+    parts: list[str] = [context.core_memory, *context.memories, *context.doing]
     parts.extend(str(event.payload.get("description") or "") for event in context.recent)
     parts.extend(str(event.payload.get("description") or "") for event in context.recent_elsewhere)
     if context.trigger is not None:
@@ -1021,6 +1021,32 @@ def _check_memories(spec: dict[str, Any], result: ScenarioResult) -> CheckResult
                        f"{result.memories} memories stored (need {want})")
 
 
+def _check_max_calls(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:
+    """Count the act.out calls of one capability in the named chain."""
+    name = spec.get("capability")
+    calls = [event for event in _scoped_events(spec, result) if event["kind"] == "act.out"
+             and (name is None or (event.get("payload") or {}).get("capability") == name)]
+    want = int(spec.get("count") or 1)
+    return CheckResult(str(spec["label"]), len(calls) <= want, f"{len(calls)} calls <= {want}")
+
+
+def _check_no_repeat_call(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:
+    """Fail when a chain calls one capability with the same arguments more than once."""
+    seen: set[tuple[Any, str]] = set()
+    repeats: list[str] = []
+    for event in _scoped_events(spec, result):
+        if event["kind"] != "act.out":
+            continue
+        payload = event.get("payload") or {}
+        key = (payload.get("capability"),
+               json.dumps(payload.get("arguments") or {}, sort_keys=True, default=str))
+        if key in seen:
+            repeats.append(f"#{event['id']} {key[0]}")
+        seen.add(key)
+    return CheckResult(str(spec["label"]), not repeats,
+                       f"repeated: {', '.join(repeats)}" if repeats else "no repeat")
+
+
 def _check_signal(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:
     """Compare the highest value of one signal over the named steps."""
     name = str(spec.get("signal") or "")
@@ -1055,6 +1081,8 @@ CHECKS: dict[str, Callable[[dict[str, Any], ScenarioResult], CheckResult]] = {
     "sleep_done": _check_sleep_done,
     "memories_stored": _check_memories,
     "signal": _check_signal,
+    "max_calls": _check_max_calls,
+    "no_repeat_call": _check_no_repeat_call,
 }
 
 

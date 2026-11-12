@@ -1,4 +1,4 @@
-"""Recall: the self's search over the Log and memories, and a task thread's desk."""
+"""Recall: the self's search over the Log and memories."""
 
 from __future__ import annotations
 
@@ -7,8 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from monoagens import reach
-from monoagens.store import read_last_events
-from monoagens.types import Event, RECENT_KINDS
+from monoagens.types import RECENT_KINDS
 
 RECALL = {
     "name": "recall",
@@ -81,33 +80,6 @@ async def search(conn, action) -> dict[str, Any]:
 
 async def _rows(conn, sql: str, params: Sequence[Any]) -> list[Any]:
     return list(await (await conn.execute(sql, params)).fetchall())
-
-
-async def doing_lines(conn, place: str, task: Mapping[str, Any],
-                      values: Mapping[str, Any]) -> tuple[str, ...]:
-    """Show a task thread's work: goal, one line per step, latest result verbatim."""
-    since, limit = int(task.get("since") or 0), int(values["max_task_steps"]) * 3
-    events = await read_last_events(conn, place, limit=limit,
-                                    kinds=("task.opened", "act.out", "act.result"))
-    parent = str(task.get("parent") or "")
-    if parent:
-        events += await read_last_events(conn, parent, limit=limit,
-                                         kinds=("act.out", "act.result"))
-    events = sorted((seen for seen in events if (seen.id or 0) >= since),
-                    key=lambda seen: seen.id or 0)
-    lines = [f"goal: {task.get('goal') or '(unknown)'}"]
-    lines += [f"step: {(seen.payload.get('arguments') or {}).get('text')}"
-              for seen in events if seen.kind == "act.out"]
-    results = [(seen.id, _result_text(seen)) for seen in events if seen.kind == "act.result"]
-    lines += [f"earlier result #{event_id} (recall it)" for event_id, _ in results[:-1]]
-    if results:
-        lines.append(f"result: {results[-1][1][: int(values['thread_result_tokens']) * 4 or None]}")
-    return tuple(lines)
-
-
-def _result_text(event: Event) -> str:
-    result = event.payload.get("result")
-    return str(result.get("text") if isinstance(result, dict) else result or "")
 
 
 def _inside(ts: datetime, start: datetime | None, end: datetime | None) -> bool:

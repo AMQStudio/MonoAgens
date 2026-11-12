@@ -91,7 +91,8 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any]) -> bool:
         await kernel._emit(event, "act.result", {"capability": capability, "to": to, "result": {
             "error": "that place may not see this content; say it where it belongs"}})
         return True
-    record = {"capability": capability, "arguments": arguments}
+    record = {"capability": capability, "arguments": arguments,
+              "communicative": bool(cap.get("communicative"))}
     stored = await kernel._emit(event, "act.out", {**record, "to": to} if to else record,
                                 place=place)
     await kernel._encode(stored, str(arguments.get("text") or "") or None)
