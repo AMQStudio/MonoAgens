@@ -38,17 +38,17 @@ def text(condition):
     return str((condition or {}).get("text") or "").strip() or None
 
 
-async def reminded(kernel, row, event):
+async def reminded(conn, row, event, *, pfc, embedder, settings):
     """Return whether the line reminds the condition: cosine reaches `lo` from the prior."""
     query = payload_text(event.payload)
-    if kernel is None or kernel.pfc is None or kernel.embedder is None or not query:
+    if pfc is None or embedder is None or not query:
         return False
-    left = await read_event_vector(kernel.conn, event.id) if event.id is not None else None
+    left = await read_event_vector(conn, event.id) if event.id is not None else None
     if left is None:
-        left = (await kernel.embedder.embed([query]))[0]
+        left = (await embedder.embed([query]))[0]
     condition_text = row["condition_text"] or text(row["condition"])
-    right = (await kernel.embedder.embed([condition_text]))[0]
-    lo = float((kernel.settings.get("calibration") or {})["wake_gate_lo"])
+    right = (await embedder.embed([condition_text]))[0]
+    lo = float((settings.get("calibration") or {})["wake_gate_lo"])
     return cosine(left, right) >= lo
 
 

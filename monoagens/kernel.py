@@ -134,7 +134,8 @@ class Kernel:
                                   event.place or "")
             return
         fired = await expect.due(self.conn, event, now=self.clock.now(),
-                                  settings=self.settings, kernel=self)
+                                  settings=self.settings, pfc=self.pfc,
+                                  embedder=self.embedder)
         for item in fired:
             await self._expect_wake(item)
         if event.kind == "tick" and self.pfc is not None and self.embedder is not None:
@@ -174,7 +175,8 @@ class Kernel:
         key = f"pfc:{place}"
         rounds = int(self.settings["constants"]["max_thought_rounds"])
         if not await self.jobs.start("pfc", key, event,
-                                     partial(jobs.decide, self, self.pfc, context, rounds),
+                                     partial(jobs.decide, self.pfc, context, rounds,
+                                             self.clock, self.settings),
                                      place=place):
             self.jobs.ask_re_wake(key, event, reason, place)
 

@@ -153,7 +153,7 @@ async def is_met(conn, condition, now):
         return False
 
 
-async def due(conn, event, *, now, settings, kernel=None):
+async def due(conn, event, *, now, settings, pfc=None, embedder=None):
     """Fire or resolve expectations that are due for this event, after the wake gate."""
     if event.kind == "tick":
         where = "ex.status = 'active' AND (ex.next_check_at <= %s OR ex.expires_at <= %s)"
@@ -172,7 +172,8 @@ async def due(conn, event, *, now, settings, kernel=None):
             await resolve_expectation(conn, row, now, "satisfied")  # patience held
             continue
         if condition.text(row["condition"]):
-            if await condition.reminded(kernel, row, event):
+            if await condition.reminded(conn, row, event, pfc=pfc, embedder=embedder,
+                                        settings=settings):
                 fired.append(await condition.reminder(conn, row, event, now))
             continue
         if not await is_met(conn, row["condition"], now):

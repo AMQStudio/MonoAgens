@@ -109,9 +109,10 @@ class JobRunner:
             await conn.close()
 
 
-async def decide(kernel: Any, pfc: Any, context: Any, rounds: int) -> dict[str, Any]:
+async def decide(pfc: Any, context: Any, rounds: int, clock: Any,
+                  settings: dict[str, Any]) -> dict[str, Any]:
     """Run one wake's PFC rounds in the background, each keeping its own usage (D51)."""
-    check = turn_check(context, kernel.clock.now(), kernel.settings)
+    check = turn_check(context, clock.now(), settings)
     made = await turns(pfc, context, rounds, check=check)
     calls = [call for item in made for call in item["calls"]]
     return {"calls": calls, "rounds": made}
