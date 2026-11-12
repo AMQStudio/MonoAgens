@@ -20,6 +20,7 @@ from monoagens.infra.embedding import FakeEmbedder
 from monoagens.core.reasoning import ToolCall
 from monoagens.infra.store import append_event, read_event_vector, read_state
 from monoagens.types import Event
+from monoagens.boot import build
 from tests.support import settings
 
 START = datetime(2026, 11, 10, 8, 0, tzinfo=timezone.utc)
@@ -86,7 +87,7 @@ async def _rows(conn, kind: str) -> list[dict]:
 async def test_pfc_and_embedding_run_as_jobs_and_record_results(aconn):
     pfc = GatePFC()
     pfc.gate.set()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=pfc, settings=SETTINGS,
+    kernel = build(aconn, clock=FakeClock(START), pfc=pfc, settings=SETTINGS,
                     embedder=FakeEmbedder())
 
     stored = await _put(kernel, _msg("halo"))
@@ -119,7 +120,7 @@ async def test_pfc_and_embedding_run_as_jobs_and_record_results(aconn):
 
 async def test_one_pfc_per_place_and_one_re_wake_with_the_newest_event(aconn):
     pfc = GatePFC()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=pfc, settings=SETTINGS,
+    kernel = build(aconn, clock=FakeClock(START), pfc=pfc, settings=SETTINGS,
                     embedder=FakeEmbedder())
 
     first = await _put(kernel, _msg("first"))
@@ -138,7 +139,7 @@ async def test_one_pfc_per_place_and_one_re_wake_with_the_newest_event(aconn):
 
 
 async def test_job_timeout_comes_from_the_prior(aconn):
-    kernel = Kernel(aconn, clock=FakeClock(START),
+    kernel = build(aconn, clock=FakeClock(START),
                     settings=settings(constants={"job_timeout_seconds": 120}),
                     embedder=FakeEmbedder())
     assert kernel.jobs.timeout == 120.0
@@ -146,7 +147,7 @@ async def test_job_timeout_comes_from_the_prior(aconn):
     without = settings()
     del without["constants"]["job_timeout_seconds"]
     with pytest.raises(KeyError):
-        Kernel(aconn, clock=FakeClock(START), settings=without, embedder=FakeEmbedder())
+        build(aconn, clock=FakeClock(START), settings=without, embedder=FakeEmbedder())
 
 
 async def test_embedding_job_timeout_returns_a_job_result_error(aconn):
@@ -156,7 +157,7 @@ async def test_embedding_job_timeout_returns_a_job_result_error(aconn):
             return [[0.0] * 384 for _ in texts]
 
     runtime = settings(constants={"job_timeout_seconds": 0.01})
-    kernel = Kernel(aconn, clock=FakeClock(START), settings=runtime, embedder=HangingEmbedder())
+    kernel = build(aconn, clock=FakeClock(START), settings=runtime, embedder=HangingEmbedder())
     stored = await _put(kernel, _msg("slow"))
     await kernel.run_until_idle()
 
@@ -188,7 +189,7 @@ async def test_sleep_success_never_records_its_dsn_or_password(aconn, caplog):
     await append_event(aconn, ts=START, kind="percept", who=WHO, place=PLACE, body="telegram",
                        payload={"text": "Muqsith suka kopi tubruk"})
     clock = FakeClock(START + timedelta(minutes=45))
-    kernel = Kernel(aconn, clock=clock, pfc=SleepPFC(SLEEP_ARGS), settings=SETTINGS,
+    kernel = build(aconn, clock=clock, pfc=SleepPFC(SLEEP_ARGS), settings=SETTINGS,
                     embedder=FakeEmbedder())
 
     with caplog.at_level(logging.DEBUG):
@@ -205,7 +206,7 @@ async def test_sleep_failure_scrubs_its_dsn_and_password_from_every_record(
     await append_event(aconn, ts=START, kind="percept", who=WHO, place=PLACE, body="telegram",
                        payload={"text": "Muqsith suka kopi tubruk"})
     clock = FakeClock(START + timedelta(minutes=45))
-    kernel = Kernel(aconn, clock=clock, pfc=SleepPFC(SLEEP_ARGS), settings=SETTINGS,
+    kernel = build(aconn, clock=clock, pfc=SleepPFC(SLEEP_ARGS), settings=SETTINGS,
                     embedder=FakeEmbedder())
     password = aconn.info.password
     dsn = config.private_dsn(aconn)
@@ -229,7 +230,7 @@ async def test_sleep_runs_as_a_job_and_records_sleep_done(aconn):
     await append_event(aconn, ts=START, kind="percept", who=WHO, place=PLACE, body="telegram",
                        payload={"text": "Muqsith suka kopi tubruk"})
     clock = FakeClock(START + timedelta(minutes=45))
-    kernel = Kernel(aconn, clock=clock, pfc=SleepPFC(SLEEP_ARGS), settings=SETTINGS,
+    kernel = build(aconn, clock=clock, pfc=SleepPFC(SLEEP_ARGS), settings=SETTINGS,
                     embedder=FakeEmbedder())
 
     await kernel.put(Event(id=None, ts=clock.now(), kind="tick"))

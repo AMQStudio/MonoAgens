@@ -10,8 +10,8 @@ from pgvector.psycopg import register_vector_async
 
 from monoagens.adapters.cli import CLIBody
 from monoagens.adapters.telegram import TelegramBody
+from monoagens.boot import build
 from monoagens.core import identity
-from monoagens.core.kernel import Kernel
 from monoagens.core.reasoning import Reasoning
 from monoagens.infra.clock import Clock
 from monoagens.infra.config import load_llm_config, tick_seconds
@@ -19,11 +19,10 @@ from monoagens.infra.embedding import FastEmbedder
 from monoagens.infra.migrate import migrate
 from monoagens.infra.prior import load_settings
 from monoagens.middleware.identity import ensure as ensure_pairing
-from monoagens.middleware.identity import inbound as pairing_inbound
 
 
 async def main() -> None:
-    """Run the kernel with the clock and the enabled bodies until stopped."""
+    """Run the kernel with the clock and the enabled adapters until stopped."""
     llm = load_llm_config()
     if not llm["base_url"] or not llm["model"]:
         raise RuntimeError(
@@ -38,12 +37,11 @@ async def main() -> None:
                                                      now=clock.now())
         pfc = Reasoning(llm["base_url"], llm["api_key"], llm["model"], effort=llm["effort"],
                   settings=settings)
-        kernel = Kernel(conn, clock=clock, pfc=pfc, settings=settings,
-                        embedder=FastEmbedder())
-        kernel.hooks.inbound.add("pairing", pairing_inbound)
+        kernel = build(conn, clock=clock, pfc=pfc, settings=settings,
+                       embedder=FastEmbedder())
         code = await ensure_pairing(conn, now=clock.now())
         if code:
-            print(f"pairing code: {code} — send it from any organ to become the owner",
+            print(f"pairing code: {code} — send it from any adapter to become the owner",
                   flush=True)
         adapters = []
         enabled = settings.get("bodies") or {}

@@ -6,7 +6,6 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 
-from monoagens.middleware import privacy
 from monoagens.infra.store import payload_text
 from monoagens.types import RECENT_KINDS
 
@@ -24,8 +23,8 @@ RECALL = {
 }
 
 
-async def search(conn, action) -> dict[str, Any]:
-    """Search events and memories, obeying the audience of the current context."""
+async def search(conn, action, *, visible, memory_visible) -> dict[str, Any]:
+    """Search events and memories; `visible` and `memory_visible` are the audience rule."""
     from monoagens.infra import prior  # local: identity imports recall at module level
 
     args, context = dict(action.payload), action.place or None
@@ -52,7 +51,7 @@ async def search(conn, action) -> dict[str, Any]:
     found = [{"kind": "event", "event_id": row[0], "ts": row[1].isoformat(),
               "place": row[4], "text": payload_text(row[5])}
              for row in rows
-             if await privacy.visible(conn, context=context, source=row[4], before=row[0])]
+             if await visible(conn, context=context, source=row[4], before=row[0])]
     memory_sql = ("SELECT id, text, place, derived_from FROM memories "
                   "WHERE valid_to IS NULL" + (" AND text ILIKE %s" if query else "")
                   + " ORDER BY id DESC LIMIT %s")
@@ -64,8 +63,8 @@ async def search(conn, action) -> dict[str, Any]:
                        conn, "SELECT id, ts, kind, place, payload FROM events "
                              "WHERE id = ANY(%s) ORDER BY id", (derived,))
                    if _inside(row[1], start, end)
-                   and await privacy.visible(conn, context=context, source=row[3])]
-        allowed = await privacy.memory_visible(conn, context=context, sources=derived)
+                   and await visible(conn, context=context, source=row[3])]
+        allowed = await memory_visible(conn, context=context, sources=derived)
         if allowed and (details or not (start or end)):
             found.append({"kind": "memory", "memory_id": memory_id, "text": text,
                           "place": place, "details": details})

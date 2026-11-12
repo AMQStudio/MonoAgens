@@ -16,6 +16,7 @@ from monoagens.infra.clock import FakeClock
 from monoagens.core.kernel import Kernel
 from monoagens.infra.store import read_state_entry
 from monoagens.types import Action, Event
+from monoagens.boot import build
 from tests.support import settings
 
 
@@ -60,7 +61,7 @@ async def test_fake_clock_advance_and_tick(aconn):
     clock.advance(15)
     assert clock.now() == start + timedelta(seconds=15)
 
-    kernel = Kernel(aconn, clock=clock, settings=SETTINGS)
+    kernel = build(aconn, clock=clock, settings=SETTINGS)
     tick_event = await clock.tick(kernel.put)
     assert tick_event.kind == "tick"
     assert tick_event.ts == clock.now()
@@ -82,7 +83,7 @@ async def test_one_hundred_events_from_two_fake_bodies(aconn):
     ticks are not stored.
     """
     clock = FakeClock(initial_time=datetime(2026, 11, 10, 10, 0, 0, tzinfo=timezone.utc))
-    kernel = Kernel(aconn, clock=clock, settings=SETTINGS)
+    kernel = build(aconn, clock=clock, settings=SETTINGS)
 
     body_a = FakeBody(name="fake_a", count=50, start_seq=0)
     body_b = FakeBody(name="fake_b", count=50, start_seq=50)
@@ -165,7 +166,7 @@ async def test_one_hundred_events_from_two_fake_bodies(aconn):
 
 async def test_atomic_transaction_per_event(aconn):
     """Architect note: append_event and project_event in one transaction per event."""
-    kernel = Kernel(aconn, settings=SETTINGS)
+    kernel = build(aconn, settings=SETTINGS)
     event = Event(
         id=None,
         ts=datetime(2026, 11, 10, 11, 0, 0, tzinfo=timezone.utc),
@@ -195,7 +196,7 @@ async def test_put_returns_only_after_event_is_committed(aconn):
     `state` when `await kernel.put(event)` returns.
     """
     clock = FakeClock(initial_time=datetime(2026, 11, 10, 12, 0, 0, tzinfo=timezone.utc))
-    kernel = Kernel(aconn, clock=clock, settings=SETTINGS)
+    kernel = build(aconn, clock=clock, settings=SETTINGS)
     event = Event(
         id=None,
         ts=datetime(2020, 1, 1, tzinfo=timezone.utc),  # overridden by the kernel clock

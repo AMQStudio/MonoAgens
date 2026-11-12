@@ -1,5 +1,7 @@
 """The three hooks: the outcome vocabulary, the owner policy first and last, and the watchdog.
 
+The core defines the vocabulary; the middleware speaks it. The owner policy is installed
+from outside and runs first and last in every hook, so no scoped rule can widen it.
 Every middleware call runs under `hook_timeout_ms` (docs/core.md §3, D42): a hook
 that exceeds it counts as Stop and writes `error`; the loop goes on.
 """
@@ -8,15 +10,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Iterator
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, Protocol
-
-from monoagens.middleware import privacy
 
 DEFAULT_HOOK_TIMEOUT_MS = 500
 SLOTS = ("first", "middle", "last")
 OWNER_POLICY = "policy"
-OWNER = "person:owner"
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,59 +60,6 @@ class Registration:
     tool: str | None = None
 
 
-def owner_policy(hook: str) -> Middleware:
-    """Return the absolute-line owner policy for one hook."""
-
-    async def policy(item: Any, ctx: Any) -> HookOutcome:
-        """Enforce the identity and privacy lines deterministically."""
-        if hook == "action" and ctx.get("identity_changing") \
-                and ctx.get("origin_actor") != OWNER:
-            return Stop("only the owner may invoke identity_changing capabilities")
-        return Continue()
-
-    return policy
-
-
-def audience_policy() -> Middleware:
-    """Absolute line 2 (D45): private content enters only an allowed audience."""
-
-    async def policy(item: Any, ctx: Any) -> HookOutcome:
-        """Keep only what the audience may see, and note the relevant private items withheld."""
-        conn, place = ctx["conn"], item.place
-        counts = dict(item.withheld)
-
-        async def keep(lines: Any, *, note_withheld: bool) -> tuple[Any, ...]:
-            kept = []
-            for line in lines:
-                if await privacy.visible(conn, context=place, source=line.place, before=line.id):
-                    kept.append(line)
-                elif note_withheld:
-                    label = await privacy.source_label(conn, line.place, line.id)
-                    counts[label] = counts.get(label, 0) + 1
-            return tuple(kept)
-
-        memories = []
-        for memory in item.memories:
-            if await privacy.memory_visible(conn, context=place,
-                                            sources=getattr(memory, "sources", ())):
-                memories.append(memory)
-            else:
-                label = await privacy.withheld_source(
-                    conn, context=place, sources=getattr(memory, "sources", ()))
-                counts[label] = counts.get(label, 0) + 1
-        elsewhere = await keep(item.recent_elsewhere, note_withheld=True)
-        recent = await keep(item.recent, note_withheld=False)
-        return Replace(replace(item, memories=tuple(memories), recent_elsewhere=elsewhere,
-                               recent=recent, withheld=tuple(sorted(counts.items()))))
-
-    return policy
-
-
-def policy_for(hook: str) -> Middleware:
-    """Return the core policy of one hook: the audience rule for context, else owner policy."""
-    return audience_policy() if hook == "context" else owner_policy(hook)
-
-
 class HookPipeline:
     """One hook: owner policy first and last, scoped middleware in between."""
 
@@ -123,15 +69,16 @@ class HookPipeline:
             raise ValueError(f"unknown hook: {name!r}")
         self.name = name
         self.timeout = timeout
-        self.policy: Middleware | None = None
+        self.first_policy: Middleware | None = None
+        self.last_policy: Middleware | None = None
         self._registrations: list[Registration] = []
         self._names: set[str] = {OWNER_POLICY}
 
-    def set_policy(self, middleware: Middleware) -> None:
-        """Install the owner policy, which runs first and last and cannot be removed."""
-        if self.policy is not None:
+    def set_policy(self, first: Middleware, last: Middleware | None = None) -> None:
+        """Install the owner policy: first and last, and never removable."""
+        if self.first_policy is not None or self.last_policy is not None:
             raise ValueError(f"{self.name}: owner policy already set")
-        self.policy = middleware
+        self.first_policy, self.last_policy = first, last if last is not None else first
 
     def add(self, name: str, middleware: Middleware, *, slot: str = "middle",
             tool: str | None = None) -> None:
@@ -146,7 +93,7 @@ class HookPipeline:
         self._names.add(name)
 
     def middlewares(self, tool: str | None = None) -> tuple[Middleware, ...]:
-        """Return the shared and matching tool-own middleware in slot order."""
+        """Return the shared and the matching tool-own middleware in slot order."""
         ordered = sorted(self._registrations, key=lambda item: SLOTS.index(item.slot))
         return tuple(reg.middleware for reg in ordered if reg.tool in (None, tool))
 
@@ -155,7 +102,8 @@ class HookPipeline:
                   on_error: Callable[[Exception], Awaitable[None]]) -> Any | None:
         """Run the chain in order under the watchdog; None means the item stopped."""
         scoped = list(self.middlewares(tool))
-        chain = [self.policy, *scoped, self.policy] if self.policy is not None else scoped
+        chain = (scoped if self.first_policy is None
+                 else [self.first_policy, *scoped, self.last_policy])
         for middleware in chain:
             try:
                 outcome = await asyncio.wait_for(middleware(item, ctx), self.timeout)
@@ -198,3 +146,10 @@ class HookRegistry:
             if pipeline.name == name:
                 return pipeline
         raise ValueError(f"unknown hook: {name!r}")
+
+    def require_policy(self) -> None:
+        """Fail unless the owner policy is installed in all three hooks (fail-closed)."""
+        for pipeline in self:
+            if pipeline.first_policy is None or pipeline.last_policy is None:
+                raise RuntimeError(
+                    f"the owner policy is not installed in the {pipeline.name} hook")

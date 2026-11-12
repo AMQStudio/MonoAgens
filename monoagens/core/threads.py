@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Sequence
 
 from monoagens.infra.prior import constants
 from monoagens.infra.store import read_state, write_state
 
-OWNER = "person:owner"
 KEY = "task:"
 OPEN = "open"
 CONTINUATIONS = ("expectation.fired", "act.result")
@@ -55,20 +55,23 @@ async def place_for(conn, event, place: str | None) -> str | None:
     return None
 
 
-async def after_step(kernel, job, event, calls: Sequence[dict[str, Any]]) -> None:
-    """Count one step, keep a thread open while it asks, and close it when done."""
+async def after_step(kernel, job, event,
+                      acts: Sequence[tuple[dict[str, Any], Mapping[str, Any]]]) -> None:
+    """Count one step, keep a thread open while it asks, and close it when done.
+
+    `acts` is one `(call, labels)` per dispatched act; the labels say whether this act
+    left the thread waiting for someone, or delivered into the place it waited for.
+    """
     conn, place = kernel.conn, str(job.place)
     task = await read_state(conn, KEY + place)
     if not task or task.get("status") != OPEN:
         return
-    acts = [call for call in calls if call.get("name") == "act" and not call.get("refused")]
-    targets = [str(((call.get("arguments") or {}).get("arguments") or {}).get("to") or "")
-               for call in acts]
     steps = int(task.get("steps") or 0) + len(acts)
-    if OWNER in targets:
-        return await _save(kernel, task, event, steps=steps, waiting_for=OWNER)
+    held = next((labels.get("hold_for") for _, labels in acts if labels.get("hold_for")), None)
+    if held:
+        return await _save(kernel, task, event, steps=steps, waiting_for=held)
     asking = bool(task.get("waiting_for"))
-    if asking and any(target and not target.startswith("person:") for target in targets):
+    if asking and any(labels.get("delivers") for _, labels in acts):
         return await close(kernel, task, event, "done")
     if steps >= int(constants(kernel.settings).get("max_task_steps", 30)):
         return await close(kernel, task, event, "max_task_steps")

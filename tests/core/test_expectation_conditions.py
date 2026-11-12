@@ -14,6 +14,7 @@ from monoagens.infra.embedding import FakeEmbedder
 from monoagens.core.kernel import Kernel
 from monoagens.core.reasoning import Reasoning
 from monoagens.infra.store import append_event, read_expectations
+from monoagens.boot import build
 from tests.support import settings
 
 SETTINGS = settings()
@@ -72,7 +73,7 @@ class Harness:
     def __init__(self, conn, *, pfc: FakeLLM | None = None) -> None:
         """Wire the kernel with a fake embedder and, when given, a model."""
         self.fake = pfc
-        self.kernel = Kernel(conn, clock=FakeClock(START),
+        self.kernel = build(conn, clock=FakeClock(START),
                              pfc=_pfc(pfc) if pfc is not None else None,
                              settings=SETTINGS, embedder=FakeEmbedder())
         self.body = RecordingBody()

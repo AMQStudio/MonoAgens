@@ -1,20 +1,35 @@
-"""Identity: the alias map, pairing the first owner, and the person cards."""
+"""Identity: the alias map, pairing the first owner, the person cards and the routes."""
 
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 from dataclasses import replace
 from datetime import datetime
+from typing import Any
 
-from monoagens.core.hooks import Continue
+from monoagens.core.hooks import Continue, Middleware, Replace, Stop
 from monoagens.infra.store import append_event, payload_text, read_state, write_state
+from monoagens.middleware import privacy
+from monoagens.types import Event
 
 LOGGER = logging.getLogger(__name__)
+OWNER = "person:owner"
 CODE_KEY = "pairing_code"
 OWNER_KEY = "owner"
 CREATED = "pair.created"
 CLAIMED = "pair.claimed"
+
+
+def is_owner(who: Any) -> bool:
+    """Return whether this opaque id is the owner's."""
+    return str(who) == OWNER
+
+
+def is_person(who: Any) -> bool:
+    """Return whether this opaque id names a person rather than a place."""
+    return str(who).startswith("person:")
 
 
 def new_code(draw=secrets.randbelow) -> str:
@@ -34,11 +49,11 @@ async def ensure(conn, *, now: datetime) -> str | None:
     async with conn.transaction():
         event = await append_event(conn, ts=now, kind=CREATED, payload={"created": True})
         await write_state(conn, CODE_KEY, {"code": code}, event.id)
-    LOGGER.info("pairing code: %s — send it from any organ to become the owner", code)
+    LOGGER.info("pairing code: %s — send it from any adapter to become the owner", code)
     return code
 
 
-async def claim(conn, event, *, now: datetime):
+async def claim_owner(conn, event, *, now: datetime):
     """Make the sender of the pairing code the owner; return the claim event."""
     if event.kind != "percept" or not event.who:
         return None
@@ -58,15 +73,176 @@ async def claim(conn, event, *, now: datetime):
     return claimed
 
 
-async def as_owner(conn, event):
+async def as_owner(conn, event: Event) -> Event:
     """Rewrite the paired owner's native id to `person:owner` at intake."""
     owner = await read_state(conn, OWNER_KEY) or {}
     if event.who and event.who == owner.get("who"):
-        return replace(event, who="person:owner")
+        return replace(event, who=OWNER)
     return event
 
 
-async def inbound(item, ctx):
-    """Inbound hook: claim the owner when a percept carries the pairing code."""
-    await claim(ctx["conn"], item, now=ctx["now"])
-    return Continue()
+def intake(conn):
+    """Return the intake callable the composition root installs on the kernel."""
+
+    async def accept(event: Event) -> Event:
+        """Take one percept from an adapter and give it the id the middleware knows."""
+        return await as_owner(conn, event)
+
+    return accept
+
+
+def claim(conn) -> Middleware:
+    """Inbound rule: claim the owner when a percept carries the pairing code."""
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        await claim_owner(conn, item, now=ctx["now"])
+        return Continue()
+
+    return rule
+
+
+def cards(conn) -> Middleware:
+    """Context rule: add one card per person present here or named in the trigger (D55)."""
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        return Replace(replace(item, people=await person_cards(conn, item.place, item.trigger)))
+
+    return rule
+
+
+def identity_line() -> Middleware:
+    """Absolute line 1: identity and privacy decisions belong to the owner alone."""
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        if ctx.get("identity_changing") and not is_owner(ctx.get("origin_actor")):
+            return Stop("only the owner may invoke identity_changing capabilities")
+        return Continue()
+
+    return rule
+
+
+def route(conn) -> Middleware:
+    """Action rule: resolve `to:`/`via:` to a place and attach the routing labels."""
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        if ctx.get("refusal") or ctx.get("handled") or not ctx["descriptor"].get("communicative"):
+            return Continue()
+        to, via = ctx.get("to"), ctx.get("via")
+        if not to:
+            return Continue()  # the current place
+        place, error = await resolve_to(conn, str(to), via)
+        if place is None and str(to) == ctx["event"].who:
+            place, error = ctx["event"].place, None  # the person is here: answer them here
+        ctx["to"] = str(to)
+        if error:
+            ctx["refusal"] = error
+            return Continue()
+        ctx["place"] = place or ctx["event"].place
+        labels = ctx["labels"]
+        labels["place_kind"] = await privacy.place_kind(conn, ctx["place"])
+        labels["hold_for"] = str(to) if is_owner(to) else None
+        labels["delivers"] = bool(to) and not is_person(to)
+        return Continue()
+
+    return rule
+
+
+async def person_cards(conn, place: str | None, event: Event | None) -> tuple[str, ...]:
+    """Return one card per person present here or named in the trigger (D55)."""
+    present = set(await privacy.audience(conn, place)) if place else set()
+    known = await _known_people(conn)
+    text = payload_text(event.payload) if event is not None else ""
+    named = {who for who, card in known.items()
+             if card["name"] and _named(card["name"], text)}
+    people = sorted((present | named) - {OWNER})
+    return tuple([await _card(conn, who, known.get(who) or {"name": None, "closeness": 0.0,
+                                                            "natives": {who}})
+                  for who in people])
+
+
+async def _known_people(conn) -> dict[str, dict[str, Any]]:
+    """Return the card data of every person the alias map or the Log has seen."""
+    mapping = await privacy.aliases(conn)
+    cur = await conn.execute("SELECT DISTINCT who FROM events WHERE who IS NOT NULL")
+    rows = await cur.fetchall()
+    states = await _person_states(conn)
+    known = {}
+    for who in {mapping.get(native, native) for (native,) in rows} | set(mapping.values()):
+        state = states.get(who) or {}
+        known[who] = {"name": _name(who, state),
+                      "closeness": float(state.get("closeness") or 0.0),
+                      "natives": {who}}
+    for native, who in mapping.items():
+        known.setdefault(who, {"name": None, "closeness": 0.0, "natives": set()})
+        known[who]["natives"].add(native)
+    return known
+
+
+async def _person_states(conn) -> dict[str, dict[str, Any]]:
+    """Return the `state: person:*` entries by person id."""
+    cur = await conn.execute("SELECT key, value FROM state WHERE key LIKE 'person:%'")
+    return {str(key): value or {} for key, value in await cur.fetchall()}
+
+
+def _name(who: str, state: dict[str, Any]) -> str | None:
+    """Return the name a card knows: the state's, else the last id segment if it is a word."""
+    name = str(state.get("name") or "").strip()
+    if name:
+        return name
+    part = who.removeprefix("person:").rpartition(":")[2]
+    return part if part.isalpha() else None
+
+
+def _named(name: str, text: str) -> bool:
+    """Return whether a card name appears in the trigger as a whole word."""
+    return bool(text) and re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text,
+                                    re.IGNORECASE) is not None
+
+
+async def _card(conn, who: str, card: dict[str, Any]) -> str:
+    """Render one person card: name, person id, reachable adapters, closeness."""
+    places = await _direct_places(conn, card["natives"])
+    reach = "; ".join(f"{adapter} at {place}" for adapter, place in sorted(places.items()))
+    label = f"{card['name']} ({who})" if card["name"] else who
+    return f"- {label}: {reach or 'no direct place known yet'}; closeness {card['closeness']:.2f}"
+
+
+async def _direct_places(conn, natives: set[str]) -> dict[str, str]:
+    """Return the direct place where each adapter last saw one of a person's ids."""
+    if not natives:
+        return {}
+    cur = await conn.execute(
+        "SELECT body, place FROM events WHERE kind = 'percept' AND place IS NOT NULL "
+        "AND who = ANY(%s) AND payload->>'place_kind' = 'direct' ORDER BY id DESC",
+        (sorted(natives),))
+    places: dict[str, str] = {}
+    for body, place in await cur.fetchall():
+        places.setdefault(str(body or "?"), place)
+    return places
+
+
+async def direct_place(conn, who: str, via: str | None = None) -> str | None:
+    """Return the 1:1 place where one person was last active, optionally on one adapter."""
+    mapping = await privacy.aliases(conn)
+    cur = await conn.execute(
+        "SELECT who, place, body, payload->>'place_kind' FROM events "
+        "WHERE kind = 'percept' AND place IS NOT NULL AND who IS NOT NULL "
+        "ORDER BY id DESC")
+    for native, place, body, kind in await cur.fetchall():
+        if mapping.get(native, native) != who or (via and str(body or "").lower() != via.lower()):
+            continue
+        if kind == "direct":
+            return place
+    return None
+
+
+async def resolve_to(conn, to: str, via: str | None = None) -> tuple[str | None, str | None]:
+    """Resolve an act's `to:` into a target place; a missing route is an honest error."""
+    if not is_person(to):
+        found = await (await conn.execute(
+            "SELECT 1 FROM events WHERE place = %s LIMIT 1", (str(to),))).fetchone()
+        return (str(to), None) if found else (None, f"no such place: {to}")
+    place = await direct_place(conn, str(to), via)
+    if place is None:
+        return None, f"no way to reach {str(to).removeprefix('person:')} yet"
+    return place, None

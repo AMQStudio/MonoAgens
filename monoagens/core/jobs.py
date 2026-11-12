@@ -1,6 +1,6 @@
 """Background jobs: slow work off the loop; every result returns as an event.
 
-The kernel loop only records and decides. The PFC, the classifier, embeddings and
+The kernel loop only records and decides. The reasoning, the classifier, embeddings and
 sleep run here, each under one timeout. A job's result goes back into the kernel
 queue as `job.result`, so it is recorded and applied by the one consumer.
 """
@@ -8,7 +8,7 @@ queue as `job.result`, so it is recorded and applied by the one consumer.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -120,7 +120,7 @@ class JobRunner:
 
 async def decide(pfc: Any, context: Any, rounds: int, clock: Any,
                   settings: dict[str, Any]) -> dict[str, Any]:
-    """Run one wake's PFC rounds in the background, each keeping its own usage (D51)."""
+    """Run one wake's reasoning rounds in the background, each keeping its usage (D51)."""
     check = turn_check(context, clock.now(), settings)
     made = await turns(pfc, context, rounds, check=check)
     calls = [call for item in made for call in item["calls"]]
@@ -132,19 +132,25 @@ async def encode(embedder: Any, event_id: int, text: str) -> dict[str, Any]:
     return {"event_id": event_id, "vector": (await embedder.embed([text]))[0]}
 
 
-async def apply_calls(kernel: Any, trigger: Event, calls: list[dict[str, Any]]) -> None:
-    """Apply the tool calls of a finished PFC job; silence is recorded when none acts."""
+async def apply_calls(kernel: Any, trigger: Event, calls: list[dict[str, Any]],
+                      ) -> list[tuple[dict[str, Any], Mapping[str, Any]]]:
+    """Apply the tool calls of a finished reasoning job; one (call, labels) per act."""
     acted, thought = False, ""
+    acts: list[tuple[dict[str, Any], Mapping[str, Any]]] = []
     said: set[str] = set()
     for raw in calls:
         if raw.get("refused"):
             continue
         call = ToolCall(str(raw.get("name")), dict(raw.get("arguments") or {}))
-        acted = await kernel._apply(trigger, call, said) or acted
+        outcome = await kernel._apply(trigger, call, said)
+        acted = outcome.acted or acted
+        if call.name == "act":
+            acts.append((raw, outcome.labels))
         if call.name == "think":
             thought = str(call.arguments.get("thought") or "")
     if not acted:
         await kernel._emit(trigger, "decision.silent", {"reason": thought or "no act"})
+    return acts
 
 
 def _view(job: Job) -> dict[str, Any]:

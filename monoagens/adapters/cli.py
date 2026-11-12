@@ -1,4 +1,4 @@
-"""CLI body: an in-process Unix socket; one percept per line typed by the owner."""
+"""CLI adapter: an in-process Unix socket; one percept per line typed by the owner."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ class CLIBody:
         self._writers: set[asyncio.StreamWriter] = set()
 
     def capabilities(self) -> tuple[dict[str, Any], ...]:
-        """Return the capability descriptors this organ declares."""
+        """Return the capability descriptors this adapter declares."""
         return CAPABILITIES
 
     async def run(self, put: Put) -> None:

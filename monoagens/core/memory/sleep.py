@@ -27,7 +27,7 @@ SLEEP_SYSTEM = (
     "You are {name}'s memory, asleep; nobody sees this. Summarize the events into durable "
     "memories in {language}, one item per fact, preference, or promise worth keeping, each "
     "with importance 0..1. Rewrite core_memory as the short always-visible summary of who "
-    "the owner is and what matters now. Use store_memories. Never invent facts."
+    "the people are and what matters now. Use store_memories. Never invent facts."
 )
 
 

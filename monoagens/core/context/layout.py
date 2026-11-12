@@ -1,4 +1,4 @@
-"""The desk: what the PFC sees in one wake, rebuilt for every wake (core.md §7)."""
+"""The desk: what the reasoning sees in one wake, rebuilt for every wake (core.md §7)."""
 
 from __future__ import annotations
 
@@ -13,18 +13,17 @@ from monoagens.core.memory.retrieval import recent_lines
 from monoagens.core.principles import work_guidance
 from monoagens.infra.prior import constants
 from monoagens.infra.store import active_expectation_lines, read_last_events, read_state
-from monoagens.middleware import privacy
 from monoagens.types import RECENT_KINDS, Event
 
 
 @dataclass(frozen=True, slots=True)
 class PFCContext:
-    """Everything the PFC sees for one wake."""
+    """Everything the reasoning sees for one wake."""
 
     now: datetime
     place: str
-    place_kind: str
     reason: str
+    place_kind: str = ""
     core_memory: str = ""
     people: Sequence[str] = ()
     expectations: Sequence[str] = ()
@@ -40,7 +39,7 @@ class PFCContext:
 
 
 def messages(soul: Any, context: PFCContext) -> list[dict[str, Any]]:
-    """Build the layered prompt: stable, core memory with person cards, volatile."""
+    """Build the layered prompt: stable, core memory with the middleware's cards, volatile."""
     return [
         {"role": "system", "content": stable(soul)},
         {"role": "system", "content": _semi_stable(context)},
@@ -49,7 +48,7 @@ def messages(soul: Any, context: PFCContext) -> list[dict[str, Any]]:
 
 
 def _semi_stable(context: PFCContext) -> str:
-    """Return the semi-stable message: core memory, then the person cards (D55)."""
+    """Return the semi-stable message: core memory, then the cards the middleware adds (D55)."""
     block = f"<core_memory>{context.core_memory}</core_memory>"
     if context.people:
         block += "\n<people>\n" + "\n".join(context.people) + "\n</people>"
@@ -101,8 +100,8 @@ def volatile(soul: Any, context: PFCContext) -> str:
 def withheld_note(context: PFCContext) -> str:
     """Return the D56 line: how many relevant private items are absent, and from where.
 
-    It names only the count and the source label (a person or place a person card
-    already allows); it never names the content.
+    It names only the count and the source label the middleware attached; it never names
+    the content.
     """
     if not context.withheld:
         return ""
@@ -222,15 +221,8 @@ async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place:
                                     kinds=(*RECENT_KINDS, "intent"))
     recent_elsewhere = await recent_lines(conn, place, limit=int(values["recent_elsewhere"]))
     core = await read_state(conn, "core_memory")
-    sources = (core or {}).get("derived_from")
-    shown = await privacy.memory_visible(conn, context=place, sources=sources)
-    withheld = ()
-    if core and core.get("text") and not shown:
-        label = await privacy.withheld_source(conn, context=place, sources=sources)
-        withheld = ((label, 1),)
     task = await read_state(conn, "task:" + place) if place.startswith("space:task:") else None
     doing = await doing_lines(conn, place, task, values, trigger=event)
-    people = await privacy.person_cards(conn, place, event)
     last = None
     for key in (f"last_spoke:{place}", f"last_seen:{event.who}"):
         value = await read_state(conn, key)
@@ -238,11 +230,9 @@ async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place:
             last = datetime.fromisoformat(value["ts"])
             break
     return PFCContext(
-        now=now, place=place, place_kind=await privacy.place_kind(conn, place),
-        reason=reason, core_memory=str((core or {}).get("text") or "") if shown else "",
-        people=people,
+        now=now, place=place, reason=reason,
+        core_memory=str((core or {}).get("text") or ""),
         expectations=await active_expectation_lines(conn, place), memories=memories,
-        withheld=withheld,
         recent=[seen for seen in recent if seen.id != event.id],
         recent_elsewhere=recent_elsewhere, doing=doing, trigger=event, last_interaction=last,
         capabilities=capabilities)

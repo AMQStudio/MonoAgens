@@ -18,6 +18,7 @@ from monoagens.core.memory import base_level, decay_d
 from monoagens.core.reasoning import Reasoning, ToolCall
 from monoagens.infra.store import append_event, insert_event_vector, read_state
 from monoagens.types import Event
+from monoagens.boot import build
 from tests.support import settings
 
 PLACE = "space:tg:1"
@@ -320,7 +321,7 @@ async def test_mvp_d_sleep_then_a_differently_worded_question_finds_the_memory(a
         "SELECT id, kind, payload FROM events WHERE id <= %s ORDER BY id", (max_before,))).fetchall()
     clock = FakeClock(START)
     fake = FakeLLM([[("store_memories", SLEEP_ARGS)], []])
-    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), settings=SETTINGS, embedder=FakeEmbedder())
+    kernel = build(aconn, clock=clock, pfc=_pfc(fake), settings=SETTINGS, embedder=FakeEmbedder())
 
     # Idle for 45 minutes: the tick path runs sleep.
     clock.set_time(START + timedelta(minutes=45))
@@ -372,7 +373,7 @@ async def test_failing_sleep_retries_at_most_once_per_retry_window(aconn):
     await _seed_events(aconn)
     clock = FakeClock(START + timedelta(minutes=31))
     pfc = FailingPFC()
-    kernel = Kernel(aconn, clock=clock, pfc=pfc, settings=SETTINGS, embedder=FakeEmbedder())
+    kernel = build(aconn, clock=clock, pfc=pfc, settings=SETTINGS, embedder=FakeEmbedder())
 
     for _ in range(20):  # 20 ticks, 30 seconds apart: 10 minutes in total.
         await kernel.put(Event(id=None, ts=clock.now(), kind="tick"))
@@ -434,7 +435,7 @@ async def test_private_memories_follow_people_not_places(aconn):
     await aconn.execute("UPDATE memories SET private = true, place = 'space:tg:9', "
                         "derived_from = %s", ([source.id],))
     fake = FakeLLM([[]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS,
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS,
                     embedder=FakeEmbedder())
 
     async def said(who: str, place: str, kind: str) -> Event:

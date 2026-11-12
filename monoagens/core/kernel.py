@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any
 
-from monoagens.core import dispatch, expectations, hooks, identity, jobs, memory, threads
+from monoagens.core import dispatch, expectations, hooks, jobs, memory, threads
 from monoagens.core.context import layout, working
 from monoagens.core.gate import Appraisal, appraise, validate_signals
 from monoagens.core.reasoning import Reasoning, ToolCall
@@ -16,10 +17,10 @@ from monoagens.infra.clock import Clock
 from monoagens.infra.prior import load_settings, signal_weights
 from monoagens.infra.store import (append_event, cursor as store_cursor, insert_event_vector,
                                    project_event)
-from monoagens.middleware import identity as middleware_identity
-from monoagens.middleware import privacy
-from monoagens.middleware.tools import ToolRegistry
 from monoagens.types import Event
+
+NOT_INSTALLED = ("the middleware is not installed: build the kernel with "
+                 "monoagens.boot.build()")
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,29 +34,40 @@ class Kernel:
 
     def __init__(self, conn, clock: Clock | None = None, pfc: Reasoning | None = None,
                  settings: dict[str, Any] | None = None, embedder: Any = None) -> None:
-        """Wire the kernel to its database connection and collaborators."""
+        """Wire the kernel to its database connection and collaborators.
+
+        The four values the middleware owns start empty: `monoagens.boot.build`
+        installs them, and the loop refuses to run until it has.
+        """
         self.conn, self.clock, self.pfc = conn, clock or Clock(), pfc
         self.settings = dict(settings) if settings is not None else load_settings()
         self.embedder = embedder
         self.queue: asyncio.Queue[_Queued] = asyncio.Queue()
         self.jobs = jobs.JobRunner(self)
-        self.tools = ToolRegistry()
-        self.tools.register(identity.SelfTool(conn, self.clock))
-        self.tools.add_capability(privacy.SHARE, privacy.SHARE_CAPABILITY)
+        self.tools: Any | None = None
+        self.intake: Callable[[Event], Awaitable[Event]] | None = None
+        self.budget_limit: float = 0.0
+        self.after_model_call: Callable[[int, Mapping[str, int]], Awaitable[None]] | None = None
         self.hooks = hooks.HookRegistry(self.settings)
-        for pipeline in self.hooks:
-            pipeline.set_policy(hooks.policy_for(pipeline.name))
         validate_signals(signal_weights(self.settings))
 
+    def require_installed(self) -> None:
+        """Refuse to run half-wired: no registry, no intake or no owner policy is fatal."""
+        if self.tools is None or self.intake is None:
+            raise RuntimeError(NOT_INSTALLED)
+        self.hooks.require_policy()
+
     async def put(self, event: Event) -> Event | None:
-        """Accept one event from a body or the clock (ticks are not acknowledged)."""
-        event = await middleware_identity.as_owner(self.conn, event)
+        """Accept one event from an adapter or the clock (ticks are not acknowledged)."""
+        if self.intake is None:
+            raise RuntimeError(NOT_INSTALLED)
+        event = await self.intake(event)
         ack = None if event.kind == "tick" else asyncio.get_running_loop().create_future()
         await self.queue.put(_Queued(event, ack))
         return await ack if ack is not None else None
 
     async def cursor(self, body: str) -> Any | None:
-        """Return the last recorded cursor for a body."""
+        """Return the last recorded cursor for an adapter."""
         return await store_cursor(self.conn, body)
 
     def enqueue(self, event: Event) -> None:
@@ -64,6 +76,8 @@ class Kernel:
 
     def register_adapter(self, adapter: Any) -> None:
         """Register an adapter and the capabilities it declares."""
+        if self.tools is None:
+            raise RuntimeError("the tool registry is not installed")
         self.tools.register(adapter)
 
     async def _append(self, event: Event, kind: str, payload: dict[str, Any], *,
@@ -126,7 +140,8 @@ class Kernel:
 
     async def _appraise(self, event: Event) -> Appraisal:
         return await appraise(event, conn=self.conn, now=self.clock.now(),
-                              settings=self.settings, embedder=self.embedder)
+                              settings=self.settings, embedder=self.embedder,
+                              daily_limit=self.budget_limit)
 
     async def _wake(self, event: Event) -> None:
         if event.kind == "job.result":
@@ -201,12 +216,14 @@ class Kernel:
         elif job.name == "pfc":
             rounds = result.get("rounds") or []
             for item in rounds:
-                await budget.record_call(self.conn, job.trigger.id, self.pfc,
-                                         purpose="pfc.decide", now=self.clock.now(),
-                                         settings=self.settings, usage=item.get("usage"))
+                call, totals = await budget.record_call(
+                    self.conn, job.trigger.id, self.pfc, purpose="pfc.decide",
+                    now=self.clock.now(), settings=self.settings, usage=item.get("usage"))
+                if call is not None and self.after_model_call is not None:
+                    await self.after_model_call(call.id, totals)
             calls = [call for item in rounds for call in item.get("calls") or []]
-            await jobs.apply_calls(self, job.trigger, calls)
-            await threads.after_step(self, job, event, calls)
+            acts = await jobs.apply_calls(self, job.trigger, calls)
+            await threads.after_step(self, job, event, acts)
         elif job.name == "encode" and isinstance(result.get("vector"), list):
             await insert_event_vector(self.conn, int(result["event_id"]), result["vector"])
         if job.re_wake is not None:
@@ -244,7 +261,7 @@ class Kernel:
             await self._expect_wake(item)
 
     async def _apply(self, event: Event, call: ToolCall,
-                     said: set[str] | None = None) -> bool:
+                     said: set[str] | None = None) -> dispatch.Dispatch:
         args = call.arguments
         if call.name == "think":
             await self._emit(event, "decision.note", {"act": "think", **args})
@@ -260,7 +277,7 @@ class Kernel:
             await self._emit(event, "decision.note", {"act": "revise", **args})
         else:
             await self._record_error(event, f"invalid tool call: {call.name} {args}")
-        return False
+        return dispatch.Dispatch(acted=False)
 
     async def _emit(self, trigger: Event, kind: str, payload: dict[str, Any], *,
                     place: str | None = None) -> Event:
@@ -276,10 +293,12 @@ class Kernel:
 
     async def step(self) -> Event:
         """Process exactly one queued event."""
+        self.require_installed()
         return await self._settle(await self.queue.get())
 
     async def run_until_idle(self) -> int:
         """Process every queued event and every in-flight background job."""
+        self.require_installed()
         count = 0
         while True:
             while not self.queue.empty():
@@ -292,6 +311,7 @@ class Kernel:
 
     async def run(self, stop_event: asyncio.Event) -> None:
         """Run the consumer loop until the stop event is set."""
+        self.require_installed()
         await self.recover()
         while not stop_event.is_set():
             try:

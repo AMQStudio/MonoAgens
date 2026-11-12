@@ -36,8 +36,8 @@ TOOLS: list[dict[str, Any]] = [
            "confidence": {"type": "number", "minimum": 0, "maximum": 1,
                           "description": "How sure the thought is."}},
           ["thought", "motivation", "confidence"]),
-    _tool("act", "Use one organ capability.",
-          {"capability": _text("The organ capability name."),
+    _tool("act", "Use one tool capability.",
+          {"capability": _text("The tool capability name."),
            "arguments": {"type": "object", "description": "Arguments for the capability."}},
           ["capability", "arguments"]),
     _tool("expect", "Hold what must remind you later: a promise, a watch, or a wait; "
@@ -50,10 +50,11 @@ TOOLS: list[dict[str, Any]] = [
            "cue_event": {"type": "object",
                          "description": 'Keys, all of which must match: kind (the event kind '
                          'exactly as the desk shows it, e.g. percept for what someone says), '
-                         'who (person id), place (place id), not_who (person id to ignore), '
-                         'text_like (a plain phrase the line contains, case-insensitive: NOT '
-                         'a regex and no | alternation; for several phrasings make several '
-                         'expectations or pick the most distinctive word). '
+                         'who (a speaker id), place (place id), not_who (a speaker id to '
+                         'ignore), text_like (a plain phrase the line contains, '
+                         'case-insensitive: NOT a regex and no | alternation; for several '
+                         'phrasings make several expectations or pick the most distinctive '
+                         'word). '
                          'who and place are ids copied exactly as the desk and the recent '
                          'lines show them, prefix included: a cue whose place does not match '
                          'the line never fires.'},
@@ -85,7 +86,7 @@ _PARAMETERS = {tool["function"]["name"]: tool["function"]["parameters"] for tool
 
 def _args(cap: dict[str, Any]) -> str:
     names = list((cap.get("schema") or {}).get("properties") or {})
-    names += ["to? (person or place)", "via? (a body)"] if cap.get("communicative") else []
+    names += ["to? (a speaker or a place)", "via? (a tool)"] if cap.get("communicative") else []
     return "(" + ", ".join(names) + ")"
 
 
@@ -94,10 +95,10 @@ def tools_for(capabilities: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     names = [f"{cap['organ']}.{cap['name']}" for cap in capabilities]
     lines = [f"{name}{_args(cap)}: {cap.get('description') or ''}"
              for name, cap in zip(names, capabilities)]
-    capability = {"type": "string", "description": "The organ capability name."}
+    capability = {"type": "string", "description": "The tool capability name."}
     if names:
         capability["enum"] = names
-    act = _tool("act", "Use one organ capability.\n" + "\n".join(lines),
+    act = _tool("act", "Use one tool capability.\n" + "\n".join(lines),
                 {"capability": capability,
                  "arguments": {"type": "object", "description": "Arguments for the capability."}},
                 ["capability", "arguments"])
@@ -106,7 +107,7 @@ def tools_for(capabilities: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
 
 @dataclass(frozen=True, slots=True)
 class ToolCall:
-    """One tool call returned by the PFC."""
+    """One tool call returned by the reasoning."""
 
     name: str
     arguments: dict[str, Any]

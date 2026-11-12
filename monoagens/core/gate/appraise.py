@@ -105,8 +105,13 @@ def _reflexive(appraisal: str, reason: str, tag: str, u: float, tau: float) -> A
 
 async def appraise(event: Event, *, conn: Any = None, situation: Situation | None = None,
                    now: datetime | None = None, embedder: Any = None,
-                   settings: dict[str, Any] | None = None) -> Appraisal:
-    """Return the decision for one event (no LLM call)."""
+                   settings: dict[str, Any] | None = None,
+                   daily_limit: float | None = None) -> Appraisal:
+    """Return the decision for one event (no LLM call).
+
+    `daily_limit` is the daily cap on tokens, injected by the kernel; 0 means no
+    cap at all, so the gate's budget term stays out.
+    """
     settings = settings if settings is not None else load_settings()
     values, params = constants(settings), formula.gate_params(settings)
     now = now or event.ts
@@ -132,9 +137,9 @@ async def appraise(event: Event, *, conn: Any = None, situation: Situation | Non
         return Appraisal(decision="wake", reason=tag[0], reflex=tag[1], signals=signals,
                          s=1.0, s_eff=1.0, p=1.0, u=u, tau=params.tau)
     moment = now or (situation.now if situation is not None else event.ts)
-    limit = budget.daily_limit(settings)
     state = situation.state if situation is not None else {}
-    used = budget.used_fraction(state.get(budget.key_for(moment, settings)), limit)
+    used = budget.used_fraction(state.get(budget.key_for(moment, settings)),
+                                daily_limit or 0.0)
     talk_rate = situation.talk_rate if situation is not None else 0.0
     debt = situation.promise_debt if situation is not None else 0.0
     known = situation.familiarity if situation is not None else 0.0

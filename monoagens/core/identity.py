@@ -15,10 +15,10 @@ FIELDS = ("name", "language", "persona", "principles")
 CAPABILITIES = (
     {"name": "set_identity",
      "description": "Change who the soul is: name, language, persona or principles. "
-                    "Only the owner may invoke it.",
+                    "Only the one the soul is paired with may invoke it.",
      "schema": {"type": "object", "additionalProperties": False, "properties": {
          "name": {"type": "string", "description": "The new name."},
-         "language": {"type": "string", "description": "The language it speaks with the owner."},
+         "language": {"type": "string", "description": "The language it speaks in."},
          "persona": {"type": "string", "description": "The persona, in any language."},
          "principles": {"type": "array", "items": {"type": "string"},
                         "description": "The principles it must never break."}}},
@@ -71,22 +71,24 @@ def _update(current: Mapping[str, Any], arguments: Mapping[str, Any]) -> dict[st
 
 
 class SelfTool:
-    """The one tool inside the core: it changes the soul's own identity."""
+    """The one tool inside the core: it changes the soul's own identity and answers a recall."""
 
     name = "self"
 
-    def __init__(self, conn, clock) -> None:
-        """Store the connection and the injected clock."""
+    def __init__(self, conn, clock, *, visible, memory_visible) -> None:
+        """Store the connection, the injected clock and the two audience predicates."""
         self.conn, self.clock = conn, clock
+        self.visible, self.memory_visible = visible, memory_visible
 
     def capabilities(self) -> tuple[dict[str, Any], ...]:
         """Return the capability descriptors this tool declares."""
         return CAPABILITIES
 
     async def act(self, action) -> dict[str, Any]:
-        """Apply an owner-approved identity change or answer a recall."""
+        """Apply an approved identity change or answer a recall."""
         if action.kind == "recall":
-            return await search(self.conn, action)
+            return await search(self.conn, action, visible=self.visible,
+                                memory_visible=self.memory_visible)
         if action.kind != "set_identity":
             raise ValueError(f"Unsupported action kind: {action.kind!r}")
         if action.event_id is None:

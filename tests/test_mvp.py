@@ -21,6 +21,7 @@ from monoagens.core.reasoning import Reasoning
 from monoagens.infra.store import append_event, read_state
 from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
+from monoagens.boot import build
 from tests.support import settings
 
 SETTINGS = settings()
@@ -116,13 +117,13 @@ async def test_mvp_a_restart_preserves_conversation_context(aconn):
     clock = FakeClock(START)
 
     first_fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "kita bahas kopi ya"}})]])
-    first = Kernel(aconn, clock=clock, pfc=_pfc(first_fake), settings=SETTINGS)
+    first = build(aconn, clock=clock, pfc=_pfc(first_fake), settings=SETTINGS)
     first.register_adapter(RecordingBody())
     await _feed(first, _msg("besok kita bahas apa?"))
 
     # Restart: a brand-new Kernel and Reasoning on the same database.
     second_fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "lanjut soal kopi"}})]])
-    second = Kernel(aconn, clock=clock, pfc=_pfc(second_fake), settings=SETTINGS)
+    second = build(aconn, clock=clock, pfc=_pfc(second_fake), settings=SETTINGS)
     body = RecordingBody()
     second.register_adapter(body)
     await _feed(second, _msg("lanjut", message_id=2))
@@ -141,7 +142,7 @@ async def test_mvp_a_restart_preserves_conversation_context(aconn):
 async def test_mvp_b_silence_and_mention(aconn):
     """MVP (b): 20 ordinary group messages stay silent; a mention gets a reply."""
     fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "iya, ada apa?"}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
     kernel.register_adapter(body)
 
@@ -191,7 +192,7 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
         [],
         [("act", {"capability": "telegram.say", "arguments": {"text": "sudah jam 7"}})],
     ])
-    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=clock, pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
     kernel.register_adapter(body)
 
@@ -218,7 +219,7 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
 
     # Restart around 7: the reminder already answered, so nothing fires again.
     restarted_fake = FakeLLM()
-    restarted = Kernel(aconn, clock=clock, pfc=_pfc(restarted_fake), settings=SETTINGS)
+    restarted = build(aconn, clock=clock, pfc=_pfc(restarted_fake), settings=SETTINGS)
     restarted.register_adapter(RecordingBody())
     await restarted.recover()
     await restarted.run_until_idle()
@@ -269,7 +270,7 @@ async def test_mvp_d_sleep_consolidation_and_retrieval(aconn):
         (max_before,))).fetchall()
 
     fake = FakeLLM([[("store_memories", SLEEP_ARGS)], []])
-    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), settings=SETTINGS, embedder=FakeEmbedder())
+    kernel = build(aconn, clock=clock, pfc=_pfc(fake), settings=SETTINGS, embedder=FakeEmbedder())
     kernel.register_adapter(RecordingBody())
 
     # Idle for 45 minutes: the tick path runs sleep.

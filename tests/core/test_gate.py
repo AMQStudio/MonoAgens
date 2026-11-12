@@ -25,6 +25,7 @@ from monoagens.infra.store import (append_event, insert_event_vector, read_event
                                   read_state, write_state)
 from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
+from monoagens.boot import build, install
 from tests.support import settings
 
 SETTINGS = settings()
@@ -422,6 +423,7 @@ async def test_a_gate_go_on_an_unaddressed_turn_creates_a_wait_instead_of_waking
 
     fake = FakeLLM()
     kernel = GateKernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    install(kernel)
     await _feed(kernel, _msg("obrolan grup", place=GROUP, place_kind="shared",
                              addressed=False))
 
@@ -520,7 +522,7 @@ async def test_fok_scores_high_only_when_the_answer_is_known(aconn):
 
 async def test_kernel_encodes_a_message_once_and_retrieval_reuses_the_vector(aconn):
     embedder = CountingEmbedder()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=None, settings=SETTINGS,
+    kernel = build(aconn, clock=FakeClock(START), pfc=None, settings=SETTINGS,
                     embedder=embedder)
 
     stored = await _feed(kernel, _msg("halo"))
@@ -542,7 +544,7 @@ async def test_kernel_encodes_a_message_once_and_retrieval_reuses_the_vector(aco
 async def test_kernel_encodes_the_reply_once_too(aconn):
     embedder = CountingEmbedder()
     fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS,
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS,
                     embedder=embedder)
     kernel.register_adapter(RecordingBody())
 
@@ -562,7 +564,7 @@ async def test_kernel_encodes_the_reply_once_too(aconn):
 
 async def test_silent_decision_event_carries_the_full_appraisal(aconn):
     fake = FakeLLM()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     await _feed(kernel, _msg("obrolan biasa", place=GROUP, place_kind="shared",
                              addressed=False))
 
@@ -587,7 +589,7 @@ async def test_silent_decision_event_carries_the_full_appraisal(aconn):
 async def test_llm_token_usage_lands_in_the_daily_budget_key(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
     pfc = _pfc(fake)
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=pfc, settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=pfc, settings=SETTINGS)
     kernel.register_adapter(RecordingBody())
 
     await _feed(kernel, _msg("halo"))
@@ -622,7 +624,7 @@ async def test_reasoning_tokens_are_recorded_and_counted_in_the_budget(aconn):
 
     fake = ReasoningLLM([[("act", {"capability": "telegram.say",
                                    "arguments": {"text": "hai"}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_adapter(RecordingBody())
 
     await _feed(kernel, _msg("halo"))
@@ -640,22 +642,26 @@ async def test_the_budget_spent_raises_theta(aconn):
     runtime = settings(owner_settings={"daily_token_budget": 100})
     key = f"budget:{START.astimezone(JAKARTA).date().isoformat()}"
     source = await append_event(aconn, ts=START, kind="percept", payload={"text": "obrolan"})
-    base = (await appraise(source, conn=aconn, now=START, settings=runtime)).theta
+    limit = 100.0
+    base = (await appraise(source, conn=aconn, now=START, settings=runtime,
+                           daily_limit=limit)).theta
     assert base > 0.0
 
     await write_state(aconn, key, {"total_tokens": 50}, source.id)
-    theta = (await appraise(source, conn=aconn, now=START, settings=runtime)).theta
+    theta = (await appraise(source, conn=aconn, now=START, settings=runtime,
+                            daily_limit=limit)).theta
     assert theta - base == pytest.approx(0.15)
 
     await write_state(aconn, key, {"total_tokens": 250}, source.id)
-    theta = (await appraise(source, conn=aconn, now=START, settings=runtime)).theta
+    theta = (await appraise(source, conn=aconn, now=START, settings=runtime,
+                            daily_limit=limit)).theta
     assert theta - base == pytest.approx(0.3)
 
 
 async def test_budget_exhausted_is_recorded_once_per_day(aconn):
     runtime = settings(owner_settings={"daily_token_budget": 10})
     fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=runtime)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=runtime)
     kernel.register_adapter(RecordingBody())
 
     await _feed(kernel, _msg("halo"))
@@ -676,7 +682,7 @@ async def test_inbound_stop_records_guard_stopped_and_skips_cognition(aconn):
     async def block(item, ctx):
         return Stop("not now")
 
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.hooks.inbound.add("block", block)
     await _feed(kernel, _msg("halo"))
 
@@ -689,7 +695,7 @@ async def test_inbound_exception_fails_closed_with_an_error_and_a_stop(aconn):
     async def boom(item, ctx):
         raise RuntimeError("nope")
 
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM()), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM()), settings=SETTINGS)
     kernel.hooks.inbound.add("boom", boom)
     await _feed(kernel, _msg("halo"))
 
@@ -703,7 +709,7 @@ async def test_inbound_replace_swaps_the_event_before_appraisal(aconn):
     async def rewrite(item, ctx):
         return Replace(replace(item, payload={**item.payload, "addressed": True}))
 
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_adapter(RecordingBody())
     kernel.hooks.inbound.add("rewrite", rewrite)
     await _feed(kernel, _msg("halo", addressed=False))
@@ -718,7 +724,7 @@ async def test_context_hook_can_replace_the_pfc_context(aconn):
     async def rewrite(item, ctx):
         return Replace(replace(item, reason="rewritten by middleware"))
 
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_adapter(RecordingBody())
     kernel.hooks.context.add("rewrite", rewrite)
     await _feed(kernel, _msg("halo"))
@@ -735,7 +741,7 @@ async def test_action_hook_replaces_the_payload_and_continue_passes(aconn):
     async def note(item, ctx):
         return Continue()
 
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
     kernel.register_adapter(body)
     kernel.hooks.action.add("note", note)
@@ -747,44 +753,44 @@ async def test_action_hook_replaces_the_payload_and_continue_passes(aconn):
     assert (await _payload(aconn, "act.out"))["arguments"]["text"] == "hai"
 
 
-async def test_action_hook_stop_keeps_the_logged_message_but_never_acts(aconn):
+async def test_action_hook_stop_records_the_stop_and_neither_records_nor_acts(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
 
     async def block(item, ctx):
         return Stop("privacy")
 
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
     kernel.register_adapter(body)
     kernel.hooks.action.add("block", block)
     await _feed(kernel, _msg("halo"))
 
     assert body.actions == []
-    assert (await _payload(aconn, "act.out"))["arguments"]["text"] == "hai"
+    assert "act.out" not in await _kinds(aconn)
     assert await _payload(aconn, "guard.stopped") == {"hook": "action", "reason": "privacy"}
 
 
-async def test_organ_own_action_hook_runs_only_for_its_organ(aconn):
+async def test_tool_own_action_hook_runs_only_for_its_tool(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
 
     async def block(item, ctx):
         return Stop("telegram only")
 
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
     kernel.register_adapter(body)
-    kernel.hooks.action.add("other-organ", block, tool="cli")
+    kernel.hooks.action.add("other-tool", block, tool="cli")
     await _feed(kernel, _msg("halo"))
 
     assert len(body.actions) == 1
 
 
-async def test_inbound_organ_own_hook_skips_events_from_another_organ(aconn):
+async def test_inbound_tool_own_hook_skips_events_from_another_tool(aconn):
     async def block(item, ctx):
         return Stop("telegram only")
 
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM()), settings=SETTINGS)
-    kernel.hooks.inbound.add("other-organ", block, tool="cli")
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM()), settings=SETTINGS)
+    kernel.hooks.inbound.add("other-tool", block, tool="cli")
     await _feed(kernel, _msg("halo"))
 
     assert "guard.stopped" not in await _kinds(aconn)
@@ -796,7 +802,7 @@ async def test_hanging_hook_times_out_as_a_stop_and_the_loop_goes_on(aconn):
         return Continue()
 
     runtime = settings(constants={"hook_timeout_ms": 10})
-    kernel = Kernel(aconn, clock=FakeClock(START), settings=runtime)
+    kernel = build(aconn, clock=FakeClock(START), settings=runtime)
     kernel.hooks.inbound.add("hang", hang, tool="telegram")
 
     await _feed(kernel, _msg("slow"))
@@ -839,7 +845,7 @@ def test_owner_policy_runs_first_and_last_around_every_hook():
     assert asyncio.run(loop_hook()) == ["policy", "middle", "policy"] * 3
 
 
-def test_hook_slots_order_middleware_and_scope_by_organ():
+def test_hook_slots_order_middleware_and_scope_by_tool():
     async def early(item, ctx):
         return Continue()
 
@@ -884,7 +890,7 @@ def test_kernel_refuses_settings_whose_signal_weights_do_not_match(conn):
     broken = settings()
     broken["constants"] = {"job_timeout_seconds": 5.0}
     with pytest.raises(ValueError, match="signal weights missing"):
-        Kernel(conn, settings=broken)
+        build(conn, settings=broken)
 
 
 class IdentityBody(RecordingBody):
@@ -898,7 +904,7 @@ class IdentityBody(RecordingBody):
 
 async def test_identity_changing_capability_is_refused_for_a_non_owner(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.set_identity", "arguments": {}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = IdentityBody()
     kernel.register_adapter(body)
 
@@ -912,7 +918,7 @@ async def test_identity_changing_capability_is_refused_for_a_non_owner(aconn):
 
 async def test_identity_changing_capability_passes_for_the_owner(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.set_identity", "arguments": {}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = IdentityBody()
     kernel.register_adapter(body)
 

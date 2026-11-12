@@ -9,13 +9,15 @@ from typing import Any
 
 from monoagens.core import hooks, memory, threads
 from monoagens.core.context import layout
-from monoagens.middleware import privacy
+from monoagens.middleware import identity, privacy
+from monoagens.middleware.contract import compose
 from monoagens.infra.clock import FakeClock
 from monoagens.infra.embedding import FakeEmbedder
 from monoagens.core.kernel import Kernel
 from monoagens.core.reasoning import Reasoning, ToolCall
 from monoagens.infra.store import append_event, read_state, write_state
 from monoagens.types import Action, Event
+from monoagens.boot import build
 from tests.support import settings
 
 START = datetime(2026, 11, 11, 8, 0, tzinfo=timezone.utc)
@@ -64,7 +66,7 @@ class Body:
 
 
 async def _kernel(conn, *, settings_value=None, pfc=None, embedder=None) -> Kernel:
-    kernel = Kernel(conn, clock=FakeClock(START), settings=settings_value or SETTINGS,
+    kernel = build(conn, clock=FakeClock(START), settings=settings_value or SETTINGS,
                     pfc=pfc, embedder=embedder)
     kernel.register_adapter(Body("whatsapp"))
     kernel.register_adapter(Body("telegram"))
@@ -142,11 +144,13 @@ OWNER_DM = "space:tg:owner"
 
 async def _desk(conn, *, place: str, trigger: int, memories: tuple = (),
                 text: str = "kerjakan"):
-    """Lay out one desk and pass it through the core's context hook."""
+    """Lay out one desk and pass it through the context hook's lines and the cards."""
+    event = _trigger(trigger, place, text=text)
     context = await layout.build_context(
-        conn, _trigger(trigger, place, text=text), place, "test", now=START,
-        settings=SETTINGS, memories=memories, capabilities=())
-    return await hooks.audience_policy()(context, {"conn": conn, "now": START})
+        conn, event, place, "test", now=START, settings=SETTINGS, memories=memories,
+        capabilities=())
+    ctx = {"conn": conn, "event": event, "now": START}
+    return await compose(privacy.filter_context(conn), identity.cards(conn))(context, ctx)
 
 
 async def test_the_owners_direct_chat_is_private_to_the_owner(aconn):
@@ -180,14 +184,14 @@ async def test_context_hook_keeps_private_lines_and_memories_inside_the_audience
     context = await layout.build_context(
         aconn, _trigger(trigger_id, GROUP), GROUP, "test", now=START, settings=SETTINGS,
         memories=(), capabilities=())
-    filtered = await hooks.audience_policy()(context, {"conn": aconn, "now": START})
+    filtered = await privacy.filter_context(aconn)(context, {"conn": aconn, "now": START})
     assert all(line.place != FULAN_A for line in filtered.item.recent_elsewhere)
 
     owner_dm = await _said(aconn, OWNER, "space:tg:owner", "direct")
     context = await layout.build_context(
         aconn, _trigger(owner_dm, "space:tg:owner"), "space:tg:owner", "test", now=START,
         settings=SETTINGS, memories=(), capabilities=())
-    filtered = await hooks.audience_policy()(context, {"conn": aconn, "now": START})
+    filtered = await privacy.filter_context(aconn)(context, {"conn": aconn, "now": START})
     assert any(line.place == FULAN_A for line in filtered.item.recent_elsewhere)
 
 
@@ -198,7 +202,7 @@ async def test_a_newcomer_never_receives_a_line_said_before_they_arrived(aconn):
     context = await layout.build_context(
         aconn, _trigger(asked, GROUP), GROUP, "test", now=START, settings=SETTINGS,
         memories=(), capabilities=())
-    desk = await hooks.audience_policy()(context, {"conn": aconn, "now": START})
+    desk = await privacy.filter_context(aconn)(context, {"conn": aconn, "now": START})
     assert [line.id for line in desk.item.recent] == [said]
 
     joined = await _said(aconn, "person:charlie", GROUP, "shared", "eh aku juga di sini")
@@ -209,7 +213,7 @@ async def test_a_newcomer_never_receives_a_line_said_before_they_arrived(aconn):
     context = await layout.build_context(
         aconn, _trigger(later, GROUP), GROUP, "test", now=START, settings=SETTINGS,
         memories=(), capabilities=())
-    desk = await hooks.audience_policy()(context, {"conn": aconn, "now": START})
+    desk = await privacy.filter_context(aconn)(context, {"conn": aconn, "now": START})
     assert [line.id for line in desk.item.recent] == [joined]
 
 
@@ -236,7 +240,7 @@ async def test_a_withheld_memory_leaves_a_note_with_its_source_but_not_its_text(
         aconn, _trigger(asked, GROUP), GROUP, "test", now=START, settings=SETTINGS,
         memories=(fact,), capabilities=())
     context = replace(context, recent_elsewhere=())
-    desk = (await hooks.audience_policy()(context, {"conn": aconn, "now": START})).item
+    desk = (await privacy.filter_context(aconn)(context, {"conn": aconn, "now": START})).item
 
     assert desk.memories == ()
     assert desk.withheld == (("person:owner private chat", 1),)
@@ -293,6 +297,7 @@ async def test_only_a_person_who_was_part_of_it_can_share_it(aconn):
         "SELECT kind FROM events ORDER BY id")).fetchall()]
     assert "share.granted" not in kinds
     assert "act.result" in kinds
+    assert "guard.stopped" in kinds  # the consent rule is a Stop: nothing later sees it
 
     # Fulan's own chain may share Fulan's line: the hook sees it and consent is recorded.
     await kernel._apply(Event(id=fulan, ts=START, kind="percept", who="person:fulan",
@@ -357,7 +362,7 @@ async def test_a_message_to_an_unknown_place_fails_honestly(aconn):
         "SELECT count(*) FROM events WHERE kind = 'act.out'")).fetchone() == (0,)
 
 
-async def test_act_offers_the_capabilities_of_every_running_organ(aconn):
+async def test_act_offers_the_capabilities_of_every_running_tool(aconn):
     kernel = await _kernel(aconn)
     assert {"whatsapp.say", "telegram.say", "dev.run", "self.share"} <= set(
         kernel.tools.capabilities)
@@ -412,6 +417,29 @@ async def test_a_paraphrase_of_a_private_line_is_not_on_the_other_places_desk(ac
     assert await privacy.leaks(aconn, BUDI, "Fulan bilang: aku di-PHK") is True
 
 
+async def test_saying_private_words_in_a_place_that_may_not_see_them_is_refused(aconn):
+    """D45: the audience rule refuses the words, records the refusal and writes nothing out."""
+    await _said(aconn, "person:fulan", FULAN_A, "direct", "aku di-PHK")
+    await aconn.execute(
+        "INSERT INTO memories (who, place, text, importance, private) "
+        "VALUES (%s, %s, %s, 0.9, true)", ("person:fulan", FULAN_A, "aku di-PHK"))
+    group = await _said(aconn, "person:charlie", GROUP, "shared", "halo semua")
+    kernel = await _kernel(aconn)
+
+    await kernel._apply(_trigger(group, GROUP), ToolCall("act", {
+        "capability": "whatsapp.say", "arguments": {"text": "aku di-PHK", "to": GROUP}}))
+
+    rows = await (await aconn.execute("SELECT kind, payload FROM events ORDER BY id")).fetchall()
+    kinds = [kind for kind, _ in rows]
+    refusal = "that place may not see this content; say it where it belongs"
+    assert "act.out" not in kinds
+    assert (await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'act.result'")).fetchone())[0]["result"] == {
+            "error": refusal}
+    stopped = [payload for kind, payload in rows if kind == "guard.stopped"]
+    assert stopped == [{"hook": "action", "reason": refusal}]
+
+
 async def test_a_long_action_opens_a_task_thread_and_it_closes_when_done(aconn):
     kernel = await _kernel(aconn)
     at = await _said(aconn, OWNER, GROUP, "shared")
@@ -427,12 +455,12 @@ async def test_a_long_action_opens_a_task_thread_and_it_closes_when_done(aconn):
                                 payload={"job": "pfc"})
     call = {"name": "act", "arguments": {"capability": "whatsapp.say",
                                          "arguments": {"to": "person:owner"}}}
-    await threads.after_step(kernel, job, result, [call])
+    await threads.after_step(kernel, job, result, [(call, {"hold_for": OWNER})])
     assert (await read_state(aconn, f"task:{task_place}"))["waiting_for"] == OWNER
 
     call = {"name": "act", "arguments": {"capability": "whatsapp.say",
                                          "arguments": {"to": GROUP}}}
-    await threads.after_step(kernel, job, result, [call])
+    await threads.after_step(kernel, job, result, [(call, {"delivers": True})])
     assert (await read_state(aconn, f"task:{task_place}"))["status"] == "closed"
     assert await (await aconn.execute(
         "SELECT count(*) FROM events WHERE kind = 'task.closed'")).fetchone() == (1,)
@@ -457,9 +485,9 @@ async def test_a_chain_that_exceeds_max_task_steps_closes(aconn):
     job = SimpleNamespace(name="pfc", place=task_place)
     result = await append_event(aconn, ts=START, kind="job.result", place=task_place,
                                 payload={"job": "pfc"})
-    await threads.after_step(kernel, job, result, [
-        {"name": "act", "arguments": {"capability": "whatsapp.say",
-                                      "arguments": {"text": "selesai"}}}])
+    call = {"name": "act", "arguments": {"capability": "whatsapp.say",
+                                        "arguments": {"text": "selesai"}}}
+    await threads.after_step(kernel, job, result, [(call, {})])
     row = await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'task.closed'")).fetchone()
     assert row[0]["reason"] == "max_task_steps"

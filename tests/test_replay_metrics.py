@@ -9,7 +9,9 @@ import sys
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from monoagens.core import hooks, memory
+from monoagens.core import memory
+from monoagens.middleware import identity, privacy
+from monoagens.middleware.contract import compose
 from monoagens.core.context import layout
 from monoagens.core.gate import Appraisal
 from monoagens.core.context.layout import PFCContext
@@ -231,7 +233,8 @@ async def test_the_withheld_note_is_not_a_private_item_on_the_desk(aconn):
                             place="space:tg:owner", sources=(dm.id,))
     context = await layout.build_context(aconn, asked, group, "test", now=NOW,
                                          settings=settings(), memories=(fact,), capabilities=())
-    desk = (await hooks.audience_policy()(context, {"conn": aconn, "now": NOW})).item
+    desk = (await compose(privacy.filter_context(aconn), identity.cards(aconn))(
+        context, {"conn": aconn, "now": NOW})).item
     assert desk.withheld
 
     tracker = replay.Tracker(conn=aconn)
@@ -254,7 +257,8 @@ async def test_person_cards_are_not_private_items_on_the_desk(aconn):
                                payload={"description": "kirim ke Budi", "place_kind": "shared"})
     context = await layout.build_context(aconn, asked, group, "test", now=NOW,
                                          settings=settings(), memories=(), capabilities=())
-    desk = (await hooks.audience_policy()(context, {"conn": aconn, "now": NOW})).item
+    desk = (await compose(privacy.filter_context(aconn), identity.cards(aconn))(
+        context, {"conn": aconn, "now": NOW})).item
     assert any("person:budi" in card for card in desk.people)
 
     tracker = replay.Tracker(conn=aconn)

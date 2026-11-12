@@ -44,6 +44,7 @@ from psycopg import sql
 from pgvector.psycopg import register_vector_async
 import yaml
 
+from monoagens.boot import install
 from monoagens.middleware import privacy
 from monoagens.adapters.cli import CAPABILITIES as CLI_CAPABILITIES
 from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
@@ -652,6 +653,7 @@ class ReplayRunner:
         pfc = self._make_pfc()
         kernel = RecordingKernel(self.conn, clock=self.clock, pfc=pfc,
                                  settings=self.settings, embedder=self.embedder)
+        install(kernel)
         for name in (BODY_NAME, CLI_BODY, GAME_BODY, WHATSAPP_BODY, DEV_BODY):
             kernel.register_adapter(FakeBody(name))
         self.kernel = kernel

@@ -1,4 +1,4 @@
-"""Telegram body: long polling over httpx; neutral ids only (who/place)."""
+"""Telegram adapter: long polling over httpx; neutral ids only (who/place)."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ class TelegramBody:
         self.bot_username: str | None = None
 
     def capabilities(self) -> tuple[dict[str, Any], ...]:
-        """Return the capability descriptors this organ declares."""
+        """Return the capability descriptors this adapter declares."""
         return CAPABILITIES
 
     def _http(self) -> httpx.AsyncClient:
@@ -92,7 +92,7 @@ class TelegramBody:
                 try:
                     updates = await self._call("getUpdates", **params)
                 except (httpx.HTTPError, RuntimeError):
-                    # A flaky network or a Telegram hiccup never kills the body.
+                    # A flaky network or a Telegram hiccup never kills the adapter.
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 30.0)
                     continue

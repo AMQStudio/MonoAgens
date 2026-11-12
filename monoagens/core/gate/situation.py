@@ -8,6 +8,7 @@ from typing import Any, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from monoagens.core import memory
+from monoagens.core.memory import cards
 from monoagens.core.gate import formula
 from monoagens.infra.prior import constants
 from monoagens.infra.store import (read_event_vector, read_expectations, read_last_events,
@@ -69,7 +70,7 @@ def effective_salience(s: float, h: float) -> float:
 
 
 def _floor_flags(event: Event, recent: Sequence[Event]) -> tuple[bool, bool]:
-    """Return whether another person was selected and whether the soul just answered."""
+    """Return whether another speaker was selected and whether the soul just answered."""
     before = [seen for seen in recent if seen.id != event.id]
     soul_answered = bool(before) and before[-1].kind == "act.out"
     payload = event.payload
@@ -127,8 +128,7 @@ async def assemble_situation(conn, event: Event, *, now: datetime,
         state[habit_key] = {"h": habituation, "ts": now.isoformat()}
         if event.id is not None:
             await write_state(conn, habit_key, state[habit_key], event.id)
-    person = await read_state(conn, f"person:{event.who}") if event.who else None
-    closeness = max(0.0, min(1.0, float((person or {}).get("closeness") or 0.0)))
+    closeness = await cards.closeness(conn, event.who)
     promise_vectors, reference_vectors, core_vectors = await _vectors(
         conn, settings, embedder)
     activation = await memory.best_activation(conn, embedder, event, now=now,

@@ -16,6 +16,8 @@ from monoagens.core.kernel import Kernel
 from monoagens.core.reasoning import Reasoning
 from monoagens.infra.store import append_event, project_event, read_state, rebuild_state
 from monoagens.types import Action, Event
+from monoagens.boot import build
+from monoagens.middleware import privacy
 from tests.support import settings
 
 SETTINGS = settings()
@@ -91,19 +93,20 @@ async def test_after_birth_identity_comes_from_state(aconn):
     assert await identity.load(aconn, {"name": "Stale"}) == updated
 
 
-def test_self_organ_declares_an_identity_changing_capability():
+def test_self_tool_declares_an_identity_changing_capability():
     class Clock:
         def now(self):
             return START
 
-    capability = identity.SelfTool(None, Clock()).capabilities()[0]
+    capability = identity.SelfTool(None, Clock(), visible=privacy.visible,
+                                       memory_visible=privacy.memory_visible).capabilities()[0]
     assert capability["name"] == "set_identity"
     assert capability["identity_changing"] is True
 
 
 async def test_a_non_owner_cannot_change_the_identity(aconn):
     await identity.ensure(aconn, SETTINGS["identity"], now=START)
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM({"name": "Hacked"})),
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM({"name": "Hacked"})),
                     settings=SETTINGS, embedder=FakeEmbedder())
 
     await _feed(kernel, _percept("person:other"))
@@ -117,7 +120,7 @@ async def test_a_non_owner_cannot_change_the_identity(aconn):
 async def test_the_owner_changes_the_identity_in_conversation(aconn):
     await identity.ensure(aconn, SETTINGS["identity"], now=START)
     fake = FakeLLM({"name": "Mona 2", "principles": ["Never lie.", "Be brief."]})
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS,
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS,
                     embedder=FakeEmbedder())
 
     await _feed(kernel, _percept("person:owner"))
@@ -129,11 +132,12 @@ async def test_the_owner_changes_the_identity_in_conversation(aconn):
 
 async def test_set_identity_rejects_unknown_fields(aconn):
     await identity.ensure(aconn, SETTINGS["identity"], now=START)
-    organ = identity.SelfTool(aconn, FakeClock(START))
+    tool = identity.SelfTool(aconn, FakeClock(START), visible=privacy.visible,
+                               memory_visible=privacy.memory_visible)
     action = Action(kind="set_identity", place=PLACE,
                     payload={"name": "Mona", "owner": "x"}, event_id=1)
     with pytest.raises(ValueError, match="unknown fields"):
-        await organ.act(action)
+        await tool.act(action)
 
 
 async def test_identity_state_is_rebuilt_from_the_log(aconn):

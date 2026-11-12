@@ -1,24 +1,37 @@
-"""Privacy: who is present, consent to share, and reaching a person (D45, D46)."""
+"""Privacy: who is present, what an audience may see, consent to share, and the withheld note.
+
+The core knows only opaque ids; this module gives them meaning. It runs as the absolute
+second line of every hook: content from a place whose audience this context does not cover
+never enters the desk, and sharing needs the consent of someone who was part of it.
+"""
 
 from __future__ import annotations
 
-import re
+from dataclasses import replace
 from typing import Any
 
-from monoagens.infra.store import payload_text, read_state
+from monoagens.core.hooks import Continue, Middleware, Replace, Stop
+from monoagens.infra.store import read_state
 from monoagens.types import Event
 
 OWNER = "person:owner"
 SHARE = "self.share"
 SHARE_CAPABILITY = {
     "name": "share",
-    "description": "Share private content with a person or a place; only if you were part of it.",
+    "description": "Share private content with a person or a place; only if you were part of it. "
+                   "Content from another place needs this before it can be repeated where its "
+                   "audience may not see it.",
     "schema": {"type": "object", "properties": {
         "item": {"type": "string"}, "episode": {"type": "integer"},
         "to": {"type": "string", "description": "person:<id> or a place id."}},
         "required": ["to"]},
     "communicative": False, "long_running": False, "identity_changing": False,
 }
+
+
+def register(registry: Any) -> None:
+    """Declare the middleware's own `self.share` capability on the kernel's registry."""
+    registry.add_capability(SHARE, SHARE_CAPABILITY)
 
 
 async def aliases(conn) -> dict[str, str]:
@@ -28,7 +41,7 @@ async def aliases(conn) -> dict[str, str]:
 
 
 async def place_kind(conn, place: str | None) -> str:
-    """Return the kind the organ reported for a place; unknown counts as shared."""
+    """Return the kind the adapter reported for a place; unknown counts as shared."""
     if not place:
         return "shared"
     row = await (await conn.execute(
@@ -38,7 +51,7 @@ async def place_kind(conn, place: str | None) -> str:
 
 
 async def direct(conn, place: str | None) -> bool:
-    """Return whether a place is a 1:1 chat, by the kind its organ reported."""
+    """Return whether a place is a 1:1 chat, by the kind its adapter reported."""
     return await place_kind(conn, place) == "direct"
 
 
@@ -152,107 +165,6 @@ async def leaks(conn, target: str | None, text: str) -> bool:
     return False
 
 
-async def person_cards(conn, place: str | None, event: Event | None) -> tuple[str, ...]:
-    """Return one card per person present here or named in the trigger (D55)."""
-    present = set(await audience(conn, place)) if place else set()
-    known = await _known_people(conn)
-    text = payload_text(event.payload) if event is not None else ""
-    named = {who for who, card in known.items()
-             if card["name"] and _named(card["name"], text)}
-    people = sorted((present | named) - {OWNER})
-    return tuple([await _card(conn, who, known.get(who) or {"name": None, "closeness": 0.0,
-                                                            "natives": {who}})
-                  for who in people])
-
-
-async def _known_people(conn) -> dict[str, dict[str, Any]]:
-    """Return the card data of every person the alias map or the Log has seen."""
-    mapping = await aliases(conn)
-    cur = await conn.execute("SELECT DISTINCT who FROM events WHERE who IS NOT NULL")
-    rows = await cur.fetchall()
-    states = await _person_states(conn)
-    known = {}
-    for who in {mapping.get(native, native) for (native,) in rows} | set(mapping.values()):
-        state = states.get(who) or {}
-        known[who] = {"name": _name(who, state),
-                      "closeness": float(state.get("closeness") or 0.0),
-                      "natives": {who}}
-    for native, who in mapping.items():
-        known.setdefault(who, {"name": None, "closeness": 0.0, "natives": set()})
-        known[who]["natives"].add(native)
-    return known
-
-
-async def _person_states(conn) -> dict[str, dict[str, Any]]:
-    """Return the `state: person:*` entries by person id."""
-    cur = await conn.execute("SELECT key, value FROM state WHERE key LIKE 'person:%'")
-    return {str(key): value or {} for key, value in await cur.fetchall()}
-
-
-def _name(who: str, state: dict[str, Any]) -> str | None:
-    """Return the name a card knows: the state's, else the last id segment if it is a word."""
-    name = str(state.get("name") or "").strip()
-    if name:
-        return name
-    part = who.removeprefix("person:").rpartition(":")[2]
-    return part if part.isalpha() else None
-
-
-def _named(name: str, text: str) -> bool:
-    """Return whether a card name appears in the trigger as a whole word."""
-    return bool(text) and re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text,
-                                    re.IGNORECASE) is not None
-
-
-async def _card(conn, who: str, card: dict[str, Any]) -> str:
-    """Render one person card: name, person id, reachable bodies, closeness."""
-    places = await _direct_places(conn, card["natives"])
-    reach = "; ".join(f"{body} at {place}" for body, place in sorted(places.items()))
-    label = f"{card['name']} ({who})" if card["name"] else who
-    return f"- {label}: {reach or 'no direct place known yet'}; closeness {card['closeness']:.2f}"
-
-
-async def _direct_places(conn, natives: set[str]) -> dict[str, str]:
-    """Return the direct place where each body last saw one of a person's ids."""
-    if not natives:
-        return {}
-    cur = await conn.execute(
-        "SELECT body, place FROM events WHERE kind = 'percept' AND place IS NOT NULL "
-        "AND who = ANY(%s) AND payload->>'place_kind' = 'direct' ORDER BY id DESC",
-        (sorted(natives),))
-    places: dict[str, str] = {}
-    for body, place in await cur.fetchall():
-        places.setdefault(str(body or "?"), place)
-    return places
-
-
-async def direct_place(conn, who: str, via: str | None = None) -> str | None:
-    """Return the 1:1 place where one person was last active, optionally on one body."""
-    mapping = await aliases(conn)
-    cur = await conn.execute(
-        "SELECT who, place, body, payload->>'place_kind' FROM events "
-        "WHERE kind = 'percept' AND place IS NOT NULL AND who IS NOT NULL "
-        "ORDER BY id DESC")
-    for native, place, body, kind in await cur.fetchall():
-        if mapping.get(native, native) != who or (via and str(body or "").lower() != via.lower()):
-            continue
-        if kind == "direct":
-            return place
-    return None
-
-
-async def resolve_to(conn, to: str, via: str | None = None) -> tuple[str | None, str | None]:
-    """Resolve an act's `to:` into a target place; a missing route is an honest error."""
-    if not str(to).startswith("person:"):
-        found = await (await conn.execute(
-            "SELECT 1 FROM events WHERE place = %s LIMIT 1", (str(to),))).fetchone()
-        return (str(to), None) if found else (None, f"no such place: {to}")
-    place = await direct_place(conn, str(to), via)
-    if place is None:
-        return None, f"no way to reach {str(to).removeprefix('person:')} yet"
-    return place, None
-
-
 async def consent(conn, event: Event, arguments: dict[str, Any]) -> tuple[bool, str | None]:
     """Return whether the chain's actor may share this content, and the content's place."""
     source = event.place
@@ -271,3 +183,85 @@ async def grant(kernel, event: Event, arguments: dict[str, Any], to: str | None,
     await kernel._emit(event, "share.granted", {
         "item": arguments.get("item"), "episode": arguments.get("episode"), "to": to,
         "persons": sorted(people), "source_place": source})
+
+
+def filter_context(conn) -> Middleware:
+    """Absolute line 2 (D45): private content enters only an allowed audience."""
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        """Keep only what the audience may see, and note the private items withheld."""
+        place = item.place
+        counts = dict(item.withheld)
+
+        async def keep(lines: Any, *, note_withheld: bool) -> tuple[Any, ...]:
+            kept = []
+            for line in lines:
+                if await visible(conn, context=place, source=line.place, before=line.id):
+                    kept.append(line)
+                elif note_withheld:
+                    label = await source_label(conn, line.place, line.id)
+                    counts[label] = counts.get(label, 0) + 1
+            return tuple(kept)
+
+        memories = []
+        for memory in item.memories:
+            if await memory_visible(conn, context=place,
+                                    sources=getattr(memory, "sources", ())):
+                memories.append(memory)
+            else:
+                label = await withheld_source(
+                    conn, context=place, sources=getattr(memory, "sources", ()))
+                counts[label] = counts.get(label, 0) + 1
+        filtered = replace(
+            item, place_kind=await place_kind(conn, place), memories=tuple(memories),
+            recent_elsewhere=await keep(item.recent_elsewhere, note_withheld=True),
+            recent=await keep(item.recent, note_withheld=False))
+        core = await read_state(conn, "core_memory")
+        sources = (core or {}).get("derived_from")
+        if filtered.core_memory and not await memory_visible(conn, context=place,
+                                                             sources=sources):
+            label = await withheld_source(conn, context=place, sources=sources)
+            counts[label] = counts.get(label, 0) + 1
+            filtered = replace(filtered, core_memory="")
+        return Replace(replace(filtered, withheld=tuple(sorted(counts.items()))))
+
+    return rule
+
+
+def guard(kernel: Any, when: str) -> Middleware:
+    """Absolute line 3 (D45, D46): consent to share, and no private words in a place.
+
+    On the way in it asks consent for `self.share`; on the way out, once the route is
+    resolved, it records the grant and refuses a message whose words the target place
+    may not see.
+    """
+    refused = "that place may not see this content; say it where it belongs"
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        """Apply the sharing and leaking lines to one act."""
+        if ctx.get("capability") == SHARE:
+            if when == "first":
+                allowed, source = await consent(ctx["conn"], ctx["event"], item)
+                if not allowed:
+                    ctx["refusal"] = "only someone who was part of it can share it"
+                    return Stop("only someone who was part of it can share it")
+                ctx["grant_source"] = source
+                return Continue()
+            if ctx.get("refusal") or ctx.get("handled"):
+                return Continue()
+            await grant(kernel, ctx["event"], item, ctx.get("to"), ctx.get("grant_source"))
+            ctx["handled"] = True
+            return Continue()
+        if when == "first":
+            return Continue()
+        place = ctx.get("place") or ctx["event"].place
+        if ctx.get("long_running"):
+            ctx["labels"]["audience"] = sorted(await audience(ctx["conn"], ctx["event"].place))
+        hidden = await leaks(ctx["conn"], place, str(item.get("text") or ""))
+        ctx["labels"]["words_hidden"] = hidden
+        if hidden and place == ctx["event"].place:
+            ctx["refusal"] = refused
+            return Stop(refused)
+        return Continue()
+
+    return rule

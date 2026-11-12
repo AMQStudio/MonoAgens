@@ -22,6 +22,8 @@ from monoagens.infra.store import (active_expectation_lines, append_event, read_
 from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
 from monoagens.core.context.working import doing_lines
+from monoagens.boot import build
+from monoagens.middleware import privacy
 from tests.support import settings
 
 SETTINGS = settings()
@@ -142,7 +144,7 @@ async def _kinds(conn) -> list[str]:
 async def test_layered_prompt_structure(aconn):
     """Stable identity, then core_memory, then tagged volatile sections in order."""
     fake = FakeLLM()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
     kernel.register_adapter(body)
 
@@ -169,7 +171,7 @@ async def test_layered_prompt_structure(aconn):
     assert capability["enum"] == ["self.set_identity", "self.recall", "self.share",
                                  "telegram.say", "telegram.react"]
     description = act_tool["function"]["description"]
-    assert "telegram.say(text, to? (person or place), via? (a body)):" in description
+    assert "telegram.say(text, to? (a speaker or a place), via? (a tool)):" in description
     assert "telegram.react(emoji, message_id):" in description
     expect_tool = next(tool for tool in request["tools"]
                        if tool["function"]["name"] == "expect")
@@ -204,7 +206,7 @@ async def test_layered_prompt_structure(aconn):
 async def test_recent_shows_only_conversational_events(aconn):
     """<recent> carries percepts, act.out, and fired expectations, never bookkeeping."""
     fake = FakeLLM()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
 
     await append_event(aconn, ts=START, kind="percept", who="person:owner", place=PLACE,
                        body="telegram", payload={"description": "halo pagi"})
@@ -237,7 +239,7 @@ async def test_recent_shows_only_conversational_events(aconn):
 
 async def test_say_is_recorded_before_the_body_acts(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "halo juga"}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody(aconn)
     kernel.register_adapter(body)
 
@@ -262,7 +264,7 @@ async def test_say_is_recorded_before_the_body_acts(aconn):
 
 async def test_react_is_recorded_before_the_body_acts(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.react", "arguments": {"emoji": "👍"}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody(aconn)
     kernel.register_adapter(body)
 
@@ -279,10 +281,10 @@ async def test_react_is_recorded_before_the_body_acts(aconn):
     ]
 
 
-async def test_an_organ_result_is_recorded_as_act_result(aconn):
+async def test_a_tool_result_is_recorded_as_act_result(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.say",
                               "arguments": {"text": "done"}})], []])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_adapter(ResultBody())
 
     await _feed(kernel, _msg("halo"))
@@ -300,7 +302,7 @@ async def test_an_act_result_wakes_the_pfc_as_a_continued_goal(aconn):
                               "arguments": {"query": "catatan"}})],
                     [("think", {"thought": "the result arrived", "motivation": 2,
                                "confidence": 0.5})], []])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_adapter(ResultBody())
 
     await _feed(kernel, _msg("halo"))
@@ -316,7 +318,7 @@ async def test_an_act_result_is_routed_to_its_task_thread(aconn):
                               "arguments": {"query": "catatan"}})],
                     [("think", {"thought": "step done", "motivation": 1,
                                "confidence": 0.5})], []])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_adapter(ResultBody())
     seed = await append_event(aconn, ts=START, kind="task.opened",
                               place="space:task:5", payload={"parent": PLACE})
@@ -332,7 +334,7 @@ async def test_an_act_result_is_routed_to_its_task_thread(aconn):
 
 async def test_a_wake_without_act_is_recorded_as_silent(aconn):
     fake = FakeLLM([[]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
     kernel.register_adapter(body)
 
@@ -346,14 +348,14 @@ async def test_a_wake_without_act_is_recorded_as_silent(aconn):
 
 async def test_reasoning_effort_is_sent_only_when_it_is_set(aconn):
     asked = FakeLLM()
-    kernel = Kernel(aconn, clock=FakeClock(START), settings=SETTINGS, pfc=Reasoning(
+    kernel = build(aconn, clock=FakeClock(START), settings=SETTINGS, pfc=Reasoning(
         "https://llm.test/v1", "test-key", "fake-model", effort="high", settings=SETTINGS,
         transport=httpx.MockTransport(asked.handler)))
     await _feed(kernel, _msg("halo"))
     assert asked.requests[0]["reasoning_effort"] == "high"
 
     plain = FakeLLM()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(plain), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(plain), settings=SETTINGS)
     await _feed(kernel, _msg("halo lagi", message_id=2))
     assert "reasoning_effort" not in plain.requests[0]
 
@@ -362,7 +364,7 @@ async def test_a_model_that_only_thinks_stops_after_max_thought_rounds(aconn):
     """D51: every round is recorded, and a model that never acts ends at the prior's limit."""
     fake = FakeLLM([[("think", {"thought": "nothing to add", "motivation": 2,
                                "confidence": 0.4})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake),
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake),
                     settings=settings(constants={"max_thought_rounds": 2}))
     kernel.register_adapter(RecordingBody())
 
@@ -387,7 +389,7 @@ async def test_a_thought_then_an_act_is_one_wake(aconn):
                                "confidence": 0.8})],
                     [("act", {"capability": "telegram.say",
                               "arguments": {"text": "Budi mengirim sketsa_logo.png"}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
     kernel.register_adapter(body)
 
@@ -408,7 +410,7 @@ async def test_an_expect_without_a_cue_is_corrected_in_the_same_wake(aconn):
                                  "cue_time": {"at": "2026-11-10T16:00:00+00:00"},
                                  "expect": {"none": True}, "policy": {"once": True}})],
                     []])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_adapter(RecordingBody())
 
     await _feed(kernel, _msg("tanya lagi kalau aku belum jawab dalam 1 jam"))
@@ -431,7 +433,7 @@ async def test_a_second_message_to_the_same_place_in_one_turn_is_refused(aconn):
         [("act", {"capability": "telegram.say", "arguments": {"text": "halo lagi"}})],
         [],
     ])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
     kernel.register_adapter(body)
 
@@ -456,7 +458,7 @@ async def test_a_refusal_returns_even_when_the_same_round_acted(aconn):
                                  "cue_event": {"kind": "percept", "text_like": "server down"},
                                  "expect": {"none": True}, "policy": {"once": True}})],
                     []])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = RecordingBody()
     kernel.register_adapter(body)
 
@@ -476,7 +478,7 @@ async def test_a_refused_round_never_runs_past_max_thought_rounds(aconn):
     """D51: a refusal buys one result round; the wake still ends at the prior's limit."""
     fake = FakeLLM([[("expect", {"about": "tanpa cue", "expect": {"none": True}})],
                     [("expect", {"about": "tanpa cue", "expect": {"none": True}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake),
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake),
                     settings=settings(constants={"max_thought_rounds": 2}))
     kernel.register_adapter(RecordingBody())
 
@@ -521,7 +523,7 @@ async def test_a_chain_in_a_place_shows_every_step_and_its_latest_result(aconn):
 
 async def test_unaddressed_message_does_not_wake_the_pfc(aconn):
     fake = FakeLLM()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
 
     await _feed(kernel, _msg("group chatter", addressed=False))
 
@@ -532,7 +534,7 @@ async def test_unaddressed_message_does_not_wake_the_pfc(aconn):
 async def test_an_unknown_tool_is_refused_and_the_loop_lives(aconn):
     """12.13: a name outside the five tools is a refusal line, not a thrown turn."""
     fake = FakeLLM([[("shout", {"text": "hi"})], [("act", {"capability": "telegram.say", "arguments": {"text": "still here"}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_adapter(RecordingBody())
 
     await _feed(kernel, _msg("first"))
@@ -546,7 +548,7 @@ async def test_an_unknown_tool_is_refused_and_the_loop_lives(aconn):
 
 async def test_llm_failure_becomes_an_error_event_and_the_loop_lives(aconn):
     fake = FakeLLM(status=500)
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
 
     await _feed(kernel, _msg("halo"))
 
@@ -567,13 +569,13 @@ async def test_mvp_a_restart_keeps_the_conversation_context(aconn):
     clock = FakeClock(START)
 
     first_fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "kita bahas kopi ya"}})]])
-    first = Kernel(aconn, clock=clock, pfc=_pfc(first_fake), settings=SETTINGS)
+    first = build(aconn, clock=clock, pfc=_pfc(first_fake), settings=SETTINGS)
     first.register_adapter(RecordingBody())
     await _feed(first, _msg("besok kita bahas apa?"))
 
     # Restart: a new Kernel and a new Reasoning on the same database.
     second_fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "lanjut soal kopi"}})]])
-    second = Kernel(aconn, clock=clock, pfc=_pfc(second_fake), settings=SETTINGS)
+    second = build(aconn, clock=clock, pfc=_pfc(second_fake), settings=SETTINGS)
     body = RecordingBody(aconn)
     second.register_adapter(body)
     await _feed(second, _msg("lanjut", message_id=2))
@@ -617,7 +619,7 @@ async def test_dm_gets_a_reply_through_the_telegram_body(aconn):
     body = TelegramBody("token", transport=httpx.MockTransport(handler))
     fake = FakeLLM([[("act", {"capability": "telegram.say",
                               "arguments": {"text": "halo!"}})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_adapter(body)
 
     stop = asyncio.Event()
@@ -642,7 +644,7 @@ async def test_dm_gets_a_reply_through_the_telegram_body(aconn):
 async def test_recent_includes_other_places_prefixed(aconn):
     """<recent> lists this place first, then other places' lines the audience allows."""
     fake = FakeLLM()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
 
     await append_event(aconn, ts=START, kind="percept", who="person:owner", place=PLACE,
                        body="telegram", payload={"description": "di sini"})
@@ -670,7 +672,7 @@ async def test_recent_includes_other_places_prefixed(aconn):
 
 async def test_recent_is_nothing_yet_when_both_parts_are_empty(aconn):
     fake = FakeLLM()
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
 
     await _feed(kernel, _msg("halo pertama"))
 
@@ -771,10 +773,11 @@ async def test_recall_lists_the_month_after_vectors_faded_and_sleep_failed(aconn
     second = await append_event(aconn, ts=october + timedelta(days=19), kind="percept",
                                 who="person:owner", place=PLACE,
                                 payload={"description": "Harga biji kopi naik dua belas persen."})
-    organ = SelfTool(aconn, FakeClock(START))
+    tool = SelfTool(aconn, FakeClock(START), visible=privacy.visible,
+                               memory_visible=privacy.memory_visible)
     args = {"from": "2026-10-01T00:00:00+00:00", "to": "2026-11-01T00:00:00+00:00"}
 
-    result = await organ.act(Action(kind="recall", place=PLACE, payload=dict(args)))
+    result = await tool.act(Action(kind="recall", place=PLACE, payload=dict(args)))
 
     assert result["searched"]["from"] == args["from"]
     assert result["count"] == 2
@@ -785,7 +788,7 @@ async def test_recall_lists_the_month_after_vectors_faded_and_sleep_failed(aconn
         "INSERT INTO memories (text, place, derived_from, created_at, embedding) "
         "VALUES (%s, %s, %s, %s, NULL)",
         ("Episod Oktober: kafe dan harga kopi.", PLACE, [first.id, second.id], START))
-    result = await organ.act(Action(kind="recall", place=PLACE, payload=dict(args)))
+    result = await tool.act(Action(kind="recall", place=PLACE, payload=dict(args)))
 
     memory = next(item for item in result["found"] if item["kind"] == "memory")
     assert "Episod Oktober" in memory["text"]
@@ -800,22 +803,23 @@ async def test_recall_obeys_absolute_line_two(aconn):
                        payload={"description": "rahasia fulan tentang kafe"})
     await append_event(aconn, ts=START, kind="percept", who="person:charlie", place=group,
                        payload={"description": "halo semua"})
-    organ = SelfTool(aconn, FakeClock(START))
+    tool = SelfTool(aconn, FakeClock(START), visible=privacy.visible,
+                               memory_visible=privacy.memory_visible)
 
-    hidden = await organ.act(Action(kind="recall", place=group,
+    hidden = await tool.act(Action(kind="recall", place=group,
                                     payload={"query": "rahasia fulan"}))
     assert hidden["found"] == []
 
     owner = "space:tg:1001"
     await append_event(aconn, ts=START, kind="percept", who="person:owner", place=owner,
                        payload={"description": "halo"})
-    allowed = await organ.act(Action(kind="recall", place=owner,
+    allowed = await tool.act(Action(kind="recall", place=owner,
                                      payload={"query": "rahasia fulan"}))
     assert "rahasia fulan" in json.dumps(allowed["found"])
 
 
 async def test_forty_unread_messages_are_appraised_once(aconn):
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM()), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM()), settings=SETTINGS)
     messages = [{"description": f"pesan {n}", "addressed": False} for n in range(40)]
     event = Event(id=None, ts=START, kind="percept", who="person:fulan", place=PLACE,
                   body="telegram", payload={
@@ -864,7 +868,7 @@ async def test_a_resolve_with_a_text_id_is_refused_and_corrected_in_the_same_wak
     fake = FakeLLM([[("resolve", {"id": "dokumen sudah selesai", "status": "satisfied"})],
                     [("resolve", {"id": exp_id, "status": "satisfied"})],
                     []])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_adapter(RecordingBody())
 
     await _feed(kernel, _msg("dokumennya sudah selesai"))
@@ -884,7 +888,7 @@ async def test_an_act_with_a_mistyped_argument_is_refused_before_it_runs(aconn):
                               "arguments": {"event_id": "yang tadi"}})],
                     [("act", {"capability": "self.recall", "arguments": {"query": "kopi"}})],
                     []])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_adapter(RecordingBody())
 
     await _feed(kernel, _msg("apa yang tadi kita bicarakan soal kopi?"))
@@ -899,14 +903,15 @@ async def test_an_act_with_a_mistyped_argument_is_refused_before_it_runs(aconn):
 
 async def test_dispatch_refuses_a_mistyped_argument_without_raising(aconn):
     """12.13: a caller that bypasses the door still gets a refusal, not an exception."""
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM()), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM()), settings=SETTINGS)
     kernel.register_adapter(RecordingBody())
     stored = await append_event(aconn, ts=START, kind="percept", who="person:owner",
                                 place=PLACE, body="telegram",
                                 payload={"description": "halo", "place_kind": "direct"})
 
-    assert await kernel._apply(stored, ToolCall("act", {
-        "capability": "self.recall", "arguments": {"event_id": "x"}})) is True
+    outcome = await kernel._apply(stored, ToolCall("act", {
+        "capability": "self.recall", "arguments": {"event_id": "x"}}))
+    assert outcome.acted is True
 
     kinds = await _kinds(aconn)
     assert "error" not in kinds
@@ -951,7 +956,7 @@ async def test_a_transport_failure_is_retried_once_then_answered(aconn):
         return _reply([("act", {"capability": "telegram.say",
                                 "arguments": {"text": "halo"}})])
 
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc_with(handler), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc_with(handler), settings=SETTINGS)
     kernel.register_adapter(RecordingBody())
 
     await _feed(kernel, _msg("halo"))
@@ -966,7 +971,7 @@ async def test_a_second_transport_failure_names_the_exception(aconn):
     def handler(request):
         raise httpx.ConnectError("", request=request)   # empty text, as the live session saw
 
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc_with(handler), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc_with(handler), settings=SETTINGS)
     kernel.register_adapter(RecordingBody())
 
     await _feed(kernel, _msg("halo"))
@@ -980,7 +985,7 @@ async def test_a_status_failure_names_the_code(aconn):
     def handler(request):
         return httpx.Response(503, json={"error": {"message": "down"}})
 
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc_with(handler), settings=SETTINGS)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc_with(handler), settings=SETTINGS)
 
     await _feed(kernel, _msg("halo"))
 

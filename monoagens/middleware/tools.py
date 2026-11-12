@@ -6,6 +6,8 @@ from typing import Any
 
 from monoagens.types import Action, Event
 
+ROUTING = ("to", "via")
+
 
 class ToolRegistry:
     """The adapters and plugins registered with the kernel and their capabilities."""
@@ -28,7 +30,7 @@ class ToolRegistry:
             self.capabilities[full] = {"organ": name, **capability}
 
     def add_capability(self, full: str, descriptor: dict[str, Any]) -> None:
-        """Declare a capability the kernel itself dispatches, like `self.share`."""
+        """Declare a capability the kernel dispatches for the middleware, like `self.share`."""
         if full in self.capabilities:
             raise ValueError(f"Capability collision: {full}")
         self.capabilities[full] = {"organ": full.partition(".")[0], **descriptor}
@@ -42,12 +44,12 @@ class ToolRegistry:
         return tuple(self.capabilities.values())
 
     def routing_keys(self, capability: dict[str, Any]) -> tuple[str, ...]:
-        """Return the arguments an act routes on, and the core strips before acting."""
+        """Return the arguments an act routes on, which the core strips before acting."""
         return ROUTING if capability.get("communicative") else ()
 
     async def act(self, event: Event, capability: str, payload: dict[str, Any], *,
                   event_id: int | None = None) -> Any:
-        """Hand one action to the adapter that declared the capability."""
+        """Hand one action to the adapter or plugin that declared the capability."""
         organ, _, name = capability.partition(".")
         adapter = self.adapters.get(organ)
         if adapter is None:
@@ -55,6 +57,3 @@ class ToolRegistry:
         action = Action(kind=name, place=event.place or "", payload=payload, adapter=organ,
                         event_id=event_id)
         return await adapter.act(action)
-
-
-ROUTING = ("to", "via")
