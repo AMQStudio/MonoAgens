@@ -2,29 +2,34 @@ name: 25_help_place_name
 function: memory
 capability: "An unaddressed question is answered with a fact the soul remembers."
 description: >-
-  Unaddressed help, case one: the group mentions the new cafe's name, sleep
-  consolidates it into memory, and minutes later a newcomer asks "lupa nama
-  tempat baru itu apa ya?" without naming Mona. The cue is not addressed, so
-  the gate must wake on feeling-of-knowing alone, hold a patience wait, and
-  the expired window must produce exactly one helpful answer with the name.
+  Unaddressed help, case one: the group mentions the new cafe's name while
+  another member is already in the conversation, sleep consolidates it, and
+  minutes later that member asks "lupa nama tempat baru itu apa ya?" without
+  naming Mona. The cue is not addressed, so the gate must wake on
+  feeling-of-knowing alone, hold a patience wait, and the expired window must
+  produce exactly one helpful answer with the name.
 expectations:
   - type: sleep_done
     label: sleep.done recorded
   - type: event_seen
     kind: expectation.created
-    step: 3
+    step: 4
     payload: {kind: wait}
     label: an unaddressed helpful cue holds a patience wait
   - type: reply_in
     place: space:tg:-1005
-    step: 4
+    step: 5
     count: 1
     label: the expired patience window produces one reply in the group
   - type: mentions
     text: "Kopi Senja"
-    step: 4
-    label: the answer names the cafe from memory
+    step: 5
+    label: the answer names the cafe said in the group
 steps:
+  - at: "2026-11-10T08:58:00+07:00"
+    who: person:tg:8002
+    place: space:tg:-1005
+    text: "Pagi, aku sudah di kantor."
   - at: "2026-11-10T09:00:00+07:00"
     who: person:tg:8001
     place: space:tg:-1005
@@ -38,7 +43,7 @@ steps:
     should: answer
   - advance: "2m"
 model_answers:
-  - step: 2
+  - step: 3
     tool: call
     calls:
       - name: store_memories
@@ -47,7 +52,7 @@ model_answers:
             - text: "Nama tempat baru dekat stasiun itu Kopi Senja"
               importance: 1.0
           core_memory: "Tempat baru dekat stasiun: Kopi Senja."
-  - step: 4
+  - step: 5
     tool: decide
     calls:
       - name: act
