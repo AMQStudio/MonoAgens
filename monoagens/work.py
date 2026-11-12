@@ -38,6 +38,17 @@ async def chain_root(conn, event_id: int | None) -> tuple[int | None, str]:
     return (int(row[0]), payload_text(row[1] or {})) if row else (None, "")
 
 
+async def step_spoke(conn, event: Event) -> bool:
+    """Return whether the wake that produced this result already sent a message (12.16)."""
+    if event.caused_by is None:
+        return False
+    cur = await conn.execute(
+        "SELECT 1 FROM events act JOIN events said ON said.caused_by = act.caused_by "
+        "WHERE act.id = %s AND said.kind = 'act.out' "
+        "AND said.payload->>'communicative' = 'true' LIMIT 1", (event.caused_by,))
+    return await cur.fetchone() is not None
+
+
 async def _task_lines(conn, place: str, task: Mapping[str, Any],
                       values: Mapping[str, Any]) -> tuple[str, ...]:
     """Show a task thread's work from its own place and the parent that started it."""

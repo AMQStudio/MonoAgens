@@ -280,16 +280,14 @@ async def test_react_is_recorded_before_the_body_acts(aconn):
 
 async def test_an_organ_result_is_recorded_as_act_result(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.say",
-                              "arguments": {"text": "done"}})],
-                    [("think", {"thought": "the result arrived", "motivation": 2,
-                               "confidence": 0.5})], []])
+                              "arguments": {"text": "done"}})], []])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_body(ResultBody())
 
     await _feed(kernel, _msg("halo"))
 
+    # 12.16: the message ended the step, so its result is recorded but wakes nothing.
     assert await _kinds(aconn) == ["percept", "model.call", "act.out", "act.result",
-                                   "model.call", "model.call", "decision.note",
                                    "decision.silent"]
     cur = await aconn.execute("SELECT payload FROM events WHERE kind='act.result'")
     assert (await cur.fetchone())[0] == {"capability": "telegram.say",
@@ -297,8 +295,8 @@ async def test_an_organ_result_is_recorded_as_act_result(aconn):
 
 
 async def test_an_act_result_wakes_the_pfc_as_a_continued_goal(aconn):
-    fake = FakeLLM([[("act", {"capability": "telegram.say",
-                              "arguments": {"text": "done"}})],
+    fake = FakeLLM([[("act", {"capability": "self.recall",
+                              "arguments": {"query": "catatan"}})],
                     [("think", {"thought": "the result arrived", "motivation": 2,
                                "confidence": 0.5})], []])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
@@ -313,8 +311,8 @@ async def test_an_act_result_wakes_the_pfc_as_a_continued_goal(aconn):
 
 
 async def test_an_act_result_is_routed_to_its_task_thread(aconn):
-    fake = FakeLLM([[("act", {"capability": "telegram.say",
-                              "arguments": {"text": "done"}})],
+    fake = FakeLLM([[("act", {"capability": "self.recall",
+                              "arguments": {"query": "catatan"}})],
                     [("think", {"thought": "step done", "motivation": 1,
                                "confidence": 0.5})], []])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)

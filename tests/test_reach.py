@@ -392,8 +392,8 @@ async def test_a_paraphrase_of_a_private_line_is_not_on_the_other_places_desk(ac
             "text": "Fulan bilang: aku di-PHK", "to": "person:budi", "via": "whatsapp"}}))
     await kernel.run_until_idle()
 
-    # The dict result of `say` continues the goal, so Budi's desk wakes once more there.
-    assert [context.place for context in pfc.contexts] == [BUDI, BUDI]
+    # 12.16: the message ended the step, so its result does not wake Budi's desk again.
+    assert [context.place for context in pfc.contexts] == [BUDI]
     for context in pfc.contexts:
         prompt = "\n".join(message["content"] for message in
                            PFC("http://unused", "", "fake", settings=SETTINGS)

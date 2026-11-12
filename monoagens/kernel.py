@@ -7,7 +7,8 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any
 
-from monoagens import budget, expect, hooks, identity, jobs, memory, organs, pairing, reach, threads
+from monoagens import (budget, expect, hooks, identity, jobs, memory, organs, pairing, reach,
+                      threads, work)
 from monoagens.clock import Clock
 from monoagens.cognition import Appraisal, appraise, validate_signals
 from monoagens.prior import load_settings, signal_weights
@@ -144,6 +145,10 @@ class Kernel:
                 await self.jobs.start("sleep", "sleep", event,
                                       partial(self.jobs.sleep, now))
         if fired or self.pfc is None or event.kind not in ("percept", "act.result"):
+            return
+        if event.kind == "act.result" and await work.step_spoke(self.conn, event):
+            await self._emit(event, "decision.silent",
+                             {"reason": "a message already ended this step"})
             return
         appraisal = await self._appraise(event)
         if event.kind == "act.result":
