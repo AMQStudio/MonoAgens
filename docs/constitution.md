@@ -36,6 +36,9 @@ formula. A new primitive must replace one or be refused.
   labels are attached by the middleware and carried without being read, numbers feed the gate.
   It does not know what a person, an owner, a group or a role is. The soul's own identity (birth
   certificate and prior) is the one thing it holds as its own.
+  Like a computer's kernel it restricts nothing itself: its capabilities are open — recall the
+  whole log, act in any place and any adapter, share data across threads — and every one of them
+  leaves only through the three hooks, where the middleware keeps it from running wild.
 - **Middleware** — the regulator, like drivers: it decides, it is the only path between the core
   and everything else, and it may limit or add what reaches the core. People, the owner,
   privacy, sharing, routes, commands, the tool registry, budget limits and quiet hours live
