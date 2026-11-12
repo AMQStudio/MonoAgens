@@ -42,7 +42,7 @@ TOOLS: list[dict[str, Any]] = [
     _tool("expect", "Hold what must remind you later: a promise, a watch, or a wait; "
                     "its cue wakes you.",
           {"about": _text("One sentence: what is expected."),
-           "kind": {"type": "string", "enum": ["promise", "wait", "predict", "guard"],
+           "kind": {"type": "string", "enum": list(expect.KINDS),
                     "description": "promise, patience, prediction or guard (default promise)."},
            "cue_time": {"type": "object",
                         "description": '{"at": ISO}, {"every": "2d"} or {"daily": "07:00"}.'},

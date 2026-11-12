@@ -13,6 +13,8 @@ from monoagens.prior import constants
 from monoagens.store import (append_event, fire_expectation, insert_expectation,
                              read_expectations, read_state, resolve_expectation)
 
+KINDS = ("promise", "wait", "predict", "guard")
+
 
 def tz(settings):
     """Return the configured zoneinfo from config.yaml."""
@@ -56,7 +58,7 @@ def validate(data, *, now, settings):
     if not about or not isinstance(raw, dict) or not raw:
         raise ValueError("expect needs about and a condition")
     kind = str(data.get("kind") or "promise")
-    if kind not in ("promise", "wait", "predict", "guard"):
+    if kind not in KINDS:
         raise ValueError(f"unknown expectation kind: {kind!r}")
     weight = float(data.get("weight", 0.5))
     policy = data.get("policy") or {"once": True}
