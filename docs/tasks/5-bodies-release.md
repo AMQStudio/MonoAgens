@@ -12,6 +12,11 @@ evaluation, and stable contracts for other developers.
 Read first: [bodies.md](../bodies.md), [middleware.md](../middleware.md) §7 (identity), [core.md](../core.md) §4, §8
 May touch: `monoagens/bodies/`, `monoagens/middleware.py` (identity part), provider adapters, `tests/`, `scenarios/`
 
+V1 (branch `archived`) already has working WhatsApp (media, history sync, identity), Discord,
+Slack and provider (Anthropic, Gemini, OpenAI, speech) code under `monoagens/gateways/` and
+`monoagens/providers/`. Port it to the adapter contract of Task 3 instead of starting over; leave
+its per-gateway policy and roles out, since policy lives in the middleware.
+
 Linking comes first: it is what lets a person's private context follow them (D45), so a wrong
 link is a leak.
 
