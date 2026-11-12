@@ -251,6 +251,14 @@ async def test_fired_expectation_is_a_wake_reflex():
         "wake", "pfc_expectation", 1.0)
 
 
+async def test_reminded_expectation_is_a_wake_reflex_that_says_reminded():
+    event = Event(None, START, "expectation.reminded", who=WHO, place=PLACE,
+                  payload={"expectation_id": 1})
+    appraisal = await appraise(event, settings=SETTINGS)
+    assert (appraisal.decision, appraisal.reflex, appraisal.reason, appraisal.p) == (
+        "wake", "pfc_expectation", "reminded", 1.0)
+
+
 async def test_an_ordinary_message_is_silent_and_reproducible():
     event = Event(42, START, "percept", who=WHO, place=PLACE, payload={"text": "obrolan"})
     first = await appraise(event, settings=SETTINGS)

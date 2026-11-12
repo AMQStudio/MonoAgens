@@ -53,10 +53,15 @@ async def reminded(conn, row, event, *, pfc, embedder, settings):
 
 
 async def reminder(conn, row, event, now):
-    """Record the reminder wake: the line and the Expectation are its trigger."""
+    """Record the reminder wake: the line, its speaker and the Expectation are its trigger.
+
+    It is not a fulfilment: the Expectation keeps its status and its fire count.
+    """
     payload = {"expectation_id": row["id"], "about": row["about"],
-               "text": payload_text(event.payload), "reminder": True}
-    fired = await append_event(conn, ts=now, kind="expectation.fired", who=row["who"],
-                               place=row["place"], body=row["source_body"],
-                               caused_by=row["source_event"], payload=payload)
-    return {**row, "fired_event": fired.id, "trigger": fired}
+               "condition": row["condition_text"] or text(row["condition"]) or "",
+               "text": payload_text(event.payload), "line_place": event.place,
+               "reminder": True}
+    reminded = await append_event(conn, ts=now, kind="expectation.reminded", who=event.who,
+                                  place=event.place, body=event.body, caused_by=event.id,
+                                  payload=payload)
+    return {**row, "trigger": reminded}

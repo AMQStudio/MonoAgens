@@ -128,7 +128,7 @@ async def test_a_line_below_lo_wakes_no_one(aconn):
     assert await _status(aconn, exp_id) == "active"
 
 
-async def test_a_line_at_or_above_lo_wakes_the_pfc_once_with_the_line(aconn):
+async def test_a_line_at_or_above_lo_wakes_the_pfc_once_with_the_reminder(aconn):
     exp_id = await _promise(aconn, text="server down")
     harness = Harness(aconn, pfc=FakeLLM([[("act", {
         "capability": "telegram.say", "arguments": {"text": "Server down, owner."}})]]))
@@ -137,13 +137,27 @@ async def test_a_line_at_or_above_lo_wakes_the_pfc_once_with_the_line(aconn):
     await harness.feed(_percept(line))
 
     assert len(harness.fake.requests) == 1  # exactly one wake
-    assert line in harness.fake.requests[0]["messages"][2]["content"]
-    reminders = await _kinds(aconn, "expectation.fired")
+    prompt = harness.fake.requests[0]["messages"][2]["content"]
+    assert line in prompt
+    assert f"{OTHER}: {line}" in prompt  # the line keeps its own speaker
+    assert "this line may relate to your expectation: kabari kalau server down;" in prompt
+    assert "condition: server down; does this line fulfil it?" in prompt
+    assert "reminded: kabari kalau server down" in prompt
+    assert "fired expectation" not in prompt
+    reminders = await _kinds(aconn, "expectation.reminded")
     assert len(reminders) == 1
     assert reminders[0]["reminder"] is True
     assert reminders[0]["expectation_id"] == exp_id
     assert reminders[0]["text"] == line
-    assert await _status(aconn, exp_id) == "active"  # the PFC may still let it be
+    assert reminders[0]["condition"] == "server down"
+    assert await _kinds(aconn, "expectation.fired") == []
+    line_id = (await (await aconn.execute(
+        "SELECT id FROM events WHERE kind = 'percept' ORDER BY id DESC LIMIT 1")).fetchone())[0]
+    cur = await aconn.execute("SELECT who, place, caused_by FROM events "
+                              "WHERE kind = 'expectation.reminded'")
+    assert await cur.fetchone() == (OTHER, GROUP, line_id)
+    rows = await read_expectations(aconn, "ex.id = %s", (exp_id,))
+    assert (rows[0]["status"], rows[0]["fire_count"]) == ("active", 0)  # still a promise
     assert [action.payload["text"] for action in harness.body.actions] == ["Server down, owner."]
 
 

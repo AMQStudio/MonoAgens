@@ -8,7 +8,7 @@ description: >-
   promise_debt, budget_used) are stored in every decision event. Two group
   lines name the document under review before the request, so the request about
   "dokumennya" has a referent. An addressed message always wakes the PFC, an
-  active promise fired by an unaddressed message wakes it too, and once Mona
+  active promise reminded by an unaddressed message wakes it too, and once Mona
   knows the answer to a group question the gate opens and the kernel's wait
   answers it once, after the patience window.
 expectations:
@@ -39,15 +39,20 @@ expectations:
     count: 8
     label: the gate stores the budget used in the decision event
   - type: event_seen
-    kind: expectation.fired
+    kind: expectation.reminded
     step: 12
     count: 1
-    label: an active promise fires on an unaddressed message
+    label: an active promise reminds the soul on an unaddressed message
   - type: reply_in
     place: space:tg:-1004
     step: 12
     count: 1
-    label: the fired promise wakes the PFC
+    label: the reminder wakes the PFC
+  - type: event_seen
+    kind: expectation.resolved
+    step: 12
+    count: 1
+    label: the statement fulfils the promise once
   - type: sleep_done
     label: the answer to the group's question is stored
   - type: event_seen
@@ -151,6 +156,11 @@ model_answers:
           intent: beri tahu bahwa dokumennya sudah selesai
           weight: 0.7
           policy: {once: true}
+  - step: 10
+    tool: decide
+    calls:
+      - name: think
+        arguments: {thought: "Masih di review; ini belum selesai, jadi janjinya tetap menunggu.", motivation: 1, confidence: 0.7}
   - step: 12
     tool: decide
     calls:

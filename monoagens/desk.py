@@ -144,6 +144,8 @@ def _recent_parts(soul: Any, event: Event) -> tuple[str, Any]:
 def _event_text(event: Event | None) -> str:
     if event is None:
         return "(no trigger event)"
+    if event.kind == "expectation.reminded":
+        return _reminder_text(event)
     text = event.payload.get("description") or event.payload.get("text")
     who = str(event.who or "?")
     line = f"{who}: {text}" if text else f"[{event.kind}]"
@@ -152,6 +154,18 @@ def _event_text(event: Event | None) -> str:
         each = [notes] if isinstance(notes, str) else notes
         line += "\n" + "\n".join(f"note: {note}" for note in each)
     return line
+
+
+def _reminder_text(event: Event) -> str:
+    """Render a reminder as the line with its speaker and place, then its question."""
+    payload = event.payload
+    place = payload.get("line_place") or event.place
+    where = f"[{place}] " if place else ""
+    said = f"{where}{event.who or '?'}: {payload.get('text')}" if payload.get("text") else ""
+    question = (f"this line may relate to your expectation: {payload.get('about') or '?'}; "
+                f"condition: {payload.get('condition') or '?'}; "
+                "does this line fulfil it?")
+    return f"{said}\n{question}" if said else question
 
 
 def _listed(items: Sequence[str]) -> str:

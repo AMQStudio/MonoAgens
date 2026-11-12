@@ -38,6 +38,8 @@ async def reflex(event: Event, conn: Any = None) -> tuple[str, str] | None:
     """Return (reason, reflex) when a commitment bypasses the draw (docs/core.md §6)."""
     if event.kind == "expectation.fired":
         return "fired expectation", "pfc_expectation"
+    if event.kind == "expectation.reminded":
+        return "reminded", "pfc_expectation"
     if _addressed(event):
         return "addressed message", "addressed"
     if event.kind == "act.result":
@@ -67,8 +69,9 @@ async def appraise(event: Event, *, conn: Any = None, situation: Situation | Non
     values, params = constants(settings), gate.gate_params(settings)
     now = now or event.ts
     u = seeded_rng(values["seed"], event.id).random()
-    if event.kind == "expectation.fired":
-        return _reflexive("wake", "fired expectation", "pfc_expectation", u, params.tau)
+    if event.kind in ("expectation.fired", "expectation.reminded"):
+        reason = "reminded" if event.kind == "expectation.reminded" else "fired expectation"
+        return _reflexive("wake", reason, "pfc_expectation", u, params.tau)
     signals = {name: 0.0 for name in SIGNALS}
     if situation is None and conn is not None:
         situation = await assemble_situation(conn, event, now=now, embedder=embedder,

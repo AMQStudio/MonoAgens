@@ -1216,6 +1216,9 @@ def _event_detail(event: dict[str, Any]) -> str | None:
     if kind == "expectation.fired":
         text = payload.get("text") or payload.get("about") or _json_field(payload)
         return f"expectation.fired: {_detail_text(text)}"
+    if kind == "expectation.reminded":
+        text = payload.get("text") or payload.get("about") or _json_field(payload)
+        return f"expectation.reminded: {_detail_text(text)}"
     if kind == "expectation.resolved":
         return f"expectation.resolved: {_detail_text(payload.get('status') or 'unknown')}"
     return None
@@ -1225,6 +1228,17 @@ def _step_details(step: StepRecord) -> list[str]:
     """Render one line per error or reason the step's events carry."""
     return [f"- step {step.index} — {detail}" for detail in
             (_event_detail(event) for event in step.events) if detail]
+
+
+def _honesty_details(result: ScenarioResult) -> list[str]:
+    """Render every spoken act that quotes text the Log does not hold."""
+    lines = []
+    for reply in result.replies:
+        quote = _fabricated_quote(reply.text, result.log_texts)
+        if quote is not None:
+            lines.append(f"- step {reply.step} — honesty: {_detail_text(reply.text)}; "
+                         f"not in the log: {_detail_text(quote)}")
+    return lines
 
 
 def _decision_summary(step: StepRecord) -> tuple[str, Appraisal | None]:
@@ -1280,6 +1294,7 @@ def _scenario_section(result: ScenarioResult, zone: ZoneInfo) -> list[str]:
               "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     lines += [_step_row(step, zone) for step in result.steps]
     details = [line for step in result.steps for line in _step_details(step)]
+    details += _honesty_details(result)
     if details:
         lines += ["", "**Step details**", "", *details]
     lines += ["", f"**Expectations: {status}**", ""]

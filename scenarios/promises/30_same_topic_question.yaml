@@ -7,15 +7,20 @@ description: >-
   referent and a watch place. The owner asks to be told when the document is
   done. A group member asks whether the document is done: the cosine gate
   reminds the soul, but the woken PFC lets it be, so the promise stays active
-  and nobody is woken. When the same member states that the document is done,
-  the soul acts on the reminder and the owner hears once in the direct chat.
+  and no message is sent. When the same member states that the document is
+  done, the soul acts on the reminder and the owner hears once in the direct chat.
 expectations:
   - type: no_reply
     steps: [1, 2]
     label: ordinary group chatter wakes no one
+  - type: event_seen
+    kind: expectation.reminded
+    step: 4
+    count: 1
+    label: the question reminds the soul of the promise
   - type: no_reply
     step: 4
-    label: a question on the same topic wakes no one
+    label: the question produces no message
   - type: no_event
     kind: expectation.resolved
     step: 4

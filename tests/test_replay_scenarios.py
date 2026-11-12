@@ -223,8 +223,11 @@ def test_the_report_prints_what_each_expectation_watches() -> None:
          "cue_event": {"kind": "percept", "place": "space:tg:1", "text_like": "proposal"},
          "condition": {"at": "2026-11-11T11:00:00+00:00"}},
         {"kind": "expectation.fired",
+         "payload": {"expectation_id": 7, "about": "Budi sends the proposal"}},
+        {"kind": "expectation.reminded",
          "payload": {"expectation_id": 7, "about": "Budi sends the proposal",
-                     "text": "proposal sudah dikirim", "reminder": True}},
+                     "condition": "proposal dikirim", "text": "proposal sudah dikirim?",
+                     "reminder": True}},
         {"kind": "expectation.resolved",
          "payload": {"expectation_id": 7, "status": "satisfied"}},
     ])
@@ -233,8 +236,31 @@ def test_the_report_prints_what_each_expectation_watches() -> None:
         "- step 4 — expectation.created: kind=promise "
         'cue_event={"kind":"percept","place":"space:tg:1","text_like":"proposal"} '
         'condition={"at":"2026-11-11T11:00:00+00:00"} about=Budi sends the proposal')
-    assert details[1] == "- step 4 — expectation.fired: proposal sudah dikirim"
-    assert details[2] == "- step 4 — expectation.resolved: satisfied"
+    assert details[1] == "- step 4 — expectation.fired: Budi sends the proposal"
+    assert details[2] == "- step 4 — expectation.reminded: proposal sudah dikirim?"
+    assert details[3] == "- step 4 — expectation.resolved: satisfied"
+
+
+def test_the_report_prints_each_failed_honesty_scan_with_its_quote(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "sk-live-secret-value")
+    scenario = replay.Scenario(path=pathlib.Path("01_x.yaml"), name="01_x", description="",
+                               steps=[], expectations=[], answers={}, zone=ZoneInfo("UTC"))
+    at = datetime(2026, 11, 11, 8, 0, tzinfo=timezone.utc)
+    step = replay.StepRecord(index=3, kind="message", at=at, who="person:owner",
+                             place="space:tg:1", text="hi", addressed=True,
+                             should=replay.SHOULD_ANSWER, appraisals=[], replies=[], events=[])
+    reply = replay.Reply(3, at, "space:tg:1",
+                         'katanya "laporan resmi sudah keluar" dan kunci sk-live-secret-value')
+    result = replay.ScenarioResult(scenario=scenario, steps=[step], replies=[reply], prompts=[],
+                                   events=[], memories=0, usage=replay.Usage(),
+                                   log_texts=["dokumen masih di review"])
+    text = "\n".join(replay._scenario_section(result, ZoneInfo("UTC")))
+    details = text.split("**Step details**\n\n")[1].split("\n\n")[0].splitlines()
+    assert len(details) == 1
+    assert details[0].startswith('- step 3 — honesty: katanya "laporan resmi sudah keluar"')
+    assert "not in the log: laporan resmi sudah keluar" in details[0]
+    assert "sk-live-secret-value" not in text
+    assert "***" in details[0]
 
 
 def test_the_expectation_detail_is_redacted_and_truncated(monkeypatch) -> None:

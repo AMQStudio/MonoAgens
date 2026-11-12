@@ -211,6 +211,7 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
     assert body.actions == [Action(kind="say", place=PLACE, payload={"text": "sudah jam 7"},
                                    body="telegram")]
     assert "expectation missed: remind the owner at 7" in _volatile(fake).split("<why_awake>")[1]
+    assert "<event>[expectation.fired]</event>" in _volatile(fake)
 
     cur = await aconn.execute("SELECT status, fire_count FROM expectations")
     assert await cur.fetchone() == ("satisfied", 1)

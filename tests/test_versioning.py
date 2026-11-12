@@ -15,7 +15,8 @@ PLACE = "space:stability"
 CORE_KINDS = (
     "percept", "command", "act.out", "act.result", "decision.silent", "decision.note",
     "decision.wake", "model.call", "budget.exhausted", "expectation.created",
-    "expectation.fired", "expectation.resolved", "job.started", "job.result",
+    "expectation.fired", "expectation.reminded", "expectation.resolved", "job.started",
+    "job.result",
     "classifier.verdict", "credence.updated", "disposition.updated", "share.granted",
     "task.opened", "task.closed", "guard.stopped", "forget.soft", "forget.hard",
     "fade.done", "sleep.done", "sleep.failed", "error",

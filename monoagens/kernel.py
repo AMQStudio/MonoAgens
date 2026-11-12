@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any
 
@@ -212,14 +212,23 @@ class Kernel:
             payload={"expectation_id": item["id"], "about": item["about"]})
         if self.pfc is None:
             return
+        reminded = trigger.kind == "expectation.reminded"
+        place = str(item.get("place") or trigger.place or "")
+        woken = replace(trigger, place=place) if reminded else trigger
         appraisal = await self._appraise(trigger)
         if appraisal.decision != "wake":
             await self._emit(trigger, f"decision.{appraisal.decision}", appraisal.payload())
         else:
-            reason = (f"expectation missed: {item['about']} "
-                      f"(intent: {item['intent'] or 'none'}); {appraisal.reason}")
-            await self._think(trigger, reason, trigger.place or "")
-        await expect.settle(self.conn, item["id"], now=now, settings=self.settings)
+            if reminded:
+                condition = str(item.get("condition_text") or "")
+                reason = (f"{appraisal.reason}: {item['about']} (condition: {condition}); "
+                          "does this line fulfil it?")
+            else:
+                reason = (f"expectation missed: {item['about']} "
+                          f"(intent: {item['intent'] or 'none'}); {appraisal.reason}")
+            await self._think(woken, reason, place)
+        if not reminded:
+            await expect.settle(self.conn, item["id"], now=now, settings=self.settings)
 
     async def recover(self) -> None:
         """Wake once more for expectations left fired across a restart."""

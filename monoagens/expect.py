@@ -158,13 +158,13 @@ async def is_met(conn, condition, now):
 
 
 async def due(conn, event, *, now, settings, pfc=None, embedder=None):
-    """Fire or resolve expectations that are due for this event, after the wake gate."""
+    """Fire, remind or resolve the expectations that are due for this event."""
     if event.kind == "tick":
         where = "ex.status = 'active' AND (ex.next_check_at <= %s OR ex.expires_at <= %s)"
         params = (now, now)
     else:
         where, params = "ex.status = 'active' AND ex.cue_event IS NOT NULL", ()
-    fired = []
+    wakes = []
     for row in await read_expectations(conn, where, params):
         if row["expires_at"] is not None and row["expires_at"] <= now:
             await resolve_expectation(conn, row, now, "dropped")  # stale
@@ -179,16 +179,16 @@ async def due(conn, event, *, now, settings, pfc=None, embedder=None):
         if condition.text(row["condition"]):
             if await condition.reminded(conn, row, event, pfc=pfc, embedder=embedder,
                                         settings=settings):
-                fired.append(await condition.reminder(conn, row, event, now))
+                wakes.append(await condition.reminder(conn, row, event, now))
             continue
         if not await is_met(conn, row["condition"], now):
-            fired.append(await fire_expectation(conn, row, now))
+            wakes.append(await fire_expectation(conn, row, now))
         elif (row["policy"] or {}).get("once") is True:
             await resolve_expectation(conn, row, now, "satisfied")
         else:
             query = "UPDATE expectations SET next_check_at = %s WHERE id = %s"
             await conn.execute(query, (next_check(row["cue_time"], now, tz(settings)), row["id"]))
-    return fired
+    return wakes
 
 
 async def settle(conn, exp_id, *, now, settings):
