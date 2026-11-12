@@ -107,7 +107,7 @@ May touch: `scripts/replay.py`, `scenarios/`, `tests/`
 - [x] 9.4 A short live session on the CLI body with the real model: a private fact said in one place is not used in another person's place; a promise is kept; the soul stays silent when not needed. Report what happened, not the secrets.
 
 ## Part 10 — Review follow-ups and the capability record (D48)
-Read first: [core.md](../core.md) §4 (speaking elsewhere), §8 (absolute line 2), §9.2 (`place_kind`), [project.md](../project.md) §4 (capability record), [AGENTS.md](../../AGENTS.md) (size budget)
+Read first: [core.md](../core.md) §4 (speaking elsewhere), §8 (absolute line 2), §9.2 (`place_kind`), [project.md](../project.md) §4 (capability record), [AGENTS.md](../../AGENTS.md) (size guide)
 May touch: `monoagens/` (all), `scripts/replay.py`, `scenarios/`, `tests/`, `prior/dispositions.yaml` (values only)
 
 Found in the architect's review of Parts 1–9.
