@@ -280,7 +280,8 @@ repeats are limited by `policy` and habituation (D40).
 **Free-text conditions** (D21, D29, D40). m = cosine(event vector, condition vector). Cosine only
 filters: m < `lo` → ignore; m ≥ `lo` → the Expectation is *reminded*: the PFC wakes once with
 the line and the Expectation as its trigger, and judges — act on it, resolve it, or let it be
-(D53). A person hears something, is reminded of a promise and thinks for a moment; there is no
+(D53). A reminder is shown as a reminder, never as a fulfilment: the line with its own speaker,
+the Expectation's condition, and the question whether this line fulfils it. A person hears something, is reminded of a promise and thinks for a moment; there is no
 separate judge. `lo` comes from the prior.
 **Deferred until real logs** (D53): a cheaper classifier call in place of the PFC wake, when logs
 show the cost matters; the "clearly yes" band (hi, opened only by the rule of three); learning
