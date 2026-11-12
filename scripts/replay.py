@@ -757,7 +757,26 @@ class ReplayRunner:
         cur = await self.conn.execute(
             "SELECT id, ts, kind, who, place, body, payload FROM events "
             "WHERE id > %s ORDER BY id", (after_id,))
-        return [_event_row(row) for row in await cur.fetchall()]
+        events = [_event_row(row) for row in await cur.fetchall()]
+        await self._attach_expectations(events)
+        return events
+
+    async def _attach_expectations(self, events: Sequence[dict[str, Any]]) -> None:
+        """Add the cue and condition behind every Expectation a created event names."""
+        ids = [int((event["payload"] or {}).get("expectation_id") or 0) for event in events
+               if event["kind"] == "expectation.created"]
+        ids = sorted({found for found in ids if found})
+        if not ids:
+            return
+        cur = await self.conn.execute(
+            "SELECT id, cue_event, condition FROM expectations WHERE id = ANY(%s)", (ids,))
+        rows = {int(row[0]): (row[1] or {}, row[2] or {}) for row in await cur.fetchall()}
+        for event in events:
+            if event["kind"] != "expectation.created":
+                continue
+            found = rows.get(int((event["payload"] or {}).get("expectation_id") or 0))
+            if found:
+                event["cue_event"], event["condition"] = found
 
     async def _memory_count(self) -> int:
         """Return how many memories the scenario's sleep produced."""
@@ -1141,6 +1160,7 @@ def _fmt_time(stamp: datetime, zone: ZoneInfo) -> str:
 
 
 DETAIL_LIMIT = 300
+EXPECTATION_LIMIT = 400
 SECRET_NAME_RE = re.compile(r"(_KEY|_TOKEN|_SECRET|_PASSWORD)$", re.IGNORECASE)
 SECRET_MIN_LENGTH = 8
 
@@ -1153,10 +1173,29 @@ def _redact(text: str) -> str:
     return text
 
 
-def _detail_text(value: Any) -> str:
+def _detail_text(value: Any, limit: int = DETAIL_LIMIT) -> str:
     """Flatten one payload field into one redacted, truncated report line."""
-    text = _redact(" ".join(str(value).split()))
-    return text if len(text) <= DETAIL_LIMIT else text[:DETAIL_LIMIT - 1] + "…"
+    return _clamp(_redact(" ".join(str(value).split())), limit)
+
+
+def _clamp(text: str, limit: int) -> str:
+    """Cut a report line at `limit` characters, marking the cut with an ellipsis."""
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def _json_field(value: Any) -> str:
+    """Render one JSON payload field compactly and in a stable order."""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _expectation_created(event: dict[str, Any]) -> str:
+    """Render what an Expectation was told to watch: its kind, cue, condition and about."""
+    payload = event.get("payload") or {}
+    line = (f"expectation.created: kind={payload.get('kind') or 'unknown'} "
+            f"cue_event={_json_field(event.get('cue_event') or {})} "
+            f"condition={_json_field(event.get('condition') or {})} "
+            f"about={payload.get('about') or '(none)'}")
+    return _detail_text(line, EXPECTATION_LIMIT)
 
 
 def _event_detail(event: dict[str, Any]) -> str | None:
@@ -1172,6 +1211,13 @@ def _event_detail(event: dict[str, Any]) -> str | None:
         act = str(payload.get("act") or "note")
         text = payload.get("thought") or payload.get("reason") or payload.get("new")
         return f"decision.note ({act}): {_detail_text(text)}" if text else None
+    if kind == "expectation.created":
+        return _expectation_created(event)
+    if kind == "expectation.fired":
+        text = payload.get("text") or payload.get("about") or _json_field(payload)
+        return f"expectation.fired: {_detail_text(text)}"
+    if kind == "expectation.resolved":
+        return f"expectation.resolved: {_detail_text(payload.get('status') or 'unknown')}"
     return None
 
 

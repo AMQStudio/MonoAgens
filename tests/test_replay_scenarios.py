@@ -213,3 +213,40 @@ def test_the_capability_record_names_the_effort_of_a_real_run() -> None:
     text = replay.build_capability_record([claim], runs, day)
     row = next(line for line in text.splitlines() if line.startswith("| A greeting"))
     assert "stronger/model (effort low)" in row
+
+
+def test_the_report_prints_what_each_expectation_watches() -> None:
+    text = _detail_section([
+        {"kind": "expectation.created",
+         "payload": {"expectation_id": 7, "kind": "promise",
+                     "about": "Budi sends the proposal"},
+         "cue_event": {"kind": "percept", "place": "space:tg:1", "text_like": "proposal"},
+         "condition": {"at": "2026-11-11T11:00:00+00:00"}},
+        {"kind": "expectation.fired",
+         "payload": {"expectation_id": 7, "about": "Budi sends the proposal",
+                     "text": "proposal sudah dikirim", "reminder": True}},
+        {"kind": "expectation.resolved",
+         "payload": {"expectation_id": 7, "status": "satisfied"}},
+    ])
+    details = text.split("**Step details**\n\n")[1].split("\n\n")[0].splitlines()
+    assert details[0] == (
+        "- step 4 — expectation.created: kind=promise "
+        'cue_event={"kind":"percept","place":"space:tg:1","text_like":"proposal"} '
+        'condition={"at":"2026-11-11T11:00:00+00:00"} about=Budi sends the proposal')
+    assert details[1] == "- step 4 — expectation.fired: proposal sudah dikirim"
+    assert details[2] == "- step 4 — expectation.resolved: satisfied"
+
+
+def test_the_expectation_detail_is_redacted_and_truncated(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "sk-live-secret-value")
+    text = _detail_section([
+        {"kind": "expectation.created",
+         "payload": {"kind": "watch", "about": "x" * 500},
+         "cue_event": {"text_like": "key sk-live-secret-value"},
+         "condition": {"none": True}},
+    ])
+    line = text.split("**Step details**\n\n")[1].split("\n\n")[0].splitlines()[0]
+    assert "sk-live-secret-value" not in text
+    assert 'cue_event={"text_like":"key ***"}' in line
+    assert len(line) == len("- step 4 — ") + replay.EXPECTATION_LIMIT
+    assert line.endswith("…")
