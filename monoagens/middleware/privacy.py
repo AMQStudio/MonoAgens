@@ -52,9 +52,40 @@ async def place_kind(conn, place: str | None) -> str:
     return str(row[0] or "shared") if row else "shared"
 
 
-async def direct(conn, place: str | None) -> bool:
+async def direct(conn, place: str | None, cache: dict | None = None) -> bool:
     """Return whether a place is a 1:1 chat, by the kind its adapter reported."""
-    return await place_kind(conn, place) == "direct"
+    return await _kind(conn, place, cache) == "direct"
+
+
+async def _kind(conn, place: str | None, cache: dict | None = None) -> str:
+    """Return one place's kind, remembered for one wake when a cache is given."""
+    if cache is None:
+        return await place_kind(conn, place)
+    key = ("kind", place)
+    if key not in cache:
+        cache[key] = await place_kind(conn, place)
+    return cache[key]
+
+
+async def _audience(conn, place: str | None, before: int | None = None,
+                    cache: dict | None = None) -> frozenset[str]:
+    """Return one place's audience, remembered for one wake when a cache is given."""
+    if cache is None:
+        return await audience(conn, place, before)
+    key = ("people", place, before)
+    if key not in cache:
+        cache[key] = await audience(conn, place, before)
+    return cache[key]
+
+
+async def _shared(conn, place: str, cache: dict | None = None) -> frozenset[str]:
+    """Return what `share.granted` added to one place, remembered for one wake."""
+    if cache is None:
+        return await shared(conn, place)
+    key = ("shared", place)
+    if key not in cache:
+        cache[key] = await shared(conn, place)
+    return cache[key]
 
 
 async def audience(conn, place: str | None, before: int | None = None) -> frozenset[str]:
@@ -89,70 +120,74 @@ async def shared(conn, place: str, before: int | None = None) -> frozenset[str]:
                      for who in (payload or {}).get("persons") or ())
 
 
-async def owner_direct(conn, place: str | None) -> bool:
+async def owner_direct(conn, place: str | None, cache: dict | None = None) -> bool:
     """Return whether this context is a direct chat with the owner."""
-    return await direct(conn, place) and await audience(conn, place) <= frozenset({OWNER})
+    return (await direct(conn, place, cache)
+            and await _audience(conn, place, None, cache) <= frozenset({OWNER}))
 
 
 async def visible(conn, *, context: str | None, source: str | None,
-                  before: int | None = None) -> bool:
+                  before: int | None = None, cache: dict | None = None) -> bool:
     """Return whether content from `source` may enter a context at `context` (D45, D50)."""
-    if not source or await owner_direct(conn, context):
+    if not source or await owner_direct(conn, context, cache):
         return True
-    need = set(await audience(conn, context)) - {OWNER}
+    need = set(await _audience(conn, context, None, cache)) - {OWNER}
     if not need or (source == context and before is None):
         return True
-    present = set(await audience(conn, source, before))
-    consented = set(await shared(conn, source))
+    present = set(await _audience(conn, source, before, cache))
+    consented = set(await _shared(conn, source, cache))
     return need <= (present - {OWNER}) | consented
 
 
-async def memory_visible(conn, *, context: str | None, sources: Any = None) -> bool:
+async def memory_visible(conn, *, context: str | None, sources: Any = None,
+                         cache: dict | None = None) -> bool:
     """Return whether every source of a memory was said to the people here (D53, D50)."""
     if not sources:
-        return await owner_direct(conn, context)
-    need = set(await audience(conn, context)) - {OWNER}
+        return await owner_direct(conn, context, cache)
+    need = set(await _audience(conn, context, None, cache)) - {OWNER}
     rows = await (await conn.execute(
         "SELECT id, place FROM events WHERE id = ANY(%s) AND place IS NOT NULL",
         (list(sources),))).fetchall()
     audiences = []
     for source, place in rows:
-        present = set(await audience(conn, place, before=source))
-        consented = set(await shared(conn, place))
+        present = set(await _audience(conn, place, source, cache))
+        consented = set(await _shared(conn, place, cache))
         audiences.append((present - {OWNER}) | consented)
     return all(need <= have for have in audiences)
 
 
-async def source_label(conn, place: str | None, before: int | None = None) -> str:
+async def source_label(conn, place: str | None, before: int | None = None,
+                       cache: dict | None = None) -> str:
     """Return the D55-safe label of a source place: a private chat's people, or the place."""
     if not place:
         return f"{OWNER} private chat"
-    if await direct(conn, place):
-        people = sorted(await audience(conn, place, before))
+    if await direct(conn, place, cache):
+        people = sorted(await _audience(conn, place, before, cache))
         if people:
             return f"{' and '.join(people)} private chat"
     return f"the chat at {place}"
 
 
-async def withheld_source(conn, *, context: str | None, sources: Any = None) -> str:
+async def withheld_source(conn, *, context: str | None, sources: Any = None,
+                          cache: dict | None = None) -> str:
     """Return the label of the source one withheld item came from (D56).
 
     A memory or core memory names the first source place whose audience this
     context does not cover. A memory without a known source is private to the
     owner, so its label says so.
     """
-    need = set(await audience(conn, context)) - {OWNER}
+    need = set(await _audience(conn, context, None, cache)) - {OWNER}
     rows = []
     if sources:
         rows = await (await conn.execute(
             "SELECT id, place FROM events WHERE id = ANY(%s) AND place IS NOT NULL",
             (list(sources),))).fetchall()
     for source, source_place in rows:
-        present = set(await audience(conn, source_place, before=source)) - {OWNER}
-        consented = set(await shared(conn, source_place))
+        present = set(await _audience(conn, source_place, source, cache)) - {OWNER}
+        consented = set(await _shared(conn, source_place, cache))
         if not need <= (present | consented):
-            return await source_label(conn, source_place, source)
-    return await source_label(conn, None)
+            return await source_label(conn, source_place, source, cache)
+    return await source_label(conn, None, None, cache)
 
 
 async def leaks(conn, target: str | None, text: str) -> bool:
@@ -196,35 +231,37 @@ def filter_context(conn) -> Middleware:
             return Continue()  # the desk this rule produced, still unfiltered by anyone else
         place = item.place
         counts = dict(item.withheld)
+        cache: dict = {}  # one audience lookup per place, not one per line
 
         async def keep(lines: Any, *, note_withheld: bool) -> tuple[Any, ...]:
             kept = []
             for line in lines:
-                if await visible(conn, context=place, source=line.place, before=line.id):
+                if await visible(conn, context=place, source=line.place, before=line.id,
+                                 cache=cache):
                     kept.append(line)
                 elif note_withheld:
-                    label = await source_label(conn, line.place, line.id)
+                    label = await source_label(conn, line.place, line.id, cache)
                     counts[label] = counts.get(label, 0) + 1
             return tuple(kept)
 
         memories = []
         for memory in item.memories:
             if await memory_visible(conn, context=place,
-                                    sources=getattr(memory, "sources", ())):
+                                    sources=getattr(memory, "sources", ()), cache=cache):
                 memories.append(memory)
             else:
                 label = await withheld_source(
-                    conn, context=place, sources=getattr(memory, "sources", ()))
+                    conn, context=place, sources=getattr(memory, "sources", ()), cache=cache)
                 counts[label] = counts.get(label, 0) + 1
         filtered = replace(
-            item, place_kind=await place_kind(conn, place), memories=tuple(memories),
+            item, place_kind=await _kind(conn, place, cache), memories=tuple(memories),
             recent_elsewhere=await keep(item.recent_elsewhere, note_withheld=True),
             recent=await keep(item.recent, note_withheld=False))
         core = await read_state(conn, "core_memory")
         sources = (core or {}).get("derived_from")
         if filtered.core_memory and not await memory_visible(conn, context=place,
-                                                             sources=sources):
-            label = await withheld_source(conn, context=place, sources=sources)
+                                                             sources=sources, cache=cache):
+            label = await withheld_source(conn, context=place, sources=sources, cache=cache)
             counts[label] = counts.get(label, 0) + 1
             filtered = replace(filtered, core_memory="")
         filtered = replace(filtered, withheld=tuple(sorted(counts.items())))

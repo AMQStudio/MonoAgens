@@ -9,11 +9,13 @@ wakes the reasoning in the request's own place with an `intent` that carries the
 from __future__ import annotations
 
 import json
+import pathlib
+from dataclasses import replace
 from typing import Any
 
 from monoagens.core.hooks import Continue, Middleware
 from monoagens.infra.store import append_event
-from monoagens.middleware import identity
+from monoagens.middleware import identity, loader, privacy, registry
 from monoagens.types import Event
 
 DEFAULTS = {"thinking": "owner_direct", "steps": "long", "approvals": "owner"}
@@ -123,3 +125,157 @@ def answer(kernel: Any) -> Middleware:
         return Continue()
 
     return rule
+
+
+# ------------------------------------------------------ what the soul shows
+
+SHOWN = "interaction.shown"
+STEP_CHARS = 200
+
+
+def switches(kernel: Any) -> dict[str, str]:
+    """Return the interaction switches: the defaults, overridden by `config.yaml`."""
+    return {**DEFAULTS, **(kernel.settings.get("interaction") or {})}
+
+
+def shows(adapter: Any) -> tuple[str, ...]:
+    """Return what one adapter declared it can show, in the contract's vocabulary."""
+    return tuple(getattr(adapter, "shows", ()) or ())
+
+
+async def present(kernel: Any, event: Event, kind: str, text: str) -> bool:
+    """Show one line where the adapter can, with the fallback the contract names."""
+    adapter = kernel.tools.adapters.get(str(event.body))
+    if adapter is None:
+        return False
+    if kind in shows(adapter):
+        await adapter.show(str(event.place), kind, text=text)
+        return True
+    if kind == "typing":
+        return False  # nothing to show, and nothing lost
+    await kernel.tools.act(event, f"{event.body}.say", {"text": text})
+    return True
+
+
+async def _last_shown(conn: Any, place: str) -> int:
+    """Return the id of the last event of this place that reasoning already showed."""
+    row = await (await conn.execute(
+        "SELECT max((payload->>'note')::bigint) FROM events "
+        "WHERE kind = %s AND place = %s", (SHOWN, place))).fetchone()
+    return int((row or (0,))[0] or 0)
+
+
+async def _notes(conn: Any, chain: int, after: int) -> list[tuple[int, str, str]]:
+    """Return the thoughts of one chain that were not shown yet, oldest first."""
+    cur = await conn.execute(
+        "SELECT id, place, payload FROM events WHERE kind = 'decision.note' "
+        "AND caused_by = %s AND id > %s AND payload->>'act' = 'think' ORDER BY id",
+        (chain, after))
+    return [(int(row[0]), str(row[1] or ""), str((row[2] or {}).get("thought") or ""))
+            for row in await cur.fetchall()]
+
+
+def narrate(kernel: Any) -> Middleware:
+    """Inbound rule: show the owner a thought, and a step of work that takes long."""
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        """Show what the switches allow, only after the audience check."""
+        place = str(item.place or "")
+        if not place:
+            return Continue()
+        settings_now = switches(kernel)
+        chain = int(item.caused_by or item.id or 0)
+        thoughts = await _notes(kernel.conn, chain, 0) if settings_now.get("thinking") != "off" \
+            else []
+        if thoughts and await privacy.owner_direct(kernel.conn, place):
+            shown = await _last_shown(kernel.conn, place)
+            for note, note_place, thought in [note for note in thoughts if note[0] > shown]:
+                if not thought or not await privacy.visible(kernel.conn, context=place,
+                                                            source=note_place, before=note):
+                    continue
+                if await present(kernel, replace(item, place=place), "edit",
+                                 f"(thinking) {thought}"):
+                    await kernel._emit(item, SHOWN, {"place": place, "kind": "thinking",
+                                                     "note": note}, place=place)
+        if settings_now.get("steps") != "off" and item.kind == "act.result":
+            capability = str((item.payload or {}).get("capability") or "")
+            declared = kernel.tools.get(capability) or {}
+            if declared.get("long_running"):
+                short = _short(interaction_text((item.payload or {}).get("result")))
+                await present(kernel, item, "edit", f"(step) {capability}: {short}")
+        return Continue()
+
+    return rule
+
+
+def interaction_text(result: Any) -> str:
+    """Return the text of one tool result, whichever key carries it."""
+    if isinstance(result, str):
+        return result
+    if isinstance(result, dict):
+        for key in ("text", "content", "output", "stdout", "error"):
+            if isinstance(result.get(key), str):
+                return str(result[key])
+        return json.dumps(result, ensure_ascii=False)
+    return "" if result is None else str(result)
+
+
+def _short(text: str) -> str:
+    """Return the first characters of one step's result."""
+    return text if len(text) <= STEP_CHARS else text[:STEP_CHARS] + "…"
+
+
+def typing(kernel: Any) -> Middleware:
+    """Action rule (first pass): say "typing…" where the act is work or a message."""
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        """Show typing for a message or a long action, if the adapter can show it."""
+        if ctx.get("refusal") or ctx.get("handled"):
+            return Continue()
+        descriptor = ctx.get("descriptor") or {}
+        if not (descriptor.get("communicative") or ctx.get("long_running")):
+            return Continue()
+        adapter = kernel.tools.adapters.get(str(ctx["event"].body))
+        if adapter is None or "typing" not in shows(adapter):
+            return Continue()
+        await adapter.show(str(ctx["event"].place), "typing")
+        return Continue()
+
+    return rule
+
+
+def install_commands(kernel: Any) -> None:
+    """Register `/show`: the owner switches what the soul shows besides its messages."""
+    if kernel.tools.command("show") is None:
+        kernel.tools.add_command(registry.CommandEntry(
+            "show", "Switch thinking, steps or approvals: /show <name> <on|off>.",
+            "interaction.show", show_switch, owner="interaction"))
+
+
+async def show_switch(kernel: Any, event: Event, arguments: list[str]) -> str:
+    """Write one `interaction:` line in config.yaml and apply it at once."""
+    usage = "usage: /show thinking|steps|approvals <on|off>"
+    if len(arguments) < 2:
+        return usage
+    what, state = arguments[0].lower(), arguments[1].lower()
+    if what not in DEFAULTS or state not in ("on", "off"):
+        return usage
+    before = switches(kernel).get(what)
+    after = DEFAULTS[what] if state == "on" else "off"
+    path = _config_path(kernel)
+    if path is not None:
+        loader.edit_config(path, lambda text: loader.set_block_entry(
+            text, "interaction", what, after), now=kernel.clock.now())
+        await loader.record_config_change(kernel, event, plugin="interaction",
+                                          key=f"interaction.{what}", before=before,
+                                          after=after)
+    kernel.settings.setdefault("interaction", {})[what] = after
+    return f"{what} is now {after}"
+
+
+def _config_path(kernel: Any) -> Any:
+    """Return the config.yaml a running kernel writes; a test kernel may have none."""
+    root = getattr(kernel, "deployment_root", None)
+    if root is None:
+        return None
+    return pathlib.Path(root) / "config.yaml"

@@ -70,6 +70,7 @@ def install(kernel: Any) -> None:
     registry.install_commands(kernel)
     roles.install_commands(kernel)
     install_commands(kernel)
+    interaction.install_commands(kernel)
     kernel.after_model_call = enforce(kernel)
 
 
@@ -77,7 +78,8 @@ def modules_for(hook: str, kernel: Any) -> tuple[tuple[str, Middleware], ...]:
     """Return the scoped middleware of one hook, in the order it runs."""
     return {"inbound": (("identity-pairing", identity.claim(kernel.conn)),
                         ("approval-answer", interaction.answer(kernel)),
-                        ("commands", registry.commands(kernel))),
+                        ("commands", registry.commands(kernel)),
+                        ("narrate", interaction.narrate(kernel))),
             "context": (("identity-cards", identity.cards(kernel.conn, roles=kernel.roles)),
                         ("self-block", registry.self_block(kernel))),
             "action": (("identity-route", identity.route(kernel.conn)),)}.get(hook, ())
@@ -90,7 +92,7 @@ def policy_for(hook: str, when: str, kernel: Any) -> Middleware:
     if hook == "action":
         if when == "first":
             return compose(identity.identity_line(), permission_line(kernel),
-                           privacy.guard(kernel, "first"))
+                           interaction.typing(kernel), privacy.guard(kernel, "first"))
         return compose(privacy.guard(kernel, "last"), quiet_line(kernel),
                        approval_line(kernel))
     return compose(identity.identity_line())

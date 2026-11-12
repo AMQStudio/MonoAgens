@@ -260,13 +260,10 @@ async def _direct_places(conn, natives: set[str]) -> dict[str, tuple[str, dateti
     if not natives:
         return {}
     cur = await conn.execute(
-        "SELECT body, place, ts FROM events WHERE kind = 'percept' AND place IS NOT NULL "
-        "AND who = ANY(%s) AND payload->>'place_kind' = 'direct' ORDER BY id DESC",
-        (sorted(natives),))
-    places: dict[str, tuple[str, datetime]] = {}
-    for body, place, seen in await cur.fetchall():
-        places.setdefault(str(body or "?"), (place, seen))
-    return places
+        "SELECT DISTINCT ON (body) body, place, ts FROM events WHERE kind = 'percept' "
+        "AND place IS NOT NULL AND who = ANY(%s) AND payload->>'place_kind' = 'direct' "
+        "ORDER BY body, id DESC", (sorted(natives),))
+    return {str(body or "?"): (place, seen) for body, place, seen in await cur.fetchall()}
 
 
 async def direct_place(conn, who: str, via: str | None = None) -> str | None:

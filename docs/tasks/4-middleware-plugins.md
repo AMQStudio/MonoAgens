@@ -260,3 +260,27 @@ middleware choosing for it.
 **Narrower rules** in `privacy.py`: `topic_rule(kernel, topics)` / `narrowing(kernel, topics)`
 drop recent lines and memories that mention a topic word and add one withheld count labelled
 `a topic you keep out of this mode`; they can only remove.
+
+**1.8 Interaction.** The core records it all; `interaction.py` decides what is shown.
+Switches: `thinking: owner_direct|off`, `steps: long|off`, `approvals: owner` in
+`config.yaml` → `interaction:`, read as `{**DEFAULTS, **settings["interaction"]}`. `narrate`
+(inbound) shows each `decision.note` of the chain once (the last shown id lives in
+`interaction.shown` events, so it survives a restart) and only in the owner's direct chat; an
+`act.result` of a `long_running` call shows `(step) <capability>: <first 200 characters>`. Every
+line passes `privacy.visible` first. `present()` applies the fallbacks: the kind the adapter
+declares is used through `show`; `typing` missing shows nothing; any other missing kind falls
+back to a normal message, never a silent pass. `typing` (action, first pass, after the
+permission line) says "typing…" for a communicative act or a long action where the adapter can
+show it. `/show <thinking|steps|approvals> on|off` (owner only, `interaction.show`) writes its
+one `interaction:` line, applies it at once and records `plugin.config_changed`; `on` restores
+the default value for that switch. The boot report names what each adapter declared it can show
+and which optional parts it has, so a lost kind is visible (Telegram: typing, edit, buttons,
+reactions; CLI: typing).
+**The context hook must fit its watchdog** (1.0c): the first full run of the new hook timed out
+in `20_act_r_activation` (context hook timed out after 0.5s) because `privacy` resolved each
+line's audience with its own queries. `visible`, `memory_visible`, `source_label` and
+`withheld_source` now take an optional per-wake cache that `filter_context` fills once per
+place, and `identity._direct_places` uses `DISTINCT ON (body)` instead of scanning every
+percept of a person; the scenario then passed three runs in a row. Measured on the synthetic
+500-event desk: 100 ms (unchanged; there every line comes from a different place, which is the
+worst case for the cache).
