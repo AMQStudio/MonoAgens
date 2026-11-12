@@ -52,11 +52,16 @@ model_answers:
         arguments:
           about: kabari owner kalau ada yang menyebut server down
           kind: promise
-          cue_event: {kind: percept, text_like: "server down"}
-          expect: {none: true}
+          cue_event: {kind: percept}
+          expect: {text: "server down"}
           intent: beri tahu owner bahwa server down disebut di grup
           weight: 0.8
           policy: {once: true}
+  - step: 4
+    tool: classify
+    calls:
+      - name: classify
+        arguments: {verdict: "yes"}
   - step: 4
     tool: decide
     calls:

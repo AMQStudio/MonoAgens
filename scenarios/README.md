@@ -10,8 +10,8 @@ from the scripted fake model; real results come from the saved reports in
 `reports/`. A capability that fails with the real model is listed as FAIL, not
 hidden.
 
-Generated 2026-11-12 03:51 UTC from 29 capabilities across 8 brain functions.
-Pooled per capability: its latest runs among 145 saved fake and 25 saved real-model reports.
+Generated 2026-11-12 04:20 UTC from 30 capabilities across 8 brain functions.
+Pooled per capability: its latest runs among 151 saved fake and 25 saved real-model reports.
 
 ## cross-body
 
@@ -58,6 +58,7 @@ _No scenario yet._
 | A recurring reminder fires again on the next day under its policy. | 10_reminder_recurring_nudge | PASS 3/3 · 2026-11-12 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high), deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort medium), deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort low) · 2026-11-12 |
 | A reminder fires in the direct place it was made in, not in a busy group. | 13_fired_reminder_different_place | PASS 3/3 · 2026-11-12 | FAIL 2/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high), deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort medium), deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort low) · 2026-11-12 |
 | A watch for a phrase stays silent through ordinary chatter and reports once when the phrase is said. | 16_watch_for_phrase | PASS 3/3 · 2026-11-12 | FAIL 0/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high), deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort medium), deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort low) · 2026-11-12 |
+| A question on the topic of a promise's condition never fulfils it; the promise waits for the statement. | 30_same_topic_question | PASS 3/3 · 2026-11-12 | not run |
 
 ## silence
 

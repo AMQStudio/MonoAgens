@@ -134,7 +134,7 @@ class Kernel:
                                   event.place or "")
             return
         fired = await expect.due(self.conn, event, now=self.clock.now(),
-                                  settings=self.settings)
+                                  settings=self.settings, kernel=self)
         for item in fired:
             await self._expect_wake(item)
         if event.kind == "tick" and self.pfc is not None and self.embedder is not None:
@@ -200,6 +200,8 @@ class Kernel:
             await threads.after_step(self, job, event, calls)
         elif job.name == "encode" and isinstance(result.get("vector"), list):
             await insert_event_vector(self.conn, int(result["event_id"]), result["vector"])
+        elif job.name == "classify":
+            await expect.condition.finish(self, job)
         if job.re_wake is not None:
             await self._think(*job.re_wake)
 
@@ -227,8 +229,8 @@ class Kernel:
 
     async def _apply(self, event: Event, call: ToolCall) -> bool:
         args = call.arguments
-        if call.name == "think":
-            await self._emit(event, "decision.note", {"act": "think", **args})
+        if call.name in ("think", "revise"):
+            await self._emit(event, "decision.note", {"act": call.name, **args})
         elif call.name == "act":
             return await organs.dispatch(self, event, args)
         elif call.name == "expect":
@@ -237,8 +239,6 @@ class Kernel:
         elif call.name == "resolve":
             await expect.resolve(self.conn, int(args["id"]), str(args["status"]),
                                  now=self.clock.now())
-        elif call.name == "revise":
-            await self._emit(event, "decision.note", {"act": "revise", **args})
         else:
             await self._record_error(event, f"invalid tool call: {call.name} {args}")
         return False

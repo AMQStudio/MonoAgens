@@ -45,6 +45,13 @@ CONSTANTS = {
     "default_expires_days": 30,
     "max_active": 200,
     "job_timeout_seconds": 5.0,
+    "rule_of_three_epsilon": 0.06,
+    "wake_gate_floor": 0.1,
+    "wake_gate_ceiling": 0.9,
+    "wake_gate_margin": 0.05,
+    "wake_gate_min_gray": 0.2,
+    "wake_gate_step": 0.02,
+    "wake_gate_daily": 0.04,
 }
 
 
@@ -61,7 +68,7 @@ def settings(**sections: dict[str, Any]) -> dict[str, Any]:
         "knobs": {"memory_persistence": 0.5, "boredom_with_repeats": 0.5,
                   "talkativeness": 0.45, "restraint_after_speaking": 0.5, "spontaneity": 0.2,
                   "reserve_when_unfamiliar": 0.3, "patience_seconds": 90},
-        "calibration": {},
+        "calibration": {"wake_gate_lo": 0.35, "wake_gate_hi": 1.0},
         "constants": dict(CONSTANTS),
         "references": {},
         "lessons": [],

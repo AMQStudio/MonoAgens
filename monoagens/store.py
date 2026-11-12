@@ -15,7 +15,8 @@ from monoagens.versioning import is_valid_event_kind, upcast
 
 EXPECTATION_COLUMNS = (
     "id", "kind", "who", "place", "about", "cue_time", "cue_event", "condition",
-    "condition_text", "intent", "weight", "policy", "status", "next_check_at",
+    "condition_text", "condition_vector", "intent", "weight", "policy", "status",
+    "next_check_at",
     "last_fired_at", "fire_count", "source_event", "derived_from", "origin_actor",
     "expires_at", "source_body",
 )
@@ -23,10 +24,10 @@ _EXPECTATIONS = ("SELECT " + ", ".join("ex." + column for column in EXPECTATION_
                  + ", s.body AS source_body FROM expectations ex"
                  " LEFT JOIN events s ON s.id = ex.source_event")
 _INSERT_EXPECTATION = (
-    "INSERT INTO expectations (kind, who, place, about, cue_time, cue_event, condition, intent, "
-    "weight, policy, status, next_check_at, source_event, derived_from, origin_actor, "
-    "expires_at) VALUES "
-    "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s, %s) RETURNING id"
+    "INSERT INTO expectations (kind, who, place, about, cue_time, cue_event, condition, "
+    "condition_text, intent, weight, policy, status, next_check_at, source_event, "
+    "derived_from, origin_actor, expires_at) VALUES "
+    "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s, %s) RETURNING id"
 )
 _EVENT_COLS = ("id, ts, kind, who, place, body, payload, caused_by, origin_actor, "
                "schema_version")

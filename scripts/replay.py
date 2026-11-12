@@ -332,12 +332,14 @@ class FakePFC:
         """Return the recorded answer for this step, else store one sleep memory."""
         self._tracker.usage.calls += 1
         self._tracker.record_prompt(str(messages[-1].get("content") or ""))
-        recorded = self._recorded("call")
+        names = {tool["function"]["name"] for tool in tools}
+        recorded = self._recorded("classify" if "classify" in names else "call")
         if recorded is not None:
             return recorded
-        names = {tool["function"]["name"] for tool in tools}
         if "store_memories" in names:
             return [ToolCall("store_memories", _fake_sleep_arguments(messages))]
+        if "classify" in names:
+            return [ToolCall("classify", {"verdict": "no"})]
         return [ToolCall("act", {"capability": "telegram.say", "arguments": {"text": "ok"}})]
 
     async def aclose(self) -> None:

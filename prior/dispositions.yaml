@@ -40,6 +40,13 @@ constants:        # engineering values; change only with replay evidence
   forward_window_minutes: 30
   learning_rate: 0.02
   rule_of_three_epsilon: 0.06
+  # free-text conditions (core.md §5, core-math.md §6, §8, §15)
+  wake_gate_floor: 0.1
+  wake_gate_ceiling: 0.9
+  wake_gate_margin: 0.05
+  wake_gate_min_gray: 0.2       # the gray band never narrows below this
+  wake_gate_step: 0.02          # one bounded step of `lo`
+  wake_gate_daily: 0.04         # 5% of the [0.1, 0.9] range per day
   # memory
   retrieve_k: 5
   recent_events: 20

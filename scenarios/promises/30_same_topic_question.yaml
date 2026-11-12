@@ -1,0 +1,76 @@
+name: 30_same_topic_question
+function: promises
+capability: "A question on the topic of a promise's condition never fulfils it; the promise waits for the statement."
+description: >-
+  The owner asks to be told when the document is done. A group member asks
+  whether the document is done: the cosine gate sends that question to the
+  classifier, which says no, so the promise stays active and nobody is woken.
+  When the same member states that the document is done, the classifier says
+  yes and the owner hears once in the direct chat.
+expectations:
+  - type: no_reply
+    step: 2
+    label: a question on the same topic wakes no one
+  - type: event_seen
+    kind: classifier.verdict
+    step: 2
+    payload: {verdict: "no"}
+    count: 1
+    label: the classifier judged the question a no
+  - type: event_seen
+    kind: classifier.verdict
+    step: 3
+    payload: {verdict: "yes"}
+    count: 1
+    label: the statement is judged a yes
+  - type: reply_in
+    place: space:tg:1001
+    step: 3
+    count: 1
+    label: the owner hears once in the direct chat
+steps:
+  - at: "2026-11-10T09:00:00+07:00"
+    who: person:owner
+    place: space:tg:1001
+    addressed: true
+    text: "kabari aku ya kalau dokumennya sudah selesai"
+  - at: "2026-11-10T09:10:00+07:00"
+    who: person:tg:7001
+    place: space:tg:-1004
+    text: "dokumen sudah selesai ya?"
+    should: silent
+  - at: "2026-11-10T09:20:00+07:00"
+    who: person:tg:7001
+    place: space:tg:-1004
+    text: "dokumennya sudah selesai kok."
+    should: answer
+model_answers:
+  - step: 1
+    tool: decide
+    calls:
+      - name: expect
+        arguments:
+          about: kabari owner kalau dokumennya sudah selesai
+          kind: promise
+          cue_event: {kind: percept, place: "space:tg:-1004"}
+          expect: {text: "dokumen sudah selesai"}
+          intent: beri tahu owner bahwa dokumennya sudah selesai
+          weight: 0.8
+          policy: {once: true}
+  - step: 2
+    tool: classify
+    calls:
+      - name: classify
+        arguments: {verdict: "no"}
+  - step: 3
+    tool: classify
+    calls:
+      - name: classify
+        arguments: {verdict: "yes"}
+  - step: 3
+    tool: decide
+    calls:
+      - name: act
+        arguments:
+          capability: telegram.say
+          arguments: {text: "Dokumennya sudah selesai, owner."}
