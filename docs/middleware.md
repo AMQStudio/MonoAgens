@@ -342,8 +342,10 @@ reads them: they ride in a percept's `data` and in an act's arguments (D61).
   report.pdf (2 pages), photo.jpg, data.xlsx").
 - **Store** (`infra/`, one door in `contract.py`): an adapter calls `put(file) → ref` when it
   receives a file; anyone who opens one calls `open(ref)`, which `privacy.py` checks. An
-  attachment carries the audience labels of the event it came with, so a file sent in a private
-  chat opens or goes on to someone else only after `share`. Hard forgetting deletes the file too.
+  attachment carries the audience labels of the events it came with, so a file sent in a private
+  chat opens or goes on to someone else only after `share`. The same file sent in several places
+  is one stored file: `open` allows it when any non-forgotten event carrying it is visible to the
+  requester. The file is deleted when no such event remains (hard forgetting included).
 - **Reading**: Workspace's `read` takes a `ref`, through the same readers as any file
   ([plugins.md §5.3](plugins.md)).
 - **Sending**: an adapter's send tool takes `attachments: [ref, …]`. The adapter declares how
