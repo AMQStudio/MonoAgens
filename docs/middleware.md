@@ -41,8 +41,9 @@ the same name (`registry/tools.py`, …); the eight concepts stay.
 
 **What the middleware itself offers.** Only commands and tools that regulate the middleware:
 `share` (privacy), pairing and later `/link` (identity), budget and quiet-hour settings and
-approval answers (policy), `/help`, `/plugin show` (registry), switching what is shown
-(interaction), `/role` and `/roles show` (roles). Anything
+approval answers (policy), `/help`, `/plugin` (registry, loader), `/reload` (loader),
+`/whoami` and `/whois` (identity), switching what is shown (interaction), `/role` and
+`/roles show` (roles). They are gated by permissions like any tool (§8). Anything
 that is a feature or a capability (search, files, `/mode`) is a plugin. Test: if
 removing it would leave a rule that can no longer be kept or changed, it belongs to the
 middleware; if the soul would only be less able, it is a plugin.
@@ -169,6 +170,11 @@ person (a command).
   - `/role add|remove <person> <role>`: `people.<id>.roles` only (`roles.py`, §8).
   Uninstalling removes nothing from the owner's files; the boot report names what is unused.
   `/plugin show <name>` prints a plugin's defaults as YAML.
+- **`/reload`** re-reads `config.yaml`, `config.d/` and the manifests without a restart (the
+  commands above call it after writing). It validates first and applies only if everything is
+  valid; otherwise it refuses with a clear message and the running configuration stays (boot,
+  in contrast, fails). It names what needs a restart (new plugin code, a new sandbox base) and
+  records what changed as history events.
 - **History, not source**: every change, by command or by hand (seen at boot or reload), is
   recorded as an event (`plugin.config_changed`, `roles.changed`: who, from what, to what).
 - **Plugin updates, the dpkg way**: the values `enable` wrote are recorded. When an update
@@ -216,6 +222,14 @@ Steps …
   the trigger, their name and where they can be reached, next to what the soul has learned of
   them. Plugins may annotate a card (lever 2); `roles.py` adds each role's and the person's `context`;
   the card is in the volatile part, so the stable prefix stays cached.
+- **`/whoami`**: the asker's person id, label and linked accounts (identity), roles with their
+  labels, tier and approval mode (roles), and this place: its name, kind and adapter, plus what
+  the platform reports ("admin of this group"), from the adapter's optional place-info part
+  ([adapters.md §2](adapters.md)); without it, only the place id is shown. In a shared place it
+  shows label, roles and place only; linked accounts go to the person's direct chat when there
+  is one, never to the group.
+- **`/whois <name or account>`**: another person's id, label and linked accounts; permission
+  `identity.whois`.
 - Linking accounts arrives with the second chat app (Task 5).
 
 ## 8. Roles and permissions
@@ -267,6 +281,15 @@ their permissions to the bases automatically).
 - **Approval modes**, per role, default `default`: `yolo` passes everything except calls marked
   `sensitive`; `default` passes reading and editing and asks before `runs_code` or `changes`
   outside the person's own workspace; `strict` asks before every step. The owner answers.
+- **The middleware's own permissions** sit in the same catalog, declared in its code:
+  `config.reload`, `plugin.manage`, `roles.manage`, `identity.whois`, `approval.answer`
+  (answering an approval for someone else's request) at tier `admin`; `identity.whoami` at
+  `guest`. The owner may move them like any permission.
+- **No one grows their own power** (as Discord: you assign only roles below your highest):
+  `/role add` gives only roles whose tier is below the giver's highest tier, so only the owner
+  gives `admin`; `/plugin enable` by an admin cannot place a permission above the admin's own
+  tier. Owner only, never movable: anything `identity_changing`, a new owner (pairing), editing
+  admin-tier roles, and moving the middleware's own permissions.
 - `/roles show <role>` prints the merged result across plugins, each line marked with its
   source (manifest, `config.d/` or `config.yaml`).
 - Role facts reported by a platform ("admin of this group") are recorded as facts about that

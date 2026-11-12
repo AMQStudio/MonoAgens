@@ -40,6 +40,9 @@ an intention into native actions.
 - Tokens and URLs come from `.env`; non-secret options (enabled or not, …) from `config.yaml`;
   nothing about an adapter lives in the core or in `soul.yaml`.
 - Report `place_kind` (direct | shared) in every percept; only the adapter knows it (D48).
+- Optionally offer **place info**: a place's name, member count and the platform's role facts
+  ("admin of this group"), used by `/whoami`, person cards and Discord role mapping; a missing
+  part is declared, never a silent empty answer.
 - Declare at boot what it can show besides messages (typing, edit message, buttons, reactions,
   …) in the vocabulary of the middleware's `contract.py`, and render what the middleware's
   `interaction.py` sends its own way; an approval answer (a click, a reaction) comes back as an
