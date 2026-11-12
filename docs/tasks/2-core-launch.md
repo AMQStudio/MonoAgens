@@ -165,9 +165,9 @@ May touch: `monoagens/` (all), `tests/`
 
 The old hard line budgets pushed code into odd places. Undo that, with no change in behavior.
 
-- [ ] 13.1 List every place in the Notes of Parts 1–12 where code was moved, merged, split or trimmed only to stay under a line budget (for example the classification result routed through `expect.condition.finish`, single-use constants removed, `pfc.py`/`desk.py` split at the line limit). For each, decide: keep (it is clearer) or restore the clearest form.
-- [ ] 13.2 Refactor the ones to restore: clear names, one responsibility per module, docstrings, files ending with a newline. No new behavior, no removed behavior.
-- [ ] 13.3 `uv run pytest` and the fake replay pass unchanged; list every refactor and its reason under Notes.
+- [x] 13.1 List every place in the Notes of Parts 1–12 where code was moved, merged, split or trimmed only to stay under a line budget (for example the classification result routed through `expect.condition.finish`, single-use constants removed, `pfc.py`/`desk.py` split at the line limit). For each, decide: keep (it is clearer) or restore the clearest form.
+- [x] 13.2 Refactor the ones to restore: clear names, one responsibility per module, docstrings, files ending with a newline. No new behavior, no removed behavior.
+- [x] 13.3 `uv run pytest` and the fake replay pass unchanged; list every refactor and its reason under Notes.
 
 **Done when.** All parts are ticked; every scenario passes with the real model in three runs out of three; the capability record is committed; `uv run pytest` and the fake replay pass in full; the
 real-model replay and live session are reported with the missed-help rate; absolute-line
@@ -1557,3 +1557,57 @@ Part 12 notes (worker, 12.8 material check 2):
   absolute-line violations 0, missed-help 0.0% (0/65), false-speak 0.0% (0/71), honesty 100.0%
   (62/62); `scenarios/README.md` regenerated. No real-model run was started here, as the task
   says; it is the coordinator's single run.
+
+Part 13 notes (worker):
+- **13.1 — where code went for a budget, and the decision.** Every row is from the Notes of
+  Parts 1–12 (part and line budget in brackets) and was checked against the code at HEAD.
+
+  | Place | Budget-driven move | Decision |
+  |---|---|---|
+  | `condition.py` ← `expect.py` (12.5; expect 240/240) | `operator` (exact fast paths) and `text` moved out with the free-text gate | **Keep.** One module owns a condition; `expect.py` keeps the expectation lifecycle, cues and settlement. |
+  | `parse_duration` in `condition.py`, re-exported by `expect` (12.5) | moved with `operator`; `expect` imported a duration parser from the condition module | **Restore.** The grammar belongs to cue times and conditions equally; new leaf `monoagens/duration.py`; `condition`, `expect`, `scripts/replay.py` and the test import it; the re-export is gone and every caller migrated. |
+  | `expect.py` (Part 6; 240/240) | `_KINDS`/`_OPS` inlined; duplicate `row["policy"]` read removed; rows/row dance in `resolve`; temp in `_operator` | **Restore `KINDS`** as the one named list shared with `pfc`'s `expect` tool enum. **Keep** `_OPS` inline and the three straight-line simplifications: a one-use literal is clear and the code is shorter without losing a name. |
+  | `jobs.decide(kernel, …)` (12.4; jobs 148/150) | the background job took the whole kernel for `clock`/`settings` | **Restore.** `decide(pfc, context, rounds, clock, settings)`; `kernel._think` passes the collaborators; the job no longer reaches the kernel. |
+  | `expect.due(…, kernel=self)` and `condition.reminded(kernel, …)` (12.5; kernel 280/280, "one argument") | the wake gate took the kernel to reach `pfc`, `embedder`, `settings` | **Restore.** `due(…, pfc=, embedder=)` and `reminded(conn, row, event, *, pfc, embedder, settings)`; the same two guards (`pfc is None`, `embedder is None`) are kept, so behavior is identical. |
+  | `organs.leaks` (12.5b; reach 150/150, "moved out to make room") | the D45 content check left `reach.py`, its sibling `memory_visible` | **Restore.** `reach.leaks` sits beside `visible`/`memory_visible`; `organs.dispatch` and `_intend` call `reach.leaks`; the test calls it there. |
+  | `reach.memory_visible` (12.5b) | a second visibility rule beside `visible` | **Keep.** It is the same audience rule applied to a memory's sources; `reach` owns who may see what. |
+  | `desk.py` ← `pfc.py` (11.2; pfc 279/280) | desk and whole prompt moved out | **Keep.** Context + rendering vs. client + rounds is a real seam and nothing was compressed. |
+  | `work.py` ← `recall.py` (12.2) | the `<doing>` view left the recall module | **Keep.** Working memory (`work.py`) vs. Log search (`recall.py`) is one responsibility each. |
+  | `store.payload_text` replacing four private accessors (12.5; memory/work/recall/pairing −23) | one shared accessor replaced `_payload_text`/`_text` copies | **Keep.** One rule for payload text; `memory` now also falls back to `arguments.text`, the desk/recall rule. |
+  | `embedding.cosine` (12.5b) | one cosine moved from `signals` and `condition` | **Keep.** One pure vector helper, no duplicate. |
+  | `store.event_from_row` in `memory.recent_lines`, one ctx in `organs.dispatch`, one appraisal in `kernel` (12.5b) | dedupe | **Keep.** Same behaviour, one construction each. |
+  | `pairing` blank line, `recall.py`/`work.py` EOF newlines (12.5b) | formatting had been trimmed | **Keep.** Already restored; a checker confirms every module ends with one newline and top-level defs are separated by two blank lines. |
+  | `store.count_recent_events` (10.7), `reach._DIRECT`/`_GROUP`/`looks_direct` (10.1), `memory`'s old cosine/`Embedder`, `middleware`'s dead context branch (7) | deleted to free lines | **Keep deleted.** Dead code; nothing calls them. |
+  | `recall.search`'s local `prior` import (10.3) | local import of `prior` | **Keep.** It breaks a real cycle (`prior → identity → recall → prior`), not a budget move; not touched. |
+  | kernel appraisal hoist (12.5b) | one `_appraise` before the `act.result`/percept branches | **Keep.** One appraisal per event, no duplicate work. |
+  | dense one-liners: `condition.parse_duration` walrus, `desk._duration` chained ternary, `desk._fit` conditional pop index, `expect.validate` packed assignments, `expect.due` combined guard, `expect.settle` ternary, `expect.recovery` await inside a boolean, `reach.visible`/`memory_visible` compressed set arithmetic, `appraise` backslash ternary | written short to save lines | **Restore.** Plain statements/`if`s; same behavior. |
+  | `pfc.turns` refusal/act booleans, `think`/`expect` descriptions (12.8 brain fixes) | — | **Keep.** Behavior the tests pin; not a line-budget move, and the text the model sees is unchanged. |
+  | draft `expect.condition.finish(self, job)` classifier routing (12.5 draft) | proposed to keep kernel at 280 | **Keep absent.** The final 12.5 design has no classifier; the name does not exist in the tree. |
+  | `guidance.py`, desk layout, prompts, prior values, scenarios | — | **Untouched.** No text the model sees and no scenario/prior data changed. |
+
+- **13.2 — every refactor (commit, reason).** No behavior was added or removed; docstrings,
+  clear names, one responsibility per module, ≤100 columns, one statement per line, two blank
+  lines between top-level definitions, one trailing newline (verified).
+  - `d2a719d` durations: new `monoagens/duration.py` (17 lines) owns the duration grammar;
+    `condition.py` imports it instead of owning it, its walrus became a named `match`, and
+    `operator` builds its pattern in two statements. Re-export from `expect` removed; callers
+    migrated (`expect`, `scripts/replay.py`, `tests/test_expect.py`).
+  - `0e7f6cd` privacy: `leaks` moved from `organs.py` back to `reach.py` beside
+    `visible`/`memory_visible`; `organs.dispatch`/`_intend` and `tests/test_reach.py` call it
+    there.
+  - `2271529` collaborators: `jobs.decide` takes `pfc, context, rounds, clock, settings`
+    instead of the kernel; `expect.due` takes `pfc`/`embedder`; `condition.reminded` takes
+    `conn, row, event, pfc, embedder, settings`. Same guards and same clock read.
+  - `79faf32` dense expressions: `desk._fit`, `desk._duration`, `expect.validate`,
+    `expect.due`, `expect.settle`, `expect.recovery`, `reach.visible`,
+    `reach.memory_visible`, `cognition/appraise` written out.
+  - `bd32cf6` kinds: `expect.KINDS` named once and used by `expect.validate` and `pfc`'s
+    `expect` tool enum (same values, same order, same JSON).
+- **13.3 — verification.** `uv run pytest`: **281 passed** (real Postgres). Fake replay:
+  30 scenarios, **130/130 checks**, missed-help 0.0% (0/65), false-speak 0.0% (0/71),
+  **absolute-line violations 0**, honesty 100.0% (62/62). `scenarios/README.md` was
+  regenerated by the runs only as generated output and reverted; no scenario, prompt, prior
+  or model-visible text changed. Package size for review only: 4,086 lines including
+  `bodies/` (`reach` 166, `expect` 232, `condition` 62, `duration` 17, `organs` 135);
+  line counts are a review signal, not a budget.
+- Nothing needed a behavior change; no question is left for the architect from this part.
