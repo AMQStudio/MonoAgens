@@ -112,6 +112,47 @@ def test_a_report_without_scenarios_is_ignored(tmp_path: pathlib.Path) -> None:
     assert replay.parse_report(path) is None
 
 
+def _detail_section(events: list[dict]) -> str:
+    """Render one scenario section whose single step carries these events."""
+    scenario = replay.Scenario(path=pathlib.Path("01_x.yaml"), name="01_x", description="",
+                               steps=[], expectations=[], answers={}, zone=ZoneInfo("UTC"))
+    at = datetime(2026, 11, 11, 8, 0, tzinfo=timezone.utc)
+    step = replay.StepRecord(index=4, kind="message", at=at, who="person:owner",
+                             place="space:tg:1", text="hi", addressed=True,
+                             should=replay.SHOULD_ANSWER, appraisals=[], replies=[],
+                             events=events)
+    result = replay.ScenarioResult(scenario=scenario, steps=[step], replies=[], prompts=[],
+                                   events=events, memories=0, usage=replay.Usage())
+    return "\n".join(replay._scenario_section(result, ZoneInfo("UTC")))
+
+
+def test_the_report_prints_the_payload_text_of_errors_and_reasons(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "sk-live-secret-value")
+    long_error = "x" * 400
+    text = _detail_section([
+        {"kind": "percept", "payload": {"description": "Budi tadi kirim file apa ya?"}},
+        {"kind": "error", "payload": {"error": long_error}},
+        {"kind": "decision.silent", "payload": {"reason": "gate score below silent threshold"}},
+        {"kind": "decision.note", "payload": {"act": "think", "thought": "file belongs to Budi"}},
+    ])
+    details = text.split("**Step details**\n\n")[1].split("\n\n")[0].splitlines()
+    assert len(details) == 3
+    assert details[0].startswith("- step 4 — error: xxx")
+    assert len(details[0]) == len("- step 4 — error: ") + replay.DETAIL_LIMIT
+    assert details[0].endswith("…")
+    assert details[1] == "- step 4 — decision.silent: gate score below silent threshold"
+    assert details[2] == "- step 4 — decision.note (think): file belongs to Budi"
+
+
+def test_the_step_details_never_print_a_secret(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "sk-live-secret-value")
+    text = _detail_section([
+        {"kind": "error", "payload": {"error": "bad key sk-live-secret-value"}},
+    ])
+    assert "sk-live-secret-value" not in text
+    assert "- step 4 — error: bad key ***" in text
+
+
 def test_the_capability_record_counts_passes_over_runs() -> None:
     claim = replay.Capability("01_group_chitchat_greeting", "silence", "A greeting is ignored.")
     day = datetime(2026, 11, 11, 10, 0, tzinfo=timezone.utc)

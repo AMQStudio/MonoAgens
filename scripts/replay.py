@@ -1136,6 +1136,47 @@ def _fmt_time(stamp: datetime, zone: ZoneInfo) -> str:
     return stamp.astimezone(zone).strftime("%Y-%m-%d %H:%M")
 
 
+DETAIL_LIMIT = 300
+SECRET_NAME_RE = re.compile(r"(_KEY|_TOKEN|_SECRET|_PASSWORD)$", re.IGNORECASE)
+SECRET_MIN_LENGTH = 8
+
+
+def _redact(text: str) -> str:
+    """Replace any configured secret that leaked into a payload text."""
+    for name, value in os.environ.items():
+        if len(value) >= SECRET_MIN_LENGTH and SECRET_NAME_RE.search(name):
+            text = text.replace(value, "***")
+    return text
+
+
+def _detail_text(value: Any) -> str:
+    """Flatten one payload field into one redacted, truncated report line."""
+    text = _redact(" ".join(str(value).split()))
+    return text if len(text) <= DETAIL_LIMIT else text[:DETAIL_LIMIT - 1] + "…"
+
+
+def _event_detail(event: dict[str, Any]) -> str | None:
+    """Return the one line a step detail shows for an event, or None for other kinds."""
+    kind = str(event.get("kind") or "")
+    payload = event.get("payload") or {}
+    if kind == "error":
+        return f"error: {_detail_text(payload.get('error') or '(no message)')}"
+    if kind == "decision.silent":
+        reason = payload.get("reason")
+        return f"decision.silent: {_detail_text(reason)}" if reason else None
+    if kind == "decision.note":
+        act = str(payload.get("act") or "note")
+        text = payload.get("thought") or payload.get("reason") or payload.get("new")
+        return f"decision.note ({act}): {_detail_text(text)}" if text else None
+    return None
+
+
+def _step_details(step: StepRecord) -> list[str]:
+    """Render one line per error or reason the step's events carry."""
+    return [f"- step {step.index} — {detail}" for detail in
+            (_event_detail(event) for event in step.events) if detail]
+
+
 def _decision_summary(step: StepRecord) -> tuple[str, Appraisal | None]:
     """Pick the strongest appraisal and an aggregate decision label."""
     decisions = [appraisal.decision for appraisal in step.appraisals]
@@ -1188,6 +1229,9 @@ def _scenario_section(result: ScenarioResult, zone: ZoneInfo) -> list[str]:
               "| Reason | Reply | Events |",
               "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     lines += [_step_row(step, zone) for step in result.steps]
+    details = [line for step in result.steps for line in _step_details(step)]
+    if details:
+        lines += ["", "**Step details**", "", *details]
     lines += ["", f"**Expectations: {status}**", ""]
     if not result.checks:
         lines += ["- (no expectations declared)", ""]
