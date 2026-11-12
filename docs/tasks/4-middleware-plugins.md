@@ -34,7 +34,8 @@ May touch: `monoagens/middleware/`, `monoagens/adapters/`, `monoagens/boot.py`, 
 - [ ] 1.7 **Policy** (`policy.py`, `privacy.py`): pass, ask or refuse from the requester's (`origin_actor`) permissions, the tool's facts and the approval mode (`yolo`, `default`, `strict`; default `default`; `sensitive` always asks); privacy rules that only narrow (confirm before forwarding a file, a mode that keeps a topic out); route hints to a person via lever 2; owner commands for budget and quiet hours.
 - [ ] 1.8 **Interaction** (`interaction.py`, middleware.md §9): the vocabulary in `contract.py` of what an adapter can show (typing, edit message, buttons, reactions); the defaults (thinking only to the owner in the owner's direct chat, tool steps only for long work, approvals ask the owner); a command to switch them; everything shown passes `privacy.py` first; fallbacks when an adapter lacks a capability; an approval answer comes back as an ordinary event. CLI and Telegram render typing, tool steps and an approval (buttons on Telegram, text on CLI); WhatsApp and Discord are Task 5.
 - [ ] 1.9 Read-only view of the log and state for plugins in `contract.py` (core.md §3, D43); the policy rule on data leaving the machine (middleware.md §3).
-- [ ] 1.10 Check: private content never reaches someone outside its audience, even when someone tries to talk the soul into it, even with a plugin that tries to widen it, and even through a shown thought or tool step; a guest asking for a tool their roles lack is refused and the soul does not promise it; a reasonable request from a group member is helped; no plugin can remove the policy; `/help` is identical on Telegram and CLI; thinking never shows in a group; a new role with only `base: member` works in every plugin; an admin cannot give `admin` or raise a permission above their tier; `/whoami` in a group never shows linked accounts.
+- [ ] 1.10 **Attachments** (middleware.md §10): the vocabulary in `contract.py`; the store in `infra/` with `put` and `open`, `open` checked by `privacy.py` against the source event's audience; hard forgetting deletes the file; Telegram and CLI receive and send several attachments per message, declaring their limits; `interaction.py` splits when an adapter sends fewer per message. Port the mechanism of V1's `AttachmentStore` (ADR `engine/0004-core-tools-and-cross-gateway-messaging`).
+- [ ] 1.11 Check: private content never reaches someone outside its audience, even when someone tries to talk the soul into it, even with a plugin that tries to widen it, and even through a shown thought or tool step; a guest asking for a tool their roles lack is refused and the soul does not promise it; a reasonable request from a group member is helped; no plugin can remove the policy; `/help` is identical on Telegram and CLI; thinking never shows in a group; a new role with only `base: member` works in every plugin; an admin cannot give `admin` or raise a permission above their tier; `/whoami` in a group never shows linked accounts; three files in one message are received, read and forwarded, and a file from a private chat is not opened for someone else without `share`.
 
 ## Part 2 — Soul Tuning
 Read first: [plugins.md](../plugins.md) §5.1, [middleware.md](../middleware.md) §2, §7
@@ -54,7 +55,7 @@ May touch: `plugins/web-search/`, `config.d/`, `tests/`, `scenarios/`
 
 ## Part 4 — Workspace and PDF Reader
 Read first: [plugins.md](../plugins.md) §5.3–5.4, [core.md](../core.md) §4
-May touch: `plugins/workspace/`, `plugins/pdf-reader/`, `config.yaml`, `config.d/`, `tests/`, `scenarios/`
+May touch: `plugins/workspace/`, `plugins/pdf-reader/`, `config.yaml`, `config.d/`, `tests/`, `scenarios/`; for 4.7 only: `monoagens/core/reasoning.py`, `monoagens/core/jobs.py`, `monoagens/core/kernel.py`, `prior/dispositions.yaml`, `.env.example`
 
 Multi-step work runs in the core's task threads (Task 2 Part 3); the plugins only offer capabilities.
 
@@ -64,7 +65,8 @@ Multi-step work runs in the core's task threads (Task 2 Part 3); the plugins onl
 - [ ] 4.4 The guard (ported from V1's two-stage guard) marks calls `sensitive`; approval follows the person's mode (1.7).
 - [ ] 4.5 PDF Reader fills `reader` for `.pdf` (pypdf); `read` of a type without a reader says so and names the extension.
 - [ ] 4.6 Scenario: "send our finished work to Budi" where the work is a file in the workspace: `read` gets it, the soul shares it and sends it through an adapter that can attach files (a test adapter until Task 5), and the forwarding rule of 1.7 applies.
-- [ ] 4.7 Check: from inside `run`, the host's home, `.env` and the database port are unreachable, another person's workspace and `/tmp` are invisible, a private address is unreachable, the internet is reachable; a guest cannot `run`; in `default` mode `run` asks the owner; "finish my code, then send it to Budi" runs as a task thread and keeps its promise.
+- [ ] 4.7 **Batch tool calls**: send `parallel_tool_calls: true` to the provider unless `LLM_PARALLEL_TOOL_CALLS=false` in `.env` (add it to `.env.example`). Scenario "grep three files, then sum them up": record wakes, model calls and tokens. If one batch wakes reasoning more than once, implement the core fix in this item: the results of one round are awaited together (or until a timeout from the prior) and wake reasoning once; record the before/after numbers under Notes as the evidence (constitution §1).
+- [ ] 4.8 Check: from inside `run`, the host's home, `.env` and the database port are unreachable, another person's workspace and `/tmp` are invisible, a private address is unreachable, the internet is reachable; a guest cannot `run`; in `default` mode `run` asks the owner; "finish my code, then send it to Budi" runs as a task thread and keeps its promise.
 
 ## Part 5 — Capability targets carried over from Task 2
 Read first: [core.md](../core.md) §4, §8 (D45–D48, D55, D56), the Notes of Task 2 Part 12
@@ -81,7 +83,7 @@ capabilities around them. A core change here is only for a bug, reported first.
 - [ ] 6.1 `uv run pytest` and the fake replay pass in full.
 - [ ] 6.2 Real-model replay and a live CLI session with the model in `.env` (never read or print it), with the four plugins on: a mode switches, a role's `context` reaches a person's card, a search runs, a Workspace task with `run` runs end to end with typing, tool steps and the approval shown. Report what happened and the metrics.
 
-**Done when.** All parts are ticked, tests and both replays reported, no core file changed,
+**Done when.** All parts are ticked, tests and both replays reported, no core file changed except by 4.7 with its evidence,
 the code readable (AGENTS.md size guide).
 
 **Notes.**

@@ -40,6 +40,10 @@ an intention into native actions.
 - Tokens and URLs come from `.env`; non-secret options (enabled or not, …) from `config.yaml`;
   nothing about an adapter lives in the core or in `soul.yaml`.
 - Report `place_kind` (direct | shared) in every percept; only the adapter knows it (D48).
+- Received files go to the attachment store (`put(file) → ref`) and are listed in the percept's
+  `data.attachments`, any number per message, with a `description` that sums them up; the send
+  tool takes `attachments: [ref, …]` and the adapter declares files per message, largest size
+  and types ([middleware.md §10](middleware.md)).
 - Optionally offer **place info**: a place's name, member count and the platform's role facts
   ("admin of this group"), used by `/whoami`, person cards and Discord role mapping; a missing
   part is declared, never a silent empty answer.

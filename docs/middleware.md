@@ -30,7 +30,7 @@ the same name (`registry/tools.py`, …); the eight concepts stay.
 
 | Module | File | What it provides | When |
 |---|---|---|---|
-| [Contract](#2-the-api-six-levers-d41) | `contract.py` | the rules of the game for every plugin and adapter: hook outcomes (pass, replace, stop, annotate), the read-only view of the log and state, the vocabulary of tool facts (§4) and of what an adapter can show (§9) | Task 3; view and vocabulary in Task 4 |
+| [Contract](#2-the-api-six-levers-d41) | `contract.py` | the rules of the game for every plugin and adapter: hook outcomes (pass, replace, stop, annotate), the read-only view of the log and state, the vocabulary of tool facts (§4), of what an adapter can show (§9) and of attachments (§10) | Task 3; view and vocabulary in Task 4 |
 | [Policy](#3-policy) | `policy.py` | the owner policy, first and last in every hook: the identity line, daily model budget, quiet hours; whether a tool call passes, asks for approval or is refused (roles + tool facts + approval mode, §8); the owner commands that change these settings | Task 3 (as `owner_policy.py` + `limits.py`, merged in Task 4) |
 | [Privacy](#3-policy) | `privacy.py` | absolute line 2: audience labels, what a context may hold, the withheld note, `share`, data leaving the machine, stricter rules from plugins | Task 3 |
 | [Identity](#7-identity-alias-map-owner-person-cards) | `identity.py` | alias map, pairing the owner, person cards, routes (`to:`); account linking | Task 3; linking in Task 5 |
@@ -318,4 +318,23 @@ edit message, buttons, reactions, …), like V1 ADR-0018's optional parts and th
 of chat frameworks. A missing capability is never a silent no-op: `interaction.py` picks the
 fallback it knows (no buttons → "reply yes or no" as text; no typing → nothing), so what is lost
 is a choice, visible in the code and the boot report.
+
+## 10. Attachments
+Files that arrive with a message or leave with one, any number per message. The core never
+reads them: they ride in a percept's `data` and in an act's arguments (D61).
+- **Vocabulary** (`contract.py`): an attachment is `{ref, name, mime, size}`. A percept lists
+  them in `data.attachments`; its `description` sums them up for reasoning ("Budi sent 3 files:
+  report.pdf (2 pages), photo.jpg, data.xlsx").
+- **Store** (`infra/`, one door in `contract.py`): an adapter calls `put(file) → ref` when it
+  receives a file; anyone who opens one calls `open(ref)`, which `privacy.py` checks. An
+  attachment carries the audience labels of the event it came with, so a file sent in a private
+  chat opens or goes on to someone else only after `share`. Hard forgetting deletes the file too.
+- **Reading**: Workspace's `read` takes a `ref`, through the same readers as any file
+  ([plugins.md §5.3](plugins.md)).
+- **Sending**: an adapter's send tool takes `attachments: [ref, …]`. The adapter declares how
+  many files per message, the largest size and the types it supports; when it can send fewer
+  than asked, `interaction.py` splits them into several messages and says so. The policy's
+  "confirm before forwarding a file" applies per attachment.
+- Whether the soul sees images directly (vision) is a separate, later decision; until then an
+  image is read through a reader.
 

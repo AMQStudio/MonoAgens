@@ -22,8 +22,8 @@ Linking comes first: it is what lets a person's private context follow them (D45
 link is a leak.
 
 - [ ] 1.1 Identity linking (`/link`): the owner links accounts, or the person confirms with a verification code sent from the second account; every link is an event and can be undone; the soul may suspect and ask, never link silently.
-- [ ] 1.2 WhatsApp with `history` and back-fill on connect; receiving and sending files as capabilities (a received file is a percept with a description and a reference in `data`).
-- [ ] 1.3 Discord.
+- [ ] 1.2 WhatsApp with `history` and back-fill on connect; receiving and sending several files per message through the attachment store (middleware.md §10): refs in `data.attachments`, a description that sums them up, declared limits per message.
+- [ ] 1.3 Discord, with several attachments per message (middleware.md §10).
 - [ ] 1.3b Interaction rendering (middleware.md §9): WhatsApp and Discord declare what they can show and render typing, tool steps and approvals their own way (WhatsApp: "typing…", approval by reaction; Discord: typing, buttons); the decisions stay in `interaction.py`.
 - [ ] 1.3c Roles from Discord: map Discord's own roles of a server to roles in `roles.py` (middleware.md §8) in the role definitions (e.g. `discord_role:` on a role), not per person; a Discord role grants nothing until the owner maps it.
 - [ ] 1.4 Check: one conversation continues across WhatsApp, Discord and Telegram; a person's private context follows them only after a verified link; a file received on WhatsApp can be read and sent on.
