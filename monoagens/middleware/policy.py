@@ -18,8 +18,10 @@ from zoneinfo import ZoneInfo
 from monoagens.core.hooks import Middleware
 from monoagens.core.identity import SelfTool
 from monoagens.infra.store import append_event
-from monoagens.middleware import identity, privacy, registry
+from monoagens.middleware import identity, privacy, registry, roles
 from monoagens.middleware.contract import compose
+
+IDENTITY_SET = "identity.set"  # the owner's alone: a permission without a base
 
 
 def install(kernel: Any) -> None:
@@ -27,8 +29,12 @@ def install(kernel: Any) -> None:
     kernel.tools = registry.ToolRegistry()
     kernel.tools.register(SelfTool(kernel.conn, kernel.clock,
                                    visible=privacy.visible,
-                                   memory_visible=privacy.memory_visible))
+                                   memory_visible=privacy.memory_visible),
+                          permissions={"recall": "self.recall",
+                                       "set_identity": IDENTITY_SET})
     privacy.register(kernel.tools)
+    registry.install_own(kernel.tools)
+    kernel.roles = roles.RoleBook.empty()
     kernel.intake = identity.intake(kernel.conn)
     kernel.budget_limit = daily_limit(kernel.settings)
     kernel.after_model_call = enforce(kernel)
@@ -37,12 +43,15 @@ def install(kernel: Any) -> None:
                             policy_for(pipeline.name, "last", kernel))
         for name, middleware in modules_for(pipeline.name, kernel):
             pipeline.add(name, middleware)
+    registry.install_commands(kernel)
 
 
 def modules_for(hook: str, kernel: Any) -> tuple[tuple[str, Middleware], ...]:
     """Return the scoped middleware of one hook, in the order it runs."""
-    return {"inbound": (("identity-pairing", identity.claim(kernel.conn)),),
-            "context": (("identity-cards", identity.cards(kernel.conn)),),
+    return {"inbound": (("identity-pairing", identity.claim(kernel.conn)),
+                        ("commands", registry.commands(kernel))),
+            "context": (("identity-cards", identity.cards(kernel.conn)),
+                        ("self-block", registry.self_block(kernel))),
             "action": (("identity-route", identity.route(kernel.conn)),)}.get(hook, ())
 
 

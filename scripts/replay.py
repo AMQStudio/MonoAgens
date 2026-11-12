@@ -91,11 +91,13 @@ CHAT_CAPABILITIES = (
     {"name": "say", "description": "Send a text message in the current place.",
      "schema": {"type": "object", "properties": {"text": {"type": "string"}},
                 "required": ["text"]},
-     "communicative": True, "long_running": False, "identity_changing": False},
+     "communicative": True, "long_running": False, "identity_changing": False,
+     "permission": None},
     {"name": "react", "description": "React to a message with one emoji.",
      "schema": {"type": "object", "properties": {"emoji": {"type": "string"}},
                 "required": ["emoji"]},
-     "communicative": False, "long_running": False, "identity_changing": False},
+     "communicative": False, "long_running": False, "identity_changing": False,
+     "permission": None},
 )
 
 # `dev` is the owner's workspace organ: it chats and runs the owner's code.
@@ -106,7 +108,7 @@ DEV_CAPABILITIES = (*CHAT_CAPABILITIES,
                      "schema": {"type": "object", "properties": {"command": {"type": "string"}},
                                 "required": ["command"]},
                      "communicative": False, "long_running": True,
-                     "identity_changing": False})
+                     "identity_changing": False, "permission": "dev.run"})
 
 TEST_CAPABILITIES = {GAME_BODY: CHAT_CAPABILITIES, WHATSAPP_BODY: CHAT_CAPABILITIES,
                      DEV_BODY: DEV_CAPABILITIES}

@@ -72,3 +72,13 @@ def settings(**sections: dict[str, Any]) -> dict[str, Any]:
     for name, patch in sections.items():
         value[name] = {**value.get(name, {}), **patch}
     return value
+
+
+def open_book(who: str, *permissions: str):
+    """Return a role book in which one person holds these permissions (guard tests)."""
+    from monoagens.middleware import roles
+
+    return roles.RoleBook(
+        roles={"open": roles.Role("open", base="guest", allow=frozenset(permissions))},
+        people={who: roles.Person(who, roles=("open",))},
+        bases={**roles.CORE_PERMISSIONS, **{name: None for name in permissions}})

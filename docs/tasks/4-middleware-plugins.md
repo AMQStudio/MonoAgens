@@ -96,3 +96,59 @@ and 30 in Task 3's closing note), not a Task 4 regression. Absolute-line violati
 restored (not committed as part of this task). Rename inventory (1.1): only `monoagens/boot.py`
 imports `owner_policy`; `owner_policy.py` imports `limits` and `tools`; no test imports them
 directly (`tests/middleware/__init__.py` only names them in its docstring).
+
+A second baseline run (same commit, with the Task 4 code in place) gave `133/133`; the 2
+failures of the first run did not reproduce, so scenario 20 is flaky by order, as suspected.
+
+**1.0 (a) Cold start.** `boot.warm()` awaits `SELECT 1` (a broken connection fails before the
+model loads) and then one `embedder.embed(["warm-up"])`; `__main__` calls it after `build` and
+before the pairing code or any adapter. The slow-embedder test (`SlowModelEmbedder`, 0.6 s load)
+measures the load inside `warm` and the whole pairing percept — recorded, `pair.claimed`,
+appraisal — in less than the 500 ms hook timeout; no `error` event is written. `warm` lets an
+embedder failure propagate: a soul that cannot embed is not served, and the retry would fail
+identically.
+**(b) Routes.** `identity.route` now falls back to the current place when `to:` names a person
+who is in that place's audience. `labels["hold_for"]` stays `None` for anyone but the owner: that
+label means "the thread waits for the owner" (`core/threads.py:70`), not "the answer is for this
+person", so the plan's assertion on `hold_for` was dropped in favour of the observable `act.out`
+(place and `to`).
+**(c) Context cost.** 500 events over 50 shared places, 200 memory events, 5 memories on the
+desk: `privacy.filter_context` = **96.3 ms** (assertion `< 250 ms`, half the hook timeout).
+
+**1.1 Rename inventory** (grep at `e6bdd81`, unchanged after): `boot.py` imported
+`owner_policy`; `owner_policy.py` imported `identity`, `limits`, `privacy`, `tools`;
+`limits.py` imported `infra.store`; no test imported `owner_policy`, `limits` or `tools`
+directly. Renames: `owner_policy.py` + `limits.py` → `policy.py` (one `install`), `tools.py` →
+`registry.py` (`ToolRegistry` unchanged), plus one docstring reference in `infra/budget.py`.
+Behavior unchanged: the suite and the fake replay were identical before and after.
+
+**1.2 Format versions.** The shipped files are already current (`config.yaml` version 2,
+`soul.yaml` version 1, `prior/manifest.yaml` `format_version: 1`), so a boot emits **no** upcast
+note; only a version 1 or unversioned file does, with the two notes the plan names. `config.yaml`
+diff: version 2, `plugins:` list → map with `workspace`, `web-search`, `soul-tuning` enabled,
+`interaction: {thinking: owner_direct, steps: long, approvals: owner}`, `roles: {fallback:
+unverified, unverified: {base: guest, label, context}}`, `people: {}`. A version 1 `config.yaml`
+reads as a map in memory and is never rewritten (test asserts the bytes).
+
+**1.3 Registry.** Entries: `ToolEntry` (facts, permission, output cap), `CommandEntry`,
+`SkillEntry`; the one output marker is `contract.OUTPUT_MARKER`, and `_cut` keeps
+`cap - len(marker)` characters so `text + marker` fits the cap. `/help` lists commands and
+**tools with a permission** — talking capabilities are excluded on purpose, which is what makes
+the text byte-identical on Telegram and CLI (their `say`/`react` descriptions differ). The
+`<self>` block is a **volatile** `Part` with order 5: `core/context/parts.py::_extension_blocks`
+refuses a non-volatile extension block. As decided in the plan, the tool index stays in the
+core's `act` tool (one line per capability) and `registry.describe` returns the full schema, so
+`<self>` carries commands, relevant skills and standing rules only.
+Two consequences of "every entry declares a permission" that the plan did not spell out:
+- the core's `self.set_identity` capability needed a permission (the core is frozen and its
+  `CAPABILITIES` cannot change), so `policy.install` passes `permissions={"recall":
+  "self.recall", "set_identity": "identity.set"}` and the middleware catalog declares
+  `identity.set` **without a base** (owner only, like `budget.manage`).
+- every adapter's `say`/`react` and every test body now declares `"permission": None`
+  explicitly; a non-talking adapter capability (the replay's `dev.run`) declares a permission.
+  A talking capability without the explicit `None` fails at boot, as D59 asks.
+`roles.py` is born here with the **empty book** (`RoleBook.empty()` = the middleware catalog as
+bases, the owner always free, everyone else only the guest-tier permissions) rather than in 1.6:
+the registry offers a turn only what its requester may use, so a kernel without a book would
+have offered nothing but talking capabilities and broken the fake replay and the core tests.
+1.6 adds `RoleBook.build`, the commands and the wildcards on top of the same API.

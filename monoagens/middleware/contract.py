@@ -26,8 +26,19 @@ from typing import Any
 from monoagens.core.hooks import (OWNER_POLICY, SLOTS, Continue, HookOutcome, Middleware,
                                   Registration, Replace, Stop)
 
-__all__ = ["OWNER_POLICY", "SLOTS", "Continue", "HookOutcome", "Middleware", "Registration",
-           "Replace", "Stop", "compose"]
+# What a tool states about itself (middleware.md §4). A tool without facts fails at boot.
+FACTS = ("reads", "changes", "runs_code", "network")
+CALL_FACTS = FACTS + ("sensitive",)  # `sensitive` is added to one call, never declared
+
+# What an adapter can show besides a message (middleware.md §9).
+SHOWS = ("typing", "edit", "buttons", "reactions")
+
+# The one marker for a cut tool output; a tool never invents a second one.
+OUTPUT_MARKER = "\n...[truncated: output exceeds {limit} chars; next: continue from character {n}]"
+
+__all__ = ["CALL_FACTS", "FACTS", "OUTPUT_MARKER", "OWNER_POLICY", "SHOWS", "SLOTS",
+           "Continue", "HookOutcome", "Middleware", "Registration", "Replace", "Stop",
+           "compose"]
 
 
 def compose(*rules: Middleware) -> Middleware:

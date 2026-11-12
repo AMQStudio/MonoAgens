@@ -124,7 +124,7 @@ class _SayBody:
                  "schema": {"type": "object", "properties": {"text": {"type": "string"}},
                             "required": ["text"]},
                  "communicative": True, "long_running": False,
-                 "identity_changing": False},)
+                 "identity_changing": False, "permission": None},)
 
     async def act(self, action):
         self.actions.append(action)

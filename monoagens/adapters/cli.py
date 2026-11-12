@@ -17,13 +17,15 @@ CAPABILITIES = (
     {"name": "say", "description": "Write a text line to the terminal.",
      "schema": {"type": "object", "properties": {"text": {"type": "string"}},
                 "required": ["text"]},
-     "communicative": True, "long_running": False, "identity_changing": False},
+     "communicative": True, "long_running": False, "identity_changing": False,
+     "permission": None},
     {"name": "react", "description": "Write one emoji to the terminal.",
      "schema": {"type": "object",
                 "properties": {"emoji": {"type": "string"},
                                "message_id": {"type": "integer"}},
                 "required": ["emoji"]},
-     "communicative": False, "long_running": False, "identity_changing": False},
+     "communicative": False, "long_running": False, "identity_changing": False,
+     "permission": None},
 )
 
 

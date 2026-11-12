@@ -18,13 +18,15 @@ CAPABILITIES = (
     {"name": "say", "description": "Send a text message in the current place.",
      "schema": {"type": "object", "properties": {"text": {"type": "string"}},
                 "required": ["text"]},
-     "communicative": True, "long_running": False, "identity_changing": False},
+     "communicative": True, "long_running": False, "identity_changing": False,
+     "permission": None},
     {"name": "react", "description": "React to a message with one emoji.",
      "schema": {"type": "object",
                 "properties": {"emoji": {"type": "string"},
                                "message_id": {"type": "integer"}},
                 "required": ["emoji"]},
-     "communicative": False, "long_running": False, "identity_changing": False},
+     "communicative": False, "long_running": False, "identity_changing": False,
+     "permission": None},
 )
 
 

@@ -26,7 +26,7 @@ from monoagens.infra.store import (append_event, insert_event_vector, read_event
 from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
 from monoagens.boot import build, install
-from tests.support import settings
+from tests.support import open_book, settings
 
 SETTINGS = settings()
 PLACE = "space:tg:1"
@@ -899,7 +899,7 @@ class IdentityBody(RecordingBody):
     def capabilities(self):
         return [{"name": "set_identity", "description": "change who the soul is",
                  "communicative": False, "long_running": False,
-                 "identity_changing": True}]
+                 "identity_changing": True, "permission": "identity.set"}]
 
 
 async def test_identity_changing_capability_is_refused_for_a_non_owner(aconn):
@@ -907,6 +907,7 @@ async def test_identity_changing_capability_is_refused_for_a_non_owner(aconn):
     kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     body = IdentityBody()
     kernel.register_adapter(body)
+    kernel.roles = open_book("person:other", "identity.set")  # so the guard is what refuses
 
     await _feed(kernel, replace(_msg("ubah dirimu"), who="person:other"))
 

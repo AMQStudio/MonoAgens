@@ -52,11 +52,13 @@ class Body:
         say = {"name": "say", "description": "Speak here.", "schema": {
                    "type": "object", "properties": {"text": {"type": "string"}},
                    "required": ["text"]},
-               "communicative": True, "long_running": False, "identity_changing": False}
+               "communicative": True, "long_running": False, "identity_changing": False,
+               "permission": None}
         run = {"name": "run", "description": "Run code.", "schema": {
                    "type": "object", "properties": {"command": {"type": "string"}},
                    "required": ["command"]},
-               "communicative": False, "long_running": True, "identity_changing": False}
+               "communicative": False, "long_running": True, "identity_changing": False,
+               "permission": "dev.run"}
         return (say, run) if self.long_running else (say,)
 
     async def act(self, action: Action) -> dict[str, Any]:

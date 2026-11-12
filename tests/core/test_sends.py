@@ -30,11 +30,13 @@ class SendingAdapter:
         return ({"name": "say", "description": "Send a line.",
                  "schema": {"type": "object", "properties": {"text": {"type": "string"}},
                             "required": ["text"]},
-                 "communicative": True, "long_running": False, "identity_changing": False},
+                 "communicative": True, "long_running": False, "identity_changing": False,
+                 "permission": None},
                 {"name": "react", "description": "React with an emoji.",
                  "schema": {"type": "object", "properties": {"emoji": {"type": "string"}},
                             "required": ["emoji"]},
-                 "communicative": False, "long_running": False, "identity_changing": False})
+                 "communicative": False, "long_running": False, "identity_changing": False,
+                 "permission": None})
 
     async def act(self, action: Action) -> None:
         self.sent.append(str(action.payload.get("text") or action.payload.get("emoji")))
