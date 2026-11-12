@@ -152,9 +152,9 @@ passes.
 - [x] 12.5b **A memory's audience from its sources (D53, before any real-model run).** Sleep no longer takes `place`/`private` from the model: the core derives them from `derived_from` (private if any source is private; audience = the people every private source was said to; no known source → private to the owner). Core memory follows the same rule. Tests: a sleep answer that omits place for a summary of Fulan's direct chat never reaches a group; core memory built from a direct chat stays out of a group. If a file is at its budget, move code rather than compress; if the package cannot hold it, stop and report.
 - [x] 12.6 **Checks that forbid correct behavior.** 16: "model.call >= 2" forbids calling `expect` at once — the check is that the promise is held in the first wake. 24: the stored fact may be said in any format ("jam lima", "17:00"); its contradictory group lines are made consistent. List every changed check under Notes.
 - [x] 12.7 **Guidance stays small.** `guidance.py` ≤ 30 lines of general principles; any line added in this part has its evidence under Notes.
-- [ ] 12.9 **Person cards for people named (D55).** The desk carries the person cards of people present or named in the trigger: name, person id, reachable bodies, closeness; never their messages. Cards are never withheld by absolute line 2. Scenario 18 steps 6–8: with Charlie in the world, the soul still knows `person:budi` and how to reach him.
+- [x] 12.9 **Person cards for people named (D55).** The desk carries the person cards of people present or named in the trigger: name, person id, reachable bodies, closeness; never their messages. Cards are never withheld by absolute line 2. Scenario 18 steps 6–8: with Charlie in the world, the soul still knows `person:budi` and how to reach him.
 - [ ] 12.10 **Withheld note (D56).** When the context hook withholds relevant private items it leaves one line: how many, and whose private place they came from; no content. Scenarios 26 and 28: the soul does not give the fact in the group, says it has something private from the owner, asks the owner in the owner's direct place, and answers only after `share.granted`.
-- [ ] 12.11 **One message per place per turn (D51).** A second communicative act to a place the same turn already spoke to is refused as already said. Test: a round with an act and a refused `expect` returns the refusal without sending the message twice.
+- [x] 12.11 **One message per place per turn (D51).** A second communicative act to a place the same turn already spoke to is refused as already said. Test: a round with an act and a refused `expect` returns the refusal without sending the message twice.
 - [x] 12.8a **Material check of every scenario still failing** (16, 18, 19, 24, 26, 27, 28, 30) — facts **and capabilities**. Scenario 18 step 7 still lacks them: the owner only mentions the finished work, no test organ can read the working folder, and the WhatsApp test organ cannot send a file; in Task 2 make the work text in the Log (what is tested here is share, send and wait, not files). Files are not the core's: receiving and sending them is a body capability (Task 5), reading a working folder is a plugin (Task 3), and rules about forwarding them are middleware policy (Task 3); a file version of this scenario belongs there. Per scenario: per scenario, what the soul needed and whether it was in the Log and on its desk; fix the scenario where material was missing. Write it under Notes before 12.8 runs.
 
 - [ ] 12.8 **Acceptance — the launch set** (owner's decision): one real-model run at `--effort high` of the launch scenarios that have not yet passed with the real model: memory and recall (07, 11, 12, 17, 20, 23), silence (01–03, 15, 21), turn-taking (04–06, 14, 22), promises (08–10, 13, 16, 24, 30), unaddressed help (25, 27, 29). Each failure gets a material check first. Then the live session (privacy across bodies, a promise kept, silence). Scenarios 18, 19, 26 and 28 move to Task 3 as capability targets; the capability record lists them as not yet held. Tick 10.10, 11.6 and 12.8.
@@ -1709,3 +1709,70 @@ Part 13 notes (worker):
   `bodies/` (`reach` 166, `expect` 232, `condition` 62, `duration` 17, `organs` 135);
   line counts are a review signal, not a budget.
 - Nothing needed a behavior change; no question is left for the architect from this part.
+
+Part 12 notes (worker, 12.9):
+- **What the item does.** `reach.person_cards(conn, place, event)` returns one card per person
+  present at the place (`reach.audience`) or named in the trigger (a known person's name, whole
+  word, case-insensitive). A name comes from `state: person:<id>` when the state holds one, else
+  from the person id's last segment when that segment is alphabetic (`person:budi` -> `budi`;
+  `person:tg:6001` has no name and can only be named through a state name). Each card carries
+  the name (when known), the person id, the direct place where each body last saw them (a
+  `percept` with `place_kind: direct`, newest per body, alias-aware) and closeness from
+  `state: person:<id>` (0.00 when unset, the default `Situation` already reads). The owner's
+  card is not rendered: the owner is the soul's always-known counterpart and every direct chat
+  would otherwise repeat it.
+- **No new primitive.** Everything is derived from existing data (aliases, `person:*` state,
+  last activity, direct places): no event, state key, book, act, hook, signal or drive was
+  added. The card is assembled per wake, not stored.
+- **Desk.** `PFCContext.people` holds the cards; `desk._semi_stable` appends `<people>` after
+  `<core_memory>` in the semi-stable system message, only when cards exist (without cards the
+  message is byte-identical to before). The context hook passes people through unchanged, and
+  `Tracker.record_desk` does not record them as items: a card holds no content, so absolute
+  line 2 never withholds it and the desk metric counts none of it (D55).
+- **Scenario 18 material, from the fake replay (steps 6-8).** Step 6 in `space:game:world1`
+  with Charlie present: `- budi (person:budi): whatsapp at
+  space:wa:628110001@s.whatsapp.net; closeness 0.00` and `- charlie (person:charlie): no
+  direct place known yet; closeness 0.00`. Step 7, whose trigger names Budi, keeps both cards
+  in the world and has Budi's card on the intent wake in his own place. Step 8 reports Budi's
+  verdict with the card still on the desk. No message text is in any card (`sketsa_logo` is
+  absent from them, and from the group prompt).
+- **Tests.** `tests/test_reach.py::test_person_cards_show_people_present_and_named_but_never_their_messages`
+  (Charlie present, Budi named, card holds name/person id/whatsapp place/closeness, none of
+  Budi's message, the prompt has `<people>`);
+  `tests/test_replay_metrics.py::test_person_cards_are_not_private_items_on_the_desk` (a real
+  desk holds Budi's card and the desk scan records only the place's own line: 0 violations).
+  `_desk`/`_trigger` in `tests/test_reach.py` gained an optional trigger text; no assertion was
+  changed.
+- `scripts/replay.py`: `_fake_context_text` includes `context.people` so a fake-mode prompt
+  check can see a card. No organ/body definition and no metric changed.
+- **Runs.** `uv run pytest`: 283 passed (the added 12.11 test made it 284). Fake replay: 30
+  scenarios, 130/130 checks, absolute-line violations 0, missed-help 0.0% (0/65), false-speak
+  0.0% (0/71), honesty 62/62. `scenarios/README.md` was regenerated only as generated output and
+  reverted. Commit 34aa31a.
+
+Part 12 notes (worker, 12.11):
+- **What the item does.** `jobs.apply_calls` tracks the places one job's calls have already
+  spoken to and hands the set to `kernel._apply` -> `organs.dispatch`. A communicative act
+  whose resolved place is already in the set is refused before any intent or `act.out`, with
+  an honest `act.result` (`{"error": "already said something to <to or place> this turn"}`),
+  so the organ is never called a second time and nothing is silently dropped. The set lives
+  for one PFC job, i.e. all rounds of one wake (D51); another place, a non-communicative act
+  (`self.share`, `react`) and a new wake are unaffected.
+- **Where and why.** The place a `to: person` names is only resolvable from the Log, and the
+  PFC job deliberately does not touch the shared connection (12.4), so the check runs where
+  the act is applied, not in `pfc.turns`; the resolved place is the same one the act would use
+  (`reach.resolve_to`, the speaker-is-here shortcut), so `to: person:budi` and the derived
+  place compare equal. The reason still reaches the soul: the refusal is a recorded
+  `act.result`, the circuit breaker continues the goal, and the next wake's desk holds it.
+  An unreachable person keeps the ordinary honest failure.
+- **Changed checks.** None. New test
+  `tests/test_pfc.py::test_a_second_message_to_the_same_place_in_one_turn_is_refused`: one
+  wake whose first round acts and carries a cue-less `expect` (refused and returned in round
+  2) and whose second round acts again at the same place; the body receives exactly one
+  message, exactly one `act.out` is recorded, and the duplicate gets `already said something
+  to space:tg:1 this turn`. The existing refusal test keeps its expectation assertion
+  unchanged.
+- **Runs.** `uv run pytest`: 284 passed (real Postgres). Fake replay: 30 scenarios, 130/130
+  checks, absolute-line violations 0, missed-help 0.0% (0/65), false-speak 0.0% (0/71),
+  honesty 62/62. `scenarios/README.md` regenerated only as generated output and reverted.
+  Commit 37c760c.
