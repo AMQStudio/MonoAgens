@@ -226,12 +226,13 @@ class Kernel:
         for item in await expect.recovery(self.conn, now=self.clock.now()):
             await self._expect_wake(item)
 
-    async def _apply(self, event: Event, call: ToolCall) -> bool:
+    async def _apply(self, event: Event, call: ToolCall,
+                     said: set[str] | None = None) -> bool:
         args = call.arguments
         if call.name == "think":
             await self._emit(event, "decision.note", {"act": "think", **args})
         elif call.name == "act":
-            return await organs.dispatch(self, event, args)
+            return await organs.dispatch(self, event, args, said=said)
         elif call.name == "expect":
             await expect.create(self.conn, args, now=self.clock.now(),
                                 settings=self.settings, source=event)

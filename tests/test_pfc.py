@@ -422,6 +422,30 @@ async def test_an_expect_without_a_cue_is_corrected_in_the_same_wake(aconn):
     assert await cur.fetchall() == [("ask again later", None)]
 
 
+async def test_a_second_message_to_the_same_place_in_one_turn_is_refused(aconn):
+    """D51: a turn speaks once per place; the repeat is an honest result, not a message."""
+    fake = FakeLLM([
+        [("act", {"capability": "telegram.say", "arguments": {"text": "halo"}}),
+         ("expect", {"about": "ask again later", "expect": {"none": True}})],
+        [("act", {"capability": "telegram.say", "arguments": {"text": "halo lagi"}})],
+        [],
+    ])
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    body = RecordingBody()
+    kernel.register_body(body)
+
+    await _feed(kernel, _msg("jawab dong"))
+
+    assert "expect refused: expect needs cue_time or cue_event" in \
+        fake.requests[1]["messages"][-1]["content"]
+    assert [action.payload for action in body.actions] == [{"text": "halo"}]
+    assert await (await aconn.execute(
+        "SELECT count(*) FROM events WHERE kind = 'act.out'")).fetchone() == (1,)
+    cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.result'")
+    assert [row[0]["result"]["error"] for row in await cur.fetchall()] == [
+        f"already said something to {PLACE} this turn"]
+
+
 async def test_a_refusal_returns_even_when_the_same_round_acted(aconn):
     """12.4/D51: a refused thought act is never lost because another call took effect."""
     fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "siap"}}),

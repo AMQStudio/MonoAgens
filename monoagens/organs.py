@@ -51,8 +51,13 @@ class OrganRegistry:
         return await body.act(action)
 
 
-async def dispatch(kernel: Any, event: Event, args: dict[str, Any]) -> bool:
-    """Resolve, guard and hand one `act` call to the organ that declares it (D2, D46)."""
+async def dispatch(kernel: Any, event: Event, args: dict[str, Any], *,
+                   said: set[str] | None = None) -> bool:
+    """Resolve, guard and hand one `act` call to the organ that declares it (D2, D46).
+
+    `said` holds the places this turn already spoke to: a turn says at most one
+    message per place, so a second communicative act there is refused (D51).
+    """
     capability = str(args.get("capability") or "")
     cap = kernel.organs.capabilities.get(capability)
     if cap is None:
@@ -83,8 +88,14 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any]) -> bool:
                            {"capability": capability, "to": to, "result": {"error": error}})
         return True
     place = target or event.place
+    if cap.get("communicative") and said is not None and place in said:
+        await kernel._emit(event, "act.result", {"capability": capability, "to": to, "result": {
+            "error": f"already said something to {to or place} this turn"}})
+        return True
     if place != event.place and cap.get("communicative"):
         await _intend(kernel, event, capability, arguments, to, place)
+        if said is not None:
+            said.add(place)
         return True
     if await reach.leaks(kernel.conn, place, str(arguments.get("text") or "")):
         await kernel._emit(event, "act.result", {"capability": capability, "to": to, "result": {
@@ -94,6 +105,8 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any]) -> bool:
               "communicative": bool(cap.get("communicative"))}
     stored = await kernel._emit(event, "act.out", {**record, "to": to} if to else record,
                                 place=place)
+    if cap.get("communicative") and said is not None:
+        said.add(place)
     await kernel._encode(stored, str(arguments.get("text") or "") or None)
     payload = await kernel._run_hooks("action", arguments, ctx, event,
                                       organ=capability.partition(".")[0])

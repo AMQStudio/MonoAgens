@@ -126,11 +126,12 @@ async def encode(embedder: Any, event_id: int, text: str) -> dict[str, Any]:
 async def apply_calls(kernel: Any, trigger: Event, calls: list[dict[str, Any]]) -> None:
     """Apply the tool calls of a finished PFC job; silence is recorded when none acts."""
     acted, thought = False, ""
+    said: set[str] = set()
     for raw in calls:
         if raw.get("refused"):
             continue
         call = ToolCall(str(raw.get("name")), dict(raw.get("arguments") or {}))
-        acted = await kernel._apply(trigger, call) or acted
+        acted = await kernel._apply(trigger, call, said) or acted
         if call.name == "think":
             thought = str(call.arguments.get("thought") or "")
     if not acted:
