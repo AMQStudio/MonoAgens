@@ -2,21 +2,9 @@
 
 from __future__ import annotations
 
-import re
-from datetime import timedelta
-
+from monoagens.duration import parse_duration
 from monoagens.embedding import cosine
 from monoagens.store import append_event, payload_text, read_event_vector
-
-_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*([smhd])$")
-
-
-def parse_duration(value):
-    """Parse a duration like "2d", "6h", "30m", or "45s" into a timedelta."""
-    if (m := _RE.match(str(value).strip().lower())) is None:
-        raise ValueError(f"invalid duration: {value!r}")
-    return timedelta(seconds=float(m[1]) * _UNITS[m[2]])
 
 
 def operator(expect):
@@ -25,8 +13,8 @@ def operator(expect):
         return {"none": True}
     if "event_seen" in expect:
         seen = expect["event_seen"] if isinstance(expect["event_seen"], dict) else {}
-        pattern = {key: value for key, value in dict(seen.get("pattern") or seen).items()
-                   if key != "within"}
+        stated = dict(seen.get("pattern") or seen)
+        pattern = {key: value for key, value in stated.items() if key != "within"}
         within = expect.get("within") or seen.get("within")
         if not pattern or not within:
             raise ValueError("event_seen needs a pattern and a within window")

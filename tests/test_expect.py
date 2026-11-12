@@ -11,6 +11,7 @@ import pytest
 
 from monoagens import expect
 from monoagens.clock import FakeClock
+from monoagens.duration import parse_duration
 from monoagens.kernel import Kernel
 from monoagens.pfc import PFC
 from monoagens.store import append_event, write_state
@@ -115,14 +116,14 @@ async def _create(conn, **overrides) -> tuple[int, Event]:
 
 
 def test_parse_duration_units():
-    assert expect.parse_duration("30s") == timedelta(seconds=30)
-    assert expect.parse_duration("30m") == timedelta(minutes=30)
-    assert expect.parse_duration("2h") == timedelta(hours=2)
-    assert expect.parse_duration("1d") == timedelta(days=1)
-    assert expect.parse_duration("1.5h") == timedelta(minutes=90)
+    assert parse_duration("30s") == timedelta(seconds=30)
+    assert parse_duration("30m") == timedelta(minutes=30)
+    assert parse_duration("2h") == timedelta(hours=2)
+    assert parse_duration("1d") == timedelta(days=1)
+    assert parse_duration("1.5h") == timedelta(minutes=90)
     for bad in ("2w", "abc", "", "10"):
         with pytest.raises(ValueError):
-            expect.parse_duration(bad)
+            parse_duration(bad)
 
 
 def test_next_check_at_every_and_daily_in_the_configured_timezone():

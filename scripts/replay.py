@@ -51,7 +51,7 @@ from monoagens.clock import FakeClock
 from monoagens.cognition import Appraisal
 from monoagens.config import DEFAULT_ENV_PATH, EFFORTS, load_env_file, load_llm_config
 from monoagens.prior import constants, load_settings
-from monoagens.expect import parse_duration
+from monoagens.duration import parse_duration
 from monoagens.kernel import Kernel
 from monoagens.embedding import FastEmbedder, FakeEmbedder
 from monoagens.migrate import migrate, migrate_url

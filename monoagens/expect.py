@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from psycopg.types.json import Jsonb
 
 from monoagens import condition
-from monoagens.condition import parse_duration
+from monoagens.duration import parse_duration
 from monoagens.prior import constants
 from monoagens.store import (append_event, fire_expectation, insert_expectation,
                              read_expectations, read_state, resolve_expectation)
