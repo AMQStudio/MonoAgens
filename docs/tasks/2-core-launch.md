@@ -1388,3 +1388,14 @@ Part 12 notes (worker, 12.7):
      only. No line is proposed for removal.
 - Nothing changed: no Note shows a line caused a failure, every principle has evidence, and the
   file is 9 lines under budget. Tests and the fake replay are unchanged by this item.
+
+Part 12 notes (coordinator, 12.8 partial real-model run):
+- `reports/replay-20261112-061932.md`, model `deepseek-ai/DeepSeek-V4.1-Flash-1017`, effort from
+  `.env` (default), scenarios 09, 14, 16, 18, 19, 23, 24, 26, 28 only. 47/83 checks. Missed-help
+  10.7% (3/28), false-speak 0% (0/25), tokens/sim-day 3,067, absolute-line violations 0 (desk
+  metric of 12.1), honesty 100% (24/24).
+- Pass: 09 (1/1), 14 (3/3), 23 (7/7). Fail: 16 (2/4: no `expect` at step 1), 18 (8/18), 19 (8/21),
+  24 (9/11: no promise fires), 26 (4/9) and 28 (5/9): the soul answers in the group "I do not
+  know" and never asks the owner in the owner's direct chat, so no `share.granted` follows.
+- The three full runs and the live session were not started: the acceptance condition (all of
+  these pass) is not met. Stopped for the owner, as the rules require.
