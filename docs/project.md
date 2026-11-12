@@ -57,7 +57,7 @@ The rule for every setting: the file gives the starting value; what the soul's b
 | File | For | Holds |
 |---|---|---|
 | `README.md` (root) | people | what it is, install, run, tune with replay |
-| `AGENTS.md` (root) | coding agents | rules, stack, invariants, size budget |
+| `AGENTS.md` (root) | coding agents | rules, stack, invariants, size guide |
 | `docs/constitution.md` | everyone | the rules that never change |
 | `docs/core.md` | everyone | the core specification (contract frozen) |
 | `docs/core-math.md` | scientists | every formula, why it was chosen, sources |

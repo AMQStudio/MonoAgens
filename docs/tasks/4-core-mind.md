@@ -45,6 +45,6 @@ The fade and hard-forget paths exist since Task 1; this part adds the policy aro
 - [ ] 4.1 `uv run pytest` and the fake replay pass in full.
 - [ ] 4.2 Real-model replay with the model in `.env` (never read or print it); report metrics against Task 2's numbers: missed-help rate, false-speak rate, tokens per simulated day, absolute-line violations (0).
 
-**Done when.** All parts are ticked, tests and both replays reported, every file within budget.
+**Done when.** All parts are ticked, tests and both replays reported, the code readable (AGENTS.md size guide).
 
 **Notes.**

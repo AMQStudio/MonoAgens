@@ -11,7 +11,7 @@ are enforced by the core itself; middleware only narrows.
 
 ## Part 1 — The foundation
 Read first: [middleware.md](../middleware.md)
-May touch: `monoagens/middleware.py` (and a `middleware/` package if it outgrows its budget), `monoagens/bodies/`, `monoagens/__main__.py`, `config.yaml`, `monoagens/store.py` (read-only view only), `tests/`, `scenarios/`
+May touch: `monoagens/middleware.py` (and a `middleware/` package if it grows past one responsibility), `monoagens/bodies/`, `monoagens/__main__.py`, `config.yaml`, `monoagens/store.py` (read-only view only), `tests/`, `scenarios/`
 
 - [ ] 1.1 Policy: default owner policy — daily budget, quiet hours; first and last in every hook; privacy rules that only narrow (confirm before forwarding a file, a mode that keeps a topic out); route hints to a person via lever 2.
 - [ ] 1.2 Commands & tools: one command registry (identical `/help`); capability registry behind `<self>`; optional tool-use approvals.
@@ -45,6 +45,6 @@ Multi-step work runs in the core's task threads (Task 2 Part 3); the plugins onl
 - [ ] 4.2 Real-model replay and a live CLI session with the model in `.env` (never read or print it), with both plugins installed: modes switch, memory-view lists and corrects, a search and a working-directory task run end to end. Report what happened and the metrics.
 
 **Done when.** All parts are ticked, tests and both replays reported, no core file changed,
-every file within budget.
+the code readable (AGENTS.md size guide).
 
 **Notes.**

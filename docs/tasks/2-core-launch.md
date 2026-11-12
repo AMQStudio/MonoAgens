@@ -156,7 +156,7 @@ passes.
 
 **Done when.** All parts are ticked; every scenario passes with the real model in three runs out of three; the capability record is committed; `uv run pytest` and the fake replay pass in full; the
 real-model replay and live session are reported with the missed-help rate; absolute-line
-violations are 0; every file is within its size budget.
+violations are 0; the code is readable (AGENTS.md size guide).
 
 **Notes.**
 

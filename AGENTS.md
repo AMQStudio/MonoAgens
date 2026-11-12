@@ -10,7 +10,7 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
   agent `omp` with model **`opencode-go/deepseek-v4.1-flash`**, reasoning effort **high**, on OpenCode Go.
 - The session that receives a task acts only as **coordinator**: it hands the track
   to the worker, then verifies the result (reads the diff, runs `uv run pytest`, checks the
-  invariants and the size budget) before committing and reporting.
+  invariants and the size guide) before committing and reporting.
 - The coordinator does not write implementation code itself. If the worker fails twice on
   the same step, stop and report to the owner instead of taking over.
 - Specifications (every `docs/*.md`) and this file are owned by the architect. Workers may tick
@@ -88,22 +88,20 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
   `pyproject.toml`; do not use the removed `event_loop` fixture).
 - No new dependency, ORM, agent framework, or platform SDK without the owner's approval.
 
-## Size budget (excluding tests)
-kernel.py ≤ 280 lines · hooks.py ≤ 150 (hook lists, ordering, watchdog) · jobs.py ≤ 150
-(background jobs and their timeouts) · migrate.py ≤ 120 (numbered migrations, backup) ·
-store.py ≤ 240 · expect.py ≤ 240 · memory.py ≤ 260 · pfc.py ≤ 280 ·
-reach.py ≤ 150 (audience, consent, reaching a person) · threads.py ≤ 120 (task threads) ·
-identity.py ≤ 120 (birth, identity) · recall.py ≤ 160 (`self.recall`, the task desk) ·
-desk.py ≤ 160 (the layered prompt) · guidance.py ≤ 30 (general principles only, never a rule
-for one case; a new line needs evidence in the task's Notes) ·
-bodies/telegram.py ≤ 180 ·
-bodies/cli.py ≤ 120 · cli.py ≤ 60 · cognition/ ≤ 600 in total, each file ≤ 160 ·
-middleware.py ≤ 150 · whole package ≤ 3,800 lines (3,500 + the two modules added for D45–D47).
-From here on the core grows only by removing code elsewhere.
-Counted on readable code: lines ≤ 100 characters, one statement per line, blank lines between
-functions and classes, docstrings on public functions. Compressing code to fit the budget is a
-violation, not a fix.
-Going over budget means the design is wrong. Stop and report; do not force it.
+## Size guide (excluding tests)
+Readability comes first. The real limit on the core is the complexity budget in
+`docs/constitution.md` §3 (books, thought acts, hooks, signals, drives, one gate formula), not a
+line count. Line numbers are only a signal for review:
+- A core module that passes about **300 lines** is a sign it may hold two jobs; split it by
+  responsibility when that makes it clearer, not to hit a number.
+- When the whole package grows by more than about 10% in one task, say why in the task's Notes.
+- Never compress code to save lines (several statements on one line, cryptic names, removed
+  docstrings or blank lines, logic moved somewhere odd to stay under a number). That is a
+  violation. Write code the next reader understands in one pass.
+- Readable code: lines ≤ 100 characters, one statement per line, clear names, blank lines between
+  functions and classes, docstrings on public functions, files end with a newline.
+- `guidance.py` stays a short list of general principles, never a rule for one case; a new line
+  needs evidence in the task's Notes.
 
 ## Files a part may touch
 - Each part touches only the files its **May touch** line names. Shared files (`kernel.py`,
