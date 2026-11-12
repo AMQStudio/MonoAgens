@@ -59,10 +59,10 @@ expectations:
     step: 14
     count: 1
     label: the patience window wakes the soul exactly once
-  - type: mentions
-    text: "lima"
+  - type: mentions_any
+    texts: ["jam lima", "lima sore", "17:00", "17.00", "5 sore", "pukul 17"]
     step: 14
-    label: the answer names the stored fact
+    label: the answer names the stored report hour in any of its formats
 steps:
   - at: "2026-11-10T13:00:00+07:00"
     who: person:tg:7001
@@ -107,7 +107,7 @@ steps:
   - at: "2026-11-10T13:04:30+07:00"
     who: person:tg:7003
     place: space:tg:-1004
-    text: "Nanti selesai jam lima sore kayaknya."
+    text: "Nanti laporannya jam lima sore kayaknya."
     should: silent
   - at: "2026-11-10T13:05:00+07:00"
     who: person:tg:7004
@@ -117,13 +117,13 @@ steps:
   - at: "2026-11-10T13:06:00+07:00"
     who: person:tg:7006
     place: space:tg:-1004
-    text: "Katanya selesai jam lima sore."
+    text: "Katanya laporannya jam lima sore."
     should: silent
   - advance: "40m"
   - at: "2026-11-10T13:50:00+07:00"
     who: person:tg:7005
     place: space:tg:-1004
-    text: "Eh, dokumennya selesai jam berapa ya? Aku lupa."
+    text: "Eh, laporannya jam berapa ya? Aku lupa."
     should: answer
   - advance: "2m"
 model_answers:
@@ -154,4 +154,4 @@ model_answers:
       - name: act
         arguments:
           capability: telegram.say
-          arguments: {text: "Jam lima sore, sudah selesai."}
+          arguments: {text: "Jam lima sore, laporannya."}

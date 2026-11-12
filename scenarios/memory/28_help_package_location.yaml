@@ -45,8 +45,8 @@ expectations:
     step: 5
     count: 1
     label: exactly one answer in the group after the owner consented
-  - type: mentions
-    text: "lemari depan"
+  - type: mentions_any
+    texts: ["lemari depan", "depan lemari", "lemari yang di depan", "lemari dekat pintu"]
     step: 5
     label: the answer gives the package's location once the owner has shared it
 steps:

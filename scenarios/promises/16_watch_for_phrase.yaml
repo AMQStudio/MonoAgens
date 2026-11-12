@@ -7,10 +7,10 @@ description: >-
   yang sama, Mona harus mengirim tepat satu pesan ke DM owner.
 expectations:
   - type: event_seen
-    kind: model.call
+    kind: expectation.created
     step: 1
-    count: 2
-    label: the thought's result comes back and the promise is held in the same wake
+    payload: {kind: promise}
+    label: the promise is held in the first wake, whether the model thinks first or not
   - type: no_reply
     steps: [2, 3]
     label: ordinary group chatter ignored

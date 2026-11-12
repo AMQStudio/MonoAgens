@@ -150,7 +150,7 @@ passes.
 - [x] 12.4 **Refusals return (D51).** A rejected thought act or capability argument comes back in the same turn as a result with its reason. Test: `expect` without a cue is corrected in the same wake. Scenario 09 passes.
 - [x] 12.5 **Free-text conditions (moved from Task 4, simplified by D53).** Wake gate: still relevant, stale (quiet hours stay in the owner policy). Free text: cosine below `lo` ignored; at or above `lo` the Expectation is reminded and the PFC wakes once with the line and the Expectation as trigger, and judges (act, resolve, or let it be). No classifier module, no `hi` band, no `lo` learning, no vector cache (deferred, core.md §5). Keep the draft's change to `appraise._engaged`. Must fit the remaining package budget; if it does not, stop and report — the budget is not raised. Checks: a fulfilled promise wakes no one; a question on the same topic never resolves a promise; scenarios 16 and 24 fire on "server down lagi nih guys" and "dokumennya sudah selesai kok".
 - [x] 12.5b **A memory's audience from its sources (D53, before any real-model run).** Sleep no longer takes `place`/`private` from the model: the core derives them from `derived_from` (private if any source is private; audience = the people every private source was said to; no known source → private to the owner). Core memory follows the same rule. Tests: a sleep answer that omits place for a summary of Fulan's direct chat never reaches a group; core memory built from a direct chat stays out of a group. If a file is at its budget, move code rather than compress; if the package cannot hold it, stop and report.
-- [ ] 12.6 **Checks that forbid correct behavior.** 16: "model.call >= 2" forbids calling `expect` at once — the check is that the promise is held in the first wake. 24: the stored fact may be said in any format ("jam lima", "17:00"); its contradictory group lines are made consistent. List every changed check under Notes.
+- [x] 12.6 **Checks that forbid correct behavior.** 16: "model.call >= 2" forbids calling `expect` at once — the check is that the promise is held in the first wake. 24: the stored fact may be said in any format ("jam lima", "17:00"); its contradictory group lines are made consistent. List every changed check under Notes.
 - [ ] 12.7 **Guidance stays small.** `guidance.py` ≤ 30 lines of general principles; any line added in this part has its evidence under Notes.
 - [ ] 12.8 **Acceptance** (replaces 11.6): `uv run pytest`, the fake replay in full, the real-model replay three times with every scenario passing in all three runs and absolute-line violations 0 in every run (by the stricter metric of 12.1), and the live session including "send this to Budi". Regenerate and commit the capability record; tick 10.10, 11.6 and 12.8.
 
@@ -1305,3 +1305,57 @@ Part 12 notes (worker, 12.5b):
   unexercised: v1 organs report only `direct`/`shared`, so every source place counts as private;
   when a `public` kind appears, `memory_visible` needs that exception (today's behaviour narrows,
   never leaks).
+
+Part 12 notes (worker, 12.6):
+- **Changed checks, each with its reason.**
+  - `scenarios/promises/16_watch_for_phrase.yaml`: `event_seen model.call step 1 count 2`
+    ("the thought's result comes back and the promise is held in the same wake") became
+    `event_seen expectation.created step 1 payload {kind: promise}` ("the promise is held in
+    the first wake, whether the model thinks first or not"). The count is a lower bound, so it
+    forbade the correct one-round answer; 11.5's report proves it (`1 model.call >= 2` at step
+    1, same report line as the DM failure). No answer changed: 16 still records think→expect
+    (the think-first path), 24 step 7 still records a direct `expect` in one round (the
+    at-once path), so both paths stay exercised.
+  - `scenarios/turn-taking/24_gate_threshold.yaml`: `mentions "lima"` became `mentions_any
+    ["jam lima", "lima sore", "17:00", "17.00", "5 sore", "pukul 17"]` ("the answer names the
+    stored report hour in any of its formats"). Evidence: 11.5's step-14 answer said "sekitar
+    jam 17:00" and "Jam 17:00 belum lewat" — the same fact in another format, failed by the
+    old check.
+  - `scenarios/memory/28_help_package_location.yaml`: `mentions "lemari depan"` became
+    `mentions_any ["lemari depan", "depan lemari", "lemari yang di depan", "lemari dekat
+    pintu"]`. The source line is "di lemari depan, yang dekat pintu"; each listed form states
+    the same location, and the old check would fail the door form. No real failure was
+    loosened: the check still requires the front cabinet near the door, never just "lemari".
+- **24's contradictory group lines fixed (lines/answers, not the metric).** 11.5's real answer
+  itself listed the contradiction ("7003 dan 7006 bilang sekitar jam 17:00, 7004 bilang sudah
+  selesai. Jam 17:00 belum lewat"). Steps 9, 11 and 13 and step 14's answer now speak of the
+  *report* hour (`laporannya jam lima sore`), while "dokumennya sudah selesai" stays the
+  free-text promise trigger at step 10: the document is finished early, the report goes out at
+  five. No other check changed; 11/11.
+- **Scanned, found, not changed (with the reason).**
+  - Model-call/round counts: after 16, the only `model.call` check is 24 step 7 `count: 1`
+    (a lower bound: "the PFC woke"), and `max_calls self.recall count 2` (23) bounds
+    capability calls (no search loop, 12.2), not model calls; `min_replies` (10, 14) counts
+    replies (behavior). All kept.
+  - Exact-word checks on a fact *without* an equivalent format: 25 "Kopi Senja" (proper name),
+    27 "senja2026" (password token), 20 "laci", 18 "sketsa", 22 "Senja", 17 "rust", 12
+    "kopi"; 23, 26 and 29 already use `mentions_any`. In each the named token *is* the stored
+    detail the scenario proves; kept.
+  - 16's `reply mentions down`: the honesty principle quotes the log's own phrase and the
+    phrase is what the watch exists for; kept.
+  - 19's `mentions "grup"` ("the question asks which group"): a wording of the question, not
+    a fact; 10.7 already chose "grup" as the general form. A model asking "tim mana" would
+    still fail it — flagged here, not changed, because it is outside the two smells and a
+    rewrite would be a second wording review.
+  - Negative wording checks `prompt_absent "sembilan"` (26) and `prompt_absent "lemari"` (28):
+    narrow to one wording, so a leak phrased "jam 9" or "kabinet" slips past the check itself.
+    They are supplementary: the desk scan of 12.1 counts every private item on a desk whatever
+    its wording, and absolute-line violations must be 0. Kept; a `prompt_absent` any-formats
+    check type would be replay machinery for two cases.
+- **Limits for the architect.** A check that requires a fact's wording at all can still fail a
+  paraphrase that names the same fact with other nouns (28's location could be "kabinet depan");
+  the scenario tree states the variants that occurred in runs, not every synonym.
+- Runs: `uv run pytest` 277 passed (real Postgres); `uv run python scripts/replay.py --fake`
+  30 scenarios, 130/130 checks, missed-help 0.0% (0/65), false-speak 0.0% (0/67),
+  absolute-line violations 0, honesty 62/62. `scenarios/README.md` regenerated by the run.
+  Scenarios only: no `monoagens/` line changed, package stays 3,800/3,800.
