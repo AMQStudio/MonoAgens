@@ -35,6 +35,40 @@ breaking what is built on top.
 - [`AGENTS.md`](AGENTS.md) — rules and invariants for coding agents.
 - `scripts/replay.py` — scenario replay: tests, metrics and tuning.
 
+## Install
+
+MonoAgens runs as one long-lived process; its database, model keys and adapters come from
+`.env` and `config.yaml`.
+
+```sh
+git clone <this repo> && cd MonoAgens
+uv sync                                  # Python 3.13 and the five runtime packages
+docker compose up -d db                  # PostgreSQL 17 with pgvector
+cp .env.example .env                     # then fill LLM_*, DATABASE_URL and the adapter keys
+uv run python -m monoagens               # the soul
+uv run python -m monoagens.cli           # a terminal body, in another terminal
+```
+
+Plugin dependencies stay with their plugin: `uv pip install ddgs pypdf` enables web search and
+the PDF reader, and the Workspace sandbox needs the system tools `bubblewrap` and `passt`
+(`pasta`). Prepare its base once, before the first `workspace.run`:
+
+```sh
+uv run python plugins/workspace/prepare.py --root .
+```
+
+**Run it as a dedicated system user** (for example `monoagens`), not as your desktop account.
+The sandbox bounds a run with `RLIMIT_NPROC`, and that limit counts every task of the account the
+process runs under: on a desktop account the browser, the editor and the session itself share the
+budget, so the sandbox is limited against them and a busy desktop can make a run fail before the
+sandbox limit is reached. Its own account keeps the count to MonoAgens and its runs.
+
+```sh
+sudo useradd --system --create-home --home-dir /srv/monoagens --shell /usr/sbin/nologin monoagens
+sudo install -d -o monoagens -g monoagens /srv/monoagens
+sudo -u monoagens git clone <this repo> /srv/monoagens/app && cd /srv/monoagens/app
+```
+
 ## Tuning with replay
 
 The replay tool feeds written scenarios through the real kernel on a throwaway database, so
