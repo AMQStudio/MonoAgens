@@ -6,12 +6,8 @@ Status: prototype. Before touching code read [docs/constitution.md](docs/constit
 task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec sections its parts link (the core: [docs/core.md](docs/core.md)). Work ONLY on that task.
 
 ## Who writes code
-- **One task = one worker**, and tasks run one after another. The worker is an **Orca
-  Orchestration** agent `omp` with model **`opencode-go/deepseek-v4.1-flash`**, reasoning effort
-  **high**, on OpenCode Go. There is no coordinator in between: the worker reads the task, the
-  specs and the code itself, implements, verifies its own result (reads its diff, runs
-  `uv run pytest` and the fake replay, checks the invariants and the size guide), commits,
-  pushes and reports to the owner. The real-model run of the last part is the worker's, once.
+- **One task = one worker**, one task after another. The owner gives the task prompt to the
+  worker directly.
 - Tools the worker may use when they help: **graphify** (the code graph: callers and
   dependencies, before moving or renaming code) and **Context7** (current library docs:
   psycopg, pgvector, fastembed, httpx, pytest-asyncio). Neither is a project dependency.
