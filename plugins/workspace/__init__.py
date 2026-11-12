@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from typing import Any
 
 from monoagens.core.hooks import Continue, Replace, Stop
@@ -22,6 +23,9 @@ def register(api: Any) -> None:
         api.notes.append(f"workspace: run unavailable ({reason})")
         api.add_rule(f"The workspace sandbox is unavailable ({reason}); "
                      "reading and writing files still work.")
+    elif shutil.which(sandbox.PASTA) is None:
+        api.notes.append("workspace: network off (no pasta)")
+        api.add_rule("The sandbox has no network: pasta is missing, so run only sees itself.")
 
 
 def who_rule():

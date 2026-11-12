@@ -40,21 +40,27 @@ SENSITIVE = (
     (re.compile(r"^git\s+reset\s+--hard"), "git reset --hard"),
     (re.compile(r"^git\s+push\s+.*(-f|--force)"), "git push --force"),
     (re.compile(r"^pip\s+install|^apt(-get)?\s+install"), "install something"),
-    (re.compile(r"^curl\b|^wget\b"), "reach the network"),
 )
 SAFE_HEADS = frozenset({
-    "ls", "cat", "head", "tail", "wc", "echo", "grep", "rg", "find", "sed", "awk", "sort",
-    "uniq", "cut", "tr", "diff", "cmp", "file", "stat", "du", "df", "pwd", "cd", "true",
-    "false", "test", "python", "python3", "pip", "pytest", "uv", "git", "make", "node",
-    "npm", "bash", "sh", "mkdir", "touch", "cp", "mv", "rm", "chmod", "curl", "wget",
-    "tar", "gzip", "unzip", "sleep", "date", "env", "which", "command", "timeout",
+    "ls", "cat", "head", "tail", "wc", "echo", "printf", "grep", "rg", "find", "sed", "awk",
+    "sort", "uniq", "cut", "tr", "diff", "cmp", "file", "stat", "du", "df", "pwd", "cd",
+    "true", "false", "test", "python", "python3", "pip", "pytest", "uv", "git", "make",
+    "node", "npm", "bash", "sh", "mkdir", "touch", "cp", "mv", "rm", "chmod", "curl",
+    "wget", "tar", "gzip", "unzip", "sleep", "date", "env", "which", "command", "timeout",
+    "id", "whoami", "groups", "uname", "hostname", "uptime", "printenv", "ln", "readlink",
+    "realpath", "getent", "dig", "host", "nslookup", "ss", "netstat", "ps", "top", "yes",
+    "ip", "route", "ifconfig", "ping", "traceroute", "mountpoint",
+    "dd", "base64", "od", "hexdump", "strings", "seq", "jq", "xargs", "nohup", "setsid",
 })
+# `&&`, `||`, `;`, a pipe, a newline, and a lone `&` (never the `&` of `2>&1`)
+# Shell separators, as tokens `shlex` yields them with punctuation_chars=True.
+SEPARATORS = frozenset({";", "&&", "||", "|", "&", "\n", ";;"})
 HIDDEN = (re.compile(r"\$IFS"), re.compile(r"\{[^}]*,[^}]*\}"), re.compile(r"\$\("),
           re.compile(r"`"))
 
 
 def screen(command: str, *, max_chars: int = 4000) -> tuple[str, str]:
-    """Return `(verdict, reason)` for one sandbox command."""
+    """Return `(verdict, reason)` for one sandbox command, one shell segment at a time."""
     text = str(command or "").strip()
     if not text:
         return DENY, "empty command"
@@ -68,9 +74,46 @@ def screen(command: str, *, max_chars: int = 4000) -> tuple[str, str]:
         if pattern.search(text):
             return PENDING, "the command hides what it runs"
     try:
-        words = shlex.split(text)
+        tokens = shlex.shlex(text, posix=True, punctuation_chars=True)
+        tokens.whitespace_split = True
+        words = list(tokens)
     except ValueError:
         return PENDING, "the quoting does not parse"
+    worst = (ALLOW, "")
+    for segment in _segments(words):
+        verdict, reason = _segment(segment)
+        if verdict == DENY:
+            return DENY, reason
+        if verdict == PENDING and worst[0] == ALLOW:
+            worst = (PENDING, reason)
+    return worst
+
+
+def _segments(words: list[str]) -> list[list[str]]:
+    """Split one shell line's tokens into its commands, keeping quoted text whole."""
+    found: list[list[str]] = []
+    current: list[str] = []
+    for word in words:
+        if word in SEPARATORS:
+            if current:
+                found.append(current)
+            current = []
+        else:
+            current.append(word)
+    if current:
+        found.append(current)
+    return found
+
+
+def _segment(words: list[str]) -> tuple[str, str]:
+    """Screen one command of a shell line (its tokens, no separator left in them)."""
+    if not words:
+        return ALLOW, ""
+    text = " ".join(words)
+    for pattern, reason in SENSITIVE:
+        if pattern.search(text):
+            return PENDING, reason
+    words = [word for word in words if word != "!"]
     heads = [word for word in words if not word.startswith("-")][:1]
     head = (heads[0] if heads else "").rsplit("/", 1)[-1]
     if head and head not in SAFE_HEADS:
@@ -78,9 +121,6 @@ def screen(command: str, *, max_chars: int = 4000) -> tuple[str, str]:
     hidden = _hidden(words)
     if hidden:
         return PENDING, f"a wrapped command needs a second look: {hidden}"
-    for pattern, reason in SENSITIVE:
-        if pattern.search(text):
-            return PENDING, reason
     return ALLOW, ""
 
 

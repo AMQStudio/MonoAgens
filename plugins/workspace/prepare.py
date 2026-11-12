@@ -7,8 +7,11 @@ unavailable (with this hint) until the marker file exists.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import pathlib
 import sys
+
+PACKAGE = "monoagens_plugins_workspace"
 
 
 class _Options:
@@ -19,6 +22,18 @@ class _Options:
         self.options = options
 
 
+def _load_base(folder: pathlib.Path):
+    """Import the plugin as the loader does, so its relative imports resolve."""
+    spec = importlib.util.spec_from_file_location(
+        PACKAGE, folder / "__init__.py", submodule_search_locations=[str(folder)])
+    if spec is None or spec.loader is None:  # pragma: no cover - a broken plugin folder
+        raise ImportError(f"cannot load the workspace plugin from {folder}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[PACKAGE] = module
+    spec.loader.exec_module(module)
+    return sys.modules[f"{PACKAGE}.base"]
+
+
 def main(argv: list[str] | None = None) -> int:
     """Prepare the base and print what happened."""
     parser = argparse.ArgumentParser(description="Prepare the Workspace sandbox base.")
@@ -27,13 +42,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base-tarball", default="", help="download this rootfs tarball")
     options = parser.parse_args(argv)
     root = pathlib.Path(options.root).resolve()
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-    import base as base_module
-
+    folder = pathlib.Path(__file__).resolve().parent
     api = _Options(root, {"base_rootfs": options.base_rootfs,
                           "base_tarball": options.base_tarball})
     try:
-        done = base_module.prepare(api)
+        done = _load_base(folder).prepare(api)
     except Exception as exc:  # a failed preparation is reported, never a traceback only
         print(f"preparation failed: {type(exc).__name__}: {exc}", flush=True)
         return 1

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import pathlib
 import shutil
 import subprocess
@@ -59,16 +60,72 @@ def export_source(api: Any, destination: pathlib.Path) -> str:
     raise RuntimeError("neither podman nor docker could export an image")
 
 
-def extract(tarball: pathlib.Path, target: pathlib.Path) -> None:
-    """Extract one rootfs, refusing absolute names, `..`, links and devices."""
+def extract(tarball: pathlib.Path, destination: pathlib.Path) -> None:
+    """Extract one rootfs image, keeping what a sandbox root needs and nothing that escapes.
+
+    Every member's *name* must be relative and free of `..`. Devices are skipped. A hard
+    link is created only when its target is relative, inside and already extracted. A
+    symlink's target is never followed while extracting: an absolute target such as
+    `/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2` is the sandbox root's own path (bwrap binds
+    this tree at `/`), and a relative target that climbs out of the tree is dropped. Regular
+    members go through tarfile's `data` filter, and a member is never written through a
+    symlink placed earlier.
+    """
     with tarfile.open(tarball) as archive:
         for member in archive.getmembers():
             name = pathlib.PurePosixPath(member.name)
             if name.is_absolute() or ".." in name.parts:
                 raise ValueError(f"refusing {member.name!r}")
-            if member.islnk() or member.isdev() or member.issym():
+            if member.isdev():
                 continue
-            archive.extract(member, target, filter="data")
+            target = destination.joinpath(*name.parts)
+            if not _parents_are_plain(destination, name):
+                continue
+            if member.issym():
+                if not _link_inside(name, member.linkname):
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if target.is_symlink() or target.exists():
+                    target.unlink()
+                os.symlink(member.linkname, target)
+                continue
+            if member.islnk():
+                link = pathlib.PurePosixPath(member.linkname)
+                source = destination.joinpath(*link.parts)
+                if link.is_absolute() or ".." in link.parts or not source.is_file():
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if target.is_symlink() or target.exists():
+                    target.unlink()
+                os.link(source, target)
+                continue
+            archive.extract(member, destination, filter="data")
+
+
+def _parents_are_plain(destination: pathlib.Path, name: pathlib.PurePosixPath) -> bool:
+    """Return whether every already-existing parent of one member is a real folder."""
+    current = destination
+    for part in name.parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            return False
+        if not current.exists():
+            return True  # the rest will be created as real folders
+    return True
+
+
+def _link_inside(name: pathlib.PurePosixPath, linkname: str) -> bool:
+    """Return whether a symlink's target, read from the sandbox root, stays in the tree."""
+    link = pathlib.PurePosixPath(linkname)
+    if link.is_absolute():
+        return True  # inside the sandbox, `/…` is this tree
+    joined = pathlib.PurePosixPath(*name.parts[:-1], *link.parts)
+    depth = 0
+    for part in joined.parts:
+        depth += -1 if part == ".." else (0 if part == "." else 1)
+        if depth < 0:
+            return False
+    return True
 
 
 def digest(path: pathlib.Path) -> str:
@@ -125,7 +182,11 @@ def _install(api: Any, base: pathlib.Path) -> None:
     """Install the base packages once, inside the sandbox with the base writable."""
     from . import sandbox
 
-    command = (f"apt-get update && apt-get install -y --no-install-recommends "
+    # Rootless bwrap cannot switch the apt sandbox user (setgroups is denied in the user
+    # namespace), so apt runs its methods as root: the process is uid 0 in the sandbox.
+    sandbox_user = "-o APT::Sandbox::User=root"
+    command = (f"apt-get {sandbox_user} update && "
+               f"apt-get {sandbox_user} install -y --no-install-recommends "
                f"{' '.join(PACKAGES)} && rm -rf /var/lib/apt/lists/*")
     environment = {"DEBIAN_FRONTEND": "noninteractive"}
     argv = ["bwrap", "--bind", str(base), "/", "--proc", "/proc", "--dev", "/dev",

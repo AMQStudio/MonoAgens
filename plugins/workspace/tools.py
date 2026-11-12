@@ -11,6 +11,8 @@ from typing import Any
 from . import guard, paths, sandbox
 
 MAX_LIMIT = 2000
+# Bound what one run may hold in memory; the registry's output cap and marker then apply.
+RUN_OUTPUT_BYTES = 80_000
 DEFAULT_LINES = 400
 BINARY = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
@@ -180,9 +182,12 @@ class WorkspaceTool:
         folders = paths.roots(self.api, who)
         cwd = str(action.payload.get("cwd") or "")
         shared = {name: folder for name, folder in folders.items() if name}
-        return await sandbox.run(self.api, who, command, workspace=folders[""],
-                                 shared=shared, writable=writable, cwd=cwd,
-                                 timeout=action.payload.get("timeout"))
+        result = await sandbox.run(self.api, who, command, workspace=folders[""],
+                                   shared=shared, writable=writable, cwd=cwd,
+                                   timeout=action.payload.get("timeout"))
+        if isinstance(result.get("output"), str) and len(result["output"]) > RUN_OUTPUT_BYTES:
+            result["output"] = result["output"][-RUN_OUTPUT_BYTES:]
+        return result
 
 
 def _write(target: pathlib.Path, text: str) -> None:

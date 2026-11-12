@@ -554,3 +554,94 @@ workspace.quota: 1G (manifest)
 **Sample `/whoami`** in the live session: `you: person:owner (owner)`, `roles: unverified
 (Unverified); tier owner; approval default`, `place: space:cli — direct, cli`. In a group the
 accounts line is absent (or sent to the asker's direct chat), as the group test shows.
+
+### 4.8 for real — the sandbox tested against this machine (2026-11-13)
+
+Setup: Podman Postgres from the repo's `compose.yaml` (`POSTGRES_PORT=5434`, container
+`monoagens-sbx-db`, image `docker.io/pgvector/pgvector:pg17`, network `monoagens-sbx_default`
+`10.89.11.0/24`, container IP `10.89.11.3`), host LAN `192.168.0.120`. From the host a real
+client reached `127.0.0.1:5434` and `192.168.0.120:5434` (`psql` is not installed; a psycopg
+connection authenticated and reported `inet_server_addr() = 10.89.11.3`). The **container IP
+`:5432` is closed from the host too** (rootless pasta does not route container addresses), so
+that row cannot distinguish the sandbox from rootless networking; the published-port paths
+are open from the host and closed inside, which is what the check needs. Base:
+`plugins/workspace/prepare.py --root .` → `var/sandbox/base`, source
+`podman debian:bookworm-slim`, **248 MB**, marker `var/sandbox/base.json`. Canary: a 24-char
+random file `~/.monoagens-canary` and `MONOAGENS_CANARY` in the launching process; both absent
+from every sandbox view; removed afterwards. Two people (`person:owner`, `person:test:other`
+with `secret.txt` in their own workspace) and a shared `toko-a` folder. Harness:
+`tests/sandbox_e2e_report.py` (every check goes through the real kernel: role book →
+`workspace.run` offered or not → policy pass/ask/refuse → guard → real sandbox);
+`tests/sandbox_child.py` starts a run for the SIGKILL check.
+
+**Result: 44/44 checks passed** (elapsed 64 s). Highlights, exact output trimmed:
+- `id; whoami` → `uid=1000 gid=1000 groups=1000,65534(nogroup)`; `cat /etc/os-release` →
+  `Debian GNU/Linux 12 (bookworm)`.
+- `ls -la /home /root` → the base's empty `/home` and `/root`; `cat ~/.monoagens-canary` →
+  `No such file`; `find / -name .env` → nothing.
+- `env` → `PWD=/work HOME=/work LANG=C.UTF-8 TERM=dumb SHLVL=0 PATH=…` only.
+- `/proc/1/environ` → `PWD=/ HOME=/work LANG C.UTF-8 TMPDIR=/tmp TERM=dumb SHLVL=0 PATH=…`,
+  process count 4.
+- `cat ../person_test_other/secret.txt`, the absolute host path, a symlink in `/work` and a
+  symlink to `/etc/shadow` → all `No such file or directory`.
+- `echo x > /usr/bin/x; echo x > /etc/x` → present inside, and **absent from the base on the
+  host afterwards**.
+- `mount`/`unshare`/`sudo`/`su` → `sandbox command blocked: mount or namespace`; with the guard
+  bypassed the kernel refuses them (`Operation not permitted`).
+- `curl -sSI https://example.com` → `HTTP/2 200`; `pip download requests` → `Saved …whl`.
+- `127.0.0.1:5434`, `localhost:5434`, `192.168.0.120:5434`, `10.89.11.3:5432`,
+  `169.254.169.254`, `10.0.0.1`, `172.16.0.1`, `192.168.1.1`, `192.168.0.120:22`,
+  `localtest.me:5434`, `[::1]:5434`, `[fd00::1]`, `[fe80::1]` → `curl: (7) Failed to connect`
+  (`rc=7`); `ip route del blackhole 10.0.0.0/8` → `RTNETLINK answers: Operation not permitted`
+  and the routes unchanged; `/dev/tcp/127.0.0.1/5434` → `sandbox command blocked: raw socket`;
+  a server started inside is unreachable from the host (`curl: (7) … 127.0.0.1:8099`).
+- limits: fork loop → `timeout after 5 seconds` (the host stayed responsive), `x=' '*(4 GiB)` →
+  `MemoryError`, `sleep 999` → `timeout after 5 seconds`, `yes | head -c 50 MB` → cut with
+  `contract.OUTPUT_MARKER`, `dd 3 MB` into the layer → the next run
+  `workspace quota exceeded: 3145732 of 1M; /workspace reset`, `/workspace reset` → `3 files
+  removed` and the next run works.
+- SIGKILL of the process that started a `sleep 999`: `bwrap before=5 after=0, pasta after=0`.
+- guard: `curl … | sh` → `blocked: download and execute`; `nc -e` → `blocked: nc -e`;
+  `rm -rf /` → `waiting for the owner's approval` (marked sensitive). A guest
+  (`person:test:other`) → `you may not use workspace.run` and `workspace.run` is not offered;
+  a member (base trusted) in `default` mode → `waiting for the owner's approval`.
+- fail-closed: with pasta off `PATH` the boot report says `workspace: network off (no pasta)`
+  and `curl https://example.com` inside fails (`Could not resolve host`); with the base moved
+  away `run` answers `workspace: run unavailable (no sandbox base (run
+  plugins/workspace/prepare.py --root .))`.
+
+**Defects found and fixed in `plugins/workspace/`** (all found by this test, none by review):
+1. `prepare.py` could not import its own package (relative imports) → it loads the plugin the
+   way the loader does.
+2. `base.extract` skipped every symlink, so the rootfs had no `/bin/sh`; and skipping
+   *absolute* symlinks removed the dynamic loader (`/lib64/ld-linux-…`). Symlinks are now
+   created explicitly (never followed while extracting, targets validated), hard links only
+   when inside and already extracted, devices skipped.
+3. Rootless apt cannot switch its sandbox user (`setgroups` is denied in a user namespace) →
+   `APT::Sandbox::User=root` for the one install pass.
+4. No resolver inside: the host uses a systemd-resolved stub no sandbox network can reach. The
+   sandbox now gets its own `resolv.conf` with public resolvers through pasta
+   (`--dns-forward 169.254.1.1` also stops pasta's warning polluting every run's output).
+5. `RLIMIT_NPROC` counts the host user's **tasks** (processes and threads); 1 577 threads on
+   this desktop made the namespace clone fail with `EAGAIN`. The limit is now the user's
+   current tasks plus the sandbox allowance.
+6. `argv(network=False)` built `bash -lc --unshare-net …` (a bash syntax error): the flag now
+   goes where it belongs, inside the bwrap arguments.
+7. The sandbox did **not** die with MonoAgens on SIGKILL: pasta resets the kernel's
+   parent-death signal. A watchdog in the wrapper polls the MonoAgens pid (and stops when the
+   run ends); `pasta --no-pidns` keeps that watchdog in the host PID namespace.
+8. `quota.reset` failed on the mode-000 `work` directory bubblewrap leaves in a layer; it
+   chmods its own layer before removing.
+9. The guard read a whole shell line as one command: `id; whoami` became "not plainly safe"
+   (an approval for a read-only command). It now tokenises with `shlex` (quotes and newlines
+   inside `python3 -c '…'` stay whole, `2>&1` is not a separator) and screens each segment,
+   with the wider safe list the checks needed (`ip`, `id`, `env`, `dd`, `yes`, …) and `curl`
+   no longer "sensitive" (a plain fetch is what the sandbox is for; `curl … | sh` stays
+   denied).
+10. `/proc/1/environ` carried the host's `PWD` (and `OLDPWD`): the wrapper starts with
+    `cd / ; unset OLDPWD` and bubblewrap sets `PWD=/work` for the command.
+11. The tool pre-sliced output to 8 000 bytes *before* the registry's cap, so the marker never
+    appeared; the sandbox now bounds at 200 000 and the registry cuts with the marker.
+
+Suite after these fixes: **530 passed, 1 skipped**; fake replay **133/133**; the base on the
+host is unchanged by the overlay writes (`/usr/bin/x` and `/etc/x` absent).

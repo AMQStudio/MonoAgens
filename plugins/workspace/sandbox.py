@@ -16,6 +16,7 @@ import pathlib
 import resource
 import shutil
 import socket
+import ctypes
 import signal
 import subprocess
 from typing import Any
@@ -28,8 +29,13 @@ IP = "ip"
 BLOCKED_ROUTES = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10",
                   "169.254.0.0/16", "127.0.0.0/8", "fc00::/7", "fe80::/10", "::1/128")
 DEFAULT_TIMEOUT = 120
-MAX_OUTPUT = 8000
+MAX_OUTPUT = 200_000
 PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# The host's resolver is a local stub (systemd-resolved) that a sandbox network cannot reach,
+# so a sandboxed run resolves names through public resolvers, reachable through pasta.
+RESOLV = "nameserver 1.1.1.1\nnameserver 9.9.9.9\n"
+PUBLIC_DNS = "1.1.1.1"
+PR_SET_PDEATHSIG = 1
 
 
 def available(api: Any) -> tuple[bool, str]:
@@ -77,34 +83,59 @@ def routes() -> list[str]:
 
 def argv(api: Any, who: str, command: str, *, workspace: pathlib.Path,
          shared: dict[str, pathlib.Path], writable: bool, cwd: str = "",
-         network: bool = True, uid: int = 1000, gid: int = 1000) -> list[str]:
+         network: bool = True, uid: int = 1000, gid: int = 1000,
+         parent: int | None = None) -> list[str]:
     """Return the exact argument list of one sandboxed run (pure: no side effects)."""
     layer = sandbox_root(api) / "layers" / _folder(who)
     (layer / "upper").mkdir(parents=True, exist_ok=True)
     (layer / "work").mkdir(parents=True, exist_ok=True)
     inner = ["bwrap", "--die-with-parent", "--unshare-all"]
     if network:
-        inner += ["--share-net"]
+        inner += ["--share-net"]  # join pasta's network namespace: outbound, no inbound
     inner += ["--new-session", "--hostname", "sandbox", "--clearenv",
               "--overlay-src", str(base_rootfs(api)),
               "--overlay", str(layer / "upper"), str(layer / "work"), "/",
               "--bind", str(workspace), "/work"]
     for name, folder in sorted(shared.items()):
         inner += [("--bind" if writable else "--ro-bind"), str(folder), f"/shared/{name}"]
+    resolv = _resolv_conf(api, network)
     inner += ["--tmpfs", "/tmp", "--tmpfs", "/run", "--proc", "/proc", "--dev", "/dev",
-              "--ro-bind", "/etc/resolv.conf", "/etc/resolv.conf",
-              "--setenv", "PATH", PATH, "--setenv", "HOME", "/work",
+              "--ro-bind", str(resolv), "/etc/resolv.conf",
+              "--setenv", "PATH", PATH, "--setenv", "HOME", "/work", "--setenv", "PWD", "/work",
               "--setenv", "LANG", "C.UTF-8", "--setenv", "TERM", "dumb",
               "--chdir", f"/work/{cwd}" if cwd else "/work",
               "--uid", str(uid), "--gid", str(gid), "--cap-drop", "ALL",
               "--", "bash", "-lc", command]
-    wrapper = "; ".join(routes()) + "; exec " + " ".join(_quote(part) for part in inner)
+    # The sandbox dies with MonoAgens even on SIGKILL: pasta resets the kernel's
+    # parent-death signal, so a small watchdog polls the MonoAgens process instead and kills
+    # the shell (bubblewrap itself by then) once it is gone; bubblewrap's PID namespace then
+    # takes every process inside with it. It also stops when the run itself ends.
+    # `cd /` first: the shell then holds PWD=/, so bubblewrap's own (visible) environment
+    # never carries the host's working directory into the sandbox.
+    watchdog = ("cd / ; unset OLDPWD ; " + (
+        f"main=$$; ( while kill -0 {parent} 2>/dev/null && kill -0 $main 2>/dev/null; "
+        "do sleep 1; done; kill -9 $main 2>/dev/null ) & " if parent else ""))
+    wrapper = (watchdog + "; ".join(routes()) + "; exec "
+               + " ".join(_quote(part) for part in inner))
     if not network or shutil.which(PASTA) is None:
-        return ["sh", "-c", "exec " + " ".join(_quote(part) for part in
-                                              [*inner[:-1], "--unshare-net", *inner[-1:]])]
+        return ["sh", "-c", watchdog + "exec " + " ".join(_quote(part) for part in inner)]
+    # `--dns-forward` keeps pasta from advertising the host's stub resolver it cannot use;
+    # the sandbox's own resolv.conf names public resolvers instead.
+    # `--no-pidns` keeps the wrapper in the host's PID namespace so its watchdog can see
+    # whether MonoAgens is still alive; bubblewrap gives the sandbox its own PID namespace.
     pasta = ["pasta", "--config-net", "--no-map-gw", "-t", "none", "-u", "none",
-             "-T", "none", "-U", "none", "--quiet"]
+             "-T", "none", "-U", "none", "--quiet", "--dns-forward", "169.254.1.1",
+             "--no-pidns"]
     return [*pasta, "--", "sh", "-c", wrapper]
+
+
+def _resolv_conf(api: Any, network: bool) -> pathlib.Path:
+    """Return the sandbox's own resolv.conf: public resolvers, empty without a network."""
+    path = sandbox_root(api) / "resolv.conf"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.is_file() or path.read_text(encoding="utf-8") != (RESOLV if network else ""):
+        path.write_text(RESOLV if network else "", encoding="utf-8")
+    return path
 
 
 def _quote(part: str) -> str:
@@ -120,16 +151,61 @@ def _folder(who: str) -> str:
 
 
 def _limits(memory_mb: int, cpus: int, pids: int):
-    """Return the pre-exec hook that sets memory, CPU and process limits."""
+    """Return the pre-exec hook that sets memory, CPU and process limits.
+
+    `RLIMIT_NPROC` counts every task of this host user — processes *and* threads — not only
+    the sandbox's, so it is set to what the user already runs plus this sandbox's allowance:
+    the limit then bounds the tasks a run adds, and a busy desktop does not stop the sandbox
+    before it starts (creating the sandbox's namespace needs a clone, and a reached limit
+    refuses it with EAGAIN).
+    """
+    room = _user_tasks() + max(1, pids)
 
     def apply() -> None:
         resource.setrlimit(resource.RLIMIT_AS, (memory_mb * 1024 * 1024,
                                                 memory_mb * 1024 * 1024))
         resource.setrlimit(resource.RLIMIT_CPU, (max(1, cpus * 10), max(1, cpus * 10)))
-        resource.setrlimit(resource.RLIMIT_NPROC, (pids, pids))
+        resource.setrlimit(resource.RLIMIT_NPROC, (room, room))
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        _die_with_parent()
 
     return apply
+
+
+def _die_with_parent() -> None:
+    """Ask the kernel to SIGKILL this process when the one that started it dies.
+
+    The sandbox dies with MonoAgens (docs/plugins.md §5.3): MonoAgens dies → pasta (this
+    process) is killed → bubblewrap, whose parent is pasta, is killed by its own
+    `--die-with-parent` → its PID namespace takes every process inside with it.
+    """
+    try:
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        libc.prctl(PR_SET_PDEATHSIG, int(signal.SIGKILL), 0, 0, 0)
+    except Exception:  # a platform without prctl keeps the kill of the group on timeout
+        pass
+
+
+def _user_tasks() -> int:
+    """Return how many tasks (processes and threads) this host user already runs."""
+    me = str(os.getuid())
+    count = 0
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/status", encoding="utf-8") as handle:
+                uid, threads = None, 1
+                for line in handle:
+                    if line.startswith("Uid:"):
+                        uid = line.split()[1]
+                    elif line.startswith("Threads:"):
+                        threads = int(line.split()[1])
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+        if uid == me:
+            count += threads
+    return count
 
 
 async def run(api: Any, who: str, command: str, *, workspace: pathlib.Path,
@@ -145,10 +221,11 @@ async def run(api: Any, who: str, command: str, *, workspace: pathlib.Path,
     seconds = float(timeout or api.options.get("timeout_seconds") or DEFAULT_TIMEOUT)
     process = await asyncio.create_subprocess_exec(
         *argv(api, who, command, workspace=workspace, shared=shared, writable=writable,
-              cwd=cwd, network=network),
+              cwd=cwd, network=network, parent=os.getpid()),
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
         preexec_fn=_limits(limits["memory_mb"], limits["cpus"], limits["pids"]),
-        env={"PATH": PATH, "HOME": "/work", "LANG": "C.UTF-8", "TERM": "dumb", "TMPDIR": "/tmp"})
+        env={"PATH": PATH, "HOME": "/work", "LANG": "C.UTF-8", "TERM": "dumb",
+             "TMPDIR": "/tmp"})
     timed_out = False
     try:
         output, _ = await asyncio.wait_for(process.communicate(), seconds)

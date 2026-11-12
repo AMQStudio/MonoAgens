@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
 import shutil
 from typing import Any
@@ -29,5 +30,22 @@ def reset(api: Any, who: str) -> int:
     for name in ("upper", "work"):
         target = folder / name
         if target.is_dir():
+            _make_writable(target)
             shutil.rmtree(target)
     return files
+
+
+def _make_writable(path: pathlib.Path) -> None:
+    """Make one layer folder removable, even where bubblewrap left a mode-000 work dir.
+
+    The layer belongs to the person, so chmod on an unreadable folder of theirs is always
+    allowed; a folder that still refuses is left for the next sweep rather than hidden.
+    """
+    try:
+        os.chmod(path, 0o700)
+        entries = list(os.scandir(path))
+    except OSError:
+        return
+    for entry in entries:
+        if entry.is_dir(follow_symlinks=False):
+            _make_writable(pathlib.Path(entry.path))
