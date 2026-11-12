@@ -145,9 +145,9 @@ every item fixes a general function or a bug. Items 10.10 and 11.6 are ticked on
 passes.
 
 - [x] 12.1 **Leak (first).** `reach.visible` returns true for a source whose audience without the owner is empty, so the owner's direct chat flows into every place (scenario 26 passed by leaking; 28 was saved only by the model). The owner's direct chat is private to the owner; it reaches anyone else only through `self.share`. The absolute-line metric must count every private item on a desk whose audience it does not cover, not only quoted text. Scenarios 26 and 28 become: the soul does not give the fact in the group; it may ask the owner in the owner's direct place, and answers only after `share.granted` (behavioral checks). Scenarios 25, 27, 29 (fact said in the group) stay as they are.
-- [ ] 12.2 **Working memory (D52).** `<doing>` for every chain in progress, not only task threads: goal, every step (non-communicative acts included), the latest result verbatim, older results as pointers. Checks: scenario 23 answers after at most two capability calls; scenario 14's summary is answered; no chain repeats the same capability call with the same arguments.
-- [ ] 12.3 **Intent on the target desk (D48).** The intent (what to say, to whom, why, where it came from) is the trigger of the wake in the target place. When several places fit, the soul asks before sending. Scenario 19: the code reaches Budi, the owner is asked which group, only that group receives it.
-- [ ] 12.4 **Refusals return (D51).** A rejected thought act or capability argument comes back in the same turn as a result with its reason. Test: `expect` without a cue is corrected in the same wake. Scenario 09 passes.
+- [x] 12.2 **Working memory (D52).** `<doing>` for every chain in progress, not only task threads: goal, every step (non-communicative acts included), the latest result verbatim, older results as pointers. Checks: scenario 23 answers after at most two capability calls; scenario 14's summary is answered; no chain repeats the same capability call with the same arguments.
+- [x] 12.3 **Intent on the target desk (D48).** The intent (what to say, to whom, why, where it came from) is the trigger of the wake in the target place. When several places fit, the soul asks before sending. Scenario 19: the code reaches Budi, the owner is asked which group, only that group receives it.
+- [x] 12.4 **Refusals return (D51).** A rejected thought act or capability argument comes back in the same turn as a result with its reason. Test: `expect` without a cue is corrected in the same wake. Scenario 09 passes.
 - [ ] 12.5 **Free-text conditions (moved from Task 4).** Wake gate: still relevant, stale (quiet hours stay in the owner policy). Free text: cosine below `lo` ignored; every candidate → one recorded classifier call; `hi` band only by the rule of three; `lo` learning within bounds and a minimum gray width. Checks: a fulfilled promise wakes no one; a question on the same topic never resolves a promise; scenarios 16 and 24 fire on "server down lagi nih guys" and "dokumennya sudah selesai kok".
 - [ ] 12.6 **Checks that forbid correct behavior.** 16: "model.call >= 2" forbids calling `expect` at once — the check is that the promise is held in the first wake. 24: the stored fact may be said in any format ("jam lima", "17:00"); its contradictory group lines are made consistent. List every changed check under Notes.
 - [ ] 12.7 **Guidance stays small.** `guidance.py` ≤ 30 lines of general principles; any line added in this part has its evidence under Notes.
@@ -983,3 +983,84 @@ Part 12 notes (worker, 12.1):
   `core_memory` is always visible (it has no place), so a private fact the model writes there
   would still reach every desk; 26/28 record a neutral core memory. Both are questions of
   memory attribution, not of the audience rule.
+
+
+Part 12 notes (worker, 12.2):
+- `monoagens/work.py` (new, 100 lines) is the desk's working memory (D52): `doing_lines` shows
+  the chain the wake belongs to — `chain_root` walks `caused_by` up to the chain's first event
+  (the goal text), then the chain's events in that place are read down from it. The lines are
+  the goal, one `step:` per `act.out` (capability plus its arguments, non-communicative acts
+  like `self.recall` and `self.share` included) and the latest `act.result` verbatim (its
+  `text`, else the whole result as JSON); older results become `earlier result #id (recall
+  it)`. A chain whose steps include a communicative line is finished, so the section is empty
+  there. `act.out` now records `communicative` (an additive payload field) so the chain can
+  tell. `memory.build_context` lays it out for every place; the task branch still reads the
+  thread and its parent. `recall.py` keeps only `self.recall` (99 lines): it was 127/160 and
+  the general chain view needs ~60 lines, so the desk moved to the module where it belongs.
+  This is why the old text-only step rendering was wrong: `self.recall` showed `step: None` and
+  its result was never on the desk (23's 29 calls).
+- Checks. Scenario 23 gains three behavioral checks: `max_calls self.recall count 2` (the
+  month is recalled before answering, no search loop), `no_repeat_call` (no capability call
+  with the same arguments twice in the chain) and `prompt_contains "step: self.recall"` (the
+  desk shows the step it already took); 7/7. Its recorded answer now does the recall in one
+  wake and the answer in the next (one act ends a wake, as D51 works), so the second desk is
+  the one with `<doing>`. Scenario 14 gains `reply at step 11` (the summary request is
+  answered); 3/3. New check types in `scripts/replay.py`: `max_calls` and `no_repeat_call`,
+  unit-tested in `tests/test_replay_metrics.py` (a duplicate recall fails both; a higher count
+  or another step passes). `_fake_context_text` now includes `<doing>`, so a prompt check can
+  see it.
+- Changed tests: `test_a_task_desk_shows_goal_steps_and_the_latest_result` pinned
+  `step: <text>`; it now pins `step: <capability> <json>` for every act (D52 wants every step,
+  not the communicative text only). `test_say_is_recorded_before_the_body_acts` and
+  `test_react_is_recorded_before_the_body_acts` pinned the exact `act.out` payload; both gain
+  `communicative` (the new additive field). New test
+  `test_a_chain_in_a_place_shows_every_step_and_its_latest_result`.
+- Limit for the architect: `<doing>` shows the chain of the current trigger in that place (one
+  wake = one cause tree), not several older unfinished chains side by side; a second chain in
+  one place is incomplete only between its own wakes, and a task thread is its own place.
+
+Part 12 notes (worker, 12.3):
+- `organs._intend` now builds the target wake's trigger from the intent itself: `you set out to
+  say '<text>' to <to>, because <goal> (from <source place>)`, the goal being the chain root's
+  text (`work.chain_root`). `act.intent` keeps the capability, arguments, target and the goal.
+  When that reason quotes a private line the target may not see, the words are withheld (`you
+  set out to send a message to <to>; its words cannot appear here`): absolute line 2 outranks
+  showing the draft to a place that may not read it.
+- `reach.leaks` was the evidence for that filter: it only scanned private memories of the act's
+  source place, so the owner's DM quoting Fulan's private line passed.
+  `tests/test_reach.py::test_a_paraphrase_of_a_private_line_is_not_on_the_other_places_desk`
+  failed on the first version of this item. It now scans every private memory, which is the
+  general rule of the absolute line, not a case rule; no check was loosened.
+- Scenario 19 gains three checks: Budi's wake carries the owner's request (`prompt_contains
+  "Tolong selesaikan"`), names the person it is for (`prompt_contains "person:budi"`) and no
+  wake says `carry out intent` (`prompt_absent`); 21/21. The owner's step-6 reply now names the
+  group's place id (`Yang space:wa:1203630001@g.us ya (Tim Alpha).`) because a test organ
+  reports no place title, so the model could not map "Tim Alpha" to a place. Asking and the
+  single-group delivery stay the soul's own acts through `act to:` — no new mechanism.
+- "Asks which group before sending" is the model's behavior on the desk it has: `guidance.py`
+  already says to ask about a gap that matters, and `<recent>` lists the other places' lines
+  with their ids. `guidance.py` is unchanged (21/30 lines).
+
+Part 12 notes (worker, 12.4):
+- `pfc.turn_check(context, now, settings)` validates each round's calls before the turn ends:
+  tool-schema arguments present/unknown, `expect.validate` (so "expect needs cue_time or
+  cue_event" comes back), and `resolve`'s id/status with the expectation present in the desk's
+  `<expectations>`. `pfc.turns` marks such a call `refused`, puts `<name> refused: <reason>`
+  into the next round's `<results>` and continues the turn (a refused call did not act);
+  `jobs.apply_calls` skips refused calls and `threads.after_step` does not count them, so a
+  refused call is never applied. `jobs.decide` takes the kernel for the clock/settings;
+  `kernel._think` passes it. Nothing in the background job touches the shared connection.
+- New test `test_an_expect_without_a_cue_is_corrected_in_the_same_wake`: round 1's cue-less
+  expect is refused, round 2's corrected expect creates the expectation in the same wake (3
+  `model.call`, one `expectation.created`). `tests/test_expect.py::test_expect_with_an_invalid_weight_becomes_an_error_event`
+  pinned the old behavior (an `error` event one wake later); it is now
+  `..._is_refused_in_the_same_turn` and asserts the reason in `<results>`, no expectation and
+  no error. Scenario 09 passes 1/1; its check (`remind_at 11:00`, exactly one reply) is
+  behavioral.
+- Sizes: work 100 (new), recall 99, pfc 240/280, jobs 148/150, kernel 280/280,
+  threads 88/120, reach 150/150, memory 260/260, desk 149/160, organs 139, guidance 21/30.
+  Package 3,753 lines without bodies (limit 3,800). Absolute-line violations 0.
+- Runs: `uv run pytest` 266 passed; fake replay 29 scenarios, 127/127 checks, missed-help 0.0%
+  (0/63), false-speak 0.0% (0/66), honesty 61/61. Commits 64cce56 (12.2), 96d6ce4 (12.3) and
+  3852a14 (12.4); each commit's own state was run with pytest and the fake replay before it was
+  made (265/124, 265/127, 266/127).
