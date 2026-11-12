@@ -88,6 +88,12 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
   `pyproject.toml`; do not use the removed `event_loop` fixture).
 - No new dependency, ORM, agent framework, or platform SDK without the owner's approval.
 
+## Priorities for code
+1. **The goal works**: the behavior the task asks for, proven by its scenarios.
+2. **Readable and easy to refactor**: the next reader understands it in one pass and can change
+   it safely.
+3. Small is good only when it serves 1 and 2. Saving lines is never a reason for a design choice.
+
 ## Size guide (excluding tests)
 Readability comes first. The real limit on the core is the complexity budget in
 `docs/constitution.md` §3 (books, thought acts, hooks, signals, drives, one gate formula), not a

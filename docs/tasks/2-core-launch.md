@@ -154,6 +154,16 @@ passes.
 - [x] 12.7 **Guidance stays small.** `guidance.py` ≤ 30 lines of general principles; any line added in this part has its evidence under Notes.
 - [ ] 12.8 **Acceptance** (replaces 11.6; the owner's decision): first a material check of every failing scenario (D54) and fixes to the scenarios that lacked material; then `uv run pytest`, the fake replay in full, **one** real-model run of only the scenarios that have not yet passed with the real model (09, 14, 23 have), absolute-line violations 0, and the live session including "send this to Budi". The capability record states one run. Tick 10.10, 11.6 and 12.8.
 
+## Part 13 — Readability pass (after 12.8)
+Read first: [AGENTS.md](../../AGENTS.md) (priorities for code, size guide)
+May touch: `monoagens/` (all), `tests/`
+
+The old hard line budgets pushed code into odd places. Undo that, with no change in behavior.
+
+- [ ] 13.1 List every place in the Notes of Parts 1–12 where code was moved, merged, split or trimmed only to stay under a line budget (for example the classification result routed through `expect.condition.finish`, single-use constants removed, `pfc.py`/`desk.py` split at the line limit). For each, decide: keep (it is clearer) or restore the clearest form.
+- [ ] 13.2 Refactor the ones to restore: clear names, one responsibility per module, docstrings, files ending with a newline. No new behavior, no removed behavior.
+- [ ] 13.3 `uv run pytest` and the fake replay pass unchanged; list every refactor and its reason under Notes.
+
 **Done when.** All parts are ticked; every scenario passes with the real model in three runs out of three; the capability record is committed; `uv run pytest` and the fake replay pass in full; the
 real-model replay and live session are reported with the missed-help rate; absolute-line
 violations are 0; the code is readable (AGENTS.md size guide).
