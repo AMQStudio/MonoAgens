@@ -24,6 +24,14 @@ INTERNAL_KINDS = ("job.started", "job.result")
 JobWork = Callable[[], Awaitable[Any]]
 
 
+def describe_failure(exc: BaseException) -> str:
+    """Name a failure so an error event is never empty (12.17)."""
+    text = str(exc).strip()
+    line = f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return f"{line} (status {status})" if status is not None else line
+
+
 @dataclass(slots=True)
 class Job:
     """One background job in flight."""
@@ -81,8 +89,8 @@ class JobRunner:
         except asyncio.TimeoutError:
             job.outcome = {"error": f"{job.name} timed out after {self.timeout:g}s"}
         except Exception as exc:  # a broken job reports it; the loop lives on
-            error = config.redact_connection_secrets(str(exc), self.kernel.conn)
-            job.outcome = {"error": error}
+            job.outcome = {"error": config.redact_connection_secrets(
+                describe_failure(exc), self.kernel.conn)}
         payload = {"job": job.name, "place": job.place, "key": job.key,
                    "started": started.id, "result": _view(job)}
         self.kernel.enqueue(Event(

@@ -36,6 +36,7 @@ CONSTANTS = {
     "max_task_steps": 30,
     "max_open_tasks": 3,
     "max_thought_rounds": 3,
+    "model_call_retries": 1,
     "rrf_k": 60,
     "decay": 0.995,
     "persistence_decay_d": [0.7, 0.3],

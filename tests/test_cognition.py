@@ -806,7 +806,8 @@ async def test_hanging_hook_times_out_as_a_stop_and_the_loop_goes_on(aconn):
     kinds = await _kinds(aconn)
     assert kinds.count("error") == 1 and kinds.count("guard.stopped") == 1
     timed_out = "inbound hook timed out after 0.01s"
-    assert (await _payload(aconn, "error"))["error"] == timed_out
+    # 12.17: the error event names the exception, so it is never an empty string.
+    assert (await _payload(aconn, "error"))["error"] == f"TimeoutError: {timed_out}"
     assert await _payload(aconn, "guard.stopped") == {"hook": "inbound", "reason": timed_out}
     assert second.id is not None  # the next event was recorded and processed
     cur = await aconn.execute("SELECT payload->>'description' FROM events "

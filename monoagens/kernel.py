@@ -265,7 +265,8 @@ class Kernel:
 
     async def _record_error(self, event: Event, exc: BaseException | str) -> None:
         try:
-            await self._append(event, "error", {"error": str(exc), "event_id": event.id},
+            text = jobs.describe_failure(exc) if isinstance(exc, BaseException) else str(exc)
+            await self._append(event, "error", {"error": text, "event_id": event.id},
                                caused_by=event.id, project=False)
         except Exception:
             pass  # the Log itself is unreachable; nothing left to record.

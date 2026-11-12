@@ -143,7 +143,7 @@ async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place:
     """Lay out the desk for one wake: recent events, memories, state and expectations."""
     values = constants(settings)
     recent = await read_last_events(conn, place, limit=int(values["recent_events"]),
-                                    kinds=RECENT_KINDS)
+                                    kinds=(*RECENT_KINDS, "intent"))
     recent_elsewhere = await recent_lines(conn, place, limit=int(values["recent_elsewhere"]))
     core = await read_state(conn, "core_memory")
     sources = (core or {}).get("derived_from")

@@ -126,11 +126,14 @@ def _recent_lines(soul: Any, context: PFCContext) -> list[str]:
 
 
 def _recent_line(soul: Any, event: Event, prefix: str = "") -> str:
-    if event.kind not in RECENT_KINDS:
+    if event.kind not in SHOWN_KINDS:
         return ""
     speaker, text = _recent_parts(soul, event)
     return (f"{prefix}{event.ts.astimezone(soul.timezone):%H:%M} "
             f"{speaker}: {text}") if text else ""
+
+
+SHOWN_KINDS = (*RECENT_KINDS, "intent")  # an intent stays pending on that place's desk
 
 
 def _recent_parts(soul: Any, event: Event) -> tuple[str, Any]:
@@ -138,6 +141,8 @@ def _recent_parts(soul: Any, event: Event) -> tuple[str, Any]:
         return soul.name, (event.payload.get("arguments") or {}).get("text")
     if event.kind == "expectation.fired":
         return "expectation", (event.payload.get("text") or event.payload.get("about"))
+    if event.kind == "intent":
+        return "intent", event.payload.get("description")
     return str(event.who or "?"), event.payload.get("description")
 
 

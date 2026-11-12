@@ -141,6 +141,18 @@ class PFC:
             await self._client.aclose()
             self._client = None
 
+    async def _post(self, body: dict[str, Any], headers: dict[str, str]) -> httpx.Response:
+        """POST one completion, retrying a transport failure as often as the prior allows."""
+        retries = int(self.settings["constants"]["model_call_retries"])
+        for attempt in range(retries + 1):
+            try:
+                return await self._http().post(f"{self.base_url}/chat/completions",
+                                               json=body, headers=headers)
+            except httpx.TransportError:
+                if attempt == retries:
+                    raise
+        raise RuntimeError("unreachable: the retry loop always returns or raises")
+
     async def call(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], *,
                    tool_choice: str = "required") -> list[ToolCall]:
         """Make one chat completion call and return its tool calls."""
@@ -149,8 +161,7 @@ class PFC:
                 "tool_choice": tool_choice}
         if self.effort:
             body["reasoning_effort"] = self.effort
-        response = await self._http().post(f"{self.base_url}/chat/completions",
-                                           json=body, headers=headers)
+        response = await self._post(body, headers)
         response.raise_for_status()
         try:
             payload = response.json()

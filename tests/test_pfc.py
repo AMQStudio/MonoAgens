@@ -924,3 +924,85 @@ async def test_the_desk_shows_the_id_that_resolve_takes(aconn):
     assert lines[0].startswith(f"#{exp_id} ")
     check = turn_check(_desk(expectations=lines), START, SETTINGS)
     assert await check(ToolCall("resolve", {"id": exp_id, "status": "satisfied"})) is None
+
+
+def _reply(calls: list[tuple[str, dict]]) -> httpx.Response:
+    """Build one chat-completion response carrying `calls`."""
+    return httpx.Response(200, json={"choices": [{"message": {
+        "role": "assistant", "tool_calls": [
+            {"id": f"call_{i}", "type": "function",
+             "function": {"name": name, "arguments": json.dumps(arguments)}}
+            for i, (name, arguments) in enumerate(calls)]}}]})
+
+
+def _pfc_with(handler) -> PFC:
+    return PFC("https://llm.test/v1", "k", "m", settings=SETTINGS,
+               transport=httpx.MockTransport(handler))
+
+
+async def test_a_transport_failure_is_retried_once_then_answered(aconn):
+    attempts = []
+
+    def handler(request):
+        attempts.append(request)
+        if len(attempts) == 1:
+            raise httpx.ReadError("reset by peer", request=request)
+        return _reply([("act", {"capability": "telegram.say",
+                                "arguments": {"text": "halo"}})])
+
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc_with(handler), settings=SETTINGS)
+    kernel.register_body(RecordingBody())
+
+    await _feed(kernel, _msg("halo"))
+
+    kinds = await _kinds(aconn)
+    assert len(attempts) == 2
+    assert kinds.count("model.call") == 1 and kinds.count("act.out") == 1
+    assert "error" not in kinds
+
+
+async def test_a_second_transport_failure_names_the_exception(aconn):
+    def handler(request):
+        raise httpx.ConnectError("", request=request)   # empty text, as the live session saw
+
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc_with(handler), settings=SETTINGS)
+    kernel.register_body(RecordingBody())
+
+    await _feed(kernel, _msg("halo"))
+
+    cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'error'")
+    payload = (await cur.fetchone())[0]
+    assert payload["error"] == "ConnectError"
+
+
+async def test_a_status_failure_names_the_code(aconn):
+    def handler(request):
+        return httpx.Response(503, json={"error": {"message": "down"}})
+
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc_with(handler), settings=SETTINGS)
+
+    await _feed(kernel, _msg("halo"))
+
+    cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'error'")
+    payload = (await cur.fetchone())[0]
+    assert payload["error"].startswith("HTTPStatusError") and "(status 503)" in payload["error"]
+
+
+async def test_a_pending_intent_is_on_the_place_desk(aconn):
+    """12.17: the next wake in that place sees what it set out to say."""
+    from monoagens import memory  # local: the test module has no memory import yet
+
+    intent = await append_event(aconn, ts=START, kind="intent", who=None, place=PLACE,
+                                payload={"description": "you set out to say 'halo' to person:budi "
+                                                        "(from space:tg:2)"})
+    asked = await append_event(aconn, ts=START + timedelta(minutes=1), kind="percept",
+                               who="person:owner", place=PLACE,
+                               payload={"description": "halo", "addressed": True,
+                                        "place_kind": "direct"})
+    context = await memory.build_context(aconn, asked, PLACE, "addressed message", now=START,
+                                         settings=SETTINGS, memories=(), capabilities=())
+    volatile = PFC("https://llm.test/v1", "k", "m",
+                   settings=SETTINGS).build_messages(context)[2]["content"]
+
+    assert "intent: you set out to say 'halo' to person:budi" in volatile
+    assert intent.id is not None
