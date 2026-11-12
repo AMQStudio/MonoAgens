@@ -32,7 +32,7 @@ import os
 import pathlib
 import re
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -611,6 +611,12 @@ def _event_row(row: Sequence[Any]) -> dict[str, Any]:
             "text": text, "body": row[5], "payload": payload}
 
 
+def said(event: dict[str, Any], capabilities: Mapping[str, Any]) -> bool:
+    """Return whether one act.out is a message a person received (12.18)."""
+    capability = str((event.get("payload") or {}).get("capability") or "")
+    return bool((capabilities.get(capability) or {}).get("communicative", False))
+
+
 # ------------------------------------------------------------------- runner
 
 
@@ -733,7 +739,8 @@ class ReplayRunner:
                           should=should_field(raw) if kind == "message" else "",
                           appraisals=list(self.kernel.appraisals),
                           replies=[(event["place"] or "", str(event["text"]))
-                                   for event in events if event["kind"] == "act.out"],
+                                   for event in events
+                                   if event["kind"] == "act.out" and self._said(event)],
                           events=events)
 
     async def _feed(self, *, who: str, place: str, text: str, addressed: bool,
@@ -790,12 +797,14 @@ class ReplayRunner:
 
     def _replies(self, steps: Sequence[StepRecord]) -> list[Reply]:
         """Flatten every communicative act.out with the step that produced it."""
-        capabilities = self.kernel.organs.capabilities if self.kernel is not None else {}
         return [Reply(step.index, event["ts"], event["place"] or "", str(event["text"] or ""))
                 for step in steps for event in step.events
-                if event["kind"] == "act.out" and capabilities.get(
-                    str((event.get("payload") or {}).get("capability") or ""),
-                    {}).get("communicative", True)]
+                if event["kind"] == "act.out" and self._said(event)]
+
+    def _said(self, event: dict[str, Any]) -> bool:
+        """Return whether one act.out is a message, judged by its capability."""
+        capabilities = self.kernel.organs.capabilities if self.kernel is not None else {}
+        return said(event, capabilities)
 
     async def _leak_violations(self, replies: Sequence[Reply]) -> list[str]:
         """Return every reply that carries a private line its audience may not see."""
@@ -1588,6 +1597,25 @@ class ReportRun:
     effort: str = ""
 
 
+REAL_RECORD_HEADING = "## Real-model record"
+REAL_RECORD_ROWS = 3
+REAL_ROW = re.compile(r"^\| ([^|]+?) \| (PASS|FAIL) \| ([^|]*?) \| ([^|]*?) \| ([^|]*?) "
+                      r"\| ([^|]*?) \| ([^|]*?) \|$")
+
+
+@dataclass(frozen=True)
+class RealRecord:
+    """One scenario's stored real-model verdict, kept in the capability record itself."""
+
+    scenario: str
+    verdict: str        # PASS or FAIL
+    checks: str         # "12/12", or "-" when the evidence is a note
+    model: str
+    effort: str
+    date: str           # YYYY-MM-DD
+    report: str         # a report filename, or notes:<part>.<item>
+
+
 def _report_when(path: pathlib.Path, lines: Sequence[str]) -> datetime:
     """Read a report's time from its header, else its filename, else its mtime."""
     for line in lines:
@@ -1685,8 +1713,68 @@ def _record_cell(pool: Sequence[ReportRun], name: str) -> str:
     return f"{verdict} {passes}/{len(pool)} · {_cell(models)} · {pool[0].when:%Y-%m-%d}"
 
 
+def stored_records(previous: str) -> list[RealRecord]:
+    """Read the ledger the capability record keeps, so a pruned report leaves no hole."""
+    found: list[RealRecord] = []
+    inside = False
+    for line in previous.splitlines():
+        if line.strip() == REAL_RECORD_HEADING:
+            inside = True
+            continue
+        if not inside:
+            continue
+        if line.startswith("## "):
+            break
+        match = REAL_ROW.match(line.strip())
+        if match:
+            found.append(RealRecord(*(cell.strip() for cell in match.groups())))
+    return found
+
+
+def merge_records(stored: Sequence[RealRecord], runs: Sequence[ReportRun],
+                  current: ReportRun | None) -> dict[str, list[RealRecord]]:
+    """Return each scenario's recorded real runs, newest first, at most REAL_RECORD_ROWS."""
+    records = list(stored)
+    reports = [run for run in runs if run.mode == "real"]
+    if current is not None and current.mode == "real":
+        reports.append(current)
+    for run in reports:
+        for name, verdict in run.results.items():
+            records.append(RealRecord(
+                scenario=name, verdict="PASS" if verdict.passed == verdict.total else "FAIL",
+                checks=f"{verdict.passed}/{verdict.total}", model=run.model,
+                effort=run.effort, date=f"{run.when:%Y-%m-%d}", report=run.path.name))
+    ordered = sorted(records, reverse=True,
+                     key=lambda record: (record.date,
+                                         1 if record.report.startswith("notes:") else 0,
+                                         record.report))
+    kept: dict[str, list[RealRecord]] = {}
+    seen: set[tuple[str, str]] = set()
+    for record in ordered:
+        if (record.scenario, record.report) in seen:
+            continue
+        seen.add((record.scenario, record.report))
+        kept.setdefault(record.scenario, []).append(record)
+    return {name: items[:REAL_RECORD_ROWS] for name, items in kept.items()}
+
+
+def _real_cell(records: Sequence[RealRecord]) -> str:
+    """Render one real-model cell: verdict, checks, model, date and the report behind it."""
+    if not records:
+        return "not run"
+    newest = records[0]
+    parts = [f"{newest.verdict} {newest.checks}" if newest.checks not in ("", "-")
+             else newest.verdict]
+    effort = "" if newest.effort == "-" else newest.effort
+    parts.append(f"{newest.model} (effort {effort})" if effort else newest.model)
+    parts += [newest.date, newest.report]
+    cell = " · ".join(part for part in parts if part and part != "-")
+    verdicts = {record.verdict for record in records}
+    return f"flaky · {cell}" if len(verdicts) > 1 else cell
+
+
 def build_capability_record(claims: Sequence[Capability], runs: Sequence[ReportRun],
-                            when: datetime) -> str:
+                            when: datetime, previous: str = "") -> str:
     """Render scenarios/README.md: every capability with its fake and real results."""
     ordered = sorted(runs, key=lambda run: run.when, reverse=True)
     fake_runs = [run for run in ordered if run.mode == "fake"]
@@ -1708,8 +1796,14 @@ def build_capability_record(claims: Sequence[Capability], runs: Sequence[ReportR
         f"Generated {when:%Y-%m-%d %H:%M} UTC from {counted} capabilities across "
         f"{len(SCENARIO_FUNCTIONS)} brain functions.",
         f"Pooled per capability: its latest runs among {len(fake_runs)} saved fake and "
-        f"{len(real_runs)} saved real-model reports.", "",
+        f"{len(real_runs)} saved real-model reports. The real column names the report "
+        "behind its",
+        "verdict and reads `flaky` when the recorded runs both passed and failed; the",
+        "`Real-model record` section at the end keeps those runs, so pruning the reports "
+        "never",
+        "erases evidence.", "",
     ]
+    ledger = merge_records(stored_records(previous), runs, None)
     for function in SCENARIO_FUNCTIONS:
         entries = sorted(by_function.get(function) or [], key=lambda claim: claim.name)
         lines += [f"## {function}", ""]
@@ -1720,15 +1814,27 @@ def build_capability_record(claims: Sequence[Capability], runs: Sequence[ReportR
                   "|---|---|---|---|"]
         for claim in entries:
             fake = _record_cell(_record_pool(fake_runs, "fake", claim.name), claim.name)
-            real = _record_cell(_record_pool(real_runs, "real", claim.name), claim.name)
+            real = _real_cell(ledger.get(claim.name) or ())
             lines.append(f"| {_cell(claim.capability)} | {claim.name} | {fake} | {real} |")
         lines.append("")
+    lines += [REAL_RECORD_HEADING, "",
+              "Kept here, so pruning `reports/` to ten never erases evidence.", "",
+              "| Scenario | Verdict | Checks | Model | Effort | Date | Report |",
+              "|---|---|---|---|---|---|---|"]
+    for claim in claims:
+        for record in ledger.get(claim.name) or ():
+            lines.append(f"| {_cell(record.scenario)} | {record.verdict} | "
+                         f"{_cell(record.checks)} | {_cell(record.model)} | "
+                         f"{_cell(record.effort or '-')} | {_cell(record.date)} | "
+                         f"{_cell(record.report)} |")
+    lines.append("")
     return "\n".join(lines)
 
 
 def capability_record(results: Sequence[ScenarioResult], mode: str, model: str,
                       when: datetime, effort: str = "",
-                      reports_dir: pathlib.Path = REPORT_DIR) -> str:
+                      reports_dir: pathlib.Path = REPORT_DIR, previous: str = "",
+                      report_path: pathlib.Path | None = None) -> str:
     """Build the capability record from this run and the saved reports."""
     claims = [Capability(result.scenario.name, result.scenario.function,
                          result.scenario.capability) for result in results]
@@ -1737,9 +1843,11 @@ def capability_record(results: Sequence[ScenarioResult], mode: str, model: str,
         scenario = load_scenario(path, ZoneInfo("UTC"))
         if scenario.name not in known:
             claims.append(Capability(scenario.name, scenario.function, scenario.capability))
-    runs = [current_run(results, mode, model, when, effort),
-            *saved_reports(reports_dir, when)]
-    return build_capability_record(claims, runs, when)
+    current = current_run(results, mode, model, when, effort)
+    if report_path is not None:
+        current.path = report_path
+    runs = [current, *saved_reports(reports_dir, when)]
+    return build_capability_record(claims, runs, when, previous)
 
 
 def write_capability_record(text: str, path: pathlib.Path = CAPABILITY_PATH) -> pathlib.Path:
@@ -1815,7 +1923,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     text = render_report(results, usage, mode, llm["model"], settings, when, zone,
                          llm["effort"])
     path = write_report(text, when, fake=args.fake, label=report_label(paths))
-    record = capability_record(results, mode, llm["model"], when, llm["effort"])
+    previous = (CAPABILITY_PATH.read_text(encoding="utf-8")
+                if CAPABILITY_PATH.is_file() else "")
+    record = capability_record(results, mode, llm["model"], when, llm["effort"],
+                               previous=previous, report_path=path)
     record_path = write_capability_record(record)
     failed = [check.label for result in results for check in result.checks if not check.passed]
     print(f"\nreport: {path}")

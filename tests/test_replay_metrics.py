@@ -314,3 +314,11 @@ def test_a_new_style_report_is_read_back(tmp_path):
     assert run is not None and run.mode == "real"
     assert run.results["24_gate_threshold"] == replay.CapabilityVerdict(1, 1)
     assert replay._report_when(path, []) == datetime(2026, 11, 12, 10, 3, tzinfo=timezone.utc)
+
+
+def test_a_non_communicative_act_out_is_not_a_reply() -> None:
+    capabilities = {"self.recall": {"communicative": False},
+                    "telegram.say": {"communicative": True}}
+    assert replay.said({"payload": {"capability": "self.recall"}}, capabilities) is False
+    assert replay.said({"payload": {"capability": "telegram.say"}}, capabilities) is True
+    assert replay.said({"payload": {"capability": "unknown.cap"}}, capabilities) is False

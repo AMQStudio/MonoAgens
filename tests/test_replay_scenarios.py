@@ -153,28 +153,26 @@ def test_the_step_details_never_print_a_secret(monkeypatch) -> None:
     assert "- step 4 — error: bad key ***" in text
 
 
-def test_the_capability_record_counts_passes_over_runs() -> None:
+def test_the_capability_record_counts_fake_passes_over_runs() -> None:
     claim = replay.Capability("01_group_chitchat_greeting", "silence", "A greeting is ignored.")
     day = datetime(2026, 11, 11, 10, 0, tzinfo=timezone.utc)
     runs = [
-        replay.ReportRun(pathlib.Path("a"), day, "real", "m-1",
-                         {"01_group_chitchat_greeting": replay.CapabilityVerdict(2, 2)}),
-        replay.ReportRun(pathlib.Path("b"), day - timedelta(days=1), "real", "m-1",
-                         {"01_group_chitchat_greeting": replay.CapabilityVerdict(1, 2)}),
-        replay.ReportRun(pathlib.Path("c"), day, "fake", "scripted",
+        replay.ReportRun(pathlib.Path("a"), day, "fake", "scripted",
                          {"01_group_chitchat_greeting": replay.CapabilityVerdict(3, 3)}),
+        replay.ReportRun(pathlib.Path("b"), day - timedelta(days=1), "fake", "scripted",
+                         {"01_group_chitchat_greeting": replay.CapabilityVerdict(2, 3)}),
     ]
     text = replay.build_capability_record([claim], runs, day)
     row = next(line for line in text.splitlines() if line.startswith("| A greeting"))
-    assert row.split(" | ")[2] == "PASS 1/1 · 2026-11-11"
-    assert row.split(" | ")[3].startswith("FAIL 1/2 · m-1 · 2026-11-11")
+    assert row.split(" | ")[2] == "FAIL 1/2 · 2026-11-11"
 
 
-def test_the_capability_record_keeps_only_its_recent_runs() -> None:
+def test_the_capability_record_keeps_only_its_recent_fake_runs() -> None:
     claim = replay.Capability("01_group_chitchat_greeting", "silence", "A greeting is ignored.")
     day = datetime(2026, 11, 11, 10, 0, tzinfo=timezone.utc)
-    runs = [replay.ReportRun(pathlib.Path(str(index)), day - timedelta(days=index), "real",
-                             "m", {"01_group_chitchat_greeting": replay.CapabilityVerdict(1, 1)})
+    runs = [replay.ReportRun(pathlib.Path(str(index)), day - timedelta(days=index), "fake",
+                             "scripted",
+                             {"01_group_chitchat_greeting": replay.CapabilityVerdict(1, 1)})
             for index in range(replay.RECORD_RUNS + 2)]
     text = replay.build_capability_record([claim], runs, day)
     assert "PASS 3/3" in text
@@ -276,3 +274,46 @@ def test_the_expectation_detail_is_redacted_and_truncated(monkeypatch) -> None:
     assert 'cue_event={"text_like":"key ***"}' in line
     assert len(line) == len("- step 4 — ") + replay.EXPECTATION_LIMIT
     assert line.endswith("…")
+
+
+def test_a_stored_verdict_survives_its_report_being_pruned() -> None:
+    claim = replay.Capability("01_group_chitchat_greeting", "silence", "A greeting is ignored.")
+    day = datetime(2026, 11, 12, 10, 0, tzinfo=timezone.utc)
+    previous = ("## Real-model record\n\n"
+                "| Scenario | Verdict | Checks | Model | Effort | Date | Report |\n"
+                "|---|---|---|---|---|---|---|\n"
+                "| 01_group_chitchat_greeting | PASS | 2/2 | m-1 | high | 2026-11-11 | "
+                "2026-11-11-0900-real-01.md |\n")
+    text = replay.build_capability_record([claim], [], day, previous=previous)
+    row = next(line for line in text.splitlines() if line.startswith("| A greeting"))
+    assert row.split(" | ")[3].rstrip(" |") == ("PASS 2/2 · m-1 (effort high) · 2026-11-11 · "
+                                               "2026-11-11-0900-real-01.md")
+
+
+def test_a_scenario_with_a_pass_and_a_fail_reads_flaky() -> None:
+    claim = replay.Capability("16_watch_for_phrase", "promises", "A watch reports once.")
+    day = datetime(2026, 11, 12, 10, 0, tzinfo=timezone.utc)
+    previous = ("## Real-model record\n\n"
+                "| Scenario | Verdict | Checks | Model | Effort | Date | Report |\n"
+                "|---|---|---|---|---|---|---|\n"
+                "| 16_watch_for_phrase | PASS | 4/4 | m-1 | high | 2026-11-11 | "
+                "notes:12.8-probe |\n")
+    runs = [replay.ReportRun(pathlib.Path("2026-11-12-1103-real-16.md"), day, "real", "m-1",
+                             {"16_watch_for_phrase": replay.CapabilityVerdict(2, 4)}, "high")]
+    text = replay.build_capability_record([claim], runs, day, previous=previous)
+    row = next(line for line in text.splitlines() if line.startswith("| A watch"))
+    assert row.split(" | ")[3].startswith("flaky · FAIL 2/4")
+    assert "notes:12.8-probe" in text and "2026-11-12-1103-real-16.md" in text
+
+
+def test_the_ledger_keeps_three_rows_per_scenario() -> None:
+    claim = replay.Capability("16_watch_for_phrase", "promises", "A watch reports once.")
+    day = datetime(2026, 11, 12, 10, 0, tzinfo=timezone.utc)
+    runs = [replay.ReportRun(pathlib.Path(f"2026-11-1{index}-0900-real-16.md"),
+                             day - timedelta(days=index), "real", "m-1",
+                             {"16_watch_for_phrase": replay.CapabilityVerdict(4, 4)}, "high")
+            for index in range(replay.REAL_RECORD_ROWS + 2)]
+    text = replay.build_capability_record([claim], runs, day)
+    ledger = text.split(replay.REAL_RECORD_HEADING)[1]
+    rows = [line for line in ledger.splitlines() if line.startswith("| 16_watch_for_phrase |")]
+    assert len(rows) == replay.REAL_RECORD_ROWS
