@@ -46,7 +46,13 @@ TOOLS: list[dict[str, Any]] = [
                     "description": "promise, patience, prediction or guard (default promise)."},
            "cue_time": {"type": "object",
                         "description": '{"at": ISO}, {"every": "2d"} or {"daily": "07:00"}.'},
-           "cue_event": {"type": "object", "description": "Pattern: kind, who, place, text_like."},
+           "cue_event": {"type": "object",
+                         "description": 'Keys, all of which must match: kind (the event kind '
+                         'exactly as the desk shows it, e.g. percept for what someone says), '
+                         'who (person id), place (place id), not_who (person id to ignore), '
+                         'text_like (a plain phrase the line contains, case-insensitive: NOT '
+                         'a regex and no | alternation; for several phrasings make several '
+                         'expectations or pick the most distinctive word).'},
            "expect": {"type": "object",
                       "description": '{"none": true}: the cue alone wakes you. '
                       '{"text": "what you are waiting to hear"}: a watch on free text, so a '

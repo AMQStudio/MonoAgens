@@ -1906,3 +1906,35 @@ Part 12 notes (worker, expect tool text condition):
   --fake`: 30 scenarios, 132/132 checks, missed-help 0.0% (0/65), false-speak 0.0% (0/75),
   absolute-line violations 0, honesty 100.0% (62/62). `scenarios/README.md` regenerated. No
   real-model replay was started here.
+
+Part 12 notes (worker, cue_event description):
+- **Evidence.** `reports/replay-20261112-092518.md`, scenarios 24 and 30 (real model, effort
+  high). The free-text condition is now chosen correctly (`{"text": ...}`), but every cue was
+  wrong: 24 `cue_event={"text_like": "dokumen|selesai|beres"}`; 30
+  `cue_event={"kind": "message", "text_like": "dokumen.*selesai"}` and
+  `{"text_like": "dokumen.*selesai|selesai.*dokumen"}`. `expect.matches_cue` compares `kind`,
+  `who` and `place` exactly against the event (so `kind: "message"` is not an event kind the
+  desk ever shows) and tests `text_like` as a case-insensitive substring, so regex dots and
+  `|` are literal and nothing matches; the watch never wakes.
+- **Cause.** The `cue_event` parameter description was `"Pattern: kind, who, place,
+  text_like."` — it did not say `kind` is the event kind as the desk shows it, did not name
+  `not_who`, and did not say `text_like` is a plain phrase.
+- **Fix.** The description now states every key `matches_cue` reads and their meaning:
+  `kind` = the event kind exactly as the desk shows it (e.g. `percept` for what someone
+  says), `who` = person id, `place` = place id, `not_who` = person id to ignore, `text_like` =
+  a plain phrase the line contains, case-insensitive, NOT a regex and no `|` alternation (for
+  several phrasings make several expectations or pick the most distinctive word); all keys
+  given must match. No scenario rule, no platform name, no new primitive. `expect.py` and
+  `guidance.py` are untouched: this item changed only the text the model sees, not matcher
+  behavior.
+- **Open question, not built.** Whether `text_like` should accept alternatives (`|`) or regex
+  remains a core behavior question; 12.8's earlier note recorded it too. Until the owner
+  decides, the description tells the model the truth about what the matcher does.
+- **Tests.** `tests/test_pfc.py` +1: `test_the_expect_tool_describes_the_cue_exactly` pins
+  that the description says `kind` is the event kind as the desk shows it (naming `percept`),
+  names `who`, `place`, `not_who` and `text_like`, says `text_like` is a "plain phrase", and
+  rules out a regex and `|` alternation.
+- **Runs.** `uv run pytest`: 294 passed (real Postgres). `uv run python scripts/replay.py
+  --fake`: 30 scenarios, 132/132 checks, missed-help 0.0% (0/65), false-speak 0.0% (0/75),
+  absolute-line violations 0, honesty 100.0% (62/62). `scenarios/README.md` regenerated. No
+  real-model replay was started here.

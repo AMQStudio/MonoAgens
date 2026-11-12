@@ -10,8 +10,8 @@ from the scripted fake model; real results come from the saved reports in
 `reports/`. A capability that fails with the real model is listed as FAIL, not
 hidden.
 
-Generated 2026-11-12 09:19 UTC from 30 capabilities across 8 brain functions.
-Pooled per capability: its latest runs among 182 saved fake and 33 saved real-model reports.
+Generated 2026-11-12 09:27 UTC from 30 capabilities across 8 brain functions.
+Pooled per capability: its latest runs among 183 saved fake and 34 saved real-model reports.
 
 ## cross-body
 
@@ -58,7 +58,7 @@ _No scenario yet._
 | A recurring reminder fires again on the next day under its policy. | 10_reminder_recurring_nudge | PASS 3/3 · 2026-11-12 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017, deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high), deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort medium) · 2026-11-12 |
 | A reminder fires in the direct place it was made in, not in a busy group. | 13_fired_reminder_different_place | PASS 3/3 · 2026-11-12 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017, deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high), deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort medium) · 2026-11-12 |
 | A watch for a phrase stays silent through ordinary chatter and reports once when the phrase is said. | 16_watch_for_phrase | PASS 3/3 · 2026-11-12 | FAIL 1/3 · deepseek-ai/DeepSeek-V4-Pro-0813 (effort high), deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high), deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-12 |
-| A question on the topic of a promise's condition never fulfils it; the promise waits for the statement. | 30_same_topic_question | PASS 3/3 · 2026-11-12 | FAIL 0/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high), deepseek-ai/DeepSeek-V4-Pro-0813 (effort high) · 2026-11-12 |
+| A question on the topic of a promise's condition never fulfils it; the promise waits for the statement. | 30_same_topic_question | PASS 3/3 · 2026-11-12 | FAIL 0/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 |
 
 ## silence
 
@@ -79,4 +79,4 @@ _No scenario yet._
 | A direct message is answered. | 06_dm_conversation | PASS 3/3 · 2026-11-12 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017, deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high), deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort medium) · 2026-11-12 |
 | Addressed mentions in a busy group are answered despite the crowd penalty. | 14_busy_group_repeated_mention | PASS 3/3 · 2026-11-12 | FAIL 1/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017, deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high), deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort medium) · 2026-11-12 |
 | Patience holds the floor: the gate's go on an answerable question creates the wait, the sender's follow-up does not cancel it, another person's answer settles it as silence, and an expired window yields one reply. | 22_patience_turn_taking | PASS 3/3 · 2026-11-12 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017, deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high), deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort medium) · 2026-11-12 |
-| The gate keeps a busy group silent, an addressed line always wakes, the decision event stores its terms, and its go on an answerable question holds a wait that wakes the soul once. | 24_gate_threshold | PASS 3/3 · 2026-11-12 | FAIL 0/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high), deepseek-ai/DeepSeek-V4-Pro-0813 (effort high) · 2026-11-12 |
+| The gate keeps a busy group silent, an addressed line always wakes, the decision event stores its terms, and its go on an answerable question holds a wait that wakes the soul once. | 24_gate_threshold | PASS 3/3 · 2026-11-12 | FAIL 0/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 |

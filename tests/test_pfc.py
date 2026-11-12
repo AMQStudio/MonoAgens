@@ -690,6 +690,20 @@ def test_the_expect_tool_offers_the_free_text_watch():
     assert "no matching event was seen" in description
 
 
+def test_the_expect_tool_describes_the_cue_exactly():
+    """12.8: every key matches_cue reads is named, and text_like is a plain phrase."""
+    expect_tool = next(tool for tool in TOOLS if tool["function"]["name"] == "expect")
+    description = expect_tool["function"]["parameters"]["properties"]["cue_event"]["description"]
+    assert "event kind exactly as the desk shows it" in description
+    assert "percept" in description
+    for key in ("who", "place", "not_who", "text_like"):
+        assert key in description
+    assert "plain phrase" in description
+    assert "NOT a regex" in description
+    assert "no | alternation" in description
+    assert "all of which must match" in description
+
+
 async def test_the_expect_tool_accepts_a_free_text_condition():
     check = turn_check(_desk(), START, SETTINGS)
     call = ToolCall("expect", {"about": "tell the owner when the document is finished",
