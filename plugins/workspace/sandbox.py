@@ -11,6 +11,7 @@ is not offered.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
 import pathlib
 import resource
@@ -32,10 +33,12 @@ DEFAULT_TIMEOUT = 120
 MAX_OUTPUT = 200_000
 PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # The host's resolver is a local stub (systemd-resolved) that a sandbox network cannot reach,
-# so a sandboxed run resolves names through public resolvers, reachable through pasta.
-RESOLV = "nameserver 1.1.1.1\nnameserver 9.9.9.9\n"
-PUBLIC_DNS = "1.1.1.1"
+# so a sandboxed run resolves names through a public resolver, reachable through pasta. The
+# `dns` option names it; a private or loopback address is refused at boot, because it would
+# point the sandbox at the ranges the wall keeps shut.
+DEFAULT_DNS = ("1.1.1.1",)
 PR_SET_PDEATHSIG = 1
+_USERNS_FLAGS: tuple[str, ...] | None = None
 
 
 def available(api: Any) -> tuple[bool, str]:
@@ -48,6 +51,46 @@ def available(api: Any) -> tuple[bool, str]:
     if not base.is_dir() or not (base / "bin").exists() and not (base / "usr").exists():
         return False, "no sandbox base (run plugins/workspace/prepare.py --root .)"
     return True, ""
+
+
+def resolvers(api: Any) -> list[str]:
+    """Return the resolver addresses of the `dns` option, validated as public IPs."""
+    given = api.options.get("dns")
+    values = list(given) if isinstance(given, (list, tuple)) else ([given] if given else [])
+    if not values:
+        return list(DEFAULT_DNS)
+    servers: list[str] = []
+    for raw in values:
+        value = str(raw).strip().strip("[]")
+        try:
+            ipaddress.ip_address(value)
+        except ValueError:
+            raise ValueError(f"workspace: dns {value!r} is not an IP address") from None
+        if policy.is_blocked_address(value):
+            raise ValueError(f"workspace: dns {value} is private or loopback; the sandbox "
+                             "resolves names through a public resolver only")
+        servers.append(value)
+    return servers
+
+
+def _userns_flags() -> tuple[str, ...]:
+    """Return the flags that forbid nested user namespaces, when this bubblewrap has them.
+
+    Without them a sandboxed run can create a nested user namespace (`unshare -r`), which
+    grants nothing outside the sandbox but is a door the wall does not need to leave open.
+    bubblewrap 0.9+ refuses it with `--disable-userns`, which needs `--unshare-user` spelled
+    out. Older bubblewrap gets no extra flag and the report says so.
+    """
+    global _USERNS_FLAGS
+    if _USERNS_FLAGS is None:
+        try:
+            found = subprocess.run([BWRAP, "--help"], capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            _USERNS_FLAGS = ()
+        else:
+            _USERNS_FLAGS = (("--unshare-user", "--disable-userns")
+                             if "--disable-userns" in found.stdout else ())
+    return _USERNS_FLAGS
 
 
 def base_rootfs(api: Any) -> pathlib.Path:
@@ -89,7 +132,7 @@ def argv(api: Any, who: str, command: str, *, workspace: pathlib.Path,
     layer = sandbox_root(api) / "layers" / _folder(who)
     (layer / "upper").mkdir(parents=True, exist_ok=True)
     (layer / "work").mkdir(parents=True, exist_ok=True)
-    inner = ["bwrap", "--die-with-parent", "--unshare-all"]
+    inner = ["bwrap", "--die-with-parent", "--unshare-all", *_userns_flags()]
     if network:
         inner += ["--share-net"]  # join pasta's network namespace: outbound, no inbound
     inner += ["--new-session", "--hostname", "sandbox", "--clearenv",
@@ -130,11 +173,13 @@ def argv(api: Any, who: str, command: str, *, workspace: pathlib.Path,
 
 
 def _resolv_conf(api: Any, network: bool) -> pathlib.Path:
-    """Return the sandbox's own resolv.conf: public resolvers, empty without a network."""
+    """Return the sandbox's own resolv.conf: the `dns` option, empty without a network."""
     path = sandbox_root(api) / "resolv.conf"
     path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.is_file() or path.read_text(encoding="utf-8") != (RESOLV if network else ""):
-        path.write_text(RESOLV if network else "", encoding="utf-8")
+    text = ("".join(f"nameserver {server}\n" for server in resolvers(api))
+            if network else "")
+    if not path.is_file() or path.read_text(encoding="utf-8") != text:
+        path.write_text(text, encoding="utf-8")
     return path
 
 

@@ -371,6 +371,76 @@ async def limits(h: Harness) -> None:
                  "reset" in reset and "quota exceeded" not in _text(after))
 
 
+async def process_limit(h: Harness) -> None:
+    """The fork loop runs against the default 120 s timeout and the host stays responsive."""
+    loop = ("python3 -c 'import os\nwhile True:\n try:\n  os.fork()\n except OSError:\n"
+            "  pass' 2>&1 | tail -2")
+    await h.start({"base": BASE, "sandbox": h.root / "var" / "sandbox", "timeout": 120}, ROLES)
+    started = time.monotonic()
+    task = asyncio.create_task(h.run("person:owner", loop))
+    probes: list[str] = []
+    while not task.done():
+        await asyncio.sleep(2)
+        probes.append(await asyncio.to_thread(_probe_host))
+        if time.monotonic() - started > 150:
+            break
+    result = await task
+    elapsed = time.monotonic() - started
+    latency = [int(probe.split(" ")[1].rstrip("ms")) for probe in probes
+               if probe.startswith("rc=0 ")]
+    observed = (_text(result) + f" | ended after {elapsed:.0f}s | host forks "
+                f"{len(latency)}/{len(probes)} ok, latency {min(latency, default=-1)}"
+                f"-{max(latency, default=-1)}ms")
+    passed = ("timeout after" in _text(result) or "Resource temporarily" in _text(result)) \
+        and elapsed < 130 and len(latency) == len(probes) and max(latency, default=10_000) < 5000
+    h.report.add(Check("fork loop at the default timeout", "person:owner", loop,
+                       "bounded by the process/CPU limit within 120 s, host responsive"),
+                 observed, passed)
+
+
+def _probe_host() -> str:
+    """One fork+exec on the host, timed: a slow or failing probe means the host was starved."""
+    started = time.monotonic()
+    try:
+        found = subprocess.run([sys.executable, "-c", "pass"], capture_output=True, text=True,
+                               timeout=15)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"FAILED {type(exc).__name__}"
+    return f"rc={found.returncode} {int((time.monotonic() - started) * 1000)}ms"
+
+
+async def wall_without_guard(h: Harness) -> None:
+    """With the guard switched off (a test-only patch), the sandbox itself refuses them.
+
+    The guard is a marker, not the wall: these commands are denied by its list, so the run
+    below removes that one pure function for the duration and asks the sandbox directly.
+    """
+    await h.start({"base": BASE, "sandbox": h.root / "var" / "sandbox", "timeout": 30}, ROLES)
+    plugin = sys.modules["monoagens_plugins_workspace"]
+    saved = plugin.guard.screen
+    plugin.guard.screen = lambda command, **options: ("allow", "")
+    try:
+        for label, command, verdict in (
+                ("mount", "mount -t tmpfs x /mnt 2>&1; echo rc=$?",
+                 lambda t: "must be superuser" in t or "rc=0" not in t),
+                ("unshare -r", "unshare -r true 2>&1; echo rc=$?", lambda t: "rc=0" not in t),
+                ("unshare -m", "unshare -m true 2>&1; echo rc=$?", lambda t: "rc=0" not in t),
+                ("sudo", "sudo true 2>&1; echo rc=$?", lambda t: "rc=0" not in t),
+                ("su", "su -c true 2>&1; echo rc=$?", lambda t: "rc=0" not in t),
+                ("dev/tcp", f"bash -c 'exec 3<>/dev/tcp/127.0.0.1/{DB_PORT}' 2>&1; echo rc=$?",
+                 lambda t: "rc=0" not in t),
+                ("no setuid binary", "find / -perm -4000 -type f 2>/dev/null | head -1",
+                 lambda t: t.strip() == ""),
+                ("no capability", "grep CapEff /proc/self/status",
+                 lambda t: "0000000000000000" in t)):
+            result = await h.run("person:owner", command, timeout=30)
+            observed = _text(result)
+            h.report.add(Check(f"wall: {label}", "person:owner", command,
+                               "refused by the sandbox itself"), observed, verdict(observed))
+    finally:
+        plugin.guard.screen = saved
+
+
 async def kill_while_running(h: Harness) -> None:
     """A SIGKILLed process that started a sandbox leaves no sandbox process behind."""
     child = await asyncio.create_subprocess_exec(
@@ -517,8 +587,10 @@ async def main() -> int:
         await network(h)
         await inbound(h)
         await limits(h)
+        await process_limit(h)
         await kill_while_running(h)
         await guard_and_permissions(h)
+        await wall_without_guard(h)
         await fail_closed(h)
         print(h.report.render(), flush=True)
         failed = [row for row in h.report.rows if not row[2]]

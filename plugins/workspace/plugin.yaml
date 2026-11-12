@@ -21,6 +21,7 @@ settings:
   base_rootfs: {type: string, default: ""}
   base_tarball: {type: string, default: ""}
   timeout_seconds: {type: int, default: 120}
+  dns: {type: array, default: [1.1.1.1]}
   max_file_bytes: {type: int, default: 2000000}
   memory_mb: {type: int, default: 1024}
   cpus: {type: int, default: 1}

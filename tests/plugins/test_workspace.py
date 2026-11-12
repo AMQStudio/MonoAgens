@@ -264,6 +264,31 @@ def test_the_sandbox_argv_keeps_the_host_out():
     assert "DEBIAN_FRONTEND" not in joined
 
 
+def test_the_dns_option_is_public_and_written_where_the_sandbox_reads_it(tmp_path):
+    from plugins.workspace import sandbox as sandbox_module
+
+    class API:
+        deployment_root = tmp_path
+        options = {"sandbox": str(tmp_path / "sandbox")}
+
+    assert sandbox_module.resolvers(API()) == ["1.1.1.1"]
+    api = API()
+    api.options = {"sandbox": str(tmp_path / "sandbox"), "dns": ["9.9.9.9", "8.8.8.8"]}
+    assert sandbox_module.resolvers(api) == ["9.9.9.9", "8.8.8.8"]
+    resolv = sandbox_module._resolv_conf(api, True).read_text(encoding="utf-8")
+    assert resolv == "nameserver 9.9.9.9\nnameserver 8.8.8.8\n"
+    assert sandbox_module._resolv_conf(api, False).read_text(encoding="utf-8") == ""
+
+    for bad in ("127.0.0.1", "10.0.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1",
+                "::1", "fd00::1", "fe80::1"):
+        api.options = {"sandbox": str(tmp_path / "sandbox"), "dns": [bad]}
+        with pytest.raises(ValueError, match="private or loopback"):
+            sandbox_module.resolvers(api)
+    api.options = {"sandbox": str(tmp_path / "sandbox"), "dns": ["resolver.lan"]}
+    with pytest.raises(ValueError, match="is not an IP address"):
+        sandbox_module.resolvers(api)
+
+
 def test_the_sandbox_quota_parses_and_compares():
     from plugins.workspace import tools as tools_module
 

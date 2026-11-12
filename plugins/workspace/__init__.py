@@ -18,6 +18,7 @@ def register(api: Any) -> None:
     api.add_middleware("action", "guard", guard_rule(api))
     api.add_command("workspace", "Reset your workspace: /workspace reset.",
                     workspace_command(api), permission="workspace.run")
+    sandbox.resolvers(api)  # a private or loopback resolver is refused at boot
     ready, reason = sandbox.available(api)
     if not ready:
         api.notes.append(f"workspace: run unavailable ({reason})")
