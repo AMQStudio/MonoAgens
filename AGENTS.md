@@ -41,7 +41,7 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
 
 ## Invariants (never break these)
 1. **The core is only a brain** (D1, D2, D32). `monoagens/kernel.py`, `hooks.py`, `jobs.py`,
-   `migrate.py`, `store.py`, `expect.py`, `memory.py`, `pfc.py`, `reach.py`, `threads.py` and `monoagens/cognition/` know only senses, organs, hooks and thought
+   `migrate.py`, `store.py`, `expect.py`, `memory.py`, `pfc.py`, `desk.py`, `guidance.py`, `reach.py`, `threads.py`, `recall.py`, `identity.py` and `monoagens/cognition/` know only senses, organs, hooks and thought
    acts. They never import from `monoagens/bodies/` or packages, never mention a platform, and
    never hard-code a world action (speaking included) — those are organ capabilities.
 2. **The log is immutable.** The `events` table is INSERT-only, enforced by a trigger. The only
@@ -94,6 +94,8 @@ kernel.py ≤ 280 lines · hooks.py ≤ 150 (hook lists, ordering, watchdog) · 
 store.py ≤ 240 · expect.py ≤ 240 · memory.py ≤ 260 · pfc.py ≤ 280 ·
 reach.py ≤ 150 (audience, consent, reaching a person) · threads.py ≤ 120 (task threads) ·
 identity.py ≤ 120 (birth, identity) · recall.py ≤ 160 (`self.recall`, the task desk) ·
+desk.py ≤ 160 (the layered prompt) · guidance.py ≤ 30 (general principles only, never a rule
+for one case; a new line needs evidence in the task's Notes) ·
 bodies/telegram.py ≤ 180 ·
 bodies/cli.py ≤ 120 · cli.py ≤ 60 · cognition/ ≤ 600 in total, each file ≤ 160 ·
 middleware.py ≤ 150 · whole package ≤ 3,800 lines (3,500 + the two modules added for D45–D47).

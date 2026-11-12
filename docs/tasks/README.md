@@ -10,7 +10,7 @@ Tasks are numbered in the order they are done. Finished tasks stay as history.
 | Task | File | Status | Depends on |
 |---|---|---|---|
 | 1 | [Core: align with the frozen contract](1-core-align.md) | **done** — 181 tests; fake replay 17/25, fixed in Task 2 Part 2 | — |
-| 2 | [Core: launch](2-core-launch.md) | in progress — Parts 1–10 worked; Part 11 (D50, D51, effort) open | Task 1 |
+| 2 | [Core: launch](2-core-launch.md) | in progress — Parts 1–11 worked; Part 12 (harness fixes, acceptance) open | Task 1 |
 | 3 | [Middleware and first plugins](3-middleware-plugins.md) | todo | Task 2 |
 | 4 | [Core: depth of mind](4-core-mind.md) | todo | Task 3 and some weeks of daily use |
 | 5 | [Bodies, first users and release](5-bodies-release.md) | todo | Task 4 |

@@ -4,8 +4,7 @@ Status: todo | Depends on: Task 3, and the owner using the soul daily for some w
 One task = one coordinator prompt. Work through the parts **in order**. Rules: [README](README.md).
 
 **Goal.** The soul thinks before it speaks, knows itself honestly, corrects itself, keeps beliefs
-up to date, learns lessons that carry across bodies, wakes cheaply for its Expectations, and
-lets go of what it should forget.
+up to date, learns lessons that carry across bodies, and lets go of what it should forget.
 
 ---
 
@@ -30,30 +29,21 @@ May touch: `monoagens/memory.py` (sleep part), `tests/test_memory.py`, `scenario
 - [ ] 2.6 Lessons and procedures with α/β credence; generic ones go to layer 2 and are used in every body.
 - [ ] 2.7 Check: a correction supersedes the old memory; a contradicted belief is revised at the next sleep; two similar episodes with different people stay apart; a lesson learned in one body is used in another.
 
-## Part 3 — Wake gate and free-text conditions
-Read first: [core.md](../core.md) §5, [core-math.md](../core-math.md) §6, §15
-May touch: `monoagens/expect.py`, `tests/test_expect.py`, `scenarios/`
-
-- [ ] 3.1 Wake gate: still relevant? stale? (quiet hours stay in the owner policy).
-- [ ] 3.2 Free text: cosine below `lo` ignored; every candidate → one recorded classifier call.
-- [ ] 3.3 `hi` band opens only by the rule of three; `lo` learning within bounds and a minimum gray width.
-- [ ] 3.4 Check: a fulfilled promise wakes no one; a question on the same topic never resolves a promise.
-
-## Part 4 — Trust, fading and forgetting
+## Part 3 — Trust, fading and forgetting
 Read first: [core.md](../core.md) §7–8
 May touch: `monoagens/memory.py`, `monoagens/forget.py`, `tests/`, `scenarios/`
 
 The fade and hard-forget paths exist since Task 1; this part adds the policy around them.
 
-- [ ] 4.1 Attribution and reliability (α/β) per domain; a non-owner never supersedes an owner fact.
-- [ ] 4.2 Fade with a fixed threshold during sleep.
-- [ ] 4.3 Soft forgetting.
-- [ ] 4.4 Hard forgetting also removes `share.granted` grants for the forgotten content.
-- [ ] 4.5 Check: a stranger cannot override an owner fact; hard forget leaves only `{"forgotten": true}` and metadata, also after a rebuild.
+- [ ] 3.1 Attribution and reliability (α/β) per domain; a non-owner never supersedes an owner fact.
+- [ ] 3.2 Fade with a fixed threshold during sleep.
+- [ ] 3.3 Soft forgetting.
+- [ ] 3.4 Hard forgetting also removes `share.granted` grants for the forgotten content.
+- [ ] 3.5 Check: a stranger cannot override an owner fact; hard forget leaves only `{"forgotten": true}` and metadata, also after a rebuild.
 
-## Part 5 — Real-model test
-- [ ] 5.1 `uv run pytest` and the fake replay pass in full.
-- [ ] 5.2 Real-model replay with the model in `.env` (never read or print it); report metrics against Task 2's numbers: missed-help rate, false-speak rate, tokens per simulated day, absolute-line violations (0).
+## Part 4 — Real-model test
+- [ ] 4.1 `uv run pytest` and the fake replay pass in full.
+- [ ] 4.2 Real-model replay with the model in `.env` (never read or print it); report metrics against Task 2's numbers: missed-help rate, false-speak rate, tokens per simulated day, absolute-line violations (0).
 
 **Done when.** All parts are ticked, tests and both replays reported, every file within budget.
 

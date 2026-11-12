@@ -93,8 +93,9 @@ tests against the map, never new rows.
    and the PFC is woken once more with the newest context (D33).
    **A thought does not end the turn** (D51). Inside one job, the results of `think`, `expect`,
    `resolve` and `revise` go back to the model, which continues until it acts, ends without a
-   tool call, or reaches `max_thought_rounds` (prior). Every round is a recorded `model.call`
-   and counts in the budget. Thinking, then doing, is one turn, as it is for a person.
+   tool call, or reaches `max_thought_rounds` (prior). A refusal (a thought act or an argument
+   the core rejects) comes back as a result with its reason, so the model can correct it in the
+   same turn. Every round is a recorded `model.call` and counts in the budget. Thinking, then doing, is one turn, as it is for a person.
 7. For each `act`: pass the **action hook**, record `act.out`, hand it to the organ, create a
    `predict` Expectation.
 8. On ticks: maybe sleep.
@@ -200,6 +201,10 @@ the prompt cache holds (D2, D32, D46). The soul can act in any body from any bod
 - Multi-step work is a chain: result → circuit breaker (it continues an active goal) → next
   `act`, limited by steps per task (`max_task_steps`) and the budget. Every step is logged, so
   tasks resume after a restart and can be interrupted (D3).
+- **Working memory of its own acts** (D52). Every chain in progress — in a task thread or in the
+  place where it started — is on the desk in `<doing>`: the goal, one line per step (the soul's
+  own acts included, also those that say nothing), the latest result verbatim, older results as
+  pointers. The soul always knows what it has just done and what came back.
 - **Task threads** (D47). A chain that needs more than one step opens its own task thread: a
   place of kind `task` with a parent place, the parent's audience (so absolute line 2 holds
   unchanged), and its own slot for one PFC job. The conversation in the parent place never waits
@@ -225,7 +230,8 @@ an honest `act.result` ("no way to reach Budi yet").
 **Speaking elsewhere** (D48). A communicative act aimed at a place other than the current one is
 never sent with text written at the current desk. The core turns it into an intent — what to
 say, to whom, why — and wakes the PFC once more in the target place, with that place's desk
-(§8, absolute line 2); the message is written there, as it would be written in Budi's chat.
+(§8, absolute line 2); the intent is that wake's trigger, so the PFC sees what it set out to
+say and why; the message is written there, as it would be written in Budi's chat.
 This costs one extra model call and only for messages to another place. A paraphrase of private
 content cannot leak, because the content was never on the target's desk. A check that a reply
 quotes no private content its audience may not see stays as a second line of defence and as a

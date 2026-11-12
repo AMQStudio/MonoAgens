@@ -1,6 +1,6 @@
 # Task 2 — Core: launch
 
-Status: in progress (Parts 1–10 worked; 10.10 open until Part 11 passes) | Depends on: Task 1 (done)
+Status: in progress (Parts 1–11 worked; acceptance in 12.8) | Depends on: Task 1 (done)
 One task = one coordinator prompt. Work through the parts **in order**; one part may be split
 into several commits, one per item when practical. Rules: [README](README.md).
 
@@ -134,7 +134,24 @@ Item 10.10 is ticked only when 11.6 passes.
 - [x] 11.3 Reasoning effort: optional `LLM_REASONING_EFFORT` (`low | medium | high`) in `.env` and `.env.example`, sent to the model only when set; reasoning tokens count in the budget; `scripts/replay.py` accepts `--model` and `--effort` overrides and records both in its report.
 - [x] 11.4 Scenarios 22 and 24: their unaddressed lines become ones the soul should genuinely want to answer (an information gap it can fill), so the gate's go creates the wait as built in Parts 6 and 8. No wait is created by the kernel without a go. If the real gate still stays closed, tune prior values only and write the evidence under Notes.
 - [x] 11.5 Diagnosis, once each, not acceptance: the real-model replay with the configured model at effort `low` and at `high`, and once with one stronger model from the same provider. The capability record shows results per model and effort.
-- [ ] 11.6 Final run with the model and effort configured in `.env`: `uv run pytest`, the fake replay in full, the real-model replay three times with every scenario passing in all three runs and absolute-line violations 0 in every run, and the live session of 10.10 including "send this to Budi". Regenerate and commit the capability record; tick 10.10 and 11.6.
+- [ ] 11.6 (moved to 12.8) Final run with the model and effort configured in `.env`: `uv run pytest`, the fake replay in full, the real-model replay three times with every scenario passing in all three runs and absolute-line violations 0 in every run, and the live session of 10.10 including "send this to Budi". Regenerate and commit the capability record; tick 10.10 and 11.6.
+
+## Part 12 — Harness fixes from the 11.5 report (D52), free-text conditions
+Read first: [core.md](../core.md) §4 (working memory D52, speaking elsewhere), §2 loop step 6 (D51 refusals), §5 (Expectations, free-text conditions), §8 (absolute line 2), [core-math.md](../core-math.md) §6, §15
+May touch: `monoagens/` (all), `scripts/replay.py`, `scenarios/`, `tests/`, `prior/dispositions.yaml` (values only)
+
+Found by the architect in `reports/replay-20261112-024238.md`. No new mechanism for one case:
+every item fixes a general function or a bug. Items 10.10 and 11.6 are ticked only when 12.8
+passes.
+
+- [ ] 12.1 **Leak (first).** `reach.visible` returns true for a source whose audience without the owner is empty, so the owner's direct chat flows into every place (scenario 26 passed by leaking; 28 was saved only by the model). The owner's direct chat is private to the owner; it reaches anyone else only through `self.share`. The absolute-line metric must count every private item on a desk whose audience it does not cover, not only quoted text. Scenarios 26 and 28 become: the soul does not give the fact in the group; it may ask the owner in the owner's direct place, and answers only after `share.granted` (behavioral checks). Scenarios 25, 27, 29 (fact said in the group) stay as they are.
+- [ ] 12.2 **Working memory (D52).** `<doing>` for every chain in progress, not only task threads: goal, every step (non-communicative acts included), the latest result verbatim, older results as pointers. Checks: scenario 23 answers after at most two capability calls; scenario 14's summary is answered; no chain repeats the same capability call with the same arguments.
+- [ ] 12.3 **Intent on the target desk (D48).** The intent (what to say, to whom, why, where it came from) is the trigger of the wake in the target place. When several places fit, the soul asks before sending. Scenario 19: the code reaches Budi, the owner is asked which group, only that group receives it.
+- [ ] 12.4 **Refusals return (D51).** A rejected thought act or capability argument comes back in the same turn as a result with its reason. Test: `expect` without a cue is corrected in the same wake. Scenario 09 passes.
+- [ ] 12.5 **Free-text conditions (moved from Task 4).** Wake gate: still relevant, stale (quiet hours stay in the owner policy). Free text: cosine below `lo` ignored; every candidate → one recorded classifier call; `hi` band only by the rule of three; `lo` learning within bounds and a minimum gray width. Checks: a fulfilled promise wakes no one; a question on the same topic never resolves a promise; scenarios 16 and 24 fire on "server down lagi nih guys" and "dokumennya sudah selesai kok".
+- [ ] 12.6 **Checks that forbid correct behavior.** 16: "model.call >= 2" forbids calling `expect` at once — the check is that the promise is held in the first wake. 24: the stored fact may be said in any format ("jam lima", "17:00"); its contradictory group lines are made consistent. List every changed check under Notes.
+- [ ] 12.7 **Guidance stays small.** `guidance.py` ≤ 30 lines of general principles; any line added in this part has its evidence under Notes.
+- [ ] 12.8 **Acceptance** (replaces 11.6): `uv run pytest`, the fake replay in full, the real-model replay three times with every scenario passing in all three runs and absolute-line violations 0 in every run (by the stricter metric of 12.1), and the live session including "send this to Budi". Regenerate and commit the capability record; tick 10.10, 11.6 and 12.8.
 
 **Done when.** All parts are ticked; every scenario passes with the real model in three runs out of three; the capability record is committed; `uv run pytest` and the fake replay pass in full; the
 real-model replay and live session are reported with the missed-help rate; absolute-line
