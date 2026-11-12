@@ -300,6 +300,21 @@ async def test_low_weight_fired_expectation_still_wakes_the_pfc_once(aconn):
     assert await _status(aconn, exp_id) == "satisfied"
 
 
+async def test_an_expectation_wake_takes_the_place_kind_from_the_place(aconn):
+    """A promise in the owner's direct chat renders `(direct)`, not a payload default."""
+    exp_id, _ = await _create(aconn, weight=0.3)
+    clock = FakeClock(START)
+    fake = FakeLLM()
+    kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), settings=SETTINGS)
+    kernel.register_body(RecordingBody())
+
+    await _feed(kernel, _msg("halo"))
+    await _tick(kernel, clock)
+
+    assert await _status(aconn, exp_id) == "satisfied"
+    assert f"<place>{PLACE} (direct)</place>" in fake.last_prompt
+
+
 async def test_policy_once_is_satisfied_after_the_turn(aconn):
     exp_id, _ = await _create(aconn)
     clock = FakeClock(START)

@@ -162,7 +162,7 @@ async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place:
             last = datetime.fromisoformat(value["ts"])
             break
     return PFCContext(
-        now=now, place=place, place_kind=str(event.payload.get("place_kind") or "shared"),
+        now=now, place=place, place_kind=await reach.place_kind(conn, place),
         reason=reason, core_memory=str((core or {}).get("text") or "") if shown else "",
         people=people,
         expectations=await active_expectation_lines(conn, place), memories=memories,
