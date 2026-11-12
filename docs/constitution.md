@@ -14,8 +14,8 @@ Like a kernel: the interface to the outside never breaks, the inside may improve
   plus real logs showing the change is better), recorded as a decision with that evidence, never
   by a task, plugin or worker on its own.
 - **Data** — the values in the default prior (`prior/`), tuned with replay at any time.
-- Always allowed: fixing an inconsistency, a typo or a broken reference, and clarifications that
-  change no behavior. Everything else belongs to another layer — middleware, bodies, plugins.
+- Always allowed: fixing a bug, a vulnerability, an inconsistency, a typo or a broken
+  reference, and clarifications or refactors that change no behavior. Everything else belongs to another layer — middleware, bodies, plugins.
 
 ## 2. Design by brain function, not by scenario (D39, D40)
 - The core is a closed list of brain functions: the brain map in [core.md §2](core.md). Each row
@@ -35,8 +35,14 @@ formula. A new primitive must replace one or be refused.
   prior). **Middleware** — the foundation in the middle: policy, commands & tools, install,
   skills, identity, RBAC. **Bodies** — organs for platforms and devices. **Plugins** — features
   built on the middleware.
+- **The middleware decides, the core records and carries out.** The core holds mechanisms
+  and the labels in the log (who was present, where a memory came from, who shared what); every
+  rule that reads those labels — privacy, who is which person, who may share, budget limits,
+  quiet hours — is middleware. The owner policy is the middleware that is always installed; the
+  core refuses to run without it (fail-closed).
 - Bodies and plugins reach the core only through the middleware: the three hooks and the organ
-  contract. Everything that reaches the brain is a `percept`; everything that persists is an
+  contract. The standard names (adapter, tool, context, reasoning) are in
+  [glossary.md](glossary.md). Everything that reaches the brain is a `percept`; everything that persists is an
   event.
 - Middleware and plugins never learn; the soul does (D34). They may add any behavior, emotions
   included, through the six levers ([middleware.md](middleware.md)); the core itself has no
@@ -44,7 +50,7 @@ formula. A new primitive must replace one or be refused.
 
 ## 5. Two absolute lines (D24, D32)
 Enforced deterministically by the owner policy, never decided by the model, never removable by a
-plugin:
+plugin; another plugin can only narrow them:
 1. Only the owner changes who the soul is.
 2. Private content never reaches anyone who was not part of it (D45): it follows the people
    it belongs to, across bodies and places, and reaches someone new only when one of those

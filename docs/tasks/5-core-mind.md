@@ -1,7 +1,7 @@
-# Task 4 — Core: depth of mind
+# Task 5 — Core: depth of mind
 
-Status: todo | Depends on: Task 3, and the owner using the soul daily for some weeks
-One task = one coordinator prompt. Work through the parts **in order**. Rules: [README](README.md).
+Status: todo | Depends on: Task 4, and the owner using the soul daily for some weeks
+One task = one worker prompt, done by one worker. Work through the parts **in order**. File names follow the layout of Task 3 ([glossary](../glossary.md)). Rules: [README](README.md).
 
 **Goal.** The soul thinks before it speaks, knows itself honestly, corrects itself, keeps beliefs
 up to date, learns lessons that carry across bodies, and lets go of what it should forget.
@@ -10,7 +10,7 @@ up to date, learns lessons that carry across bodies, and lets go of what it shou
 
 ## Part 1 — Inner thought and self-model
 Read first: [core.md](../core.md) §6, §8
-May touch: `monoagens/pfc.py`, `tests/test_pfc.py`, `scenarios/`
+May touch: `monoagens/core/reasoning.py`, its tests, `scenarios/`
 
 - [ ] 1.1 `think(thought, motivation 1..5, confidence 0..1)` before any communicative `act` when self-selecting; gate on `speaking_bar` / `certainty_bar`.
 - [ ] 1.2 Stable prompt: principles, honesty principles (core.md §8), knowledge cutoff from per-model config.
@@ -19,7 +19,7 @@ May touch: `monoagens/pfc.py`, `tests/test_pfc.py`, `scenarios/`
 
 ## Part 2 — Revise, beliefs, lessons and procedures
 Read first: [core.md](../core.md) §6–7, [core-math.md](../core-math.md) §7, §14
-May touch: `monoagens/memory.py` (sleep part), `tests/test_memory.py`, `scenarios/`
+May touch: `monoagens/core/memory/` (sleep part), its tests, `scenarios/`
 
 - [ ] 2.1 `revise` sets `valid_to` / `superseded_by`; nothing deleted.
 - [ ] 2.2 `basis` (observed | told | inferred) on memories; sleep gist is `inferred`.
@@ -31,7 +31,7 @@ May touch: `monoagens/memory.py` (sleep part), `tests/test_memory.py`, `scenario
 
 ## Part 3 — Trust, fading and forgetting
 Read first: [core.md](../core.md) §7–8
-May touch: `monoagens/memory.py`, `monoagens/forget.py`, `tests/`, `scenarios/`
+May touch: `monoagens/core/memory/`, `tests/`, `scenarios/`
 
 The fade and hard-forget paths exist since Task 1; this part adds the policy around them.
 

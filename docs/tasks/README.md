@@ -1,25 +1,28 @@
 # Tasks
 
-Work for coding workers. **One file = one task = one coordinator prompt.** Each task is split
-into parts and items, numbered in the order they are done (`3.2` = part 3, item 2). The
-coordinator works through the parts in order, one commit per item when practical, and ends with
-the real-model test in the last part.
+Work for coding workers. **One file = one task = one worker.** Each task is split into parts and
+items, numbered in the order they are done (`3.2` = part 3, item 2). Tasks run **one after
+another**: one worker takes one task file, works through its parts in order (one commit per item
+when practical), verifies its own work, ends with the real-model test in the last part, and
+reports to the owner. The next task starts after that report.
 
-Tasks are numbered in the order they are done. Finished tasks stay as history.
+Tasks are numbered in the order they are done. Finished tasks stay as history. Tasks written
+before Task 3 name files by their earlier names; the [glossary](../glossary.md) maps them.
 
 | Task | File | Status | Depends on |
 |---|---|---|---|
 | 1 | [Core: align with the frozen contract](1-core-align.md) | **done** — 181 tests; fake replay 17/25, fixed in Task 2 Part 2 | — |
-| 2 | [Core: launch](2-core-launch.md) | in progress — closing on the launch set (12.8); then the core pauses | Task 1 |
-| 3 | [Middleware and first plugins](3-middleware-plugins.md) | todo | Task 2 |
-| 4 | [Core: depth of mind](4-core-mind.md) | todo | Task 3 and some weeks of daily use |
-| 5 | [Bodies, first users and release](5-bodies-release.md) | todo | Task 4 |
+| 2 | [Core: launch](2-core-launch.md) | in progress — closing items 12.13–12.15, then the launch set (12.8) | Task 1 |
+| 3 | [Core: clean refactor](3-core-refactor.md) | todo — same behavior; decisions move to the middleware; standard names | Task 2 |
+| 4 | [Middleware and first plugins](4-middleware-plugins.md) | todo | Task 3 |
+| 5 | [Core: depth of mind](5-core-mind.md) | todo | Task 4 and some weeks of daily use |
+| 6 | [Adapters, first users and release](6-bodies-release.md) | todo | Task 5 |
 
 The architect updates this table and each file's `Status:` line; workers never do.
 
 ## Launch
 "Launch" means: the owner uses the soul every day in a direct chat and one group. Task 2 is the
-whole path there. The first number is the **missed-help rate**: of the group messages that
+whole path there; Task 3 then cleans the core without changing what it does. The first number is the **missed-help rate**: of the group messages that
 should have been answered, how many passed the gate. The gate is tuned for recall, not
 precision: a needless wake costs a few tokens and the PFC can still stay silent; a missed
 moment is a failure.

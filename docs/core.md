@@ -419,9 +419,11 @@ loads a prior and never exports or shares learned state (D25).
    audience shares it (`self.share`, recorded as `share.granted`), and the new person then counts
    as part of its audience. Each person speaks only for what they were part of: the owner can share
    work done with the soul, but cannot share what Fulan said in private; the owner's view of
-   everything is a view, not ownership. Enforced by the core itself in the context hook, so it holds with
-   an empty middleware pipeline. Middleware decides who is the same person (the alias map) and
-   may add stricter rules (narrow); it can never widen what this line allows.
+   everything is a view, not ownership. Enforced by the owner policy in the context hook, which is always installed: the
+   core refuses to run without it (fail-closed), so the line holds even with no other
+   middleware. The core records the labels (who was present, `derived_from`, `share.granted`,
+   `place_kind`); the policy judges them. Middleware decides who is the same person (the alias
+   map) and may add stricter rules (narrow); nothing can widen what this line allows.
 
 **Everything else is weighed by the PFC** (D24, D31). Anyone may ask; requests are judged
 against the owner's interests and the principles. Learned procedures and lessons carry credence

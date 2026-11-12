@@ -1,7 +1,7 @@
-# Task 5 — Bodies, first users and release
+# Task 6 — Adapters, first users and release
 
-Status: todo | Depends on: Task 4
-One task = one coordinator prompt. Work through the parts **in order**. Rules: [README](README.md).
+Status: todo | Depends on: Task 5
+One task = one worker prompt, done by one worker. Work through the parts **in order**. File names follow the layout of Task 3 ([glossary](../glossary.md)). Rules: [README](README.md).
 
 **Goal.** One soul across many bodies and providers, then real users, a release, an honest
 evaluation, and stable contracts for other developers.
@@ -10,11 +10,11 @@ evaluation, and stable contracts for other developers.
 
 ## Part 1 — Identity linking, more bodies, more models
 Read first: [bodies.md](../bodies.md), [middleware.md](../middleware.md) §7 (identity), [core.md](../core.md) §4, §8
-May touch: `monoagens/bodies/`, `monoagens/middleware.py` (identity part), provider adapters, `tests/`, `scenarios/`
+May touch: `monoagens/adapters/`, `monoagens/middleware/` (identity part), provider adapters, `tests/`, `scenarios/`
 
 V1 (branch `archived`) already has working WhatsApp (media, history sync, identity), Discord,
 Slack and provider (Anthropic, Gemini, OpenAI, speech) code under `monoagens/gateways/` and
-`monoagens/providers/`. Port it to the adapter contract of Task 3 instead of starting over; leave
+`monoagens/providers/`. Port it to the adapter contract of Task 4 instead of starting over; leave
 its per-gateway policy and roles out, since policy lives in the middleware.
 
 Linking comes first: it is what lets a person's private context follow them (D45), so a wrong

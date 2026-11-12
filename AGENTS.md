@@ -6,13 +6,17 @@ Status: prototype. Before touching code read [docs/constitution.md](docs/constit
 task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec sections its parts link (the core: [docs/core.md](docs/core.md)). Work ONLY on that task.
 
 ## Who writes code
-- All implementation work is delegated to an **Orca Orchestration** worker running
-  agent `omp` with model **`opencode-go/deepseek-v4.1-flash`**, reasoning effort **high**, on OpenCode Go.
-- The session that receives a task acts only as **coordinator**: it hands the track
-  to the worker, then verifies the result (reads the diff, runs `uv run pytest`, checks the
-  invariants and the size guide) before committing and reporting.
-- The coordinator does not write implementation code itself. If the worker fails twice on
-  the same step, stop and report to the owner instead of taking over.
+- **One task = one worker**, and tasks run one after another. The worker is an **Orca
+  Orchestration** agent `omp` with model **`opencode-go/deepseek-v4.1-flash`**, reasoning effort
+  **high**, on OpenCode Go. There is no coordinator in between: the worker reads the task, the
+  specs and the code itself, implements, verifies its own result (reads its diff, runs
+  `uv run pytest` and the fake replay, checks the invariants and the size guide), commits,
+  pushes and reports to the owner. The real-model run of the last part is the worker's, once.
+- Tools the worker may use when they help: **graphify** (the code graph: callers and
+  dependencies, before moving or renaming code) and **Context7** (current library docs:
+  psycopg, pgvector, fastembed, httpx, pytest-asyncio). Neither is a project dependency.
+- If the same step fails twice, stop and report to the owner what was tried; do not work around
+  it.
 - Specifications (every `docs/*.md`) and this file are owned by the architect. Workers may tick
   boxes and write under **Notes** in their own task file in `docs/tasks/`; they never edit a
   specification or the status table.
@@ -22,14 +26,14 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
 
 ## Secrets (never break this)
 - Never read, print, cat, grep, copy, or summarize `.env` or any file holding secrets.
-  This applies to the coordinator and to every worker.
+  This applies to every worker and every session.
 - To learn which variables exist, read `.env.example`. To check that a variable is set,
   test for its presence only (e.g. `test -n "$LLM_API_KEY"`), never print its value.
 - Never put a secret in a command line, a log, a test, a commit, a report, or a prompt.
 - If a secret is exposed anyway, stop and tell the owner which one, so it can be rotated.
 
 ## How to work
-- One coordinator prompt = one task file. Work through its parts in order; one commit per item
+- One worker = one task file. Work through its parts in order; one commit per item
   when practical. Do not start the next task. Do not add features that were not asked for.
 - An item is done only when all tests pass (`uv run pytest`) and the fake replay passes. Tick it
   in the task file.
@@ -41,7 +45,7 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
 
 ## Invariants (never break these)
 1. **The core is only a brain** (D1, D2, D32). `monoagens/kernel.py`, `hooks.py`, `jobs.py`,
-   `migrate.py`, `store.py`, `expect.py`, `memory.py`, `pfc.py`, `desk.py`, `guidance.py`, `reach.py`, `threads.py`, `recall.py`, `identity.py` and `monoagens/cognition/` know only senses, organs, hooks and thought
+   `migrate.py`, `store.py`, `expect.py`, `memory.py`, `pfc.py`, `desk.py`, `guidance.py`, `reach.py`, `threads.py`, `recall.py`, `identity.py` and `monoagens/cognition/` (after Task 3: everything under `monoagens/core/`) know only senses, organs, hooks and thought
    acts. They never import from `monoagens/bodies/` or packages, never mention a platform, and
    never hard-code a world action (speaking included) — those are organ capabilities.
 2. **The log is immutable.** The `events` table is INSERT-only, enforced by a trigger. The only
