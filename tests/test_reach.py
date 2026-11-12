@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from monoagens import hooks, memory, organs, reach, threads
+from monoagens import hooks, memory, reach, threads
 from monoagens.clock import FakeClock
 from monoagens.embedding import FakeEmbedder
 from monoagens.kernel import Kernel
@@ -354,7 +354,7 @@ async def test_a_paraphrase_of_a_private_line_is_not_on_the_other_places_desk(ac
         "SELECT place, payload FROM events WHERE kind = 'act.out'")).fetchone()
     assert spoken[0] == BUDI
     assert "di-PHK" not in spoken[1]["arguments"]["text"]
-    assert await organs.leaks(aconn, BUDI, "Fulan bilang: aku di-PHK") is True
+    assert await reach.leaks(aconn, BUDI, "Fulan bilang: aku di-PHK") is True
 
 
 async def test_a_long_action_opens_a_task_thread_and_it_closes_when_done(aconn):

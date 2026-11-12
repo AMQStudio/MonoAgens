@@ -103,6 +103,18 @@ async def memory_visible(conn, *, context: str | None, sources: Any = None) -> b
     return all(need <= have for have in audiences)
 
 
+async def leaks(conn, target: str | None, text: str) -> bool:
+    """Return whether a message would carry private content the target may not see (D45)."""
+    if not text or not target:
+        return False
+    cur = await conn.execute("SELECT text, derived_from FROM memories WHERE valid_to IS NULL")
+    for line, sources in await cur.fetchall():
+        if line and line in text and not await memory_visible(
+                conn, context=target, sources=sources):
+            return True
+    return False
+
+
 async def direct_place(conn, who: str, via: str | None = None) -> str | None:
     """Return the 1:1 place where one person was last active, optionally on one body."""
     mapping = await aliases(conn)

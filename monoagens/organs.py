@@ -86,7 +86,7 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any]) -> bool:
     if place != event.place and cap.get("communicative"):
         await _intend(kernel, event, capability, arguments, to, place)
         return True
-    if await leaks(kernel.conn, place, str(arguments.get("text") or "")):
+    if await reach.leaks(kernel.conn, place, str(arguments.get("text") or "")):
         await kernel._emit(event, "act.result", {"capability": capability, "to": to, "result": {
             "error": "that place may not see this content; say it where it belongs"}})
         return True
@@ -123,7 +123,7 @@ async def _intend(kernel: Any, event: Event, capability: str, arguments: dict[st
         "capability": capability, "arguments": arguments, "to": to, "target": place,
         "why": goal})
     reason = f"you set out to say {said!r} to {to or place}"
-    if await leaks(kernel.conn, place, f"{said}\n{goal}"):
+    if await reach.leaks(kernel.conn, place, f"{said}\n{goal}"):
         reason = f"you set out to send a message to {to or place}; its words cannot appear here"
     elif goal:
         reason += f", because {goal}"
@@ -133,15 +133,3 @@ async def _intend(kernel: Any, event: Event, capability: str, arguments: dict[st
         payload={"description": f"{reason} (from {event.place})",
                  "capability": capability, "to": to, "intent": intent.id,
                  "place_kind": await reach.place_kind(kernel.conn, place)}))
-
-
-async def leaks(conn, target: str | None, text: str) -> bool:
-    """Return whether a message would carry private content the target may not see (D45)."""
-    if not text or not target:
-        return False
-    cur = await conn.execute("SELECT text, derived_from FROM memories WHERE valid_to IS NULL")
-    for line, sources in await cur.fetchall():
-        if line and line in text and not await reach.memory_visible(
-                conn, context=target, sources=sources):
-            return True
-    return False
