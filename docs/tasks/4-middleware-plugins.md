@@ -43,7 +43,7 @@ Multi-step work runs in the core's task threads (Task 2 Part 3); the plugins onl
 - [ ] 3.1 Web search/fetch tool organ.
 - [ ] 3.2 File read tool organ.
 - [ ] 3.3 Working-directory organ (read, write and run inside one folder the owner configures) with `long_running` capabilities. A command runs with a computed environment, never the inherited one, so no secret reaches it (V1 ADR-0024 `engine/0024-tool-input-contract`, the shell part); its output follows the cap of 1.2.
-- [ ] 3.3b Scenario: "send our finished work to Budi" where the work is a file in the working folder: the working-directory organ reads it, the soul shares it and sends it through a body that can attach files (a test organ until Task 6), and the forwarding policy of Part 1.1 applies.
+- [ ] 3.3b Scenario: "send our finished work to Budi" where the work is a file in the working folder: the working-directory organ reads it, the soul shares it and sends it through a body that can attach files (a test organ until Task 5), and the forwarding policy of Part 1.1 applies.
 - [ ] 3.4 Check: "who is the president now?" triggers a search when the search plugin is installed, and an honest "as of my knowledge" answer when it is not; "finish my code, then send it to Budi" runs as a task thread and keeps its promise.
 
 ## Part 3b — Capability targets carried over from Task 2

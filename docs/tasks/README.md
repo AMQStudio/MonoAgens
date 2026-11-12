@@ -15,8 +15,9 @@ before Task 3 name files by their earlier names; the [glossary](../glossary.md) 
 | 2 | [Core: launch](2-core-launch.md) | in progress — closing items 12.13–12.15, then the launch set (12.8) | Task 1 |
 | 3 | [Core: clean refactor](3-core-refactor.md) | todo — same behavior; decisions move to the middleware; standard names | Task 2 |
 | 4 | [Middleware and first plugins](4-middleware-plugins.md) | todo | Task 3 |
-| 5 | [Core: depth of mind](5-core-mind.md) | todo | Task 4 and some weeks of daily use |
-| 6 | [Adapters, first users and release](6-bodies-release.md) | todo | Task 5 |
+| 5 | [Adapters: WhatsApp, Discord and more](5-adapters.md) | todo — WhatsApp and Discord first, so the soul is usable daily | Task 4 |
+| 6 | [Core: depth of mind](6-core-mind.md) | todo — last, after weeks of daily use | Task 5 and some weeks of daily use |
+| 7 | [First users and release](7-release.md) | todo | Task 6 |
 
 The architect updates this table and each file's `Status:` line; workers never do.
 

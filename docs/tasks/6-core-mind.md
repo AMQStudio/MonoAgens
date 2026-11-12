@@ -1,6 +1,6 @@
-# Task 5 — Core: depth of mind
+# Task 6 — Core: depth of mind
 
-Status: todo | Depends on: Task 4, and the owner using the soul daily for some weeks
+Status: todo | Depends on: Task 5, and the owner using the soul daily on WhatsApp for some weeks
 One task = one worker prompt, done by one worker. Work through the parts **in order**. File names follow the layout of Task 3 ([glossary](../glossary.md)). Rules: [README](README.md).
 
 **Goal.** The soul thinks before it speaks, knows itself honestly, corrects itself, keeps beliefs
