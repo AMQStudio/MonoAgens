@@ -16,7 +16,7 @@ Linking comes first: it is what lets a person's private context follow them (D45
 link is a leak.
 
 - [ ] 1.1 Identity linking (`/link`): the owner links accounts, or the person confirms with a verification code sent from the second account; every link is an event and can be undone; the soul may suspect and ask, never link silently.
-- [ ] 1.2 WhatsApp with `history` and back-fill on connect.
+- [ ] 1.2 WhatsApp with `history` and back-fill on connect; receiving and sending files as capabilities (a received file is a percept with a description and a reference in `data`).
 - [ ] 1.3 Discord.
 - [ ] 1.4 Voice (STT/TTS).
 - [ ] 1.5 First non-chat body (a game such as Minecraft, an IoT device or a robot simulation) with its own reflexes inside the body.
