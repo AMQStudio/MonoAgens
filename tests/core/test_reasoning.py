@@ -245,7 +245,7 @@ async def test_say_is_recorded_before_the_body_acts(aconn):
 
     trigger = await _feed(kernel, _msg("halo"))
 
-    assert await _kinds(aconn) == ["percept", "model.call", "act.out"]
+    assert await _kinds(aconn) == ["percept", "model.call", "act.out", "act.confirmed"]
     cur = await aconn.execute("SELECT who, place, body, payload, caused_by FROM events WHERE kind='act.out'")
     who, place, body_name, payload, caused_by = await cur.fetchone()
     assert (who, place, body_name) == ("person:owner", PLACE, "telegram")
@@ -290,8 +290,8 @@ async def test_a_tool_result_is_recorded_as_act_result(aconn):
     await _feed(kernel, _msg("halo"))
 
     # 12.16: the message ended the step, so its result is recorded but wakes nothing.
-    assert await _kinds(aconn) == ["percept", "model.call", "act.out", "act.result",
-                                   "decision.silent"]
+    assert await _kinds(aconn) == ["percept", "model.call", "act.out", "act.confirmed",
+                                   "act.result", "decision.silent"]
     cur = await aconn.execute("SELECT payload FROM events WHERE kind='act.result'")
     assert (await cur.fetchone())[0] == {"capability": "telegram.say",
                                          "result": {"message_id": 7}}
@@ -398,7 +398,7 @@ async def test_a_thought_then_an_act_is_one_wake(aconn):
     assert [action.payload for action in body.actions] == [
         {"text": "Budi mengirim sketsa_logo.png"}]
     assert await _kinds(aconn) == ["percept", "model.call", "model.call",
-                                   "decision.note", "act.out"]
+                                   "decision.note", "act.out", "act.confirmed"]
     assert [request["tool_choice"] for request in fake.requests] == ["required", "auto"]
     assert "<results>\nthink: " in fake.requests[1]["messages"][-1]["content"]
 
@@ -468,7 +468,7 @@ async def test_a_refusal_returns_even_when_the_same_round_acted(aconn):
         fake.requests[1]["messages"][-1]["content"]
     assert [action.payload for action in body.actions] == [{"text": "siap"}]
     assert await _kinds(aconn) == ["percept", "model.call", "model.call", "model.call",
-                                   "act.out", "expectation.created"]
+                                   "act.out", "act.confirmed", "expectation.created"]
     cur = await aconn.execute("SELECT about, cue_event FROM expectations")
     assert await cur.fetchall() == [("kabari kalau server down",
                                      {"kind": "percept", "text_like": "server down"})]
@@ -542,8 +542,8 @@ async def test_an_unknown_tool_is_refused_and_the_loop_lives(aconn):
 
     assert "shout refused: unknown tool: shout" in fake.requests[1]["messages"][-1]["content"]
     kinds = await _kinds(aconn)
-    assert kinds == ["percept", "model.call", "model.call", "act.out",
-                     "percept", "model.call", "act.out"]
+    assert kinds == ["percept", "model.call", "model.call", "act.out", "act.confirmed",
+                     "percept", "model.call", "act.out", "act.confirmed"]
 
 
 async def test_llm_failure_becomes_an_error_event_and_the_loop_lives(aconn):
@@ -623,7 +623,8 @@ async def test_dm_gets_a_reply_through_the_telegram_body(aconn):
     kernel.register_adapter(body)
 
     stop = asyncio.Event()
-    tasks = [asyncio.create_task(kernel.run(stop)), asyncio.create_task(body.run(kernel.put))]
+    consumer = asyncio.create_task(kernel.run(stop))
+    listener = asyncio.create_task(body.run(kernel.put))
     try:
         for _ in range(2000):
             if sent:
@@ -631,14 +632,15 @@ async def test_dm_gets_a_reply_through_the_telegram_body(aconn):
             await asyncio.sleep(0.001)
         else:  # pragma: no cover - defensive
             raise AssertionError("the DM never got a reply")
-    finally:
+        # Let the act in flight finish, so its confirmation is committed too.
         stop.set()
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.wait_for(consumer, 5.0)
+    finally:
+        listener.cancel()
+        await asyncio.gather(listener, return_exceptions=True)
 
     assert sent == [{"chat_id": "111", "text": "halo!"}]
-    assert await _kinds(aconn) == ["percept", "model.call", "act.out"]
+    assert await _kinds(aconn) == ["percept", "model.call", "act.out", "act.confirmed"]
 
 
 async def test_recent_includes_other_places_prefixed(aconn):

@@ -55,9 +55,9 @@ the command registry come in Task 4.
 Read first: [middleware.md](../middleware.md), [core.md](../core.md) §3
 May touch: `monoagens/core/`, `monoagens/middleware/`, `monoagens/infra/`, `tests/`, `scenarios/`
 
-- [ ] 3.1 Fail-closed: the kernel refuses to start without the owner policy in all three hooks. The owner policy runs first and last in every hook, no plugin can remove it, and a plugin can only narrow what it allows. Tests for each.
-- [ ] 3.2 Context parts (V1 `engine/0034-prompt-parts`): every block of the context is declared once with its order and whether it is stable (cached prefix) or volatile; middleware and plugins add blocks through the context hook without editing the core. Test: the stable prefix hash is the same before and after this item for the same soul.
-- [ ] 3.3 Send ledger (V1 `engine/0011-crash-safety`): an outgoing act is recorded before it is sent and a confirming event is appended when the adapter confirms it (events only: no new table, no new book, complexity budget §3), so a restart never sends the same message twice and never loses one silently. Test: a crash between record and confirm resends once, after the restart.
+- [x] 3.1 Fail-closed: the kernel refuses to start without the owner policy in all three hooks. The owner policy runs first and last in every hook, no plugin can remove it, and a plugin can only narrow what it allows. Tests for each.
+- [x] 3.2 Context parts (V1 `engine/0034-prompt-parts`): every block of the context is declared once with its order and whether it is stable (cached prefix) or volatile; middleware and plugins add blocks through the context hook without editing the core. Test: the stable prefix hash is the same before and after this item for the same soul.
+- [x] 3.3 Send ledger (V1 `engine/0011-crash-safety`): an outgoing act is recorded before it is sent and a confirming event is appended when the adapter confirms it (events only: no new table, no new book, complexity budget §3), so a restart never sends the same message twice and never loses one silently. Test: a crash between record and confirm resends once, after the restart.
 
 ## Part 4 — Real-model parity
 - [ ] 4.1 `uv run pytest` and the fake replay pass in full.
@@ -232,3 +232,59 @@ holds only the daily token cap.
 `scripts/replay.py --fake` → 133/133 checks, absolute-line violations 0; the `core/` grep prints
 only comments naming the middleware, the frozen `persona` key, the mechanism's name (owner
 policy) and `core/memory/cards.py`, whose comment says `state: person:<id>` is frozen data.
+
+**Part 3 — fail-closed (3.1).** `tests/core/test_fail_closed.py` (new, six tests) pins it:
+`boot.build` installs the registry, the intake, the budget number and the post-call watcher and
+the policy in all three hooks; a plain `Kernel` refuses `put`, `step`, `run_until_idle` and
+`register_adapter` until `boot.install`; a bare `HookRegistry` refuses `require_policy`;
+`set_policy` refuses a second installation and `HookPipeline` has no removal API; a context rule
+that Replaces the desk with private content is narrowed by the last pass (two withheld items
+plus the one the desk already carried); and a rule registered after the policy cannot undo the
+identity line — the act is still stopped with the pinned reason. The mechanism is
+`HookPipeline.set_policy(first, last)` + `HookRegistry.require_policy()` as the first statement
+of `run`, `step` and `run_until_idle`.
+
+**Part 3 — context parts (3.2).** `monoagens/core/context/parts.py` (new) declares `CORE_PARTS`:
+`identity` and `principles` stable, `core_memory` and `people` semi, then `now`, `place`,
+`why_awake`, `results`, `doing`, `expectations`, `memories`, `withheld`, `recent`, `event`
+volatile, each with a unique `order` inside its layer and one `produce`. `messages(soul,
+context)` renders the three messages from `CORE_PARTS + context.blocks`; a block with a
+non-volatile layer or a taken name is refused with its name; the trimming loop for `recent` and
+`memories` and the `volatile_tokens_max` budget are unchanged. `layout.py` keeps `PFCContext`
+(now with `blocks`, and `place_kind` defaulting to `""`), `withheld_note` and `build_context`.
+
+Golden stable prefix, captured before the item and unchanged after it:
+`sha256 = 7ebc122f4b2988eb0ab2e33048c128a2dda8ed2fe3aa3e3c8cb424237232b448`
+(`hashlib` of the first message's content for `Reasoning("http://unused", "", "fake",
+settings=SETTINGS)` and the plain desk). `tests/core/test_context.py` pins that hash, the exact
+three messages of a desk with results, doing, memories, a withheld note and a line elsewhere (all
+byte-identical to the pre-item renderer), a block added through the context hook (it lands after
+`</event>`), and the two refusals.
+
+**Part 3 — send ledger (3.3).** `monoagens/core/sends.py` (new, events only: no table, no book).
+`act.confirmed` is the additive kind; its payload is `{"capability": ..., "to": ...}` (the `to`
+key only when the act had one). The pending predicate is: `act.out` rows whose
+`payload->>'communicative'` is `'true'` with no event caused by them of kind `act.confirmed`,
+`act.result` or `error` (that is `CLOSING`). `dispatch` confirms right after the tool returns and
+before the `act.result` is enqueued; `Kernel.recover()` calls `sends.resume` before the
+expectations recovery. **At-least-once**: a crash between the record and the confirmation can
+send the same message once more after the restart; a confirmed message is never sent again; a
+tool that returns nothing and then raises closes its row with an `error`, so a failing adapter
+cannot loop. The first restart after this change also resends communicative `act.out` rows
+written before it existed, because they carry no confirmation and no closing event — that is the
+same rule, read on old rows.
+
+Tests: `tests/core/test_sends.py` (new, four) pins the single resend on `recover`, the second
+`recover` sending nothing, `act.out` before `act.confirmed` with no `act.result` for a tool that
+returns nothing, the one `error` row for a capability whose tool is gone (and no retry), and a
+non-communicative act never pending. Seven exact `_kinds(...)` lists gained `act.confirmed` right
+after `act.out` (`tests/core/test_gate.py` once, `tests/core/test_reasoning.py` six); the
+communication "at the moment the adapter acts" lists and the non-communicative
+`telegram.react`/`set_identity` lists stay as they were. `test_dm_gets_a_reply_through_the_
+telegram_body` now lets the act in flight finish (it sets the stop event and awaits the consumer)
+instead of cancelling the loop the moment the adapter sends, so the confirmation is committed
+when it asserts.
+
+**Part 3 — check.** `uv run pytest -q` → 336 passed (321 baseline + 6 fail-closed + 4 context +
+4 sends + 1 leak refusal); `scripts/replay.py --fake` → 133/133 checks, absolute-line violations
+0.

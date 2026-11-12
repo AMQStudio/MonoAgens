@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any
 
-from monoagens.core import dispatch, expectations, hooks, jobs, memory, threads
+from monoagens.core import dispatch, expectations, hooks, jobs, memory, sends, threads
 from monoagens.core.context import layout, working
 from monoagens.core.gate import Appraisal, appraise, validate_signals
 from monoagens.core.reasoning import Reasoning, ToolCall
@@ -256,7 +256,8 @@ class Kernel:
             await expectations.settle(self.conn, item["id"], now=now, settings=self.settings)
 
     async def recover(self) -> None:
-        """Wake once more for expectations left fired across a restart."""
+        """Resend what was recorded but never confirmed, then wake for fired expectations."""
+        await sends.resume(self)
         for item in await expectations.recovery(self.conn, now=self.clock.now()):
             await self._expect_wake(item)
 

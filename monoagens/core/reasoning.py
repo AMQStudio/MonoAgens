@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from monoagens.core import arguments, expectations
-from monoagens.core.context import layout
+from monoagens.core.context import parts
 from monoagens.core.context.layout import PFCContext
 from monoagens.infra.prior import load_settings
 
@@ -178,7 +178,7 @@ class Reasoning:
 
     def build_messages(self, context: PFCContext) -> list[dict[str, Any]]:
         """Build the layered prompt: stable, core memory, volatile."""
-        return layout.messages(self, context)
+        return parts.messages(self, context)
 
     async def decide(self, context: PFCContext) -> list[ToolCall]:
         """Ask the model to act on one context; after a thought round no tool is forced."""

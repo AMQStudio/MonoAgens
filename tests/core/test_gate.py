@@ -925,4 +925,5 @@ async def test_identity_changing_capability_passes_for_the_owner(aconn):
     await _feed(kernel, _msg("ubah dirimu"))
 
     assert len(body.actions) == 1
+    # set_identity is not communicative, so no act.confirmed closes it.
     assert await _kinds(aconn) == ["percept", "model.call", "act.out"]

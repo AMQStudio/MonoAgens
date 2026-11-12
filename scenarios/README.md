@@ -10,8 +10,8 @@ from the scripted fake model; real results come from the saved reports in
 `reports/`. A capability that fails with the real model is listed as FAIL, not
 hidden.
 
-Generated 2026-11-12 13:28 UTC from 30 capabilities across 8 brain functions.
-Pooled per capability: its latest runs among 10 saved fake and 1 saved real-model reports. The real column names the report behind its
+Generated 2026-11-12 13:39 UTC from 30 capabilities across 8 brain functions.
+Pooled per capability: its latest runs among 11 saved fake and 0 saved real-model reports. The real column names the report behind its
 verdict and reads `flaky` when the recorded runs both passed and failed; the
 `Real-model record` section at the end keeps those runs, so pruning the reports never
 erases evidence.

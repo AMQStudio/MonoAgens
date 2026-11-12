@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from monoagens.core import arguments, threads
+from monoagens.core import arguments, sends, threads
 from monoagens.core.context import working
 from monoagens.types import Event
 
@@ -84,6 +84,8 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any], *,
         await threads.open_for(kernel, event, ctx["labels"].get("audience") or ())
     result = await kernel.tools.act(replace(event, place=place), capability, payload,
                                     event_id=stored.id)
+    if cap.get("communicative"):
+        await sends.confirm(kernel, stored, capability, to)
     if result is not None:
         kernel.enqueue(Event(id=None, ts=kernel.clock.now(), kind="act.result", who=event.who,
                              place=place, body=event.body, caused_by=stored.id,
