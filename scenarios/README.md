@@ -10,8 +10,8 @@ from the scripted fake model; real results come from the saved reports in
 `reports/`. A capability that fails with the real model is listed as FAIL, not
 hidden.
 
-Generated 2026-11-12 12:04 UTC from 30 capabilities across 8 brain functions.
-Pooled per capability: its latest runs among 9 saved fake and 2 saved real-model reports. The real column names the report behind its
+Generated 2026-11-12 12:11 UTC from 30 capabilities across 8 brain functions.
+Pooled per capability: its latest runs among 7 saved fake and 4 saved real-model reports. The real column names the report behind its
 verdict and reads `flaky` when the recorded runs both passed and failed; the
 `Real-model record` section at the end keeps those runs, so pruning the reports never
 erases evidence.
@@ -90,6 +90,9 @@ Kept here, so pruning `reports/` to ten never erases evidence.
 
 | Scenario | Verdict | Checks | Model | Effort | Date | Report |
 |---|---|---|---|---|---|---|
+| 24_gate_threshold | FAIL | 11/12 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | replay-20261112-100338.md |
+| 24_gate_threshold | FAIL | 11/12 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1211-real-24.md |
+| 24_gate_threshold | FAIL | 11/12 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1202-real-24.md |
 | 17_cross_body_continuity | PASS | - | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-11 | notes:10.10 |
 | 07_dm_restart_continuity | PASS | - | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-11 | notes:10.10 |
 | 11_sleep_memory_consolidation | PASS | - | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-11 | notes:10.10 |
@@ -118,6 +121,3 @@ Kept here, so pruning `reports/` to ten never erases evidence.
 | 05_group_reply_to_bot | PASS | - | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-11 | notes:10.10 |
 | 06_dm_conversation | PASS | - | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-11 | notes:10.10 |
 | 14_busy_group_repeated_mention | PASS | 3/3 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-12 | replay-20261112-061932.md |
-| 24_gate_threshold | FAIL | 11/12 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | replay-20261112-100338.md |
-| 24_gate_threshold | FAIL | 11/12 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1202-real-24.md |
-| 24_gate_threshold | FAIL | 9/12 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1158-real-24.md |

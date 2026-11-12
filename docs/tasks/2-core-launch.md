@@ -165,7 +165,7 @@ passes.
 - [x] 12.17 **A failed model call is never silent (bug, live session 12.8).** An `intent` wake wrote `error: ''` and its turn was lost. A transport failure is retried once (`prior` constant, no magic number); if it fails again the error event carries the exception type and status, and the intent stays pending so the next wake in that place sees it. Test with a fake transport that fails once, then twice.
 - [x] 12.18 **Replay counting (harness).** Only communicative acts count as replies (`self.recall` and other non-communicative acts never do). The capability record keeps each scenario's last real-model verdict, its date and report name in `scenarios/README.md` itself, so pruning reports to ten never erases evidence; restore the verdicts of the launch scenarios that passed in earlier real runs from the Notes of Parts 9–12.
 - [x] 12.19 **Scenario 24 step 12 (architect's decision, D54).** Two people contradict each other a minute apart ("masih di review", then "sudah selesai kok"), so asking back is honest. Step 12 becomes the unambiguous statement "Bu Rina sudah selesai review, proposal anggaran Q4 sudah final." Keep the check that it fulfils the promise once.
-- [ ] 12.20 **A promise is kept by doing it (architect's answer to the 12.19 question).** Resolving a promise means it was kept, so a reminder wake that finds a promise fulfilled does the promised act first, in the same turn, then resolves; a silent resolve is a broken promise. Options (b) and (c) are refused: (b) is a rule for one case inside the core, (c) would pass a broken promise. Reword the existing reminder line in `guidance.py` to carry this as a general principle; no new line, so the list does not grow. Then one real run of scenario 24. **If 24 still fails, stop retrying:** Task 2 closes with 24 recorded as not yet held (a target for Task 6), so the work does not loop.
+- [x] 12.20 **A promise is kept by doing it (architect's answer to the 12.19 question).** Resolving a promise means it was kept, so a reminder wake that finds a promise fulfilled does the promised act first, in the same turn, then resolves; a silent resolve is a broken promise. Options (b) and (c) are refused: (b) is a rule for one case inside the core, (c) would pass a broken promise. Reword the existing reminder line in `guidance.py` to carry this as a general principle; no new line, so the list does not grow. Then one real run of scenario 24. **If 24 still fails, stop retrying:** Task 2 closes with 24 recorded as not yet held (a target for Task 6), so the work does not loop.
 - [ ] 12.8 **Acceptance — the launch set** (after 12.12–12.20; rerun only 24, then the live session to confirm 12.16 and 12.17; owner's decision): one real-model run at `--effort high` of the launch scenarios that have not yet passed with the real model: memory and recall (07, 11, 12, 17, 20, 23), silence (01–03, 15, 21), turn-taking (04–06, 14, 22), promises (08–10, 13, 16, 24, 30), unaddressed help (25, 27, 29). Each failure gets a material check first. Then the live session (privacy across bodies, a promise kept, silence). Scenarios 18, 19, 26 and 28 move to Task 4 as capability targets; the capability record lists them as not yet held. Tick 10.10, 11.6 and 12.8.
 
 ## Part 13 — Readability pass (after 12.8)
@@ -2248,3 +2248,44 @@ Part 12 notes (worker, 12.8 acceptance attempt — **not met**):
   `2026-11-12-1113-real-24-30-16-25-27-29.md` and their `notes:12.8-probe` rows. 04, 13, 20 and
   22 have no real-model pass in the record and stay `not run`; 18, 19, 26 and 28 stay `not run`
   (Task 4's capability targets). 12.8, 10.10, 11.6 are not ticked.
+
+Part 12 notes (worker, 12.20):
+- **The principle, reworded not added.** `monoagens/guidance.py` keeps its eighth bullet and
+  its line count (28 `wc -l`, under 12.7's 30): the reminder line now reads "when it fulfils one,
+  keep it by doing it in this same turn: say what you promised before you resolve, because a
+  resolve without the act is a broken promise; when it does not, let it be: think, or stay silent
+  where the line was said." No new bullet, no rule for one scenario: it is the general form of
+  the question 12.19 left open.
+- `uv run pytest`: 321 passed. `uv run python scripts/replay.py --fake`: 30 scenarios, 134/134
+  checks, missed-help 0.0% (0/65), false-speak 0.0% (0/75), absolute-line violations 0, honesty
+  100.0% (62/62). The reword changes no fake result: the scripted answers already act before they
+  resolve.
+- **The one real run, `--effort high`, scenario 24 only:** `reports/2026-11-12-1211-real-24.md`,
+  11/12 checks, 4 LLM calls, 10983 tokens (prompt 8960, cached 5248, completion 2023, reasoning
+  971), absolute-line violations 0, false-speak 0.0%, honesty 100.0% (3/3).
+  - **12.20's behavior holds.** Step 12: the promise fires, the soul says it to the asker and
+    only then resolves — `expectation.fired`, `act.out` ("person:tg:7001 kabar yang kujanjikan:
+    proposal anggaran Q4 sudah final. Bu Rina selesai review, info dari person:tg:7004 barusan."),
+    `expectation.resolved`. The 1211 run has an `act.out` where the 1202 run had only a resolve.
+    The check "the reminder wakes the PFC" now passes with a real message.
+  - **The one failure is the mechanism check, not the behavior:** "an active promise reminds the
+    soul on an unaddressed message" (0 `expectation.reminded` >= 1). At step 9 the model held the
+    promise as `condition: {"none": true}` with `cue_event.text_like: "final"`, i.e. a cue-only
+    promise, so step 12 fires it as an `expectation.fired` and the soul still keeps it. The
+    scenario's recorded (fake) answer uses `expect: {text: "dokumen sudah selesai"}`, the
+    free-text path, so the fake run reports `expectation.reminded` and passes. The check pins the
+    free-text mechanism while the soul's own cue-only promise is kept correctly; a `reminded`
+    count cannot be satisfied by a promise the model chose to hold by cue. That is a 12.6
+    question (a check that forbids an equally correct mechanism), not a soul bug, and it is the
+    first thing Task 6 should look at.
+- **Per the owner's rule, no second run and no check change.** Scenario 24 is recorded as **not
+  yet held — a Task 6 target**; Task 2 closes with it open. 12.8, 10.10 and 11.6 stay unticked
+  for that reason only: every other launch scenario holds, and 16 and 30 keep their `flaky`
+  record with both reports and their probes.
+- **Real verdicts restored in the record where the Notes of Part 10 hold them.** Real-model runs
+  are recorded as passing for 04 and 13, so their `notes:10.9` rows are seeded: 04 PASS 1/1 and
+  13 PASS (checks not recorded, `-`), model `deepseek-ai/DeepSeek-V4.1-Flash-1017`, effort
+  default (`-`), date 2026-11-11, the run files (`replay-20261111-165002/165455/165656.md`) being
+  pruned. Evidence, Part 10 notes (10.8): "04 0/1 -> 1/1" and "09 and 13 failed in 9.3 and passed
+  when replayed alone". Scenarios 20 and 22 have no real-model pass in these Notes (22 reads
+  "4/7 unchanged", 20 is never named) and stay `not run`.
