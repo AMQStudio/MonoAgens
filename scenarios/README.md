@@ -10,8 +10,8 @@ from the scripted fake model; real results come from the saved reports in
 `reports/`. A capability that fails with the real model is listed as FAIL, not
 hidden.
 
-Generated 2026-11-12 12:11 UTC from 30 capabilities across 8 brain functions.
-Pooled per capability: its latest runs among 7 saved fake and 4 saved real-model reports. The real column names the report behind its
+Generated 2026-11-12 12:12 UTC from 30 capabilities across 8 brain functions.
+Pooled per capability: its latest runs among 8 saved fake and 3 saved real-model reports. The real column names the report behind its
 verdict and reads `flaky` when the recorded runs both passed and failed; the
 `Real-model record` section at the end keeps those runs, so pruning the reports never
 erases evidence.
@@ -59,7 +59,7 @@ _No scenario yet._
 | A reminder asked for a time fires exactly once at that time. | 08_reminder_at_time | PASS 3/3 · 2026-11-12 | PASS · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 · notes:10.10 |
 | A follow-up asked for one hour later fires once while the owner stays silent. | 09_reminder_ask_again | PASS 3/3 · 2026-11-12 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-12 · replay-20261112-061932.md |
 | A recurring reminder fires again on the next day under its policy. | 10_reminder_recurring_nudge | PASS 3/3 · 2026-11-12 | PASS · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 · notes:10.10 |
-| A reminder fires in the direct place it was made in, not in a busy group. | 13_fired_reminder_different_place | PASS 3/3 · 2026-11-12 | not run |
+| A reminder fires in the direct place it was made in, not in a busy group. | 13_fired_reminder_different_place | PASS 3/3 · 2026-11-12 | PASS · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 · notes:10.9 |
 | A watch for a phrase stays silent through ordinary chatter and reports once when the phrase is said. | 16_watch_for_phrase | PASS 3/3 · 2026-11-12 | flaky · PASS 4/4 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · notes:12.8-probe |
 | A question on the topic of a promise's condition never fulfils it; the promise waits for the statement. | 30_same_topic_question | PASS 3/3 · 2026-11-12 | flaky · PASS 5/5 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · notes:12.8-probe |
 
@@ -77,7 +77,7 @@ _No scenario yet._
 
 | Capability | Scenario | Fake result | Real model |
 |---|---|---|---|
-| A direct mention in a group is answered there. | 04_group_mention | PASS 3/3 · 2026-11-12 | not run |
+| A direct mention in a group is answered there. | 04_group_mention | PASS 3/3 · 2026-11-12 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 · notes:10.9 |
 | A group reply to the soul is treated as addressed and answered. | 05_group_reply_to_bot | PASS 3/3 · 2026-11-12 | PASS · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 · notes:10.10 |
 | A direct message is answered. | 06_dm_conversation | PASS 3/3 · 2026-11-12 | PASS · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-11 · notes:10.10 |
 | Addressed mentions in a busy group are answered despite the crowd penalty. | 14_busy_group_repeated_mention | PASS 3/3 · 2026-11-12 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-12 · replay-20261112-061932.md |
@@ -90,9 +90,6 @@ Kept here, so pruning `reports/` to ten never erases evidence.
 
 | Scenario | Verdict | Checks | Model | Effort | Date | Report |
 |---|---|---|---|---|---|---|
-| 24_gate_threshold | FAIL | 11/12 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | replay-20261112-100338.md |
-| 24_gate_threshold | FAIL | 11/12 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1211-real-24.md |
-| 24_gate_threshold | FAIL | 11/12 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1202-real-24.md |
 | 17_cross_body_continuity | PASS | - | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-11 | notes:10.10 |
 | 07_dm_restart_continuity | PASS | - | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-11 | notes:10.10 |
 | 11_sleep_memory_consolidation | PASS | - | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-11 | notes:10.10 |
@@ -107,6 +104,7 @@ Kept here, so pruning `reports/` to ten never erases evidence.
 | 08_reminder_at_time | PASS | - | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-11 | notes:10.10 |
 | 09_reminder_ask_again | PASS | 1/1 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-12 | replay-20261112-061932.md |
 | 10_reminder_recurring_nudge | PASS | - | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-11 | notes:10.10 |
+| 13_fired_reminder_different_place | PASS | - | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-11 | notes:10.9 |
 | 16_watch_for_phrase | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | notes:12.8-probe |
 | 16_watch_for_phrase | FAIL | 2/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1113-real-24-30-16-25-27-29.md |
 | 16_watch_for_phrase | FAIL | 3/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1103-real-24-30-16-25-27-29.md |
@@ -118,6 +116,10 @@ Kept here, so pruning `reports/` to ten never erases evidence.
 | 03_group_chitchat_weather | PASS | - | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-11 | notes:10.10 |
 | 15_urgent_unaddressed_group | PASS | - | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-11 | notes:10.10 |
 | 21_own_name_capture | PASS | - | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-11 | notes:10.10 |
+| 04_group_mention | PASS | 1/1 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-11 | notes:10.9 |
 | 05_group_reply_to_bot | PASS | - | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-11 | notes:10.10 |
 | 06_dm_conversation | PASS | - | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-11 | notes:10.10 |
 | 14_busy_group_repeated_mention | PASS | 3/3 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-12 | replay-20261112-061932.md |
+| 24_gate_threshold | FAIL | 11/12 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | replay-20261112-100338.md |
+| 24_gate_threshold | FAIL | 11/12 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1211-real-24.md |
+| 24_gate_threshold | FAIL | 11/12 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1202-real-24.md |
