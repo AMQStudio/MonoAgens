@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from monoagens.core.kernel import Kernel
-from monoagens.middleware import owner_policy
+from monoagens.middleware import policy
 
 
 def build(conn: Any, *, clock: Any = None, pfc: Any = None, settings: Any = None,
@@ -22,4 +22,18 @@ def build(conn: Any, *, clock: Any = None, pfc: Any = None, settings: Any = None
 
 def install(kernel: Kernel) -> None:
     """Install the middleware into a plain kernel: policy, intake, tools, injected values."""
-    owner_policy.install(kernel)
+    policy.install(kernel)
+
+
+async def warm(kernel: Kernel) -> None:
+    """Load what is slow before any adapter can deliver a percept (hook timeout 500 ms).
+
+    The embedding model loads on its first call, which takes far longer than a hook may
+    run; doing it here means the first message of a cold start — often the pairing code —
+    is handled like any other. The database is checked first so a broken connection fails
+    before the model is loaded.
+    """
+    await kernel.conn.execute("SELECT 1")
+    embed = getattr(kernel.embedder, "embed", None)
+    if embed is not None:
+        await embed(["warm-up"])

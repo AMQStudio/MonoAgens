@@ -6,9 +6,14 @@ from datetime import datetime, timezone
 
 import pytest
 
+from monoagens.boot import build
+from monoagens.core.reasoning import ToolCall
+from monoagens.infra.clock import FakeClock
 from monoagens.middleware import identity
 from monoagens.core.hooks import Continue
 from monoagens.infra.store import append_event, read_state, write_state
+from monoagens.types import Event
+from tests.support import settings
 
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -101,3 +106,51 @@ async def test_the_paired_owner_is_rewritten_at_intake(aconn):
     assert rewritten.who == "person:owner"
     other = await identity.as_owner(aconn, await _percept(aconn, who="person:tg:99"))
     assert other.who == "person:tg:99"
+
+
+GROUP = "space:tg:-500"
+
+
+class _SayBody:
+    """A body that answers `say` and records what it was asked to send."""
+
+    name = "telegram"
+
+    def __init__(self) -> None:
+        self.actions = []
+
+    def capabilities(self):
+        return ({"name": "say", "description": "Speak here.",
+                 "schema": {"type": "object", "properties": {"text": {"type": "string"}},
+                            "required": ["text"]},
+                 "communicative": True, "long_running": False,
+                 "identity_changing": False},)
+
+    async def act(self, action):
+        self.actions.append(action)
+
+
+async def test_a_person_present_here_is_answered_here(aconn):
+    """1.0b: a person with no direct place who is present here is answered here."""
+    await _percept(aconn, who="person:tg:7001", text="halo")
+    await append_event(aconn, ts=START, kind="percept", who="person:tg:7001",
+                       place=GROUP, body="telegram",
+                       payload={"description": "halo", "place_kind": "shared"})
+    body = _SayBody()
+    kernel = build(aconn, clock=FakeClock(START), settings=settings())
+    kernel.register_adapter(body)
+    trigger = Event(id=None, ts=START, kind="percept", who="person:owner", place=GROUP,
+                    body="telegram", payload={"description": "jawab", "place_kind": "shared"},
+                    origin_actor="person:owner")
+
+    await kernel._apply(trigger, ToolCall("act", {
+        "capability": "telegram.say",
+        "arguments": {"text": "halo juga", "to": "person:tg:7001"}}))
+
+    assert [action.place for action in body.actions] == [GROUP]
+    row = await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'act.out'")).fetchone()
+    assert row[0]["to"] == "person:tg:7001"
+    assert await (await aconn.execute(
+        "SELECT count(*) FROM events WHERE kind = 'act.result' AND payload::text LIKE "
+        "'%no way to reach%'")).fetchone() == (0,)

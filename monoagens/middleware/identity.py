@@ -133,6 +133,9 @@ def route(conn) -> Middleware:
         place, error = await resolve_to(conn, str(to), via)
         if place is None and str(to) == ctx["event"].who:
             place, error = ctx["event"].place, None  # the person is here: answer them here
+        if (place is None and is_person(to)
+                and str(to) in await privacy.audience(conn, ctx["event"].place)):
+            place, error = ctx["event"].place, None  # the person is here: answer them here
         ctx["to"] = str(to)
         if error:
             ctx["refusal"] = error

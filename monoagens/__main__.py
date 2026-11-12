@@ -10,7 +10,7 @@ from pgvector.psycopg import register_vector_async
 
 from monoagens.adapters.cli import CLIBody
 from monoagens.adapters.telegram import TelegramBody
-from monoagens.boot import build
+from monoagens.boot import build, warm
 from monoagens.core import identity
 from monoagens.core.reasoning import Reasoning
 from monoagens.infra.clock import Clock
@@ -40,6 +40,7 @@ async def main() -> None:
                   settings=settings)
         kernel = build(conn, clock=clock, pfc=pfc, settings=settings,
                        embedder=FastEmbedder())
+        await warm(kernel)
         code = await ensure_pairing(conn, now=clock.now())
         if code:
             print(f"pairing code: {code} — send it from any adapter to become the owner",
