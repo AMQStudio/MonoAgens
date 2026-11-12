@@ -23,6 +23,7 @@ class PFCContext:
     people: Sequence[str] = ()
     expectations: Sequence[str] = ()
     memories: Sequence[str] = ()
+    withheld: Sequence[tuple[str, int]] = ()
     recent: Sequence[Event] = ()
     recent_elsewhere: Sequence[Event] = ()
     doing: Sequence[str] = ()
@@ -78,6 +79,7 @@ def volatile(soul: Any, context: PFCContext) -> str:
             f"<doing>\n{_listed(doing)}\n</doing>",
             f"<expectations>{_listed(context.expectations)}</expectations>",
             f"<memories>\n{_listed(memories)}\n</memories>",
+            *_withheld(context),
             f"<recent>\n{chr(10).join(recent)}\n</recent>",
             f"<event>{_event_text(context.trigger)}</event>",
         ]
@@ -88,6 +90,27 @@ def volatile(soul: Any, context: PFCContext) -> str:
             bucket.pop(0)
             parts = build()
     return "\n".join(parts)
+
+
+def withheld_note(context: PFCContext) -> str:
+    """Return the D56 line: how many relevant private items are absent, and from where.
+
+    It names only the count and the source label (a person or place a person card
+    already allows); it never names the content.
+    """
+    if not context.withheld:
+        return ""
+    parts = [f"{count} thing{'s' if count != 1 else ''} you know from {label}"
+             for label, count in context.withheld]
+    total = sum(count for _, count in context.withheld)
+    verb = "are" if total != 1 else "is"
+    return f"{' and '.join(parts)} {verb} not shown here"
+
+
+def _withheld(context: PFCContext) -> list[str]:
+    """Return the withheld note as one prompt section, if anything was withheld."""
+    note = withheld_note(context)
+    return [f"<withheld>{note}</withheld>"] if note else []
 
 
 def _results(context: PFCContext) -> list[str]:

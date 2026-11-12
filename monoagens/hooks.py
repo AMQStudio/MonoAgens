@@ -22,17 +22,33 @@ def audience_policy() -> Middleware:
     """Absolute line 2 (D45): private content enters only an allowed audience."""
 
     async def policy(item: Any, ctx: Any) -> HookOutcome:
-        """Keep only the memories and lines this context's audience may see."""
+        """Keep only what the audience may see, and note the relevant private items withheld."""
         conn, place = ctx["conn"], item.place
+        counts = dict(item.withheld)
 
-        memories = [memory for memory in item.memories if await reach.memory_visible(
-            conn, context=place, sources=getattr(memory, "sources", ()))]
-        lines = [line for line in item.recent_elsewhere if await reach.visible(
-            conn, context=place, source=line.place, before=line.id)]
-        recent = [line for line in item.recent if await reach.visible(
-            conn, context=place, source=line.place, before=line.id)]
-        return Replace(replace(item, memories=tuple(memories), recent_elsewhere=tuple(lines),
-                               recent=tuple(recent)))
+        async def keep(lines: Any, *, note_withheld: bool) -> tuple[Any, ...]:
+            kept = []
+            for line in lines:
+                if await reach.visible(conn, context=place, source=line.place, before=line.id):
+                    kept.append(line)
+                elif note_withheld:
+                    label = await reach.source_label(conn, line.place, line.id)
+                    counts[label] = counts.get(label, 0) + 1
+            return tuple(kept)
+
+        memories = []
+        for memory in item.memories:
+            if await reach.memory_visible(conn, context=place,
+                                          sources=getattr(memory, "sources", ())):
+                memories.append(memory)
+            else:
+                label = await reach.withheld_source(
+                    conn, context=place, sources=getattr(memory, "sources", ()))
+                counts[label] = counts.get(label, 0) + 1
+        elsewhere = await keep(item.recent_elsewhere, note_withheld=True)
+        recent = await keep(item.recent, note_withheld=False)
+        return Replace(replace(item, memories=tuple(memories), recent_elsewhere=elsewhere,
+                               recent=recent, withheld=tuple(sorted(counts.items()))))
 
     return policy
 

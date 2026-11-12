@@ -146,8 +146,12 @@ async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place:
                                     kinds=RECENT_KINDS)
     recent_elsewhere = await recent_lines(conn, place, limit=int(values["recent_elsewhere"]))
     core = await read_state(conn, "core_memory")
-    shown = await reach.memory_visible(conn, context=place,
-                                       sources=(core or {}).get("derived_from"))
+    sources = (core or {}).get("derived_from")
+    shown = await reach.memory_visible(conn, context=place, sources=sources)
+    withheld = ()
+    if core and core.get("text") and not shown:
+        label = await reach.withheld_source(conn, context=place, sources=sources)
+        withheld = ((label, 1),)
     task = await read_state(conn, "task:" + place) if place.startswith("space:task:") else None
     doing = await doing_lines(conn, place, task, values, trigger=event)
     people = await reach.person_cards(conn, place, event)
@@ -162,6 +166,7 @@ async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place:
         reason=reason, core_memory=str((core or {}).get("text") or "") if shown else "",
         people=people,
         expectations=await active_expectation_lines(conn, place), memories=memories,
+        withheld=withheld,
         recent=[seen for seen in recent if seen.id != event.id],
         recent_elsewhere=recent_elsewhere, doing=doing, trigger=event, last_interaction=last,
         capabilities=capabilities)

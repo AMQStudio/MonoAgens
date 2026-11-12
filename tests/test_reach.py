@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -204,6 +205,52 @@ async def test_a_newcomer_never_receives_a_line_said_before_they_arrived(aconn):
         memories=(), capabilities=())
     desk = await hooks.audience_policy()(context, {"conn": aconn, "now": START})
     assert [line.id for line in desk.item.recent] == [joined]
+
+
+async def test_a_withheld_line_leaves_a_note_with_its_source_but_not_its_text(aconn):
+    """D56: the note says how many and whose private chat; the words stay off the desk."""
+    await _said(aconn, OWNER, OWNER_DM, "direct", "rapat jam sembilan")
+    asked = await _said(aconn, "person:budi", GROUP, "shared", "rapat jam berapa?")
+    desk = (await _desk(aconn, place=GROUP, trigger=asked)).item
+
+    assert desk.recent_elsewhere == ()
+    assert desk.withheld == (("person:owner private chat", 1),)
+    prompt = _prompt(desk)
+    assert "1 thing you know from person:owner private chat is not shown here" in prompt
+    assert "sembilan" not in prompt
+
+
+async def test_a_withheld_memory_leaves_a_note_with_its_source_but_not_its_text(aconn):
+    """D56: a retrieved private memory is counted and labelled, never quoted."""
+    dm = await _said(aconn, OWNER, OWNER_DM, "direct", "rapat jam sembilan")
+    asked = await _said(aconn, "person:budi", GROUP, "shared", "rapat jam berapa?")
+    fact = memory.MemoryHit("- rapat jam sembilan (owner at space:tg:owner)",
+                            place=OWNER_DM, sources=(dm,))
+    context = await memory.build_context(
+        aconn, _trigger(asked, GROUP), GROUP, "test", now=START, settings=SETTINGS,
+        memories=(fact,), capabilities=())
+    context = replace(context, recent_elsewhere=())
+    desk = (await hooks.audience_policy()(context, {"conn": aconn, "now": START})).item
+
+    assert desk.memories == ()
+    assert desk.withheld == (("person:owner private chat", 1),)
+    prompt = _prompt(desk)
+    assert "1 thing you know from person:owner private chat is not shown here" in prompt
+    assert "sembilan" not in prompt
+
+
+async def test_no_withheld_note_when_nothing_was_withheld(aconn):
+    asked = await _said(aconn, "person:budi", GROUP, "shared", "halo semua")
+    desk = (await _desk(aconn, place=GROUP, trigger=asked)).item
+
+    assert desk.withheld == ()
+    assert "<withheld>" not in _prompt(desk)
+
+
+def _prompt(desk) -> str:
+    """Render the three prompt messages into one string, as the PFC sends them."""
+    return "\n".join(message["content"] for message in
+                     PFC("http://unused", "", "fake", settings=SETTINGS).build_messages(desk))
 
 
 async def test_share_with_a_person_records_consent_and_counts_as_audience(aconn):

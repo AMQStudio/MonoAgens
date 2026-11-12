@@ -108,6 +108,38 @@ async def memory_visible(conn, *, context: str | None, sources: Any = None) -> b
     return all(need <= have for have in audiences)
 
 
+async def source_label(conn, place: str | None, before: int | None = None) -> str:
+    """Return the D55-safe label of a source place: a private chat's people, or the place."""
+    if not place:
+        return f"{OWNER} private chat"
+    if await direct(conn, place):
+        people = sorted(await audience(conn, place, before))
+        if people:
+            return f"{' and '.join(people)} private chat"
+    return f"the chat at {place}"
+
+
+async def withheld_source(conn, *, context: str | None, sources: Any = None) -> str:
+    """Return the label of the source one withheld item came from (D56).
+
+    A memory or core memory names the first source place whose audience this
+    context does not cover. A memory without a known source is private to the
+    owner, so its label says so.
+    """
+    need = set(await audience(conn, context)) - {OWNER}
+    rows = []
+    if sources:
+        rows = await (await conn.execute(
+            "SELECT id, place FROM events WHERE id = ANY(%s) AND place IS NOT NULL",
+            (list(sources),))).fetchall()
+    for source, source_place in rows:
+        present = set(await audience(conn, source_place, before=source)) - {OWNER}
+        consented = set(await shared(conn, source_place))
+        if not need <= (present | consented):
+            return await source_label(conn, source_place, source)
+    return await source_label(conn, None)
+
+
 async def leaks(conn, target: str | None, text: str) -> bool:
     """Return whether a message would carry private content the target may not see (D45)."""
     if not text or not target:

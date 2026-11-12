@@ -55,7 +55,7 @@ from monoagens.duration import parse_duration
 from monoagens.kernel import Kernel
 from monoagens.embedding import FastEmbedder, FakeEmbedder
 from monoagens.migrate import migrate, migrate_url
-from monoagens.desk import PFCContext
+from monoagens.desk import PFCContext, withheld_note
 from monoagens.pfc import PFC, ToolCall
 from monoagens.types import Action, Event
 
@@ -293,6 +293,9 @@ def _fake_context_text(context: PFCContext) -> str:
     """Render a fake-mode prompt from the pieces the kernel handed over."""
     parts: list[str] = [context.core_memory, *context.people, *context.memories,
                         *context.doing]
+    note = withheld_note(context)
+    if note:
+        parts.append(note)
     parts.extend(str(event.payload.get("description") or "") for event in context.recent)
     parts.extend(str(event.payload.get("description") or "") for event in context.recent_elsewhere)
     if context.trigger is not None:

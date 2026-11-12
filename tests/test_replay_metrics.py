@@ -215,6 +215,29 @@ def test_report_metrics_are_ordered_missed_help_first() -> None:
     assert metrics.missed_help_rate() == 0.0 and metrics.false_speak_rate() is None
 
 
+async def test_the_withheld_note_is_not_a_private_item_on_the_desk(aconn):
+    """D56: the note names a count and source; the desk scan counts no content for it."""
+    group = "space:tg:-500"
+    dm = await append_event(aconn, ts=NOW, kind="percept", who="person:owner",
+                            place="space:tg:owner", body="telegram",
+                            payload={"description": "rapat jam sembilan",
+                                     "place_kind": "direct"})
+    asked = await append_event(aconn, ts=NOW, kind="percept", who="person:budi", place=group,
+                               body="telegram",
+                               payload={"description": "rapat jam berapa?", "place_kind": "shared"})
+    fact = memory.MemoryHit("- rapat jam sembilan (owner at space:tg:owner)",
+                            place="space:tg:owner", sources=(dm.id,))
+    context = await memory.build_context(aconn, asked, group, "test", now=NOW,
+                                         settings=settings(), memories=(fact,), capabilities=())
+    desk = (await hooks.audience_policy()(context, {"conn": aconn, "now": NOW})).item
+    assert desk.withheld
+
+    tracker = replay.Tracker(conn=aconn)
+    await tracker.record_desk(desk)
+    assert tracker.desks[0].items == ()
+    assert await replay.desk_violations(aconn, tracker.desks) == []
+
+
 async def test_person_cards_are_not_private_items_on_the_desk(aconn):
     """D55: a card is not content, so the desk scan counts none of it."""
     group = "space:tg:-500"
