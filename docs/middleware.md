@@ -58,7 +58,8 @@ Every plugin and adapter uses the same levers, so the core never knows the case 
 3. **Declare** standing rules, shown in `<self>` in a fixed order (cache-friendly).
 4. **Remember and observe**: write only by putting events (state is a projection under
    `<plugin>:*`, so replay and hard forgetting still work); read the log and state read-only,
-   for dashboards, debugging or metric exporters (D43).
+   for dashboards, debugging or metric exporters (D43). The view returns raw content: a tool
+   that shows it to people passes it through `privacy.visible` for the requester's place first.
 5. **Sense and act** through its own tools (a timer, a `set_mode` capability, a search tool).
 6. **Steer knobs** by a bounded, temporary offset recorded as `disposition.updated` with the
    plugin as source; learning never moves an offset, and uninstalling removes it.
@@ -107,8 +108,9 @@ The one middleware that is always present.
   delivers to a place. A route rule may change the default (email for work, WhatsApp in the
   evening).
 - **Default owner policy**, active out of the box: the two absolute lines, the daily model
-  budget, quiet hours. Budget and quiet hours are owner settings (starting values in `config.yaml`, later changes in
-  chat as events) the owner may tighten or loosen;
+  budget, quiet hours. Budget and quiet hours are owner settings in `config.yaml`, changed by
+  hand or in chat with `/budget` and `/quiet`, which write their own line (§5); the owner may
+  tighten or loosen them;
   plugins may add rules inside the policy, never remove it (D22, D24, D36).
 
 ## 4. Registry (tools, commands, skills)
@@ -134,6 +136,11 @@ person (a command).
   capabilities; the registry assembles them next to the descriptor, so the core's descriptor
   never changes. A tool without facts fails at boot, naming it. A tool may add the fact
   `sensitive` to one call (the Workspace guard does, plugins.md §5).
+- **Every entry declares a permission** (D59). Only an adapter's talking capabilities (say,
+  react, and the like) may have none; every other tool and every command of a plugin or of the
+  middleware names one, and a missing one fails at boot. A permission without a `base` is the
+  owner's only; there is no "open to everyone" by omission.
+- **One output marker** (`contract.OUTPUT_MARKER`) for every cut output.
 - **Offered per requester.** In the context hook the registry offers a turn only the tools the
   requester may use (`roles.py`, §8), so the soul never promises what it cannot do. In the action
   hook `policy.py` decides pass, ask or refuse from the requester's permissions, the tool's
@@ -175,6 +182,8 @@ person (a command).
   valid; otherwise it refuses with a clear message and the running configuration stays (boot,
   in contrast, fails). It names what needs a restart (new plugin code, a new sandbox base) and
   records what changed as history events.
+- Every owner setting follows this rule: `/budget`, `/quiet` and the interaction switches
+  (§9) write their own line in `config.yaml`; none is kept as an event that overrides the file.
 - **History, not source**: every change, by command or by hand (seen at boot or reload), is
   recorded as an event (`plugin.config_changed`, `roles.changed`: who, from what, to what).
 - **Plugin updates, the dpkg way**: the values `enable` wrote are recorded. When an update
@@ -257,6 +266,10 @@ their permissions to the bases automatically).
   through its tier. There is no inheritance between roles; a person simply holds several (Budi =
   `member` + `toko-a`). An exception for one person is a small role (`runner: { allow:
   [workspace.run] }`) given to that person.
+- **A role's effective tier** is the highest of its `base` and the base tiers of the
+  permissions in its `allow` (a permission without a base counts as owner). Giving, editing and
+  the "no one grows their own power" rule below compare effective tiers, so a group role that
+  carries admin permissions is an admin-tier role.
 - **Permission tiers per plugin** live in `config.d/<plugin>.yaml` → `permissions:` (written by
   `/plugin enable` from the manifest): changing `workspace.run: member` gives it to every role
   with `base: member`. `role_settings:` sits next to it.
@@ -280,14 +293,16 @@ their permissions to the bases automatically).
   (as Discord's channel overrides).
 - **Approval modes**, per role, default `default`: `yolo` passes everything except calls marked
   `sensitive`; `default` passes reading and editing and asks before `runs_code` or `changes`
-  outside the person's own workspace; `strict` asks before every step. The owner answers.
+  outside the person's own workspace; `strict` asks before every step. The owner answers, and so
+  may anyone with `approval.answer` for someone else's request. An approval covers the call as
+  asked; if the retried call differs, it is asked once more, then the owner is told instead.
 - **The middleware's own permissions** sit in the same catalog, declared in its code:
   `config.reload`, `plugin.manage`, `roles.manage`, `identity.whois`, `approval.answer`
   (answering an approval for someone else's request) at tier `admin`; `identity.whoami` at
   `guest`. The owner may move them like any permission.
 - **No one grows their own power** (as Discord: you assign only roles below your highest):
-  `/role add` gives only roles whose tier is below the giver's highest tier, so only the owner
-  gives `admin`; `/plugin enable` by an admin cannot place a permission above the admin's own
+  `/role add` gives only roles whose effective tier is below the giver's highest tier, so only
+  the owner gives an admin-tier role; `/plugin enable` by an admin cannot place a permission above the admin's own
   tier. Owner only, never movable: anything `identity_changing`, a new owner (pairing), editing
   admin-tier roles, and moving the middleware's own permissions.
 - `/roles show <role>` prints the merged result across plugins, each line marked with its
@@ -307,7 +322,7 @@ three places:
 - **`interaction.py` decides** what is shown, to whom and how much. Defaults: thinking only to
   the owner in the owner's direct chat, never in a shared place; tool steps only for work that
   takes long; an approval asks the person the policy names. The owner switches these with a
-  command. Everything shown passes the audience check of `privacy.py` first: a thought can hold
+  command that writes `config.yaml` → `interaction:` (§5). Everything shown passes the audience check of `privacy.py` first: a thought can hold
   private content.
 - **The adapter renders**, its own way: WhatsApp's "typing…", an edited Telegram message,
   buttons on Telegram, reactions on WhatsApp. An approval answer (a click, a reaction) comes

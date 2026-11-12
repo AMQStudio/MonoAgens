@@ -42,7 +42,7 @@ in memory):
 ```yaml
 version: 2
 timezone: Asia/Jakarta              # where the soul lives; used for <now>
-owner_settings:                     # initial values; changes made in chat are events and win
+owner_settings:                     # changed by hand or with /budget and /quiet, which write these lines
   daily_token_budget: 300000
   quiet_hours: { from: "22:00", to: "06:00" }
 runtime:
@@ -76,7 +76,10 @@ manifests through `manifest_version`). Older versions are upcast in memory and n
 boot report; the file is never rewritten. A newer version than supported fails at boot. A file
 without `version:` is read as version 1 with a warning.
 
-The rule for every setting: the file gives the starting value; what the soul's books say wins.
+The rule for every setting: the deployment files (`config.yaml`, `config.d/`) are the source of
+truth for the deployment and are changed by hand or by the few commands that write their own
+lines; what the soul learns (knobs, memories, identity) lives in its books, and there the
+books win over the starting values in `soul.yaml` and `prior/`.
 
 ## 3. Documents (D32.14)
 | File | For | Holds |
