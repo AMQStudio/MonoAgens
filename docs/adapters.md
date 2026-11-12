@@ -38,6 +38,11 @@ an intention into native actions.
 - Tokens and URLs come from `.env`; non-secret options (enabled or not, …) from `config.yaml`;
   nothing about an adapter lives in the core or in `soul.yaml`.
 - Report `place_kind` (direct | shared) in every percept; only the adapter knows it (D48).
+- Declare at boot what it can show besides messages (typing, edit message, buttons, reactions,
+  …) in the vocabulary of the middleware's `contract.py`, and render what the middleware's
+  `interaction.py` sends its own way; an approval answer (a click, a reaction) comes back as an
+  ordinary percept ([middleware.md §9](middleware.md)). It decides nothing about what is shown
+  or to whom.
 
 **Loading an adapter** (D49). An adapter is a module with one factory, `create(options, env)`, that
 returns the adapter: `options` is its own section of `config.yaml`, `env` gives the variables it

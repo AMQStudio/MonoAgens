@@ -20,22 +20,31 @@ The middleware runs in the core's three hooks (inbound, context, action) and off
    Plugins (memory-view, modes, search…)        Adapters (Telegram, WhatsApp, robot…)
                    \                                  /
                     ──────────── Middleware ──────────
-        owner policy · identity · privacy · limits · tools · commands · loader · skills · rbac
+     contract · policy · privacy · identity · registry · loader · interaction  (+ rbac later)
                                        │  three hooks
                        Core (ids, labels, numbers — mechanisms only)
 ```
 
+Seven files, one concept each (decided 2026-11-12). A file that grows becomes a folder of the
+same name (`registry/tools.py`, …); the seven concepts stay.
+
 | Module | File | What it provides | When |
 |---|---|---|---|
-| [Policy](#3-policy) | `contract.py`, `owner_policy.py` | hook outcomes; the owner policy, first and last in every hook | Task 3, always on |
-| [Privacy](#3-policy) | `privacy.py` | audience labels, what a context may hold, the withheld note, `share` | Task 3 |
-| [Limits](#3-policy) | `limits.py` | daily model budget limit, quiet hours | Task 3 |
-| [Identity](#7-identity-alias-map-owner-person-cards) | `identity.py` | alias map, pairing the owner, person cards; account linking | Task 3; linking in Task 5 |
-| [Tools](#4-commands--tools) | `tools.py` | the tool registry, which tools a turn is offered, routing a call to its owner | Task 3 |
-| [Commands](#4-commands--tools) | `commands.py` | one command registry, handled without a model call | Task 4 |
-| [Install](#5-install-plugin-manager) | `loader.py` | reads `config.yaml` and manifests, loads adapters and plugins, collisions, fail-closed check | Task 4 |
-| [Skills](#6-skills) | — | installed SKILL.md in the context | Task 4 |
+| [Contract](#2-the-api-six-levers-d41) | `contract.py` | the rules of the game for every plugin and adapter: hook outcomes (pass, replace, stop, annotate), the read-only view of the log and state, the vocabulary an adapter uses to declare what it can show (§9) | Task 3; view and vocabulary in Task 4 |
+| [Policy](#3-policy) | `policy.py` | the owner policy, first and last in every hook: the identity line, daily model budget, quiet hours, optional approvals before a tool call; the owner commands that change these settings | Task 3 (as `owner_policy.py` + `limits.py`, merged in Task 4) |
+| [Privacy](#3-policy) | `privacy.py` | absolute line 2: audience labels, what a context may hold, the withheld note, `share`, data leaving the machine, stricter rules from plugins | Task 3 |
+| [Identity](#7-identity-alias-map-owner-person-cards) | `identity.py` | alias map, pairing the owner, person cards, routes (`to:`); account linking | Task 3; linking in Task 5 |
+| [Registry](#4-registry-tools-commands-skills) | `registry.py` | tools (used by the soul), commands (typed by people), skills (read by the soul): one list of names and short descriptions, the full entry on request, collisions; `/help` | Task 3 (as `tools.py`); commands and skills in Task 4 |
+| [Loader](#5-install-plugin-manager) | `loader.py` | reads `config.yaml` and manifests, loads adapters and plugins in dependency order, collisions and the fail-closed check at boot | Task 4 |
+| [Interaction](#9-interaction) | `interaction.py` | what the soul shows people besides its messages (typing, tool steps, thinking) and approvals asked and answered: what, to whom, how much | Task 4; rendering per adapter in Task 5 |
 | [RBAC](#8-rbac) | — | roles and permissions | when a group needs roles |
+
+**What the middleware itself offers.** Only commands and tools that regulate the middleware:
+`share` (privacy), pairing and later `/link` (identity), budget and quiet-hour settings and
+approval answers (policy), `/help` (registry), switching what is shown (interaction). Anything
+that is a feature or a capability (search, files, `/mode`, memory-view) is a plugin. Test: if
+removing it would leave a rule that can no longer be kept or changed, it belongs to the
+middleware; if the soul would only be less able, it is a plugin.
 
 ## 2. The API: six levers (D41)
 Every plugin and adapter uses the same levers, so the core never knows the case — modes ("daily" vs
@@ -100,7 +109,13 @@ The one middleware that is always present.
   chat as events) the owner may tighten or loosen;
   plugins may add rules inside the policy, never remove it (D22, D24, D36).
 
-## 4. Commands & tools
+## 4. Registry (tools, commands, skills)
+
+Tools, commands and installed skills follow one pattern, as MCP's tools, prompts and resources
+do: a list of names with short descriptions, the full entry on request, one namespace with
+collisions failing at boot. Every entry names **who uses it**: the soul (a tool, a skill) or a
+person (a command).
+
 - **Commands are defined once** in a shared registry. Adapters only translate native syntax
   (`/help@bot`, `/help`, `:help`) into a neutral `command` event and may add presentation (menus,
   buttons) but never logic. A command is handled in the inbound hook without a model call; the
@@ -111,9 +126,10 @@ The one middleware that is always present.
   action hook it routes a call to the adapter or plugin that owns it. The core keeps only the
   dispatch door: check the arguments against the descriptor, record, hand to the action hook,
   record the result.
-- **Tool-use rules and approvals** are optional owner choices in the action hook, e.g. ask the
-  owner before an expensive or irreversible tool call, or before a learned procedure is used
-  (D19).
+- **Tool-use rules and approvals** are optional owner choices in the action hook, kept in
+  `policy.py`, e.g. ask the owner before an expensive or irreversible tool call, or before a
+  learned procedure is used (D19). How the question is shown and answered is `interaction.py`
+  (§9).
 - **Draft**: per-person rate limits and steps-per-task limits live here.
 
 ## 5. Install (plugin manager)
@@ -123,6 +139,8 @@ The one middleware that is always present.
   refuses to start the kernel without the owner policy first and last in every hook.
 - Name collisions (two plugins claiming the same command, tool or state namespace) fail at boot
   (D9, D41).
+- A manifest may name `dependencies`: other plugins that must load first (as Home Assistant's
+  integration manifest does). A missing or failing dependency fails at boot, naming both.
 - Plugins are trusted code installed by the owner and run in-process (the Home Assistant model).
   The owner policy holds against plugins that follow the contract; it is not a sandbox against
   malicious code, and the docs say so (D32.11).
@@ -136,6 +154,7 @@ The one middleware that is always present.
   while.
 
 ## 6. Skills
+Part of the registry (§4).
 - **Installed skills** are static SKILL.md files shipped by plugins. Only the names and
   descriptions of relevant skills enter the prompt via the context hook; the body is loaded on
   request; versioned; use counts feed the same ACT-R activation as memories (D11, D34).
@@ -175,3 +194,24 @@ Steps …
   person, so the soul's social understanding can use them; the soul's own sense of standing stays
   in its person cards (D31).
 - Permission never overrides the two absolute lines and never buys dishonesty (D24, D31).
+
+## 9. Interaction
+What the soul shows people besides its messages, and approvals asked and answered. Three parts,
+three places:
+- **The core records, and changes nothing.** Everything needed is already an event (`job.started`,
+  `think`, `act.out`, `act.result`); thinking and tool steps are never plugins.
+- **`interaction.py` decides** what is shown, to whom and how much. Defaults: thinking only to
+  the owner in the owner's direct chat, never in a shared place; tool steps only for work that
+  takes long; an approval asks the person the policy names. The owner switches these with a
+  command. Everything shown passes the audience check of `privacy.py` first: a thought can hold
+  private content.
+- **The adapter renders**, its own way: WhatsApp's "typing…", an edited Telegram message,
+  buttons on Telegram, reactions on WhatsApp. An approval answer (a click, a reaction) comes
+  back as an ordinary event to the middleware.
+
+**What an adapter can show** is declared at boot in the vocabulary of `contract.py` (typing,
+edit message, buttons, reactions, …), like V1 ADR-0018's optional parts and the channel matrix
+of chat frameworks. A missing capability is never a silent no-op: `interaction.py` picks the
+fallback it knows (no buttons → "reply yes or no" as text; no typing → nothing), so what is lost
+is a choice, visible in the code and the boot report.
+

@@ -43,6 +43,7 @@ it; the core never does.
 name: work-modes
 version: 0.1.0
 state_namespace: work-modes          # its state keys are work-modes:* (projected from its events)
+dependencies: []                     # other plugins that must load first; missing or failing fails boot
 tools: [modes_tool]                  # e.g. offers a `set_mode` capability
 middleware:
   - { hook: context, scope: shared, entry: modes.annotate }   # attaches "mode: professional"
