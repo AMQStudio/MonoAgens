@@ -77,7 +77,7 @@ interruptions where it should be quiet, promise keeping, recall after 1/7/30 day
 one is the bot" (target ≈ 50%). Pre-registered metrics. Public claims phrased as "≥ X% of human
 baseline on these N behaviors".
 
-**Every scenario carries its own material** (D54). A scenario holds, as synthetic data the worker writes, everything the behavior needs: the facts, the people and their accounts, the artifacts (a file, a piece of work, code and its test output) and realistic results from every test organ it uses. A failure is called the soul's failure only after a material check shows that what the soul needed was in the Log and reachable on its desk; otherwise the scenario is fixed, never the soul. The material check is written under the task's Notes.
+**Every scenario carries its own material** (D54). A scenario holds, as synthetic data the worker writes, everything the behavior needs: the facts, the people and their accounts, the artifacts (a file, a piece of work, code and its test output), realistic results from every test organ it uses, and the capabilities the behavior needs (mentioning a file is not enough: reading it and sending it must be capabilities a test organ offers). A failure is called the soul's failure only after a material check shows that what the soul needed was in the Log and reachable on its desk; otherwise the scenario is fixed, never the soul. The material check is written under the task's Notes.
 
 **Scenarios are the capability record** (D48). Each scenario states one capability in one
 line and the brain function it belongs to. The replay script writes `scenarios/README.md` from
