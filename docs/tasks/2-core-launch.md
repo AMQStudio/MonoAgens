@@ -157,7 +157,7 @@ passes.
 - [x] 12.11 **One message per place per turn (D51).** A second communicative act to a place the same turn already spoke to is refused as already said. Test: a round with an act and a refused `expect` returns the refusal without sending the message twice.
 - [x] 12.8a **Material check of every scenario still failing** (16, 18, 19, 24, 26, 27, 28, 30) — facts **and capabilities**. Scenario 18 step 7 still lacks them: the owner only mentions the finished work, no test organ can read the working folder, and the WhatsApp test organ cannot send a file; in Task 2 make the work text in the Log (what is tested here is share, send and wait, not files). Files are not the core's: receiving and sending them is a body capability (Task 5), reading a working folder is a plugin (Task 3), and rules about forwarding them are middleware policy (Task 3); a file version of this scenario belongs there. Per scenario: per scenario, what the soul needed and whether it was in the Log and on its desk; fix the scenario where material was missing. Write it under Notes before 12.8 runs.
 
-- [ ] 12.12 **A reminder is not a fulfilment (D53; bug found in the 24/30 reports).** `condition.reminder` records the reminder as `expectation.fired` with the promise owner as `who`, and the desk renders it exactly like a met condition, so the soul reports "done" on "masih di review". Fix: a reminder has its own event kind (`expectation.reminded`, additive), keeps the line's own speaker, and the desk shows it as "this line may relate to your expectation: <about>; condition: <text>; does this line fulfil it?" with the reason "reminded", not "fired expectation". No new guidance line. Checks: scenario 30's question line produces no message and the promise stays active (rewrite of the check that forbade the wake D53 requires); scenario 24's "masih di review" produces no message; the later "sudah selesai" fulfils the promise once. Also `scripts/replay.py` prints every communicative act that fails the honesty scan, with the quotation it could not find. `text_like` stays a plain substring (no `|`, no regex).
+- [x] 12.12 **A reminder is not a fulfilment (D53; bug found in the 24/30 reports).** `condition.reminder` records the reminder as `expectation.fired` with the promise owner as `who`, and the desk renders it exactly like a met condition, so the soul reports "done" on "masih di review". Fix: a reminder has its own event kind (`expectation.reminded`, additive), keeps the line's own speaker, and the desk shows it as "this line may relate to your expectation: <about>; condition: <text>; does this line fulfil it?" with the reason "reminded", not "fired expectation". No new guidance line. Checks: scenario 30's question line produces no message and the promise stays active (rewrite of the check that forbade the wake D53 requires); scenario 24's "masih di review" produces no message; the later "sudah selesai" fulfils the promise once. Also `scripts/replay.py` prints every communicative act that fails the honesty scan, with the quotation it could not find. `text_like` stays a plain substring (no `|`, no regex).
 - [ ] 12.8 **Acceptance — the launch set** (after 12.12; owner's decision): one real-model run at `--effort high` of the launch scenarios that have not yet passed with the real model: memory and recall (07, 11, 12, 17, 20, 23), silence (01–03, 15, 21), turn-taking (04–06, 14, 22), promises (08–10, 13, 16, 24, 30), unaddressed help (25, 27, 29). Each failure gets a material check first. Then the live session (privacy across bodies, a promise kept, silence). Scenarios 18, 19, 26 and 28 move to Task 3 as capability targets; the capability record lists them as not yet held. Tick 10.10, 11.6 and 12.8.
 
 ## Part 13 — Readability pass (after 12.8)
@@ -1939,3 +1939,71 @@ Part 12 notes (worker, cue_event description):
   --fake`: 30 scenarios, 132/132 checks, missed-help 0.0% (0/65), false-speak 0.0% (0/75),
   absolute-line violations 0, honesty 100.0% (62/62). `scenarios/README.md` regenerated. No
   real-model replay was started here.
+
+Part 12 notes (worker, 12.12):
+- **The bug and the fix.** `condition.reminder` no longer writes `expectation.fired`. It writes
+  `expectation.reminded` (a new unprefixed core event kind, additive: kinds are not
+  schema-versioned, so no upcaster is needed; readers keep unknown payload fields) with the
+  **line's own speaker** as `who`, the **line's place** as `place`, the line's body and
+  `caused_by` the line's event id. Payload: `{expectation_id, about, condition, text,
+  line_place, reminder: true}`. The Expectation is untouched: no status change, no
+  `fire_count` increment, no `settle` (the kernel skips `expect.settle` for a reminder). A
+  genuine firing (exact `event_seen`/`state`, `cue_time`, `none`) still goes through
+  `fire_expectation` unchanged.
+- **The desk.** `desk._event_text` renders a reminder as its own block: the line with
+  `[line_place] speaker: text`, then `this line may relate to your expectation: <about>;
+  condition: <text>; does this line fulfil it?`. The kernel's wake reason is
+  `reminded: <about> (condition: <text>); does this line fulfil it?`, not
+  `expectation missed`. `appraise` treats `expectation.reminded` as a circuit-breaker wake whose
+  reason is `reminded` (`reflex` and the early no-draw branch in `appraise`). No guidance line
+  was added; `guidance.py` is untouched.
+- **Where the wake is laid out (a decision with evidence).** The stored event keeps the line's
+  place (D53: the line's own speaker and place), but the PFC job runs in the Expectation's
+  place (`item["place"]`), with a copy of the reminder trigger whose `place` is that desk.
+  Reasons: (1) `active_expectation_lines` lists only expectations of the wake place, so a
+  reminder desk in the line's place would not show the promise and `resolve` would be refused
+  (`_check_resolve` needs the id on the desk) although D53 says the woken PFC may resolve it;
+  (2) a myopic `act` uses the trigger event's place, so without the copy the soul's answer
+  would land in the group instead of the place it is thinking in, which is exactly the 24/30
+  failure mode. The copy is in memory only; the Log event is unchanged.
+- **Kind lists checked.** `RECENT_KINDS` deliberately does not gain the reminder: the line is
+  already a percept in `<recent>`, the reminder is the wake's `<event>`, and adding it would
+  repeat the line and let a later desk read a reminder as a conversational message. `threads.
+  CONTINUATIONS` does not gain it either: a reminder is judged where the promise lives, not
+  continued in a task thread (only a genuine firing continues a goal). `recall` follows
+  `RECENT_KINDS`, so it is unchanged. `scripts/replay.py`'s detail renderer prints
+  `expectation.reminded: <line>`; its metrics count kinds through events, so no change was
+  needed there. `tests/test_versioning.py`'s core-kind list names the new kind.
+- **Honesty lines.** `scripts/replay.py` now appends one `- step N — honesty: <act text>; not in
+  the log: <quote>` line under a scenario's Step details for every communicative act whose
+  quoted span `_fabricated_quote` cannot find. Both fields go through `_detail_text`, so they
+  are redacted and truncated; no secret is printed.
+- **Scenarios and every changed check.**
+  - `promises/30_same_topic_question.yaml`: the description no longer claims "nobody is woken"
+    (the reminder wake is required by D53); it says no message is sent. The check label "a
+    question on the same topic wakes no one" became "the question produces no message" (it is a
+    `no_reply` check and never forbade the wake, but its label claimed it did). Added
+    `event_seen expectation.reminded step 4 count 1` — "the question reminds the soul of the
+    promise" — because the old check set could not tell a reminder from silence. The existing
+    `no_event expectation.resolved step 4 count 0` ("the question does not resolve the
+    promise") and `reply_in space:tg:1001 step 5 count 1` stay. Recorded answers already let
+    the question be (a `think`) and act+resolve on the statement, so no answer changed.
+  - `turn-taking/24_gate_threshold.yaml`: description now says "reminded by an unaddressed
+    message". `event_seen expectation.fired step 12` became `expectation.reminded` with the
+    label "an active promise reminds the soul on an unaddressed message" (a free-text
+    condition only reminds; the observe/resolve decision is the PFC's). The `reply_in` label
+    became "the reminder wakes the PFC". Added `event_seen expectation.resolved step 12 count
+    1` — "the statement fulfils the promise once" — the behaviour the item demands. Added the
+    recorded step-10 `think` ("Masih di review; ini belum selesai...") so a reminded wake in
+    the real model's situation answers with a thought, not a message; step 12 still acts and
+    resolves #1.
+  - `promises/16_watch_for_phrase.yaml` needed no check or recorded-answer change: with the
+    wake laid out in the promise's place its one-round answer still lands in the owner's DM.
+- **Spec ownership.** `docs/core.md` §5 already carries the reminder wording (architect's
+  1cbd412); §3's event-kind list does not yet name `expectation.reminded`. Specs are the
+  architect's, so this worker did not edit them; the list needs the architect's one-line
+  addition.
+- **Runs.** `uv run pytest`: 296 passed (real Postgres). `uv run python scripts/replay.py
+  --fake`: 30 scenarios, 134/134 checks, missed-help 0.0% (0/65), false-speak 0.0% (0/75),
+  absolute-line violations 0, honesty 100.0% (62/62). `scenarios/README.md` regenerated. The
+  real-model replay was not run (12.12 does not ask for it).
