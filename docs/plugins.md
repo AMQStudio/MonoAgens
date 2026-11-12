@@ -47,7 +47,8 @@ version: 0.1.0                       # the plugin's release
 description: Read, write and run code in a sandboxed folder per person.
 dependencies: []                     # must load first; missing or failing fails boot
 optional_dependencies: []            # used when present
-state_namespace: workspace           # its state keys are workspace:* (projected from its events)
+state_namespace: workspace           # its state keys are workspace:* (projected from its events); its
+                                     # event kinds are workspace.<kind> (a `-` in the name becomes `_`)
 features:                            # each can be switched off in config.d/
   tools: [read, write, edit, grep, glob, run]
   commands: [workspace]

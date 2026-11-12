@@ -184,7 +184,7 @@ user-space ABI:
   wording, the values in a prior. They may change at any time.
 - A change that breaks a stable surface is a core v2 ([constitution §1](constitution.md)).
 
-**Event kinds** (each with a `schema_version`; plugins use `<plugin>.<kind>`). percept · command · act.out · act.result · decision.silent · decision.note ·
+**Event kinds** (each with a `schema_version`; plugins use `<plugin>.<kind>`, where `<plugin>` is the plugin's name with `-` written as `_`, since event kinds hold no hyphen). percept · command · act.out · act.result · decision.silent · decision.note ·
 decision.wake · model.call · budget.exhausted · expectation.created · expectation.fired ·
 expectation.reminded · expectation.resolved · job.started · job.result · classifier.verdict · credence.updated ·
 disposition.updated · share.granted · task.opened · task.closed · guard.stopped · forget.soft · forget.hard · fade.done · sleep.done ·
