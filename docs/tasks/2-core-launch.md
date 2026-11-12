@@ -1409,3 +1409,35 @@ Part 12 notes (coordinator, 12.8 partial real-model run):
   know" and never asks the owner in the owner's direct chat, so no `share.granted` follows.
 - The three full runs and the live session were not started: the acceptance condition (all of
   these pass) is not met. Stopped for the owner, as the rules require.
+
+Part 12 notes (worker, 12.8 prep):
+- **Material check of every failing scenario (D54), written before any soul-side change.**
+  Each row names the action a check demands, where the material for it lives, and what was
+  missing. "Registered" means the capability is declared by the kernel (`self.share`,
+  `self.recall`, `self.set_identity`) or by the replay's test organs; `ReplayRunner._make_kernel`
+  registers `telegram`, `cli`, `game`, `whatsapp` and `dev` the same way for the real and the
+  fake run, so both runs see the same tools.
+
+  | Scenario | Check demands | Material present | Missing | Added |
+  |---|---|---|---|---|
+  | 16 | an `expect` in the first wake, silence through chatter, one DM | the owner's request; the group's lines; `person:owner` = `space:tg:1001` | the group spoke only after the request, so no group place id was on the request's desk and the watch could name no place | step 1 (07:58, `person:tg:6001`, `space:tg:-10099`); checks move to steps 2/5 and `no_reply` covers [1, 3, 4] |
+  | 18 | answer moves to the owner's private channel; "hasil kerjaan kita" shared and sent to Budi | Budi's file line, Fulan's line, the owner's DM `space:game:dm:owner`, `self.share` and `whatsapp.say` with `to:` | nothing in the Log was "our work": the owner's step 7 asked to send an artifact no event named (the 11.5 failure "Hasil kerjaan yang mana?") | the owner names it in the shared world at 08:13 (step 6): "hasil kerjaan kita versi final sudah selesai dan filenya ada di folder kerja". The saying place's audience is owner+charlie, so the step-7 desk (world1 with charlie) may hold it under `reach.visible`; no check changed |
+  | 19 | promise, code to Budi, which group asked, thread closes | the request, both groups, Budi's direct place, the `dev` organ with `dev.run` | `dev.run` answered `{ok: true, finished: true}` with no output, so there was nothing to deliver (the 11.5 report: "dev.run selalu balik ok, finished tanpa output") | `FakeBody.act` returns the command's observable result (files changed, `pytest: 12 passed`) as `text`, and the `dev` capability says it reports that output; the task-thread `<doing>` now shows it. No check changed |
+  | 24 | the promise fires on the unaddressed line, the wait answers once | the addressed request and the watched line are both in `space:tg:-1004`; the answer is said there | none | nothing (the 11.5 failure was no `expect`, a soul-side cause) |
+  | 26, 28 | silence in the group, a question to the owner in `space:tg:1001`, one answer after `share.granted` | the fact is an owner percept in `space:tg:1001` and a sleep memory derived from it; `person:owner` resolves to `space:tg:1001`; `self.share` and `telegram.say`/`to:` are registered | the fact is (correctly) absent from the group desk, so no group wake carries a cue that the soul knows it | nothing; the desk cue is the open question below |
+
+- **What the material fixes changed in the replay.** 16: 1 new step (a group line before the
+  request), 3 checks renumbered, `no_reply` widened to the new chatter line. 18: one step's text
+  now names the artifact; no step, check or recorded answer changed. 19: no scenario file
+  changed; the `dev` organ and its description in `scripts/replay.py` now report output. Fake
+  replay: 30 scenarios, 130/130 checks, absolute-line violations 0, missed-help 0.0% (0/65),
+  false-speak 0.0% (0/68). `uv run pytest`: 277 passed.
+- **Open question (not built).** For 26 and 28 the only remaining gap is a cue, not material:
+  the group desk is empty of the fact by the privacy rule, and it says `<memories>none</memories>`
+  without saying that memories were withheld, so a soul reading it cannot tell "I do not know"
+  from "I may know it but not here". A desk line that says something was withheld needs a new
+  field on `PFCContext` plus a rendering and the hook that fills it (3–4 package lines); the
+  package is exactly 3,800/3,800 and no honest removal was found, so per the rules this stops
+  here as a design question for the architect: is a withheld-count on the desk a desk fact or a
+  new core primitive, and which line pays for it? The general principle that a soul may ask the
+  person it might be private to was put in `guidance.py` (next note), which fits the budget.

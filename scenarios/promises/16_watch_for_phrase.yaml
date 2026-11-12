@@ -8,19 +8,23 @@ description: >-
 expectations:
   - type: event_seen
     kind: expectation.created
-    step: 1
+    step: 2
     payload: {kind: promise}
     label: the promise is held in the first wake, whether the model thinks first or not
   - type: no_reply
-    steps: [2, 3]
+    steps: [1, 3, 4]
     label: ordinary group chatter ignored
   - type: reply_in
     place: space:tg:1001
-    step: 4
+    step: 5
     count: 1
     label: exactly one message to the owner's DM
   - reply mentions down
 steps:
+  - at: "2026-11-10T07:58:00+07:00"
+    who: person:tg:6001
+    place: space:tg:-10099
+    text: "Selamat pagi, nanti deploy staging jam sembilan ya."
   - at: "2026-11-10T08:00:00+07:00"
     who: person:owner
     place: space:tg:1001
@@ -40,12 +44,12 @@ steps:
     text: "server down lagi nih guys"
     should: answer
 model_answers:
-  - step: 1
+  - step: 2
     tool: decide
     calls:
       - name: think
         arguments: {thought: "owner minta dikabari; simpan janjinya dulu", motivation: 4, confidence: 0.8}
-  - step: 1
+  - step: 2
     tool: decide
     calls:
       - name: expect
@@ -57,7 +61,7 @@ model_answers:
           intent: beri tahu owner bahwa server down disebut di grup
           weight: 0.8
           policy: {once: true}
-  - step: 4
+  - step: 5
     tool: decide
     calls:
       - name: act

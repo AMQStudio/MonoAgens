@@ -94,7 +94,9 @@ CHAT_CAPABILITIES = (
 
 # `dev` is the owner's workspace organ: it chats and runs the owner's code.
 DEV_CAPABILITIES = (*CHAT_CAPABILITIES,
-                    {"name": "run", "description": "Run a command and report completion.",
+                    {"name": "run",
+                     "description": "Run a command in the owner's workspace and report its "
+                                    "output: files changed, tests, and the result text.",
                      "schema": {"type": "object", "properties": {"command": {"type": "string"}},
                                 "required": ["command"]},
                      "communicative": False, "long_running": True,
@@ -389,10 +391,20 @@ class FakeBody:
         return TEST_CAPABILITIES[self.name]
 
     async def act(self, action: Action) -> Any:
-        """Record the action; a long action also reports its completion."""
+        """Record the action; a long action reports the output it produced."""
         self.actions.append(action)
         if action.kind in TEST_LONG_RUNNING.get(self.name, frozenset()):
-            return {"ok": True, "finished": True}
+            return {"ok": True, "finished": True, "text": self._output(action)}
+
+    @staticmethod
+    def _output(action: Action) -> str:
+        """Render a command's observable result: what changed and what the tests said."""
+        command = str(action.payload.get("command") or "")
+        return (f"$ {command}\n"
+                "src/parser.py | 9 ++++----- (the failing branch now returns the parsed node)\n"
+                "tests/test_parser.py | 2 +-\n"
+                "3 files changed, 41 insertions(+), 9 deletions(-)\n"
+                "pytest: 12 passed in 0.51s")
 
 
 class RecordingKernel(Kernel):

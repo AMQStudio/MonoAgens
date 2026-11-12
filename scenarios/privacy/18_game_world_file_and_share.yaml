@@ -122,7 +122,9 @@ steps:
   - at: "2026-11-11T08:13:00+07:00"
     who: person:owner
     place: space:game:world1
-    text: "Budi kirim file apa tadi ya? aku lupa."
+    text: >-
+      Budi kirim file apa tadi ya? aku lupa. Ngomong-ngomong, hasil kerjaan kita
+      versi final sudah selesai dan filenya ada di folder kerja, siap dikirim.
     addressed: true
   - at: "2026-11-11T08:20:00+07:00"
     who: person:owner
