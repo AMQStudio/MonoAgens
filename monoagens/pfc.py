@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from monoagens import desk, expect
+from monoagens import contract, desk, expect
 from monoagens.desk import PFCContext
 from monoagens.prior import load_settings
 
@@ -67,7 +67,7 @@ TOOLS: list[dict[str, Any]] = [
                       "description": '{"once": true} or {"cooldown": "6h", "max_fires": 3}.'},
            "expires_at": _text("ISO time after which it is void.")}, ["about", "expect"]),
     _tool("resolve", "Close an expectation.",
-          {"id": {"type": "integer"},
+          {"id": {"type": "integer", "description": "The number the desk shows as #N."},
            "status": {"type": "string", "enum": ["satisfied", "dropped"]}}, ["id", "status"]),
     _tool("revise", "Correct an earlier memory; nothing is deleted.",
           {"old": _text("The memory being corrected."),
@@ -202,16 +202,14 @@ def turn_check(context: PFCContext, now: Any, settings: dict[str, Any]) -> Calla
     """Return the check that refuses a bad thought act with its reason (D51)."""
 
     async def check(call: ToolCall) -> str | None:
+        if call.name == "act":
+            return _check_act(context, call.arguments)
         parameters = _PARAMETERS.get(call.name)
         if parameters is None:
-            return None
-        missing = [name for name in parameters.get("required") or ()
-                   if name not in call.arguments]
-        unknown = [name for name in call.arguments if name not in parameters["properties"]]
-        if missing:
-            return f"missing {', '.join(missing)}"
-        if unknown:
-            return f"unknown argument {', '.join(unknown)}"
+            return f"unknown tool: {call.name}"
+        found = contract.errors(parameters, call.arguments)
+        if found:
+            return contract.refusal(found)
         if call.name == "expect":
             try:
                 expect.validate(call.arguments, now=now, settings=settings)
@@ -224,15 +222,26 @@ def turn_check(context: PFCContext, now: Any, settings: dict[str, Any]) -> Calla
     return check
 
 
+def _check_act(context: PFCContext, arguments: dict[str, Any]) -> str | None:
+    """Refuse an act whose own or whose capability's arguments break their schema."""
+    found = contract.errors(_PARAMETERS["act"], arguments)
+    if found:
+        return contract.refusal(found)
+    name = str(arguments.get("capability") or "")
+    cap = next((item for item in context.capabilities
+                if f"{item['organ']}.{item['name']}" == name), None)
+    if cap is None:
+        return f"unknown capability: {name}"
+    found = contract.capability_errors(cap, arguments["arguments"])
+    return contract.refusal(found) if found else None
+
+
 def _check_resolve(context: PFCContext, arguments: dict[str, Any]) -> str | None:
     """Refuse a resolve that names no expectation on the desk, or a status outside two."""
     status = str(arguments.get("status") or "")
     if status not in ("satisfied", "dropped"):
         return "status must be satisfied or dropped"
-    try:
-        exp_id = int(arguments["id"])
-    except (KeyError, TypeError, ValueError):
-        return "id must be an integer"
+    exp_id = arguments["id"]
     shown = {int(line[1:].split(" ", 1)[0]) for line in context.expectations
              if line.startswith("#") and line[1:2].isdigit()}
     return None if exp_id in shown else f"no expectation #{exp_id} on the desk"

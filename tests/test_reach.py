@@ -45,9 +45,13 @@ class Body:
 
     def capabilities(self) -> tuple[dict[str, Any], ...]:
         """Declare a chat capability and, for `dev`, a long-running one."""
-        say = {"name": "say", "description": "Speak here.", "schema": {"type": "object"},
+        say = {"name": "say", "description": "Speak here.", "schema": {
+                   "type": "object", "properties": {"text": {"type": "string"}},
+                   "required": ["text"]},
                "communicative": True, "long_running": False, "identity_changing": False}
-        run = {"name": "run", "description": "Run code.", "schema": {"type": "object"},
+        run = {"name": "run", "description": "Run code.", "schema": {
+                   "type": "object", "properties": {"command": {"type": "string"}},
+                   "required": ["command"]},
                "communicative": False, "long_running": True, "identity_changing": False}
         return (say, run) if self.long_running else (say,)
 

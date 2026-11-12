@@ -9,13 +9,15 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
+from monoagens import expect
 from monoagens.clock import FakeClock
 from monoagens.cognition import Situation, appraise
 from monoagens.identity import SelfOrgan
 from monoagens.kernel import Kernel
 from monoagens.desk import PFCContext
 from monoagens.pfc import PFC, TOOLS, TOOL_NAMES, ToolCall, turn_check
-from monoagens.store import append_event, read_state, write_state
+from monoagens.store import (active_expectation_lines, append_event, read_state,
+                             write_state)
 from monoagens.bodies.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
 from monoagens.work import doing_lines
@@ -528,7 +530,8 @@ async def test_unaddressed_message_does_not_wake_the_pfc(aconn):
     assert await _kinds(aconn) == ["percept", "decision.silent"]
 
 
-async def test_invalid_tool_call_becomes_an_error_event_and_the_loop_lives(aconn):
+async def test_an_unknown_tool_is_refused_and_the_loop_lives(aconn):
+    """12.13: a name outside the five tools is a refusal line, not a thrown turn."""
     fake = FakeLLM([[("shout", {"text": "hi"})], [("act", {"capability": "telegram.say", "arguments": {"text": "still here"}})]])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_body(RecordingBody())
@@ -536,11 +539,10 @@ async def test_invalid_tool_call_becomes_an_error_event_and_the_loop_lives(aconn
     await _feed(kernel, _msg("first"))
     await _feed(kernel, _msg("second", message_id=2))
 
+    assert "shout refused: unknown tool: shout" in fake.requests[1]["messages"][-1]["content"]
     kinds = await _kinds(aconn)
-    assert kinds == ["percept", "model.call", "error", "decision.silent", "percept", "model.call", "act.out"]
-    cur = await aconn.execute("SELECT payload FROM events WHERE kind='error'")
-    error = (await cur.fetchone())[0]
-    assert "invalid tool call: shout" in error["error"]
+    assert kinds == ["percept", "model.call", "model.call", "act.out",
+                     "percept", "model.call", "act.out"]
 
 
 async def test_llm_failure_becomes_an_error_event_and_the_loop_lives(aconn):
@@ -840,3 +842,87 @@ async def test_backfill_signals_are_discounted_by_age():
     new = await appraise(fresh, situation=Situation(event=fresh, self_name="Mona", now=START),
                          now=START, settings=SETTINGS)
     assert aged.signals["own_name"] < new.signals["own_name"]
+
+
+# ---------------------------------------------- the argument door (12.13)
+
+async def _one_promise(aconn) -> int:
+    """Store one active expectation and return its id."""
+    source = await append_event(aconn, ts=START, kind="percept", who="person:owner",
+                                place=PLACE, body="telegram",
+                                payload={"description": "kabari aku soal dokumen"})
+    await expect.create(aconn, {"about": "tell the owner when the document is finished",
+                                "cue_time": {"at": (START + timedelta(hours=1)).isoformat()},
+                                "expect": {"none": True}, "policy": {"once": True}},
+                        now=START, settings=SETTINGS, source=source)
+    cur = await aconn.execute("SELECT id FROM expectations WHERE status = 'active'")
+    return (await cur.fetchone())[0]
+
+
+async def test_a_resolve_with_a_text_id_is_refused_and_corrected_in_the_same_wake(aconn):
+    """12.13: a non-integer id is a refusal with its field, never an exception."""
+    exp_id = await _one_promise(aconn)
+    fake = FakeLLM([[("resolve", {"id": "dokumen sudah selesai", "status": "satisfied"})],
+                    [("resolve", {"id": exp_id, "status": "satisfied"})],
+                    []])
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel.register_body(RecordingBody())
+
+    await _feed(kernel, _msg("dokumennya sudah selesai"))
+
+    assert "resolve refused: id: expected integer, got string" in \
+        fake.requests[1]["messages"][-1]["content"]
+    assert [request["tool_choice"] for request in fake.requests] == \
+        ["required", "auto", "auto"]
+    cur = await aconn.execute("SELECT status FROM expectations")
+    assert [row[0] for row in await cur.fetchall()] == ["satisfied"]
+    assert "error" not in await _kinds(aconn)
+
+
+async def test_an_act_with_a_mistyped_argument_is_refused_before_it_runs(aconn):
+    """12.13: the capability's own schema names the bad argument for the next round."""
+    fake = FakeLLM([[("act", {"capability": "self.recall",
+                              "arguments": {"event_id": "yang tadi"}})],
+                    [("act", {"capability": "self.recall", "arguments": {"query": "kopi"}})],
+                    []])
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel.register_body(RecordingBody())
+
+    await _feed(kernel, _msg("apa yang tadi kita bicarakan soal kopi?"))
+
+    assert "act refused: arguments.event_id: expected integer, got string" in \
+        fake.requests[1]["messages"][-1]["content"]
+    kinds = await _kinds(aconn)
+    assert kinds.count("act.result") == 1
+    assert "error" not in kinds
+    assert [request["tool_choice"] for request in fake.requests][:2] == ["required", "auto"]
+
+
+async def test_dispatch_refuses_a_mistyped_argument_without_raising(aconn):
+    """12.13: a caller that bypasses the door still gets a refusal, not an exception."""
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM()), settings=SETTINGS)
+    kernel.register_body(RecordingBody())
+    stored = await append_event(aconn, ts=START, kind="percept", who="person:owner",
+                                place=PLACE, body="telegram",
+                                payload={"description": "halo", "place_kind": "direct"})
+
+    assert await kernel._apply(stored, ToolCall("act", {
+        "capability": "self.recall", "arguments": {"event_id": "x"}})) is True
+
+    kinds = await _kinds(aconn)
+    assert "error" not in kinds
+    cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.result'")
+    payloads = [row[0] for row in await cur.fetchall()]
+    assert payloads == [{"capability": "self.recall", "result": {
+        "error": "invalid arguments for self.recall: arguments.event_id: "
+                 "expected integer, got string"}}]
+
+
+async def test_the_desk_shows_the_id_that_resolve_takes(aconn):
+    """12.13: the number the desk shows as #N is exactly what resolve accepts."""
+    exp_id = await _one_promise(aconn)
+    lines = await active_expectation_lines(aconn, PLACE)
+
+    assert lines[0].startswith(f"#{exp_id} ")
+    check = turn_check(_desk(expectations=lines), START, SETTINGS)
+    assert await check(ToolCall("resolve", {"id": exp_id, "status": "satisfied"})) is None

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from monoagens import reach, threads, work
+from monoagens import contract, reach, threads, work
 from monoagens.types import Action, Event
 
 
@@ -63,7 +63,15 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any], *,
     if cap is None:
         await kernel._record_error(event, f"unknown capability: {capability!r}")
         return False
-    arguments = dict(args["arguments"]) if isinstance(args.get("arguments"), dict) else {}
+    arguments = args.get("arguments")
+    broken = contract.capability_errors(cap, arguments)
+    if broken:
+        await kernel._emit(event, "act.result", {
+            "capability": capability,
+            "result": {"error": f"invalid arguments for {capability}: "
+                                f"{contract.refusal(broken)}"}})
+        return True
+    arguments = dict(arguments)
     routed = cap.get("communicative") or capability == reach.SHARE
     to, via = (arguments.pop("to", None), arguments.pop("via", None)) if routed else (None, None)
     ctx = {"conn": kernel.conn, "event": event, "now": kernel.clock.now(),
