@@ -162,7 +162,7 @@ class Loader:
             effective = self._features(name, manifest, config_d.get(name) or {}, report)
             api = PluginAPI(name=name, manifest=manifest, points=self._points,
                             options=self._options(name, manifest, config_d.get(name) or {}),
-                            features=effective)
+                            features=effective, log=contract.LogView())
             for point in (manifest.get("extension_points") or {}).get("opens") or ():
                 api.open_point(str(point))
             self._register(name, api, report)
@@ -484,6 +484,8 @@ class Loader:
         for previous in getattr(kernel, "loaded_plugins", ()):
             kernel.tools.discard_owner(previous)
         for api in loaded.apis:
+            if isinstance(api.log, contract.LogView):
+                api.log._bind(kernel.conn)
             for tool, facts in api.tools:
                 kernel.tools.add_tool(tool, facts, owner=getattr(tool, "name", None) or api.name)
             for entry in api.commands:

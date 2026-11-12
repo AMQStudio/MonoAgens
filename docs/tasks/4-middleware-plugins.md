@@ -284,3 +284,14 @@ place, and `identity._direct_places` uses `DISTINCT ON (body)` instead of scanni
 percept of a person; the scenario then passed three runs in a row. Measured on the synthetic
 500-event desk: 100 ms (unchanged; there every line comes from a different place, which is the
 worst case for the cache).
+
+**1.9 The read-only view.** `contract.LogView` exposes the Log and the state board to plugins
+and nothing else: `recent(place, limit, kinds)`, `by_kind(kind, after_id, limit)`,
+`state(key)`, `state_prefix(prefix)`, `search(text, limit)` (ILIKE over the payload's
+description/text). It holds the connection privately (`_conn`), has no write method and hands
+out no connection; unbound it refuses instead of reading somewhere else. The loader creates one
+per plugin API and binds it to the kernel's connection at install, so a plugin reads it lazily.
+The class docstring carries the rule the plan asks for: any plugin tool that shows a view line
+to people passes it through `privacy.visible` (or `memory_visible`) first, and a filtered line
+becomes the withheld count, never a shown line. The policy rule on data leaving the machine is
+in 1.7 (`privacy.leaving`).
