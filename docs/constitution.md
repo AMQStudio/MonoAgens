@@ -9,6 +9,10 @@ Like a kernel: the interface to the outside never breaks, the inside may improve
   descriptor, hook contract, the six levers, events, `recall`, birth certificate and prior
   format — plus the two absolute lines, the complexity budget and the list of brain functions
   (the brain map). Breaking any of these is a core v2, which only the owner can open.
+- **Every file format carries its version** (D58): events through their schema version, YAML
+  files through `version:` (or `format_version` / `manifest_version`). Older versions are
+  upcast when read, never rewritten; a newer one than supported fails loudly. This is how a
+  frozen contract evolves without breaking.
 - **Provisional** — the internal formulas: how each signal is computed, the terms of θ, the
   ACT-R parameters, the context layout. They may change **only with evidence** (replay scenarios
   plus real logs showing the change is better), recorded as a decision with that evidence, never

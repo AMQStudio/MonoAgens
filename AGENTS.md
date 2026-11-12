@@ -64,7 +64,7 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
    `asyncio.to_thread`. Every hook call and background job runs under its watchdog timeout
    (`docs/core.md` §3).
 8. **Configuration lives outside code.** Models, keys, URLs and the optional reasoning effort come from `.env`; deployment settings
-   from `config.yaml`. Identity comes from the birth certificate (`soul.yaml`); weights and thresholds from the prior in `prior/` (D35).
+   from `config.yaml` and `config.d/`. Identity comes from the birth certificate (`soul.yaml`); weights and thresholds from the prior in `prior/` (D35).
    No magic numbers in code.
 9. **Signals are pure.** A cognition signal only reads its `Situation` and returns a number in
    [0, 1]. No writes, no LLM calls, no I/O beyond what `Situation` already holds.
@@ -89,6 +89,10 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
 - Dev dependencies: `pytest`, `pytest-asyncio >= 1.3` (1.x: set `asyncio_mode = "auto"` in
   `pyproject.toml`; do not use the removed `event_loop` fixture).
 - No new dependency, ORM, agent framework, or platform SDK without the owner's approval.
+- **Plugin dependencies** live with the plugin (declared in its manifest, installed only when it
+  is enabled), never in the core's list. Approved by the owner (2026-11-12): `web-search`:
+  `ddgs`; `pdf-reader`: `pypdf`; `workspace`: the system tools `bubblewrap` and `passt`
+  (pasta), not Python packages.
 
 ## Priorities for code
 1. **The goal works**: the behavior the task asks for, proven by its scenarios.

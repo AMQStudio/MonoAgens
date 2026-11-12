@@ -8,6 +8,6 @@
 | [core-math.md](core-math.md) | the formulas behind the core and their sources |
 | [middleware.md](middleware.md) | the regulator: owner policy, privacy, identity, limits, tools, commands, install, skills |
 | [adapters.md](adapters.md) | Telegram, CLI; next WhatsApp and Discord; later voice, games, robots |
-| [plugins.md](plugins.md) | features on the middleware: tools, modes, memory-view, roles |
+| [plugins.md](plugins.md) | features on the middleware: Soul Tuning, Web Search, Workspace, readers |
 | [project.md](project.md) | license, users, release gate, evaluation, document rules |
 | [tasks/](tasks/README.md) | work for coding workers, in order |

@@ -25,6 +25,7 @@ link is a leak.
 - [ ] 1.2 WhatsApp with `history` and back-fill on connect; receiving and sending files as capabilities (a received file is a percept with a description and a reference in `data`).
 - [ ] 1.3 Discord.
 - [ ] 1.3b Interaction rendering (middleware.md §9): WhatsApp and Discord declare what they can show and render typing, tool steps and approvals their own way (WhatsApp: "typing…", approval by reaction; Discord: typing, buttons); the decisions stay in `interaction.py`.
+- [ ] 1.3c Roles from Discord: map Discord's own roles of a server to roles in `roles.py` (middleware.md §8) as role holders, recorded as events; a Discord role grants nothing until the owner maps it.
 - [ ] 1.4 Check: one conversation continues across WhatsApp, Discord and Telegram; a person's private context follows them only after a verified link; a file received on WhatsApp can be read and sent on.
 - [ ] 1.5 Real-model test (this task's one exception to the last-part rule, because WhatsApp is needed daily): the replay launch set passes on the new adapters, then a live session on WhatsApp in the owner's direct chat and one group (the model in `.env`; never read or print it). Report what happened and the metrics. From here the owner uses the soul daily on WhatsApp.
 

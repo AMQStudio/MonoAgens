@@ -16,8 +16,10 @@ an intention into native actions.
 
 ## 2. Rules for every adapter
 - Declare capabilities with the core's descriptor ([core.md §9.1](core.md)): name, JSON schema,
-  description, `communicative`, `long_running`, `identity_changing`. The middleware's tool
-  registry offers them to reasoning in a fixed order (D2, D32).
+  description, `communicative`, `long_running`, `identity_changing`, and the tool facts of the
+  middleware's `contract.py` (`reads`, `changes`, `runs_code`, `network`); a tool without facts
+  fails at boot. The middleware's tool registry offers them to reasoning in a fixed order (D2,
+  D32).
 - The brain decides intent and content; the adapter decides how (bubbles, TTS, gestures). Fine
   motor control stays in the adapter (D2).
 - Sense through the core's `percept` ([core.md §9.2](core.md)): who, place, `addressed`, a short

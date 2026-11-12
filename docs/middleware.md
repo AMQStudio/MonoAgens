@@ -17,32 +17,33 @@ The middleware runs in the core's three hooks (inbound, context, action) and off
 (§2). It is static and never learns — learning belongs to the soul (D34).
 
 ```
-   Plugins (memory-view, modes, search…)        Adapters (Telegram, WhatsApp, robot…)
+   Plugins (Soul Tuning, Web Search, Workspace…)  Adapters (Telegram, WhatsApp, robot…)
                    \                                  /
                     ──────────── Middleware ──────────
-     contract · policy · privacy · identity · registry · loader · interaction  (+ rbac later)
+  contract · policy · privacy · identity · registry · loader · interaction · roles
                                        │  three hooks
                        Core (ids, labels, numbers — mechanisms only)
 ```
 
-Seven files, one concept each (decided 2026-11-12). A file that grows becomes a folder of the
-same name (`registry/tools.py`, …); the seven concepts stay.
+Eight files, one concept each (decided 2026-11-12, D59). A file that grows becomes a folder of
+the same name (`registry/tools.py`, …); the eight concepts stay.
 
 | Module | File | What it provides | When |
 |---|---|---|---|
-| [Contract](#2-the-api-six-levers-d41) | `contract.py` | the rules of the game for every plugin and adapter: hook outcomes (pass, replace, stop, annotate), the read-only view of the log and state, the vocabulary an adapter uses to declare what it can show (§9) | Task 3; view and vocabulary in Task 4 |
-| [Policy](#3-policy) | `policy.py` | the owner policy, first and last in every hook: the identity line, daily model budget, quiet hours, optional approvals before a tool call; the owner commands that change these settings | Task 3 (as `owner_policy.py` + `limits.py`, merged in Task 4) |
+| [Contract](#2-the-api-six-levers-d41) | `contract.py` | the rules of the game for every plugin and adapter: hook outcomes (pass, replace, stop, annotate), the read-only view of the log and state, the vocabulary of tool facts (§4) and of what an adapter can show (§9) | Task 3; view and vocabulary in Task 4 |
+| [Policy](#3-policy) | `policy.py` | the owner policy, first and last in every hook: the identity line, daily model budget, quiet hours; whether a tool call passes, asks for approval or is refused (roles + tool facts + approval mode, §8); the owner commands that change these settings | Task 3 (as `owner_policy.py` + `limits.py`, merged in Task 4) |
 | [Privacy](#3-policy) | `privacy.py` | absolute line 2: audience labels, what a context may hold, the withheld note, `share`, data leaving the machine, stricter rules from plugins | Task 3 |
 | [Identity](#7-identity-alias-map-owner-person-cards) | `identity.py` | alias map, pairing the owner, person cards, routes (`to:`); account linking | Task 3; linking in Task 5 |
-| [Registry](#4-registry-tools-commands-skills) | `registry.py` | tools (used by the soul), commands (typed by people), skills (read by the soul): one list of names and short descriptions, the full entry on request, collisions; `/help` | Task 3 (as `tools.py`); commands and skills in Task 4 |
-| [Loader](#5-install-plugin-manager) | `loader.py` | reads `config.yaml` and manifests, loads adapters and plugins in dependency order, collisions and the fail-closed check at boot | Task 4 |
+| [Registry](#4-registry-tools-commands-skills) | `registry.py` | tools (used by the soul), commands (typed by people), skills (read by the soul): one list of names and short descriptions, the full entry on request, collisions; assembles tool facts; offers a turn only what its requester may use; `/help` | Task 3 (as `tools.py`); commands and skills in Task 4 |
+| [Loader](#5-install-plugin-manager) | `loader.py` | reads `config.yaml`, `config.d/` and manifests (with their format versions), loads adapters and plugins in dependency order, collisions and the fail-closed check at boot | Task 4 |
 | [Interaction](#9-interaction) | `interaction.py` | what the soul shows people besides its messages (typing, tool steps, thinking) and approvals asked and answered: what, to whom, how much | Task 4; rendering per adapter in Task 5 |
-| [RBAC](#8-rbac) | — | roles and permissions | when a group needs roles |
+| [Roles](#8-roles-and-permissions) | `roles.py` | what each person may do: roles with a base tier, permissions declared by plugins, settings per role, approval mode per role; always present, empty by default (owner free, everyone else only talks) | Task 4 |
 
 **What the middleware itself offers.** Only commands and tools that regulate the middleware:
 `share` (privacy), pairing and later `/link` (identity), budget and quiet-hour settings and
-approval answers (policy), `/help` (registry), switching what is shown (interaction). Anything
-that is a feature or a capability (search, files, `/mode`, memory-view) is a plugin. Test: if
+approval answers (policy), `/help`, `/plugin show` (registry), switching what is shown
+(interaction), `/role` and `/roles show` (roles). Anything
+that is a feature or a capability (search, files, `/mode`) is a plugin. Test: if
 removing it would leave a rule that can no longer be kept or changed, it belongs to the
 middleware; if the soul would only be less able, it is a plugin.
 
@@ -126,10 +127,17 @@ person (a command).
   action hook it routes a call to the adapter or plugin that owns it. The core keeps only the
   dispatch door: check the arguments against the descriptor, record, hand to the action hook,
   record the result.
-- **Tool-use rules and approvals** are optional owner choices in the action hook, kept in
-  `policy.py`, e.g. ask the owner before an expensive or irreversible tool call, or before a
-  learned procedure is used (D19). How the question is shown and answered is `interaction.py`
-  (§9).
+- **Tool facts.** Every tool states facts about itself in the vocabulary of `contract.py`:
+  `reads`, `changes` (writes or deletes something), `runs_code`, `network` (reaches the
+  internet). A plugin states them in its manifest, an adapter when it registers its
+  capabilities; the registry assembles them next to the descriptor, so the core's descriptor
+  never changes. A tool without facts fails at boot, naming it. A tool may add the fact
+  `sensitive` to one call (the Workspace guard does, plugins.md §5).
+- **Offered per requester.** In the context hook the registry offers a turn only the tools the
+  requester may use (`roles.py`, §8), so the soul never promises what it cannot do. In the action
+  hook `policy.py` decides pass, ask or refuse from the requester's permissions, the tool's
+  facts and the requester's approval mode (§8). The requester is the chain's `origin_actor`, not
+  whoever is present. How an approval is asked and answered is `interaction.py` (§9).
 - **Draft**: per-person rate limits and steps-per-task limits live here.
 
 ## 5. Install (plugin manager)
@@ -144,7 +152,14 @@ person (a command).
 - Plugins are trusted code installed by the owner and run in-process (the Home Assistant model).
   The owner policy holds against plugins that follow the contract; it is not a sandbox against
   malicious code, and the docs say so (D32.11).
-- The installed plugins are listed in `config.yaml` ([project.md §2](project.md)).
+- The installed plugins are listed in `config.yaml`; each plugin's own settings live in
+  `config.d/<plugin>.yaml`, holding only what the owner changed; defaults live in the plugin's
+  manifest ([plugins.md §3–4](plugins.md), [project.md §2](project.md)). Off until enabled.
+- **Format versions** (D58): every YAML file carries its format version. An older version is
+  upcast in memory and the boot report names it; the file is never rewritten. A newer version
+  than supported fails at boot. A file without `version:` is read as version 1 with a warning.
+- The program never writes the owner's YAML files; `/plugin show <name>` prints a plugin's
+  defaults as YAML to copy.
 - Adapters are loaded by the same module, from the `bodies:` section of `config.yaml` (the key
   keeps its name), through each adapter's `create(options, env)` factory ([adapters.md §2](adapters.md), D49).
 - Uninstalling removes a plugin's tools, middleware, rules and knob offsets; its events stay in
@@ -184,16 +199,50 @@ Steps …
   current owner. The core never knows who the owner is; the owner policy does.
 - **Person cards** (D55): through the context hook it adds, for the people present or named in
   the trigger, their name and where they can be reached, next to what the soul has learned of
-  them.
+  them. Plugins may annotate a card (lever 2), e.g. Soul Tuning's line for the person's role;
+  the card is in the volatile part, so the stable prefix stays cached.
 - Linking accounts arrives with the second chat app (Task 5).
 
-## 8. RBAC
-- **Hierarchy as permission** (roles, who may do what, "only admins may run /settings") is
-  enforced only in the inbound and action hooks; the core never sees it (D31).
+## 8. Roles and permissions
+`roles.py` answers **what this person may do**; `policy.py` turns that into pass, ask or refuse
+(§4). Always present, so no module or plugin has a branch for "no roles". The default
+configuration is empty: the owner may do everything, everyone else only talks (D59). Modelled
+on Discord roles (several per person, permissions add up, `@everyone` as the floor) and on the
+base roles of GitHub and Google Cloud (a custom role starts from a fixed base; new services add
+their permissions to the bases automatically).
+
+- **Four fixed tiers**: `guest < member < trusted < admin`; the owner is above all and always
+  free. Plugins know only the tiers, never the owner's role names.
+- **Permissions are declared by plugins** in the manifest, each with a label and description
+  (for a panel later) and the lowest `base` tier that gets it by default; a permission without a
+  `base` is the owner's only. Plugins may also declare `role_settings` with a value per tier
+  (e.g. a sandbox quota). Wildcards in permission names: `plugin.*` and `*`; the boot report
+  and `/roles show` list what a wildcard expands to.
+- **Roles are defined by the owner** in `config.yaml` → `roles:`:
+  - a **tier role** has a `base` and says how much a person may do;
+  - a **group role** has no `base` and only marks where a person belongs (a shop, a team); it
+    gives nothing but what it lists;
+  - either may add `allow`, `deny`, `settings` and an `approval` mode.
+  A new role works in every plugin at once, and a newly installed plugin reaches every role
+  through its tier. There is no inheritance between roles; a person simply holds several (Budi =
+  `member` + `toko-a`). `people:` overrides one person's `allow`, `deny` and `settings`.
+- **Which value wins**: the person, then all of the person's roles together (a `deny` beats an
+  `allow`), then the manifest's tier defaults. `fallback:` names the role everyone holds
+  (`@everyone`, tier `guest` unless set). A place may override with the same `allow` and `deny`
+  (as Discord's channel overrides).
+- **Approval modes**, per role, default `default`: `yolo` passes everything except calls marked
+  `sensitive`; `default` passes reading and editing and asks before `runs_code` or `changes`
+  outside the person's own workspace; `strict` asks before every step. The owner answers.
+- **Who holds which role is an event**, set with `/role add Budi toko-a` and undone the same
+  way, like identity links and pairing; definitions stay in the file. `/roles show <role>`
+  prints the merged result across plugins, each line marked with its source (manifest or
+  `config.yaml`).
 - Role facts reported by a platform ("admin of this group") are recorded as facts about that
-  person, so the soul's social understanding can use them; the soul's own sense of standing stays
-  in its person cards (D31).
-- Permission never overrides the two absolute lines and never buys dishonesty (D24, D31).
+  person, so the soul's social understanding can use them; they grant nothing by themselves
+  (D31). Mapping Discord's own roles arrives in Task 5.
+- No permission overrides the two absolute lines or buys dishonesty (D24, D31). Scoping a
+  permission to one group ("admin only inside toko A") is not supported; a place override
+  covers the common case.
 
 ## 9. Interaction
 What the soul shows people besides its messages, and approvals asked and answered. Three parts,

@@ -26,18 +26,21 @@ and may change without a new decision. Nothing here may change the core
   owner-set retention (D14).
 
 ## 2. Deployment files
-Four files, each with one job; none holds what belongs to another (D7, D35, D36).
+Five files and folders, each with one job; none holds what belongs to another (D7, D35, D36).
 
 | File | Holds | Read | Changed by |
 |---|---|---|---|
 | `.env` | secrets and endpoints: model keys and URLs, bot tokens, database URL | every start | owner or technician |
-| `config.yaml` | this deployment's non-secret settings: timezone, owner settings, runtime, adapters and plugins | every start | owner; owner settings also in chat |
+| `config.yaml` | this deployment's non-secret settings: timezone, owner settings, runtime, adapters, plugins on, roles | every start | owner; owner settings and role holders also in chat |
+| `config.d/` | one file per plugin: its features and options | every start | owner |
 | `soul.yaml` | the birth certificate: name, language, persona, principles ([core.md §9.3](core.md)) | once, at birth | nobody afterwards; identity changes in chat |
 | `prior/` | instincts: knobs, calibration, constants ([core.md §9.4](core.md)) | once, at birth | developers, with replay |
 
-**`config.yaml`** (format version 1, **Draft**):
+**`config.yaml`** (format version 2, **Draft**; version 1 had `plugins:` as a list and is upcast
+in memory):
 
 ```yaml
+version: 2
 timezone: Asia/Jakarta              # where the soul lives; used for <now>
 owner_settings:                     # initial values; changes made in chat are events and win
   daily_token_budget: 300000
@@ -48,8 +51,29 @@ runtime:
 bodies:                             # adapters (the key keeps its name); non-secret options only; tokens in .env
   telegram: { enabled: true }
   cli: { enabled: true }
-plugins: []                         # installed plugins, e.g. [work-modes]
+plugins:                            # which plugins are on; their settings live in config.d/<name>.yaml
+  workspace:   { enabled: true }
+  web-search:  { enabled: true }
+  soul-tuning: { enabled: true }
+roles:                              # middleware.md §8; empty = owner free, everyone else only talks
+  fallback: customer
+  customer:  { base: guest }
+  member:    { base: member }
+  moderator: { base: member, allow: [workspace.run] }
+  toko-a:    { settings: { workspace.shared: toko-a } }   # a group role: no base
+people:
+  budi:      { settings: { workspace.quota: 5G } }
 ```
+
+**`config.d/<plugin>.yaml`**: one per plugin, only what the owner changed ([plugins.md §4](plugins.md)).
+If `config.yaml` grows too long, `roles:` may move to its own file later; the format stays.
+
+**Format versions** (D58): every YAML file the owner or a developer edits carries its format
+version (`config.yaml`, `config.d/*.yaml`, `soul.yaml`; the prior folder through
+`format_version` in `prior/manifest.yaml`, since some prior files are plain lists; plugin
+manifests through `manifest_version`). Older versions are upcast in memory and named in the
+boot report; the file is never rewritten. A newer version than supported fails at boot. A file
+without `version:` is read as version 1 with a warning.
 
 The rule for every setting: the file gives the starting value; what the soul's books say wins.
 

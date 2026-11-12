@@ -28,7 +28,7 @@ brain.**
 | Core | the soul: neutral and primitive, only a brain; opaque ids, labels and numbers (§8, D57); what it is born with — birth certificate and prior (§9.3–9.4) | yes |
 | Middleware | the regulator and the only path in and out, running in the three hooks: owner policy, privacy, identity, limits, tools, commands, install, skills ([middleware.md](middleware.md)) | no |
 | Adapters | connections to platforms and devices ([adapters.md](adapters.md)) | no |
-| Plugins (packages) | features built on the middleware: tools, memory-view, modes, roles ([plugins.md](plugins.md)) | no |
+| Plugins (packages) | features built on the middleware: tools, Soul Tuning, Workspace ([plugins.md](plugins.md)) | no |
 
 **Scope** (D1, D35, D57). The core knows three generic things: **percepts** (whatever `put`s
 events), **capabilities** (whatever receives `act` and may return results as events) and
@@ -509,13 +509,14 @@ backfill: false             # true when an adapter catches up on what it missed
 Other senses use the same shape: `description: "kitchen temperature 31 °C"` with
 `data: { celsius: 31 }`, or `description: "someone entered through the front door"`.
 
-### 9.3 Birth certificate (`soul.yaml`, format version 1)
+### 9.3 Birth certificate (`soul.yaml`, format version 1, D58)
 Who the soul is, read once at birth (D35). After birth, identity lives in `state: identity`; the
 file is not re-read, and only the owner changes identity, in conversation. Without a birth
 certificate the soul is born neutral and may ask the owner what to be called. Role plugins may
 ship one, used only at birth.
 
 ```yaml
+version: 1                  # format version (D58)
 name: Mona
 language: id                # the language it speaks with the owner
 persona: |                  # any language
