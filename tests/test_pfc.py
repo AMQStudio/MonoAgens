@@ -166,7 +166,7 @@ async def test_layered_prompt_structure(aconn):
     assert capability["enum"] == ["self.set_identity", "self.recall", "self.share",
                                  "telegram.say", "telegram.react"]
     description = act_tool["function"]["description"]
-    assert "telegram.say(text, to?, via?):" in description
+    assert "telegram.say(text, to? (person or place), via? (a body)):" in description
     assert "telegram.react(emoji, message_id):" in description
     expect_tool = next(tool for tool in request["tools"]
                        if tool["function"]["name"] == "expect")
@@ -420,6 +420,45 @@ async def test_an_expect_without_a_cue_is_corrected_in_the_same_wake(aconn):
                                    "expectation.created", "decision.silent"]
     cur = await aconn.execute("SELECT about, cue_event FROM expectations")
     assert await cur.fetchall() == [("ask again later", None)]
+
+
+async def test_a_refusal_returns_even_when_the_same_round_acted(aconn):
+    """12.4/D51: a refused thought act is never lost because another call took effect."""
+    fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "siap"}}),
+                     ("expect", {"about": "kabari kalau server down",
+                                 "expect": {"none": True}})],
+                    [("expect", {"about": "kabari kalau server down",
+                                 "cue_event": {"kind": "percept", "text_like": "server down"},
+                                 "expect": {"none": True}, "policy": {"once": True}})],
+                    []])
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    body = RecordingBody()
+    kernel.register_body(body)
+
+    await _feed(kernel, _msg("kabari aku kalau ada yang bilang server down"))
+
+    assert "expect refused: expect needs cue_time or cue_event" in \
+        fake.requests[1]["messages"][-1]["content"]
+    assert [action.payload for action in body.actions] == [{"text": "siap"}]
+    assert await _kinds(aconn) == ["percept", "model.call", "model.call", "model.call",
+                                   "act.out", "expectation.created"]
+    cur = await aconn.execute("SELECT about, cue_event FROM expectations")
+    assert await cur.fetchall() == [("kabari kalau server down",
+                                     {"kind": "percept", "text_like": "server down"})]
+
+
+async def test_a_refused_round_never_runs_past_max_thought_rounds(aconn):
+    """D51: a refusal buys one result round; the wake still ends at the prior's limit."""
+    fake = FakeLLM([[("expect", {"about": "tanpa cue", "expect": {"none": True}})],
+                    [("expect", {"about": "tanpa cue", "expect": {"none": True}})]])
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake),
+                    settings=settings(constants={"max_thought_rounds": 2}))
+    kernel.register_body(RecordingBody())
+
+    await _feed(kernel, _msg("kabari aku nanti"))
+
+    assert len(fake.requests) == 2
+    assert await _kinds(aconn) == ["percept", "model.call", "model.call", "decision.silent"]
 
 
 async def test_a_chain_in_a_place_shows_every_step_and_its_latest_result(aconn):

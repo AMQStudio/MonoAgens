@@ -28,7 +28,7 @@ def _text(description: str) -> dict[str, Any]:
 
 
 TOOLS: list[dict[str, Any]] = [
-    _tool("think", "Think before acting; state the thought and how sure you are.",
+    _tool("think", "State a thought and how sure it is; the same wake still acts on it.",
           {"thought": _text("One sentence of inner thought."),
            "motivation": {"type": "integer", "minimum": 1, "maximum": 5,
                           "description": "How strongly this deserves to be said."},
@@ -39,7 +39,8 @@ TOOLS: list[dict[str, Any]] = [
           {"capability": _text("The organ capability name."),
            "arguments": {"type": "object", "description": "Arguments for the capability."}},
           ["capability", "arguments"]),
-    _tool("expect", "Hold an expectation about the future; you are woken if it is missed.",
+    _tool("expect", "Hold what must remind you later: a promise, a watch, or a wait; "
+                    "its cue wakes you.",
           {"about": _text("One sentence: what is expected."),
            "kind": {"type": "string", "enum": ["promise", "wait", "predict", "guard"],
                     "description": "promise, patience, prediction or guard (default promise)."},
@@ -69,7 +70,7 @@ _PARAMETERS = {tool["function"]["name"]: tool["function"]["parameters"] for tool
 
 def _args(cap: dict[str, Any]) -> str:
     names = list((cap.get("schema") or {}).get("properties") or {})
-    names += ["to?", "via?"] if cap.get("communicative") else []
+    names += ["to? (person or place)", "via? (a body)"] if cap.get("communicative") else []
     return "(" + ", ".join(names) + ")"
 
 
@@ -176,8 +177,11 @@ async def turns(pfc: Any, context: PFCContext, limit: int,
                 notes.append(_recorded([item])[0])
             raw.append(item)
         made.append({"calls": raw, "usage": dict(getattr(pfc, "last_usage", None) or {})})
-        if not raw or not all(item["name"] in THOUGHT_ACTS or item.get("refused")
-                              for item in raw):
+        refused = any(item.get("refused") for item in raw)
+        acted = any(item["name"] not in THOUGHT_ACTS and not item.get("refused")
+                    for item in raw)
+        # A refusal must return as a result even when the same round carried out an act.
+        if not raw or (acted and not refused):
             break
         taken += notes
     return made

@@ -1441,3 +1441,60 @@ Part 12 notes (worker, 12.8 prep):
   here as a design question for the architect: is a withheld-count on the desk a desk fact or a
   new core primitive, and which line pays for it? The general principle that a soul may ask the
   person it might be private to was put in `guidance.py` (next note), which fits the budget.
+
+Part 12 notes (worker, 12.8 brain fixes):
+- **The uncommitted diff was reviewed line by line; only evidence-backed, general changes
+  kept.** Files touched: `monoagens/guidance.py` (24 lines, under the 30-line limit),
+  `monoagens/pfc.py` (241 → 244 lines), `tests/test_pfc.py`, and the regenerated
+  `scenarios/README.md`. No scenario file, no check, no platform name, no design primitive.
+  The withheld-memory desk line stays an open design question; nothing was built for it.
+- **The 300s timeout was not reproduced.** With the kept changes, `uv run pytest
+  tests/test_pfc.py` runs in 2.9s (30 passed) and `uv run pytest` in 17.1s (279 passed).
+  The loop cannot add rounds: `turns` runs `while len(made) < max(1, int(limit))`, and the
+  new exit condition only decides whether a round already counted is followed by another,
+  so `max_thought_rounds` remains a hard ceiling. Likeliest external cause (unproven): a
+  second pytest process sharing the one test schema and blocking on its locks. A regression
+  test now pins the ceiling: `test_a_refused_round_never_runs_past_max_thought_rounds`
+  scripts two refused `expect` rounds with `max_thought_rounds: 2` and asserts exactly two
+  `model.call`s.
+- **Kept: a refusal returns even when the same round acted** (`pfc.turns`, now `refused` /
+  `acted` booleans with a one-line comment, replacing the old "all thought acts or refused"
+  test). Evidence: 12.4/D51 says a rejected thought act or capability argument comes back in
+  the same turn as a result; the old condition broke the moment any call carried out a
+  non-thought act, so a refusal in that round was lost. New test
+  `test_a_refusal_returns_even_when_the_same_round_acted` (act + cue-less `expect` in one
+  round, corrected `expect` in the next) pins it.
+- **Kept: `think` description** — "State a thought and how sure it is; the same wake still
+  acts on it." Evidence: the 12.8 real-model run's 18 and 19, where the soul thought and
+  answered but called neither `self.share` nor `act to:`; 10.8 failures 16/29/30 (a `think`
+  whose thought held the plan, no tool call). It states the existing loop behavior (D51).
+  The guidance bullet "Thinking is not acting: in the same answer, call the tool that
+  carries the thought out" is restored, not replaced: 12.7 records it as the fix for 10.8
+  04/25/16 and 10.10's live session.
+- **Kept: `expect` description names its classes** — "Hold what must remind you later: a
+  promise, a watch, or a wait; its cue wakes you." Evidence: 12.8 real-model 16 and 24, where
+  the owner asked to be told when something happens and the first wake created no `expect`.
+  The classes are general Expectation kinds (`docs/core.md` §5), not a scenario rule.
+- **Kept: guidance bullet for a private question** — "If what you know may be private to
+  someone, ask that person privately instead of saying you do not know." Evidence: 12.8
+  real-model 26 and 28, where the soul answered "I do not know" in the group and never asked
+  the owner in `space:tg:1001`, so no `share.granted` followed. The 12.8 prep material note
+  already named this as the intended general principle (the desk cue stays open).
+- **Kept: `to?` / `via?` labels in the `act` capability list** — "(person or place)" and
+  "(a body)". Evidence: 18 and 19 must reach Budi (a person, no place of his own) and 26/28
+  must reach the owner privately; a bare `to?` read as a place. General, matches
+  `reach.py`'s documented `to:` contract; no capability name changed.
+- **Reverted: the guidance merge** that folded "Thinking is not acting…" and "You act only
+  through the tools. Staying silent is a valid choice." into one line. The silence line has
+  behavioral evidence in 12.7 (11.5 false-speak 0.0%, D51's no-tool round, 12.5 scenario 30)
+  and 12.7 proposed no removal; the merged wording also dropped the same-answer instruction.
+  The line keeps its bullet dash so the list stays a list (formatting only).
+- **Reverted: the `cue_event` description** ("The event that wakes you: who, place,
+  text_like"). It dropped `kind`, which `expect.matches_cue` reads; the old "Pattern: kind,
+  who, place, text_like." is true and complete. The `expect` object's description was also
+  restored (`{"state": key, "op": "eq|gt|lt", "value": x}`), because `condition.operator`
+  accepts that form; hiding it was not supported by any evidence.
+- **Runs.** `uv run pytest`: 279 passed. Fake replay: 30 scenarios, 130/130 checks,
+  absolute-line violations 0, missed-help 0.0% (0/65), false-speak 0.0% (0/68), honesty
+  100.0% (62/62); `scenarios/README.md` regenerated. The real-model run is the coordinator's
+  single run after this commit; none was started here.
