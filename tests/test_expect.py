@@ -338,12 +338,13 @@ async def test_recurring_policy_reschedules_by_cooldown_then_drops_at_max_fires(
 async def test_expect_tool_creates_an_expectation_and_records_it(aconn):
     fake = FakeLLM([[("expect", {"about": "remind me at 7", "cue_time": {"daily": "07:00"},
                                 "expect": {"none": True}, "intent": "remind gently",
-                                "weight": 0.9, "policy": {"once": True}})]])
+                                "weight": 0.9, "policy": {"once": True}})], []])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
 
     await _feed(kernel, _msg("ingatkan saya jam 7"))
 
-    assert await _kinds(aconn) == ["percept", "model.call", "expectation.created", "decision.silent"]
+    assert await _kinds(aconn) == ["percept", "model.call", "model.call",
+                                   "expectation.created", "decision.silent"]
     cur = await aconn.execute("SELECT who, place, about, weight, status, next_check_at, expires_at "
                               "FROM expectations")
     who, place, about, weight, status, next_check, expires = await cur.fetchone()
@@ -354,13 +355,13 @@ async def test_expect_tool_creates_an_expectation_and_records_it(aconn):
 
 async def test_expect_with_an_invalid_weight_becomes_an_error_event(aconn):
     fake = FakeLLM([[("expect", {"about": "bad", "cue_time": {"daily": "07:00"},
-                                "expect": {"none": True}, "weight": 2.0})]])
+                                "expect": {"none": True}, "weight": 2.0})], []])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
 
     await _feed(kernel, _msg("buat janji"))
 
     kinds = await _kinds(aconn)
-    assert kinds == ["percept", "model.call", "error"]
+    assert kinds == ["percept", "model.call", "model.call", "error"]
     cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'error'")
     assert "weight" in (await cur.fetchone())[0]["error"]
     cur = await aconn.execute("SELECT count(*) FROM expectations")
@@ -390,6 +391,7 @@ async def test_mvp_c_remind_me_at_seven_exactly_once_across_a_restart(aconn):
         [("expect", {"about": "remind the owner at 7", "cue_time": {"daily": "07:00"},
                      "expect": {"none": True}, "intent": "remind gently", "weight": 1.0,
                      "policy": {"once": True}})],
+        [],
         [("act", {"capability": "telegram.say", "arguments": {"text": "sudah jam 7"}})],
     ])
     kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), settings=SETTINGS)
@@ -397,7 +399,8 @@ async def test_mvp_c_remind_me_at_seven_exactly_once_across_a_restart(aconn):
     kernel.register_body(body)
 
     await _feed(kernel, _msg("ingatkan saya jam 7"))
-    assert await _kinds(aconn) == ["percept", "model.call", "expectation.created", "decision.silent"]
+    assert await _kinds(aconn) == ["percept", "model.call", "model.call",
+                                   "expectation.created", "decision.silent"]
 
     clock.set_time(SEVEN - timedelta(minutes=10))
     await _tick(kernel, clock)

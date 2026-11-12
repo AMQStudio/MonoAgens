@@ -173,8 +173,9 @@ class Kernel:
         if context is None:
             return
         key = f"pfc:{place}"
+        rounds = int(self.settings["constants"]["max_thought_rounds"])
         if not await self.jobs.start("pfc", key, event,
-                                     partial(jobs.decide, self.pfc, context), place=place):
+                                     partial(jobs.decide, self.pfc, context, rounds), place=place):
             self.jobs.ask_re_wake(key, event, reason, place)
 
     async def _finish_job(self, event: Event) -> None:
@@ -188,11 +189,14 @@ class Kernel:
             if job.name == "sleep":
                 await self._emit(job.trigger, "sleep.failed", {"error": str(job.outcome["error"])})
         elif job.name == "pfc":
-            await budget.record_call(self.conn, job.trigger.id, self.pfc,
-                                     purpose="pfc.decide", now=self.clock.now(),
-                                     settings=self.settings, usage=result.get("usage"))
-            await jobs.apply_calls(self, job.trigger, result.get("calls") or [])
-            await threads.after_step(self, job, event, result.get("calls") or [])
+            rounds = result.get("rounds") or []
+            for item in rounds:
+                await budget.record_call(self.conn, job.trigger.id, self.pfc,
+                                         purpose="pfc.decide", now=self.clock.now(),
+                                         settings=self.settings, usage=item.get("usage"))
+            calls = [call for item in rounds for call in item.get("calls") or []]
+            await jobs.apply_calls(self, job.trigger, calls)
+            await threads.after_step(self, job, event, calls)
         elif job.name == "encode" and isinstance(result.get("vector"), list):
             await insert_event_vector(self.conn, int(result["event_id"]), result["vector"])
         if job.re_wake is not None:

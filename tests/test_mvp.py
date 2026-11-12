@@ -188,6 +188,7 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
         [("expect", {"about": "remind the owner at 7", "cue_time": {"daily": "07:00"},
                      "expect": {"none": True}, "intent": "remind gently", "weight": 1.0,
                      "policy": {"once": True}})],
+        [],
         [("act", {"capability": "telegram.say", "arguments": {"text": "sudah jam 7"}})],
     ])
     kernel = Kernel(aconn, clock=clock, pfc=_pfc(fake), settings=SETTINGS)
@@ -195,7 +196,8 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
     kernel.register_body(body)
 
     await _feed(kernel, _msg("ingatkan saya jam 7"))
-    assert await _kinds(aconn) == ["percept", "model.call", "expectation.created", "decision.silent"]
+    assert await _kinds(aconn) == ["percept", "model.call", "model.call",
+                                   "expectation.created", "decision.silent"]
 
     clock.set_time(SEVEN - timedelta(minutes=10))
     await _tick(kernel, clock)

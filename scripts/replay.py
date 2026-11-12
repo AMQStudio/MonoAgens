@@ -52,7 +52,8 @@ from monoagens.expect import parse_duration
 from monoagens.kernel import Kernel
 from monoagens.embedding import FastEmbedder, FakeEmbedder
 from monoagens.migrate import migrate, migrate_url
-from monoagens.pfc import PFC, PFCContext, ToolCall
+from monoagens.desk import PFCContext
+from monoagens.pfc import PFC, ToolCall
 from monoagens.reach import leaks
 from monoagens.types import Action, Event
 
@@ -280,12 +281,14 @@ class FakePFC:
         return list(queue[used]) if used < len(queue) else None
 
     async def decide(self, context: PFCContext) -> list[ToolCall]:
-        """Return the recorded answer for this step, else say(text="ok")."""
+        """Return the recorded answer for this step, else say(text="ok") in the first round."""
         self._tracker.usage.calls += 1
         self._tracker.record_prompt(_fake_context_text(context), context.place)
         recorded = self._recorded("decide")
         if recorded is not None:
             return recorded
+        if context.results:
+            return []  # a scripted model has nothing more to add after its thought round
         return [ToolCall("act", {"capability": "telegram.say", "arguments": {"text": "ok"}})]
 
     async def call(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], *,

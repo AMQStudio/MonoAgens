@@ -13,7 +13,7 @@ from pgvector import Vector
 
 from monoagens import budget
 from monoagens.recall import doing_lines
-from monoagens.pfc import PFCContext
+from monoagens.desk import PFCContext
 from monoagens.prior import constants, retrieval
 from monoagens.store import (active_expectation_lines, append_event,
                              read_event_vector, read_expectations, read_last_events,

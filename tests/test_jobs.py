@@ -104,7 +104,8 @@ async def test_pfc_and_embedding_run_as_jobs_and_record_results(aconn):
     assert encoded["result"]["event_id"] == stored.id
     assert encoded["result"]["embedded"] is True and "vector" not in encoded["result"]
 
-    assert [row["act"] for row in await _rows(aconn, "decision.note")] == ["think"]
+    assert [row["act"] for row in await _rows(aconn, "decision.note")] == ["think"] * 3
+    assert len(await _rows(aconn, "model.call")) == 3  # every round is a recorded call
     assert (await _rows(aconn, "model.call"))[0]["purpose"] == "pfc.decide"
     assert await read_event_vector(aconn, stored.id) is not None
 
@@ -130,11 +131,10 @@ async def test_one_pfc_per_place_and_one_re_wake_with_the_newest_event(aconn):
     pfc.gate.set()
     await kernel.run_until_idle()
 
-    assert len(pfc.contexts) == 2  # the first wake plus exactly one re-wake
-    assert pfc.contexts[0].trigger.id == first.id
-    assert pfc.contexts[1].trigger.id == third.id  # newest event wins; second collapsed
+    wakes = list(dict.fromkeys(context.trigger.id for context in pfc.contexts))
+    assert wakes == [first.id, third.id]  # the first wake plus one; the second collapsed
     assert not kernel.jobs.in_flight
-    assert len(await _rows(aconn, "decision.note")) == 2
+    assert len(await _rows(aconn, "decision.silent")) == len(wakes)
 
 
 async def test_job_timeout_comes_from_the_prior(aconn):

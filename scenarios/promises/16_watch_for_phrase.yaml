@@ -6,6 +6,11 @@ description: >-
   grup biasa harus diabaikan, tetapi begitu Charlie menyebut frasa itu di grup
   yang sama, Mona harus mengirim tepat satu pesan ke DM owner.
 expectations:
+  - type: event_seen
+    kind: model.call
+    step: 1
+    count: 2
+    label: the thought's result comes back and the promise is held in the same wake
   - type: no_reply
     steps: [2, 3]
     label: ordinary group chatter ignored
@@ -35,6 +40,11 @@ steps:
     text: "server down lagi nih guys"
     should: answer
 model_answers:
+  - step: 1
+    tool: decide
+    calls:
+      - name: think
+        arguments: {thought: "owner minta dikabari; simpan janjinya dulu", motivation: 4, confidence: 0.8}
   - step: 1
     tool: decide
     calls:

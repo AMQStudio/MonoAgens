@@ -17,7 +17,7 @@ import psycopg
 from pgvector.psycopg import register_vector_async
 
 from monoagens import config, memory
-from monoagens.pfc import ToolCall
+from monoagens.pfc import ToolCall, turns
 from monoagens.types import Event
 
 INTERNAL_KINDS = ("job.started", "job.result")
@@ -109,12 +109,11 @@ class JobRunner:
             await conn.close()
 
 
-async def decide(pfc: Any, context: Any) -> dict[str, Any]:
-    """Run one PFC call in the background, keeping its usage with its calls."""
-    calls = await pfc.decide(context)
-    usage = dict(getattr(pfc, "last_usage", None) or {})
-    return {"calls": [{"name": call.name, "arguments": call.arguments} for call in calls],
-            "usage": usage}
+async def decide(pfc: Any, context: Any, rounds: int) -> dict[str, Any]:
+    """Run one wake's PFC rounds in the background, each keeping its own usage (D51)."""
+    made = await turns(pfc, context, rounds)
+    calls = [call for item in made for call in item["calls"]]
+    return {"calls": calls, "rounds": made}
 
 
 async def encode(embedder: Any, event_id: int, text: str) -> dict[str, Any]:

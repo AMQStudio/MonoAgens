@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
 from typing import Any, Sequence
 from zoneinfo import ZoneInfo
 
 import httpx
 
-from monoagens.guidance import work_guidance
-from monoagens.prior import constants, load_settings
-from monoagens.types import RECENT_KINDS, Event
+from monoagens import desk
+from monoagens.desk import PFCContext
+from monoagens.prior import load_settings
 
 
 def _tool(name: str, description: str, properties: dict[str, Any],
@@ -63,6 +62,7 @@ TOOLS: list[dict[str, Any]] = [
            "reason": _text("Why the correction is made.")}, ["old", "new", "reason"]),
 ]
 TOOL_NAMES = frozenset(tool["function"]["name"] for tool in TOOLS)
+THOUGHT_ACTS = frozenset({"think", "expect", "resolve", "revise"})
 
 
 def _args(cap: dict[str, Any]) -> str:
@@ -92,25 +92,6 @@ class ToolCall:
 
     name: str
     arguments: dict[str, Any]
-
-
-@dataclass(frozen=True, slots=True)
-class PFCContext:
-    """Everything the PFC sees for one wake."""
-
-    now: datetime
-    place: str
-    place_kind: str
-    reason: str
-    core_memory: str = ""
-    expectations: Sequence[str] = ()
-    memories: Sequence[str] = ()
-    recent: Sequence[Event] = ()
-    recent_elsewhere: Sequence[Event] = ()
-    doing: Sequence[str] = ()
-    trigger: Event | None = None
-    last_interaction: datetime | None = None
-    capabilities: Sequence[dict[str, Any]] = ()
 
 
 class PFC:
@@ -162,85 +143,33 @@ class PFC:
             for call in raw_calls
         ]
 
-    async def decide(self, context: PFCContext) -> list[ToolCall]:
-        """Ask the model to act on one context."""
-        return await self.call(self.build_messages(context), tools_for(context.capabilities))
-
     def build_messages(self, context: PFCContext) -> list[dict[str, Any]]:
         """Build the layered prompt: stable, core memory, volatile."""
-        return [
-            {"role": "system", "content": self._stable_prompt()},
-            {"role": "system", "content": f"<core_memory>{context.core_memory}</core_memory>"},
-            {"role": "user", "content": self._volatile_prompt(context)},
-        ]
+        return desk.messages(self, context)
 
-    def _stable_prompt(self) -> str:
-        parts = [f"You are {self.name}.", str(self.identity.get("persona") or "").strip()]
-        principles = [str(p) for p in self.identity.get("principles") or []]
-        if principles:
-            parts.append("Principles:\n" + "\n".join(f"- {p}" for p in principles))
-        parts += [f"Language: {self.identity.get('language') or 'en'}.", work_guidance()]
-        return "\n\n".join(part for part in parts if part)
+    async def decide(self, context: PFCContext) -> list[ToolCall]:
+        """Ask the model to act on one context; after a thought round no tool is forced."""
+        return await self.call(self.build_messages(context), tools_for(context.capabilities),
+                               tool_choice="auto" if context.results else "required")
 
-    def _volatile_prompt(self, context: PFCContext) -> str:
-        local_now = context.now.astimezone(self.timezone)
-        values = constants(self.settings)
-        doing = _fit(list(context.doing), int(values["thread_result_tokens"]), keep_first=True)
-        memories = _fit([str(item) for item in context.memories], int(values["memory_tokens"]))
-        recent = _fit(self._recent_lines(context), int(values["recent_tokens"]))
 
-        def build() -> list[str]:
-            return [
-                f"<now>{local_now:%Y-%m-%d %H:%M}, {local_now:%A}, {self.timezone.key}, "
-                "time since last interaction: "
-                f"{_duration(context.now, context.last_interaction)}</now>",
-                f"<place>{context.place} ({context.place_kind})</place>",
-                f"<why_awake>{context.reason}</why_awake>",
-                f"<doing>\n{_listed(doing)}\n</doing>",
-                f"<expectations>{_listed(context.expectations)}</expectations>",
-                f"<memories>\n{_listed(memories)}\n</memories>",
-                f"<recent>\n{chr(10).join(recent)}\n</recent>",
-                f"<event>{self._event_text(context.trigger)}</event>",
-            ]
+async def turns(pfc: Any, context: PFCContext, limit: int) -> list[dict[str, Any]]:
+    """Run one wake's rounds: a thought act's result returns to the model (D51)."""
+    taken, made = [], []
+    while len(made) < max(1, int(limit)):
+        calls = await pfc.decide(replace(context, results=tuple(taken)))
+        raw = [{"name": call.name, "arguments": call.arguments} for call in calls]
+        made.append({"calls": raw, "usage": dict(getattr(pfc, "last_usage", None) or {})})
+        if not raw or not all(call["name"] in THOUGHT_ACTS for call in raw):
+            break
+        taken += _recorded(raw)
+    return made
 
-        limit, parts = int(values["volatile_tokens_max"]), build()
-        for bucket in (recent, memories):
-            while _tokens("\n".join(parts)) > limit and len(bucket) > 1:
-                bucket.pop(0)
-                parts = build()
-        return "\n".join(parts)
 
-    def _recent_lines(self, context: PFCContext) -> list[str]:
-        lines = [self._recent_line(event) for event in context.recent]
-        lines += [self._recent_line(event, f"[{event.place}] ")
-                  for event in context.recent_elsewhere]
-        return [line for line in lines if line] or ["(nothing yet)"]
-
-    def _recent_line(self, event: Event, prefix: str = "") -> str:
-        if event.kind not in RECENT_KINDS:
-            return ""
-        speaker, text = self._recent_parts(event)
-        return (f"{prefix}{event.ts.astimezone(self.timezone):%H:%M} "
-                f"{speaker}: {text}") if text else ""
-
-    def _recent_parts(self, event: Event) -> tuple[str, Any]:
-        if event.kind == "act.out":
-            return self.name, (event.payload.get("arguments") or {}).get("text")
-        if event.kind == "expectation.fired":
-            return "expectation", (event.payload.get("text") or event.payload.get("about"))
-        return str(event.who or "?"), event.payload.get("description")
-
-    def _event_text(self, event: Event | None) -> str:
-        if event is None:
-            return "(no trigger event)"
-        text = event.payload.get("description") or event.payload.get("text")
-        who = str(event.who or "?")
-        line = f"{who}: {text}" if text else f"[{event.kind}]"
-        notes = event.payload.get("notes")
-        if notes:
-            each = [notes] if isinstance(notes, str) else notes
-            line += "\n" + "\n".join(f"note: {note}" for note in each)
-        return line
+def _recorded(calls: list[dict[str, Any]]) -> list[str]:
+    """Render what each thought act recorded, as the next round's results."""
+    return [f"{call['name']}: {json.dumps(call['arguments'], ensure_ascii=False)}"
+            for call in calls]
 
 
 def _usage(raw: dict[str, Any]) -> dict[str, int]:
@@ -250,30 +179,3 @@ def _usage(raw: dict[str, Any]) -> dict[str, int]:
     return {"prompt_tokens": prompt, "cached_tokens": int(details.get("cached_tokens") or 0),
             "completion_tokens": completion,
             "total_tokens": int(raw.get("total_tokens") or prompt + completion)}
-
-
-def _listed(items: Sequence[str]) -> str:
-    return "\n".join(str(item) for item in items) if items else "none"
-
-
-def _tokens(text: str) -> int:
-    """Approximate one section's token count from its characters."""
-    return max(1, len(text) // 4)
-
-
-def _fit(lines: list[str], limit: int, *, keep_first: bool = False) -> list[str]:
-    """Drop the oldest lines until the section fits its token budget."""
-    lines = list(lines)
-    while len(lines) > 1 and sum(map(_tokens, lines)) > limit:
-        lines.pop(1 if keep_first and len(lines) > 2 else 0)
-    return lines
-
-
-def _duration(now: datetime, then: datetime | None) -> str:
-    if then is None:
-        return "first interaction"
-    minutes = max(0, int((now - then).total_seconds() // 60))
-    days, rest = divmod(minutes, 1440)
-    hours, mins = divmod(rest, 60)
-    return f"{days}d {hours}h" if days else f"{hours}h {mins}m" if hours else f"{minutes}m"
-

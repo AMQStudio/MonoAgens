@@ -14,7 +14,8 @@ from monoagens.cognition import Situation, appraise
 from monoagens.identity import SelfOrgan
 from monoagens.recall import doing_lines
 from monoagens.kernel import Kernel
-from monoagens.pfc import PFC, PFCContext, TOOL_NAMES
+from monoagens.desk import PFCContext
+from monoagens.pfc import PFC, TOOL_NAMES
 from monoagens.store import append_event, read_state, write_state
 from monoagens.bodies.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
@@ -276,14 +277,15 @@ async def test_an_organ_result_is_recorded_as_act_result(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.say",
                               "arguments": {"text": "done"}})],
                     [("think", {"thought": "the result arrived", "motivation": 2,
-                               "confidence": 0.5})]])
+                               "confidence": 0.5})], []])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_body(ResultBody())
 
     await _feed(kernel, _msg("halo"))
 
     assert await _kinds(aconn) == ["percept", "model.call", "act.out", "act.result",
-                                   "model.call", "decision.note", "decision.silent"]
+                                   "model.call", "model.call", "decision.note",
+                                   "decision.silent"]
     cur = await aconn.execute("SELECT payload FROM events WHERE kind='act.result'")
     assert (await cur.fetchone())[0] == {"capability": "telegram.say",
                                          "result": {"message_id": 7}}
@@ -293,13 +295,13 @@ async def test_an_act_result_wakes_the_pfc_as_a_continued_goal(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.say",
                               "arguments": {"text": "done"}})],
                     [("think", {"thought": "the result arrived", "motivation": 2,
-                               "confidence": 0.5})]])
+                               "confidence": 0.5})], []])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_body(ResultBody())
 
     await _feed(kernel, _msg("halo"))
 
-    assert len(fake.requests) == 2
+    assert len(fake.requests) == 3  # the act, the thought, then the turn ends
     volatile = fake.requests[1]["messages"][-1]["content"]
     assert "<why_awake>goal continued</why_awake>" in volatile
     assert "<event>[act.result]</event>" in volatile
@@ -309,7 +311,7 @@ async def test_an_act_result_is_routed_to_its_task_thread(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.say",
                               "arguments": {"text": "done"}})],
                     [("think", {"thought": "step done", "motivation": 1,
-                               "confidence": 0.5})]])
+                               "confidence": 0.5})], []])
     kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_body(ResultBody())
     seed = await append_event(aconn, ts=START, kind="task.opened",
@@ -338,20 +340,47 @@ async def test_a_wake_without_act_is_recorded_as_silent(aconn):
     assert body.actions == []
 
 
-async def test_think_is_recorded_and_silence_keeps_its_reason(aconn):
+async def test_a_model_that_only_thinks_stops_after_max_thought_rounds(aconn):
+    """D51: every round is recorded, and a model that never acts ends at the prior's limit."""
     fake = FakeLLM([[("think", {"thought": "nothing to add", "motivation": 2,
                                "confidence": 0.4})]])
-    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake),
+                    settings=settings(constants={"max_thought_rounds": 2}))
     kernel.register_body(RecordingBody())
 
     await _feed(kernel, _msg("hm"))
 
-    assert await _kinds(aconn) == ["percept", "model.call", "decision.note", "decision.silent"]
+    assert await _kinds(aconn) == ["percept", "model.call", "model.call",
+                                   "decision.note", "decision.note", "decision.silent"]
+    assert len(fake.requests) == 2
+    assert [request["tool_choice"] for request in fake.requests] == ["required", "auto"]
+    last = fake.requests[1]["messages"][-1]["content"]
+    assert "<results>\nthink: " in last and "nothing to add" in last
     cur = await aconn.execute("SELECT payload FROM events WHERE kind='decision.note'")
     assert (await cur.fetchone())[0] == {
         "act": "think", "thought": "nothing to add", "motivation": 2, "confidence": 0.4}
     cur = await aconn.execute("SELECT payload FROM events WHERE kind='decision.silent'")
     assert (await cur.fetchone())[0] == {"reason": "nothing to add"}
+
+
+async def test_a_thought_then_an_act_is_one_wake(aconn):
+    """D51: the thought's result goes back to the model, which acts in the same wake."""
+    fake = FakeLLM([[("think", {"thought": "the owner needs the file", "motivation": 4,
+                               "confidence": 0.8})],
+                    [("act", {"capability": "telegram.say",
+                              "arguments": {"text": "Budi mengirim sketsa_logo.png"}})]])
+    kernel = Kernel(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    body = RecordingBody()
+    kernel.register_body(body)
+
+    await _feed(kernel, _msg("Budi kirim file apa?"))
+
+    assert [action.payload for action in body.actions] == [
+        {"text": "Budi mengirim sketsa_logo.png"}]
+    assert await _kinds(aconn) == ["percept", "model.call", "model.call",
+                                   "decision.note", "act.out"]
+    assert [request["tool_choice"] for request in fake.requests] == ["required", "auto"]
+    assert "<results>\nthink: " in fake.requests[1]["messages"][-1]["content"]
 
 
 async def test_unaddressed_message_does_not_wake_the_pfc(aconn):
