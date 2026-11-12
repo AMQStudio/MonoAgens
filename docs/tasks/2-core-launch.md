@@ -133,7 +133,7 @@ Item 10.10 is ticked only when 11.6 passes.
 - [x] 11.2 D51: inside one PFC job, the results of `think`, `expect`, `resolve` and `revise` go back to the model, which continues until it acts, ends without a tool call (tool choice is no longer forced after the first round), or reaches `max_thought_rounds`. Each round is a recorded `model.call`. Tests: a fake model that thinks, then acts, produces the act in the same wake; a model that only thinks stops after `max_thought_rounds` with `decision.silent` and its reason.
 - [x] 11.3 Reasoning effort: optional `LLM_REASONING_EFFORT` (`low | medium | high`) in `.env` and `.env.example`, sent to the model only when set; reasoning tokens count in the budget; `scripts/replay.py` accepts `--model` and `--effort` overrides and records both in its report.
 - [x] 11.4 Scenarios 22 and 24: their unaddressed lines become ones the soul should genuinely want to answer (an information gap it can fill), so the gate's go creates the wait as built in Parts 6 and 8. No wait is created by the kernel without a go. If the real gate still stays closed, tune prior values only and write the evidence under Notes.
-- [ ] 11.5 Diagnosis, once each, not acceptance: the real-model replay with the configured model at effort `low` and at `high`, and once with one stronger model from the same provider. The capability record shows results per model and effort.
+- [x] 11.5 Diagnosis, once each, not acceptance: the real-model replay with the configured model at effort `low` and at `high`, and once with one stronger model from the same provider. The capability record shows results per model and effort.
 - [ ] 11.6 Final run with the model and effort configured in `.env`: `uv run pytest`, the fake replay in full, the real-model replay three times with every scenario passing in all three runs and absolute-line violations 0 in every run, and the live session of 10.10 including "send this to Budi". Regenerate and commit the capability record; tick 10.10 and 11.6.
 
 **Done when.** All parts are ticked; every scenario passes with the real model in three runs out of three; the capability record is committed; `uv run pytest` and the fake replay pass in full; the
@@ -878,3 +878,18 @@ Part 11 notes (worker, 11.4):
   regenerated (the capability texts of 22/24 changed) and committed as generated.
 - Out-of-list edit: `tests/support.py` gained `max_thought_rounds: 3` (it mirrors the prior);
   `docs/core.md`, `prior/dispositions.yaml` and every other spec are untouched.
+
+Part 11 notes (coordinator, 11.5):
+- Diagnosis with `deepseek-ai/DeepSeek-V4.1-Flash-1017`, one run per effort. The stronger-model run
+  (`DeepSeek-V4-Pro-0813`) was dropped on the owner's instruction (too slow); flash only.
+
+  | effort | checks | missed-help | false-speak | tokens/sim-day | absolute-line | honesty |
+  |---|---|---|---|---|---|---|
+  | low | 77/110 | 4.9% (3/61) | 0% | 10,752 | 0 | 100% |
+  | medium | 75/110 | 4.9% (3/61) | 0% | 8,534 | 0 | 100% |
+  | high | 78/110 | 4.9% (3/61) | 0% | 11,503 | 0 | 100% |
+
+- Effort does not change the picture: the same scenarios fail at every level (18 at 5-6/18, 19 at
+  9-12/18, 23, 16, 28, 24; 09 and 14 at medium and high). Failures are in the share/send/promise
+  chains (the model says it cannot find Budi's file, answers in the shared place, creates no
+  `expect`/`share.granted`), not in reasoning depth. 11.6 is not met and was not started.
