@@ -1,6 +1,6 @@
 # Task 2 — Core: launch
 
-Status: in progress (Parts 1–9 done, Part 10 open) | Depends on: Task 1 (done)
+Status: in progress (Parts 1–10 worked; 10.10 open until Part 11 passes) | Depends on: Task 1 (done)
 One task = one coordinator prompt. Work through the parts **in order**; one part may be split
 into several commits, one per item when practical. Rules: [README](README.md).
 
@@ -122,6 +122,19 @@ Found in the architect's review of Parts 1–9.
 - [x] 10.8 Classify each of the 35 real-model failures from 9.3 as (a) check too strict → rewritten per 10.7, or (b) the soul behaved wrongly → fixed by brain function, never by a rule for that case. List all 35 under Notes.
 - [x] 10.9 `scripts/replay.py` writes `scenarios/README.md`, the capability record: per brain function, each capability with its fake result and its real-model result (passes over runs, model, date). Generated, never hand-edited.
 - [ ] 10.10 Final run: `uv run pytest` on the real Postgres; the fake replay in full; the real-model replay **three times**, with every scenario passing in all three runs and absolute-line violations 0 in every run; a live session with the real model that also covers "send this to Budi" (shared, written at Budi's desk, delivered). The capability record is regenerated from these runs and committed.
+
+## Part 11 — Decisions from the Part 10 review (D50, D51, reasoning effort)
+Read first: [core.md](../core.md) §2 (loop step 6, D51), §8 (absolute line 2, D50), [AGENTS.md](../../AGENTS.md) invariant 8
+May touch: `monoagens/` (all), `scripts/replay.py`, `scenarios/`, `tests/`, `prior/dispositions.yaml` (values only), `.env.example`
+
+Item 10.10 is ticked only when 11.6 passes.
+
+- [ ] 11.1 D50: a line in a place that is not public enters a desk — the same place's included — only if everyone present now was present when it was said (`reach.audience(place, before)`). Test: the owner alone in a shared world hears about Budi's file; Charlie joins; the line is not on the desk any more. Scenario 18 step 6 passes.
+- [ ] 11.2 D51: inside one PFC job, the results of `think`, `expect`, `resolve` and `revise` go back to the model, which continues until it acts, ends without a tool call (tool choice is no longer forced after the first round), or reaches `max_thought_rounds`. Each round is a recorded `model.call`. Tests: a fake model that thinks, then acts, produces the act in the same wake; a model that only thinks stops after `max_thought_rounds` with `decision.silent` and its reason.
+- [ ] 11.3 Reasoning effort: optional `LLM_REASONING_EFFORT` (`low | medium | high`) in `.env` and `.env.example`, sent to the model only when set; reasoning tokens count in the budget; `scripts/replay.py` accepts `--model` and `--effort` overrides and records both in its report.
+- [ ] 11.4 Scenarios 22 and 24: their unaddressed lines become ones the soul should genuinely want to answer (an information gap it can fill), so the gate's go creates the wait as built in Parts 6 and 8. No wait is created by the kernel without a go. If the real gate still stays closed, tune prior values only and write the evidence under Notes.
+- [ ] 11.5 Diagnosis, once each, not acceptance: the real-model replay with the configured model at effort `low` and at `high`, and once with one stronger model from the same provider. The capability record shows results per model and effort.
+- [ ] 11.6 Final run with the model and effort configured in `.env`: `uv run pytest`, the fake replay in full, the real-model replay three times with every scenario passing in all three runs and absolute-line violations 0 in every run, and the live session of 10.10 including "send this to Budi". Regenerate and commit the capability record; tick 10.10 and 11.6.
 
 **Done when.** All parts are ticked; every scenario passes with the real model in three runs out of three; the capability record is committed; `uv run pytest` and the fake replay pass in full; the
 real-model replay and live session are reported with the missed-help rate; absolute-line

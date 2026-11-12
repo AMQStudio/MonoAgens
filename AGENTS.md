@@ -7,7 +7,7 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
 
 ## Who writes code
 - All implementation work is delegated to an **Orca Orchestration** worker running
-  agent `omp` with model **`opencode-go/deepseek-v4.1-flash`**, effort **low**, on OpenCode Go.
+  agent `omp` with model **`opencode-go/deepseek-v4.1-flash`**, reasoning effort **high**, on OpenCode Go.
 - The session that receives a task acts only as **coordinator**: it hands the track
   to the worker, then verifies the result (reads the diff, runs `uv run pytest`, checks the
   invariants and the size budget) before committing and reporting.
@@ -61,7 +61,7 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
 7. **Pure async.** No blocking calls inside `async def`. CPU work (embedding) goes through
    `asyncio.to_thread`. Every hook call and background job runs under its watchdog timeout
    (`docs/core.md` §3).
-8. **Configuration lives outside code.** Models, keys, URLs come from `.env`; deployment settings
+8. **Configuration lives outside code.** Models, keys, URLs and the optional reasoning effort come from `.env`; deployment settings
    from `config.yaml`. Identity comes from the birth certificate (`soul.yaml`); weights and thresholds from the prior in `prior/` (D35).
    No magic numbers in code.
 9. **Signals are pure.** A cognition signal only reads its `Situation` and returns a number in

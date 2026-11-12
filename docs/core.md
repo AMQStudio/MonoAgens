@@ -91,6 +91,10 @@ tests against the map, never new rows.
    background job. Its result returns as an event and is handled in a later turn. At most one
    PFC job per place (a task thread is its own place) is in flight; if a new event arrived there meanwhile, the result is applied
    and the PFC is woken once more with the newest context (D33).
+   **A thought does not end the turn** (D51). Inside one job, the results of `think`, `expect`,
+   `resolve` and `revise` go back to the model, which continues until it acts, ends without a
+   tool call, or reaches `max_thought_rounds` (prior). Every round is a recorded `model.call`
+   and counts in the budget. Thinking, then doing, is one turn, as it is for a person.
 7. For each `act`: pass the **action hook**, record `act.out`, hand it to the organ, create a
    `predict` Expectation.
 8. On ticks: maybe sleep.
@@ -388,7 +392,9 @@ loads a prior and never exports or shares learned state (D25).
    owner. So what Fulan said in a private chat on one body may be used in Fulan's private chat on
    another body, but never in a group where anyone else is present. Content from places that are
    not private flows freely. Whether a place is direct (one person) or shared comes from the organ (`place_kind`,
-   §9.2), never from the shape of an id (D48). Content reaches someone new only by consent (D46): a person in its
+   §9.2), never from the shape of an id (D48). Audience is fixed when a line is said (D50): a
+   line in a place that is not public stays with the people present at that moment, even on the
+   same place's desk, so a newcomer never receives what was said before they arrived. Content reaches someone new only by consent (D46): a person in its
    audience shares it (`self.share`, recorded as `share.granted`), and the new person then counts
    as part of its audience. Each person speaks only for what they were part of: the owner can share
    work done with the soul, but cannot share what Fulan said in private; the owner's view of
