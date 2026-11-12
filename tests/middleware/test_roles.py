@@ -245,6 +245,16 @@ async def test_whoami_shows_accounts_in_a_direct_chat_only(aconn):
     assert "roles: member, toko-a (Toko A), unverified (Unverified)" in group
 
 
+async def test_whoami_names_the_owner_as_owner(aconn):
+    kernel = await _kernel(aconn)
+
+    reply = await kernel.tools.command("whoami").handler(
+        kernel, _command(who="person:owner"), [])
+
+    assert "roles: owner; tier owner; approval default" in reply
+    assert "unverified" not in reply
+
+
 async def test_whoami_sends_the_accounts_to_the_direct_chat_of_a_group_asker(aconn):
     kernel = await _kernel(aconn)
     at = await append_event(aconn, ts=START, kind="percept", who="person:tg:1", place=DIRECT,

@@ -358,6 +358,21 @@ def install_commands(kernel: Any) -> None:
                                            owner="roles"))
 
 
+def _held_line(book: RoleBook, who: str) -> str:
+    """Return the roles line: the owner is named `owner`, then every role held.
+
+    The fallback role is dropped for the owner: it describes someone not yet known, so it
+    says nothing true about the owner, whose tier is above every role.
+    """
+    owner = book.tier(who) == OWNER_TIER
+    named = ["owner"] if owner else []
+    for role in book.held(who):
+        if owner and role.name == book.fallback:
+            continue
+        named.append(role.name + (f" ({role.label})" if role.label else ""))
+    return ", ".join(named) or "none"
+
+
 def _book(kernel: Any) -> RoleBook:
     """Return the kernel's role book, or the default one before a loader installed it."""
     return getattr(kernel, "roles", None) or RoleBook.empty()
@@ -382,9 +397,8 @@ async def whoami(kernel: Any, event: Event, arguments: list[str]) -> str:
             lines.append("(accounts sent to your direct chat)")
     elif accounts:
         lines.append("accounts: " + ", ".join(accounts))
-    held = ", ".join(role.name + (f" ({role.label})" if role.label else "")
-                     for role in book.held(who)) or "none"
-    lines.append(f"roles: {held}; tier {book.tier(who)}; approval {book.approval(who)}")
+    lines.append(f"roles: {_held_line(book, who)}; tier {book.tier(who)}; "
+                 f"approval {book.approval(who)}")
     info = await place_info(kernel, event, place)
     lines.append(f"place: {place} — {await privacy.place_kind(conn, place)}, {event.body}"
                  + (f', "{info["name"]}"' if info.get("name") else "")
