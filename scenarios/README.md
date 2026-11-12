@@ -10,8 +10,8 @@ from the scripted fake model; real results come from the saved reports in
 `reports/`. A capability that fails with the real model is listed as FAIL, not
 hidden.
 
-Generated 2026-11-12 07:43 UTC from 30 capabilities across 8 brain functions.
-Pooled per capability: its latest runs among 166 saved fake and 27 saved real-model reports.
+Generated 2026-11-12 08:49 UTC from 30 capabilities across 8 brain functions.
+Pooled per capability: its latest runs among 176 saved fake and 29 saved real-model reports.
 
 ## cross-body
 
@@ -36,17 +36,17 @@ _No scenario yet._
 | A preference said once is recalled later from another body after sleep. | 12_topic_recall_after_sleep | PASS 3/3 · 2026-11-12 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017, deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high), deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort medium) · 2026-11-12 |
 | A frequently used memory outranks newer, more important unused ones (ACT-R activation) and answers the question. | 20_act_r_activation | PASS 3/3 · 2026-11-12 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017, deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high), deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort medium) · 2026-11-12 |
 | A month's episodes are recalled from the Log, with details from the original events. | 23_recall_episodes | PASS 3/3 · 2026-11-12 | FAIL 1/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017, deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high), deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort medium) · 2026-11-12 |
-| An unaddressed question is answered with a fact the soul remembers. | 25_help_place_name | PASS 3/3 · 2026-11-12 | FAIL 2/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017, deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high), deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort medium) · 2026-11-12 |
+| An unaddressed question is answered with a fact the soul remembers. | 25_help_place_name | PASS 3/3 · 2026-11-12 | FAIL 2/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017, deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 |
 | A fact said in the owner's direct chat stays private: the soul asks the owner and answers the group only after share.granted. | 26_help_meeting_time | PASS 3/3 · 2026-11-12 | FAIL 1/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017, deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 |
-| An unaddressed question is answered with a password the soul learned in that group. | 27_help_wifi_password | PASS 3/3 · 2026-11-12 | FAIL 2/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017, deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high), deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort medium) · 2026-11-12 |
+| An unaddressed question is answered with a password the soul learned in that group. | 27_help_wifi_password | PASS 3/3 · 2026-11-12 | FAIL 1/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017, deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 |
 | A location said in the owner's direct chat stays private: the soul asks the owner and answers the group only after share.granted. | 28_help_package_location | PASS 3/3 · 2026-11-12 | FAIL 0/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017, deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 |
-| An unaddressed question is answered with the clinic hours the soul remembers. | 29_help_clinic_hours | PASS 3/3 · 2026-11-12 | FAIL 1/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017, deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high), deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort medium) · 2026-11-12 |
+| An unaddressed question is answered with the clinic hours the soul remembers. | 29_help_clinic_hours | PASS 3/3 · 2026-11-12 | FAIL 2/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017, deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 |
 
 ## privacy
 
 | Capability | Scenario | Fake result | Real model |
 |---|---|---|---|
-| Budi's file is used when the owner is alone, moved to the owner's private channel when someone else is present, shared to Budi with consent, and Fulan's private line never leaves the owner's direct chat. | 18_game_world_file_and_share | PASS 3/3 · 2026-11-12 | FAIL 0/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017, deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 |
+| Budi's file is used when the owner is alone, moved to the owner's private channel when someone else is present, shared to Budi with consent, and Fulan's private line never leaves the owner's direct chat. | 18_game_world_file_and_share | PASS 3/3 · 2026-11-12 | FAIL 0/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-12 |
 | A multi-step job opens a task thread, holds a promise, delivers to Budi's direct place, asks which group before sharing, and its waiting does not block the owner's chat. | 19_task_thread_two_groups | PASS 3/3 · 2026-11-12 | FAIL 0/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017, deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 |
 
 ## promises

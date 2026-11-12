@@ -153,7 +153,7 @@ passes.
 - [x] 12.6 **Checks that forbid correct behavior.** 16: "model.call >= 2" forbids calling `expect` at once — the check is that the promise is held in the first wake. 24: the stored fact may be said in any format ("jam lima", "17:00"); its contradictory group lines are made consistent. List every changed check under Notes.
 - [x] 12.7 **Guidance stays small.** `guidance.py` ≤ 30 lines of general principles; any line added in this part has its evidence under Notes.
 - [x] 12.9 **Person cards for people named (D55).** The desk carries the person cards of people present or named in the trigger: name, person id, reachable bodies, closeness; never their messages. Cards are never withheld by absolute line 2. Scenario 18 steps 6–8: with Charlie in the world, the soul still knows `person:budi` and how to reach him.
-- [ ] 12.10 **Withheld note (D56).** When the context hook withholds relevant private items it leaves one line: how many, and whose private place they came from; no content. Scenarios 26 and 28: the soul does not give the fact in the group, says it has something private from the owner, asks the owner in the owner's direct place, and answers only after `share.granted`.
+- [x] 12.10 **Withheld note (D56).** When the context hook withholds relevant private items it leaves one line: how many, and whose private place they came from; no content. Scenarios 26 and 28: the soul does not give the fact in the group, says it has something private from the owner, asks the owner in the owner's direct place, and answers only after `share.granted`.
 - [x] 12.11 **One message per place per turn (D51).** A second communicative act to a place the same turn already spoke to is refused as already said. Test: a round with an act and a refused `expect` returns the refusal without sending the message twice.
 - [x] 12.8a **Material check of every scenario still failing** (16, 18, 19, 24, 26, 27, 28, 30) — facts **and capabilities**. Scenario 18 step 7 still lacks them: the owner only mentions the finished work, no test organ can read the working folder, and the WhatsApp test organ cannot send a file; in Task 2 make the work text in the Log (what is tested here is share, send and wait, not files). Files are not the core's: receiving and sending them is a body capability (Task 5), reading a working folder is a plugin (Task 3), and rules about forwarding them are middleware policy (Task 3); a file version of this scenario belongs there. Per scenario: per scenario, what the soul needed and whether it was in the Log and on its desk; fix the scenario where material was missing. Write it under Notes before 12.8 runs.
 
@@ -1776,3 +1776,42 @@ Part 12 notes (worker, 12.11):
   checks, absolute-line violations 0, missed-help 0.0% (0/65), false-speak 0.0% (0/71),
   honesty 62/62. `scenarios/README.md` regenerated only as generated output and reverted.
   Commit 37c760c.
+
+Part 12 notes (worker, 12.10):
+- **What the item does.** When the audience filter removes a *relevant* private item,
+  `hooks.audience_policy` counts it under the source label and `memory.build_context` does the
+  same for a withheld core memory; `desk.withheld_note` renders one `<withheld>` line right
+  after `<memories>` in the volatile prompt, e.g. "2 things you know from person:owner private
+  chat are not shown here". Only the count and a D55-safe label (a person id, `person:owner
+  private chat`, or the place of a shared source) appear; no text, no fact.
+- **What counts as relevant.** Retrieved memories (the normal `retrieve` cut, before the
+  audience filter), the recent lines of *other* places (`recent_elsewhere`), and core memory.
+  The whole database is never scanned. A same-place `recent` line hidden by D50 is filtered
+  silently: it is already the desk's own place, not a candidate from elsewhere.
+- **Labels.** `reach.source_label` names a direct place by the people in its audience at that
+  line (`person:owner private chat` for the owner's DM), else by the place. `reach.withheld_source`
+  picks, for a memory or core memory, the first `derived_from` place whose audience the context
+  does not cover; a memory with no known source is private to the owner and says so. Each
+  withheld item is counted once, under its first failing source. No new core primitive: the
+  note is a field of `PFCContext` and a prompt line, not a book, act, hook, signal or drive.
+- **Desk metric.** `Tracker.record_desk` still records only memories, lines and core memory;
+  the note is not an item, so the absolute-line scan ignores it (test below).
+- **Checked in the fake replay (26 and 28).** At step 4 of `26_help_meeting_time` the group
+  desk in `space:tg:-1006` carries `4 things you know from person:owner private chat are not
+  shown here` next to the question, and no `#1` line, memory or core text (`sembilan` absent).
+  `28_help_package_location` renders the same note in `space:tg:-1008` (`lemari` absent). The
+  run is 131/131 checks with absolute-line violations 0, so the note appears and leaks nothing.
+  Scenario files 26 and 28 were not changed (they belong to Task 3); no recorded answer needed
+  a change because their checks still pass.
+- **Bug fix (separate commit).** `memory.build_context` now takes `place_kind` from
+  `reach.place_kind(conn, place)` instead of the trigger payload, so an `expectation.fired`
+  wake in the owner's DM renders `(direct)`. `tests/test_expect.py::test_an_expectation_wake_takes_the_place_kind_from_the_place`
+  fires a promise from the owner's direct place and asserts the prompt's `<place>` line.
+- **Tests.** `tests/test_reach.py`: a withheld line and a withheld memory each leave
+  `("person:owner private chat", 1)` and the note, with `sembilan` absent from the rendered
+  prompt; a desk with nothing withheld has no `<withheld>`. `tests/test_replay_metrics.py`: a
+  desk whose only content was withheld still has an empty item list and 0 desk violations.
+- **Runs.** `uv run pytest`: 289 passed (real Postgres). `uv run python scripts/replay.py
+  --fake`: 30 scenarios, 131/131 checks, missed-help 0.0% (0/65), false-speak 0.0% (0/71),
+  absolute-line violations 0, honesty 100.0% (62/62). `scenarios/README.md` regenerated and
+  committed. No real-model replay was started, as the task says. Commits 9f48281 and 8c28eb4.
