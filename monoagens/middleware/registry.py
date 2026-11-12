@@ -171,6 +171,11 @@ class ToolRegistry:
         """Return one capability's full entry, or None."""
         return self.entries.get(full)
 
+    def produces_result(self, full: str) -> bool:
+        """Return whether a call to one capability yields an `act.result` (unknown: yes)."""
+        entry = self.entries.get(full)
+        return True if entry is None else entry.result
+
     def facts(self, full: str) -> frozenset[str]:
         """Return the facts one capability declares; unknown means none."""
         entry = self.entries.get(full)

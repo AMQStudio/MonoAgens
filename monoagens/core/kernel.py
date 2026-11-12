@@ -149,7 +149,7 @@ class Kernel:
     async def _wake(self, event: Event) -> None:
         if event.kind == "act.result" and await self._batch_holds(event):
             return
-        await self._flush_batches(event.place or "")
+        await self._flush_batches(None if event.kind == "tick" else (event.place or ""))
         if event.kind == "job.result":
             await self._finish_job(event)
             return
@@ -212,11 +212,15 @@ class Kernel:
         self._batches.pop(key, None)
         return False
 
-    async def _flush_batches(self, place: str) -> None:
-        """Wake once for a round whose results are late; a result cannot stall a place."""
+    async def _flush_batches(self, place: str | None = None) -> None:
+        """Wake once for a round whose results are late; a result cannot stall a place.
+
+        A tick carries no place of its own, so it flushes every place (a round whose result
+        never arrives must not also wait for an unrelated event in its own place).
+        """
         now = self.clock.now()
         for key in [key for key, batch in self._batches.items()
-                    if key[1] == place and now >= batch["deadline"]]:
+                    if (place is None or key[1] == place) and now >= batch["deadline"]]:
             batch = self._batches.pop(key)
             await self._think(batch["trigger"], "the results of one round are in",
                               str(key[1]))
@@ -232,12 +236,11 @@ class Kernel:
         results = 0
         for raw, _labels in acts:
             capability = str((raw.get("arguments") or {}).get("capability") or "")
-            entry = self.tools.entry(capability)
-            if entry is None:
+            declared = self.tools.get(capability)
+            if declared is None:
                 continue  # no such tool, so no result will come
-            if not entry.result:
+            if not self.tools.produces_result(capability):
                 continue  # the middleware handled it and recorded its own outcome
-            declared = self.tools.get(capability) or {}
             if declared.get("long_running") or declared.get("communicative"):
                 continue
             results += 1

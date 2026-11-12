@@ -177,6 +177,30 @@ async def test_a_late_result_is_flushed_when_the_timeout_passes(aconn):
     assert (await _kinds(aconn)).count("model.call") == 1
 
 
+async def test_a_tick_flushes_a_round_in_any_place(aconn):
+    clock = FakeClock(START)
+    kernel, _pfc, _tool = _kernel(aconn, [[], []], clock=clock)
+    trigger = await append_event(aconn, ts=START, kind="percept", who="person:owner",
+                                 place=PLACE, body="telegram",
+                                 payload={"description": "kerjakan", "place_kind": "direct"})
+    key = (int(trigger.id or 0), PLACE)
+    kernel._batches[key] = {"trigger": trigger, "remaining": 1, "deadline": START}
+    clock.advance(TIMEOUT_MS / 1000 + 1)
+
+    await _feed(kernel, Event(id=None, ts=clock.now(), kind="tick", who="clock",
+                              place="space:clock", body="clock", payload={}))
+
+    assert key not in kernel._batches
+    assert (await _kinds(aconn)).count("model.call") == 1
+    desk = pfc_desk_places(kernel)
+    assert desk == [PLACE]  # the round's own place woke, not the tick's
+
+
+def pfc_desk_places(kernel) -> list[str]:
+    """Return the places the reasoning was laid out for (one per context)."""
+    return [str(context.place) for context in kernel.pfc.contexts[-1:]]
+
+
 async def test_an_act_that_never_produced_a_result_is_not_counted(aconn):
     kernel, _pfc, _tool = _kernel(aconn, [])
 
