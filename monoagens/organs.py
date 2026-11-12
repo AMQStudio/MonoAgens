@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from monoagens import reach, threads
+from monoagens import reach, threads, work
 from monoagens.types import Action, Event
 
 
@@ -120,14 +120,20 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any]) -> bool:
 
 async def _intend(kernel: Any, event: Event, capability: str, arguments: dict[str, Any],
                   to: str | None, place: str) -> None:
-    """Record what to say elsewhere and wake the PFC there, with that place's desk (D48)."""
+    """Record what to say elsewhere and wake the PFC there with the intent itself (D48)."""
+    _, goal = await work.chain_root(kernel.conn, event.id)
+    said = str(arguments.get("text") or arguments.get("item") or "")
     intent = await kernel._emit(event, "act.intent", {
         "capability": capability, "arguments": arguments, "to": to, "target": place,
-        "why": event.payload.get("text") or event.payload.get("description")})
+        "why": goal})
+    reason = f"you set out to say {said!r} to {to or place}"
+    if await reach.leaks(kernel.conn, event.place, place, f"{said}\n{goal}"):
+        reason = f"you set out to send a message to {to or place}; its words cannot appear here"
+    elif goal:
+        reason += f", because {goal}"
     kernel.enqueue(Event(
         id=None, ts=kernel.clock.now(), kind="intent", who=None, place=place,
         caused_by=intent.id, origin_actor=event.origin_actor,
-        payload={"description": f"carry out intent #{intent.id}: a message for "
-                                f"{to or place}",
+        payload={"description": f"{reason} (from {event.place})",
                  "capability": capability, "to": to, "intent": intent.id,
                  "place_kind": await reach.place_kind(kernel.conn, place)}))

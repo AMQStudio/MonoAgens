@@ -24,6 +24,20 @@ expectations:
     step: 4
     text_contains: "kirim"
     label: the promise is fired by the work's completion
+  - type: prompt_contains
+    text: "Tolong selesaikan"
+    step: 4
+    place: space:wa:628110001@s.whatsapp.net
+    label: Budi's wake carries the intent's own reason
+  - type: prompt_contains
+    text: "person:budi"
+    step: 4
+    place: space:wa:628110001@s.whatsapp.net
+    label: Budi's wake names the person it is for
+  - type: prompt_absent
+    text: "carry out intent"
+    step: 4
+    label: no wake is a generic intent number
   - type: reply_in
     place: space:wa:628110001@s.whatsapp.net
     step: 4
@@ -122,7 +136,7 @@ steps:
   - at: "2026-11-11T09:10:00+07:00"
     who: person:owner
     place: space:game:world1
-    text: "Yang Tim Alpha ya."
+    text: "Yang space:wa:1203630001@g.us ya (Tim Alpha)."
     addressed: true
 model_answers:
   - step: 4

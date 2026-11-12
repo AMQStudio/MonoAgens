@@ -91,14 +91,16 @@ async def visible(conn, *, context: str | None, source: str | None,
 
 
 async def leaks(conn, source: str | None, target: str | None, text: str) -> bool:
-    """Return whether a message to another place would carry content it may not see."""
-    if not text or not source or not target or source == target:
+    """Return whether a message would carry a private line the target may not see (D45)."""
+    if not text or not target:
         return False
-    cur = await conn.execute("SELECT text FROM memories WHERE place = %s AND private "
-                             "AND valid_to IS NULL", (source,))
-    if not [row[0] for row in await cur.fetchall() if row[0] and row[0] in text]:
-        return False
-    return not await visible(conn, context=target, source=source)
+    cur = await conn.execute("SELECT text, place FROM memories "
+                             "WHERE private AND valid_to IS NULL")
+    for line, place in await cur.fetchall():
+        if line and line in text and not await visible(conn, context=target,
+                                                       source=place or source):
+            return True
+    return False
 
 
 async def direct_place(conn, who: str, via: str | None = None) -> str | None:
