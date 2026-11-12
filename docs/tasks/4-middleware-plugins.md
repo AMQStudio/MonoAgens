@@ -16,8 +16,9 @@ take the mechanism, leave its roles, approvals, flows and multi-runner leases. R
 
 ## Part 1 — The foundation
 Read first: [middleware.md](../middleware.md)
-May touch: `monoagens/middleware/`, `monoagens/adapters/`, `monoagens/__main__.py`, `config.yaml`, `monoagens/infra/` store (read-only view only), `tests/`, `scenarios/`
+May touch: `monoagens/middleware/`, `monoagens/adapters/`, `monoagens/boot.py`, `monoagens/__main__.py`, `config.yaml`, `monoagens/infra/` store (read-only view only), `tests/`, `scenarios/`
 
+- [ ] 1.0 **Follow-ups from Task 3** (its Notes). (a) A cold start never loses a percept: the boot warms what is slow (the embedding model, the database pool) before any adapter starts, so the first message — often the pairing code — passes its inbound hook inside the watchdog; test with a slow fake embedder. (b) Routes: when `to:` names someone with no direct place who is present in the current place, `identity.route` answers in the current place instead of refusing (scenario 24's "no way to reach tg:7001 yet"). (c) The context hook stays inside its watchdog on a long desk: measure `privacy.filter_context` on the largest scenario and record the time under Notes.
 - [ ] 1.1 Policy: extend the owner policy of Task 3 — privacy rules that only narrow (confirm before forwarding a file, a mode that keeps a topic out); route hints to a person via lever 2.
 - [ ] 1.2 Commands & tools: one command registry (identical `/help`); capability registry behind `<self>` as an index — the core lines always on the context, each capability a short line, its full schema loaded on request (V1 ADR-0015 `engine/0015-capability-manifest`); every tool declares an output cap and cuts with a "continue from here" marker, never silently (V1 ADR-0021 `engine/0021-tool-output-contract`); optional tool-use approvals.
 - [ ] 1.3 Install: plugin manager reading the manifest (plugins.md §3; V1 ADR-0028 `0028-plugin-model`: off until enabled, its dependencies live with the plugin); collisions fail at boot; uninstall removes everything but events.
