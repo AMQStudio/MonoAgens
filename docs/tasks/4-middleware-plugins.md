@@ -537,3 +537,20 @@ printed here), effort `high`, report `reports/2026-11-12-1859-real-18-19-26-28.m
 `:…` line into a `command` event (only Telegram did), so `/mode` and `/whoami` reached the model
 as text. `cli.format.command_event` now does it and `tests/adapters/test_cli.py` covers it; the
 transcript above is from the run after the fix.
+
+**Sample `/roles show member`** (a book built from the shipped manifests):
+```
+help: guest (middleware)
+identity.whoami: guest (middleware)
+privacy.share: guest (middleware)
+registry.describe: guest (middleware)
+self.recall: guest (middleware)
+web-search.fetch: guest (manifest)
+web-search.search: guest (manifest)
+workspace.read: guest (manifest)
+workspace.write: member (manifest)
+workspace.quota: 1G (manifest)
+```
+**Sample `/whoami`** in the live session: `you: person:owner (owner)`, `roles: unverified
+(Unverified); tier owner; approval default`, `place: space:cli — direct, cli`. In a group the
+accounts line is absent (or sent to the asker's direct chat), as the group test shows.

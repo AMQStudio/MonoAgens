@@ -324,7 +324,8 @@ def describe_role(book: RoleBook, role_name: str) -> str:
     if role is None:
         return f"no role called {role_name}"
     tier = role.effective_tier(book.bases)
-    held = {name for name, base in book.bases.items() if _rank(base) <= _rank(tier)}
+    held = {name for name, base in book.bases.items()
+            if base is not None and _rank(base) <= _rank(tier)}
     held = (held | set(role.allow)) - set(role.deny)
     lines = [f"{name}: {book.bases.get(name) or OWNER_TIER} "
              f"({book.sources.get(name, 'config.yaml')})" for name in sorted(held)]
@@ -332,6 +333,8 @@ def describe_role(book: RoleBook, role_name: str) -> str:
                        ("context", role.context)):
         if value:
             lines.append(f"{key}: {value} (config.yaml)")
+    for key, value in sorted((book.role_settings.get(tier) or {}).items()):
+        lines.append(f"{key}: {value} ({book.sources.get(key, 'manifest')})")
     for key, value in sorted(role.settings.items()):
         lines.append(f"{key}: {value} (config.yaml)")
     return "\n".join(lines) or f"{role_name} holds nothing"
