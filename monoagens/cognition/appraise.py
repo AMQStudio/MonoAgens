@@ -77,8 +77,9 @@ async def appraise(event: Event, *, conn: Any = None, situation: Situation | Non
         signals = {name: fn(situation) for name, fn in SIGNALS.items()}
     if event.payload.get("backfill"):
         sent = event.payload.get("sent_at")
-        age = max(0.0, (now - datetime.fromisoformat(str(sent))).total_seconds() / 3600) \
-            if sent else 0.0
+        age = 0.0
+        if sent:
+            age = max(0.0, (now - datetime.fromisoformat(str(sent))).total_seconds() / 3600)
         decay = math.exp(-memory.decay_d(settings) * age)
         signals = {name: value * decay for name, value in signals.items()}
     tag = await reflex(event, conn)

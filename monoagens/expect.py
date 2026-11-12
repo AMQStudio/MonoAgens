@@ -51,13 +51,15 @@ def matches_cue(pattern, event):
 
 def validate(data, *, now, settings):
     """Validate one `expect` tool call and return the row values to insert."""
-    about, raw = str(data.get("about") or "").strip(), data.get("condition", data.get("expect"))
+    about = str(data.get("about") or "").strip()
+    raw = data.get("condition", data.get("expect"))
     if not about or not isinstance(raw, dict) or not raw:
         raise ValueError("expect needs about and a condition")
     kind = str(data.get("kind") or "promise")
     if kind not in ("promise", "wait", "predict", "guard"):
         raise ValueError(f"unknown expectation kind: {kind!r}")
-    weight, policy = float(data.get("weight", 0.5)), data.get("policy") or {"once": True}
+    weight = float(data.get("weight", 0.5))
+    policy = data.get("policy") or {"once": True}
     if not 0.0 <= weight <= 1.0:
         raise ValueError(f"weight out of range: {weight}")
     if not isinstance(policy, dict) or not (policy.get("once") is True or policy.get("cooldown")):
@@ -165,8 +167,9 @@ async def due(conn, event, *, now, settings, pfc=None, embedder=None):
         if row["expires_at"] is not None and row["expires_at"] <= now:
             await resolve_expectation(conn, row, now, "dropped")  # stale
             continue
-        if row["kind"] == "guard" or (event.kind != "tick"
-                                      and not matches_cue(row["cue_event"], event)):
+        if row["kind"] == "guard":
+            continue
+        if event.kind != "tick" and not matches_cue(row["cue_event"], event):
             continue
         if event.kind != "tick" and row["kind"] == "wait" and row["cue_event"].get("not_who"):
             await resolve_expectation(conn, row, now, "satisfied")  # patience held
@@ -198,8 +201,10 @@ async def settle(conn, exp_id, *, now, settings):
     if policy.get("once") is True or maxed:
         status = "satisfied" if policy.get("once") is True else "dropped"
         return await resolve_expectation(conn, {**row, "fired_event": None}, now, status)
-    nxt = now + parse_duration(policy["cooldown"]) if policy.get("cooldown") else next_check(
-        row["cue_time"], now, tz(settings))
+    if policy.get("cooldown"):
+        nxt = now + parse_duration(policy["cooldown"])
+    else:
+        nxt = next_check(row["cue_time"], now, tz(settings))
     query = "UPDATE expectations SET status = 'active', next_check_at = %s WHERE id = %s"
     await conn.execute(query, (nxt, exp_id))
 
@@ -213,9 +218,11 @@ async def recovery(conn, *, now):
             "AND payload->>'expectation_id' = %s ORDER BY id DESC LIMIT 1",
             (str(row["id"]),))).fetchone()
         fired_id = hit[0] if hit else None
-        answered = fired_id is not None and await (await conn.execute(
-            "SELECT 1 FROM events WHERE kind = 'act.out' AND caused_by = %s LIMIT 1",
-            (fired_id,))).fetchone() is not None
+        answered = False
+        if fired_id is not None:
+            cur = await conn.execute("SELECT 1 FROM events WHERE kind = 'act.out' "
+                                     "AND caused_by = %s LIMIT 1", (fired_id,))
+            answered = await cur.fetchone() is not None
         if answered:
             await resolve_expectation(conn, {**row, "fired_event": fired_id}, now, "satisfied")
         else:

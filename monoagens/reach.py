@@ -86,8 +86,9 @@ async def visible(conn, *, context: str | None, source: str | None,
     need = set(await audience(conn, context)) - {OWNER}
     if not need or (source == context and before is None):
         return True
-    have = (set(await audience(conn, source, before)) - {OWNER}) | set(await shared(conn, source))
-    return need <= have
+    present = set(await audience(conn, source, before))
+    consented = set(await shared(conn, source))
+    return need <= (present - {OWNER}) | consented
 
 
 async def memory_visible(conn, *, context: str | None, sources: Any = None) -> bool:
@@ -98,8 +99,11 @@ async def memory_visible(conn, *, context: str | None, sources: Any = None) -> b
     rows = await (await conn.execute(
         "SELECT id, place FROM events WHERE id = ANY(%s) AND place IS NOT NULL",
         (list(sources),))).fetchall()
-    audiences = [((set(await audience(conn, place, before=source)) - {OWNER})
-                  | set(await shared(conn, place))) for source, place in rows]
+    audiences = []
+    for source, place in rows:
+        present = set(await audience(conn, place, before=source))
+        consented = set(await shared(conn, place))
+        audiences.append((present - {OWNER}) | consented)
     return all(need <= have for have in audiences)
 
 

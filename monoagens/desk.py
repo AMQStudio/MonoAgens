@@ -135,7 +135,10 @@ def _fit(lines: list[str], limit: int, *, keep_first: bool = False) -> list[str]
     """Drop the oldest lines until the section fits its token budget."""
     lines = list(lines)
     while len(lines) > 1 and sum(map(_tokens, lines)) > limit:
-        lines.pop(1 if keep_first and len(lines) > 2 else 0)
+        if keep_first and len(lines) > 2:
+            lines.pop(1)
+        else:
+            lines.pop(0)
     return lines
 
 
@@ -145,4 +148,8 @@ def _duration(now: datetime, then: datetime | None) -> str:
     minutes = max(0, int((now - then).total_seconds() // 60))
     days, rest = divmod(minutes, 1440)
     hours, mins = divmod(rest, 60)
-    return f"{days}d {hours}h" if days else f"{hours}h {mins}m" if hours else f"{minutes}m"
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {mins}m"
+    return f"{minutes}m"
