@@ -80,7 +80,9 @@ def test_config_yaml_holds_only_deployment_settings():
 
     config = load_config(DEFAULT_CONFIG_PATH)
 
-    assert set(config) == {"timezone", "owner_settings", "runtime", "bodies", "plugins"}
+    assert set(config) == {"version", "timezone", "owner_settings", "runtime", "bodies",
+                          "plugins", "interaction", "roles", "people"}
+    assert config["version"] == 2
     assert config["timezone"] == "Asia/Jakarta"
     assert config["owner_settings"]["daily_token_budget"] == 300000
     assert config["runtime"]["tick_seconds"] == 30
@@ -92,7 +94,7 @@ def test_soul_yaml_is_only_the_birth_certificate():
 
     certificate = load_soul(DEFAULT_SOUL_PATH)
 
-    assert set(certificate) == {"name", "language", "persona", "principles"}
+    assert set(certificate) == {"version", "name", "language", "persona", "principles"}
     assert certificate["name"] == "Mona"
     assert "Never lie and never invent facts." in certificate["principles"]
 

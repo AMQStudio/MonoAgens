@@ -5,17 +5,22 @@ from __future__ import annotations
 import pathlib
 from typing import Any, Mapping
 
-from monoagens.infra.config import (DEFAULT_CONFIG_PATH, DEFAULT_SOUL_PATH, load_config,
-                                    load_soul, read_yaml)
+from monoagens.infra.config import (CONFIG_UPCASTERS, CONFIG_VERSION, DEFAULT_CONFIG_PATH,
+                                    DEFAULT_SOUL_PATH, PRIOR_VERSION, SOUL_VERSION,
+                                    read_versioned, read_yaml)
 
 DEFAULT_PRIOR_PATH = pathlib.Path(__file__).resolve().parent.parent.parent / "prior"
 _LAYERS = ("manifest", "dispositions", "references", "lessons", "procedures")
 
 
-def load_prior(path: pathlib.Path = DEFAULT_PRIOR_PATH) -> dict[str, Any]:
+def load_prior(path: pathlib.Path = DEFAULT_PRIOR_PATH,
+               notes: list[str] | None = None) -> dict[str, Any]:
     """Load every prior layer from one folder, flattening dispositions into sections."""
     path = pathlib.Path(path)
-    layers = {name: read_yaml(path / f"{name}.yaml") for name in _LAYERS}
+    layers = {name: read_yaml(path / f"{name}.yaml") for name in _LAYERS if name != "manifest"}
+    layers["manifest"] = read_versioned(
+        path / "manifest.yaml", key="format_version", supported=PRIOR_VERSION,
+        label="prior/manifest.yaml", upcasters={}, notes=notes)
     dispositions = layers.pop("dispositions")
     return {
         **layers,
@@ -27,19 +32,27 @@ def load_prior(path: pathlib.Path = DEFAULT_PRIOR_PATH) -> dict[str, Any]:
 
 def load_settings(config_path: pathlib.Path = DEFAULT_CONFIG_PATH,
                   certificate_path: pathlib.Path = DEFAULT_SOUL_PATH,
-                  prior_path: pathlib.Path = DEFAULT_PRIOR_PATH) -> dict[str, Any]:
+                  prior_path: pathlib.Path = DEFAULT_PRIOR_PATH,
+                  notes: list[str] | None = None) -> dict[str, Any]:
     """Load the deployment settings, the birth certificate and the prior into one view."""
     from monoagens.core import identity  # local: identity -> memory -> prior is a cycle
 
-    config = load_config(config_path)
+    config = read_versioned(config_path, key="version", supported=CONFIG_VERSION,
+                            label="config.yaml", upcasters=CONFIG_UPCASTERS, notes=notes)
     return {
-        "identity": identity.from_certificate(load_soul(certificate_path)),
+        "identity": identity.from_certificate(
+            read_versioned(certificate_path, key="version", supported=SOUL_VERSION,
+                           label="soul.yaml", upcasters={}, notes=notes)),
         "timezone": str(config.get("timezone") or "UTC"),
         "owner_settings": config.get("owner_settings") or {},
         "runtime": config.get("runtime") or {},
         "bodies": config.get("bodies") or {},
-        "plugins": config.get("plugins") or [],
-        **load_prior(prior_path),
+        "plugins": config.get("plugins") or {},
+        "interaction": config.get("interaction") or {},
+        "roles": config.get("roles") or {},
+        "people": config.get("people") or {},
+        "places": config.get("places") or {},
+        **load_prior(prior_path, notes),
     }
 
 

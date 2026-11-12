@@ -1,11 +1,24 @@
+version: 2
 timezone: Asia/Jakarta
-owner_settings:
+owner_settings:                     # changed by hand or with /budget and /quiet
   daily_token_budget: 300000
   quiet_hours: { from: "22:00", to: "06:00" }
 runtime:
   tick_seconds: 30
   sleep: { idle_minutes: 30, retry_minutes: 30, hour: 2 }
-bodies:
+bodies:                             # adapters; tokens stay in .env
   telegram: { enabled: true }
   cli: { enabled: true }
-plugins: []
+plugins:                            # which plugins are on; settings live in config.d/<name>.yaml
+  workspace:   { enabled: true }
+  web-search:  { enabled: true }
+  soul-tuning: { enabled: true }
+interaction:                        # what the soul shows; /show writes these lines
+  thinking: owner_direct
+  steps: long
+  approvals: owner
+roles:                              # empty = owner free, everyone else only talks
+  fallback: unverified
+  unverified: { base: guest, label: "Unverified",
+                context: "Not known yet; be kind, share nothing about the owner." }
+people: {}
