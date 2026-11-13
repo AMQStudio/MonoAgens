@@ -24,7 +24,9 @@ SHARE_CAPABILITY = {
                    "Content from another place needs this before it can be repeated where its "
                    "audience may not see it.",
     "schema": {"type": "object", "properties": {
-        "item": {"type": "string"}, "episode": {"type": "integer"},
+        "item": {"type": "string"},
+        "episode": {"type": "string",
+                    "description": "The event id of the content's source, digits only."},
         "to": {"type": "string", "description": "person:<id> or a place id."}},
         "required": ["to"]},
     "communicative": False, "long_running": False, "identity_changing": False,
@@ -203,6 +205,18 @@ async def leaks(conn, target: str | None, text: str) -> bool:
     return False
 
 
+def episode_error(arguments: dict[str, Any]) -> str:
+    """Return why `episode` is wrong, or "" when it is absent or all digits (coerced in place)."""
+    raw = arguments.get("episode")
+    if raw is None:
+        return ""
+    text = str(raw).strip()
+    if not text.isdigit():
+        return f"episode: expected an event id made of digits, got {raw!r}"
+    arguments["episode"] = int(text)
+    return ""
+
+
 async def consent(conn, event: Event, arguments: dict[str, Any]) -> tuple[bool, str | None]:
     """Return whether the chain's actor may share this content, and the content's place."""
     source = event.place
@@ -285,6 +299,10 @@ def guard(kernel: Any, when: str) -> Middleware:
         """Apply the sharing and leaking lines to one act."""
         if ctx.get("capability") == SHARE:
             if when == "first":
+                wrong = episode_error(item)
+                if wrong:
+                    ctx["refusal"] = wrong
+                    return Stop(wrong)
                 allowed, source = await consent(ctx["conn"], ctx["event"], item)
                 if not allowed:
                     ctx["refusal"] = "only someone who was part of it can share it"

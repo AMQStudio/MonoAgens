@@ -180,6 +180,43 @@ async def test_the_owners_direct_chat_is_private_to_the_owner(aconn):
     assert shared_desk.item.memories == (fact,)
 
 
+async def test_a_digit_string_episode_is_accepted_and_other_values_name_the_field(aconn):
+    dm = await _said(aconn, OWNER, OWNER_DM, "direct", "Rapat tim besok jam sembilan pagi")
+    asked = await _said(aconn, "person:budi", GROUP, "shared", "rapat jam berapa?")
+    kernel = await _kernel(aconn)
+
+    await kernel._apply(_trigger(dm, OWNER_DM), ToolCall("act", {
+        "capability": "self.share",
+        "arguments": {"item": "Rapat tim besok jam sembilan pagi", "episode": str(dm),
+                      "to": GROUP}}))
+    cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'share.granted' "
+                              "ORDER BY id DESC LIMIT 1")
+    row = await cur.fetchone()
+    assert row is not None, "the share was not granted"
+    assert row[0]["episode"] == dm and isinstance(row[0]["episode"], int)
+    assert row[0]["source_place"] == OWNER_DM
+    assert row[0]["to"] == GROUP
+
+    await kernel._apply(_trigger(asked, GROUP), ToolCall("act", {
+        "capability": "self.share",
+        "arguments": {"item": "rapat jam sembilan", "episode": "besok", "to": GROUP}}))
+    cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.result' "
+                              "ORDER BY id DESC LIMIT 1")
+    result = (await cur.fetchone())[0]
+    assert "episode: expected an event id made of digits" in result["result"]["error"]
+
+    await kernel._apply(_trigger(asked, GROUP), ToolCall("act", {
+        "capability": "self.share",
+        "arguments": {"item": "rapat jam sembilan", "episode": 1.5, "to": GROUP}}))
+    cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.result' "
+                              "ORDER BY id DESC LIMIT 1")
+    error = (await cur.fetchone())[0]["result"]["error"]
+    assert "arguments.episode: expected string, got number" in error
+    count = await (await aconn.execute(
+        "SELECT count(*) FROM events WHERE kind = 'share.granted'")).fetchone()
+    assert count[0] == 1
+
+
 async def test_context_hook_keeps_private_lines_and_memories_inside_the_audience(aconn):
     trigger_id = await _said(aconn, "person:fulan", FULAN_A, "direct", "aku di-PHK")
     await _said(aconn, "person:charlie", GROUP, "shared")
@@ -293,7 +330,7 @@ async def test_only_a_person_who_was_part_of_it_can_share_it(aconn):
     kernel.hooks.action.add("spy", spy)
     await kernel._apply(_trigger(fulan, FULAN_A), ToolCall("act", {
         "capability": "self.share",
-        "arguments": {"episode": fulan, "to": "person:budi"}}))
+        "arguments": {"episode": str(fulan), "to": "person:budi"}}))
     assert seen == []  # the action hook never sees content the actor was not part of
     kinds = [row[0] for row in await (await aconn.execute(
         "SELECT kind FROM events ORDER BY id")).fetchall()]
@@ -305,7 +342,7 @@ async def test_only_a_person_who_was_part_of_it_can_share_it(aconn):
     await kernel._apply(Event(id=fulan, ts=START, kind="percept", who="person:fulan",
                               place=FULAN_A, origin_actor="person:fulan"),
                         ToolCall("act", {"capability": "self.share", "arguments": {
-                            "episode": fulan, "to": "person:budi"}}))
+                            "episode": str(fulan), "to": "person:budi"}}))
     assert seen
     assert await (await aconn.execute(
         "SELECT count(*) FROM events WHERE kind = 'share.granted'")).fetchone() == (1,)
