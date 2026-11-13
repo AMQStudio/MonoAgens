@@ -8,7 +8,7 @@ queue as `job.result`, so it is recorded and applied by the one consumer.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -132,6 +132,14 @@ async def encode(embedder: Any, event_id: int, text: str) -> dict[str, Any]:
     return {"event_id": event_id, "vector": (await embedder.embed([text]))[0]}
 
 
+async def embed_batch(embedder: Any, items: Sequence[tuple[int, str]]) -> dict[str, Any]:
+    """Embed one batch of `(event_id, text)` pairs in the background."""
+    if not items:
+        return {"items": []}
+    vectors = await embedder.embed([text for _, text in items])
+    return {"items": [(eid, vec) for (eid, _), vec in zip(items, vectors)]}
+
+
 async def apply_calls(kernel: Any, trigger: Event, calls: list[dict[str, Any]],
                       ) -> list[tuple[dict[str, Any], Mapping[str, Any]]]:
     """Apply the tool calls of a finished reasoning job; one (call, labels) per act."""
@@ -162,4 +170,7 @@ def _view(job: Job) -> dict[str, Any]:
         vector = result.get("vector") or []
         return {"event_id": result.get("event_id"), "embedded": bool(vector),
                 "dim": len(vector)}
+    if job.name == "embed_batch":
+        items = result.get("items") or []
+        return {"count": len(items), "embedded": bool(items)}
     return result if isinstance(result, dict) else {"value": result}

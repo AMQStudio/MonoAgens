@@ -77,6 +77,34 @@ async def insert_event_vector(conn, event_id: int, embedding: Sequence[float],
     )
 
 
+async def insert_event_vectors(conn, items: Sequence[tuple[int, Sequence[float]]]) -> None:
+    """Batch-insert event embeddings without overwriting existing vectors."""
+    if not items:
+        return
+    rows = [(int(eid), Vector(list(vec)), [int(eid)]) for eid, vec in items]
+    async with conn.cursor() as cur:
+        await cur.executemany(
+            "INSERT INTO event_vectors (event_id, embedding, derived_from) "
+            "VALUES (%s, %s, %s) ON CONFLICT (event_id) DO NOTHING",
+            rows,
+        )
+
+
+async def unembedded_imported_percepts(conn) -> list[tuple[int, str]]:
+    """Return imported percept `(id, text)` pairs that still lack an embedding vector."""
+    cur = await conn.execute(
+        "SELECT e.id, COALESCE(NULLIF(e.payload->>'description', ''), e.payload->>'text', '') "
+        "FROM events e "
+        "LEFT JOIN event_vectors v ON v.event_id = e.id "
+        "WHERE e.kind = 'percept' "
+        "  AND COALESCE((e.payload->>'imported')::boolean, false) = true "
+        "  AND v.event_id IS NULL "
+        "  AND BTRIM(COALESCE(NULLIF(e.payload->>'description', ''), e.payload->>'text', '')) <> '' "
+        "ORDER BY e.id ASC"
+    )
+    return [(int(eid), str(text)) for eid, text in await cur.fetchall()]
+
+
 async def read_event_vector(conn, event_id: int) -> list[float] | None:
     """Return the embedding already stored for an event, if any."""
     cur = await conn.execute("SELECT embedding FROM event_vectors WHERE event_id = %s",

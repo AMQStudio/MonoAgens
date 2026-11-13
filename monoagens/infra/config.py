@@ -146,6 +146,17 @@ def whatsapp_history_chunk_size(options: Mapping[str, Any] | None = None) -> int
     return size
 
 
+def embed_batch_size(settings: Mapping[str, Any]) -> int:
+    """Return batch size for background embedding of imported percepts."""
+    raw = (settings.get("runtime") or {}).get("embed_batch_size")
+    if raw is None:
+        raw = (load_config().get("runtime") or {}).get("embed_batch_size")
+    size = int(raw or 0)
+    if size <= 0:
+        raise ValueError("runtime.embed_batch_size must be a positive integer")
+    return size
+
+
 def load_env_file(path: pathlib.Path = DEFAULT_ENV_PATH) -> dict[str, str]:
     """Read a simple KEY=VALUE .env file into a dict."""
     env_path = pathlib.Path(path)

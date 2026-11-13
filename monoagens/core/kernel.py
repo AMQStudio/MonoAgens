@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import timedelta
@@ -19,7 +20,8 @@ from monoagens.infra import budget, config, observability
 from monoagens.infra.clock import Clock
 from monoagens.infra.prior import load_settings, signal_weights
 from monoagens.infra.store import (append_event, cursor as store_cursor, insert_event_vector,
-                                   project_event)
+                                   insert_event_vectors, project_event,
+                                   unembedded_imported_percepts)
 from monoagens.types import Event
 
 NOT_INSTALLED = ("the middleware is not installed: build the kernel with "
@@ -65,6 +67,9 @@ class Kernel:
         self.hooks = hooks.HookRegistry(self.settings)
         self._batches: dict[tuple[int, str], dict[str, Any]] = {}
         self._results_this_round = 0
+        self._pending_embeds: deque[tuple[int, str]] = deque()
+        self._embed_trigger: Event | None = None
+        self._embed_batch_size: int = config.embed_batch_size(self.settings)
         self._observer = observability.EventObserver(
             summary_every=config.import_summary_every(self.settings),
             conn=self.conn,
@@ -140,9 +145,33 @@ class Kernel:
         text = text or str(event.payload.get("description") or event.payload.get("text") or "")
         if self.embedder is None or event.id is None or not text.strip():
             return
+        if event.kind == "percept" and (event.payload or {}).get("imported") is True:
+            self._pending_embeds.append((event.id, text))
+            self._embed_trigger = event
+            if len(self._pending_embeds) >= self._embed_batch_size:
+                await self._flush_embed_batch()
+            return
         await self.jobs.start("encode", f"encode:{event.id}", event,
                               partial(jobs.encode, self.embedder, event.id, text),
                               place=event.place or "")
+
+    async def _flush_embed_batch(self, *, force: bool = False) -> None:
+        if self.embedder is None or not self._pending_embeds or self.jobs.busy("embed_batch"):
+            return
+        if not force and len(self._pending_embeds) < self._embed_batch_size:
+            return
+        count = min(self._embed_batch_size, len(self._pending_embeds))
+        batch = [self._pending_embeds.popleft() for _ in range(count)]
+        trigger = self._embed_trigger or Event(
+            id=batch[0][0], ts=self.clock.now(), kind="percept", who="", place="",
+        )
+        await self.jobs.start(
+            "embed_batch",
+            "embed_batch",
+            trigger,
+            partial(jobs.embed_batch, self.embedder, batch),
+            place="",
+        )
 
     async def _settle(self, item: _Queued) -> Event:
         resolved = item.event
@@ -173,6 +202,8 @@ class Kernel:
                 if stored is None:
                     return item.event
             await self._wake(stored)
+            if self._pending_embeds and self.queue.empty():
+                await self._flush_embed_batch(force=True)
         except Exception as exc:
             await self._record_error(stored, exc)
         finally:
@@ -372,6 +403,12 @@ class Kernel:
             await threads.after_step(self, job, event, acts)
         elif job.name == "encode" and isinstance(result.get("vector"), list):
             await insert_event_vector(self.conn, int(result["event_id"]), result["vector"])
+        elif job.name == "embed_batch":
+            items = result.get("items") or []
+            if items:
+                await insert_event_vectors(self.conn, items)
+            if self._pending_embeds:
+                await self._flush_embed_batch(force=self.queue.empty())
         if job.re_wake is not None:
             re_place = str(job.re_wake[2])
             if not (re_place.startswith("space:task:") and not await threads.is_open(
@@ -409,6 +446,13 @@ class Kernel:
         await sends.resume(self)
         for item in await expectations.recovery(self.conn, now=self.clock.now()):
             await self._expect_wake(item)
+        if self.embedder is not None:
+            known = {eid for eid, _ in self._pending_embeds}
+            missing = [item for item in await unembedded_imported_percepts(self.conn)
+                       if item[0] not in known]
+            if missing:
+                self._pending_embeds.extend(missing)
+                await self._flush_embed_batch(force=True)
 
     async def _apply(self, event: Event, call: ToolCall,
                      said: set[str] | None = None) -> dispatch.Dispatch:
