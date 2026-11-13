@@ -288,6 +288,11 @@ adapter is a special case.
     the forgotten ids is cleared and rebuilt at the next sleep (with the `sleep.done` copy);
     an in-flight encode or embed job never inserts a vector for a forgotten event. Payloads of
     later events that quote a forgotten one are a design gap for Task 6, noted, not changed.
+  - [ ] P.15 One check, one home (D84): the privacy check lives only in the context hook. Remove
+    `kernel.visible` from `Kernel._expect_wake` (a hidden fourth seam that also drops a wake
+    without recording it); a reminder line that is not visible is dropped by the context check,
+    and a wake left without its line is stopped and recorded. Merge `filter_context` and
+    `verify_context` into one check in the last context slot.
 
   **E. Adapters** (with 1.11's fakes and recordings)
   - [ ] E.1 WhatsApp: a message without a sender is never the owner's; poll votes are decrypted
