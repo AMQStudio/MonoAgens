@@ -158,11 +158,14 @@ def test_own_name_scores_one_only_when_the_turn_is_not_allocated():
     assert SIGNALS["own_name"](_situation(event=lookalike, self_name="Mona")) == 0.0
 
 
-def test_info_gap_is_the_best_cosine_to_the_prior_references():
-    situation = _situation(vector=[1.0, 0.0], references=([0.0, 1.0], [1.0, 0.0]))
-    assert SIGNALS["info_gap"](situation) == pytest.approx(1.0)
+def test_info_gap_is_the_cosine_to_the_centroid_of_the_prior_references():
+    # The centroid of [1, 0] and [0, 1] is [0.5, 0.5]: cosine with [1, 0] is 1/sqrt(2).
+    situation = _situation(vector=[1.0, 0.0], references=([1.0, 0.0], [0.0, 1.0]))
+    assert SIGNALS["info_gap"](situation) == pytest.approx(1 / math.sqrt(2))
     unrelated = _situation(vector=[1.0, 0.0], references=([0.0, 1.0], [-1.0, 0.0]))
     assert SIGNALS["info_gap"](unrelated) == 0.0
+    empty = _situation(vector=[1.0, 0.0], references=())
+    assert SIGNALS["info_gap"](empty) == 0.0
 
 
 def test_feeling_of_knowing_is_high_only_when_the_answer_is_known():

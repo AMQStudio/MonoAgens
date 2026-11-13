@@ -81,13 +81,23 @@ def _floor_flags(event: Event, recent: Sequence[Event]) -> tuple[bool, bool]:
     return other_selected, soul_answered
 
 
+def reference_sentences(references: Mapping[str, Any], language: str) -> list[str]:
+    """Return the `all` list plus this language's own: no language is left with nothing.
+
+    The embedder is multilingual, so the English `all` list serves a soul in any language;
+    a per-language key only adds sentences in that language.
+    """
+    shared = [str(sentence) for sentence in references.get("all") or []]
+    own = [str(sentence) for sentence in references.get(language) or []]
+    return shared + [sentence for sentence in own if sentence not in shared]
+
+
 async def _vectors(conn: Any, settings: Mapping[str, Any],
                    embedder: Any) -> tuple[list[list[float]], list[list[float]],
                                            list[list[float]]]:
     """Embed core memory, active promises and reference sentences in one call."""
     language = str((settings.get("identity") or {}).get("language") or "en")
-    references = [str(sentence) for sentence in
-                  (settings.get("references") or {}).get(language) or []]
+    references = reference_sentences(settings.get("references") or {}, language)
     core = str(((await read_state(conn, "core_memory")) or {}).get("text") or "")
     rows = await read_expectations(conn, "ex.status = 'active' AND ex.kind = 'promise'")
     promises = [str(row.get("about") or "") for row in rows]

@@ -54,8 +54,16 @@ def own_name(situation: Situation) -> float:
 
 @register_signal("info_gap")
 def info_gap(situation: Situation) -> float:
-    """Score the best cosine to the prior's reference sentences for the language."""
-    return _clamp(_best_cosine(situation.vector, situation.references))
+    """Score the cosine to the centroid (mean vector) of the reference sentences.
+
+    The centroid answers "is this the kind of line that asks about something forgotten",
+    so one reference that happens to share a word cannot carry the value alone.
+    """
+    vectors = [vector for vector in situation.references if vector]
+    if not vectors or not situation.vector:
+        return 0.0
+    centroid = [sum(column) / len(vectors) for column in zip(*vectors)]
+    return _clamp(cosine(situation.vector, centroid))
 
 
 @register_signal("feeling_of_knowing")

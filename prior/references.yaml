@@ -1,4 +1,13 @@
-# Reference sentences for the info_gap signal, per language (docs/core.md §6, §9.4).
+# Reference sentences for the info_gap signal (docs/core.md §6, §9.4).
+#
+# `all` applies to every language: the embedder is multilingual, so one English list
+# serves a soul in any language. A language key adds its own sentences and is optional;
+# a language without its own list uses `all`, never nothing.
+all:
+  - "I forgot, what was it called?"
+  - "does anyone know?"
+  - "what was that thing from yesterday?"
+  - "who remembers?"
 id:
   - "aku lupa, apa ya namanya?"
   - "ada yang tahu nggak?"
