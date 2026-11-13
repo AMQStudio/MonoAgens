@@ -130,9 +130,19 @@ adapter is a special case.
 Read first: [adapters.md](../adapters.md)
 May touch: `monoagens/adapters/`, provider adapters, `tests/`, `scenarios/`
 
-- [ ] 2.1 Voice notes (STT/TTS). Voice calls wait for a mature, widely released calling library
-  (project.md §5); until then a call stays a percept and the soul answers in chat.
-- [ ] 2.2 First non-chat adapter (a game such as Minecraft, an IoT device or a robot simulation) with its own reflexes inside the adapter.
+- [ ] 2.1 Speech for every adapter: STT/TTS drivers in `infra/providers/speech/`, ported from V1
+  (`monoagens/providers/speech.py`: OpenAI-shaped STT/TTS, which local servers such as
+  faster-whisper, Piper and Kokoro also speak, Deepgram, ElevenLabs), chosen by `.env`
+  (`STT_PROVIDER`, `TTS_PROVIDER`); shared by every adapter, never tied to one. A voice note in
+  becomes a percept with its transcript (imported ones are transcribed on open); `say` gains
+  `voice: true`, rendered as the platform's own voice note, text as the fallback; the words stay
+  in the Log. Voice calls wait for a mature, widely released calling library (project.md §5);
+  until then a call stays a percept and the soul answers in chat.
+- [ ] 2.2 First non-chat adapter: Home Assistant as a body (adapters.md §8, D71): the soul as HA's
+  conversation agent through a small HA custom integration, satellites' areas as shared places,
+  exposed entities as `home.state` and `home.control`, listed entity changes as percepts, the
+  reply deadline with a holding line and a later announce. Tests with a fake HA. A robot with its
+  own adapter and reflexes comes later.
 - [ ] 2.3 More provider drivers in `infra/providers/` (Part 0A's port): native Claude (prompt caching), native Gemini, DeepSeek; optional separate models for sleep and the classifier.
 - [ ] 2.4 Check: a non-chat adapter senses and acts through the same contract; switching provider is a `.env` change (`LLM_PROVIDER`).
 

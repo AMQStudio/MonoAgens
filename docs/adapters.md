@@ -202,7 +202,38 @@ tells the two apart itself:
 | Discord | next (Task 5) | ported from V1 on discord.py (message content intent); servers, channels, threads, DMs; buttons and menus (an interaction is acknowledged within Discord's 3 s by deferring, inside the adapter); role mapping (§3) |
 | Voice notes | Task 5 Part 2 | STT in, TTS out; description = transcript |
 | Voice calls | later | waits for a mature calling library to be widely released (WhatsApp: whatsmeow and neonize only see and reject calls; a calling stack such as meowcaller is still experimental and Go-only); then call audio ↔ STT/TTS as a `long_running` act ([project.md §5](project.md)). Until then a call is a percept and the soul answers in chat |
-| IoT device / robot sim | **Draft** | first non-chat adapter; sensor readings as described percepts |
+| Home Assistant | **Draft**, Task 5 Part 2 | the first non-chat adapter (§8) |
+| Robot (own adapter) | later | microphone and speaker straight to the adapter, with its own reflexes (wake word, voice activity, barge-in, turning to the speaker); after Home Assistant |
 
 Tools (search, files, email) are in the [plugin catalog](plugins.md). Model providers are not
 adapters: they are drivers behind the core's model port, in `infra/providers/` ([core.md §3](core.md)).
+
+## 8. Home Assistant as a body (**Draft**, D71)
+Home Assistant (HA) already runs a whole voice pipeline — wake word (openWakeWord), speech to
+text and text to speech over its Wyoming protocol (Whisper, Piper), and ESP32 voice satellites
+through ESPHome — and it already controls the home's devices. The soul does not rebuild any of
+that: HA is one adapter, and the soul is HA's conversation agent.
+- **Hearing.** A small HA custom integration (shipped in this repository, installed into HA by
+  the owner) registers the soul as a conversation agent and forwards each utterance to the
+  adapter: a percept with `addressed: true` (the wake word was said), the satellite's area as the
+  place (`homeassistant:area:kitchen`, `place_kind: shared`, since anyone in the room hears), and
+  the HA user when HA knows who spoke, otherwise an unknown speaker. Absolute line 2 then holds
+  as in any group: nothing private is said aloud in a room.
+- **Speaking.** The answer to an utterance goes back to HA as the agent's reply, which HA speaks
+  through its TTS on that satellite; a silent decision returns an empty reply. Speaking first (a
+  reminder, an announcement) goes through HA's announce or TTS service on a satellite or media
+  player of the target area. Typing has no meaning here; `voice` is the only way to speak.
+- **The home as tools.** Only the entities the owner exposes in HA (HA's own "exposed entities")
+  reach the soul: a short `home.state` (facts `reads`) and `home.control(entity, action, data?)`
+  (facts `changes`, its permission at tier `trusted` by default), so locks, alarms and heaters go
+  through the policy and approval modes like any change.
+- **The home as senses.** State changes of the entities the owner lists under
+  `bodies.homeassistant.senses:` (a door, motion, a temperature past a threshold) become
+  percepts ("front door opened"), never addressed; everything else stays in HA.
+- **Latency.** HA waits for the agent's reply, so the adapter sets a reply deadline from config
+  (`reply_seconds`); past it, it answers HA with a short holding line and speaks the real answer
+  later by announce. The gate and reasoning are never skipped: no speech-to-speech model answers
+  for the soul.
+- `.env`: `HA_URL`, `HA_TOKEN` (a long-lived access token). The client library for HA's
+  WebSocket API, if one is needed, asks the owner first (AGENTS.md).
+
