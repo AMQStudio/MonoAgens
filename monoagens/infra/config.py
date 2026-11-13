@@ -146,6 +146,18 @@ def whatsapp_history_chunk_size(options: Mapping[str, Any] | None = None) -> int
     return size
 
 
+def whatsapp_undecryptable_grace_seconds(options: Mapping[str, Any] | None = None) -> float:
+    """Return retry grace window before reporting an undecryptable WhatsApp message."""
+    raw = (options or {}).get("undecryptable_grace_seconds")
+    if raw is None:
+        wa = (load_config().get("bodies") or {}).get("whatsapp") or {}
+        raw = wa.get("undecryptable_grace_seconds")
+    seconds = float(raw if raw is not None else 15.0)
+    if seconds <= 0:
+        raise ValueError("bodies.whatsapp.undecryptable_grace_seconds must be positive")
+    return seconds
+
+
 def embed_batch_size(settings: Mapping[str, Any]) -> int:
     """Return batch size for background embedding of imported percepts."""
     raw = (settings.get("runtime") or {}).get("embed_batch_size")

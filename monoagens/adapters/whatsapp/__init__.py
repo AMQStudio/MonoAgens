@@ -26,6 +26,7 @@ from monoagens.adapters.whatsapp.format import (
     format_album,
     format_call,
     format_message,
+    format_undecryptable,
     parse_timestamp,
 )
 from monoagens.adapters.whatsapp.history_sync import (
@@ -70,8 +71,9 @@ def create(options: dict[str, Any], env: dict[str, str]) -> "WhatsAppBody":
     if unknown:
         raise ValueError(f"whatsapp: unknown optional tool {unknown[0]!r}")
     chunk_size = config.whatsapp_history_chunk_size(options)
+    grace = config.whatsapp_undecryptable_grace_seconds(options)
     return WhatsAppBody(session_db=session, full_sync=full_sync, enabled_tools=tools,
-                        history_chunk_size=chunk_size)
+                        history_chunk_size=chunk_size, undecryptable_grace=grace)
 
 
 class WhatsAppBody:
@@ -88,7 +90,8 @@ class WhatsAppBody:
                  self_account: str | None = None,
                  album_window: float = DEFAULT_ALBUM_WINDOW,
                  enabled_tools: list[str] | tuple[str, ...] = (),
-                 history_chunk_size: int | None = None) -> None:
+                 history_chunk_size: int | None = None,
+                 undecryptable_grace: float | None = None) -> None:
         """Hold session configuration, directory state, and optional test client hooks."""
         self.session_db = pathlib.Path(session_db)
         self.full_sync = full_sync
@@ -106,10 +109,16 @@ class WhatsAppBody:
             if history_chunk_size is not None
             else config.whatsapp_history_chunk_size()
         )
+        self.undecryptable_grace = (
+            max(0.001, float(undecryptable_grace))
+            if undecryptable_grace is not None
+            else config.whatsapp_undecryptable_grace_seconds()
+        )
         self._sent: set[str] = set()
         self._sent_loaded = False
         self._choices_prompts: dict[str, list[str]] = {}
         self._albums: dict[str, dict[str, Any]] = {}
+        self._undecryptable: dict[str, asyncio.Task[Any]] = {}
         self._connected_once = False
         self._connected_at: datetime | None = None
         self._backfilling = False
@@ -240,6 +249,9 @@ class WhatsAppBody:
             LOGGER.error("whatsapp failed to emit error event for %s: %s", label, emit_exc)
 
     def _register_handlers(self, client: Any, put: Put) -> None:
+        from neonize.proto.Neonize_pb2 import (
+            UndecryptableMessage as UndecryptableMessageEv,
+        )
         from neonize.aioze.events import (
             CallOfferEv,
             CallOfferNoticeEv,
@@ -289,6 +301,15 @@ class WhatsAppBody:
                 await self.handle_message(ev, put)
 
             await _guarded("message", work())
+
+        @client.event(UndecryptableMessageEv)
+        async def _on_undecryptable(accepted: Any, ev: Any) -> None:
+            async def work() -> None:
+                self._sync_self_identity(
+                    getattr(accepted, "me", None) or getattr(client, "me", None))
+                await self.handle_undecryptable(ev, put)
+
+            await _guarded("undecryptable", work())
 
         @client.event(HistorySyncEv)
         async def _on_history(_accepted: Any, ev: Any) -> None:
@@ -359,10 +380,43 @@ class WhatsAppBody:
             return False
         return sent < self._connected_at.replace(microsecond=0)
 
+    def _cancel_undecryptable(self, msg_id: str) -> None:
+        if not msg_id:
+            return
+        task = self._undecryptable.pop(msg_id, None)
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+
+    async def handle_undecryptable(self, ev: Any, put: Put) -> None:
+        """Schedule an honest percept for `ev` once whatsmeow stops retrying decryption."""
+        info = getattr(ev, "Info", None)
+        msg_id = str(getattr(info, "ID", "") or "")
+        key = msg_id or f"anon:{id(ev)}"
+        self._cancel_undecryptable(key)
+        is_backfill = self._backfilling or self._is_before_connect(ev)
+
+        async def _after_retry_window() -> None:
+            try:
+                await asyncio.sleep(self.undecryptable_grace)
+                self._undecryptable.pop(key, None)
+                event = format_undecryptable(
+                    ev, directory=self.directory, now=self._clock.now(), name=self.name,
+                    self_account=self.self_account, backfill=is_backfill,
+                )
+                if event is not None:
+                    await put(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                await self._emit_adapter_error(put, exc, label="undecryptable")
+
+        self._undecryptable[key] = asyncio.create_task(_after_retry_window())
+
     async def handle_message(self, ev: Any, put: Put, *, backfill: bool = False) -> Event | None:
         """Convert one live `MessageEv` into a percept (collapsing albums) and emit via `put`."""
         info = getattr(ev, "Info", None)
         msg_id = str(getattr(info, "ID", "") or "")
+        self._cancel_undecryptable(msg_id)
         source = getattr(info, "MessageSource", None)
         from_me = bool(getattr(source, "IsFromMe", False))
         if from_me and msg_id and await self.is_own_message(msg_id):
@@ -566,12 +620,16 @@ class WhatsAppBody:
         return self.directory.place_meta(place)
 
     async def aclose(self) -> None:
-        """Cancel pending album timers and stop the neonize client cleanly."""
+        """Cancel pending album and undecryptable timers and stop the neonize client cleanly."""
         for album_id in list(self._albums):
             task = self._albums[album_id].get("task")
             if task is not None and not task.done():
                 task.cancel()
         self._albums.clear()
+        for task in list(self._undecryptable.values()):
+            if not task.done():
+                task.cancel()
+        self._undecryptable.clear()
         if self._client is not None:
             stop = getattr(self._client, "stop", None)
             if callable(stop):

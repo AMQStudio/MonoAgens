@@ -14,7 +14,7 @@ runtime:
   leak_candidates: 50
   backfill_settle_seconds: 0.5
 bodies:                             # adapters; tokens stay in .env
-  whatsapp: { enabled: true, history_chunk_size: 25 }
+  whatsapp: { enabled: true, history_chunk_size: 25, undecryptable_grace_seconds: 15 }
   cli: { enabled: true }
 plugins:                            # which plugins are on; settings live in config.d/<name>.yaml
   workspace:   { enabled: true }

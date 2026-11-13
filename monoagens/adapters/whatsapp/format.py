@@ -435,3 +435,42 @@ def _match_choice(text: str, reply_id: str,
 def _has_fields(proto: Any) -> bool:
     fn = getattr(proto, "ListFields", None)
     return bool(fn()) if callable(fn) else bool(proto)
+
+
+def format_undecryptable(ev: Any, *, directory: WhatsAppDirectory, now: datetime,
+                         name: str = "whatsapp", self_account: str | None = None,
+                         backfill: bool = False) -> Event | None:
+    """Turn a failed-decryption `UndecryptableMessage` into an honest percept."""
+    info = getattr(ev, "Info", None)
+    if info is None:
+        return None
+    source = getattr(info, "MessageSource", None)
+    msg_id = str(getattr(info, "ID", "") or "")
+    pushname = str(getattr(info, "Pushname", "") or "")
+    raw_ts = getattr(info, "Timestamp", 0)
+    chat_jid, who, _from_me = _sender_and_chat(source, directory, self_account=self_account)
+    if not chat_jid or chat_jid.endswith("@broadcast"):
+        return None
+    if not who:
+        who = self_account or f"whatsapp:{digits_of(chat_jid)}"
+    sender_label = directory.label(who, pushname=pushname)
+    place = place_id(chat_jid)
+    place_kind = "shared" if chat_jid.endswith(("@g.us", "@newsletter")) else "direct"
+    sent_at = iso_timestamp(raw_ts, fallback=now)
+    return clean_event(Event(
+        id=None, ts=now, kind="percept", who=who, place=place, body=name,
+        payload={
+            "description": f"{sender_label}: a message could not be read",
+            "addressed": place_kind == "direct",
+            "place_kind": place_kind,
+            "place_info": directory.place_meta(place),
+            "sent_at": sent_at,
+            **({"self_account": self_account} if self_account else {}),
+            **({"backfill": True} if backfill else {}),
+            "data": {
+                "message_id": msg_id,
+                "undecryptable": True,
+                "unavailable": bool(getattr(ev, "IsUnavailable", False)),
+            },
+        },
+    ))

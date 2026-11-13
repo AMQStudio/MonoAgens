@@ -767,3 +767,58 @@ async def test_whatsapp_marks_pre_connect_and_offline_sync_messages_as_backfill(
     assert emitted[1].payload["sent_at"]
     assert "backfill" not in emitted[2].payload
     assert emitted[2].payload["sent_at"]
+
+
+async def test_whatsapp_undecryptable_emits_after_retry_grace_and_suppresses_when_recovered(
+    tmp_path,
+) -> None:
+    """Undecryptable messages report once retries stop, and vanish if a retry decrypts them."""
+    from neonize.aioze.events import MessageEv
+
+    client = _FakeThreadedWAClient()
+    wa = WhatsAppBody(client=client, session_db=tmp_path / "wa.db", clock=FakeClock(START),
+                      undecryptable_grace=0.05)
+    wa._sync_self_identity(client.me)
+    emitted: list[Event] = []
+
+    async def put(ev: Event) -> None:
+        emitted.append(ev)
+
+    wa._register_handlers(client, put)
+    assert nb.UndecryptableMessage in client._handlers
+
+    ev_fail = nb.UndecryptableMessage(
+        Info=_make_ev(msg_id="U1", chat_user=BUDI_PN, sender_user=BUDI_PN).Info,
+        IsUnavailable=False,
+        DecryptFailMode=1,
+    )
+    ev_recover = nb.UndecryptableMessage(
+        Info=_make_ev(msg_id="U2", chat_user=BUDI_PN, sender_user=BUDI_PN).Info,
+        IsUnavailable=False,
+        DecryptFailMode=1,
+    )
+    recovered_msg = _make_ev(
+        msg_id="U2", chat_user=BUDI_PN, sender_user=BUDI_PN,
+        message=e2e.Message(conversation="decrypted on retry"),
+    )
+
+    try:
+        # Two failed attempts on U1 -> still only one notice once retries stop
+        await client._handlers[nb.UndecryptableMessage](client, ev_fail)
+        await client._handlers[nb.UndecryptableMessage](client, ev_fail)
+        # U2 fails once, then recovers via MessageEv within the grace window
+        await client._handlers[nb.UndecryptableMessage](client, ev_recover)
+        await asyncio.sleep(0.01)
+        await client._handlers[MessageEv](client, recovered_msg)
+        await asyncio.sleep(0.09)
+    finally:
+        await wa.aclose()
+
+    descriptions = [str((ev.payload or {}).get("description") or "") for ev in emitted]
+    assert len(emitted) == 2
+    assert any("decrypted on retry" in d for d in descriptions)
+    failed = [ev for ev in emitted if (ev.payload or {}).get("data", {}).get("message_id") == "U1"]
+    assert len(failed) == 1
+    assert "a message could not be read" in failed[0].payload["description"]
+    assert failed[0].payload["data"]["undecryptable"] is True
+    assert failed[0].payload["addressed"] is True
