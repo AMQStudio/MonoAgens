@@ -42,7 +42,7 @@ May touch: `monoagens/contract/` (new), `contract.lock` (new), `tests/contract/`
 - [x] 1.2 `contract.lock`: the hash of `monoagens/contract/`, and `tests/contract/test_lock.py`
   that fails when they differ. The worker writes the first hash here; from 7.3 on only the owner
   changes it.
-- [ ] 1.3 Architecture tests as a **ratchet** (`tests/architecture/`): every ban of contract.md §7
+- [x] 1.3 Architecture tests as a **ratchet** (`tests/architecture/`): every ban of contract.md §7
   as a test over the source tree; today's violations are listed in
   `tests/architecture/baseline.yaml` (file, line, ban). The test fails on a new violation **and**
   on a listed one that no longer exists, so the list can only shrink. It must be empty by 6.4.
