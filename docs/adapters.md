@@ -237,3 +237,69 @@ that: HA is one adapter, and the soul is HA's conversation agent.
 - `.env`: `HA_URL`, `HA_TOKEN` (a long-lived access token). The client library for HA's
   WebSocket API, if one is needed, asks the owner first (AGENTS.md).
 
+## 9. Speech: hearing and speaking (**Draft**, D72)
+**One soul, one mind.** Every speech engine is only ears and a mouth. What to say, whether to
+speak at all, memory and privacy stay with the soul: every utterance is a percept that passes the
+gate, and every spoken word comes from a `say` the soul chose. No model answers for the soul.
+
+**Drivers by protocol, not by model** (`infra/providers/speech/`, ported from V1's
+`monoagens/providers/speech.py`). Local and cloud speech models are many and change every month,
+so a driver speaks a protocol and covers every model behind it:
+
+| Door | Covers | Notes |
+|---|---|---|
+| OpenAI-shaped HTTP (`/audio/transcriptions`, `/audio/speech`) | OpenAI, Groq, and the many local servers that mirror the shape (faster-whisper, Kokoro, …) | in V1; a different server is a different `base_url` |
+| Wyoming (Home Assistant's voice protocol, JSON over TCP) | HA's local voice services: Whisper, Piper, openWakeWord, … | written with plain asyncio streams, no new dependency |
+| Native | ElevenLabs, Deepgram | their own APIs; in V1 |
+
+Chosen by `.env`, shared by every adapter, never tied to one:
+
+```
+STT_PROVIDER=openai            # openai | wyoming | elevenlabs | deepgram
+STT_BASE_URL=                  # a local server or Wyoming address (tcp://host:10300)
+STT_MODEL=
+TTS_PROVIDER=wyoming           # openai | wyoming | elevenlabs
+TTS_BASE_URL=tcp://localhost:10200
+TTS_VOICE=
+VOICE_REALTIME=                # optional realtime engine (§ below); empty = none
+ELEVENLABS_API_KEY=            # one key variable per cloud provider
+```
+
+Each driver reports at boot the languages it supports; when the soul's language (`soul.yaml`
+`language`) is not among them the boot report warns, so a model that only knows English never
+fails silently on Indonesian. Small models for weak devices (an in-process runtime such as
+sherpa-onnx) are a later dependency the owner approves (AGENTS.md).
+
+**Hearing.** The adapter, as the sensory cortex, turns speech into a percept: a voice note is
+stored as an attachment and transcribed, and the percept carries the transcript as its
+description (`"Budi (voice note, 0:12): …"`) and in `data.transcript`; live speech on a device is
+segmented by the adapter (wake word, voice activity) and each turn becomes a percept. Imported
+voice notes are transcribed only when opened (§5). A failed or missing STT gives an honest
+description ("Budi sent a voice note (0:12), not transcribed").
+
+**Speaking.** `say(..., voice: true)` asks for speech; reasoning chooses it. A chat adapter sends
+the platform's own voice note, a device speaks through its speaker; without TTS or a voice note
+the text is sent. The words stay in the Log as the `act.out` text, so memory keeps what was said,
+not only audio.
+
+**Listening while speaking** (a reflex of the adapter, D2). When someone speaks over the soul,
+the adapter stops talking at once (barge-in), and the `act.result` reports what was actually
+heard (`spoken_until`), so the soul and its memory know where it was cut off; the interrupting
+speech is a percept with `data.interrupted: true`. Echo cancellation, so the soul does not hear
+itself, belongs to the device (a microphone array with a DSP, a voice satellite).
+
+**Realtime engines** (OpenAI Realtime, Gemini Live, ElevenLabs, and local ones) may be used as a
+faster ear (streaming transcription, end-of-turn detection) and a more expressive mouth (speaking
+the soul's text), never as the one who answers: their own replies are switched off. The price is
+a little more latency than letting them answer, paid for one identity, one memory and privacy
+that holds.
+
+**Latency.** Streaming STT and TTS let the soul start speaking before the whole answer is
+synthesised. A websocket client, if a provider needs one, is a new dependency the owner approves.
+
+**Cost.** Seconds transcribed and characters spoken are recorded with each use (in the percept's
+`data` and the `act.result`) and appear in the metrics; a daily speech limit comes only if needed.
+
+Out of scope: voice calls (project.md §5); cloning anyone's voice but the one the owner chose for
+the soul.
+
