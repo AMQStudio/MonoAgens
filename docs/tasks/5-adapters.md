@@ -281,6 +281,13 @@ adapter is a special case.
   - [x] P.11 D80 delegation applies only to the one reply to the delegated message.
   - [x] P.12 Report only: `share` without an episode, and what hard forgetting leaves behind
     (core_memory text, payloads, a late vector insert), each against the spec.
+  - [ ] P.13 `share` follows its spec (middleware.md §3, D46): it names an item or an episode;
+    the grant covers only those events, never the whole place before or after; a `share`
+    without either is refused with a question.
+  - [ ] P.14 Hard forgetting follows core.md §7: `core_memory` whose `derived_from` overlaps
+    the forgotten ids is cleared and rebuilt at the next sleep (with the `sleep.done` copy);
+    an in-flight encode or embed job never inserts a vector for a forgotten event. Payloads of
+    later events that quote a forgotten one are a design gap for Task 6, noted, not changed.
 
   **E. Adapters** (with 1.11's fakes and recordings)
   - [ ] E.1 WhatsApp: a message without a sender is never the owner's; poll votes are decrypted
