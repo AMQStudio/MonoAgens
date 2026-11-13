@@ -154,3 +154,96 @@ async def test_a_person_present_here_is_answered_here(aconn):
     assert await (await aconn.execute(
         "SELECT count(*) FROM events WHERE kind = 'act.result' AND payload::text LIKE "
         "'%no way to reach%'")).fetchone() == (0,)
+
+
+class _FakePFC:
+    def __init__(self) -> None:
+        self.contexts = []
+
+    async def decide(self, context):
+        self.contexts.append(context)
+        return []
+
+
+async def _put_idle(kernel, *events):
+    import asyncio
+    tasks = [asyncio.create_task(kernel.put(ev)) for ev in events]
+    while not all(t.done() for t in tasks):
+        await kernel.run_until_idle()
+        await asyncio.sleep(0)
+    await kernel.run_until_idle()
+    return [t.result() for t in tasks]
+
+
+async def test_unknown_account_registers_one_person_id_and_owner_stays_owner(aconn):
+    import re
+
+    kernel = build(aconn, clock=FakeClock(START), pfc=_FakePFC(), settings=settings())
+    kernel.register_adapter(_SayBody())
+    code = await identity.ensure(aconn, now=START)
+
+    [guest] = await _put_idle(kernel, Event(
+        id=None, ts=START, kind="percept", who="telegram:123",
+        place="space:tg:-500", body="telegram",
+        payload={"description": "halo", "place_kind": "shared", "addressed": False}))
+
+    assert re.fullmatch(r"person:p_[0-9a-f]+", guest.who)
+    assert await read_state(aconn, "alias:telegram:123") == {"who": guest.who}
+    reg = await _events(aconn, identity.REGISTERED)
+    assert len(reg) == 1
+
+    [owner_msg] = await _put_idle(kernel, Event(
+        id=None, ts=START, kind="percept", who="telegram:999",
+        place="space:tg:999", body="telegram",
+        payload={"description": code, "place_kind": "direct", "addressed": True}))
+    assert owner_msg.who != "person:owner"
+    [next_owner_msg] = await _put_idle(kernel, Event(
+        id=None, ts=START, kind="percept", who="telegram:999",
+        place="space:tg:999", body="telegram",
+        payload={"description": "halo lagi", "place_kind": "direct", "addressed": True}))
+    assert next_owner_msg.who == "person:owner"
+
+
+async def test_two_racing_percepts_of_one_account_get_one_person_id(aconn):
+    kernel = build(aconn, clock=FakeClock(START), pfc=_FakePFC(), settings=settings())
+    kernel.register_adapter(_SayBody())
+    first, second = await _put_idle(
+        kernel,
+        Event(id=None, ts=START, kind="percept", who="whatsapp:628110099",
+              place="space:wa:g1", body="telegram",
+              payload={"description": "satu", "place_kind": "shared", "addressed": False}),
+        Event(id=None, ts=START, kind="percept", who="whatsapp:628110099",
+              place="space:wa:g1", body="telegram",
+              payload={"description": "dua", "place_kind": "shared", "addressed": False}),
+    )
+
+    assert first.who == second.who
+    assert first.who.startswith("person:p_")
+    assert len(await _events(aconn, identity.REGISTERED)) == 1
+
+
+async def test_mentions_and_reply_to_are_mapped_before_core_sees_them(aconn):
+    fake = _FakePFC()
+    kernel = build(aconn, clock=FakeClock(START), pfc=fake, settings=settings())
+    kernel.register_adapter(_SayBody())
+
+    [stored] = await _put_idle(kernel, Event(
+        id=None, ts=START, kind="percept", who="telegram:101",
+        place="space:tg:-500", body="telegram",
+        payload={"description": "tolong cek", "place_kind": "shared", "addressed": True,
+                 "data": {"message_id": 10, "mentions": ["telegram:202", "telegram:303"],
+                          "reply_to": {"message_id": 5, "who": "telegram:202"}}}))
+
+    assert stored.who.startswith("person:p_")
+    mentions = stored.payload["data"]["mentions"]
+    reply_who = stored.payload["data"]["reply_to"]["who"]
+    assert len(mentions) == 2 and all(m.startswith("person:p_") for m in mentions)
+    assert reply_who == mentions[0]
+    row = await (await aconn.execute(
+        "SELECT who, payload::text FROM events WHERE id = %s", (stored.id,))).fetchone()
+    assert "telegram:" not in row[0] and "telegram:" not in row[1]
+    assert fake.contexts
+    assert all("telegram:" not in str(line)
+               for ctx in fake.contexts
+               for line in (*ctx.people, *ctx.memories, ctx.trigger.who,
+                            str(ctx.trigger.payload)))

@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import re
 import secrets
+import weakref
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
 from monoagens.core.hooks import Continue, Middleware, Replace, Stop
+from monoagens.infra.clock import Clock
 from monoagens.infra.store import append_event, payload_text, read_state, write_state
 from monoagens.middleware import privacy
 from monoagens.types import Event
@@ -22,6 +26,8 @@ CODE_KEY = "pairing_code"
 OWNER_KEY = "owner"
 CREATED = "pair.created"
 CLAIMED = "pair.claimed"
+REGISTERED = "identity.registered"
+_CONN_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = weakref.WeakKeyDictionary()
 
 
 def is_owner(who: Any) -> bool:
@@ -70,9 +76,58 @@ async def claim_owner(conn, event, *, now: datetime):
                                      place=event.place, body=event.body,
                                      payload={"code_used": True}, caused_by=event.id)
         await write_state(conn, OWNER_KEY, {"who": event.who}, claimed.id)
+        await conn.execute(
+            "UPDATE state SET value = %s, updated_by_event = %s "
+            "WHERE key LIKE 'alias:%%' AND value->>'who' = %s",
+            (json.dumps({"who": OWNER}), claimed.id, event.who))
         await conn.execute("DELETE FROM state WHERE key = %s", (CODE_KEY,))
     LOGGER.info("owner paired: %s", event.who)
     return claimed
+
+
+def is_account(value: Any) -> bool:
+    """Return whether one id is a native adapter account (`telegram:123`), not a person id."""
+    text = str(value or "")
+    return (bool(text) and ":" in text and not text.startswith("person:")
+            and not text.startswith("space:"))
+
+
+def _conn_lock(conn: Any) -> asyncio.Lock:
+    """Return one serialization lock for shared async connections during intake."""
+    lock = _CONN_LOCKS.get(conn)
+    if lock is None:
+        lock = asyncio.Lock()
+        _CONN_LOCKS[conn] = lock
+    return lock
+
+
+async def resolve_account(conn: Any, account: str, *, now: datetime,
+                          place: str | None = None, body: str | None = None,
+                          cause_id: int | None = None) -> str:
+    """Map one native account to its person id, registering unknown accounts atomically."""
+    if not is_account(account):
+        return account
+    key = f"alias:{account}"
+    async with _conn_lock(conn):
+        owner = await read_state(conn, OWNER_KEY) or {}
+        if owner.get("who") == account:
+            return OWNER
+        existing = await read_state(conn, key)
+        if existing is not None:
+            person = str((existing or {}).get("who") or existing)
+            return OWNER if owner.get("who") == person else person
+        person = f"person:p_{secrets.token_hex(4)}"
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (key,))
+            found = await read_state(conn, key)
+            if found is not None:
+                resolved = str((found or {}).get("who") or found)
+                return OWNER if owner.get("who") == resolved else resolved
+            registered = await append_event(
+                conn, ts=now, kind=REGISTERED, who=person, place=place, body=body,
+                payload={"account": account, "person": person}, caused_by=cause_id)
+            await write_state(conn, key, {"who": person}, registered.id)
+        return person
 
 
 async def as_owner(conn, event: Event) -> Event:
@@ -83,12 +138,55 @@ async def as_owner(conn, event: Event) -> Event:
     return event
 
 
-def intake(conn):
+async def resolve_event(conn, event: Event, *, now: datetime) -> Event:
+    """Map native accounts in `who`, `origin_actor`, `data.mentions`, and `data.reply_to`."""
+    if event.kind not in ("percept", "command"):
+        return await as_owner(conn, event)
+    who = event.who
+    if who and is_account(who):
+        who = await resolve_account(conn, who, now=now, place=event.place, body=event.body)
+    origin = event.origin_actor
+    if origin and is_account(origin):
+        origin = await resolve_account(conn, origin, now=now, place=event.place, body=event.body)
+    payload = dict(event.payload or {})
+    data = payload.get("data")
+    if isinstance(data, Mapping):
+        updated_data = dict(data)
+        changed = False
+        mentions = updated_data.get("mentions")
+        if isinstance(mentions, (list, tuple)):
+            mapped_mentions = [
+                (await resolve_account(conn, str(item), now=now, place=event.place,
+                                       body=event.body)
+                 if is_account(item) else item)
+                for item in mentions
+            ]
+            if list(mentions) != mapped_mentions:
+                updated_data["mentions"] = mapped_mentions
+                changed = True
+        reply_to = updated_data.get("reply_to")
+        if isinstance(reply_to, Mapping) and reply_to.get("who"):
+            rwho = str(reply_to["who"])
+            mapped_rwho = (
+                await resolve_account(conn, rwho, now=now, place=event.place, body=event.body)
+                if is_account(rwho) else rwho
+            )
+            if mapped_rwho != rwho:
+                updated_data["reply_to"] = {**reply_to, "who": mapped_rwho}
+                changed = True
+        if changed:
+            payload["data"] = updated_data
+    resolved = replace(event, who=who, origin_actor=origin, payload=payload)
+    return await as_owner(conn, resolved)
+
+
+def intake(conn, *, clock: Clock | None = None):
     """Return the intake callable the composition root installs on the kernel."""
+    clock_now = clock or Clock()
 
     async def accept(event: Event) -> Event:
         """Take one percept from an adapter and give it the id the middleware knows."""
-        return await as_owner(conn, event)
+        return await resolve_event(conn, event, now=clock_now.now())
 
     return accept
 

@@ -207,7 +207,7 @@ class TelegramBody:
         parts = data.split(":")
         answer = len(parts) == 3 and parts[0] == "approval"
         return Event(id=None, ts=self._clock.now(), kind="percept",
-                     who=f"person:tg:{(query.get('from') or {}).get('id')}",
+                     who=f"telegram:{(query.get('from') or {}).get('id')}",
                      place=f"space:tg:{(query.get('message') or {}).get('chat', {}).get('id')}",
                      body=self.name,
                      payload={"description": parts[1] if answer else data,

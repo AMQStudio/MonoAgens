@@ -127,7 +127,7 @@ async def test_private_message_from_owner():
     event = events[0]
     assert event.kind == "percept"
     assert event.body == "telegram"
-    assert event.who == f"person:tg:{OWNER_ID}"
+    assert event.who == f"telegram:{OWNER_ID}"
     assert event.place == f"space:tg:{CHAT_PRIVATE}"
     assert event.payload["cursor"] == 500
     assert event.payload["data"]["message_id"] == 11
@@ -166,7 +166,7 @@ async def test_group_chat_mention_and_non_mention():
     plain, mentioned = events
     assert plain.payload["addressed"] is False
     assert plain.payload["place_kind"] == "shared"
-    assert plain.who == "person:tg:999"
+    assert plain.who == "telegram:999"
     assert mentioned.payload["addressed"] is True
     assert mentioned.payload["cursor"] == 601
     assert mentioned.place == f"space:tg:{CHAT_GROUP}"

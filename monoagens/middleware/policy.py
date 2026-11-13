@@ -61,7 +61,7 @@ def install(kernel: Any) -> None:
     kernel.roles = roles.RoleBook.empty()
     kernel.prior_knobs = prior_knobs(kernel.settings)
     kernel.knob_bounds = {}
-    kernel.intake = identity.intake(kernel.conn)
+    kernel.intake = identity.intake(kernel.conn, clock=kernel.clock)
     kernel.budget_limit = daily_limit(kernel.settings)
     kernel.after_model_call = enforce(kernel)
     for pipeline in kernel.hooks:

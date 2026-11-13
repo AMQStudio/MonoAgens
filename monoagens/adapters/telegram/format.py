@@ -16,14 +16,32 @@ def event(update_id: int, message: dict[str, Any], text: str, *, clock: Clock,
           attachments: Sequence[Mapping[str, Any]] = ()) -> Event:
     """Build the percept of one incoming message; ids stay opaque, nothing is interpreted."""
     chat = message["chat"]
-    sender_id = (message.get("from") or {}).get("id")
-    who = f"person:tg:{sender_id}"
+    sender = message.get("from") or {}
+    sender_id = sender.get("id")
+    who = (f"telegram:{sender_id}" if sender_id is not None
+           else f"telegram:chat:{chat['id']}")
+    sender_label = str(sender.get("first_name") or "someone")
     place_kind = "direct" if chat.get("type") == "private" else "shared"
     data: dict[str, Any] = {"message_id": message["message_id"]}
+    reply_msg = message.get("reply_to_message") or {}
+    if reply_msg:
+        reply_from = (reply_msg.get("from") or {}).get("id")
+        reply_info: dict[str, Any] = {"message_id": reply_msg.get("message_id")}
+        if reply_from is not None:
+            reply_info["who"] = f"telegram:{reply_from}"
+        data["reply_to"] = reply_info
+    mentions = [
+        f"telegram:{entity['user']['id']}"
+        for entity in (*(message.get("entities") or ()),
+                       *(message.get("caption_entities") or ()))
+        if entity.get("type") == "text_mention" and (entity.get("user") or {}).get("id")
+    ]
+    if mentions:
+        data["mentions"] = list(dict.fromkeys(mentions))
     description = text
     if attachments:
         data["attachments"] = [dict(item) for item in attachments]
-        summary = describe_attachments(attachments, sent_by=who)
+        summary = describe_attachments(attachments, sent_by=sender_label)
         description = f"{text} {summary}".strip() if text else summary
     return Event(id=None, ts=clock.now(), kind="percept", who=who,
                  place=f"space:tg:{chat['id']}", body=name,

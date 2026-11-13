@@ -647,7 +647,8 @@ async def test_dm_gets_a_reply_through_the_telegram_body(aconn):
         await asyncio.gather(listener, return_exceptions=True)
 
     assert sent == [{"chat_id": "111", "text": "halo!"}]
-    assert await _kinds(aconn) == ["percept", "model.call", "act.out", "act.confirmed"]
+    assert await _kinds(aconn) == [
+        "identity.registered", "percept", "model.call", "act.out", "act.confirmed"]
 
 
 async def test_recent_includes_other_places_prefixed(aconn):
