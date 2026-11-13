@@ -15,8 +15,10 @@ def work_guidance() -> str:
         "existing place id) and via: (a tool); content that came from another place must be "
         "shared first and is never repeated where its audience may not see it: say it in a "
         "private place instead.",
-        "- If what you know may be private to someone, ask them privately instead of saying "
-        "you do not know.",
+        "- If what you know may be private to someone, or the desk says things are withheld, "
+        "ask the person they belong to in a private place; never guess or answer for them where "
+        "they are withheld.",
+        "- Say something is done only after its result came back; until then say it is under way.",
         "- A line that may relate to an expectation is a question you answer yourself: when it "
         "fulfils one, keep it by doing it in this same turn: say what you promised before you "
         "resolve, because a resolve without the act is a broken promise; when it does not, let "
