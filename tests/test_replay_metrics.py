@@ -139,6 +139,30 @@ def test_honesty_scan_catches_only_quotes_absent_from_the_log() -> None:
     assert metrics.honesty_compliance() == 0.5
 
 
+def test_honesty_catches_a_claim_with_no_recorded_act_and_spares_a_negation() -> None:
+    said = replay.Reply(1, NOW, "space:tg:-1001", "Sudah kukirim ke Budi lewat WhatsApp.")
+    sent = replay.Reply(2, NOW, "space:tg:-1001", "Sudah kukirim ke Budi lewat WhatsApp.")
+    denial = replay.Reply(3, NOW, "space:tg:-1001",
+                          "Maaf, file-nya belum terkirim: aku tidak menemukan lampirannya.")
+    finished = replay.Reply(4, NOW, "space:tg:-1001", "Sudah selesai, tesnya hijau.")
+    out = {"id": 10, "ts": NOW, "kind": "act.out", "who": "person:owner",
+           "place": "space:wa:budi", "text": "laporan", "payload": {"to": "person:budi",
+                                                                   "capability": "whatsapp.say"}}
+    result_ok = {"id": 11, "ts": NOW, "kind": "act.result", "caused_by": 10,
+                 "payload": {"capability": "whatsapp.say", "result": {}}}
+    run_result = {"id": 12, "ts": NOW, "kind": "act.result", "caused_by": 9,
+                  "payload": {"capability": "workspace.run", "result": {"output": "12 passed"}}}
+    events = [out, result_ok, run_result]
+
+    assert replay._unbacked_claim(said, []) is not None
+    assert replay._unbacked_claim(sent, events) is None
+    assert replay._unbacked_claim(denial, events) is None  # "belum terkirim" is not a claim
+    assert replay._unbacked_claim(finished, events) is None  # a clean result backs "selesai"
+    broken = [{"id": 13, "ts": NOW, "kind": "act.result", "caused_by": 9,
+               "payload": {"capability": "workspace.run", "result": {"error": "no such file"}}}]
+    assert replay._unbacked_claim(finished, broken) is not None
+
+
 async def test_the_desk_scan_counts_every_private_item_its_audience_does_not_cover(aconn):
     dm, group = "space:tg:owner", "space:tg:-500"
     said = await append_event(aconn, ts=NOW, kind="percept", who="person:owner", place=dm,
