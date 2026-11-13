@@ -33,7 +33,7 @@ Read first: [contract.md](../contract.md) (all), V1's `engine/inbound.py` and `e
 May touch: `monoagens/contract/` (new), `contract.lock` (new), `tests/contract/` (new),
 `tests/architecture/` (new), `tests/bodies/` (new), `pyproject.toml` (test markers only)
 
-- [ ] 1.1 `monoagens/contract/`: the types and validators of contract.md §3 and §4 — event
+- [x] 1.1 `monoagens/contract/`: the types and validators of contract.md §3 and §4 — event
   envelope, feature names, capability descriptor (facts, permission, the closed schema subset with
   V1's keyword validator), hook outcomes (`Continue`, `Replace`, `Stop(reason, held)`), context
   item, action, receipt states, the adapter surface as Protocols (mandatory and optional), percept,
@@ -188,3 +188,43 @@ May touch: `tests/` (all), `scenarios/`, `scripts/replay.py`
 no contract change; `contract.lock` is committed by the owner; the soul is used daily on WhatsApp.
 
 **Notes.**
+
+### Baseline and decisions (before any edit, at `44f9c1f`)
+
+Line counts: core 3842 · middleware 6144 · adapters 5465 · plugins 2065 · tests 18577
+(`find <dir> -type f \( -name '*.py' -o -name '*.yaml' -o -name '*.sql' \) -exec cat {} + | wc -l`).
+
+Known-red at baseline: `tests/core/test_expectations.py::test_a_message_ends_the_step_so_its_result_does_not_wake_again`
+(17 `model.call`, expected 3). Not fixed before the parts: it comes from the unfinished 1.12
+F.2-F.5 WIP commit `0b1a2e6` (`jobs.apply_calls`, `kernel` guards, `working.step_spoke`), and
+Part 2.7 (F.2-F.4) plus 6.1 own that code. The rest of the tree is green (664 passed, 1 skipped)
+and `scripts/replay.py --fake` passes 158/158 checks.
+
+Decisions carried from the plan (one line each):
+
+- **D-A** pairing is a command: adapters translate a native command into `command {name, args}`;
+  the middleware looks the name up and never strips syntax.
+- **D-B** the core reads no `payload` and no `labels`; its own structured data lives in the books
+  (`state: action:<id>`, `state: merged:<from>`) or the in-process return value; the one store read
+  is `store.merge_source`.
+- **D-C** receipts are returned in-process, not parsed from the Log; a `Refusal` lost to a restart
+  is re-obtained by handing the same action id to the body again.
+- **D-D** context items are the only context; "annotate" is `Replace` with the item's text extended.
+- **D-E** action ids are `f"{job_key}:{job_started_event_id}:{round}:{n}"`.
+- **D-F** the action ledger lives in `state: action:<id>`; it replaces `sends.py` and every
+  `payload->>'communicative'` query.
+- **D-G** a held action is recorded (`act.result {state: held}`), never sent; the middleware
+  releases it later as a new act.
+- **D-H** `Kernel.act_via_hooks(trigger, capability, arguments)` is the one public door command
+  answers, approvals and brake prompts use; authority stays in the action hook.
+- **D-I** every installed skill is offered in the semi-stable block; no word overlap.
+- **D-J** the talk-rate fair share uses `features.audience_size` when > 0, else distinct percept
+  speakers + 1.
+- **D-K** a stored `text_like` is upcast to `condition.text` in memory at read; new ones are
+  refused; stored rows are never rewritten.
+- **D-L** `monoagens/types.py` becomes a re-export of the contract types (`Event`,
+  `CURRENT_SCHEMA_VERSION`; `StateEntry` stays); `RECENT_KINDS` moves to `monoagens/core/kinds.py`.
+- **D-M** one transitional producer path: `Kernel.put`/`_settle` run incoming events through
+  `contract.percept.from_legacy_event` until Part 4 deletes the call.
+- **D-N** the database default of `events.schema_version` stays 1; `append_event` passes
+  `schema_version=SCHEMA_VERSION` explicitly.
