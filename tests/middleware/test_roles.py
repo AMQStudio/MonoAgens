@@ -378,3 +378,82 @@ async def test_a_role_context_reaches_the_person_card(aconn):
                                                                       "now": START})
 
     assert any("The owner's brother." in line for line in outcome.item.people)
+
+
+async def test_discord_role_grants_inside_server_tree_and_revokes_on_next_percept(aconn):
+    report = BootReport()
+    cfg = {
+        "roles": {
+            "fallback": "guest",
+            "guest": {"base": "guest"},
+            "moderator": {
+                "base": "admin",
+                "discord_role": ["999/555"],
+                "context": "Discord server moderator.",
+            },
+            "broken": {"base": "member", "discord_role": ["not-valid-no-slash"]},
+        },
+        "people": {},
+    }
+    book = roles.RoleBook.build(cfg, CATALOG, MANIFESTS, {}, report)
+    assert any("invalid discord_role" in line for line in report.lines)
+
+    kernel = await _kernel(aconn)
+    kernel.roles = book
+    who = "person:p_dc_1"
+    guild_chan = "space:dc:chan1"
+    thread = "space:dc:thread1"
+    dc_dm = "space:dc:dm1"
+    wa_dm = "space:wa:62811"
+
+    async def _noop(*_args):
+        return None
+
+    # Unmapped Discord role (444) grants nothing anywhere.
+    percept_unmapped = await append_event(
+        aconn, ts=START, kind="percept", who=who, place=guild_chan, body="discord",
+        payload={
+            "description": "hi", "place_kind": "shared",
+            "place_info": {"form": "group", "parent": "space:dc:guild:999"},
+            "data": {"guild_id": "999", "discord_roles": ["444"]},
+        })
+    await kernel.hooks.inbound.run(percept_unmapped, {"conn": aconn, "now": START},
+                                   on_stop=_noop, on_error=_noop)
+    assert not kernel.roles.can(who, "workspace.run", guild_chan)
+
+    # Mapped Discord role (999/555) grants admin tier in thread -> channel -> guild 999,
+    # while NOT in DM or WhatsApp.
+    percept_mod = await append_event(
+        aconn, ts=START, kind="percept", who=who, place=thread, body="discord",
+        payload={
+            "description": "mod here", "place_kind": "shared",
+            "place_info": {"form": "thread", "parent": guild_chan},
+            "data": {"guild_id": "999", "discord_roles": ["555"]},
+        })
+    await kernel.hooks.inbound.run(percept_mod, {"conn": aconn, "now": START},
+                                   on_stop=_noop, on_error=_noop)
+    assert kernel.roles.can(who, "workspace.run", thread)
+    assert kernel.roles.can(who, "workspace.run", guild_chan)
+    assert not kernel.roles.can(who, "workspace.run", dc_dm)
+    assert not kernel.roles.can(who, "workspace.run", wa_dm)
+    assert "Discord server moderator." in kernel.roles.contexts(who, thread)
+    assert not kernel.roles.contexts(who, wa_dm)
+
+    # Rebuilding & reconciling from DB restores place parents and Discord roles across restart.
+    rebuilt = await roles.reconcile_merges(
+        aconn, roles.RoleBook.build(cfg, CATALOG, MANIFESTS, {}, BootReport()))
+    assert rebuilt.can(who, "workspace.run", thread)
+    assert not rebuilt.can(who, "workspace.run", wa_dm)
+
+    # Role removed on Discord -> gone immediately at next percept.
+    percept_removed = await append_event(
+        aconn, ts=START, kind="percept", who=who, place=guild_chan, body="discord",
+        payload={
+            "description": "demoted", "place_kind": "shared",
+            "place_info": {"form": "group", "parent": "space:dc:guild:999"},
+            "data": {"guild_id": "999", "discord_roles": []},
+        })
+    await kernel.hooks.inbound.run(percept_removed, {"conn": aconn, "now": START},
+                                   on_stop=_noop, on_error=_noop)
+    assert not kernel.roles.can(who, "workspace.run", guild_chan)
+    assert not kernel.roles.can(who, "workspace.run", thread)

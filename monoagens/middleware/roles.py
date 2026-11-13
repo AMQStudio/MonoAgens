@@ -13,7 +13,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
 
-from monoagens.infra.store import append_event
+from monoagens.core.hooks import Continue, Middleware
+from monoagens.infra.store import append_event, read_state, write_state
 from monoagens.middleware import identity, privacy
 from monoagens.middleware.registry import CommandEntry
 from monoagens.types import Event
@@ -65,6 +66,7 @@ class Role:
     approval: str | None = None
     label: str | None = None
     context: str | None = None
+    discord_role: tuple[str, ...] = ()
 
     def effective_tier(self, bases: Mapping[str, str | None]) -> str:
         """Return the highest tier this role reaches: its base or the base of what it allows."""
@@ -98,6 +100,8 @@ class RoleBook:
     role_settings: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     sources: Mapping[str, str] = field(default_factory=dict)
     merges: Mapping[str, str] = field(default_factory=dict)
+    place_parents: Mapping[str, str] = field(default_factory=dict)
+    discord_guilds: Mapping[str, Mapping[str, frozenset[str]]] = field(default_factory=dict)
 
     @classmethod
     def empty(cls) -> "RoleBook":
@@ -122,7 +126,8 @@ class RoleBook:
                 deny=_expand(values.get("deny") or (), bases, report),
                 settings=dict(values.get("settings") or {}),
                 approval=values.get("approval"), label=values.get("label"),
-                context=values.get("context"))
+                context=values.get("context"),
+                discord_role=_parse_discord_roles(values.get("discord_role"), str(name), report))
         if fallback and fallback not in found:
             report.add(f"role {fallback} is not defined; ignored")
             fallback = ""
@@ -168,33 +173,89 @@ class RoleBook:
         younger = sorted(src for src, dst in self.merges.items() if dst == target and src != target)
         return (target, *younger) if target == str(who) else (str(who), target, *younger)
 
-    def held(self, who: str) -> tuple[Role, ...]:
-        """Return the roles one person holds, in the order the configuration names them."""
+    def with_place_parents(self, parents: Mapping[str, str]) -> "RoleBook":
+        """Return the book updated with `place -> parent` links for Discord server walks."""
+        if not parents:
+            return self
+        return replace(self, place_parents={**self.place_parents,
+                                            **{str(k): str(v) for k, v in parents.items() if v}})
+
+    def with_discord_roles(self, who: str, guild_id: str, role_ids: Sequence[str]) -> "RoleBook":
+        """Replace `who`'s active Discord role ids in `guild_id`."""
+        gid, person = str(guild_id or ""), str(who or "")
+        if not gid or not person:
+            return self
+        by_guild = dict(self.discord_guilds.get(person) or {})
+        by_guild[gid] = frozenset(str(rid) for rid in role_ids if str(rid))
+        return replace(self, discord_guilds={**self.discord_guilds, person: by_guild})
+
+    def with_discord_context(self, who: str, guild_id: str, role_ids: Sequence[str],
+                             parents: Mapping[str, str] | None = None) -> "RoleBook":
+        """Return the book updated with one percept's Discord parent chain and held role ids."""
+        book = self.with_place_parents(parents or {})
+        return book.with_discord_roles(who, guild_id, role_ids) if guild_id else book
+
+    def _discord_guild_for(self, place: str | None) -> str | None:
+        """Walk `place`'s parent chain up to `space:dc:guild:<server_id>`, or None."""
+        seen: set[str] = set()
+        cur = str(place or "")
+        while cur and cur not in seen:
+            seen.add(cur)
+            if cur.startswith("space:dc:guild:"):
+                return cur.removeprefix("space:dc:guild:")
+            cur = str(self.place_parents.get(cur) or "")
+        return None
+
+    def _discord_held_roles(self, who: str, place: str | None) -> tuple[str, ...]:
+        """Return mapped role names earned via Discord roles when `place` reaches their server."""
+        guild_id = self._discord_guild_for(place)
+        if not guild_id:
+            return ()
+        held_ids: set[str] = set()
+        for alias in self._aliases_for(str(who)):
+            by_guild = self.discord_guilds.get(alias)
+            if by_guild and guild_id in by_guild:
+                held_ids.update(by_guild[guild_id])
+        if not held_ids:
+            return ()
+        prefix = f"{guild_id}/"
+        matched: list[str] = []
+        for role in self.roles.values():
+            if any(entry.startswith(prefix) and entry.removeprefix(prefix) in held_ids
+                   for entry in role.discord_role):
+                matched.append(role.name)
+        return tuple(matched)
+
+    def held(self, who: str, place: str | None = None) -> tuple[Role, ...]:
+        """Return the roles one person holds here, in configuration order."""
         names: list[str] = []
         for alias in self._aliases_for(str(who)):
             person = self.people.get(alias)
             for name in (person.roles if person is not None else ()):
                 if name not in names:
                     names.append(name)
+        for name in self._discord_held_roles(who, place):
+            if name not in names:
+                names.append(name)
         if self.fallback and self.fallback not in names:
             names.append(self.fallback)
         return tuple(self.roles[name] for name in names if name in self.roles)
 
-    def tier(self, who: str) -> str:
+    def tier(self, who: str, place: str | None = None) -> str:
         """Return one person's tier: the owner is above all, else the highest role held."""
         if str(who) == "person:owner":
             return OWNER_TIER
-        reached = [role.effective_tier(self.bases) for role in self.held(who)]
+        reached = [role.effective_tier(self.bases) for role in self.held(who, place)]
         return max(reached, key=_rank) if reached else "guest"
 
-    def permissions(self, who: str) -> frozenset[str]:
+    def permissions(self, who: str, place: str | None = None) -> frozenset[str]:
         """Return every permission one person holds: the tier's, plus allows, minus denies."""
         if str(who) == "person:owner":
             return frozenset(self.bases)
-        tier = _rank(self.tier(who))
+        tier = _rank(self.tier(who, place))
         held = {name for name, base in self.bases.items()
                 if base is not None and _rank(base) <= tier}
-        for role in self.held(who):
+        for role in self.held(who, place):
             held |= set(role.allow)
             held -= set(role.deny)
         return frozenset(held)
@@ -215,16 +276,16 @@ class RoleBook:
                 return False
             if permission in override["allow"]:
                 return True
-        return permission in self.permissions(who)
+        return permission in self.permissions(who, place)
 
-    def settings(self, who: str) -> dict[str, Any]:
+    def settings(self, who: str, place: str | None = None) -> dict[str, Any]:
         """Return one person's role settings: the tier's, then each role's (lists merge)."""
-        tier = self.tier(who)
+        tier = self.tier(who, place)
         resolved: dict[str, Any] = {}
         for name in TIERS:
             if _rank(name) <= _rank(tier):
                 resolved.update(dict(self.role_settings.get(name) or {}))
-        for role in self.held(who):
+        for role in self.held(who, place):
             for key, value in role.settings.items():
                 if key.endswith("shared"):
                     merged = list(resolved.get(key) or [])
@@ -236,9 +297,9 @@ class RoleBook:
                     resolved[key] = value
         return resolved
 
-    def approval(self, who: str) -> str:
+    def approval(self, who: str, place: str | None = None) -> str:
         """Return one person's approval mode (`yolo`, `default` or `strict`)."""
-        for role in reversed(self.held(who)):
+        for role in reversed(self.held(who, place)):
             if role.approval in APPROVALS:
                 return str(role.approval)
         return DEFAULT_APPROVAL
@@ -254,25 +315,45 @@ class RoleBook:
                 return role.label
         return None
 
-    def contexts(self, who: str) -> tuple[str, ...]:
+    def contexts(self, who: str, place: str | None = None) -> tuple[str, ...]:
         """Return the context lines for one person: each role's, then their own."""
-        lines = [role.context for role in self.held(who) if role.context]
+        lines = [role.context for role in self.held(who, place) if role.context]
         for alias in self._aliases_for(str(who)):
             person = self.people.get(alias)
             if person is not None and person.context:
                 lines.append(person.context)
         return tuple(lines)
 
-    def may_give(self, giver: str, role_name: str) -> bool:
+    def may_give(self, giver: str, role_name: str, place: str | None = None) -> bool:
         """Return whether one person may give a role: strictly below their own tier."""
         role = self.roles.get(role_name)
         if role is None:
             return False
-        mine, theirs = _rank(self.tier(giver)), _rank(role.effective_tier(self.bases))
-        return self.tier(giver) == OWNER_TIER or theirs < mine
+        mine, theirs = _rank(self.tier(giver, place)), _rank(role.effective_tier(self.bases))
+        return self.tier(giver, place) == OWNER_TIER or theirs < mine
 
 
 # -------------------------------------------------------------- resolution
+
+
+def _parse_discord_roles(raw: Any, role_name: str, report: Any) -> tuple[str, ...]:
+    """Parse `discord_role:` entries (`<server id>/<role id>`) and warn on malformed specs."""
+    if raw is None:
+        return ()
+    items = [raw] if isinstance(raw, str) else list(raw)
+    parsed: list[str] = []
+    for entry in items:
+        text = str(entry or "").strip()
+        guild_id, sep, role_id = text.partition("/")
+        if not sep or not guild_id.strip() or not role_id.strip() or "/" in role_id:
+            if report is not None:
+                report.add(f"role {role_name}: invalid discord_role {text!r} "
+                           "(expected '<server id>/<role id>'); ignored")
+            continue
+        norm = f"{guild_id.strip()}/{role_id.strip()}"
+        if norm not in parsed:
+            parsed.append(norm)
+    return tuple(parsed)
 
 
 def _bases(catalog: Mapping[str, str | None], manifests: Mapping[str, Mapping[str, Any]],
@@ -357,7 +438,8 @@ def describe_role(book: RoleBook, role_name: str) -> str:
     lines = [f"{name}: {book.bases.get(name) or OWNER_TIER} "
              f"({book.sources.get(name, 'config.yaml')})" for name in sorted(held)]
     for key, value in (("label", role.label), ("approval", role.approval),
-                       ("context", role.context)):
+                       ("context", role.context),
+                       ("discord_role", ", ".join(role.discord_role) if role.discord_role else None)):
         if value:
             lines.append(f"{key}: {value} (config.yaml)")
     for key, value in sorted((book.role_settings.get(tier) or {}).items()):
@@ -370,16 +452,74 @@ def describe_role(book: RoleBook, role_name: str) -> str:
 # ---------------------------------------------------------------- commands
 
 
+async def reconcile_discord(conn: Any, book: RoleBook) -> RoleBook:
+    """Load persisted `state: place:*` parent chains and `state: discord_roles:*` into `book`."""
+    cur_places = await conn.execute("SELECT key, value FROM state WHERE key LIKE 'place:%'")
+    parents: dict[str, str] = {}
+    for key, value in await cur_places.fetchall():
+        parent = str((value or {}).get("parent") or "")
+        if parent:
+            parents[str(key).removeprefix("place:")] = parent
+    book = book.with_place_parents(parents)
+    cur_roles = await conn.execute(
+        "SELECT key, value FROM state WHERE key LIKE 'discord_roles:%'")
+    for key, value in await cur_roles.fetchall():
+        rest = str(key).removeprefix("discord_roles:")
+        who, sep, guild_id = rest.rpartition(":")
+        if sep and who and guild_id:
+            role_ids = list((value or {}).get("roles") or ())
+            book = book.with_discord_roles(who, guild_id, role_ids)
+    return book
+
+
 async def reconcile_merges(conn: Any, book: RoleBook, report: Any = None) -> RoleBook:
-    """Load `state: merged:*` into the running role book and warn on younger `people:` entries."""
+    """Load `state: merged:*`, place parent chains and Discord role holdings into `book`."""
     from monoagens.core.memory.cards import merge_map  # local: avoid top-level cycle
 
     merges = await merge_map(conn)
-    return book.with_merges(merges, report=report)
+    return await reconcile_discord(conn, book.with_merges(merges, report=report))
+
+
+def discord_roles(kernel: Any) -> Middleware:
+    """Inbound rule: keep `kernel.roles` synced with each Discord percept's roles & place."""
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        del ctx
+        if getattr(item, "kind", "") != "percept":
+            return Continue()
+        payload = item.payload or {}
+        if payload.get("imported") is True:
+            return Continue()
+        place = str(getattr(item, "place", "") or "")
+        place_info = payload.get("place_info") or {}
+        data = payload.get("data") or {}
+        guild_id = str(data.get("guild_id") or "")
+        parents: dict[str, str] = {}
+        raw_parent = str(place_info.get("parent") or "")
+        if place and raw_parent:
+            parents[place] = raw_parent
+            if guild_id and not raw_parent.startswith("space:dc:guild:"):
+                parents[raw_parent] = f"space:dc:guild:{guild_id}"
+        book = _book(kernel)
+        if guild_id and "discord_roles" in data:
+            who = str(getattr(item, "origin_actor", None) or getattr(item, "who", "") or "")
+            role_ids = [str(r) for r in (data.get("discord_roles") or ())]
+            if who and getattr(item, "id", None):
+                key = f"discord_roles:{who}:{guild_id}"
+                cur = await read_state(kernel.conn, key)
+                if list((cur or {}).get("roles") or ()) != role_ids:
+                    await write_state(kernel.conn, key, {"roles": role_ids}, int(item.id))
+            book = book.with_discord_context(who, guild_id, role_ids, parents)
+        elif parents:
+            book = book.with_place_parents(parents)
+        kernel.roles = book
+        return Continue()
+
+    return rule
 
 
 def install_commands(kernel: Any) -> None:
-    """Register the middleware's own role commands: /whoami, /whois, /role, /roles."""
+    """Register role commands and keep Discord role mappings updated on inbound percepts."""
     tools = kernel.tools
     for name, description, permission, handler in (
             ("whoami", "Show who you are here, and what you may do.", "identity.whoami",
@@ -391,17 +531,20 @@ def install_commands(kernel: Any) -> None:
         if tools.command(name) is None:
             tools.add_command(CommandEntry(name, description, permission, handler,
                                            owner="roles"))
+    inbound = getattr(getattr(kernel, "hooks", None), "inbound", None)
+    if inbound is not None and "discord-roles" not in getattr(inbound, "_names", set()):
+        inbound.add("discord-roles", discord_roles(kernel), slot="first")
 
 
-def _held_line(book: RoleBook, who: str) -> str:
+def _held_line(book: RoleBook, who: str, place: str | None = None) -> str:
     """Return the roles line: the owner is named `owner`, then every role held.
 
     The fallback role is dropped for the owner: it describes someone not yet known, so it
     says nothing true about the owner, whose tier is above every role.
     """
-    owner = book.tier(who) == OWNER_TIER
+    owner = book.tier(who, place) == OWNER_TIER
     named = ["owner"] if owner else []
-    for role in book.held(who):
+    for role in book.held(who, place):
         if owner and role.name == book.fallback:
             continue
         named.append(role.name + (f" ({role.label})" if role.label else ""))
@@ -432,8 +575,8 @@ async def whoami(kernel: Any, event: Event, arguments: list[str]) -> str:
             lines.append("(accounts sent to your direct chat)")
     elif accounts:
         lines.append("accounts: " + ", ".join(accounts))
-    lines.append(f"roles: {_held_line(book, who)}; tier {book.tier(who)}; "
-                 f"approval {book.approval(who)}")
+    lines.append(f"roles: {_held_line(book, who, place)}; tier {book.tier(who, place)}; "
+                 f"approval {book.approval(who, place)}")
     stored = await identity.read_place(conn, place)
     live = await place_info(kernel, event, place)
     if live and event.id is not None and any(
@@ -476,7 +619,7 @@ async def give_role(kernel: Any, event: Event, arguments: list[str]) -> str:
     if role_name not in book.roles:
         return f"no role called {role_name}"
     giver = str(event.origin_actor or event.who)
-    if not book.may_give(giver, role_name):
+    if not book.may_give(giver, role_name, event.place):
         return f"only the owner may change {role_name}"
     who = (await identity.find_person(kernel.conn, query, labels=_labels(kernel))
            or (query if query.startswith("person:") else None))

@@ -312,6 +312,13 @@ def place_tracker(conn: Any) -> Middleware:
         if not raw.get("form"):
             raw["form"] = "dm" if payload.get("place_kind") == "direct" else "group"
         await record_place(conn, str(item.place), raw, event_id=int(item.id))
+        guild_id = str((payload.get("data") or {}).get("guild_id") or "")
+        parent = str(raw.get("parent") or "")
+        if guild_id and parent and not parent.startswith("space:dc:guild:"):
+            existing = await read_place(conn, parent)
+            if not existing.get("parent"):
+                await record_place(conn, parent, {"parent": f"space:dc:guild:{guild_id}"},
+                                   event_id=int(item.id))
         return Continue()
 
     return rule
@@ -362,7 +369,8 @@ async def person_cards(conn, place: str | None, event: Event | None,
              if card["name"] and _named(card["name"], text)}
     people = sorted((present | named) - {OWNER})
     return tuple([await _card(conn, who, known.get(who) or {"name": None, "closeness": 0.0,
-                                                            "natives": {who}}, roles=roles)
+                                                            "natives": {who}},
+                              roles=roles, place=place)
                   for who in people])
 
 
@@ -449,14 +457,16 @@ def _named(name: str, text: str) -> bool:
                                     re.IGNORECASE) is not None
 
 
-async def _card(conn, who: str, card: dict[str, Any], *, roles: Any = None) -> str:
+async def _card(conn, who: str, card: dict[str, Any], *, roles: Any = None,
+                place: str | None = None) -> str:
     """Render one person card: name, person id, reachable adapters, closeness, role context."""
     places = await _direct_places(conn, card["natives"])
     reach = "; ".join(f"{adapter} at {place} (last {seen.astimezone(timezone.utc):%Y-%m-%d %H:%M})"
                       for adapter, (place, seen) in sorted(places.items()))
     label = f"{card['name']} ({who})" if card["name"] else who
     line = f"- {label}: {reach or 'no direct place known yet'}; closeness {card['closeness']:.2f}"
-    contexts = [str(context)[:CONTEXT_CAP] for context in (roles.contexts(who) if roles else ())]
+    raw_contexts = (roles.contexts(who, place) if place else roles.contexts(who)) if roles else ()
+    contexts = [str(context)[:CONTEXT_CAP] for context in raw_contexts]
     return "\n".join([line, *[f"  {context}" for context in contexts if context]])
 
 

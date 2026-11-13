@@ -217,7 +217,7 @@ def answer(kernel: Any) -> Middleware:
         owner = answerer == OWNER
         request_id, allowed = None, False
         if payload.get("approval") is not None:
-            if not (owner or kernel.roles.can(answerer, "approval.answer")):
+            if not (owner or kernel.roles.can(answerer, "approval.answer", item.place)):
                 return Continue()
             request_id, allowed = int(payload["approval"]), bool(payload.get("answer"))
         elif payload.get("brake") is not None:
@@ -230,7 +230,8 @@ def answer(kernel: Any) -> Middleware:
             return Continue()
         elif (rmatch := _match_reaction_approval(kernel, item)) is not None:
             prefix, request_id, allowed = rmatch
-            if not (owner or (prefix == "approval" and kernel.roles.can(answerer, "approval.answer"))):
+            if not (owner or (prefix == "approval"
+                              and kernel.roles.can(answerer, "approval.answer", item.place))):
                 return Continue()
             if prefix == "brake":
                 held = await brake_by_id(kernel.conn, request_id)
