@@ -343,3 +343,30 @@ Deviations, recorded:
   commit: `dispatch` still records one only when the tool returns something. Making it universal
   reorders eight pinned event sequences in `tests/core/test_reasoning.py`, and that migration
   belongs with the deterministic action ids and the ledger.
+
+### Where the work stands (session of 2026-11-14)
+
+Green and pushed: Part 1 (1.1-1.4), Part 2 items 2.1 and 2.3. `uv run pytest -q` is **687 passed,
+1 skipped, 0 failed** and `scripts/replay.py --fake` is **158/158** at commit `b47d615`. The
+baseline's one red test is fixed.
+
+Not started, in the order the plan asks for them, with what each one meets:
+
+- **2.2** the remaining payload reads in the core are `context/parts.py` (rendering),
+  `context/working.py` (chain lines), `expectations.py:269` (`reminded`/`reminder`), and
+  `identity.py:97`, plus the label reads in `jobs.py:187` and `dispatch.py`/`threads.py`
+  (`audience`, `hold_for`, `delivers`, `words_hidden`, `place_kind`). The label half cannot be
+  done inside Part 2's May-touch: the middleware must return `Replace`/`Stop(held=True)` first
+  (3.2, 3.3, 3.5). Do the rendering half (parts/working/expectations/identity/recall) first; it
+  needs `_emit(..., description=...)` at every core site that carries words today.
+- **2.4** reads `text_like` in `expectations.matches_cue`, `is_met` and `validate`, and the tests
+  that assert it are **not all in Part 2's scope**: `tests/core/test_expectations.py`,
+  `test_gate.py`, `test_reasoning.py` are, but `tests/test_mvp.py:235` and
+  `tests/test_replay_scenarios.py:221-274` are not. Either widen 2.4's May-touch to those two
+  files by a line in this task file, or land 2.4 together with 6.1.
+- **2.5** changes the type the context hook receives; the middleware's context rules
+  (`privacy.py` 44 tests) parse the rendered lines, so 2.5 and 3.3 are one change, not two.
+- **2.6-2.8**: 2.6 needs `registry.act` to answer with a receipt (3.4) and the eight sequence
+  tests in `tests/core/test_reasoning.py` rewritten to the universal `act.result`.
+
+The audit items carried by Parts 2-5 (S.6, E.1-E.4, F.2-F.5, F.9-F.12, O.1-O.6) are untouched.
