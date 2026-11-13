@@ -307,3 +307,83 @@ def _context(trigger: Event, *, recent=()):
 
     return PFCContext(now=START, place=GROUP, reason="test", recent=tuple(recent),
                       trigger=trigger)
+
+
+class _LoopPFC:
+    """Scripted reasoning that loops forever calling `dev.run` until stopped."""
+
+    last_usage: dict[str, int] = {}
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def decide(self, context: Any):
+        if str(getattr(context, "place", "")) == OWNER_DM:
+            return []
+        self.calls += 1
+        return [ToolCall("act", {"capability": "dev.run", "arguments": {"command": "echo loop"}})]
+
+    async def aclose(self) -> None:
+        return None
+
+
+async def _drive(kernel, *events: Event) -> None:
+    """Feed events through the kernel queue until idle."""
+    for event in events:
+        put = asyncio.create_task(kernel.put(event))
+        await asyncio.sleep(0)
+        await kernel.step()
+        await put
+    await kernel.run_until_idle()
+
+
+async def test_brake_stops_endless_loop_tells_owner_once_and_can_resume(aconn):
+    values = settings()
+    values["owner_settings"] = {"max_task_steps": 30, "max_wakes_per_hour": 3}
+    pfc = _LoopPFC()
+    kernel = build(aconn, clock=FakeClock(START), pfc=pfc, settings=values)
+    voice = Voice()
+    kernel.register_adapter(voice)
+    tool = Tool(facts=("reads",))
+    kernel.tools.add_tool(tool, {"run": {"facts": ["reads"], "permission": "dev.run"}})
+    kernel.roles = open_book("person:owner", "dev.run")
+    await append_event(aconn, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
+                       body="telegram",
+                       payload={"description": "halo", "place_kind": "direct"})
+
+    loop_msg = Event(id=None, ts=START, kind="percept", who="person:owner", place=GROUP,
+                     body="telegram", origin_actor="person:owner",
+                     payload={"description": "kerjakan terus", "place_kind": "shared",
+                              "addressed": True})
+    await _drive(kernel, loop_msg)
+
+    assert pfc.calls == 3
+    cur = await aconn.execute("SELECT kind, payload FROM events ORDER BY id")
+    events = await cur.fetchall()
+    kinds = [row[0] for row in events]
+    assert kinds.count("brake.held") == 1
+    assert kinds.count("guard.stopped") == 1
+    assert len(voice.shown) == 1
+    shown_place, shown_kind, shown_data = voice.shown[0]
+    assert shown_place == OWNER_DM and shown_kind == "buttons"
+    notice = shown_data["text"]
+    assert "Stopped work" in notice and "max_wakes_per_hour" in notice and "continue" in notice
+
+    reply = Event(id=None, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
+                  body="telegram", origin_actor="person:owner",
+                  payload={"description": "yes", "place_kind": "direct", "addressed": True})
+    await _drive(kernel, reply)
+
+    cur = await aconn.execute("SELECT kind FROM events ORDER BY id")
+    after = [row[0] for row in await cur.fetchall()]
+    assert "brake.resumed" in after
+    assert after.count("model.call") > 3
+    assert after.count("brake.held") == 2
+
+
+def test_config_yaml_includes_owner_brake_defaults():
+    import pathlib, yaml
+
+    loaded = yaml.safe_load(pathlib.Path("config.yaml").read_text(encoding="utf-8"))
+    assert loaded["owner_settings"]["max_task_steps"] == 30
+    assert loaded["owner_settings"]["max_wakes_per_hour"] == 20

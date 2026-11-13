@@ -3,6 +3,8 @@ timezone: Asia/Jakarta
 owner_settings:                     # changed by hand or with /budget and /quiet
   daily_token_budget: 300000
   quiet_hours: { from: "22:00", to: "06:00" }
+  max_task_steps: 30
+  max_wakes_per_hour: 20
 runtime:
   tick_seconds: 30
   sleep: { idle_minutes: 30, retry_minutes: 30, hour: 2 }

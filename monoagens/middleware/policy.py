@@ -13,7 +13,7 @@ from __future__ import annotations
 import ipaddress
 import pathlib
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import datetime, time
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -103,9 +103,10 @@ def attachment_sweep(kernel: Any) -> Middleware:
 
 
 def policy_for(hook: str, when: str, kernel: Any) -> Middleware:
-    """Return the absolute lines of one hook: identity, permissions, privacy, approvals."""
+    """Return the absolute lines of one hook: identity, permissions, privacy, approvals, brakes."""
     if hook == "context":
-        return compose(identity.identity_line(), privacy.filter_context(kernel.conn))
+        return compose(identity.identity_line(), brake_line(kernel),
+                       privacy.filter_context(kernel.conn))
     if hook == "action":
         if when == "first":
             return compose(identity.identity_line(), permission_line(kernel),
@@ -119,6 +120,100 @@ def daily_limit(settings: Mapping[str, Any]) -> float:
     """Return the owner's daily token budget (0 or less means no cap)."""
     owner = settings.get("owner_settings") or {}
     return float(owner.get("daily_token_budget") or 0)
+
+
+def brake_limits(settings: Mapping[str, Any]) -> tuple[int, int]:
+    """Return `(max_task_steps, max_wakes_per_hour)` from owner settings or prior constants."""
+    owner = settings.get("owner_settings") or {}
+    constants = settings.get("constants") or {}
+    steps = owner.get("max_task_steps")
+    if steps is None:
+        steps = constants.get("max_task_steps", 30)
+    wakes = owner.get("max_wakes_per_hour")
+    if wakes is None:
+        wakes = constants.get("max_wakes_per_hour", 20)
+    return int(steps), int(wakes)
+
+
+async def _chain_brake_state(conn: Any, trigger: Event, now: datetime) -> tuple[int, int, int, str, bool]:
+    """Return `(root_id, steps, wakes_in_hour, work_label, already_held)` for one chain."""
+    anchor = trigger.id or trigger.caused_by
+    if anchor is None:
+        return 0, 0, 0, "", False
+    cur = await conn.execute(
+        "WITH RECURSIVE up AS ("
+        "SELECT id, caused_by, payload FROM events WHERE id = %s "
+        "UNION ALL SELECT e.id, e.caused_by, e.payload FROM events e JOIN up u ON e.id = u.caused_by"
+        ") SELECT id, payload FROM up ORDER BY id ASC LIMIT 1",
+        (int(anchor),),
+    )
+    root_row = await cur.fetchone()
+    if root_row is None:
+        return 0, 0, 0, "", False
+    root_id = int(root_row[0])
+    root_payload = dict(root_row[1] or {})
+    work = str(root_payload.get("description") or root_payload.get("text")
+               or trigger.place or f"chain #{root_id}")[:80]
+    resumed = await (await conn.execute(
+        "SELECT id, ts FROM events WHERE kind = %s AND payload->>'root' = %s "
+        "ORDER BY id DESC LIMIT 1", (interaction.BRAKE_RESUMED, str(root_id)))).fetchone()
+    after_id = int(resumed[0]) if resumed is not None else 0
+    window_start = now - timedelta(hours=1)
+    if resumed is not None and resumed[1] > window_start:
+        window_start = resumed[1]
+    held = await (await conn.execute(
+        "SELECT 1 FROM events WHERE kind = %s AND id > %s AND payload->>'root' = %s LIMIT 1",
+        (interaction.BRAKE_HELD, after_id, str(root_id)))).fetchone()
+    counts = await (await conn.execute(
+        "WITH RECURSIVE down AS ("
+        "SELECT id, kind, ts, payload FROM events WHERE id = %s "
+        "UNION ALL SELECT e.id, e.kind, e.ts, e.payload FROM events e JOIN down d ON e.caused_by = d.id"
+        ") SELECT "
+        "COUNT(*) FILTER (WHERE kind = 'act.out' AND id > %s), "
+        "COUNT(*) FILTER (WHERE kind = 'job.started' AND payload->>'job' = 'pfc' "
+        "  AND id > %s AND ts >= %s) "
+        "FROM down",
+        (root_id, after_id, after_id, window_start),
+    )).fetchone()
+    return root_id, int(counts[0] or 0), int(counts[1] or 0), work, held is not None
+
+
+def brake_line(kernel: Any) -> Middleware:
+    """Context pass: stop a chain at `max_task_steps` or `max_wakes_per_hour` and tell the owner."""
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        """Stop an endless or oversized chain before starting another model call."""
+        trigger = ctx.get("event")
+        if trigger is None:
+            return Continue()
+        max_steps, max_wakes = brake_limits(kernel.settings)
+        if max_steps <= 0 and max_wakes <= 0:
+            return Continue()
+        root_id, steps, wakes, work, already_held = await _chain_brake_state(
+            kernel.conn, trigger, kernel.clock.now())
+        if root_id == 0:
+            return Continue()
+        place = str(getattr(item, "place", None) or trigger.place or "")
+        first_task_step = False
+        if place.startswith("space:task:"):
+            task = await read_state(kernel.conn, f"task:{place}")
+            first_task_step = bool(task and int(task.get("steps") or 0) == 0)
+        reason, limit_name, count, cap = "", "", 0, 0
+        if max_wakes > 0 and wakes >= max_wakes:
+            limit_name, count, cap = "max_wakes_per_hour", wakes, max_wakes
+            reason = f"brake: {limit_name} limit reached ({wakes}/{max_wakes})"
+        elif max_steps > 0 and steps >= max_steps and not first_task_step:
+            limit_name, count, cap = "max_task_steps", steps, max_steps
+            reason = f"brake: {limit_name} limit reached ({steps}/{max_steps})"
+        if not reason:
+            return Continue()
+        if not already_held:
+            await interaction.notify_brake(
+                kernel, trigger, root_id=root_id, place=place or str(trigger.place or ""),
+                work=work, reason=reason, limit=limit_name, value=count, cap=cap)
+        return Stop(reason)
+
+    return rule
 
 
 def enforce(kernel: Any) -> Callable[[int, Mapping[str, int]], Awaitable[None]]:

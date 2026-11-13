@@ -22,6 +22,8 @@ DEFAULTS = {"thinking": "owner_direct", "steps": "long", "approvals": "owner"}
 OWNER = "person:owner"
 REQUEST = "approval.requested"
 ANSWERED = "approval.answered"
+BRAKE_HELD = "brake.held"
+BRAKE_RESUMED = "brake.resumed"
 YES = ("yes", "ya")
 
 
@@ -78,11 +80,77 @@ async def by_id(conn: Any, request_id: int) -> dict[str, Any] | None:
     return dict(row[0] or {}) if row else None
 
 
+async def pending_brake(conn: Any) -> dict[str, Any] | None:
+    """Return the newest held brake nobody answered yet, with its payload."""
+    row = await (await conn.execute(
+        "SELECT id, payload FROM events WHERE kind = %s AND id NOT IN ("
+        "  SELECT (payload->>'brake')::bigint FROM events WHERE kind = %s"
+        "  AND payload ? 'brake') ORDER BY id DESC LIMIT 1", (BRAKE_HELD, BRAKE_RESUMED))
+    ).fetchone()
+    return {"id": int(row[0]), **dict(row[1] or {})} if row is not None else None
+
+
+async def brake_by_id(conn: Any, brake_id: int) -> dict[str, Any] | None:
+    """Return one held brake event by its id."""
+    row = await (await conn.execute(
+        "SELECT payload FROM events WHERE id = %s AND kind = %s", (brake_id, BRAKE_HELD))
+    ).fetchone()
+    return dict(row[0] or {}) if row else None
+
+
+async def notify_brake(kernel: Any, trigger: Event, *, root_id: int, place: str, work: str,
+                       reason: str, limit: str, value: int, cap: int) -> Event:
+    """Record a held brake and tell the owner once in the owner's direct chat."""
+    brake = await kernel._emit(trigger, BRAKE_HELD, {
+        "root": root_id, "place": place, "work": work, "reason": reason,
+        "limit": limit, "value": value, "cap": cap,
+        "place_kind": (trigger.payload or {}).get("place_kind"),
+    }, place=place)
+    direct = await identity.direct_place(kernel.conn, OWNER)
+    if direct is None:
+        return brake
+    body = await _body_of(kernel.conn, direct)
+    adapter = kernel.tools.adapters.get(body)
+    text = (f"Stopped work ({work}): {reason}. "
+            f"Reply yes to continue, or no to leave it stopped.")
+    await kernel._emit(brake, "act.out", {
+        "capability": f"{body}.say" if adapter is not None else "",
+        "arguments": {"text": text}, "communicative": True}, place=direct)
+    if adapter is None:
+        return brake
+    if "buttons" in tuple(getattr(adapter, "shows", ()) or ()):
+        await adapter.show(direct, "buttons", text=text, buttons=[
+            ("Continue", f"approval:yes:{brake.id}"), ("Stop", f"approval:no:{brake.id}")])
+    else:
+        await kernel.tools.act(Event(id=None, ts=trigger.ts, kind="act.out", who=OWNER,
+                                     place=direct, body=body),
+                               f"{body}.say", {"text": text})
+    return brake
+
+
+async def _answer_brake(kernel: Any, item: Event, brake_id: int, held: dict[str, Any],
+                        allowed: bool, answerer: str) -> None:
+    """Record a brake decision and enqueue a continuation intent when the owner allows it."""
+    work = str(held.get("work") or held.get("place") or "stopped work")
+    target = str(held.get("place") or item.place or "")
+    await append_event(kernel.conn, ts=kernel.clock.now(), kind=BRAKE_RESUMED,
+                       who=OWNER, place=target, body=item.body, caused_by=item.id,
+                       payload={"brake": brake_id, "root": held.get("root"),
+                                "allowed": allowed, "by": answerer})
+    if allowed:
+        kernel.enqueue(Event(
+            id=None, ts=kernel.clock.now(), kind="intent", who=OWNER,
+            place=target, body=item.body,
+            payload={"description": f"the owner chose to continue the stopped work: {work}",
+                     "root": held.get("root"), "brake": brake_id,
+                     "place_kind": held.get("place_kind")}))
+
+
 def answer(kernel: Any) -> Middleware:
-    """Inbound rule: the owner's yes or no answers the pending approval, once."""
+    """Inbound rule: the owner's yes or no answers the newest pending approval or brake."""
 
     async def rule(item: Any, ctx: Any) -> Any:
-        """Turn one answer into `approval.answered`, and a yes into a retry intent."""
+        """Turn one answer into `approval.answered` / `brake.resumed`, and yes into an intent."""
         if getattr(item, "kind", "") != "percept":
             return Continue()
         payload = item.payload or {}
@@ -93,17 +161,34 @@ def answer(kernel: Any) -> Middleware:
             if not (owner or kernel.roles.can(answerer, "approval.answer")):
                 return Continue()
             request_id, allowed = int(payload["approval"]), bool(payload.get("answer"))
+        elif payload.get("brake") is not None:
+            if not owner:
+                return Continue()
+            held = await brake_by_id(kernel.conn, int(payload["brake"]))
+            if held is not None:
+                await _answer_brake(kernel, item, int(payload["brake"]), held,
+                                    bool(payload.get("answer")), answerer)
+            return Continue()
         else:
             text = str(payload.get("description") or "").strip().lower()
             if owner and text in (*YES, "no"):
-                found = await pending(kernel.conn)
-                if found is None:
+                found_approval = await pending(kernel.conn)
+                found_brake = await pending_brake(kernel.conn)
+                if found_brake is not None and (
+                        found_approval is None or found_brake["id"] > found_approval["id"]):
+                    await _answer_brake(kernel, item, int(found_brake["id"]), found_brake,
+                                        text in YES, answerer)
                     return Continue()
-                request_id, allowed = int(found["id"]), text in YES
+                if found_approval is None:
+                    return Continue()
+                request_id, allowed = int(found_approval["id"]), text in YES
         if request_id is None:
             return Continue()
         asked = await by_id(kernel.conn, request_id)
         if asked is None:
+            held = await brake_by_id(kernel.conn, request_id) if owner else None
+            if held is not None:
+                await _answer_brake(kernel, item, request_id, held, allowed, answerer)
             return Continue()
         await append_event(kernel.conn, ts=kernel.clock.now(), kind=ANSWERED,
                            who=asked.get("who"), place=asked.get("place"), body=item.body,
