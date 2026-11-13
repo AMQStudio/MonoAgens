@@ -18,6 +18,7 @@ before Task 3 name files by their earlier names; the [glossary](../glossary.md) 
 | 5 | [Adapters: WhatsApp, Discord and more](5-adapters.md) | **next** — Part 0A providers (model port, OpenCode Go, fallback, new baseline), 0B the loop, brakes, one privacy truth, 0C full outputs, progress note, the two-day paper; then Part 1: one id per person and linking as a merge, places, WhatsApp (full import), Discord, what is shown, Discord roles (D65–D70) | Task 4 |
 | 6 | [Core: depth of mind](6-core-mind.md) | todo — last, after weeks of daily use | Task 5 and some weeks of daily use |
 | 7 | [First users and release](7-release.md) | todo | Task 6 |
+| — | [Later: voice, Home Assistant, more model providers](later-voice-home.md) | todo — moved out of Task 5 Part 2; its number and place are decided with the web panel task | Task 5 |
 
 The architect updates this table and each file's `Status:` line; workers never do.
 

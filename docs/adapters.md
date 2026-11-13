@@ -131,8 +131,7 @@ the same on every adapter, drawn the best way each platform allows:
     the soul);
   - `thread: "title"` — start a new thread or topic for this message where the place allows it;
   - `location: {lat, lon, name?}` — share a place;
-  - `voice: true` — say it aloud: a voice note on chat adapters, speech on devices (§9; Task 5
-    Part 2);
+  - `voice: true` — say it aloud: a voice note on chat adapters, speech on devices (§9; [later task](tasks/later-voice-home.md));
 - `react(emoji, message_id?)`;
 - `edit(message_id, text)` for its own messages, where the platform allows it.
 Progress messages, typing, read receipts and approval prompts are not the soul's: the
@@ -202,9 +201,9 @@ tells the two apart itself:
 | CLI | present; native in Task 5 | Unix socket inside the main process, thin client; text, files by path, reply; typing and progress as status lines; buttons as numbered choices; declared gaps for the rest |
 | WhatsApp | next (Task 5) | ported from V1 on neonize (a linked device); own or owner's number (§6); full history import (§5); files, stickers, polls, reactions, edits; no buttons, so approvals by reaction |
 | Discord | next (Task 5) | ported from V1 on discord.py (message content intent); servers, channels, threads, DMs; buttons and menus (an interaction is acknowledged within Discord's 3 s by deferring, inside the adapter); role mapping (§3) |
-| Voice notes | Task 5 Part 2 | STT in, TTS out; description = transcript |
+| Voice notes | [later task](tasks/later-voice-home.md) | STT in, TTS out; description = transcript |
 | Voice calls | later | waits for a mature calling library to be widely released (WhatsApp: whatsmeow and neonize only see and reject calls; a calling stack such as meowcaller is still experimental and Go-only); then call audio ↔ STT/TTS as a `long_running` act ([project.md §5](project.md)). Until then a call is a percept and the soul answers in chat |
-| Home Assistant | **Draft**, Task 5 Part 2 | the first non-chat adapter (§8) |
+| Home Assistant | **Draft**, [later task](tasks/later-voice-home.md) | the first non-chat adapter (§8) |
 | Robot (own adapter) | later | microphone and speaker straight to the adapter, with its own reflexes (wake word, voice activity, barge-in, turning to the speaker); after Home Assistant |
 
 Tools (search, files, email) are in the [plugin catalog](plugins.md). Model providers are not

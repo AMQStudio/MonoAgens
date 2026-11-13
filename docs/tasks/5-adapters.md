@@ -6,7 +6,8 @@ One task = one worker prompt, done by one worker. Work through the parts **in or
 **Goal.** The soul is usable every day: model providers as drivers with a fallback, the loop
 and privacy fixes, nothing lost when work continues; then one soul across WhatsApp, Discord and
 Telegram with one id per person so privacy follows people, every adapter (Telegram and CLI
-included) using everything its platform offers; then voice notes, a non-chat adapter and more provider drivers.
+included) using everything its platform offers. The task ends with Part 1; voice, Home Assistant
+and more provider drivers moved to [later-voice-home.md](later-voice-home.md) (owner, 2026-11-13).
 
 ---
 
@@ -125,30 +126,6 @@ adapter is a special case.
   needed daily): the replay launch set passes on the new adapters, then a live session on
   WhatsApp in the owner's direct chat and one group (the model in `.env`; never read or print
   it). Report what happened and the metrics. From here the owner uses the soul daily on WhatsApp.
-
-## Part 2 — More adapters and models
-Read first: [adapters.md](../adapters.md)
-May touch: `monoagens/adapters/`, `monoagens/infra/providers/` (speech and model drivers), `integrations/homeassistant/` (new: the HA custom integration), `monoagens/middleware/` (interaction, for `voice`), `.env.example`, `tests/`, `scenarios/`
-
-- [ ] 2.1 Speech for every adapter (adapters.md §9, D72): drivers by protocol in
-  `infra/providers/speech/` — OpenAI-shaped HTTP (ported from V1), Wyoming (new, plain asyncio),
-  ElevenLabs and Deepgram (ported) — chosen by `.env`, shared by every adapter, each reporting its
-  languages with a boot warning when the soul's language is missing. Voice notes in on WhatsApp,
-  Telegram and Discord become percepts with their transcript (imported ones on open; an honest
-  description when STT fails); `say(voice: true)` sends the platform's voice note, text as the
-  fallback, the words kept in the Log. Barge-in and `spoken_until` in the contract, tested with a
-  fake device. A realtime engine, if set, only transcribes and speaks; its own replies are off,
-  and a test proves no utterance reaches a reply without the gate. Tests with fake STT/TTS
-  servers for each door. A websocket client, if needed, asks the owner first. Voice calls wait
-  for a mature, widely released calling library (project.md §5); until then a call stays a
-  percept and the soul answers in chat.
-- [ ] 2.2 First non-chat adapter: Home Assistant as a body (adapters.md §8, D71): the soul as HA's
-  conversation agent through a small HA custom integration, satellites' areas as shared places,
-  exposed entities as `home.state` and `home.control`, listed entity changes as percepts, the
-  reply deadline with a holding line and a later announce. Tests with a fake HA. A robot with its
-  own adapter and reflexes comes later.
-- [ ] 2.3 More provider drivers in `infra/providers/` (Part 0A's port): native Claude (prompt caching), native Gemini, DeepSeek; optional separate models for sleep and the classifier.
-- [ ] 2.4 Check: a non-chat adapter senses and acts through the same contract; switching provider is a `.env` change (`LLM_PROVIDER`).
 
 **Done when.** All parts are ticked; the owner talks to the soul daily on WhatsApp; tests and
 the real-model run are reported; the code is readable (AGENTS.md size guide).
