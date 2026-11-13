@@ -41,7 +41,7 @@ May touch: `monoagens/middleware/`, `monoagens/infra/` (attachment store), `plug
 
 ## Part 1 — Identity, places, WhatsApp and Discord
 Read first: [adapters.md](../adapters.md) (all), [middleware.md](../middleware.md) §7 (identity), §8 (platform roles), §9 (interaction), §10 (attachments), [core.md](../core.md) §4 (history and import), §8 (two ids become one), §9.2
-May touch: `monoagens/adapters/`, `monoagens/middleware/` (identity, interaction, roles, contract), `monoagens/infra/` (attachment store: deferred refs), `config.yaml`, `tests/`, `scenarios/`, `scripts/replay.py`; `monoagens/core/` only for `source.merged` (1.1) and `imported` (1.3), and only after the plan names the files (`kernel.py` or `store.py` included only if named)
+May touch: `monoagens/adapters/`, `monoagens/middleware/` (identity, interaction, roles, contract), `monoagens/infra/` (attachment store: deferred refs), `config.yaml`, `pyproject.toml` and `uv.lock` (the adapter extras approved in AGENTS.md), `.gitignore`, `.env.example`, `tests/`, `scenarios/`, `scripts/replay.py`; `monoagens/core/` only for `source.merged` (1.1) and `imported` (1.3), and only after the plan and the files it names are written under Notes (`kernel.py` or `store.py` included only if named)
 
 V1 (branch `archived`) already has working WhatsApp (neonize: media, history sync, identity,
 directory), Discord (discord.py) and speech provider code under `monoagens/gateways/` and
@@ -57,8 +57,8 @@ link is a leak.
   never `person:tg:123`); the inbound hook maps `who`, `data.mentions` and `data.reply_to.who`
   through the account map and registers an unknown account at once (`identity.registered`,
   `person:p_<random>`, one id per account under a unique key); the owner stays `person:owner`.
-  Existing development data uses the old ids: ask the owner whether to convert it once or reset
-  the development database, before doing either. Test: a new account gets one id, two racing
+  Existing development data uses the old ids: the owner decided (2026-11-13) to reset the
+  development database, not to convert it. Test: a new account gets one id, two racing
   percepts of it get the same id, a mention is mapped, the core sees no account.
 - [ ] 1.1 Linking as a merge (D65, middleware.md §7, core.md §8): `/link` by the owner and by
   code (single use, 10 minutes, three tries), `/unlink`; `identity.merged` into the older id

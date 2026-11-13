@@ -94,6 +94,11 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
   is enabled), never in the core's list. Approved by the owner (2026-11-12): `web-search`:
   `ddgs`; `pdf-reader`: `pypdf`; `workspace`: the system tools `bubblewrap` and `passt`
   (pasta), not Python packages.
+- **Adapter dependencies** follow the same rule: an optional extra per adapter in
+  `pyproject.toml`, installed only when that adapter is enabled. Approved by the owner
+  (2026-11-13): `whatsapp`: `neonize` (with `segno` for the pairing QR, and the `protobuf`
+  override neonize needs); `discord`: `discord.py`. Check the current versions against their
+  live docs and pin a range.
 
 ## Priorities for code
 1. **The goal works**: the behavior the task asks for, proven by its scenarios.
