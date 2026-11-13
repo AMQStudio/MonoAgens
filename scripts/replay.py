@@ -50,7 +50,9 @@ from monoagens.boot import install
 from monoagens.middleware import privacy
 from monoagens.middleware.contract import describe_attachments
 from monoagens.adapters.cli import CAPABILITIES as CLI_CAPABILITIES
+from monoagens.adapters.discord.capabilities import CAPABILITIES as DISCORD_CAPABILITIES
 from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
+from monoagens.adapters.whatsapp.capabilities import CAPABILITIES as WHATSAPP_CAPABILITIES
 from monoagens.infra.clock import FakeClock
 from monoagens.core.gate import Appraisal
 from monoagens.infra.config import (DEFAULT_ENV_PATH, EFFORTS, load_env, load_env_file,
@@ -80,6 +82,7 @@ SCENARIO_FUNCTIONS = ("cross-body", "honesty", "learning", "memory", "privacy",
                       "promises", "silence", "turn-taking")
 BODY_NAME = "telegram"
 CLI_BODY = "cli"
+DISCORD_BODY = "discord"
 GAME_BODY = "game"
 WHATSAPP_BODY = "whatsapp"
 DEV_BODY = "dev"
@@ -89,7 +92,7 @@ TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?$")
 
 # Neutral places used by the test organs; the prefix names the organ.
 PLACE_BODIES = (("space:game", GAME_BODY), ("space:wa", WHATSAPP_BODY),
-                ("space:cli", CLI_BODY))
+                ("space:dc", DISCORD_BODY), ("space:cli", CLI_BODY))
 
 # A test organ only needs the two chat capabilities of a real body.
 CHAT_CAPABILITIES = (
@@ -117,8 +120,8 @@ DEV_CAPABILITIES = (*CHAT_CAPABILITIES,
                      "communicative": False, "long_running": True,
                      "identity_changing": False, "permission": "dev.run"})
 
-TEST_CAPABILITIES = {GAME_BODY: CHAT_CAPABILITIES, WHATSAPP_BODY: CHAT_CAPABILITIES,
-                     DEV_BODY: DEV_CAPABILITIES}
+TEST_CAPABILITIES = {GAME_BODY: CHAT_CAPABILITIES, WHATSAPP_BODY: WHATSAPP_CAPABILITIES,
+                     DISCORD_BODY: DISCORD_CAPABILITIES, DEV_BODY: DEV_CAPABILITIES}
 
 # Action kinds a test organ reports as a finished long action (an `act.result`).
 TEST_LONG_RUNNING = {DEV_BODY: frozenset({"run"})}
