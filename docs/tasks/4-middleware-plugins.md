@@ -70,7 +70,7 @@ Multi-step work runs in the core's task threads (Task 2 Part 3); the plugins onl
 
 ## Part 5 — Capability targets carried over from Task 2
 Read first: [core.md](../core.md) §4, §8 (D45–D48, D55, D56), the Notes of Task 2 Part 12
-May touch: `scenarios/`, `scripts/replay.py`, `plugins/`, `monoagens/middleware/`, `tests/`; for 5.0d only: `monoagens/core/principles.py`
+May touch: `scenarios/`, `scripts/replay.py`, `plugins/`, `monoagens/middleware/`, `tests/`; for 5.0d only: `monoagens/core/principles.py`; for 5.0f only: `monoagens/core/gate/signals.py`, `monoagens/core/gate/situation.py`, `prior/references.yaml`, `prior/dispositions.yaml`
 
 The core already has the mechanisms; these scenarios need middleware, plugins and real
 capabilities around them. A core change here is only for a bug, reported first, except the
@@ -84,6 +84,8 @@ two principle lines of 5.0d, decided by the owner (2026-11-13) on the evidence i
   - a new line after it: "Say something is done only after its result came back; until then say it is under way.".
   Record the stable-prefix hash change under Notes (the prompt cache restarts once).
 - [ ] 5.0e Workspace: default `pids` 64 (the 120 s fork loop in Notes).
+- [ ] 5.0f Language-neutral `info_gap` (owner decision 2026-11-13): today `prior/references.yaml` holds only `id:`, so a soul in any other language gets no references and `info_gap` is silently 0. The embedder is multilingual, so: the references are written in English under one key that applies to every language (per-language lists stay optional and are added to it, never required); the signal compares the message with the **centroid** (mean vector) of the references instead of the best single sentence; a language without its own list uses the English one, never nothing. Measure `info_gap` and the gate on the launch set before and after (fake and real); recalibrate the related prior values with replay if needed, and record the numbers under Notes as the evidence (constitution §1).
+- [ ] 5.0g Soul Tuning examples: `examples.yaml` in English with the labels `person` and `you` (no soul name); the `<soul_tuning>` block says the examples show the style, not the language, and the soul answers in the speaker's language; the owner may give their own examples through `config.d/soul-tuning.yaml` (`options.examples`), validated like the file. Keep the stable-prefix hash test.
 
 - [ ] 5.1 Scenario 18 (game adapter, Budi's file, sharing to Budi with consent, Fulan never shared): passes with the real model, its material checked (facts and capabilities).
 - [ ] 5.2 Scenario 19 (task thread, delivery to Budi, ask which group): passes with the real model, with Workspace.
