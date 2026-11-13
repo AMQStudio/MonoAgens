@@ -183,3 +183,23 @@ def test_configure_logging_writes_info_lines_to_stdout_stream() -> None:
     finally:
         logger.removeHandler(handler)
         logger.setLevel(prev_level)
+
+
+def test_observability_measures_description_payload_len(caplog) -> None:
+    """WhatsApp-style description payloads report their non-zero text length."""
+    from monoagens.infra.observability import EventObserver
+    from monoagens.types import Event
+
+    caplog.set_level(logging.INFO, logger="kernel")
+    observer = EventObserver(summary_every=50)
+    event = Event(
+        id=1, ts=START, kind="percept", who="whatsapp:6281100001@s.whatsapp.net",
+        place="space:wa:6281100001@s.whatsapp.net", body="whatsapp",
+        payload={"description": "halo selamat malam"},
+    )
+    observer.observe(event)
+    lines = _info_lines(caplog)
+    assert lines == [
+        "kind=percept adapter=whatsapp place=space:wa:6281100001@s.whatsapp.net "
+        "who=whatsapp:6281100001@s.whatsapp.net len=18"
+    ]

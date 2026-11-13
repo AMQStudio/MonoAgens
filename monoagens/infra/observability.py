@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from monoagens.infra import config
+from monoagens.infra.store import payload_text
 from monoagens.types import Event
 
 LOGGER = logging.getLogger("kernel.events")
@@ -20,9 +21,9 @@ def _text_length(event: Event) -> int:
     payload = event.payload or {}
     if event.kind == "act.out":
         args = payload.get("arguments") or {}
-        if isinstance(args, dict):
-            return len(str(args.get("text") or payload.get("text") or ""))
-    return len(str(payload.get("text") or ""))
+        if isinstance(args, dict) and args.get("text"):
+            return len(str(args["text"]))
+    return len(payload_text(payload))
 
 
 def _is_gate_decision(event: Event) -> bool:

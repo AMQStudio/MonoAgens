@@ -657,3 +657,69 @@ async def test_whatsapp_concurrent_history_sync_serializes_and_yields(tmp_path) 
     dm_idx = order.index("LIVE_DM")
     assert a_last < b_first
     assert dm_idx < len(order) - 1
+
+
+async def test_whatsapp_real_protobuf_shapes_keep_text_and_non_zero_log_len(tmp_path, caplog) -> None:
+    """Plain, reply, caption, edit, and reaction protobufs retain description and log len."""
+    from monoagens.infra.observability import EventObserver
+
+    caplog.set_level(logging.INFO, logger="kernel")
+    client = FakeWAClient()
+    wa = WhatsAppBody(client=client, session_db=tmp_path / "wa.db", clock=FakeClock(START))
+    wa._sync_self_identity(client.me)
+    events: list[Event] = []
+    observer = EventObserver(summary_every=50)
+
+    async def put(ev: Event) -> None:
+        events.append(ev)
+        observer.observe(ev)
+
+    cases = [
+        _make_ev(msg_id="M_PLAIN", message=e2e.Message(conversation="plain halo apa kabar")),
+        _make_ev(
+            msg_id="M_REPLY",
+            message=e2e.Message(extendedTextMessage=e2e.ExtendedTextMessage(
+                text="isi balasan panjang",
+                contextInfo=e2e.ContextInfo(stanzaID="M_PLAIN", participant=f"{OWN_PN}@s.whatsapp.net"),
+            )),
+        ),
+        _make_ev(
+            msg_id="M_CAPTION",
+            message=e2e.Message(imageMessage=e2e.ImageMessage(
+                caption="foto rapat tadi", mimetype="image/jpeg",
+            )),
+        ),
+        _make_ev(
+            msg_id="M_EDIT",
+            message=e2e.Message(protocolMessage=e2e.ProtocolMessage(
+                type=e2e.ProtocolMessage.Type.MESSAGE_EDIT,
+                key=MessageKey(ID="M_PLAIN"),
+                editedMessage=e2e.Message(conversation="plain halo edited"),
+            )),
+        ),
+        _make_ev(
+            msg_id="M_REACT",
+            message=e2e.Message(reactionMessage=e2e.ReactionMessage(
+                text="👍", key=MessageKey(ID="M_PLAIN"),
+            )),
+        ),
+    ]
+    for ev in cases:
+        await wa.handle_message(ev, put)
+
+    assert len(events) == 5
+    descriptions = [str((ev.payload or {}).get("description") or "") for ev in events]
+    assert "plain halo apa kabar" in descriptions[0]
+    assert "isi balasan panjang" in descriptions[1]
+    assert "foto rapat tadi" in descriptions[2]
+    assert "plain halo edited" in descriptions[3]
+    assert "👍" in descriptions[4]
+
+    percept_lines = [
+        rec.message for rec in caplog.records
+        if rec.name == "kernel.events" and rec.message.startswith("kind=percept ")
+    ]
+    assert len(percept_lines) == 5
+    for desc, line in zip(descriptions, percept_lines):
+        assert f"len={len(desc)}" in line
+        assert len(desc) > 0
