@@ -14,6 +14,7 @@ from monoagens.infra.clock import FakeClock
 from monoagens.infra.embedding import FakeEmbedder
 from monoagens.core.kernel import Kernel
 from monoagens.core.reasoning import Reasoning
+from monoagens.infra.providers import OpenAICompatibleProvider
 from monoagens.infra.store import append_event, project_event, read_state, rebuild_state
 from monoagens.types import Action, Event
 from monoagens.boot import build
@@ -44,8 +45,10 @@ class FakeLLM:
 
 
 def _pfc(fake: FakeLLM) -> Reasoning:
-    return Reasoning("https://llm.test/v1", "key", "fake-model", settings=SETTINGS,
-               transport=httpx.MockTransport(fake.handler))
+    return Reasoning(
+        OpenAICompatibleProvider("https://llm.test/v1", "key", "fake-model",
+                                 transport=httpx.MockTransport(fake.handler)),
+        settings=SETTINGS)
 
 
 def _percept(who: str) -> Event:

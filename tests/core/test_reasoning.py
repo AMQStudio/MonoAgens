@@ -17,6 +17,7 @@ from monoagens.core.kernel import Kernel
 from monoagens.core.context import layout
 from monoagens.core.context.layout import PFCContext
 from monoagens.core.reasoning import TOOLS, TOOL_NAMES, Reasoning, ToolCall, turn_check
+from monoagens.infra.providers import OpenAICompatibleProvider
 from monoagens.infra.store import (active_expectation_lines, append_event, read_state,
                                   write_state)
 from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
@@ -70,11 +71,14 @@ class FakeLLM:
 
 def _pfc(fake: FakeLLM) -> Reasoning:
     return Reasoning(
-        "https://llm.test/v1",
-        "test-key",
-        "fake-model",
+        OpenAICompatibleProvider(
+            "https://llm.test/v1",
+            "test-key",
+            "fake-model",
+            retries=int(SETTINGS["constants"]["model_call_retries"]),
+            transport=httpx.MockTransport(fake.handler),
+        ),
         settings=SETTINGS,
-        transport=httpx.MockTransport(fake.handler),
     )
 
 
@@ -350,8 +354,9 @@ async def test_a_wake_without_act_is_recorded_as_silent(aconn):
 async def test_reasoning_effort_is_sent_only_when_it_is_set(aconn):
     asked = FakeLLM()
     kernel = build(aconn, clock=FakeClock(START), settings=SETTINGS, pfc=Reasoning(
-        "https://llm.test/v1", "test-key", "fake-model", effort="high", settings=SETTINGS,
-        transport=httpx.MockTransport(asked.handler)))
+        OpenAICompatibleProvider("https://llm.test/v1", "test-key", "fake-model", effort="high",
+                                 transport=httpx.MockTransport(asked.handler)),
+        settings=SETTINGS))
     await _feed(kernel, _msg("halo"))
     assert asked.requests[0]["reasoning_effort"] == "high"
 
@@ -731,7 +736,7 @@ def _desk(**changes) -> PFCContext:
 
 def test_a_fifteen_step_task_keeps_the_prompt_flat():
     small = settings(constants={"thread_result_tokens": 80, "volatile_tokens_max": 400})
-    pfc = Reasoning("https://llm.test/v1", "k", "m", settings=small)
+    pfc = Reasoning(settings=small)
     five = pfc.build_messages(_desk(doing=_doing(5)))[2]["content"]
     fifteen = pfc.build_messages(_desk(doing=_doing(15)))[2]["content"]
     assert len(fifteen) <= len(five) + 200 and len(fifteen) < 1200
@@ -742,7 +747,7 @@ def test_a_fifteen_step_task_keeps_the_prompt_flat():
 def test_middleware_notes_are_rendered_with_their_event():
     event = Event(id=1, ts=START, kind="percept", who="person:owner", place=PLACE,
                   payload={"description": "halo", "notes": ["alias: Fulan = person:fulan"]})
-    pfc = Reasoning("https://llm.test/v1", "k", "m", settings=SETTINGS)
+    pfc = Reasoning(settings=SETTINGS)
     volatile = pfc.build_messages(_desk(trigger=event))[2]["content"]
     assert "<event>person:owner: halo\nnote: alias: Fulan = person:fulan</event>" in volatile
 
@@ -945,8 +950,11 @@ def _reply(calls: list[tuple[str, dict]]) -> httpx.Response:
 
 
 def _pfc_with(handler) -> Reasoning:
-    return Reasoning("https://llm.test/v1", "k", "m", settings=SETTINGS,
-               transport=httpx.MockTransport(handler))
+    return Reasoning(
+        OpenAICompatibleProvider("https://llm.test/v1", "k", "m",
+                                 retries=int(SETTINGS["constants"]["model_call_retries"]),
+                                 transport=httpx.MockTransport(handler)),
+        settings=SETTINGS)
 
 
 async def test_a_transport_failure_is_retried_once_then_answered(aconn):
@@ -1010,8 +1018,7 @@ async def test_a_pending_intent_is_on_the_place_desk(aconn):
                                         "place_kind": "direct"})
     context = await layout.build_context(aconn, asked, PLACE, "addressed message", now=START,
                                          settings=SETTINGS, memories=(), capabilities=())
-    volatile = Reasoning("https://llm.test/v1", "k", "m",
-                   settings=SETTINGS).build_messages(context)[2]["content"]
+    volatile = Reasoning(settings=SETTINGS).build_messages(context)[2]["content"]
 
     assert "intent: you set out to say 'halo' to person:budi" in volatile
     assert intent.id is not None

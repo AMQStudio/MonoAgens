@@ -5,10 +5,8 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-from typing import Any, Sequence
+from typing import Any, Protocol, Sequence
 from zoneinfo import ZoneInfo
-
-import httpx
 
 from monoagens.core import arguments, expectations
 from monoagens.core.context import parts
@@ -113,72 +111,52 @@ class ToolCall:
     arguments: dict[str, Any]
 
 
-class Reasoning:
-    """The LLM client: layered prompts and tool calls over chat completions."""
+class ModelPort(Protocol):
+    """Model port called by Reasoning; provider drivers live outside the core."""
 
-    def __init__(self, base_url: str, api_key: str, model: str, *, effort: str = "",
+    async def decide(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], *,
+                     tool_choice: str = "required") -> tuple[list[ToolCall], dict[str, Any]]:
+        """Run one model decision and return (tool_calls, usage)."""
+        ...
+
+    async def aclose(self) -> None:
+        """Close any underlying transport resources."""
+        ...
+
+
+class Reasoning:
+    """The LLM side of the self: layered prompts and tool calls over an injected model port."""
+
+    def __init__(self, port: ModelPort | None = None, *,
                  settings: dict[str, Any] | None = None,
-                 identity: dict[str, Any] | None = None,
-                 transport: httpx.AsyncBaseTransport | None = None,
-                 client: httpx.AsyncClient | None = None, timeout: float = 30.0,
-                 parallel_tool_calls: bool = True) -> None:
-        """Store the endpoint, the key, the model, the optional effort, and the identity."""
-        self.base_url, self.api_key, self.model = base_url.rstrip("/"), api_key, model
-        self.effort = effort.strip().lower()
+                 identity: dict[str, Any] | None = None) -> None:
+        """Store the model port, settings, and identity."""
+        self._port = port
         self.settings = settings if settings is not None else load_settings()
         self.identity = dict(identity if identity is not None
                              else self.settings.get("identity") or {})
         self.timezone = ZoneInfo(str(self.settings.get("timezone") or "UTC"))
         self.name = str(self.identity.get("name") or "")
-        self.last_usage: dict[str, int] = {}
-        self.parallel_tool_calls = parallel_tool_calls
-        self._transport, self._client, self._timeout = transport, client, timeout
+        self.last_usage: dict[str, Any] = {}
 
-    def _http(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient(transport=self._transport, timeout=self._timeout)
-        return self._client
+    @property
+    def model(self) -> str:
+        """Return the active model name reported by the injected port."""
+        return str(getattr(self._port, "model", "") or "")
 
     async def aclose(self) -> None:
-        """Close the underlying HTTP client."""
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
-
-    async def _post(self, body: dict[str, Any], headers: dict[str, str]) -> httpx.Response:
-        """POST one completion, retrying a transport failure as often as the prior allows."""
-        retries = int(self.settings["constants"]["model_call_retries"])
-        for attempt in range(retries + 1):
-            try:
-                return await self._http().post(f"{self.base_url}/chat/completions",
-                                               json=body, headers=headers)
-            except httpx.TransportError:
-                if attempt == retries:
-                    raise
-        raise RuntimeError("unreachable: the retry loop always returns or raises")
+        """Close the injected model port if present."""
+        if self._port is not None:
+            await self._port.aclose()
 
     async def call(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], *,
                    tool_choice: str = "required") -> list[ToolCall]:
-        """Make one chat completion call and return its tool calls."""
-        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        body = {"model": self.model, "messages": messages, "tools": tools,
-                "tool_choice": tool_choice}
-        if self.parallel_tool_calls:
-            body["parallel_tool_calls"] = True
-        if self.effort:
-            body["reasoning_effort"] = self.effort
-        response = await self._post(body, headers)
-        response.raise_for_status()
-        try:
-            payload = response.json()
-            raw_calls = payload["choices"][0]["message"].get("tool_calls") or []
-        except (KeyError, IndexError, TypeError) as exc:
-            raise ValueError(f"Malformed chat completion response: {exc}") from exc
-        self.last_usage = _usage(payload.get("usage") or {})
-        return [
-            ToolCall(call["function"]["name"], json.loads(call["function"]["arguments"] or "{}"))
-            for call in raw_calls
-        ]
+        """Make one model decision through the port and return its tool calls."""
+        if self._port is None:
+            raise RuntimeError("ModelPort is not configured")
+        calls, usage = await self._port.decide(messages, tools, tool_choice=tool_choice)
+        self.last_usage = dict(usage)
+        return calls
 
     def build_messages(self, context: PFCContext) -> list[dict[str, Any]]:
         """Build the layered prompt: stable, core memory, volatile."""
@@ -271,14 +249,3 @@ def _recorded(calls: list[dict[str, Any]]) -> list[str]:
     """Render what each thought act recorded, as the next round's results."""
     return [f"{call['name']}: {json.dumps(call['arguments'], ensure_ascii=False)}"
             for call in calls]
-
-
-def _usage(raw: dict[str, Any]) -> dict[str, int]:
-    """Normalize one response's token usage into the five tracked counters."""
-    details, prompt = raw.get("prompt_tokens_details") or {}, int(raw.get("prompt_tokens") or 0)
-    reasoning = raw.get("completion_tokens_details") or {}
-    completion = int(raw.get("completion_tokens") or 0)
-    return {"prompt_tokens": prompt, "cached_tokens": int(details.get("cached_tokens") or 0),
-            "completion_tokens": completion,
-            "reasoning_tokens": int(reasoning.get("reasoning_tokens") or 0),
-            "total_tokens": int(raw.get("total_tokens") or prompt + completion)}

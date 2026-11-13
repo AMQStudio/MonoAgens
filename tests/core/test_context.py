@@ -26,7 +26,7 @@ PREFIX_HASH = "8535fcd588d944ec769b7c61436d30d9600b3a811bd35e9fcb63acb26717b38f"
 
 
 def _soul() -> Reasoning:
-    return Reasoning("http://unused", "", "fake", settings=SETTINGS)
+    return Reasoning(settings=SETTINGS)
 
 
 def _plain() -> PFCContext:

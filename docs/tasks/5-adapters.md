@@ -17,7 +17,7 @@ May touch: `monoagens/infra/providers/` (new), `monoagens/boot.py`, `monoagens/_
 All real-model work below depends on this part, so it comes first. V1 (branch `archived`) has
 provider code under `monoagens/providers/` (Anthropic, Gemini, OpenAI); port what fits.
 
-- [ ] A.1 The model port (D64): `core/reasoning.py` keeps building the neutral messages and tools and calls an injected model port (`decide(messages, tools, *, tool_choice) -> (tool calls, usage)`), as the embedder is injected; the HTTP request, headers and response parsing move to `infra/providers/openai_compatible.py`. A refactor that changes no behavior: the suite and the fake replay pass unchanged, and the core imports nothing from `infra/providers/`.
+- [x] A.1 The model port (D64): `core/reasoning.py` keeps building the neutral messages and tools and calls an injected model port (`decide(messages, tools, *, tool_choice) -> (tool calls, usage)`), as the embedder is injected; the HTTP request, headers and response parsing move to `infra/providers/openai_compatible.py`. A refactor that changes no behavior: the suite and the fake replay pass unchanged, and the core imports nothing from `infra/providers/`.
 - [ ] A.2 The OpenCode Go driver (`infra/providers/opencode_go.py`): the endpoint from the official Go docs (`https://opencode.ai/inference/go/openai/v1/chat/completions` for DeepSeek V4.1 Flash, model `deepseek-v4.1-flash`); a stable `x-opencode-session` header per soul so the gateway can route and cache the stable prefix; thinking levels `low | high | max` mapped from `LLM_REASONING_EFFORT`; cached tokens read from the usage. Check the endpoint and the header against the live docs before coding; the docs move.
 - [ ] A.3 Selection and fallback (`.env`): `LLM_PROVIDER` (`openai-compatible` default, `opencode-go`) and `LLM_FALLBACKS` (an ordered list of providers, each with its own key variable); a call that fails for quota, rate limit or a server error moves to the next, and every move is recorded in the Log with the reason; a refusal of the request itself (a bad argument) does not move. Every model call stays a gated, recorded call counted in the budget (AGENTS invariant 5).
 - [ ] A.4 New baseline: the launch set once with the real model through OpenCode Go (`deepseek-v4.1-flash`, `--effort high`); record checks per scenario and tokens (cached included) under Notes. Later measurements compare with this baseline, not with Task 4's 24/26 on another gateway.
@@ -121,3 +121,8 @@ May touch: `monoagens/adapters/`, provider adapters, `tests/`, `scenarios/`
 the real-model run are reported; the code is readable (AGENTS.md size guide).
 
 **Notes.**
+
+### A.1 Core edit plan
+- Exact core file: `monoagens/core/reasoning.py`. No other core file is modified.
+- Change: remove `httpx` and HTTP transport/request/response code from `monoagens/core/reasoning.py`; define `ModelPort` (`Protocol` with `decide(messages, tools, *, tool_choice="required") -> tuple[list[ToolCall], dict[str, Any]]` and `aclose() -> None`); refactor `Reasoning` to wrap an injected `ModelPort`. Move the OpenAI-compatible HTTP client (`_http`, `_post`, `aclose`, `_usage`, headers, retries) to `monoagens/infra/providers/openai_compatible.py`.
+- Progress A.1: done — 539 passed, 1 skipped (`uv run pytest`); fake replay 133/133 passed; core import invariant clean.

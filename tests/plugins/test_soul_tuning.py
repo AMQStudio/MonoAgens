@@ -104,7 +104,7 @@ async def test_the_stable_prefix_does_not_change(aconn, tmp_path):
     with_plugin, _ = await _kernel(aconn, _root(tmp_path, "soul-tuning"), "soul-tuning")
     without = build(aconn, clock=FakeClock(START), settings=settings())
     trigger = await _trigger(aconn)
-    soul = Reasoning("http://unused", "", "fake", settings=with_plugin.settings)
+    soul = Reasoning(settings=with_plugin.settings)
 
     async def first_message(kernel) -> str:
         context = await layout.build_context(

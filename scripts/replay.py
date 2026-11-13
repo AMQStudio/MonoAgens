@@ -58,6 +58,7 @@ from monoagens.infra.duration import parse_duration
 from monoagens.core.kernel import Kernel
 from monoagens.infra.embedding import FastEmbedder, FakeEmbedder
 from monoagens.infra.migrate import migrate, migrate_url
+from monoagens.infra.providers import OpenAICompatibleProvider
 from monoagens.core.context.layout import PFCContext, withheld_note
 from monoagens.core.reasoning import Reasoning, ToolCall
 from monoagens.types import Action, Event
@@ -680,9 +681,11 @@ class ReplayRunner:
             return FakePFC(self.tracker, self.answers)
         client = httpx.AsyncClient(
             transport=UsageTransport(httpx.AsyncHTTPTransport(), self.tracker), timeout=90.0)
-        return TrackedPFC(self.tracker, self.llm["base_url"], self.llm["api_key"],
-                          self.llm["model"], effort=self.llm.get("effort") or "",
-                          settings=self.settings, client=client, timeout=90.0)
+        retries = int(self.settings["constants"]["model_call_retries"])
+        port = OpenAICompatibleProvider(
+            self.llm["base_url"], self.llm["api_key"], self.llm["model"],
+            effort=self.llm.get("effort") or "", retries=retries, client=client, timeout=90.0)
+        return TrackedPFC(self.tracker, port, settings=self.settings)
 
     async def _make_kernel(self) -> Kernel:
         """Build a fresh kernel that records its appraisals and the scenario's plugins."""

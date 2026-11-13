@@ -15,6 +15,7 @@ from monoagens.infra.clock import Clock
 from monoagens.infra.embedding import FastEmbedder
 from monoagens.infra.migrate import migrate
 from monoagens.infra.prior import load_settings
+from monoagens.infra.providers import OpenAICompatibleProvider
 from monoagens.middleware.identity import ensure as ensure_pairing
 from monoagens.middleware.loader import Loader
 
@@ -38,9 +39,12 @@ async def main() -> None:
         clock = Clock(tick_seconds=config.tick_seconds(settings))
         settings["identity"] = await identity.ensure(conn, settings["identity"],
                                                     now=clock.now())
-        pfc = Reasoning(llm["base_url"], llm["api_key"], llm["model"], effort=llm["effort"],
-                        settings=settings,
-                        parallel_tool_calls=llm["parallel_tool_calls"])
+        retries = int(settings["constants"]["model_call_retries"])
+        port = OpenAICompatibleProvider(
+            llm["base_url"], llm["api_key"], llm["model"], effort=llm["effort"],
+            retries=retries, parallel_tool_calls=llm["parallel_tool_calls"],
+        )
+        pfc = Reasoning(port, settings=settings)
         kernel = build(conn, clock=clock, pfc=pfc, settings=settings, embedder=FastEmbedder())
         await warm(kernel)
         code = await ensure_pairing(conn, now=clock.now())

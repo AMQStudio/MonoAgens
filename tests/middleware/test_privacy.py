@@ -299,7 +299,7 @@ async def test_no_withheld_note_when_nothing_was_withheld(aconn):
 def _prompt(desk) -> str:
     """Render the three prompt messages into one string, as the Reasoning sends them."""
     return "\n".join(message["content"] for message in
-                     Reasoning("http://unused", "", "fake", settings=SETTINGS).build_messages(desk))
+                     Reasoning(settings=SETTINGS).build_messages(desk))
 
 
 async def test_share_with_a_person_records_consent_and_counts_as_audience(aconn):
@@ -442,7 +442,7 @@ async def test_a_paraphrase_of_a_private_line_is_not_on_the_other_places_desk(ac
     assert [context.place for context in pfc.contexts] == [BUDI]
     for context in pfc.contexts:
         prompt = "\n".join(message["content"] for message in
-                           Reasoning("http://unused", "", "fake", settings=SETTINGS)
+                           Reasoning(settings=SETTINGS)
                            .build_messages(context))
         assert "di-PHK" not in prompt
     intent = await (await aconn.execute(
@@ -622,7 +622,7 @@ async def test_person_cards_show_people_present_and_named_but_never_their_messag
     assert "sketsa_logo" not in cards
 
     prompt = "\n".join(message["content"] for message in
-                       Reasoning("http://unused", "", "fake", settings=SETTINGS)
+                       Reasoning(settings=SETTINGS)
                        .build_messages(desk))
     assert "<people>" in prompt and "person:budi" in prompt
     assert "sketsa_logo" not in prompt

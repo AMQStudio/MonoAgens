@@ -16,6 +16,7 @@ from monoagens.core.kernel import Kernel
 from monoagens.infra.embedding import FakeEmbedder
 from monoagens.core.memory import base_level, decay_d
 from monoagens.core.reasoning import Reasoning, ToolCall
+from monoagens.infra.providers import OpenAICompatibleProvider
 from monoagens.infra.store import append_event, insert_event_vector, read_state
 from monoagens.types import Event
 from monoagens.boot import build
@@ -79,8 +80,10 @@ class FakeLLM:
 
 
 def _pfc(fake: FakeLLM) -> Reasoning:
-    return Reasoning("https://llm.test/v1", "key", "fake",
-               settings=SETTINGS, transport=httpx.MockTransport(fake.handler))
+    return Reasoning(
+        OpenAICompatibleProvider("https://llm.test/v1", "key", "fake",
+                                 transport=httpx.MockTransport(fake.handler)),
+        settings=SETTINGS)
 
 
 async def _add_memory(conn, text: str, *, importance=0.5, accessed=START, valid_to=None,

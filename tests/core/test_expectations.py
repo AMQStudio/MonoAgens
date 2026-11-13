@@ -14,6 +14,7 @@ from monoagens.infra.clock import FakeClock
 from monoagens.infra.duration import parse_duration
 from monoagens.core.kernel import Kernel
 from monoagens.core.reasoning import Reasoning
+from monoagens.infra.providers import OpenAICompatibleProvider
 from monoagens.infra.store import append_event, write_state
 from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
@@ -48,8 +49,10 @@ class FakeLLM:
 
 
 def _pfc(fake: FakeLLM) -> Reasoning:
-    return Reasoning("https://llm.test/v1", "test-key", "fake-model", settings=SETTINGS,
-               transport=httpx.MockTransport(fake.handler))
+    return Reasoning(
+        OpenAICompatibleProvider("https://llm.test/v1", "test-key", "fake-model",
+                                 transport=httpx.MockTransport(fake.handler)),
+        settings=SETTINGS)
 
 
 class RecordingBody:

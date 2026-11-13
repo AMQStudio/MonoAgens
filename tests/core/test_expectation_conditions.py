@@ -13,6 +13,7 @@ from monoagens.infra.clock import FakeClock
 from monoagens.infra.embedding import FakeEmbedder
 from monoagens.core.kernel import Kernel
 from monoagens.core.reasoning import Reasoning
+from monoagens.infra.providers import OpenAICompatibleProvider
 from monoagens.infra.store import append_event, read_expectations
 from monoagens.boot import build
 from tests.support import settings
@@ -44,8 +45,10 @@ class FakeLLM:
 
 
 def _pfc(fake: FakeLLM) -> Reasoning:
-    return Reasoning("https://llm.test/v1", "test-key", "fake-model", settings=SETTINGS,
-               transport=httpx.MockTransport(fake.handler))
+    return Reasoning(
+        OpenAICompatibleProvider("https://llm.test/v1", "test-key", "fake-model",
+                                 transport=httpx.MockTransport(fake.handler)),
+        settings=SETTINGS)
 
 
 class RecordingBody:
