@@ -161,3 +161,17 @@ def test_expectation_kind_check_rejects_unknown_kinds(conn):
     conn.execute(
         "INSERT INTO expectations (kind, about, expires_at, source_event) "
         "VALUES ('guard', 'x', now() + interval '1 day', %s)", (event_id,))
+
+
+def test_privacy_candidate_indexes_exist(conn):
+    rows = conn.execute(
+        "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()"
+    ).fetchall()
+    names = {name for (name,) in rows}
+    assert {
+        "idx_events_privacy_trgm",
+        "idx_events_privacy_tsv",
+        "idx_events_share_granted",
+        "idx_memories_privacy_trgm",
+        "idx_memories_privacy_tsv",
+    } <= names

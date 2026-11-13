@@ -148,3 +148,11 @@ def test_reasoning_effort_is_read_and_checked(tmp_path, monkeypatch):
     monkeypatch.delenv("LLM_REASONING_EFFORT")
     with pytest.raises(ValueError, match="LLM_REASONING_EFFORT"):
         load_llm_config(path)
+
+
+def test_leak_candidates_reads_runtime_config():
+    from monoagens.infra.config import DEFAULT_CONFIG_PATH, leak_candidates, load_config
+
+    assert leak_candidates(load_config(DEFAULT_CONFIG_PATH)) == 50
+    with pytest.raises(ValueError, match="runtime.leak_candidates"):
+        leak_candidates({"runtime": {"leak_candidates": 0}})

@@ -157,6 +157,17 @@ def embed_batch_size(settings: Mapping[str, Any]) -> int:
     return size
 
 
+def leak_candidates(settings: Mapping[str, Any] | None = None) -> int:
+    """Return max SQL similarity candidates checked by `privacy.leaks()`."""
+    raw = ((settings or {}).get("runtime") or {}).get("leak_candidates")
+    if raw is None:
+        raw = (load_config().get("runtime") or {}).get("leak_candidates")
+    count = int(raw or 0)
+    if count <= 0:
+        raise ValueError("runtime.leak_candidates must be a positive integer")
+    return count
+
+
 def load_env_file(path: pathlib.Path = DEFAULT_ENV_PATH) -> dict[str, str]:
     """Read a simple KEY=VALUE .env file into a dict."""
     env_path = pathlib.Path(path)

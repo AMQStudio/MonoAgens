@@ -745,3 +745,69 @@ async def test_delegated_reply_via_reply_to_grants_one_reply_only(aconn):
     await kernel._run_hooks("inbound", second, {"conn": aconn, "now": START},
                             second, tool=second.body)
     assert await privacy.audience(aconn, BUDI, before=second.id) == frozenset({"person:budi"})
+
+
+async def test_leaks_protects_imported_private_lines(aconn):
+    """Imported percepts from private chats stay protected from leaking elsewhere."""
+    await append_event(
+        aconn, ts=START, kind="percept", who="person:fulan", place=FULAN_A, body="whatsapp",
+        payload={"description": "Nomor PIN brankas kantor adalah 884219.",
+                 "place_kind": "direct", "imported": True})
+    await _said(aconn, "person:charlie", GROUP, "shared", "halo semua")
+    msg = "Pakai PIN 884219 atau nomor pin brankas kantor adalah 884219."
+    assert await privacy.leaks(aconn, GROUP, msg) is True
+    assert await privacy.leaks(aconn, FULAN_A, "Nomor PIN brankas kantor adalah 884219.") is False
+
+
+async def test_leaks_at_scale_with_6000_events_and_200_chats(aconn):
+    """D45/B.3: leaks() stays <50 ms at 6,000 events across 200 chats (half imported)."""
+    import time
+    from psycopg.types.json import Jsonb
+
+    rows = []
+    for i in range(6000):
+        chat = f"space:wa:chat{i % 200}"
+        who = f"person:wa:user{i % 200}"
+        text = (
+            f"Pesan nomor {i} dari obrolan {i % 200} membahas proyek tim "
+            f"ref{i % 97} untuk jadwal hari ke-{(i % 28) + 1}."
+        )
+        if i == 1234:
+            text = "aku di-PHK kemarin"
+        elif i == 2345:
+            text = ("Halo semua, kemarin aku ketemu Fulan dan katanya "
+                    "password wifi ruang tamu adalah kopi hitam panas.")
+        elif i == 5000:
+            text = "Besok kita ketemu di kafe ujung jalan ya teman."
+        payload: dict[str, Any] = {"description": text, "place_kind": "direct"}
+        if i % 2 == 0:
+            payload["imported"] = True
+        rows.append((START, "percept", who, chat, "whatsapp", Jsonb(payload), who))
+    async with aconn.cursor() as cur:
+        await cur.executemany(
+            "INSERT INTO events (ts, kind, who, place, body, payload, origin_actor) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            rows,
+        )
+    imp_row = await (await aconn.execute(
+        "SELECT id FROM events WHERE payload->>'description' = 'aku di-PHK kemarin'")).fetchone()
+    await aconn.execute(
+        "INSERT INTO memories (who, place, text, importance, private, derived_from) "
+        "VALUES (%s, %s, %s, 0.9, true, %s)",
+        ("person:wa:user34", "space:wa:chat34", "di-PHK kemarin", [int(imp_row[0])]),
+    )
+    await aconn.execute("ANALYZE events; ANALYZE memories")
+
+    target = "space:wa:chat0"
+    checks = [
+        ("Hai Budi, katanya kemarin aku di-PHK kemarin dari kantor.", True),
+        ("Kalau butuh internet pakai password wifi ruang tamu saja ya.", True),
+        ("Besok kita ketemu di kafe ujung jalan ya teman.", False),
+        ("Selamat pagi semuanya, semoga hari ini lancar dan menyenangkan.", False),
+    ]
+    for outgoing, expected in checks:
+        t0 = time.perf_counter()
+        result = await privacy.leaks(aconn, target, outgoing)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        assert result is expected
+        assert elapsed_ms < 50.0, f"leaks() took {elapsed_ms:.2f} ms for {outgoing!r}"

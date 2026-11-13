@@ -11,6 +11,7 @@ runtime:
   adapter_retry: { initial_seconds: 1, max_seconds: 60, factor: 2 }
   import_summary_every: 100
   embed_batch_size: 64
+  leak_candidates: 50
 bodies:                             # adapters; tokens stay in .env
   whatsapp: { enabled: true, history_chunk_size: 25 }
   cli: { enabled: true }
