@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from monoagens.core import hooks, memory, threads
+from monoagens.core import expectations, hooks, memory, threads
 from monoagens.core.context import layout
 from monoagens.middleware import identity, privacy
 from monoagens.middleware.contract import compose
@@ -626,3 +626,122 @@ async def test_person_cards_show_people_present_and_named_but_never_their_messag
                        .build_messages(desk))
     assert "<people>" in prompt and "person:budi" in prompt
     assert "sketsa_logo" not in prompt
+
+
+async def test_scenario_18_step_4_desk_line_is_sent_while_private_dm_in_group_is_refused(aconn):
+    """D45 one truth: visible desk content is never refused as a leak; private DMs still are."""
+    budi = await _said(aconn, "person:budi", BUDI, "direct",
+                       "Ini sketsa logo versi baru: warna biru gelap.", body="whatsapp")
+    owner_dm = await _said(aconn, OWNER, OWNER_DM, "direct",
+                           "Kode brankas ruang rapat itu 842190, jangan kasih tahu grup.")
+    await aconn.execute("INSERT INTO memories (text, derived_from) VALUES (%s, %s)",
+                        ("Sketsa logo versi baru: warna biru gelap", [budi]))
+    world = await _said(aconn, OWNER, "space:game:world1", "shared", "Budi tadi kirim file apa ya?")
+    kernel = await _kernel(aconn)
+
+    desk_quote = "Budi mengirim Sketsa logo versi baru: warna biru gelap"
+    await kernel._apply(_trigger(world, "space:game:world1"), ToolCall("act", {
+        "capability": "whatsapp.say",
+        "arguments": {"text": desk_quote, "to": "space:game:world1"}}))
+    out = await (await aconn.execute(
+        "SELECT place, payload FROM events WHERE kind = 'act.out' ORDER BY id DESC LIMIT 1")
+    ).fetchone()
+    assert out is not None and out[0] == "space:game:world1"
+    assert desk_quote in out[1]["arguments"]["text"]
+
+    group = await _said(aconn, "person:charlie", GROUP, "shared", "halo semua")
+    await kernel._apply(_trigger(group, GROUP), ToolCall("act", {
+        "capability": "whatsapp.say",
+        "arguments": {"text": "Kata owner kode brankas ruang rapat itu 842190.", "to": GROUP}}))
+    res = await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'act.result' ORDER BY id DESC LIMIT 1")
+    ).fetchone()
+    assert "that place may not see this content" in res[0]["result"]["error"]
+
+
+async def test_delegated_reply_carries_delegator_audience_for_one_reply_only(aconn):
+    """D80: a matched wait-expectation reply gets delegator X; later/Fulan lines do not."""
+    await _said(aconn, "person:charlie", GROUP, "shared", "halo grup")
+    asked_id = await _said(aconn, OWNER, GROUP, "shared", "tanya Budi cocok atau tidak")
+    asked = Event(id=asked_id, ts=START, kind="percept", who=OWNER, place=GROUP,
+                  body="telegram", origin_actor=OWNER)
+    await _said(aconn, "person:budi", BUDI, "direct", "hai", body="whatsapp")
+    kernel = await _kernel(aconn)
+
+    await kernel._emit(asked, "act.out", {
+        "capability": "whatsapp.say",
+        "arguments": {"text": "Menurutmu cocok atau tidak?"},
+        "communicative": True}, place=BUDI)
+    exp_created = await expectations.create(aconn, {
+        "kind": "wait", "about": "Budi menjawab",
+        "cue_event": {"who": "person:budi"}, "expect": {"none": True}},
+        now=START, settings=SETTINGS, source=asked)
+
+    budi_reply = await append_event(
+        aconn, ts=START, kind="percept", who="person:budi", place=BUDI, body="whatsapp",
+        payload={"description": "Cocok kok, cuma warnanya agak terlalu terang.",
+                 "place_kind": "direct"})
+    await kernel._run_hooks("inbound", budi_reply, {"conn": aconn, "now": START},
+                            budi_reply, tool=budi_reply.body)
+    assert await privacy.audience(aconn, BUDI, before=budi_reply.id) == frozenset({
+        "person:budi", OWNER})
+    assert await privacy.visible(aconn, context=GROUP, source=BUDI, before=budi_reply.id) is False
+
+    # Unrelated later line from Budi keeps only Budi's audience.
+    await expectations.resolve(aconn, int(exp_created.payload["expectation_id"]),
+                               "satisfied", now=START)
+    later = await append_event(
+        aconn, ts=START, kind="percept", who="person:budi", place=BUDI, body="whatsapp",
+        payload={"description": "Aku mau cuti besok, rahasia ya.", "place_kind": "direct"})
+    await kernel._run_hooks("inbound", later, {"conn": aconn, "now": START},
+                            later, tool=later.body)
+    assert await privacy.audience(aconn, BUDI, before=later.id) == frozenset({"person:budi"})
+    assert await privacy.leaks(aconn, GROUP, "Cocok kok, cuma warnanya agak terlalu terang.") is True
+
+    # Owner chooses to share into GROUP; only the matched reply opens, never Fulan's DM.
+    reply_here = Event(id=asked_id, ts=START, kind="percept", who=OWNER, place=GROUP,
+                       body="telegram", origin_actor=OWNER)
+    await kernel._apply(reply_here, ToolCall("act", {
+        "capability": "self.share", "arguments": {"item": "jawaban Budi", "to": GROUP}}))
+    assert await privacy.visible(aconn, context=GROUP, source=BUDI, before=budi_reply.id) is True
+    assert await privacy.leaks(aconn, GROUP, "Budi bilang cocok, cuma warnanya agak terlalu terang.") is False
+    assert await privacy.leaks(aconn, GROUP, "Aku mau cuti besok, rahasia ya.") is True
+
+    fulan = await _said(aconn, "person:fulan", FULAN_A, "direct", "aku di-PHK")
+    await kernel._apply(_trigger(fulan, FULAN_A), ToolCall("act", {
+        "capability": "self.share",
+        "arguments": {"episode": str(fulan), "to": "person:budi"}}))
+    kinds = [r[0] for r in await (await aconn.execute(
+        "SELECT kind FROM events WHERE kind = 'guard.stopped'")).fetchall()]
+    assert kinds
+
+
+async def test_delegated_reply_via_reply_to_grants_one_reply_only(aconn):
+    """D80: a percept replying (`reply_to`) to an owner-delegated send includes owner once."""
+    root_id = await _said(aconn, OWNER, GROUP, "shared", "tanya Budi ya")
+    await _said(aconn, "person:budi", BUDI, "direct", "hai", body="whatsapp")
+    kernel = await _kernel(aconn)
+
+    root = Event(id=root_id, ts=START, kind="percept", who=OWNER, place=GROUP,
+                 body="telegram", origin_actor=OWNER)
+    out = await kernel._emit(root, "act.out", {
+        "capability": "whatsapp.say", "arguments": {"text": "Jadi nggak?"},
+        "communicative": True}, place=BUDI)
+    await kernel._emit(out, "act.confirmed", {"capability": "whatsapp.say",
+                                              "message_id": "wa-msg-9"}, place=BUDI)
+
+    first = await append_event(
+        aconn, ts=START, kind="percept", who="person:budi", place=BUDI, body="whatsapp",
+        payload={"description": "Jadi jam lima.", "place_kind": "direct",
+                 "reply_to": "wa-msg-9"})
+    await kernel._run_hooks("inbound", first, {"conn": aconn, "now": START},
+                            first, tool=first.body)
+    assert await privacy.audience(aconn, BUDI, before=first.id) == frozenset({"person:budi", OWNER})
+
+    second = await append_event(
+        aconn, ts=START, kind="percept", who="person:budi", place=BUDI, body="whatsapp",
+        payload={"description": "Oh iya gaji belum turun.", "place_kind": "direct",
+                 "reply_to": "wa-msg-9"})
+    await kernel._run_hooks("inbound", second, {"conn": aconn, "now": START},
+                            second, tool=second.body)
+    assert await privacy.audience(aconn, BUDI, before=second.id) == frozenset({"person:budi"})

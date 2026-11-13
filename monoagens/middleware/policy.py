@@ -113,7 +113,7 @@ def policy_for(hook: str, when: str, kernel: Any) -> Middleware:
                            interaction.typing(kernel), privacy.guard(kernel, "first"))
         return compose(privacy.guard(kernel, "last"), quiet_line(kernel),
                        approval_line(kernel))
-    return compose(identity.identity_line())
+    return compose(identity.identity_line(), privacy.delegation(kernel))
 
 
 def daily_limit(settings: Mapping[str, Any]) -> float:

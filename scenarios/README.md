@@ -10,8 +10,8 @@ from the scripted fake model; real results come from the saved reports in
 `reports/`. A capability that fails with the real model is listed as FAIL, not
 hidden.
 
-Generated 2026-11-13 11:10 UTC from 30 capabilities across 8 brain functions.
-Pooled per capability: its latest runs among 8 saved fake and 3 saved real-model reports. The real column names the report behind its
+Generated 2026-11-13 12:30 UTC from 30 capabilities across 8 brain functions.
+Pooled per capability: its latest runs among 8 saved fake and 1 saved real-model reports. The real column names the report behind its
 verdict and reads `flaky` when the recorded runs both passed and failed; the
 `Real-model record` section at the end keeps those runs, so pruning the reports never
 erases evidence.
@@ -49,7 +49,7 @@ _No scenario yet._
 
 | Capability | Scenario | Fake result | Real model |
 |---|---|---|---|
-| Budi's file is used when the owner is alone, moved to the owner's private channel when someone else is present, shared to Budi with consent, and Fulan's private line never leaves the owner's direct chat. | 18_game_world_file_and_share | PASS 3/3 · 2026-11-13 | FAIL 6/19 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-13 · 2026-11-13-0457-real-all.md |
+| Budi's file is used when the owner is alone, moved to the owner's private channel when someone else is present, shared to Budi with consent, Budi's reply reaches the busy world only after the owner shares it (D80), and Fulan's private line never leaves the owner's direct chat. | 18_game_world_file_and_share | PASS 3/3 · 2026-11-13 | FAIL 6/19 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-13 · 2026-11-13-0457-real-all.md |
 | A multi-step job opens a task thread, holds a promise, delivers to Budi's direct place, asks which group before sharing, and its waiting does not block the owner's chat. | 19_task_thread_two_groups | PASS 3/3 · 2026-11-13 | FAIL 14/21 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-13 · 2026-11-13-0457-real-all.md |
 
 ## promises
@@ -111,12 +111,42 @@ Kept here, so pruning `reports/` to ten never erases evidence.
 | 25_help_place_name | PASS | 4/4 | deepseek-v4.1-flash | high | 2026-11-13 | 2026-11-13-1110-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
 | 25_help_place_name | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
 | 25_help_place_name | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| 26_help_meeting_time | FAIL | 3/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
+| 26_help_meeting_time | FAIL | 3/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0409-real-18-19-26-28.md |
+| 26_help_meeting_time | FAIL | 5/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2025-real-26-28.md |
 | 27_help_wifi_password | PASS | 4/4 | deepseek-v4.1-flash | high | 2026-11-13 | 2026-11-13-1110-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
 | 27_help_wifi_password | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
 | 27_help_wifi_password | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| 28_help_package_location | FAIL | 3/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
+| 28_help_package_location | FAIL | 3/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0409-real-18-19-26-28.md |
+| 28_help_package_location | FAIL | 5/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2025-real-26-28.md |
 | 29_help_clinic_hours | PASS | 4/4 | deepseek-v4.1-flash | high | 2026-11-13 | 2026-11-13-1110-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
 | 29_help_clinic_hours | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
 | 29_help_clinic_hours | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| 18_game_world_file_and_share | FAIL | 6/19 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
+| 18_game_world_file_and_share | FAIL | 5/19 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0409-real-18-19-26-28.md |
+| 18_game_world_file_and_share | FAIL | 8/19 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1859-real-18-19-26-28.md |
+| 19_task_thread_two_groups | FAIL | 14/21 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
+| 19_task_thread_two_groups | FAIL | 13/21 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0409-real-18-19-26-28.md |
+| 19_task_thread_two_groups | FAIL | 12/21 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1859-real-18-19-26-28.md |
+| 08_reminder_at_time | PASS | 1/1 | deepseek-v4.1-flash | high | 2026-11-13 | 2026-11-13-1110-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| 08_reminder_at_time | PASS | 1/1 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
+| 08_reminder_at_time | PASS | 1/1 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| 09_reminder_ask_again | PASS | 1/1 | deepseek-v4.1-flash | high | 2026-11-13 | 2026-11-13-1110-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| 09_reminder_ask_again | PASS | 1/1 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
+| 09_reminder_ask_again | PASS | 1/1 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-12 | replay-20261112-061932.md |
+| 10_reminder_recurring_nudge | PASS | 1/1 | deepseek-v4.1-flash | high | 2026-11-13 | 2026-11-13-1110-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| 10_reminder_recurring_nudge | PASS | 1/1 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
+| 10_reminder_recurring_nudge | PASS | 1/1 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| 13_fired_reminder_different_place | PASS | 3/3 | deepseek-v4.1-flash | high | 2026-11-13 | 2026-11-13-1110-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| 13_fired_reminder_different_place | PASS | 3/3 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
+| 13_fired_reminder_different_place | PASS | 3/3 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| 16_watch_for_phrase | PASS | 4/4 | deepseek-v4.1-flash | high | 2026-11-13 | 2026-11-13-1110-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| 16_watch_for_phrase | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
+| 16_watch_for_phrase | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | notes:12.8-probe |
+| 30_same_topic_question | PASS | 5/5 | deepseek-v4.1-flash | high | 2026-11-13 | 2026-11-13-1110-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| 30_same_topic_question | FAIL | 4/5 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
+| 30_same_topic_question | PASS | 5/5 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | notes:12.8-probe |
 | 01_group_chitchat_greeting | PASS | 1/1 | deepseek-v4.1-flash | high | 2026-11-13 | 2026-11-13-1110-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
 | 01_group_chitchat_greeting | PASS | 1/1 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
 | 01_group_chitchat_greeting | PASS | 1/1 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
@@ -150,33 +180,3 @@ Kept here, so pruning `reports/` to ten never erases evidence.
 | 24_gate_threshold | FAIL | 10/11 | deepseek-v4.1-flash | high | 2026-11-13 | 2026-11-13-1110-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
 | 24_gate_threshold | FAIL | 10/11 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
 | 24_gate_threshold | FAIL | 11/12 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | replay-20261112-100338.md |
-| 08_reminder_at_time | PASS | 1/1 | deepseek-v4.1-flash | high | 2026-11-13 | 2026-11-13-1110-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| 08_reminder_at_time | PASS | 1/1 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
-| 08_reminder_at_time | PASS | 1/1 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| 09_reminder_ask_again | PASS | 1/1 | deepseek-v4.1-flash | high | 2026-11-13 | 2026-11-13-1110-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| 09_reminder_ask_again | PASS | 1/1 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
-| 09_reminder_ask_again | PASS | 1/1 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-12 | replay-20261112-061932.md |
-| 10_reminder_recurring_nudge | PASS | 1/1 | deepseek-v4.1-flash | high | 2026-11-13 | 2026-11-13-1110-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| 10_reminder_recurring_nudge | PASS | 1/1 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
-| 10_reminder_recurring_nudge | PASS | 1/1 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| 13_fired_reminder_different_place | PASS | 3/3 | deepseek-v4.1-flash | high | 2026-11-13 | 2026-11-13-1110-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| 13_fired_reminder_different_place | PASS | 3/3 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
-| 13_fired_reminder_different_place | PASS | 3/3 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| 16_watch_for_phrase | PASS | 4/4 | deepseek-v4.1-flash | high | 2026-11-13 | 2026-11-13-1110-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| 16_watch_for_phrase | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
-| 16_watch_for_phrase | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | notes:12.8-probe |
-| 30_same_topic_question | PASS | 5/5 | deepseek-v4.1-flash | high | 2026-11-13 | 2026-11-13-1110-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| 30_same_topic_question | FAIL | 4/5 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
-| 30_same_topic_question | PASS | 5/5 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | notes:12.8-probe |
-| 26_help_meeting_time | FAIL | 3/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
-| 26_help_meeting_time | FAIL | 3/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0409-real-18-19-26-28.md |
-| 26_help_meeting_time | FAIL | 5/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2025-real-26-28.md |
-| 28_help_package_location | FAIL | 3/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
-| 28_help_package_location | FAIL | 3/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0409-real-18-19-26-28.md |
-| 28_help_package_location | FAIL | 5/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2025-real-26-28.md |
-| 18_game_world_file_and_share | FAIL | 6/19 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
-| 18_game_world_file_and_share | FAIL | 5/19 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0409-real-18-19-26-28.md |
-| 18_game_world_file_and_share | FAIL | 8/19 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1859-real-18-19-26-28.md |
-| 19_task_thread_two_groups | FAIL | 14/21 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0457-real-all.md |
-| 19_task_thread_two_groups | FAIL | 13/21 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-13 | 2026-11-13-0409-real-18-19-26-28.md |
-| 19_task_thread_two_groups | FAIL | 12/21 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1859-real-18-19-26-28.md |
