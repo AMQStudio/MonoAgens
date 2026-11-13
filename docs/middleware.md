@@ -144,6 +144,13 @@ person (a command).
   middleware names one, and a missing one fails at boot. A permission without a `base` is the
   owner's only; there is no "open to everyone" by omission.
 - **One output marker** (`contract.OUTPUT_MARKER`) for every cut output.
+- **Nothing is lost when an output is cut** (D62). The full output goes to the attachment store
+  (§10) with the `act.result` as its origin, so its audience and hard forgetting follow the
+  chain; the result carries the cut text plus `full: {ref, size}`, and the marker names the
+  ref and the offset to continue from. The middleware capability `registry.more(ref, offset,
+  limit)` reads the rest of any tool's output, through the same privacy check as an
+  attachment. `<doing>`'s pointers to older results can therefore always be opened again: the
+  view is compressed, the record is not.
 - **Offered per requester.** In the context hook the registry offers a turn only the tools the
   requester may use (`roles.py`, §8), so the soul never promises what it cannot do. In the action
   hook `policy.py` decides pass, ask or refuse from the requester's permissions, the tool's

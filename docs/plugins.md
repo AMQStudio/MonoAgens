@@ -134,6 +134,10 @@ On by default through the shipped `config.yaml`; off with one line.
 - Tools: `read` (line ranges; also attachments received by adapters, through their
   reference), `write`, `edit` (exact text replacement), `grep`, `glob`, `run`. Output is capped
   with a "continue from here" marker ([middleware.md §4](middleware.md)).
+- **Progress note for long work** (a standing rule, lever 3): work of more than a few steps
+  keeps `progress.md` in the workspace it works in — the goal, what is done, the next step,
+  the files involved — updated after each step and read first whenever the work resumes. The
+  owner can open and edit it like any file.
 - Opens the `reader` extension point: one reader per file type; `read` without a reader for a
   type says so and names the extension it needs, never returns raw bytes.
 - Folders: each person's own workspace; **shared folders** named by the setting
