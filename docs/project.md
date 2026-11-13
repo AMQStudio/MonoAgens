@@ -30,7 +30,7 @@ Five files and folders, each with one job; none holds what belongs to another (D
 
 | File | Holds | Read | Changed by |
 |---|---|---|---|
-| `.env` | secrets and endpoints: model keys and URLs, bot tokens, database URL | every start | owner or technician |
+| `.env` | secrets and endpoints: the model provider and its fallbacks (`LLM_PROVIDER`, `LLM_FALLBACKS`, keys, model), bot tokens, database URL | every start | owner or technician |
 | `config.yaml` | this deployment's non-secret settings: timezone, owner settings, runtime, adapters, plugins on, roles | every start | owner; owner settings in chat; `/plugin` and `/role` write their own lines |
 | `config.d/` | one file per plugin: its features and options | every start | owner |
 | `soul.yaml` | the birth certificate: name, language, persona, principles ([core.md §9.3](core.md)) | once, at birth | nobody afterwards; identity changes in chat |

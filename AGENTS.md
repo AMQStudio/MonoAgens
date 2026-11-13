@@ -45,7 +45,8 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
    plugins, never mentions a platform, and never hard-codes a world action (speaking included) —
    those are tool capabilities. From Task 3 on (D57) the core also knows only opaque ids, labels
    and numbers: it never imports from `monoagens/middleware/` and never means a person, the owner
-   or a group.
+   or a group. From Task 5 on (D64) it also knows no model provider: it calls the injected model
+   port, and provider drivers live in `monoagens/infra/providers/`.
 2. **The log is immutable.** The `events` table is INSERT-only, enforced by a trigger. The only
    exception is hard forgetting (`docs/core.md` §7), through one dedicated function that the trigger
    recognizes. `event_vectors` rows are deleted only by fading or hard forgetting, each
@@ -63,7 +64,7 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
 7. **Pure async.** No blocking calls inside `async def`. CPU work (embedding) goes through
    `asyncio.to_thread`. Every hook call and background job runs under its watchdog timeout
    (`docs/core.md` §3).
-8. **Configuration lives outside code.** Models, keys, URLs and the optional reasoning effort come from `.env`; deployment settings
+8. **Configuration lives outside code.** The model provider and its fallbacks, models, keys, URLs and the optional reasoning effort come from `.env`; deployment settings
    from `config.yaml` and `config.d/`. Identity comes from the birth certificate (`soul.yaml`); weights and thresholds from the prior in `prior/` (D35).
    No magic numbers in code.
 9. **Signals are pure.** A cognition signal only reads its `Situation` and returns a number in

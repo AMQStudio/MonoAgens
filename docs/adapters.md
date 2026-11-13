@@ -78,4 +78,5 @@ bodies:
 | Voice | **Draft** | STT in, TTS out; description = transcript |
 | IoT device / robot sim | **Draft** | first non-chat adapter; sensor readings as described percepts |
 
-Tools (search, files, email) are in the [plugin catalog](plugins.md).
+Tools (search, files, email) are in the [plugin catalog](plugins.md). Model providers are not
+adapters: they are drivers behind the core's model port, in `infra/providers/` ([core.md §3](core.md)).

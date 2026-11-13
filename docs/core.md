@@ -190,6 +190,13 @@ expectation.reminded · expectation.resolved · job.started · job.result · cla
 disposition.updated · share.granted · task.opened · task.closed · guard.stopped · forget.soft · forget.hard · fade.done · sleep.done ·
 sleep.failed · error.
 
+**The model port** (D64). Reasoning builds neutral messages and tools and calls one injected
+model port, as the embedder and the store are injected; the core knows no provider, endpoint
+or header. Provider drivers live in `infra/providers/` and are chosen by `.env`
+(`LLM_PROVIDER`, `LLM_FALLBACKS`); every call still goes through the gate, is recorded and
+counts in the budget. A provider is not an adapter: it is where the soul thinks, not a body
+that senses or acts.
+
 ## 4. Adapters, tools and capabilities
 
 Adapters and plugins bring what senses (`run(put)`) and what acts (`act(action)`). Each tool declares its
