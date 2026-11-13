@@ -20,7 +20,7 @@ provider code under `monoagens/providers/` (Anthropic, Gemini, OpenAI); port wha
 - [x] A.1 The model port (D64): `core/reasoning.py` keeps building the neutral messages and tools and calls an injected model port (`decide(messages, tools, *, tool_choice) -> (tool calls, usage)`), as the embedder is injected; the HTTP request, headers and response parsing move to `infra/providers/openai_compatible.py`. A refactor that changes no behavior: the suite and the fake replay pass unchanged, and the core imports nothing from `infra/providers/`.
 - [x] A.2 The OpenCode Go driver (`infra/providers/opencode_go.py`): the endpoint from the official Go docs (`https://opencode.ai/inference/go/openai/v1/chat/completions` for DeepSeek V4.1 Flash, model `deepseek-v4.1-flash`); a stable `x-opencode-session` header per soul so the gateway can route and cache the stable prefix; thinking levels `low | high | max` mapped from `LLM_REASONING_EFFORT`; cached tokens read from the usage. Check the endpoint and the header against the live docs before coding; the docs move.
 - [x] A.3 Selection and fallback (`.env`): `LLM_PROVIDER` (`openai-compatible` default, `opencode-go`) and `LLM_FALLBACKS` (an ordered list of providers, each with its own key variable); a call that fails for quota, rate limit or a server error moves to the next, and every move is recorded in the Log with the reason; a refusal of the request itself (a bad argument) does not move. Every model call stays a gated, recorded call counted in the budget (AGENTS invariant 5).
-- [ ] A.4 New baseline: the launch set once with the real model through OpenCode Go (`deepseek-v4.1-flash`, `--effort high`); record checks per scenario and tokens (cached included) under Notes. Later measurements compare with this baseline, not with Task 4's 24/26 on another gateway.
+- [x] A.4 New baseline: the launch set once with the real model through OpenCode Go (`deepseek-v4.1-flash`, `--effort high`); record checks per scenario and tokens (cached included) under Notes. Later measurements compare with this baseline, not with Task 4's 24/26 on another gateway.
 
 ## Part 0B — The loop, brakes and one privacy truth
 Read first: [middleware.md](../middleware.md) §3, §4; the Notes of Task 4
@@ -146,3 +146,37 @@ the real-model run are reported; the code is readable (AGENTS.md size guide).
 - Progress A.1: done — 539 passed, 1 skipped (`uv run pytest`); fake replay 133/133 passed; core import invariant clean.
 - Progress A.2: done — OpenCode Go live docs (`https://opencode.ai/docs/go/`, checked 2026-11-13) verified (`https://opencode.ai/inference/go/openai/v1/chat/completions`, `x-opencode-session` derived via UUIDv5 from soul id, `medium` mapped to `high` with boot note); 542 passed, 1 skipped (`uv run pytest`); fake replay 133/133 passed.
 - Progress A.3: done — `FallbackProvider`, `load_provider_config`, `build_provider`, additive `provider` & `fallbacks` on `model.call` in `budget.py`; 546 passed, 1 skipped (`uv run pytest`); fake replay 133/133 passed.
+- Progress A.4: done — OpenCode Go real-model launch set (`deepseek-v4.1-flash`, `--effort high`): **24/26** scenarios in full, **72/75** checks, 94 calls, **260,089** total tokens (223,988 prompt · 136,320 cached · 36,101 completion · 19,720 reasoning); missed-help 0.0%, false-speak 0.0%, absolute-line violations 0, honesty 96.2%.
+
+### A.4 Launch-set baseline (OpenCode Go, `deepseek-v4.1-flash`, `--effort high`, 2026-11-13)
+Report: `reports/2026-11-13-1110-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md`.
+Failing scenarios: `23_recall_episodes` (5/7), `24_gate_threshold` (10/11).
+
+| Scenario | Checks | LLM calls | Prompt | Cached | Completion | Total tokens | Result |
+|---|---|---|---|---|---|---|---|
+| 17_cross_body_continuity | 1/1 | 2 | 4596 | 2048 | 788 | 5384 | PASS |
+| 07_dm_restart_continuity | 2/2 | 3 | 7233 | 6272 | 1013 | 8246 | PASS |
+| 11_sleep_memory_consolidation | 2/2 | 3 | 5314 | 4096 | 1137 | 6451 | PASS |
+| 12_topic_recall_after_sleep | 2/2 | 3 | 7391 | 2176 | 991 | 8382 | PASS |
+| 20_act_r_activation | 3/3 | 18 | 48468 | 26880 | 6220 | 54688 | PASS |
+| 23_recall_episodes | 5/7 | 5 | 12700 | 10368 | 1644 | 14344 | FAIL |
+| 25_help_place_name | 4/4 | 2 | 2890 | 0 | 817 | 3707 | PASS |
+| 27_help_wifi_password | 4/4 | 2 | 2882 | 0 | 1050 | 3932 | PASS |
+| 29_help_clinic_hours | 4/4 | 2 | 2892 | 0 | 790 | 3682 | PASS |
+| 01_group_chitchat_greeting | 1/1 | 0 | 0 | 0 | 0 | 0 | PASS |
+| 02_group_chitchat_lunch | 1/1 | 0 | 0 | 0 | 0 | 0 | PASS |
+| 03_group_chitchat_weather | 1/1 | 0 | 0 | 0 | 0 | 0 | PASS |
+| 15_urgent_unaddressed_group | 1/1 | 0 | 0 | 0 | 0 | 0 | PASS |
+| 21_own_name_capture | 3/3 | 0 | 0 | 0 | 0 | 0 | PASS |
+| 04_group_mention | 1/1 | 1 | 2182 | 768 | 394 | 2576 | PASS |
+| 05_group_reply_to_bot | 1/1 | 2 | 4482 | 2048 | 1448 | 5930 | PASS |
+| 06_dm_conversation | 1/1 | 1 | 2238 | 2048 | 86 | 2324 | PASS |
+| 14_busy_group_repeated_mention | 3/3 | 15 | 45604 | 32640 | 4330 | 49934 | PASS |
+| 22_patience_turn_taking | 7/7 | 2 | 2859 | 0 | 547 | 3406 | PASS |
+| 24_gate_threshold | 10/11 | 4 | 9256 | 4096 | 2179 | 11435 | FAIL |
+| 08_reminder_at_time | 1/1 | 3 | 5278 | 4096 | 791 | 6069 | PASS |
+| 09_reminder_ask_again | 1/1 | 4 | 7681 | 6272 | 1567 | 9248 | PASS |
+| 10_reminder_recurring_nudge | 1/1 | 9 | 19788 | 10880 | 5342 | 25130 | PASS |
+| 13_fired_reminder_different_place | 3/3 | 7 | 15764 | 10624 | 1800 | 17564 | PASS |
+| 16_watch_for_phrase | 4/4 | 2 | 4661 | 2944 | 1053 | 5714 | PASS |
+| 30_same_topic_question | 5/5 | 4 | 9829 | 8064 | 2114 | 11943 | PASS |
