@@ -135,6 +135,17 @@ adapter is a special case.
   come from the Log). An architecture test fails on any of these. Tests: an approval answered by
   reaction after a restart still counts; a brake prompt in Indonesian with `language: id`; the
   same moderator test as 1.6 with `platform_role`.
+- [ ] 1.10 Failures and one way to speak (D82, D83; middleware.md §2, §4) — before the live
+  session of 1.8: rule kinds guard / best-effort in the composer (every show is best-effort;
+  policy, privacy, identity and roles stay guards); a refused communicative act returns to
+  reasoning with its reason for one more round; one neutral `say`, `react`, `edit` routed to the
+  trigger's place (or `to:` / `via:`), the `<adapter>.say` entries hidden from the prompt; the
+  leak check counts only distinctive overlap (minimum matching words from config, phrases common
+  across many places ignored) and its `guard.stopped` names the matched event or memory id and
+  audience; a fault-injection test over every adapter method, best-effort rule and tool. Tests:
+  a show that raises does not stop the turn; a stranger's "halo" gets an answer even with many
+  similar imported greetings; a scripted first draft that leaks is followed by a safe answer; a
+  WhatsApp message cannot be answered through the CLI.
 - [ ] 1.8 Real-model test (this task's one exception to the last-part rule, because WhatsApp is
   needed daily): the replay launch set passes on the new adapters, then a live session on
   WhatsApp in the owner's direct chat and one group (the model in `.env`; never read or print

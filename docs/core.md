@@ -203,7 +203,9 @@ Adapters and plugins bring what senses (`run(put)`) and what acts (`act(action)`
 capabilities (§9.1): name · JSON schema · description · `communicative` · `long_running` ·
 `identity_changing`. Reasoning's tools are the five thought acts; `act` offers the capabilities of
 every running tool, not only the one of the adapter the current percept came from, listed in a fixed order so
-the prompt cache holds (D2, D32, D46). The soul can act in any adapter from any adapter.
+the prompt cache holds (D2, D32, D46). The soul can act in any adapter from any adapter. The
+middleware's registry may present the same capability of several adapters as one neutral entry
+and route it (speaking: one `say`, D83); the core only sees the entries the registry offers.
 
 - The brain decides intent and content; the adapter decides how (chat bubbles, TTS, gestures).
   Fine control stays inside the adapter (D2).

@@ -94,6 +94,30 @@ may simulate them.
 install order] → [policy — last]`. Scope is **shared** (every adapter that opts in) or **adapter-own**
 (unique to one platform). Name collisions fail at boot.
 
+**What a failure does, by layer (D82).** Every failure is recorded and logged; none is ever
+silent, and none is swallowed by a blanket `except`. What happens next depends on what failed,
+decided in one place, not by scattered try/except:
+
+| Layer | On failure | Examples |
+|---|---|---|
+| Guard rule (policy, privacy, identity, roles) | the item stops (fail closed), `guard.stopped` or `error` | the leak check, a permission, the identity line |
+| Best-effort rule (what is only shown) | `error` naming the rule, the adapter and the show kind; the item **continues** | typing, read receipts, progress, thinking |
+| Adapter | `error` naming the adapter; that adapter alone restarts with backoff; the soul and the other adapters keep running | a timeout, a lost connection |
+| Tool or plugin call | an honest `act.result` with the error, so reasoning knows the act failed | a search that failed, a missing file |
+| Core loop | `error` and a log line, then the next event; never `continue` without a record | a failed insert |
+
+Every middleware rule declares its kind when it is installed: **guard** (the default, fail
+closed) or **best-effort**. The composer runs a best-effort rule inside its own wrapper, so the
+core's hook contract (fail closed) is unchanged. A **fault-injection test** makes each adapter
+method, each best-effort rule and each tool raise in turn and checks that the soul keeps working
+and records the error.
+
+**A refused message is not the end of the turn (D82).** When a guard stops a communicative act
+(a leak, a wrong place), the refusal returns to reasoning as that act's `act.result` with its
+reason, and reasoning gets one more round in the same place to say something it may say, within
+the thought-round limit and the budget. A refusal alone never leaves a person without an answer;
+quiet hours and brakes are not refusals of content and keep their own rules.
+
 ## 3. Policy
 The one middleware that is always present.
 - Wraps every module and plugin, first and last, and cannot be removed (D9).
@@ -150,7 +174,17 @@ The one middleware that is always present.
 
 Tools, commands and installed skills follow one pattern, as MCP's tools, prompts and resources
 do: a list of names with short descriptions, the full entry on request, one namespace with
-collisions failing at boot. Every entry names **who uses it**: the soul (a tool, a skill) or a
+collisions failing at boot.
+
+**One neutral way to speak (D83).** Reasoning never sees `<adapter>.say`, `<adapter>.react` or
+`<adapter>.edit`. The registry offers one neutral `say`, `react` and `edit`, with the union of
+the neutral fields (adapters.md §4), and routes each call: by default to the place the trigger
+came from, through that place's adapter; with `to:` (and optionally `via:`) through the route
+rule (§3, §7). The adapters still register their own speaking capabilities; the registry hides
+them from the prompt and dispatches to them, and a field an adapter cannot draw is drawn by its
+fallback. The soul therefore cannot answer a WhatsApp message through the CLI by picking the
+wrong tool, and the tool list does not grow with each adapter. Non-communicative adapter tools
+(`home.control`, opt-in platform tools) keep their own names. Every entry names **who uses it**: the soul (a tool, a skill) or a
 person (a command).
 
 - **Commands are defined once** in a shared registry. Adapters only translate native syntax

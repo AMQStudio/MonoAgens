@@ -121,7 +121,10 @@ answered"), and place events (joined, left, renamed, role changed). Each becomes
   through a reader (vision later).
 
 **Out: few tools for the soul, rich intents through neutral fields.** The soul's tools stay
-few and neutral, so the prompt cache holds and choices stay easy. What is a communicative
+few and neutral, so the prompt cache holds and choices stay easy. Reasoning sees one `say`,
+`react` and `edit` whatever adapters run; the middleware's registry routes each call to the
+adapter of the place it is for (D83, [middleware.md §4](middleware.md)). Each adapter still
+registers its own speaking capabilities and draws them its way. What is a communicative
 intent — something the soul means to do, not only how it looks — is a neutral field of `say`,
 the same on every adapter, drawn the best way each platform allows:
 - `say(text, attachments?, reply_to?, mentions?, sticker?, choices?, thread?, location?)`:
