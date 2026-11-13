@@ -10,7 +10,13 @@ from typing import Any
 import discord
 
 from monoagens.adapters.discord import send
-from monoagens.adapters.discord.capabilities import CAPABILITIES, SHOWS
+from monoagens.adapters.discord.capabilities import (
+    CAPABILITIES,
+    GAPS,
+    OPTIONAL_CAPABILITIES,
+    READS,
+    SHOWS,
+)
 from monoagens.adapters.discord.format import (
     format_delete,
     format_edit,
@@ -44,19 +50,26 @@ def create(options: dict[str, Any], env: dict[str, str]) -> "DiscordBody":
     token_env = str(options.get("bot_token_env") or "DISCORD_BOT_TOKEN")
     token = str(env.get(token_env) or "")
     defer_media = bool(options.get("defer_media", False))
-    return DiscordBody(token=token, defer_media=defer_media)
+    tools = [str(t) for t in (options.get("tools") or ()) if t]
+    unknown = [t for t in tools if t not in OPTIONAL_CAPABILITIES]
+    if unknown:
+        raise ValueError(f"discord: unknown optional tool {unknown[0]!r}")
+    return DiscordBody(token=token, defer_media=defer_media, enabled_tools=tools)
 
 
 class DiscordBody:
     """Discord gateway adapter on discord.py: DMs, guild channels, threads, components & roles."""
 
     name = "discord"
+    reads = READS
     shows = SHOWS
+    gaps = GAPS
 
     def __init__(self, token: str = "", *, clock: Clock | None = None,
                  client: Any = None, client_factory: Callable[..., Any] | None = None,
                  defer_media: bool = False,
-                 http_client: Any = None) -> None:
+                 http_client: Any = None,
+                 enabled_tools: list[str] | tuple[str, ...] = ()) -> None:
         self._token = token
         self._clock = clock or Clock()
         self._client = client
@@ -67,6 +80,7 @@ class DiscordBody:
         self._put: Put | None = None
         self.directory = DiscordDirectory()
         self.bot_id: str = ""
+        self.enabled_tools = tuple(t for t in enabled_tools if t in OPTIONAL_CAPABILITIES)
         self._sent: set[str] = set()
         self._choices_prompts: dict[str, list[str]] = {}
         self._stop_event = asyncio.Event()
@@ -88,8 +102,9 @@ class DiscordBody:
         return await fetch_deferred(meta, http_client=self._http_client)
 
     def capabilities(self) -> tuple[dict[str, Any], ...]:
-        """Return the capability descriptors this adapter declares."""
-        return CAPABILITIES
+        """Return declared capabilities plus any platform tools enabled in `bodies.discord.tools`."""
+        extras = tuple(OPTIONAL_CAPABILITIES[name] for name in self.enabled_tools)
+        return CAPABILITIES + extras
 
     def remember_sent(self, message_id: str) -> None:
         """Track outgoing Discord message ids so replies and reactions know what is ours."""
@@ -289,6 +304,28 @@ class DiscordBody:
                 self._resolve_channel, action.place,
                 str(p.get("message_id") or ""), str(p.get("text") or ""),
             )
+        if action.kind == "pin" and "pin" in self.enabled_tools:
+            ch = await self._resolve_channel(action.place)
+            if ch is None:
+                return {"error": f"Discord place not found: {action.place}"}
+            msg = await ch.fetch_message(int(str(p.get("message_id") or "")))
+            if hasattr(msg, "pin"):
+                await msg.pin()
+            return {"pinned": True, "message_id": str(p.get("message_id") or "")}
+        if action.kind == "manage_role" and "manage_role" in self.enabled_tools:
+            ch = await self._resolve_channel(action.place)
+            guild = getattr(ch, "guild", None)
+            if guild is None:
+                return {"error": "manage_role requires a Discord server channel"}
+            member = guild.get_member(int(str(p.get("user_id"))))
+            role = guild.get_role(int(str(p.get("role_id"))))
+            if member is None or role is None:
+                return {"error": "member or role not found"}
+            if p.get("action") == "remove":
+                await member.remove_roles(role)
+            else:
+                await member.add_roles(role)
+            return {"ok": True, "action": p.get("action"), "role_id": str(role.id)}
         raise ValueError(f"Unsupported action kind: {action.kind!r}")
 
     async def show(self, place: str, kind: str, **data: Any) -> Any:

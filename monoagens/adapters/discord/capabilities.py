@@ -83,4 +83,55 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
     },
 )
 
-SHOWS = ("typing", "edit", "buttons", "reactions")
+OPTIONAL_CAPABILITIES: dict[str, dict[str, Any]] = {
+    "pin": {
+        "name": "pin",
+        "description": "Pin a message in the current Discord channel or thread.",
+        "schema": {
+            "type": "object",
+            "properties": {"message_id": {"type": "string"}},
+            "required": ["message_id"],
+        },
+        "communicative": False,
+        "long_running": False,
+        "identity_changing": False,
+        "facts": ("changes",),
+        "permission": "discord.pin",
+    },
+    "manage_role": {
+        "name": "manage_role",
+        "description": "Add or remove a Discord role on a server member.",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "string"},
+                "role_id": {"type": "string"},
+                "action": {"type": "string", "enum": ["add", "remove"]},
+            },
+            "required": ["user_id", "role_id", "action"],
+        },
+        "communicative": False,
+        "long_running": False,
+        "identity_changing": False,
+        "facts": ("changes",),
+        "permission": "discord.roles",
+    },
+}
+
+READS = (
+    "text", "reply", "mention", "edit", "delete", "reaction", "sticker",
+    "location", "poll", "files", "call", "place_event", "voice_note",
+    "choices_answer",
+)
+
+SHOWS = (
+    "typing", "edit", "delete", "reply", "reactions", "buttons", "menus",
+    "polls", "stickers", "embeds", "threads",
+)
+
+GAPS: dict[str, str] = {
+    "view_once": "Discord has no view-once self-destructing media flag",
+    "contact": "Discord has no native vCard contact card attachment type",
+    "read_receipts": "Discord bot accounts cannot send per-message read receipts",
+    "locations": "Discord has no native map pin widget; location renders as text coordinates and link",
+}

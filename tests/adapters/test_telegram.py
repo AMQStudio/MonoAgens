@@ -278,9 +278,9 @@ async def test_act_react_sets_reaction():
 
 
 def test_capability_descriptors():
-    """say counts as speaking; react does not; react accepts a message id."""
+    """say counts as speaking; react and edit do not; react accepts a message id."""
     caps = {cap["name"]: cap for cap in TelegramBody("token").capabilities()}
-    assert set(caps) == {"say", "react"}
+    assert set(caps) == {"say", "react", "edit"}
     assert caps["say"]["communicative"] is True
     assert caps["react"]["communicative"] is False
     assert caps["react"]["schema"]["properties"]["message_id"]["type"] == "integer"

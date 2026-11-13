@@ -9,7 +9,13 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from monoagens.adapters.whatsapp import send
-from monoagens.adapters.whatsapp.capabilities import CAPABILITIES, SHOWS
+from monoagens.adapters.whatsapp.capabilities import (
+    CAPABILITIES,
+    GAPS,
+    OPTIONAL_CAPABILITIES,
+    READS,
+    SHOWS,
+)
 from monoagens.adapters.whatsapp.format import (
     album_expected_count,
     album_parent_id,
@@ -44,20 +50,27 @@ def create(options: dict[str, Any], env: dict[str, str]) -> "WhatsAppBody":
     session = str(options.get("session_db") or env.get("WHATSAPP_SESSION_DB")
                   or "var/whatsapp.db")
     full_sync = bool(options.get("full_sync", True))
-    return WhatsAppBody(session_db=session, full_sync=full_sync)
+    tools = [str(t) for t in (options.get("tools") or ()) if t]
+    unknown = [t for t in tools if t not in OPTIONAL_CAPABILITIES]
+    if unknown:
+        raise ValueError(f"whatsapp: unknown optional tool {unknown[0]!r}")
+    return WhatsAppBody(session_db=session, full_sync=full_sync, enabled_tools=tools)
 
 
 class WhatsAppBody:
     """Eyes and hands for WhatsApp over neonize: shared account, history import, deferred media."""
 
     name = "whatsapp"
+    reads = READS
     shows = SHOWS
+    gaps = GAPS
 
     def __init__(self, session_db: str | pathlib.Path = "var/whatsapp.db", *,
                  full_sync: bool = True, clock: Clock | None = None,
                  client: Any = None, client_factory: Callable[..., Any] | None = None,
                  self_account: str | None = None,
-                 album_window: float = DEFAULT_ALBUM_WINDOW) -> None:
+                 album_window: float = DEFAULT_ALBUM_WINDOW,
+                 enabled_tools: list[str] | tuple[str, ...] = ()) -> None:
         """Hold session configuration, directory state, and optional test client hooks."""
         self.session_db = pathlib.Path(session_db)
         self.full_sync = full_sync
@@ -69,6 +82,7 @@ class WhatsAppBody:
         self.me: Any = None
         self.self_account: str | None = self_account
         self.album_window = album_window
+        self.enabled_tools = tuple(t for t in enabled_tools if t in OPTIONAL_CAPABILITIES)
         self._sent: set[str] = set()
         self._choices_prompts: dict[str, list[str]] = {}
         self._albums: dict[str, dict[str, Any]] = {}
@@ -88,8 +102,9 @@ class WhatsAppBody:
             door.register_fetcher(self.name, self.fetch_attachment)
 
     def capabilities(self) -> tuple[dict[str, Any], ...]:
-        """Return the capability descriptors this adapter declares."""
-        return CAPABILITIES
+        """Return declared capabilities plus any tools enabled in `bodies.whatsapp.tools`."""
+        extras = tuple(OPTIONAL_CAPABILITIES[name] for name in self.enabled_tools)
+        return CAPABILITIES + extras
 
     def remember_sent(self, message_id: str) -> None:
         """Record an outgoing message id so D66 ignores its own `IsFromMe` echo."""
@@ -377,6 +392,18 @@ class WhatsAppBody:
             res = await send.send_edit(
                 self._client, action.place, str(action.payload.get("message_id") or ""),
                 str(action.payload.get("text") or ""))
+        elif action.kind == "pin" and "pin" in self.enabled_tools:
+            getter = getattr(self._client, "pin_message", None)
+            if callable(getter):
+                await getter(send.jid_of(send.chat_jid_from_place(action.place)),
+                             str(action.payload.get("message_id") or ""))
+            res = {"pinned": True}
+        elif action.kind == "reject_call" and "reject_call" in self.enabled_tools:
+            rejector = getattr(self._client, "reject_call", None)
+            if callable(rejector):
+                await rejector(str(action.payload.get("caller") or ""),
+                               str(action.payload.get("call_id") or ""))
+            res = {"rejected": True}
         else:
             raise ValueError(f"Unsupported action kind: {action.kind!r}")
         if isinstance(res, dict):

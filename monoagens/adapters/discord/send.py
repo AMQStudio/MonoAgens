@@ -186,7 +186,7 @@ async def edit(resolve_channel: ResolveChannel, place: str, message_id: str,
 
 async def show(resolve_channel: ResolveChannel, place: str, kind: str,
                **data: Any) -> Any:
-    """Render non-message interaction hints: typing, edit, buttons/menus, or reactions."""
+    """Render non-message hints natively on Discord across the full declared SHOWS set."""
     channel = await resolve_channel(place)
     if channel is None:
         raise ValueError(f"Discord place not found: {place}")
@@ -198,12 +198,43 @@ async def show(resolve_channel: ResolveChannel, place: str, kind: str,
     if kind == "edit":
         msg = await channel.fetch_message(int(str(data.get("message_id"))))
         return await msg.edit(content=str(data.get("text") or ""))
-    if kind == "buttons":
+    if kind == "delete":
+        msg = await channel.fetch_message(int(str(data.get("message_id"))))
+        return await msg.delete()
+    if kind == "reply":
+        mid = str(data.get("message_id") or "")
+        ref = (discord.MessageReference(message_id=int(mid), channel_id=int(channel.id))
+               if mid.isdigit() and hasattr(channel, "id") else None)
+        return await channel.send(str(data.get("text") or "\u200b"), reference=ref)
+    if kind in ("buttons", "menus"):
         buttons: Sequence[tuple[str, str]] = data.get("buttons") or ()
         items = [(str(label), str(val)) for label, val in buttons]
-        view = _build_component_view(items, multiple=bool(data.get("multiple")))
+        multi = bool(data.get("multiple")) or kind == "menus"
+        view = _build_component_view(items, multiple=multi)
         return await channel.send(str(data.get("text") or "\u200b"), view=view)
     if kind == "reactions":
         msg = await channel.fetch_message(int(str(data.get("message_id"))))
         return await msg.add_reaction(str(data.get("emoji") or ""))
+    if kind == "polls":
+        opts = [str(o)[:55] for o in (data.get("options") or ())]
+        if hasattr(discord, "Poll"):
+            poll = discord.Poll(
+                question=str(data.get("question") or data.get("text") or "Vote")[:300],
+                duration=__import__("datetime").timedelta(hours=24),
+                multiple=bool(data.get("multiple")),
+            )
+            for opt in opts[:10]:
+                poll.add_answer(text=opt)
+            return await channel.send(poll=poll)
+        return await channel.send(str(data.get("text") or "Vote"))
+    if kind == "stickers":
+        return await channel.send(str(data.get("emoji") or "🏷️"))
+    if kind == "embeds":
+        embed = discord.Embed(
+            title=str(data.get("title") or ""),
+            description=str(data.get("text") or ""),
+        )
+        return await channel.send(embed=embed)
+    if kind == "threads":
+        return await channel.create_thread(name=str(data.get("title") or "Thread")[:100])
     raise ValueError(f"cannot show {kind!r}")

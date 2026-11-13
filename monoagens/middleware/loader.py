@@ -394,10 +394,10 @@ class Loader:
         if not isinstance(getattr(adapter, "name", None), str) or not adapter.name:
             raise ValueError(f"adapter {name}: missing required part 'name'")
         shows = tuple(getattr(adapter, "shows", ()) or ())
-        unknown = [kind for kind in shows if kind not in contract.SHOWS]
-        if unknown:
-            raise ValueError(f"adapter {name}: cannot show {unknown[0]!r}")
+        cov_lines = contract.check_coverage(name, adapter)
         report.add(f"adapter {name}: shows {', '.join(shows) or 'nothing'}")
+        for line in cov_lines:
+            report.add(line)
         limits = getattr(adapter, "FILES", None)
         if isinstance(limits, dict):
             report.add(f"adapter {name}: files {limits.get('per_message')} per message, "

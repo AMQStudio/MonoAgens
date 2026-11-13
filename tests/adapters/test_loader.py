@@ -92,7 +92,7 @@ def test_the_telegram_factory_reads_the_token_from_the_environment():
 
     assert isinstance(adapter, telegram_adapter.TelegramBody)
     assert adapter._poll_timeout == 5
-    assert adapter.shows == ("typing", "edit", "buttons", "reactions")
+    assert adapter.shows == telegram_adapter.SHOWS
 
     with pytest.raises(RuntimeError, match="telegram: TELEGRAM_BOT_TOKEN is not set"):
         telegram_adapter.create({}, {})
@@ -103,7 +103,7 @@ def test_the_cli_factory_needs_nothing(tmp_path):
 
     assert isinstance(adapter, cli_adapter.CLIBody)
     assert adapter.path == str(tmp_path / "s.sock")
-    assert adapter.shows == ("typing",)
+    assert adapter.shows == cli_adapter.SHOWS
 
 
 def test_both_adapters_come_through_the_loader_without_the_environment():

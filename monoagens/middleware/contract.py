@@ -33,8 +33,59 @@ from monoagens.core.hooks import (OWNER_POLICY, SLOTS, Continue, HookOutcome, Mi
 FACTS = ("reads", "changes", "runs_code", "network")
 CALL_FACTS = FACTS + ("sensitive",)  # `sensitive` is added to one call, never declared
 
-# What an adapter can show besides a message (middleware.md §9).
-SHOWS = ("typing", "edit", "buttons", "reactions")
+# What an adapter can show besides a message (adapters.md §4, middleware.md §9).
+SHOWS = (
+    "typing", "read_receipts", "edit", "delete", "reply", "reactions",
+    "buttons", "menus", "polls", "stickers", "embeds", "threads", "locations",
+)
+
+# What an adapter can read from incoming platform events (adapters.md §4).
+READS = (
+    "text", "reply", "mention", "edit", "delete", "reaction", "sticker",
+    "location", "contact", "poll", "view_once", "files", "call",
+    "place_event", "voice_note", "choices_answer",
+)
+
+
+def check_coverage(name: str, adapter: Any) -> tuple[str, ...]:
+    """Validate an adapter's declared reads, shows and gaps against D67 vocabulary.
+
+    Returns coverage lines suitable for the boot report. Adapters that have not yet
+    declared `reads` or `gaps` only have their `shows` checked.
+    """
+    shows = tuple(getattr(adapter, "shows", ()) or ())
+    unknown_shows = [kind for kind in shows if kind not in SHOWS]
+    if unknown_shows:
+        raise ValueError(f"adapter {name}: cannot show {unknown_shows[0]!r}")
+
+    has_reads = hasattr(adapter, "reads")
+    has_gaps = hasattr(adapter, "gaps")
+    if not (has_reads or has_gaps):
+        return ()
+
+    reads = tuple(getattr(adapter, "reads", ()) or ())
+    unknown_reads = [kind for kind in reads if kind not in READS]
+    if unknown_reads:
+        raise ValueError(f"adapter {name}: unknown read kind {unknown_reads[0]!r}")
+
+    gaps = getattr(adapter, "gaps", None)
+    if not isinstance(gaps, Mapping):
+        raise ValueError(f"adapter {name}: missing coverage gaps map")
+
+    expected_gaps = [k for k in READS if k not in reads] + [k for k in SHOWS if k not in shows]
+    if getattr(adapter, "history", None) is None and "history" not in expected_gaps:
+        expected_gaps.append("history")
+    missing = [k for k in expected_gaps if k not in gaps or not str(gaps[k] or "").strip()]
+    if missing:
+        raise ValueError(f"adapter {name}: undeclared coverage gap {missing[0]!r}")
+
+    lines = [
+        f"adapter {name} coverage: reads {', '.join(reads) or 'none'}",
+        f"adapter {name} coverage: shows {', '.join(shows) or 'none'}",
+    ]
+    for kind in sorted(gaps):
+        lines.append(f"adapter {name} gap {kind}: {gaps[kind]}")
+    return tuple(lines)
 
 # The one marker for a cut tool output; a tool never invents a second one.
 OUTPUT_MARKER = (
@@ -42,9 +93,9 @@ OUTPUT_MARKER = (
     "full in {ref}; continue from character {n}]"
 )
 
-__all__ = ["CALL_FACTS", "FACTS", "OUTPUT_MARKER", "OWNER_POLICY", "SHOWS", "SLOTS",
-           "AttachmentDoor", "LogView", "attachment_origins", "describe_attachments",
-           "find_attachment", "open_attachment",
+__all__ = ["CALL_FACTS", "FACTS", "OUTPUT_MARKER", "OWNER_POLICY", "READS", "SHOWS", "SLOTS",
+           "AttachmentDoor", "LogView", "attachment_origins", "check_coverage",
+           "describe_attachments", "find_attachment", "open_attachment",
            "Continue", "HookOutcome", "Middleware", "Registration", "Replace", "Stop",
            "compose"]
 

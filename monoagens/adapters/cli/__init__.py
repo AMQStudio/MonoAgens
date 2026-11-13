@@ -5,11 +5,17 @@ from __future__ import annotations
 import asyncio
 import os
 import pathlib
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from monoagens.adapters.cli import receive, send
-from monoagens.adapters.cli.capabilities import CAPABILITIES, SHOWS
+from monoagens.adapters.cli.capabilities import (
+    CAPABILITIES,
+    GAPS,
+    OPTIONAL_CAPABILITIES,
+    READS,
+    SHOWS,
+)
 from monoagens.adapters.cli.format import command_event, event, split_line
 from monoagens.infra.clock import Clock
 from monoagens.types import Action, Event
@@ -27,25 +33,42 @@ def socket_path() -> str:
 
 def create(options: dict[str, Any], env: dict[str, str]) -> "CLIBody":
     """Build the adapter from config.yaml's options and the environment (D49)."""
-    return CLIBody(str(options.get("socket") or "") or None)
+    del env
+    tools = [str(t) for t in (options.get("tools") or ()) if t]
+    unknown = [t for t in tools if t not in OPTIONAL_CAPABILITIES]
+    if unknown:
+        raise ValueError(f"cli: unknown optional tool {unknown[0]!r}")
+    return CLIBody(str(options.get("socket") or "") or None, enabled_tools=tools)
 
 
 class CLIBody:
     """Eyes and hands for the local terminal over a Unix socket."""
 
     name = "cli"
+    reads = READS
     shows = SHOWS
+    gaps = GAPS
 
-    def __init__(self, path: str | None = None, clock: Clock | None = None) -> None:
-        """Store the socket path; the file is created when the server starts."""
+    def __init__(self, path: str | None = None, clock: Clock | None = None, *,
+                 enabled_tools: Sequence[str] = ()) -> None:
+        """Store socket path, enabled platform tools, and prompt tracking state."""
         self.path = path or socket_path()
         self._clock = clock or Clock()
         self._writers: set[asyncio.StreamWriter] = set()
         self.files: Any = None
+        self.enabled_tools = tuple(t for t in enabled_tools if t in OPTIONAL_CAPABILITIES)
+        self._seq = 0
+        self._last_prompt: tuple[str, list[str]] | None = None
 
     def capabilities(self) -> tuple[dict[str, Any], ...]:
-        """Return the capability descriptors this adapter declares."""
-        return CAPABILITIES
+        """Return declared capabilities plus any platform tools enabled in `bodies.cli.tools`."""
+        extras = tuple(OPTIONAL_CAPABILITIES[name] for name in self.enabled_tools)
+        return CAPABILITIES + extras
+
+    async def place_info(self, place: str) -> dict[str, Any]:
+        """Return structured place info for the local owner terminal."""
+        del place
+        return {"form": "dm", "parent": None, "can_post": True, "name": "Terminal"}
 
     async def run(self, put: Put) -> None:
         """Serve typed lines from local clients until the task is cancelled."""
@@ -55,29 +78,53 @@ class CLIBody:
 
         await receive.serve(self.path, accept, self._writers)
 
-    async def act(self, action: Action) -> None:
-        """Write one rendered line to every connected client, files included."""
+    async def act(self, action: Action) -> Any:
+        """Write one rendered line or optional platform action to connected clients."""
+        p = action.payload or {}
         if action.kind == "say":
-            text = str(action.payload.get("text") or "")
-            if text:
-                await send.broadcast(self._writers, f"{text}\n")
-            for ref in action.payload.get("attachments") or ():
+            self._seq += 1
+            msg_id = f"cli:{self._seq}"
+            choices = [str(c) for c in (p.get("choices") or ()) if str(c)]
+            if choices:
+                self._last_prompt = (msg_id, choices)
+            lines = send.format_say_lines(
+                text=str(p.get("text") or ""),
+                reply_to=str(p["reply_to"]) if p.get("reply_to") else None,
+                mentions=list(p.get("mentions") or ()),
+                sticker=str(p["sticker"]) if p.get("sticker") else None,
+                choices=choices,
+                thread=str(p["thread"]) if p.get("thread") else None,
+                location=p.get("location") if isinstance(p.get("location"), dict) else None,
+            )
+            for line in lines:
+                await send.broadcast(self._writers, f"{line}\n")
+            for ref in p.get("attachments") or ():
                 try:
                     data, info = await self.files.open(str(ref), context=action.place)
                 except Exception as exc:
                     return {"error": f"cannot attach {ref}: {exc}"}
                 await send.file(self._writers, info, await self._where(ref, data))
-        elif action.kind == "react":
-            await send.broadcast(self._writers, f"[{action.payload.get('emoji', '')}]\n")
-        else:
-            raise ValueError(f"Unsupported action kind: {action.kind!r}")
+            return {"message_id": msg_id}
+        if action.kind == "react":
+            await send.broadcast(self._writers, f"[{p.get('emoji', '')}]\n")
+            return {"emoji": p.get("emoji", "")}
+        if action.kind == "pin" and "pin" in self.enabled_tools:
+            await send.broadcast(self._writers, f"[pinned] {p.get('text') or ''}\n")
+            return {"pinned": True}
+        raise ValueError(f"Unsupported action kind: {action.kind!r}")
 
     async def show(self, place: str, kind: str, **data: Any) -> None:
-        """Show one non-message thing as a line; unknown kinds are refused."""
+        """Show one non-message thing as a status/fallback line; unknown kinds are refused."""
+        del place
+        if kind in ("buttons", "menus") and data.get("buttons"):
+            self._seq += 1
+            msg_id = f"cli:{self._seq}"
+            self._last_prompt = (msg_id, [str(lbl) for lbl, _ in data["buttons"]])
         await send.show(self._writers, kind, **data)
 
     async def _where(self, ref: str, data: bytes) -> str:
         """Return the path a written file has on disk, for the terminal line."""
+        del data
         found = self.files.store.find(str(ref))
         return str(found) if found is not None else str(ref)
 
@@ -95,4 +142,5 @@ class CLIBody:
                 text = f"{text} [cannot read {path}: {exc}]".strip()
                 continue
             attachments.append(await self.files.put(data, name=pathlib.Path(path).name))
-        return event(text, clock=self._clock, name=self.name, attachments=attachments)
+        return event(text, clock=self._clock, name=self.name,
+                     attachments=attachments, last_prompt=self._last_prompt)

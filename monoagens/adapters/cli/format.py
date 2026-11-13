@@ -13,14 +13,43 @@ PLACE = "space:cli"
 OWNER = "person:owner"
 
 
+def match_choice(text: str, last_prompt: tuple[str, list[str]] | None) -> tuple[str, str] | None:
+    """Match a numbered answer (`1`, `2`, ...) against the most recent terminal choices prompt."""
+    if not last_prompt:
+        return None
+    prompt_id, options = last_prompt
+    raw = text.strip()
+    if not raw.isdigit():
+        return None
+    idx = int(raw)
+    if 1 <= idx <= len(options):
+        return options[idx - 1], prompt_id
+    return None
+
+
 def event(text: str, *, clock: Clock, name: str = "cli",
-          attachments: Sequence[Mapping[str, Any]] = ()) -> Event:
+          attachments: Sequence[Mapping[str, Any]] = (),
+          last_prompt: tuple[str, list[str]] | None = None) -> Event:
     """Build the percept of one typed line (the owner typing in their own terminal)."""
-    payload: dict[str, Any] = {"description": text, "addressed": True, "place_kind": "direct"}
+    data: dict[str, Any] = {}
+    choice_matched = match_choice(text, last_prompt)
+    if choice_matched is not None:
+        choice_val, q_id = choice_matched
+        data["choice"] = choice_val
+        data["reply_to"] = {"message_id": q_id}
     if attachments:
-        payload["data"] = {"attachments": [dict(item) for item in attachments]}
+        data["attachments"] = [dict(item) for item in attachments]
         summary = describe_attachments(attachments, sent_by=OWNER)
-        payload["description"] = f"{text} {summary}".strip() if text else summary
+        desc = f"{text} {summary}".strip() if text else summary
+    else:
+        desc = text
+    payload: dict[str, Any] = {
+        "description": desc,
+        "addressed": True,
+        "place_kind": "direct",
+    }
+    if data:
+        payload["data"] = data
     return Event(id=None, ts=clock.now(), kind="percept", who=OWNER, place=PLACE, body=name,
                  payload=payload)
 

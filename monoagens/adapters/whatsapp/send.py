@@ -184,19 +184,46 @@ async def send_edit(client: Any, place: str, message_id: str, text: str) -> dict
 
 
 async def send_show(client: Any, place: str, kind: str, **data: Any) -> Any:
-    """Show typing, edit, or reaction feedback on WhatsApp."""
-    if client is None:
-        return None
-    jid = jid_of(chat_jid_from_place(place))
+    """Show typing, read receipts, edit, delete, reply, reactions, polls, stickers or geo."""
     if kind == "typing":
+        if client is None:
+            return None
         from neonize.utils.enum import ChatPresence, ChatPresenceMedia
 
+        jid = jid_of(chat_jid_from_place(place))
         return await client.send_chat_presence(
             jid, ChatPresence.CHAT_PRESENCE_COMPOSING, ChatPresenceMedia.CHAT_PRESENCE_MEDIA_TEXT)
+    if kind == "read_receipts":
+        if client is None:
+            return None
+        jid = jid_of(chat_jid_from_place(place))
+        ids = [str(x) for x in (data.get("message_ids") or [data.get("message_id")] or ()) if x]
+        return await client.mark_read(*ids, chat=jid)
     if kind == "edit":
         return await send_edit(client, place, str(data.get("message_id") or ""),
                                str(data.get("text") or ""))
+    if kind == "delete":
+        if client is None or not data.get("message_id"):
+            return None
+        jid = jid_of(chat_jid_from_place(place))
+        return await client.revoke_message(jid, jid, str(data["message_id"]))
+    if kind == "reply":
+        return await send_say(client, None, None, place,
+                              {"text": str(data.get("text") or ""),
+                               "reply_to": data.get("message_id")})
     if kind == "reactions":
         return await send_react(client, place, str(data.get("emoji") or ""),
                                 str(data.get("message_id") or ""))
+    if kind == "polls":
+        return await send_say(client, None, None, place,
+                              {"text": str(data.get("question") or data.get("text") or "Vote"),
+                               "choices": list(data.get("options") or ()),
+                               "multiple": bool(data.get("multiple"))})
+    if kind == "stickers":
+        return await send_say(client, None, None, place,
+                              {"text": str(data.get("emoji") or ""),
+                               "sticker": data.get("sticker")})
+    if kind == "locations":
+        loc = data.get("location") if isinstance(data.get("location"), dict) else data
+        return await send_say(client, None, None, place, {"location": loc})
     raise ValueError(f"cannot show {kind!r}")

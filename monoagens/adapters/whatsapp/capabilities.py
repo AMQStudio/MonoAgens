@@ -80,4 +80,52 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
     },
 )
 
-SHOWS = ("typing", "edit", "reactions")
+OPTIONAL_CAPABILITIES: dict[str, dict[str, Any]] = {
+    "pin": {
+        "name": "pin",
+        "description": "Pin a message in the current WhatsApp chat.",
+        "schema": {
+            "type": "object",
+            "properties": {"message_id": {"type": "string"}, "seconds": {"type": "integer"}},
+            "required": ["message_id"],
+        },
+        "communicative": False,
+        "long_running": False,
+        "identity_changing": False,
+        "facts": ("changes",),
+        "permission": "whatsapp.pin",
+    },
+    "reject_call": {
+        "name": "reject_call",
+        "description": "Reject an incoming WhatsApp call.",
+        "schema": {
+            "type": "object",
+            "properties": {"call_id": {"type": "string"}, "caller": {"type": "string"}},
+            "required": ["call_id"],
+        },
+        "communicative": False,
+        "long_running": False,
+        "identity_changing": False,
+        "facts": ("changes",),
+        "permission": "whatsapp.call",
+    },
+}
+
+READS = (
+    "text", "reply", "mention", "edit", "delete", "reaction", "sticker",
+    "location", "contact", "poll", "view_once", "files", "call",
+    "place_event", "voice_note", "choices_answer",
+)
+
+SHOWS = (
+    "typing", "read_receipts", "edit", "delete", "reply", "reactions",
+    "polls", "stickers", "locations",
+)
+
+GAPS: dict[str, str] = {
+    "buttons": "WhatsApp consumer accounts over neonize cannot send interactive reply buttons",
+    "menus": "WhatsApp consumer accounts cannot send list menus; choices use polls or numbered lists",
+    "embeds": "WhatsApp has no separate embed card object beyond link previews",
+    "threads": "WhatsApp chats have no sub-thread primitive; thread falls back to a titled reply",
+    "history": "WhatsApp pushes pairing HistorySync events automatically instead of on-demand pull",
+}
