@@ -2248,7 +2248,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     load_environment()
     url = replay_url()
-    settings = load_settings()
+    settings = load_settings(certificate_path=ROOT / "tests" / "fixtures" / "soul.yaml")
     llm = {"base_url": DEFAULT_BASE_URL, "api_key": "", "model": DEFAULT_MODEL, "effort": ""}
     if not args.fake:
         llm = llm_settings()

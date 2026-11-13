@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import pathlib
 
 import pytest
 
@@ -99,10 +100,13 @@ def test_config_yaml_holds_only_deployment_settings():
     assert config["bodies"]["cli"]["enabled"] is True
 
 
-def test_soul_yaml_is_only_the_birth_certificate():
-    from monoagens.infra.config import DEFAULT_SOUL_PATH, load_soul
+FIXTURE_SOUL_PATH = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "soul.yaml"
 
-    certificate = load_soul(DEFAULT_SOUL_PATH)
+
+def test_soul_yaml_is_only_the_birth_certificate():
+    from monoagens.infra.config import load_soul
+
+    certificate = load_soul(FIXTURE_SOUL_PATH)
 
     assert set(certificate) == {"version", "name", "language", "persona", "principles"}
     assert certificate["name"] == "Mona"
@@ -116,14 +120,14 @@ def test_the_prior_carries_the_behavioral_numbers():
     assert set(prior["constants"]) >= {"seed", "retrieve_k", "decay", "default_expires_days",
                                        "max_active", "job_timeout_seconds"}
     assert set(prior["knobs"]) and set(prior["calibration"])
-    assert set(signal_weights(load_settings())) == {
+    assert set(signal_weights(load_settings(certificate_path=FIXTURE_SOUL_PATH))) == {
         "own_name", "info_gap", "feeling_of_knowing", "relevance", "social_cost"}
 
 
 def test_settings_join_config_certificate_and_prior():
     from monoagens.infra.prior import load_settings
 
-    settings = load_settings()
+    settings = load_settings(certificate_path=FIXTURE_SOUL_PATH)
 
     assert settings["identity"]["name"] == "Mona"
     assert settings["timezone"] == "Asia/Jakarta"

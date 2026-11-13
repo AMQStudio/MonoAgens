@@ -6,10 +6,11 @@ rewritten. `config.d/*.yaml` files carry `version` too and read unchanged at ver
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
-from monoagens.infra.config import (DEFAULT_CONFIG_PATH, DEFAULT_SOUL_PATH, load_config,
-                                    load_soul, read_versioned)
+from monoagens.infra.config import (DEFAULT_CONFIG_PATH, load_config, load_soul, read_versioned)
 from monoagens.infra.prior import load_settings
 
 
@@ -91,10 +92,13 @@ def test_a_config_d_file_at_version_1_reads_unchanged(tmp_path):
     assert notes == []
 
 
+FIXTURE_SOUL_PATH = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "soul.yaml"
+
+
 def test_the_shipped_files_carry_the_current_version():
     notes: list[str] = []
 
     assert load_config(DEFAULT_CONFIG_PATH, notes=notes)["version"] == 2
-    assert load_soul(DEFAULT_SOUL_PATH, notes=notes)["version"] == 1
-    assert load_settings(notes=notes)
+    assert load_soul(FIXTURE_SOUL_PATH, notes=notes)["version"] == 1
+    assert load_settings(certificate_path=FIXTURE_SOUL_PATH, notes=notes)
     assert notes == []
