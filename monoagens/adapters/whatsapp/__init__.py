@@ -39,6 +39,7 @@ from monoagens.adapters.whatsapp.identity import (
     place_id,
 )
 from monoagens.adapters.whatsapp.media import fetch_media, store_deferred
+from monoagens.infra import config
 from monoagens.infra.clock import Clock
 from monoagens.types import Action, Event
 
@@ -66,7 +67,9 @@ def create(options: dict[str, Any], env: dict[str, str]) -> "WhatsAppBody":
     unknown = [t for t in tools if t not in OPTIONAL_CAPABILITIES]
     if unknown:
         raise ValueError(f"whatsapp: unknown optional tool {unknown[0]!r}")
-    return WhatsAppBody(session_db=session, full_sync=full_sync, enabled_tools=tools)
+    chunk_size = config.whatsapp_history_chunk_size(options)
+    return WhatsAppBody(session_db=session, full_sync=full_sync, enabled_tools=tools,
+                        history_chunk_size=chunk_size)
 
 
 class WhatsAppBody:
@@ -82,7 +85,8 @@ class WhatsAppBody:
                  client: Any = None, client_factory: Callable[..., Any] | None = None,
                  self_account: str | None = None,
                  album_window: float = DEFAULT_ALBUM_WINDOW,
-                 enabled_tools: list[str] | tuple[str, ...] = ()) -> None:
+                 enabled_tools: list[str] | tuple[str, ...] = (),
+                 history_chunk_size: int | None = None) -> None:
         """Hold session configuration, directory state, and optional test client hooks."""
         self.session_db = pathlib.Path(session_db)
         self.full_sync = full_sync
@@ -95,6 +99,11 @@ class WhatsAppBody:
         self.self_account: str | None = self_account
         self.album_window = album_window
         self.enabled_tools = tuple(t for t in enabled_tools if t in OPTIONAL_CAPABILITIES)
+        self.history_chunk_size = (
+            max(1, int(history_chunk_size))
+            if history_chunk_size is not None
+            else config.whatsapp_history_chunk_size()
+        )
         self._sent: set[str] = set()
         self._sent_loaded = False
         self._choices_prompts: dict[str, list[str]] = {}
@@ -102,6 +111,7 @@ class WhatsAppBody:
         self._connected_once = False
         self._backfilling = False
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._history_lock = asyncio.Lock()
 
     @property
     def files(self) -> Any:
@@ -408,23 +418,27 @@ class WhatsAppBody:
 
     async def handle_history_sync(self, sync: Any, put: Put, *,
                                   backfill: bool = False) -> list[Event]:
-        """Ingest one `HistorySync` payload into percepts and put each without waking."""
-        if not self._sent_loaded:
-            conn = getattr(self._files, "_conn", None)
-            if conn is not None:
-                self._sent.update(await sent_ids_from_log(conn, body=self.name))
-            self._sent_loaded = True
-        events = await extract_sync_events(
-            sync, directory=self.directory, files=self._files, now=self._clock.now(),
-            name=self.name, self_account=self.self_account, own_sent=self._sent,
-            backfill=backfill,
-        )
-        for ev in events:
-            try:
-                await put(ev)
-            except Exception as exc:
-                await self._emit_adapter_error(put, exc, label="history_sync_put")
-        return events
+        """Ingest one `HistorySync` payload serially, yielding between configured chunks."""
+        async with self._history_lock:
+            if not self._sent_loaded:
+                conn = getattr(self._files, "_conn", None)
+                if conn is not None:
+                    self._sent.update(await sent_ids_from_log(conn, body=self.name))
+                self._sent_loaded = True
+            events = await extract_sync_events(
+                sync, directory=self.directory, files=self._files, now=self._clock.now(),
+                name=self.name, self_account=self.self_account, own_sent=self._sent,
+                backfill=backfill,
+            )
+            chunk = max(1, int(self.history_chunk_size))
+            for idx, ev in enumerate(events, start=1):
+                try:
+                    await put(ev)
+                except Exception as exc:
+                    await self._emit_adapter_error(put, exc, label="history_sync_put")
+                if idx % chunk == 0 and idx < len(events):
+                    await asyncio.sleep(0)
+            return events
 
     async def handle_group_info(self, ev: Any, put: Put) -> Event | None:
         """Update cached place metadata and emit a percept describing the group change."""

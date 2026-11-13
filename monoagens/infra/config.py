@@ -135,6 +135,17 @@ def import_summary_every(settings: Mapping[str, Any]) -> int:
     return count
 
 
+def whatsapp_history_chunk_size(options: Mapping[str, Any] | None = None) -> int:
+    """Return WhatsApp history import chunk size from `bodies.whatsapp.history_chunk_size`."""
+    raw = (options or {}).get("history_chunk_size")
+    if raw is None:
+        raw = ((load_config().get("bodies") or {}).get("whatsapp") or {}).get("history_chunk_size")
+    size = int(raw or 0)
+    if size <= 0:
+        raise ValueError("bodies.whatsapp.history_chunk_size must be a positive integer")
+    return size
+
+
 def load_env_file(path: pathlib.Path = DEFAULT_ENV_PATH) -> dict[str, str]:
     """Read a simple KEY=VALUE .env file into a dict."""
     env_path = pathlib.Path(path)

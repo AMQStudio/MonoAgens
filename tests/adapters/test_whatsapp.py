@@ -606,3 +606,54 @@ async def test_threaded_neonize_events_and_nul_payloads_become_percepts_or_error
     # Failed intake rolled back identity.registered for whatsapp:6287770001 cleanly
     reg_accounts = [r[3].get("account") for r in all_rows if r[1] == "identity.registered"]
     assert "whatsapp:6287770001" not in reg_accounts
+
+
+async def test_whatsapp_concurrent_history_sync_serializes_and_yields(tmp_path) -> None:
+    """Concurrent HistorySync bursts serialize via lock and yield between chunks for live DMs."""
+    wa = WhatsAppBody(session_db=tmp_path / "wa.db", clock=FakeClock(START), history_chunk_size=2)
+    order: list[str] = []
+
+    def _sync_chunk(tag: str, count: int):
+        msgs = [
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    key=SimpleNamespace(ID=f"{tag}_{i}", fromMe=False, participant=""),
+                    message=SimpleNamespace(conversation=f"msg {tag} {i}"),
+                    messageTimestamp=int(START.timestamp()) + i,
+                    pushName="Alice",
+                )
+            )
+            for i in range(count)
+        ]
+        return SimpleNamespace(
+            conversations=[SimpleNamespace(ID="628110001@s.whatsapp.net", name="Alice", messages=msgs)]
+        )
+
+    async def fake_put(ev: Event):
+        payload = ev.payload or {}
+        if payload.get("imported"):
+            order.append(str(payload["data"]["message_id"]))
+        else:
+            order.append("LIVE_DM")
+        await asyncio.sleep(0)
+
+    async def live_dm():
+        await asyncio.sleep(0)
+        await fake_put(Event(
+            id=None, ts=START, kind="percept", who="whatsapp:628119999@s.whatsapp.net",
+            place="space:wa:628119999@s.whatsapp.net", body="whatsapp",
+            payload={"text": "live ping", "dm": True},
+        ))
+
+    t1 = asyncio.create_task(wa.handle_history_sync(_sync_chunk("A", 4), fake_put))
+    t2 = asyncio.create_task(wa.handle_history_sync(_sync_chunk("B", 4), fake_put))
+    tdm = asyncio.create_task(live_dm())
+    await asyncio.gather(t1, t2, tdm)
+
+    assert len(order) == 9
+    # A finished all 4 before B started (serialized by _history_lock), and LIVE_DM didn't wait for all 8
+    a_last = max(i for i, tag in enumerate(order) if tag.startswith("A_"))
+    b_first = min(i for i, tag in enumerate(order) if tag.startswith("B_"))
+    dm_idx = order.index("LIVE_DM")
+    assert a_last < b_first
+    assert dm_idx < len(order) - 1
