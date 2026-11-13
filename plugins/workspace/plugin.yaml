@@ -25,7 +25,7 @@ settings:
   max_file_bytes: {type: int, default: 2000000}
   memory_mb: {type: int, default: 1024}
   cpus: {type: int, default: 1}
-  pids: {type: int, default: 256}
+  pids: {type: int, default: 64}
 permissions:
   workspace.read:  {label: "Read files", base: guest}
   workspace.write: {label: "Write and edit", base: member}

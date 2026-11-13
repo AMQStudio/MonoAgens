@@ -262,7 +262,7 @@ async def run(api: Any, who: str, command: str, *, workspace: pathlib.Path,
         return {"error": f"workspace: run unavailable ({reason})"}
     network = shutil.which(PASTA) is not None
     limits = {key: int(api.options.get(key) or default) for key, default in (
-        ("memory_mb", 1024), ("cpus", 1), ("pids", 256))}
+        ("memory_mb", 1024), ("cpus", 1), ("pids", 64))}
     seconds = float(timeout or api.options.get("timeout_seconds") or DEFAULT_TIMEOUT)
     process = await asyncio.create_subprocess_exec(
         *argv(api, who, command, workspace=workspace, shared=shared, writable=writable,
