@@ -67,7 +67,7 @@ steps:
     place: space:tg:-1002
     text: "Oke, makasih ya."
     should: silent
-  - at: "2026-11-10T12:38:10+07:00"
+  - at: "2026-11-10T12:41:00+07:00"
     who: person:tg:4003
     place: space:tg:-1002
     text: "Eh, aku lupa lagi: rapatnya di kafe mana ya?"

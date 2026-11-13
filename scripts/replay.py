@@ -63,6 +63,7 @@ from monoagens.core.kernel import Kernel
 from monoagens.infra.embedding import FastEmbedder, FakeEmbedder
 from monoagens.infra.migrate import migrate, migrate_url
 from monoagens.infra.providers import DEFAULT_OPENCODE_GO_MODEL, build_provider
+from monoagens.infra.store import append_event, write_state
 from monoagens.core.context.layout import PFCContext, withheld_note
 from monoagens.core.reasoning import Reasoning, ToolCall
 from monoagens.types import Action, Event
@@ -772,6 +773,7 @@ class ReplayRunner:
             await self._make_kernel()
             self._clear_workspace()
             self._materialize_workspace()
+            await self._seed_identities(scenario)
             await self.kernel.recover()
             await self.kernel.run_until_idle()
             steps = [await self._run_step(index, raw)
@@ -844,11 +846,45 @@ class ReplayRunner:
                                    if event["kind"] == "act.out" and self._said(event)],
                           events=events)
 
+    @staticmethod
+    def _native_account(who: str, body: str) -> str:
+        """Convert scenario `person:...` syntax into the native account its adapter sends."""
+        if who == OWNER:
+            return f"{body}:owner"
+        prefixes = (("person:tg:", BODY_NAME), ("person:wa:", WHATSAPP_BODY),
+                    ("person:dc:", DISCORD_BODY), ("person:cli:", CLI_BODY))
+        for prefix, target_body in prefixes:
+            if who.startswith(prefix):
+                return f"{target_body}:{who.removeprefix(prefix)}"
+        if who.startswith("person:"):
+            return f"{body}:{who.removeprefix('person:')}"
+        return who
+
+    async def _seed_identities(self, scenario: Scenario) -> None:
+        """Seed the paired owner (and named fixture contacts) so adapters send native accounts."""
+        ts = self._initial_time(scenario)
+        claimed = await append_event(
+            self.conn, ts=ts, kind="pair.claimed", who=OWNER, place=None,
+            body=BODY_NAME, payload={"code_used": True, "seed": True})
+        await write_state(self.conn, "owner", {"who": f"{BODY_NAME}:owner"}, claimed.id)
+        bodies = (BODY_NAME, CLI_BODY, DISCORD_BODY, GAME_BODY, WHATSAPP_BODY, DEV_BODY)
+        for body in bodies:
+            await write_state(self.conn, f"alias:{body}:owner", {"who": OWNER}, claimed.id)
+        for step in scenario.steps:
+            raw_who = str(step.get("who") or "")
+            if (raw_who.startswith("person:") and raw_who != OWNER
+                    and ":" not in raw_who.removeprefix("person:")):
+                place = str(step.get("place") or OWNER_DM)
+                body = body_for(place, str(step.get("body") or "") or None)
+                account = self._native_account(raw_who, body)
+                await write_state(self.conn, f"alias:{account}", {"who": raw_who}, claimed.id)
+
     async def _feed(self, *, who: str, place: str, text: str, addressed: bool,
                     body: str | None = None, attach: Sequence[str] = ()) -> None:
         """Put one percept and let the single consumer process it to completion."""
         self._message_id += 1
         name = body_for(place, body)
+        native_who = self._native_account(who, name)
         kind = "direct" if name == CLI_BODY else place_kind(place)
         data: dict[str, Any] = {"message_id": self._message_id}
         description = text
@@ -857,7 +893,7 @@ class ReplayRunner:
             data["attachments"] = files
             summary = describe_attachments(files, sent_by=who)
             description = f"{text} {summary}".strip() if text else summary
-        event = Event(id=None, ts=self.clock.now(), kind="percept", who=who, place=place,
+        event = Event(id=None, ts=self.clock.now(), kind="percept", who=native_who, place=place,
                       body=name, payload={"description": description, "addressed": addressed,
                                           "place_kind": kind, "data": data})
         task = asyncio.create_task(self.kernel.put(event))
