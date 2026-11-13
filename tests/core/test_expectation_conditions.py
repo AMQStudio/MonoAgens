@@ -157,9 +157,9 @@ async def test_a_line_at_or_above_lo_wakes_the_pfc_once_with_the_reminder(aconn)
     assert await _kinds(aconn, "expectation.fired") == []
     line_id = (await (await aconn.execute(
         "SELECT id FROM events WHERE kind = 'percept' ORDER BY id DESC LIMIT 1")).fetchone())[0]
-    cur = await aconn.execute("SELECT who, place, caused_by FROM events "
+    cur = await aconn.execute("SELECT who, place, caused_by, origin_actor FROM events "
                               "WHERE kind = 'expectation.reminded'")
-    assert await cur.fetchone() == (OTHER, GROUP, line_id)
+    assert await cur.fetchone() == (OTHER, GROUP, line_id, "person:owner")
     rows = await read_expectations(aconn, "ex.id = %s", (exp_id,))
     assert (rows[0]["status"], rows[0]["fire_count"]) == ("active", 0)  # still a promise
     assert [action.payload["text"] for action in harness.body.actions] == ["Server down, owner."]

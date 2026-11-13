@@ -138,7 +138,12 @@ class ToolRegistry:
             spec = declared.get(short)
             if not spec or "facts" not in spec:
                 raise ValueError(f"{full}: a tool without facts")
-            permission = str(spec.get("permission") or full)
+            if "permission" in spec and not spec["permission"]:
+                if not self._allows_no_permission(capability):
+                    raise ValueError(f"{full}: an entry without a permission")
+                permission = ""
+            else:
+                permission = str(spec.get("permission") or full)
             self._add(full, name, capability, facts=tuple(spec["facts"]),
                       permission=permission,
                       output_cap=int(spec.get("output_cap") or DEFAULT_OUTPUT_CAP))
@@ -162,12 +167,23 @@ class ToolRegistry:
                                        permission, output_cap, result)
 
     @staticmethod
+    def _allows_no_permission(capability: Mapping[str, Any]) -> bool:
+        """True for communicative capabilities and the D67 expression tools (react, edit)."""
+        return (bool(capability.get("communicative"))
+                or str(capability.get("name") or "") in ("react", "edit"))
+
+    @staticmethod
     def _permission(full: str, capability: Mapping[str, Any], given: str | None) -> str:
-        """Return an entry's permission; only a talking capability may declare none."""
+        """Return an entry's permission; only talking and expression tools may omit one."""
+        allows_none = ToolRegistry._allows_no_permission(capability)
         if given is not None:
+            if not given and not allows_none:
+                raise ValueError(f"{full}: an entry without a permission")
             return given
         if "permission" in capability and capability["permission"] is None:
-            return ""  # an adapter's talking capability: say, react and the like
+            if allows_none:
+                return ""
+            raise ValueError(f"{full}: an entry without a permission")
         permission = str(capability.get("permission") or "")
         if not permission:
             raise ValueError(f"{full}: an entry without a permission")

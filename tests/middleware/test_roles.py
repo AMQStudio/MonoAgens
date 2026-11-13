@@ -460,3 +460,32 @@ async def test_platform_role_grants_inside_server_tree_and_revokes_on_next_perce
                                    on_stop=_noop, on_error=_noop)
     assert not kernel.roles.can(who, "workspace.run", guild_chan)
     assert not kernel.roles.can(who, "workspace.run", thread)
+
+
+def test_allow_grants_exact_permission_never_a_tier():
+    cfg = {
+        "roles": {
+            "fallback": "guest",
+            "guest": {"base": "guest"},
+            "member": {"base": "member"},
+            "admin": {"base": "admin"},
+            "runner": {"base": "guest", "allow": ["workspace.run"]},
+            "power": {"base": "member", "allow": ["budget.manage"]},
+        },
+        "people": {
+            "person:tg:10": {"roles": ["runner"]},
+            "person:tg:11": {"roles": ["power"]},
+        },
+    }
+    found = book(cfg)
+
+    assert found.tier("person:tg:10") == "guest"
+    assert found.can("person:tg:10", "workspace.run")
+    assert not found.can("person:tg:10", "workspace.write")
+    assert not found.can("person:tg:10", "web-search.search")
+    assert found.settings("person:tg:10")["workspace.quota"] == "0"
+
+    assert found.tier("person:tg:11") == "member"
+    assert found.can("person:tg:11", "budget.manage")
+    assert not found.can("person:tg:11", "roles.manage")
+    assert not found.may_give("person:tg:11", "member")

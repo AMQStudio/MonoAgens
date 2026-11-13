@@ -13,6 +13,7 @@ from typing import Any
 
 from monoagens.core import arguments, sends, threads
 from monoagens.core.context import working
+from monoagens.infra.store import project_event
 from monoagens.types import Event
 
 
@@ -99,9 +100,20 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any], *,
                              place=place, body=event.body, caused_by=stored.id,
                              origin_actor=event.origin_actor,
                              payload={"capability": capability, "result": result}))
-    if isinstance(result, dict) and isinstance(result.get("identity"), dict) and kernel.pfc:
-        kernel.pfc.identity = result["identity"]
-        kernel.settings = {**kernel.settings, "identity": result["identity"]}
+    if (cap.get("identity_changing") and isinstance(result, dict)
+            and isinstance(result.get("identity"), dict)):
+        new_identity = result["identity"]
+        row = await (await kernel.conn.execute(
+            "SELECT 1 FROM events WHERE kind = 'identity.updated' AND caused_by = %s LIMIT 1",
+            (stored.id,))).fetchone()
+        if row is None:
+            updated = await kernel._emit(stored, "identity.updated",
+                                         {"identity": new_identity}, place=place)
+            await project_event(kernel.conn, updated)
+        if kernel.pfc:
+            kernel.pfc.identity = new_identity
+            kernel.pfc.name = str(new_identity.get("name") or "")
+        kernel.settings = {**kernel.settings, "identity": new_identity}
     return Dispatch(acted=True, labels=ctx["labels"])
 
 

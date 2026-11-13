@@ -7,6 +7,7 @@ import pathlib
 import re
 from collections.abc import Mapping
 from dataclasses import replace
+from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Any
 
@@ -47,6 +48,9 @@ FALLBACKS = contract.FALLBACKS
 OWNER = "person:owner"
 REQUEST = "approval.requested"
 ANSWERED = "approval.answered"
+CONSUMED = "approval.consumed"
+EXPIRED = "approval.expired"
+APPROVAL_TTL = timedelta(minutes=30)
 BRAKE_HELD = "brake.held"
 BRAKE_RESUMED = "brake.resumed"
 SHOWN = "interaction.shown"
@@ -118,6 +122,16 @@ async def _send_prompt(kernel: Any, trigger: Event, place: str, text: str, *,
     }, place=place)
 
 
+def _requester_name(kernel: Any, trigger: Event) -> str:
+    """Return a readable requester label (`Label (id)` or `id`) for approval prompts."""
+    who = str(trigger.origin_actor or trigger.who or "")
+    roles = getattr(kernel, "roles", None)
+    label = roles.label(who) if who and roles is not None else None
+    if label and label != who:
+        return f"{label} ({who})"
+    return who or "unknown"
+
+
 async def request(kernel: Any, trigger: Event, request_id: int, capability: str,
                   arguments: dict[str, Any], reason: str) -> str | None:
     """Ask the owner to allow one call via neutral `choices`; return the place asked, if any."""
@@ -126,7 +140,9 @@ async def request(kernel: Any, trigger: Event, request_id: int, capability: str,
         return None
     cat = catalog(getattr(kernel, "settings", None))["approval"]
     args_json = json.dumps(arguments, ensure_ascii=False, sort_keys=True)
-    text = str(cat["prompt"]).format(capability=capability, arguments=args_json, reason=reason)
+    text = str(cat["prompt"]).format(
+        capability=capability, arguments=args_json,
+        requester=_requester_name(kernel, trigger), reason=reason)
     choices = [str(cat["yes_label"]), str(cat["no_label"])]
     await _send_prompt(kernel, trigger, place, text, prompt_kind="approval",
                        prompt_id=request_id, choices=choices)
@@ -141,44 +157,122 @@ async def _body_of(conn: Any, place: str) -> str:
     return str(row[0]) if row else ""
 
 
-async def pending(conn: Any) -> dict[str, Any] | None:
-    """Return the newest approval request nobody answered yet, with its payload."""
+async def is_consumed(conn: Any, request_id: int) -> bool:
+    """Return whether an approved request has already executed its single allowed act."""
     row = await (await conn.execute(
-        "SELECT id, payload FROM events WHERE kind = %s AND id NOT IN ("
-        "  SELECT (payload->>'request')::bigint FROM events WHERE kind = %s"
-        "  AND payload ? 'request') ORDER BY id DESC LIMIT 1", (REQUEST, ANSWERED))).fetchone()
+        "SELECT 1 FROM events WHERE kind = %s AND payload->>'request' = %s LIMIT 1",
+        (CONSUMED, str(request_id)))).fetchone()
+    return row is not None
+
+
+async def _is_closed(conn: Any, request_id: int) -> bool:
+    """Return whether `request_id` has already been answered or expired."""
+    row = await (await conn.execute(
+        "SELECT 1 FROM events WHERE kind IN (%s, %s) AND payload->>'request' = %s LIMIT 1",
+        (ANSWERED, EXPIRED, str(request_id)))).fetchone()
+    return row is not None
+
+
+async def expire_stale(conn: Any, *, now: datetime, trigger: Event | None = None) -> int:
+    """Mark unanswered approval requests older than `APPROVAL_TTL` as `approval.expired`."""
+    cutoff = now - APPROVAL_TTL
+    cur = await conn.execute(
+        "SELECT id, ts, who, place, body, origin_actor, payload FROM events "
+        "WHERE kind = %s AND ts < %s AND id NOT IN ("
+        "  SELECT (payload->>'request')::bigint FROM events WHERE kind IN (%s, %s)"
+        "  AND payload ? 'request') ORDER BY id ASC",
+        (REQUEST, cutoff, ANSWERED, EXPIRED))
+    rows = await cur.fetchall()
+    for req_id, _ts, who, place, body, origin_actor, payload in rows:
+        data = dict(payload or {})
+        await append_event(
+            conn, ts=now, kind=EXPIRED, who=who, place=place, body=body,
+            origin_actor=origin_actor or data.get("who") or who,
+            caused_by=trigger.id if trigger is not None else int(req_id),
+            payload={"request": int(req_id),
+                     "who": data.get("who") or origin_actor or who,
+                     "capability": data.get("capability"),
+                     "reason": "expired"})
+    return len(rows)
+
+
+async def pending(conn: Any, *, now: datetime | None = None) -> dict[str, Any] | None:
+    """Return the newest `approval.requested` only if it is open and within `APPROVAL_TTL`."""
+    row = await (await conn.execute(
+        "SELECT id, ts, who, origin_actor, payload FROM events WHERE kind = %s "
+        "ORDER BY id DESC LIMIT 1", (REQUEST,))).fetchone()
     if row is None:
         return None
-    return {"id": int(row[0]), **dict(row[1] or {})}
+    req_id, ts, who, origin_actor, payload = row
+    if await _is_closed(conn, int(req_id)):
+        return None
+    if now is not None and now - ts > APPROVAL_TTL:
+        return None
+    data = dict(payload or {})
+    return {"id": int(req_id), "ts": ts, **data,
+            "who": data.get("who") or origin_actor or who}
 
 
 async def by_id(conn: Any, request_id: int) -> dict[str, Any] | None:
     """Return one approval request by the id of its event."""
     row = await (await conn.execute(
-        "SELECT payload FROM events WHERE id = %s AND kind = %s", (request_id, REQUEST))
-    ).fetchone()
-    return dict(row[0] or {}) if row else None
+        "SELECT ts, who, origin_actor, payload FROM events WHERE id = %s AND kind = %s",
+        (request_id, REQUEST))).fetchone()
+    if row is None:
+        return None
+    ts, who, origin_actor, payload = row
+    data = dict(payload or {})
+    return {"ts": ts, **data, "who": data.get("who") or origin_actor or who}
 
 
 async def pending_brake(conn: Any) -> dict[str, Any] | None:
     """Return the newest held brake nobody answered yet, with its payload."""
     row = await (await conn.execute(
-        "SELECT id, payload FROM events WHERE kind = %s AND id NOT IN ("
+        "SELECT id, who, origin_actor, payload FROM events WHERE kind = %s AND id NOT IN ("
         "  SELECT (payload->>'brake')::bigint FROM events WHERE kind = %s"
         "  AND payload ? 'brake') ORDER BY id DESC LIMIT 1", (BRAKE_HELD, BRAKE_RESUMED))
     ).fetchone()
-    return {"id": int(row[0]), **dict(row[1] or {})} if row is not None else None
+    if row is None:
+        return None
+    bid, who, origin_actor, payload = row
+    data = dict(payload or {})
+    if not data.get("origin_actor") and (origin_actor or who):
+        data["origin_actor"] = origin_actor or who
+    return {"id": int(bid), **data}
 
 
 async def brake_by_id(conn: Any, brake_id: int) -> dict[str, Any] | None:
     """Return one held brake event by its id."""
     row = await (await conn.execute(
-        "SELECT payload FROM events WHERE id = %s AND kind = %s", (brake_id, BRAKE_HELD))
-    ).fetchone()
-    return dict(row[0] or {}) if row else None
+        "SELECT who, origin_actor, payload FROM events WHERE id = %s AND kind = %s",
+        (brake_id, BRAKE_HELD))).fetchone()
+    if row is None:
+        return None
+    who, origin_actor, payload = row
+    data = dict(payload or {})
+    if not data.get("origin_actor") and (origin_actor or who):
+        data["origin_actor"] = origin_actor or who
+    return data
 
 
-async def _prompt_by_reply(conn: Any, place: str, message_id: str) -> dict[str, Any] | None:
+async def _brake_origin(conn: Any, held: Mapping[str, Any]) -> str | None:
+    """Return the held chain's `origin_actor` (from `held` or its root event), never owner."""
+    origin = str(held.get("origin_actor") or "").strip()
+    if origin:
+        return origin
+    root_id = held.get("root")
+    if root_id is not None:
+        row = await (await conn.execute(
+            "SELECT origin_actor, who FROM events WHERE id = %s", (int(root_id),))).fetchone()
+        if row is not None:
+            resolved = str(row[0] or row[1] or "").strip()
+            if resolved:
+                return resolved
+    return None
+
+
+async def _prompt_by_reply(conn: Any, place: str, message_id: str,
+                           *, now: datetime | None = None) -> dict[str, Any] | None:
     """Find the newest open approval or brake prompt rendered with `message_id` in `place`."""
     cur = await conn.execute(
         "SELECT payload FROM events WHERE kind = %s AND place = %s "
@@ -192,11 +286,10 @@ async def _prompt_by_reply(conn: Any, place: str, message_id: str) -> dict[str, 
         if not prompt_id:
             continue
         if kind == "approval":
-            row_ans = await (await conn.execute(
-                "SELECT 1 FROM events WHERE kind = %s AND payload->>'request' = %s LIMIT 1",
-                (ANSWERED, str(prompt_id)))).fetchone()
-            if row_ans is None and await by_id(conn, prompt_id) is not None:
-                return info
+            asked = await by_id(conn, prompt_id)
+            if asked is not None and not await _is_closed(conn, prompt_id):
+                if now is None or now - asked["ts"] <= APPROVAL_TTL:
+                    return info
         elif kind == "brake":
             row_ans = await (await conn.execute(
                 "SELECT 1 FROM events WHERE kind = %s AND payload->>'brake' = %s LIMIT 1",
@@ -249,6 +342,7 @@ async def notify_brake(kernel: Any, trigger: Event, *, root_id: int, place: str,
     brake = await kernel._emit(trigger, BRAKE_HELD, {
         "root": root_id, "place": place, "work": work, "reason": reason,
         "limit": limit, "value": value, "cap": cap,
+        "origin_actor": trigger.origin_actor or trigger.who,
         "place_kind": (trigger.payload or {}).get("place_kind"),
     }, place=place)
     direct = await identity.direct_place(kernel.conn, OWNER)
@@ -265,17 +359,19 @@ async def notify_brake(kernel: Any, trigger: Event, *, root_id: int, place: str,
 
 async def _answer_brake(kernel: Any, item: Event, brake_id: int, held: dict[str, Any],
                         allowed: bool, answerer: str) -> None:
-    """Record a brake decision and enqueue a continuation intent when the owner allows it."""
+    """Record a brake decision and enqueue a continuation intent with the held chain's origin."""
     work = str(held.get("work") or held.get("place") or "stopped work")
     target = str(held.get("place") or item.place or "")
+    origin = await _brake_origin(kernel.conn, held)
     await append_event(kernel.conn, ts=kernel.clock.now(), kind=BRAKE_RESUMED,
-                       who=OWNER, place=target, body=item.body, caused_by=item.id,
+                       who=origin, origin_actor=origin, place=target, body=item.body,
+                       caused_by=item.id,
                        payload={"brake": brake_id, "root": held.get("root"),
                                 "allowed": allowed, "by": answerer})
     if allowed:
         kernel.enqueue(Event(
-            id=None, ts=kernel.clock.now(), kind="intent", who=OWNER,
-            place=target, body=item.body,
+            id=None, ts=kernel.clock.now(), kind="intent", who=origin,
+            origin_actor=origin, place=target, body=item.body,
             payload={"description": f"the owner chose to continue the stopped work: {work}",
                      "root": held.get("root"), "brake": brake_id,
                      "place_kind": held.get("place_kind")}))
@@ -302,7 +398,12 @@ def answer(kernel: Any) -> Middleware:
     async def rule(item: Any, ctx: Any) -> Any:
         """Match an incoming answer against pending Log prompts and record the outcome."""
         del ctx
-        if getattr(item, "kind", "") != "percept":
+        kind = getattr(item, "kind", "")
+        now = kernel.clock.now()
+        if kind in ("percept", "tick"):
+            await expire_stale(kernel.conn, now=now,
+                               trigger=item if getattr(item, "id", None) else None)
+        if kind != "percept":
             return Continue()
         payload = item.payload or {}
         answerer = str(item.origin_actor or item.who)
@@ -323,7 +424,7 @@ def answer(kernel: Any) -> Middleware:
                                     bool(payload.get("answer")), answerer)
             return Continue()
         elif reply_mid:
-            prompt = await _prompt_by_reply(kernel.conn, str(item.place or ""), reply_mid)
+            prompt = await _prompt_by_reply(kernel.conn, str(item.place or ""), reply_mid, now=now)
             if prompt is not None:
                 token = data.get("answer")
                 if token is None:
@@ -350,7 +451,8 @@ def answer(kernel: Any) -> Middleware:
                         request_id, allowed = pid, matched
         else:
             text = str(payload.get("description") or "").strip().lower()
-            if owner and text:
+            direct = await identity.direct_place(kernel.conn, OWNER) if owner and text else None
+            if owner and text and direct is not None and item.place == direct:
                 cat = catalog(getattr(kernel, "settings", None))
                 app_cat, brake_cat = cat["approval"], cat["brake"]
                 pos_app = {str(w).lower() for w in (app_cat.get("yes_words") or ())} | {
@@ -359,7 +461,7 @@ def answer(kernel: Any) -> Middleware:
                     str(app_cat.get("no_label") or "").lower()}
                 pos_brk = pos_app | {str(brake_cat.get("continue_label") or "").lower()}
                 neg_brk = neg_app | {str(brake_cat.get("stop_label") or "").lower()}
-                found_approval = await pending(kernel.conn)
+                found_approval = await pending(kernel.conn, now=now)
                 found_brake = await pending_brake(kernel.conn)
                 if found_brake is not None and (
                         found_approval is None or found_brake["id"] > found_approval["id"]):
@@ -377,14 +479,17 @@ def answer(kernel: Any) -> Middleware:
             if held is not None:
                 await _answer_brake(kernel, item, request_id, held, allowed, answerer)
             return Continue()
-        await append_event(kernel.conn, ts=kernel.clock.now(), kind=ANSWERED,
-                           who=asked.get("who"), place=asked.get("place"), body=item.body,
-                           caused_by=item.id,
+        if await _is_closed(kernel.conn, request_id) or now - asked["ts"] > APPROVAL_TTL:
+            return Continue()
+        requester = str(asked.get("who") or "") or None
+        await append_event(kernel.conn, ts=now, kind=ANSWERED,
+                           who=requester, origin_actor=requester,
+                           place=asked.get("place"), body=item.body, caused_by=item.id,
                            payload={"request": request_id, "allowed": allowed,
-                                    "who": asked.get("who"), "by": answerer})
+                                    "who": requester, "by": answerer})
         if allowed:
             kernel.enqueue(Event(
-                id=None, ts=kernel.clock.now(), kind="intent", who=OWNER,
+                id=None, ts=now, kind="intent", who=requester, origin_actor=requester,
                 place=str(asked.get("place") or item.place), body=item.body,
                 payload={
                     "description": (

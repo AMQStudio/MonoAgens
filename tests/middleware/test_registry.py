@@ -103,16 +103,28 @@ def test_a_duplicate_command_fails_at_boot():
 
 def test_only_a_talking_capability_may_declare_no_permission():
     tools = ToolRegistry()
-    tools.register(_Body("silent", ({"name": "say", "description": "Speak.",
-                                     "schema": {}, "communicative": True,
-                                     "long_running": False, "identity_changing": False,
-                                     "permission": None},)))
+    tools.register(_Body("silent", (
+        {"name": "say", "description": "Speak.", "schema": {}, "communicative": True,
+         "long_running": False, "identity_changing": False, "permission": None},
+        {"name": "react", "description": "React.", "schema": {}, "communicative": False,
+         "long_running": False, "identity_changing": False, "permission": None},
+        {"name": "edit", "description": "Edit.", "schema": {}, "communicative": False,
+         "long_running": False, "identity_changing": False, "permission": None},
+    )))
     assert tools.permission("silent.say") == ""
+    assert tools.permission("silent.react") == ""
+    assert tools.permission("silent.edit") == ""
 
     with pytest.raises(ValueError, match="quiet.read: an entry without a permission"):
         tools.register(_Body("quiet", ({"name": "read", "description": "Read.",
                                         "schema": {}, "communicative": False,
                                         "long_running": False, "identity_changing": False},)))
+
+    with pytest.raises(ValueError, match="silent2.exec: an entry without a permission"):
+        tools.register(_Body("silent2", ({"name": "exec", "description": "Exec.",
+                                          "schema": {}, "communicative": False,
+                                          "long_running": False, "identity_changing": False,
+                                          "permission": None},)))
 
 
 async def _help_on(aconn, body: _Body) -> str:

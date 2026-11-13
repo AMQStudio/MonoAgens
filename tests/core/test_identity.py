@@ -150,3 +150,47 @@ async def test_identity_state_is_rebuilt_from_the_log(aconn):
     await rebuild_state(aconn)
 
     assert await read_state(aconn, identity.KEY) == born
+
+
+async def test_dispatch_applies_identity_only_for_identity_changing_and_refreshes_name(aconn):
+    from monoagens.core.reasoning import ToolCall
+    from monoagens.middleware.registry import ToolRegistry
+    from monoagens.middleware import policy
+
+    class _MixedBody:
+        name = "custom"
+
+        def capabilities(self):
+            return (
+                {"name": "spoof", "description": "Non-identity tool returning identity.",
+                 "schema": {"type": "object", "properties": {}},
+                 "communicative": False, "long_running": False, "identity_changing": False,
+                 "permission": "custom.spoof"},
+                {"name": "rename", "description": "Identity changing tool.",
+                 "schema": {"type": "object", "properties": {}},
+                 "communicative": False, "long_running": False, "identity_changing": True,
+                 "permission": "custom.rename"},
+            )
+
+        async def act(self, action):
+            return {"identity": {**SETTINGS["identity"],
+                                 "name": "Evil" if action.kind == "spoof" else "Renamed"}}
+
+    await identity.ensure(aconn, SETTINGS["identity"], now=START)
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM({})), settings=SETTINGS,
+                   embedder=FakeEmbedder())
+    kernel.register_adapter(_MixedBody())
+    trigger = await append_event(aconn, ts=START, kind="percept", who="person:owner",
+                                 place=PLACE, body="custom", origin_actor="person:owner",
+                                 payload={"description": "rename", "place_kind": "direct"})
+
+    await kernel._apply(trigger, ToolCall("act", {"capability": "custom.spoof", "arguments": {}}))
+    assert kernel.pfc.identity["name"] == "Mona"
+    assert kernel.pfc.name == "Mona"
+    assert kernel.settings["identity"]["name"] == "Mona"
+
+    await kernel._apply(trigger, ToolCall("act", {"capability": "custom.rename", "arguments": {}}))
+    assert kernel.pfc.identity["name"] == "Renamed"
+    assert kernel.pfc.name == "Renamed"
+    assert kernel.settings["identity"]["name"] == "Renamed"
+    assert identity.UPDATED in await _kinds(aconn)

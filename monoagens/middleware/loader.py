@@ -228,6 +228,8 @@ class Loader:
         namespace = manifest.get("state_namespace")
         if namespace is not None and str(namespace) != name:
             raise ValueError(f"plugin {name}: state_namespace must be {name!r}")
+        for permission in (manifest.get("permissions") or {}):
+            roles.validate_permission_name(name, str(permission), f"plugin {name}")
 
     def _config_d(self, installed: Mapping[str, Any], report: BootReport,
                   ) -> dict[str, dict[str, Any]]:
@@ -251,10 +253,13 @@ class Loader:
 
     @staticmethod
     def _check_config_d(path: pathlib.Path, values: Mapping[str, Any]) -> None:
-        """Refuse an unknown key in one config.d file."""
+        """Refuse an unknown key or out-of-namespace permission in one config.d file."""
         for key in values:
             if key not in CONFIG_D_KEYS:
                 raise ValueError(f"config.d/{path.stem}.yaml: unknown key {key!r}")
+        for permission in (values.get("permissions") or {}):
+            roles.validate_permission_name(path.stem, str(permission),
+                                           f"config.d/{path.stem}.yaml")
 
     def _order(self, installed: Mapping[str, Any], manifests: Mapping[str, Mapping[str, Any]],
                report: BootReport) -> list[str]:

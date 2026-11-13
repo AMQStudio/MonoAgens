@@ -33,6 +33,8 @@ REGISTERED = "identity.registered"
 MERGED = "identity.merged"
 UNLINKED = "identity.unlinked"
 LINK_PREFIX = "link_code:"
+LINK_TRIES_PREFIX = "link_tries:"
+PAIR_TRIES_PREFIX = "pair_tries:"
 LINK_TTL = timedelta(minutes=10)
 LINK_TRIES = 3
 _CONN_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = weakref.WeakKeyDictionary()
@@ -69,15 +71,61 @@ async def ensure(conn, *, now: datetime) -> str | None:
     return code
 
 
+async def _tries_blocked(conn: Any, key: str, *, now: datetime,
+                         limit: int = LINK_TRIES) -> bool:
+    """Return True while ``key`` is locked out after hitting ``limit`` wrong guesses."""
+    state = await read_state(conn, key)
+    if not state:
+        return False
+    reset_at = datetime.fromisoformat(str(state["reset_at"]))
+    if reset_at <= now:
+        await conn.execute("DELETE FROM state WHERE key = %s", (key,))
+        return False
+    return int(state.get("tries") or 0) >= limit
+
+
+async def _record_wrong_try(conn: Any, key: str, cause_id: int, *, now: datetime,
+                            ttl: timedelta = LINK_TTL,
+                            limit: int = LINK_TRIES) -> bool:
+    """Record one wrong guess for ``key`` and return True once it reaches ``limit``."""
+    state = await read_state(conn, key)
+    tries = 0
+    reset_at = now + ttl
+    if state:
+        existing_reset = datetime.fromisoformat(str(state["reset_at"]))
+        if existing_reset > now:
+            tries = int(state.get("tries") or 0)
+            reset_at = existing_reset
+    tries += 1
+    await write_state(
+        conn, key, {"tries": tries, "reset_at": reset_at.isoformat()}, cause_id)
+    return tries >= limit
+
+
 async def claim_owner(conn, event, *, now: datetime):
     """Make the sender of the pairing code the owner; return the claim event."""
     if event.kind != "percept" or not event.who:
         return None
+    if (event.payload or {}).get("imported"):
+        return None
     if await read_state(conn, OWNER_KEY) is not None:
         return None
-    current = await read_state(conn, CODE_KEY) or {}
+    row = await (await conn.execute(
+        "SELECT value, updated_by_event FROM state WHERE key = %s",
+        (CODE_KEY,))).fetchone()
+    if row is None:
+        return None
+    current, code_event_id = dict(row[0] or {}), int(row[1])
     code = str(current.get("code") or "")
-    if not code or code not in payload_text(event.payload):
+    text = payload_text(event.payload).strip()
+    if not code or not text:
+        return None
+    try_key = f"{PAIR_TRIES_PREFIX}{event.who}"
+    if await _tries_blocked(conn, try_key, now=now):
+        return None
+    if code not in text:
+        cause_id = event.id if event.id is not None else code_event_id
+        await _record_wrong_try(conn, try_key, cause_id, now=now)
         return None
     async with conn.transaction():
         claimed = await append_event(conn, ts=now, kind=CLAIMED, who=event.who,
@@ -89,6 +137,7 @@ async def claim_owner(conn, event, *, now: datetime):
             "WHERE key LIKE 'alias:%%' AND value->>'who' = %s",
             (json.dumps({"who": OWNER}), claimed.id, event.who))
         await conn.execute("DELETE FROM state WHERE key = %s", (CODE_KEY,))
+        await conn.execute("DELETE FROM state WHERE key LIKE %s", (f"{PAIR_TRIES_PREFIX}%",))
     LOGGER.info("owner paired: %s", event.who)
     return claimed
 
@@ -634,14 +683,19 @@ async def _issue_link_code(conn: Any, caller: str, event: Event, now: datetime) 
 async def _consume_link_code(kernel: Any, event: Event, caller: str, guess: str,
                              now: datetime) -> str:
     conn = kernel.conn
+    try_key = f"{LINK_TRIES_PREFIX}{caller}"
+    if await _tries_blocked(conn, try_key, now=now):
+        return "too many wrong /link codes; run /link again for a new code"
     digits = _norm_code(guess)
     rows = await (await conn.execute(
         "SELECT key, value, updated_by_event FROM state WHERE key LIKE %s",
         (f"{LINK_PREFIX}%",))).fetchall()
     matched = None
-    active: list[tuple[str, dict[str, Any], int]] = []
+    fallback_id = event.id
     expired_match = False
     for key, raw, upd_id in rows:
+        if fallback_id is None:
+            fallback_id = int(upd_id)
         data = dict(raw or {})
         expires = datetime.fromisoformat(str(data.get("expires_at")))
         if expires <= now:
@@ -651,27 +705,28 @@ async def _consume_link_code(kernel: Any, event: Event, caller: str, guess: str,
             continue
         if digits and data.get("code") == digits:
             matched = (str(key), data)
-        else:
-            active.append((str(key), data, int(upd_id)))
     if matched is not None:
         key, data = matched
         target = str(data.get("person") or "")
-        await conn.execute("DELETE FROM state WHERE key = %s", (key,))
         if not target or target == caller:
+            await conn.execute("DELETE FROM state WHERE key = %s", (key,))
             return f"that account already belongs to {caller}"
+        if is_owner(caller) and not is_owner(target):
+            return ("cannot link another person's code into the owner; "
+                    "run /link from the owner account instead")
+        await conn.execute("DELETE FROM state WHERE key = %s", (key,))
+        await conn.execute("DELETE FROM state WHERE key = %s", (try_key,))
         src, dst = await merge_people(
             kernel, caller, target, by=caller, now=now, place=event.place,
             body=event.body, caused_by=event.id, trigger=event)
         return (f"linked: {src} merged into {dst}. Remembered history stays together "
                 "(unlinking later only starts a new id from then on).")
+    if fallback_id is None:
+        row = await (await conn.execute("SELECT MAX(id) FROM events")).fetchone()
+        fallback_id = int(row[0]) if row and row[0] is not None else None
     locked = False
-    for key, data, upd_id in active:
-        tries = int(data.get("tries") or 0) + 1
-        if tries >= LINK_TRIES:
-            await conn.execute("DELETE FROM state WHERE key = %s", (key,))
-            locked = True
-        else:
-            await write_state(conn, key, {**data, "tries": tries}, upd_id)
+    if fallback_id is not None:
+        locked = await _record_wrong_try(conn, try_key, fallback_id, now=now)
     if expired_match:
         return "that /link code has expired; run /link again for a new code"
     if locked:

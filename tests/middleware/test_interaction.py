@@ -164,6 +164,7 @@ async def test_approval_and_brake_send_neutral_choices_in_configured_language(ac
     assert place == OWNER_DM
     sent = kernel.tools.adapters["telegram"].actions[-1].payload
     assert sent["text"].startswith("Perlu izin: workspace.run")
+    assert "person:owner" in sent["text"]
     assert sent["choices"] == ["Ya", "Tidak"]
     assert not kernel.tools.adapters["telegram"].shown
 

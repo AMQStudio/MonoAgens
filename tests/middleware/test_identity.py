@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -449,3 +449,124 @@ async def test_place_persisted_and_readonly_place_refuses_before_act(aconn):
         "SELECT payload FROM events WHERE kind = 'act.result' ORDER BY id")).fetchall()
     assert len(results) == 2
     assert all("read-only" in str(r[0]["result"]["error"]) for r in results)
+
+
+async def test_link_tries_are_counted_per_guesser_and_never_burn_other_codes(aconn):
+    clock = FakeClock(START)
+    kernel = build(aconn, clock=clock, pfc=_FakePFC(), settings=settings())
+    kernel.register_adapter(_SayBody())
+
+    [alice] = await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="percept", who="telegram:601",
+        place="space:tg:601", body="telegram",
+        payload={"description": "alice", "place_kind": "direct", "addressed": True}))
+    [bob] = await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="percept", who="telegram:602",
+        place="space:tg:602", body="telegram",
+        payload={"description": "bob", "place_kind": "direct", "addressed": True}))
+    [eve] = await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="percept", who="discord:603",
+        place="space:dc:603", body="discord",
+        payload={"description": "eve", "place_kind": "direct", "addressed": True}))
+
+    await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="command", who="telegram:601",
+        place="space:tg:601", body="telegram", payload={"command": "link", "arguments": []}))
+    await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="command", who="telegram:602",
+        place="space:tg:602", body="telegram", payload={"command": "link", "arguments": []}))
+    alice_code = str((await read_state(aconn, f"{identity.LINK_PREFIX}{alice.who}"))["code"])
+    bob_code = str((await read_state(aconn, f"{identity.LINK_PREFIX}{bob.who}"))["code"])
+
+    # Eve burns her own 3 guesses; neither Alice's nor Bob's code is deleted,
+    # and Eve's 4th attempt with the real code is blocked during the 10m window.
+    for guess in ("000000", "111111", "222222", alice_code):
+        await _put_idle(kernel, Event(
+            id=None, ts=clock.now(), kind="command", who="discord:603",
+            place="space:dc:603", body="discord", payload={"command": "link", "arguments": [guess]}))
+    assert await identity.find_person(aconn, "discord:603") == eve.who
+    assert await read_state(aconn, f"{identity.LINK_PREFIX}{alice.who}") is not None
+    assert await read_state(aconn, f"{identity.LINK_PREFIX}{bob.who}") is not None
+
+    # Legitimate second accounts can still redeem both codes immediately.
+    await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="command", who="discord:604",
+        place="space:dc:604", body="discord",
+        payload={"command": "link", "arguments": [alice_code]}))
+    await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="command", who="discord:605",
+        place="space:dc:605", body="discord",
+        payload={"command": "link", "arguments": [bob_code]}))
+    assert await identity.find_person(aconn, "discord:604") == alice.who
+    assert await identity.find_person(aconn, "discord:605") == bob.who
+
+    # After the 10-minute window passes, Eve may try again.
+    clock.advance(timedelta(minutes=11))
+    await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="command", who="telegram:602",
+        place="space:tg:602", body="telegram", payload={"command": "link", "arguments": []}))
+    new_bob_code = str((await read_state(aconn, f"{identity.LINK_PREFIX}{bob.who}"))["code"])
+    await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="command", who="discord:603",
+        place="space:dc:603", body="discord",
+        payload={"command": "link", "arguments": [new_bob_code]}))
+    assert await identity.find_person(aconn, "discord:603") == bob.who
+
+
+async def test_owner_cannot_absorb_non_owner_via_link_code(aconn):
+    clock = FakeClock(START)
+    code = await identity.ensure(aconn, now=clock.now())
+    kernel = build(aconn, clock=clock, pfc=_FakePFC(), settings=settings())
+    kernel.register_adapter(_SayBody())
+
+    await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="percept", who="telegram:700",
+        place="space:tg:700", body="telegram",
+        payload={"description": code, "place_kind": "direct", "addressed": True}))
+    assert await identity.find_person(aconn, "telegram:700") == identity.OWNER
+
+    [stranger] = await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="percept", who="discord:701",
+        place="space:dc:701", body="discord",
+        payload={"description": "hi", "place_kind": "direct", "addressed": True}))
+    await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="command", who="discord:701",
+        place="space:dc:701", body="discord", payload={"command": "link", "arguments": []}))
+    stranger_code = str((await read_state(aconn, f"{identity.LINK_PREFIX}{stranger.who}"))["code"])
+
+    await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="command", who="telegram:700",
+        place="space:tg:700", body="telegram",
+        payload={"command": "link", "arguments": [stranger_code]}))
+    assert await identity.find_person(aconn, "discord:701") == stranger.who
+    assert await read_state(aconn, f"{identity.LINK_PREFIX}{stranger.who}") is not None
+
+
+async def test_pairing_code_limits_tries_per_account(aconn):
+    code = await identity.ensure(aconn, now=START)
+    for idx in range(3):
+        wrong = await _percept(aconn, who="person:tg:999",
+                               text=f"00000{idx}" if f"00000{idx}" != code else f"99999{idx}")
+        assert await identity.claim_owner(aconn, wrong, now=START) is None
+
+    # Locked out within the 10-minute window even with the real code
+    locked = await _percept(aconn, who="person:tg:999", text=code)
+    assert await identity.claim_owner(aconn, locked, now=START + timedelta(minutes=1)) is None
+    assert await read_state(aconn, identity.OWNER_KEY) is None
+
+    # A different account is not affected by tg:999's failed attempts
+    other = await _percept(aconn, who="person:tg:100", text=code)
+    assert await identity.claim_owner(aconn, other, now=START + timedelta(minutes=1)) is not None
+    assert await read_state(aconn, identity.OWNER_KEY) == {"who": "person:tg:100"}
+
+
+async def test_pairing_code_lockout_clears_after_window(aconn):
+    code = await identity.ensure(aconn, now=START)
+    for idx in range(3):
+        wrong = await _percept(aconn, who="person:tg:999",
+                               text=f"00000{idx}" if f"00000{idx}" != code else f"99999{idx}")
+        assert await identity.claim_owner(aconn, wrong, now=START) is None
+    assert await identity.claim_owner(
+        aconn, await _percept(aconn, who="person:tg:999", text=code),
+        now=START + timedelta(minutes=11)) is not None
+    assert await read_state(aconn, identity.OWNER_KEY) == {"who": "person:tg:999"}

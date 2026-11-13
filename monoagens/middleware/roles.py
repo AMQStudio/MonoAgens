@@ -68,6 +68,10 @@ class Role:
     context: str | None = None
     platform_role: tuple[str, ...] = ()
 
+    def base_tier(self) -> str:
+        """Return this role's declared base tier (`guest` if omitted); `allow` never raises it."""
+        return self.base if self.base in TIERS else "guest"
+
     def effective_tier(self, bases: Mapping[str, str | None]) -> str:
         """Return the highest tier this role reaches: its base or the base of what it allows."""
         reached = [_rank(self.base)]
@@ -245,11 +249,12 @@ class RoleBook:
         return tuple(self.roles[name] for name in names if name in self.roles)
 
     def tier(self, who: str, place: str | None = None) -> str:
-        """Return one person's tier: the owner is above all, else the highest role held."""
+        """Return one person's tier: the owner is above all, else the highest role base held."""
         if str(who) == "person:owner":
             return OWNER_TIER
-        reached = [role.effective_tier(self.bases) for role in self.held(who, place)]
-        return max(reached, key=_rank) if reached else "guest"
+        reached = [_rank(role.base_tier()) for role in self.held(who, place) if role.base in TIERS]
+        best = max(reached) if reached else 0
+        return TIERS[max(best, 0)]
 
     def permissions(self, who: str, place: str | None = None) -> frozenset[str]:
         """Return every permission one person holds: the tier's, plus allows, minus denies."""
@@ -359,18 +364,28 @@ def _parse_platform_roles(raw: Any, role_name: str, report: Any) -> tuple[str, .
     return tuple(parsed)
 
 
+def validate_permission_name(owner: str, permission: str, source: str) -> None:
+    """Refuse redefining a core permission or one outside `owner`'s namespace."""
+    perm = str(permission)
+    if perm in CORE_PERMISSIONS or not perm.startswith(f"{owner}."):
+        raise ValueError(
+            f"{source}: permission {perm!r} redefines core or is outside namespace '{owner}.'")
+
+
 def _bases(catalog: Mapping[str, str | None], manifests: Mapping[str, Mapping[str, Any]],
            config_d: Mapping[str, Mapping[str, Any]],
            report: Any) -> tuple[dict[str, str | None], dict[str, str]]:
     """Return the effective base of every permission and where it came from."""
     bases = {str(name): base for name, base in catalog.items()}
     sources = {str(name): "middleware" for name in catalog}
-    for manifest in manifests.values():
+    for owner, manifest in manifests.items():
         for name, spec in (manifest.get("permissions") or {}).items():
+            validate_permission_name(str(owner), str(name), f"plugin {owner}")
             bases[str(name)] = (spec or {}).get("base")
             sources[str(name)] = "manifest"
-    for values in config_d.values():
+    for owner, values in config_d.items():
         for name, base in (values.get("permissions") or {}).items():
+            validate_permission_name(str(owner), str(name), f"config.d/{owner}.yaml")
             if name in bases and bases[name] != base:
                 report.add(f"permission {name}: {base or OWNER_TIER} (config.d)")
             bases[str(name)] = base
@@ -434,7 +449,7 @@ def describe_role(book: RoleBook, role_name: str) -> str:
     role = book.roles.get(role_name)
     if role is None:
         return f"no role called {role_name}"
-    tier = role.effective_tier(book.bases)
+    tier = role.base_tier()
     held = {name for name, base in book.bases.items()
             if base is not None and _rank(base) <= _rank(tier)}
     held = (held | set(role.allow)) - set(role.deny)

@@ -289,5 +289,6 @@ async def reminder(conn, row, event, now):
                "reminder": True}
     reminded_event = await append_event(conn, ts=now, kind="expectation.reminded",
                                         who=event.who, place=event.place, body=event.body,
+                                        origin_actor=row["origin_actor"],
                                         caused_by=event.id, payload=payload)
     return {**row, "trigger": reminded_event}

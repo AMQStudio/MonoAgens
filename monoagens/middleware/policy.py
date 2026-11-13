@@ -271,10 +271,15 @@ async def _needs_approval(kernel: Any, ctx: Any, facts: set[str]) -> str:
     approved = event.payload.get("approved") if event.kind == "intent" else None
     if approved is not None:
         asked = await interaction.by_id(kernel.conn, int(approved))
+        asked_who = asked.get("who") if asked else None
+        same_actor = (not asked_who) or (str(asked_who) == str(ctx.get("origin_actor") or ""))
         same = (asked is not None
+                and same_actor
                 and str(asked.get("capability")) == str(ctx.get("capability"))
                 and (asked.get("arguments") or {}) == (ctx.get("arguments") or {}))
         if same:
+            if await interaction.is_consumed(kernel.conn, int(approved)):
+                return "ask"
             return "pass"
         if await _asked_again(kernel.conn, int(approved)):
             return "refused"
@@ -322,6 +327,12 @@ def approval_line(kernel: Any) -> Middleware:
         facts = set(kernel.tools.facts(capability)) | set(ctx.get("call_facts") or ())
         decision = await _needs_approval(kernel, ctx, facts)
         if decision == "pass":
+            approved = (ctx["event"].payload.get("approved")
+                        if ctx["event"].kind == "intent" else None)
+            if approved is not None:
+                await kernel._emit(ctx["event"], interaction.CONSUMED, {
+                    "request": int(approved), "capability": capability,
+                    "who": ctx.get("origin_actor")})
             return Continue()
         if decision == "refused":
             ctx["refusal"] = "the approved call was different; ask the owner again"

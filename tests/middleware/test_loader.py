@@ -462,3 +462,27 @@ def register(api):
     after = [entry.name for entry in kernel.hooks.inbound._registrations]
     assert after == before
     assert "demo-mark" in after
+
+
+def test_plugin_and_config_d_cannot_redefine_core_or_other_namespace_permissions(tmp_path):
+    make_plugin(tmp_path, spec=manifest(permissions={"demo.poke": {"base": "guest"},
+                                                     "budget.manage": {"base": "guest"}}))
+    with pytest.raises(ValueError, match="budget.manage"):
+        Loader(tmp_path).load(settings(plugins={"demo": {"enabled": True}}))
+
+    make_plugin(tmp_path, spec=manifest(permissions={"demo.poke": {"base": "guest"},
+                                                     "workspace.run": {"base": "guest"}}))
+    with pytest.raises(ValueError, match="workspace.run"):
+        Loader(tmp_path).load(settings(plugins={"demo": {"enabled": True}}))
+
+    make_plugin(tmp_path)
+    (tmp_path / "config.d").mkdir(exist_ok=True)
+    (tmp_path / "config.d" / "demo.yaml").write_text(
+        "version: 1\npermissions: {roles.manage: guest}\nrole_settings: {}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="roles.manage"):
+        Loader(tmp_path).load(settings(plugins={"demo": {"enabled": True}}))
+
+    (tmp_path / "config.d" / "demo.yaml").write_text(
+        "version: 1\npermissions: {other.perm: guest}\nrole_settings: {}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="other.perm"):
+        Loader(tmp_path).load(settings(plugins={"demo": {"enabled": True}}))
