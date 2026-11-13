@@ -545,14 +545,18 @@ async def _direct_places(conn, natives: set[str]) -> dict[str, tuple[str, dateti
         if native_id:
             excluded.add(native_id)
     cur = await conn.execute(
-        "SELECT DISTINCT ON (body) body, place, ts FROM events WHERE kind = 'percept' "
+        "SELECT DISTINCT ON (body, place) body, place, ts, id FROM events WHERE kind = 'percept' "
         "AND place IS NOT NULL AND who = ANY(%s) AND payload->>'place_kind' = 'direct' "
-        "ORDER BY body, id DESC", (sorted(natives),))
+        "ORDER BY body, place, id DESC", (sorted(natives),))
+    rows = sorted(await cur.fetchall(), key=lambda row: row[3], reverse=True)
     places: dict[str, tuple[str, datetime]] = {}
-    for body, place, seen in await cur.fetchall():
-        if place in excluded or str(place).rsplit(":", 1)[-1] in excluded:
+    for body, place, seen, _ in rows:
+        bkey = str(body or "?")
+        if bkey in places or place in excluded or str(place).rsplit(":", 1)[-1] in excluded:
             continue
-        places[str(body or "?")] = (place, seen)
+        if await privacy.place_kind(conn, place) != "direct":
+            continue
+        places[bkey] = (place, seen)
     return places
 
 

@@ -350,7 +350,7 @@ async def test_full_output_respects_privacy_and_hard_forget(aconn, tmp_path):
     blocked = await kernel.tools.act(group_event, "registry.more", {"ref": ref, "offset": 0})
     assert "may not see" in blocked["error"]
 
-    await privacy.grant(kernel, dm_event, {"item": "secret output"},
+    await privacy.grant(kernel, stored, {"item": "secret output", "episode": str(stored.id)},
                         to=PLACE, source="space:tg:dm:bob")
     opened = await kernel.tools.act(group_event, "registry.more",
                                     {"ref": ref, "offset": 0, "limit": 50})

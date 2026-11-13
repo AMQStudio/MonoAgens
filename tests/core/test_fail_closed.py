@@ -113,7 +113,8 @@ async def test_a_plugin_that_widens_the_desk_is_narrowed_again(aconn):
     kernel = build(aconn, clock=FakeClock(START), settings=SETTINGS)
 
     async def widen(item, ctx):
-        return Replace(replace(item, memories=(fact,), recent_elsewhere=(line,)))
+        return Replace(replace(item, memories=(fact,),
+                               recent_elsewhere=(*item.recent_elsewhere, line)))
 
     kernel.hooks.context.add("widen", widen)
     context = await layout.build_context(aconn, trigger, GROUP, "test", now=START,

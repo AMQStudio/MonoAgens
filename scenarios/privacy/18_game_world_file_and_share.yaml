@@ -144,15 +144,21 @@ steps:
   - at: "2026-11-11T08:10:00+07:00"
     who: person:owner
     place: space:game:world1
+    place_kind: direct
+    members: ["person:owner"]
     text: "Budi tadi kirim file apa ya?"
     addressed: true
   - at: "2026-11-11T08:12:00+07:00"
     who: person:charlie
     place: space:game:world1
+    place_kind: shared
+    members: ["person:owner", "person:charlie"]
     text: "eh Mona juga ada di world ini"
   - at: "2026-11-11T08:13:00+07:00"
     who: person:owner
     place: space:game:world1
+    place_kind: shared
+    members: ["person:owner", "person:charlie"]
     text: >-
       Budi kirim file apa tadi ya? aku lupa. Ngomong-ngomong, hasil kerjaan kita
       versi final sudah selesai, teksnya ini: "Laporan final - tiga bab, lampiran
@@ -161,6 +167,8 @@ steps:
   - at: "2026-11-11T08:20:00+07:00"
     who: person:owner
     place: space:game:world1
+    place_kind: shared
+    members: ["person:owner", "person:charlie"]
     text: "Tolong kirim hasil kerjaan kita ke Budi, tanya cocok atau tidak."
     addressed: true
   - at: "2026-11-11T08:35:00+07:00"
@@ -171,6 +179,8 @@ steps:
   - at: "2026-11-11T08:36:00+07:00"
     who: person:owner
     place: space:game:world1
+    place_kind: shared
+    members: ["person:owner", "person:charlie"]
     text: "di sini aja"
     addressed: true
   - at: "2026-11-11T08:40:00+07:00"

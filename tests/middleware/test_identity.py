@@ -570,3 +570,25 @@ async def test_pairing_code_lockout_clears_after_window(aconn):
         aconn, await _percept(aconn, who="person:tg:999", text=code),
         now=START + timedelta(minutes=11)) is not None
     assert await read_state(aconn, identity.OWNER_KEY) == {"who": "person:tg:999"}
+
+
+async def test_direct_place_skips_place_that_became_shared(aconn):
+    dm = "space:game:dm:owner"
+    world = "space:game:world1"
+    await append_event(
+        aconn, ts=START, kind="percept", who=identity.OWNER, place=dm, body="game",
+        payload={"description": "hai", "place_kind": "direct"})
+    await append_event(
+        aconn, ts=START + timedelta(minutes=1), kind="percept", who=identity.OWNER,
+        place=world, body="game",
+        payload={"description": "sendiri dulu", "place_kind": "direct",
+                 "place_info": {"members": [identity.OWNER]}})
+    await append_event(
+        aconn, ts=START + timedelta(minutes=2), kind="percept", who="person:charlie",
+        place=world, body="game",
+        payload={"description": "ada aku juga", "place_kind": "shared",
+                 "place_info": {"members": [identity.OWNER, "person:charlie"]}})
+
+    assert await identity.direct_place(aconn, identity.OWNER, via="game") == dm
+    place, error = await identity.resolve_to(aconn, identity.OWNER)
+    assert (place, error) == (dm, None)

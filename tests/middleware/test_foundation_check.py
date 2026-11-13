@@ -359,10 +359,11 @@ async def test_12_a_private_file_is_refused_in_a_group_until_it_is_shared(aconn)
     kernel, _, _ = _kernel(aconn)
     store = kernel.attachments
     attachment = await store.put(b"laporan", name="laporan.txt")
-    await append_event(aconn, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
-                       body="telegram",
-                       payload={"description": "laporan", "place_kind": "direct",
-                                "data": {"attachments": [attachment]}})
+    source = await append_event(
+        aconn, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
+        body="telegram",
+        payload={"description": "laporan", "place_kind": "direct",
+                 "data": {"attachments": [attachment]}})
     budi_ev = await _said(aconn, "person:budi", GROUP, "shared", "halo")
     await aconn.execute(
         "INSERT INTO state (key, value, updated_by_event) VALUES (%s, %s, %s)",
@@ -371,7 +372,8 @@ async def test_12_a_private_file_is_refused_in_a_group_until_it_is_shared(aconn)
     with pytest.raises(PermissionError):
         await contract.open_attachment(aconn, store, attachment["ref"], context=GROUP)
     await append_event(aconn, ts=START, kind="share.granted", place=OWNER_DM,
-                       payload={"persons": ["person:budi"], "source_place": OWNER_DM})
+                       payload={"persons": ["person:budi"], "source_place": OWNER_DM,
+                                "episode": source.id})
 
     data, _ = await contract.open_attachment(aconn, store, attachment["ref"], context=GROUP)
     assert data == b"laporan"

@@ -6,6 +6,9 @@ plugins:
   web-search: {enabled: true}
   workspace: {enabled: true}
   pdf-reader: {enabled: true}
+places:
+  space:tg:-1006:
+    members: ["person:tg:8101"]
 description: >-
   Unaddressed help, case two: the owner tells Mona the meeting time in a direct
   chat and sleep keeps it. A group member who was never part of that chat asks

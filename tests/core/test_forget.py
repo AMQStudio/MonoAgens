@@ -113,3 +113,90 @@ async def test_forget_hard_deletes_vectors_derived_from_a_forgotten_event(aconn)
 async def test_forget_hard_rejects_unknown_events(aconn):
     with pytest.raises(ValueError, match="unknown event ids"):
         await forget_hard(aconn, [999_999], now=START)
+
+
+async def test_forget_hard_clears_overlapping_core_memory_and_blocks_inflight_vectors(aconn):
+    from monoagens.boot import build
+    from monoagens.core import memory
+    from monoagens.core.reasoning import ToolCall
+    from monoagens.infra.clock import FakeClock
+    from monoagens.infra.embedding import FakeEmbedder
+    from monoagens.infra.store import read_state, rebuild_state
+
+    class _SleepLLM:
+        model = "sleep-model"
+        last_usage = {"prompt_tokens": 5, "completion_tokens": 5}
+
+        def __init__(self) -> None:
+            self.seen_cores: list[str] = []
+
+        async def call(self, messages, _tools, *, tool_choice="required"):
+            content = str(messages[-1]["content"])
+            self.seen_cores.append(content)
+            return [ToolCall("store_memories", {
+                "items": [{"text": "clean summary", "importance": 0.5}],
+                "core_memory": "rebuilt clean core",
+            })]
+
+    forgotten = await _event(aconn, ts=START)
+    kept = await _event(aconn, ts=START + timedelta(minutes=1))
+    done_ev = await append_event(
+        aconn, ts=START + timedelta(minutes=2), kind="sleep.done",
+        payload={"core_memory": "secret in core", "last_event_id": kept.id,
+                 "derived_from": [forgotten.id, kept.id]})
+    await aconn.execute(
+        "INSERT INTO state (key, value, updated_by_event) VALUES "
+        "('core_memory', %s, %s), ('sleep:last_event', %s, %s) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "
+        "updated_by_event = EXCLUDED.updated_by_event",
+        (Jsonb({"text": "secret in core", "derived_from": [forgotten.id, kept.id]}),
+         done_ev.id, Jsonb({"id": kept.id}), done_ev.id))
+
+    # 1. Hard forget clears core_memory state + scrubs sleep.done copy; rebuild_state stays clean.
+    await forget_hard(aconn, [forgotten.id], now=START + timedelta(minutes=3),
+                      who="person:owner", place=PLACE)
+    assert await read_state(aconn, "core_memory") is None
+    done_row = await (await aconn.execute(
+        "SELECT payload FROM events WHERE id = %s", (done_ev.id,))).fetchone()
+    assert done_row == ({"forgotten": True},)
+
+    await rebuild_state(aconn)
+    assert await read_state(aconn, "core_memory") is None
+
+    # 2. Next sleep rebuilds core_memory from an empty core prompt.
+    llm = _SleepLLM()
+    rebuilt_done = await memory.sleep(aconn, pfc=llm, embedder=FakeEmbedder(),
+                                      now=START + timedelta(hours=2), settings=SETTINGS)
+    assert rebuilt_done is not None and rebuilt_done.kind == "sleep.done"
+    assert llm.seen_cores and "<core_memory></core_memory>" in llm.seen_cores[0]
+    core_after = await read_state(aconn, "core_memory")
+    assert core_after is not None and core_after["text"] == "rebuilt clean core"
+
+    # 3. In-flight encode and embed_batch results never insert vectors for forgotten events.
+    kernel = build(aconn, clock=FakeClock(START), settings=SETTINGS, embedder=FakeEmbedder())
+    ev_encode = await _event(aconn, ts=START + timedelta(hours=3))
+    ev_batch_forget = await _event(aconn, ts=START + timedelta(hours=3, minutes=1))
+    ev_batch_keep = await _event(aconn, ts=START + timedelta(hours=3, minutes=2))
+    from monoagens.core.jobs import Job
+    j1 = await append_event(aconn, ts=START, kind="job.result",
+                            payload={"name": "encode", "key": f"encode:{ev_encode.id}"})
+    j2 = await append_event(aconn, ts=START, kind="job.result",
+                            payload={"name": "embed_batch", "key": "embed_batch"})
+    kernel.jobs.in_flight[f"encode:{ev_encode.id}"] = Job(
+        name="encode", key=f"encode:{ev_encode.id}", trigger=ev_encode, place=PLACE,
+        outcome={"result": {"event_id": ev_encode.id, "vector": [0.1] * 384}})
+    kernel.jobs.in_flight["embed_batch"] = Job(
+        name="embed_batch", key="embed_batch", trigger=ev_batch_keep, place="",
+        outcome={"result": {"items": [(ev_batch_forget.id, [0.2] * 384),
+                                      (ev_batch_keep.id, [0.3] * 384)]}})
+    await forget_hard(aconn, [ev_encode.id, ev_batch_forget.id],
+                      now=START + timedelta(hours=3, minutes=5))
+    await kernel._finish_job(j1)
+    await kernel._finish_job(j2)
+
+    rows = await (await aconn.execute("SELECT event_id FROM event_vectors ORDER BY event_id")).fetchall()
+    stored_ids = [int(r[0]) for r in rows]
+    assert ev_encode.id not in stored_ids
+    assert ev_batch_forget.id not in stored_ids
+    assert ev_batch_keep.id in stored_ids
+

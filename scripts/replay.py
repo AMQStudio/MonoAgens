@@ -252,6 +252,7 @@ class Tracker:
     usage: Usage = field(default_factory=Usage)
     prompts: list[tuple[int, str | None, str]] = field(default_factory=list)
     desks: list[Desk] = field(default_factory=list)
+    desk_violations: list[str] = field(default_factory=list)
     step_index: int = 0
     answers_used: dict[tuple[int, str], int] = field(default_factory=dict)
     conn: Any = None
@@ -270,7 +271,10 @@ class Tracker:
         if context.core_memory:
             items.append(DeskItem(None, None, await self._core_sources()))
         trigger = context.trigger.id if context.trigger is not None else None
-        self.desks.append(Desk(self.step_index, context.place, trigger, tuple(items)))
+        desk = Desk(self.step_index, context.place, trigger, tuple(items))
+        self.desks.append(desk)
+        if self.conn is not None:
+            self.desk_violations.extend(await desk_violations(self.conn, [desk]))
 
     async def _core_sources(self) -> tuple[int, ...]:
         """Return the Log events the current core memory was built from."""
@@ -480,6 +484,7 @@ class Scenario:
     files: dict[str, str] = field(default_factory=dict)
     roles: dict[str, Any] = field(default_factory=dict)
     people: dict[str, Any] = field(default_factory=dict)
+    places: dict[str, Any] = field(default_factory=dict)
     workspace_files: dict[str, str] = field(default_factory=dict)
 
 
@@ -574,8 +579,10 @@ def load_scenario(path: pathlib.Path, zone: ZoneInfo) -> Scenario:
         raise ValueError(f"{path}: workspace_files must be a map of relative path to its text")
     declared_roles = data.get("roles") or {}
     declared_people = data.get("people") or {}
-    if not isinstance(declared_roles, dict) or not isinstance(declared_people, dict):
-        raise ValueError(f"{path}: roles and people must be maps")
+    declared_places = data.get("places") or {}
+    if (not isinstance(declared_roles, dict) or not isinstance(declared_people, dict)
+            or not isinstance(declared_places, dict)):
+        raise ValueError(f"{path}: roles, people and places must be maps")
     return Scenario(path=path, name=str(data.get("name") or path.stem),
                     description=str(data.get("description") or ""), steps=steps,
                     expectations=list(data.get("expectations") or []),
@@ -583,7 +590,8 @@ def load_scenario(path: pathlib.Path, zone: ZoneInfo) -> Scenario:
                     function=function, capability=capability,
                     plugins=dict(plugins), bodies_extra=dict(bodies_extra),
                     files=dict(files), roles=dict(declared_roles),
-                    people=dict(declared_people), workspace_files=dict(workspace_files))
+                    people=dict(declared_people), places=dict(declared_places),
+                    workspace_files=dict(workspace_files))
 
 
 def load_answers(path: pathlib.Path,
@@ -757,10 +765,12 @@ class ReplayRunner:
         start_usage = Usage(**vars(self.tracker.usage))
         self.tracker.prompts.clear()
         self.tracker.desks.clear()
+        self.tracker.desk_violations.clear()
         self.tracker.answers_used.clear()
         self.answers = scenario.answers
         self.files = dict(scenario.files)
         self.declared = {"roles": dict(scenario.roles), "people": dict(scenario.people)}
+        self.places = dict(scenario.places)
         self.workspace_files = dict(scenario.workspace_files)
         self.selected = dict(scenario.plugins)
         self.extra_bodies = dict(scenario.bodies_extra)
@@ -791,7 +801,7 @@ class ReplayRunner:
                 memories=await self._memory_count(),
                 usage=self.tracker.usage.minus(start_usage),
                 violations=(await self._leak_violations(replies)
-                            + await desk_violations(self.conn, desks)),
+                            + list(self.tracker.desk_violations)),
                 log_texts=await self._log_texts(steps),
                 unreachable_refs=await self._unreachable_refs(all_events))
         self.conn = self.tracker.conn = None
@@ -818,9 +828,20 @@ class ReplayRunner:
         text = str(raw.get("text") or "")
         body = str(raw.get("body") or "") or None
         addressed = bool(raw.get("addressed", False))
+        place_defaults = dict(getattr(self, "places", {}).get(place) or {})
+        place_info = dict(place_defaults.get("place_info") or {})
+        if isinstance(place_defaults.get("members"), (list, tuple)):
+            place_info["members"] = list(place_defaults["members"])
+        if isinstance(raw.get("place_info"), dict):
+            place_info.update(raw["place_info"])
+        if isinstance(raw.get("members"), (list, tuple)):
+            place_info["members"] = list(raw["members"])
+        step_place_kind = raw.get("place_kind") or place_defaults.get("place_kind")
         if kind == "message":
             await self._feed(who=who, place=place, text=text, addressed=addressed, body=body,
-                             attach=list(raw.get("attach") or ()))
+                             attach=list(raw.get("attach") or ()),
+                             place_info=place_info or None,
+                             kind_override=str(step_place_kind) if step_place_kind else None)
         elif kind == "advance":
             self.clock.advance(parse_duration(raw["advance"]))
             await self.clock.tick(self.kernel.put)
@@ -883,12 +904,14 @@ class ReplayRunner:
                 await write_state(self.conn, f"alias:{account}", {"who": raw_who}, claimed.id)
 
     async def _feed(self, *, who: str, place: str, text: str, addressed: bool,
-                    body: str | None = None, attach: Sequence[str] = ()) -> None:
+                    body: str | None = None, attach: Sequence[str] = (),
+                    place_info: dict[str, Any] | None = None,
+                    kind_override: str | None = None) -> None:
         """Put one percept and let the single consumer process it to completion."""
         self._message_id += 1
         name = body_for(place, body)
         native_who = self._native_account(who, name)
-        kind = "direct" if name == CLI_BODY else place_kind(place)
+        kind = kind_override or ("direct" if name == CLI_BODY else place_kind(place))
         data: dict[str, Any] = {"message_id": self._message_id}
         description = text
         files = await self._attach(attach, place) if attach else []
@@ -896,9 +919,12 @@ class ReplayRunner:
             data["attachments"] = files
             summary = describe_attachments(files, sent_by=who)
             description = f"{text} {summary}".strip() if text else summary
+        payload: dict[str, Any] = {"description": description, "addressed": addressed,
+                                   "place_kind": kind, "data": data}
+        if place_info:
+            payload["place_info"] = dict(place_info)
         event = Event(id=None, ts=self.clock.now(), kind="percept", who=native_who, place=place,
-                      body=name, payload={"description": description, "addressed": addressed,
-                                          "place_kind": kind, "data": data})
+                      body=name, payload=payload)
         task = asyncio.create_task(self.kernel.put(event))
         await asyncio.sleep(0)
         await self.kernel.step()
@@ -1743,32 +1769,24 @@ def _fabricated_quote(text: str, corpus: Sequence[str]) -> str | None:
 async def desk_violations(conn, desks: Sequence[Desk]) -> list[str]:
     """Return every desk item whose own audience does not cover that desk (D45, D50, D53).
 
-    Independent of `privacy.visible`: it restates absolute line 2 from the Log, so a bug in
-    the context hook or in `visible` itself cannot pass the metric.
+    Uses `privacy.visible` / `privacy.memory_visible` directly (one source of truth).
     """
     found: list[str] = []
     for desk in desks:
         if not desk.place or await privacy.owner_direct(conn, desk.place):
             continue
-        need = set(await privacy.audience(conn, desk.place, desk.trigger)) - {OWNER}
         reported: set[tuple[str | None, tuple[int, ...] | None]] = set()
         for item in desk.items:
             key = (item.source, item.sources)
-            if not need or key in reported:
+            if key in reported:
                 continue
             if item.sources is not None:
-                rows = await (await conn.execute(
-                    "SELECT id, place FROM events WHERE id = ANY(%s) AND place IS NOT NULL",
-                    (list(item.sources),))).fetchall()
-                audiences = [((set(await privacy.audience(conn, place, source)) - {OWNER})
-                              | set(await privacy.shared(conn, place, desk.trigger)))
-                             for source, place in rows]
-                covered = bool(item.sources) and all(need <= have for have in audiences)
+                covered = await privacy.memory_visible(
+                    conn, context=desk.place, sources=item.sources)
                 label = f"sources {list(item.sources)}" if item.sources else "no known source"
             else:
-                covered = bool(item.source) and need <= (
-                    (set(await privacy.audience(conn, item.source, item.before)) - {OWNER})
-                    | set(await privacy.shared(conn, item.source, desk.trigger)))
+                covered = await privacy.visible(
+                    conn, context=desk.place, source=item.source, before=item.before)
                 label = item.source or "no known source"
             if not covered:
                 reported.add(key)

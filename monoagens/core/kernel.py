@@ -461,11 +461,27 @@ class Kernel:
             self._track_batch(job, acts)
             await threads.after_step(self, job, event, acts)
         elif job.name == "encode" and isinstance(result.get("vector"), list):
-            await insert_event_vector(self.conn, int(result["event_id"]), result["vector"])
+            event_id = int(result["event_id"])
+            async with self.conn.transaction():
+                row = await (await self.conn.execute(
+                    "SELECT 1 FROM events WHERE id = %s "
+                    "AND payload <> '{\"forgotten\": true}'::jsonb FOR SHARE",
+                    (event_id,))).fetchone()
+                if row is not None:
+                    await insert_event_vector(self.conn, event_id, result["vector"])
         elif job.name == "embed_batch":
             items = result.get("items") or []
             if items:
-                await insert_event_vectors(self.conn, items)
+                batch_ids = sorted({int(eid) for eid, _ in items})
+                async with self.conn.transaction():
+                    rows = await (await self.conn.execute(
+                        "SELECT id FROM events WHERE id = ANY(%s) "
+                        "AND payload <> '{\"forgotten\": true}'::jsonb FOR SHARE",
+                        (batch_ids,))).fetchall()
+                    alive = {int(r[0]) for r in rows}
+                    kept = [(eid, vec) for eid, vec in items if int(eid) in alive]
+                    if kept:
+                        await insert_event_vectors(self.conn, kept)
             if self._pending_embeds:
                 await self._flush_embed_batch(force=self.queue.empty())
         if job.re_wake is not None:
@@ -484,16 +500,6 @@ class Kernel:
             return
         reminded = trigger.kind == "expectation.reminded"
         place = str(item.get("place") or trigger.place or "")
-        if reminded:
-            line_place = str((trigger.payload or {}).get("line_place") or trigger.place or "")
-            vis = getattr(self, "visible", None)
-            if vis is not None:
-                allowed = await vis(self.conn, context=place, source=line_place,
-                                    before=trigger.caused_by)
-            else:
-                allowed = bool(place) and line_place == place
-            if not allowed:
-                return
         woken = replace(trigger, place=place) if reminded else trigger
         appraisal = await self._appraise(trigger)
         if appraisal.decision != "wake":

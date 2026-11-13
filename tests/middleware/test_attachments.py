@@ -86,7 +86,8 @@ async def test_a_share_lets_another_place_open_the_file(aconn, tmp_path):
 
     await append_event(aconn, ts=START, kind="share.granted", place=OWNER_DM,
                        payload={"persons": ["person:budi"], "source_place": OWNER_DM,
-                                "to": "person:budi"}, caused_by=source.id)
+                                "episode": source.id, "to": "person:budi"},
+                       caused_by=source.id)
 
     data, _ = await contract.open_attachment(aconn, store, attachment["ref"], context=GROUP)
     assert data == b"kode"

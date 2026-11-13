@@ -178,10 +178,11 @@ async def test_the_desk_scan_counts_every_private_item_its_audience_does_not_cov
         aconn, [replay.Desk(3, dm, said.id, (replay.DeskItem(dm, None),))]) == []
 
     grant = await append_event(aconn, ts=NOW, kind="share.granted", place=dm,
-                               payload={"source_place": dm, "persons": ["person:budi"]})
+                               payload={"source_place": dm, "episode": said.id,
+                                        "persons": ["person:budi"]})
     assert await replay.desk_violations(aconn, [leaked])
     assert await replay.desk_violations(
-        aconn, [replay.Desk(4, group, grant.id, (replay.DeskItem(dm, None),))]) == []
+        aconn, [replay.Desk(4, group, grant.id, (replay.DeskItem(dm, said.id),))]) == []
 
 
 async def test_the_desk_scan_judges_a_memory_by_its_sources(aconn):

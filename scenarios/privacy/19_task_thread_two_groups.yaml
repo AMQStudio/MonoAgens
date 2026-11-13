@@ -44,11 +44,11 @@ expectations:
     step: 4
     text_contains: "kirim"
     label: the promise is fired by the work's completion
-  - type: prompt_contains
-    text: "Tolong selesaikan"
+  - type: mentions
+    text: "12 passed"
     step: 4
     place: space:wa:628110001@s.whatsapp.net
-    label: Budi's wake carries the intent's own reason
+    label: the completed task result reaches Budi on WhatsApp without the raw goal prompt
   - type: prompt_contains
     text: "person:budi"
     step: 4
@@ -136,14 +136,17 @@ steps:
   - at: "2026-11-11T09:00:00+07:00"
     who: person:owner
     place: space:wa:1203630001@g.us
+    members: ["person:owner", "person:alpha_member"]
     text: "pagi semua"
   - at: "2026-11-11T09:01:00+07:00"
     who: person:owner
     place: space:wa:1203630002@g.us
+    members: ["person:owner", "person:beta_member"]
     text: "pagi juga"
   - at: "2026-11-11T09:05:00+07:00"
     who: person:owner
     place: space:game:world1
+    members: ["person:owner"]
     text: >-
       Tolong selesaikan kodeku dulu, lalu kirim ke Budi lewat WhatsApp dan ke
       grup. Kodenya ada di workspace dev, file src/parser.py, tesnya masih gagal.
@@ -151,11 +154,13 @@ steps:
   - at: "2026-11-11T09:06:00+07:00"
     who: person:owner
     place: space:game:world1
+    members: ["person:owner"]
     text: "Kamu masih di situ?"
     addressed: true
   - at: "2026-11-11T09:10:00+07:00"
     who: person:owner
     place: space:game:world1
+    members: ["person:owner"]
     text: "Yang space:wa:1203630001@g.us ya (Tim Alpha)."
     addressed: true
 model_answers:

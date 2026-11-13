@@ -6,6 +6,9 @@ plugins:
   web-search: {enabled: true}
   workspace: {enabled: true}
   pdf-reader: {enabled: true}
+places:
+  space:tg:-1008:
+    members: ["person:tg:8301"]
 description: >-
   Unaddressed help, case four: the owner leaves a package in the front cabinet and
   tells Mona in a direct chat; sleep keeps it. A housemate group then asks where it

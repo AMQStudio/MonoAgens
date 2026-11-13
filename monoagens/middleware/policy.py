@@ -75,7 +75,6 @@ def install(kernel: Any) -> None:
     install_commands(kernel)
     interaction.install_commands(kernel)
     kernel.after_model_call = enforce(kernel)
-    kernel.visible = privacy.visible
 
 
 class _LiveRoles:
@@ -127,10 +126,11 @@ def policy_for(hook: str, when: str, kernel: Any) -> Middleware:
     """Return the absolute lines of one hook: identity, permissions, privacy, approvals, brakes."""
     if hook == "context":
         if when == "first":
-            return compose(identity.identity_line(), brake_line(kernel),
-                           privacy.filter_context(kernel.conn, settings=kernel.settings),
-                           kernel=kernel)
-        return compose(privacy.verify_context(kernel), kernel=kernel)
+            return compose(identity.identity_line(), brake_line(kernel), kernel=kernel)
+        return compose(
+            privacy.filter_context(kernel.conn, kernel=kernel, settings=kernel.settings),
+            kernel=kernel,
+        )
     if hook == "action":
         if when == "first":
             return compose(identity.identity_line(), permission_line(kernel),

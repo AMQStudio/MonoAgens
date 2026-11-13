@@ -168,10 +168,17 @@ def test_privacy_candidate_indexes_exist(conn):
         "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()"
     ).fetchall()
     names = {name for (name,) in rows}
-    assert {
+    assert "idx_events_share_granted" in names
+    assert not ({
         "idx_events_privacy_trgm",
         "idx_events_privacy_tsv",
-        "idx_events_share_granted",
         "idx_memories_privacy_trgm",
         "idx_memories_privacy_tsv",
-    } <= names
+    } & names)
+    fn_rows = conn.execute(
+        "SELECT proname FROM pg_proc p "
+        "JOIN pg_namespace n ON n.oid = p.pronamespace "
+        "WHERE n.nspname = current_schema() "
+        "AND proname IN ('event_line_text', 'privacy_clean_text')"
+    ).fetchall()
+    assert fn_rows == []

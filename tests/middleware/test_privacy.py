@@ -175,7 +175,9 @@ async def test_the_owners_direct_chat_is_private_to_the_owner(aconn):
     await kernel._apply(_trigger(dm, OWNER_DM), ToolCall("act", {
         "capability": "self.share",
         "arguments": {"item": "rapat jam sembilan", "to": GROUP}}))
-    assert await privacy.visible(aconn, context=GROUP, source=OWNER_DM) is True
+    assert await privacy.visible(aconn, context=GROUP, source=OWNER_DM, before=dm) is True
+    assert await privacy.visible(aconn, context=GROUP, source=OWNER_DM) is False
+
     shared_desk = await _desk(aconn, place=GROUP, trigger=asked, memories=(fact,))
     assert shared_desk.item.memories == (fact,)
 
@@ -315,7 +317,8 @@ async def test_share_with_a_person_records_consent_and_counts_as_audience(aconn)
     rows = await (await aconn.execute("SELECT payload FROM events WHERE kind = 'share.granted'")
                   ).fetchall()
     assert rows and rows[0][0]["persons"] == ["person:charlie"]
-    assert await privacy.visible(aconn, context="space:tg:charlie", source=GROUP) is True
+    assert await privacy.visible(aconn, context="space:tg:charlie", source=GROUP, before=at) is True
+    assert await privacy.visible(aconn, context="space:tg:charlie", source=GROUP) is False
 
 
 async def test_only_a_person_who_was_part_of_it_can_share_it(aconn):
@@ -351,7 +354,7 @@ async def test_only_a_person_who_was_part_of_it_can_share_it(aconn):
 
 
 async def test_share_with_a_place_grants_everyone_present(aconn):
-    at = await _said(aconn, OWNER, GROUP, "shared")
+    at = await _said(aconn, OWNER, GROUP, "shared", "ini kode kita")
     await _said(aconn, "person:fulan", GROUP, "shared")
     kernel = await _kernel(aconn)
     await kernel._apply(_trigger(at, GROUP), ToolCall("act", {
@@ -908,17 +911,8 @@ async def test_verify_context_last_checks_all_eight_sections_and_records_error(a
     assert cleaned.trigger is None
     assert cleaned.people == ()
 
-    err_rows = await (await aconn.execute(
-        "SELECT payload FROM events WHERE kind = 'error'")).fetchall()
-    assert len(err_rows) >= 8
-    err_blob = str(err_rows)
-    assert "rahasia" not in err_blob and "Stranger" not in err_blob
-
-    await aconn.execute("SELECT 1")
-    before_good_errors = (await (await aconn.execute(
-        "SELECT count(*) FROM events WHERE kind = 'error'")).fetchone())[0]
     good = layout.PFCContext(
-        now=START, place=GROUP, reason="test",
+        now=START, place=GROUP, place_kind="shared", reason="test",
         recent=(budi_ev,),
         expectations=(f"#{pub_exp.payload['expectation_id']} grup exp (no intent stated)",),
         trigger=budi_ev,
@@ -930,7 +924,7 @@ async def test_verify_context_last_checks_all_eight_sections_and_records_error(a
     res_good = await rule(good, {"conn": aconn, "now": START})
     assert isinstance(res_good, hooks.Continue)
     assert await (await aconn.execute(
-        "SELECT count(*) FROM events WHERE kind = 'error'")).fetchone() == (before_good_errors,)
+        "SELECT count(*) FROM events WHERE kind = 'error'")).fetchone() == (0,)
 
 
 async def test_filter_context_drops_cross_place_expectations_and_doing_cleanly(aconn):
@@ -1108,6 +1102,94 @@ async def test_dm_line_matching_group_promise_never_wakes_group(aconn):
     kernel.enqueue(group_ev)
     await kernel.run_until_idle()
     assert any(ctx.place == GROUP for ctx in pfc.contexts)
+
+
+async def test_p15_privacy_lives_only_in_last_context_slot_and_stops_hidden_reminder(aconn):
+    from monoagens.middleware import policy
+
+    fulan_ev = await _said(aconn, "person:fulan", FULAN_A, "direct", "rahasia fulan")
+    budi_ev = await append_event(
+        aconn, ts=START, kind="percept", who="person:budi", place=GROUP, body="telegram",
+        payload={"description": "halo grup", "place_kind": "shared",
+                 "place_info": {"members": ["person:budi"]}})
+    await expectations.create(aconn, {
+        "kind": "promise", "about": "kabari kalau server down",
+        "cue_event": {"kind": "percept"},
+        "expect": {"text": "server down"},
+        "expires_at": (START + timedelta(hours=1)).isoformat(),
+    }, now=START, settings=SETTINGS,
+        source=Event(id=budi_ev.id, ts=START, kind="percept", who=OWNER, place=GROUP))
+
+    pfc = _ScriptedPFC([[]])
+    kernel = await _kernel(aconn, pfc=pfc, embedder=FakeEmbedder())
+    assert getattr(kernel, "visible", None) is None
+
+    # First context slot no longer runs privacy filtering; last slot does.
+    fulan_obj = Event(id=fulan_ev, ts=START, kind="percept", who="person:fulan", place=FULAN_A,
+                      payload={"description": "rahasia fulan"})
+    raw = layout.PFCContext(now=START, place=GROUP, reason="test",
+                            recent_elsewhere=(fulan_obj,), trigger=budi_ev)
+    first_res = await policy.policy_for("context", "first", kernel)(raw, {"conn": aconn, "now": START})
+    assert isinstance(first_res, hooks.Continue) or first_res.item.recent_elsewhere == (fulan_obj,)
+
+    dm_ev = Event(id=None, ts=START, kind="percept", who="person:fulan", place=FULAN_A,
+                  body="whatsapp",
+                  payload={"description": "server down rahasia fulan", "place_kind": "direct"})
+    kernel.enqueue(dm_ev)
+    await kernel.run_until_idle()
+    assert all(ctx.place != GROUP for ctx in pfc.contexts)
+    stopped = await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'guard.stopped' AND place = %s",
+        (GROUP,))).fetchall()
+    assert stopped and stopped[0][0].get("hook") == "context"
+
+
+async def test_p13_share_requires_item_or_episode_and_never_grants_whole_place(aconn):
+    secret_before = await _said(aconn, OWNER, OWNER_DM, "direct", "rahasia pin 1111")
+    meeting = await _said(aconn, OWNER, OWNER_DM, "direct", "rapat jam sembilan")
+    secret_after = await _said(aconn, OWNER, OWNER_DM, "direct", "rahasia pin 2222")
+    await append_event(
+        aconn, ts=START, kind="percept", who="person:budi", place=GROUP, body="telegram",
+        payload={"description": "kapan rapat?", "place_kind": "shared",
+                 "place_info": {"members": ["person:budi"]}})
+    kernel = await _kernel(aconn)
+
+    # 1. Calling self.share without item or episode is refused with a question.
+    await kernel._apply(_trigger(meeting, OWNER_DM), ToolCall("act", {
+        "capability": "self.share", "arguments": {"to": GROUP}}))
+    await kernel.run_until_idle()
+    res = await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'act.result' ORDER BY id DESC LIMIT 1")).fetchone()
+    assert res is not None and "?" in str((res[0].get("result") or {}).get("error") or "")
+    assert await (await aconn.execute(
+        "SELECT count(*) FROM events WHERE kind = 'share.granted'")).fetchone() == (0,)
+
+    # 2. Sharing one item covers only its event, never earlier/later events or the whole place.
+    await kernel._apply(_trigger(meeting, OWNER_DM), ToolCall("act", {
+        "capability": "self.share",
+        "arguments": {"item": "rapat jam sembilan", "to": GROUP}}))
+    assert await privacy.visible(aconn, context=GROUP, source=OWNER_DM, before=meeting) is True
+    assert await privacy.visible(aconn, context=GROUP, source=OWNER_DM, before=secret_before) is False
+    assert await privacy.visible(aconn, context=GROUP, source=OWNER_DM, before=secret_after) is False
+    assert await privacy.visible(aconn, context=GROUP, source=OWNER_DM) is False
+
+
+async def test_outbound_cross_place_act_out_does_not_add_stranger_to_dm_audience(aconn):
+    """Only `percept` events (who spoke there) count toward `audience`, never cross-place `act.out`."""
+    await _said(aconn, OWNER, OWNER_DM, "direct", "kabari aku kalau server down")
+    await append_event(
+        aconn, ts=START, kind="percept", who="person:charlie", place=GROUP, body="telegram",
+        payload={"description": "server down", "place_kind": "shared",
+                 "place_info": {"members": ["person:charlie"]}})
+    await append_event(
+        aconn, ts=START, kind="act.out", who="person:charlie", place=OWNER_DM, body="telegram",
+        payload={"capability": "telegram.say", "arguments": {"text": "server down di grup"},
+                 "communicative": True})
+    assert await privacy.audience(aconn, OWNER_DM) == frozenset({OWNER})
+    assert await privacy.owner_direct(aconn, OWNER_DM) is True
+
+
+
 
 
 

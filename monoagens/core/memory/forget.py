@@ -49,7 +49,20 @@ async def forget_hard(conn: psycopg.AsyncConnection, event_ids: Sequence[int], *
                            "OR derived_from && %s::bigint[]", (ids, ids))
         await conn.execute("DELETE FROM memories WHERE derived_from && %s::bigint[]", (ids,))
         await conn.execute("DELETE FROM expectations WHERE derived_from && %s::bigint[]", (ids,))
-        await conn.execute("UPDATE events SET payload = %s WHERE id = ANY(%s)",
-                           (Jsonb({"forgotten": True}), ids))
+        core_row = await (await conn.execute(
+            "SELECT value FROM state WHERE key = 'core_memory'")).fetchone()
+        core_sources = (
+            {int(src) for src in (core_row[0].get("derived_from") or [])}
+            if core_row and isinstance(core_row[0], dict) else set()
+        )
+        if core_sources & set(ids):
+            await conn.execute("DELETE FROM state WHERE key = 'core_memory'")
+        await conn.execute(
+            "UPDATE events SET payload = %s WHERE id = ANY(%s) OR ("
+            "kind = 'sleep.done' AND EXISTS ("
+            "SELECT 1 FROM jsonb_array_elements_text("
+            "COALESCE(payload->'derived_from', '[]'::jsonb)) elem "
+            "WHERE elem::bigint = ANY(%s)))",
+            (Jsonb({"forgotten": True}), ids, ids))
         return await append_event(conn, ts=now, kind="forget.hard", who=who, place=place,
                                   payload={"forgotten_events": len(ids)})

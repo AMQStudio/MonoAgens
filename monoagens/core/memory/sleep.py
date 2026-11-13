@@ -84,6 +84,7 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
         "LEFT JOIN active_places ap ON ap.place = e.place "
         "WHERE e.kind NOT IN ('sleep.done', 'sleep.failed', 'tick', 'model.call', "
         "'budget.exhausted', 'job.started', 'job.result') "
+        "AND e.payload <> '{\"forgotten\": true}'::jsonb "
         "AND ("
         "  (e.id > %s AND COALESCE((e.payload->>'imported')::boolean, false) = false "
         "   AND NOT (e.kind = 'identity.registered' AND e.place IS NOT NULL "

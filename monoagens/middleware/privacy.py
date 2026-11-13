@@ -7,6 +7,7 @@ never enters the desk, and sharing needs the consent of someone who was part of 
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -55,7 +56,7 @@ async def place_kind(conn, place: str | None) -> str:
     if not place:
         return "shared"
     row = await (await conn.execute(
-        "SELECT payload->>'place_kind' FROM events WHERE place = %s "
+        "SELECT payload->>'place_kind' FROM events WHERE kind = 'percept' AND place = %s "
         "AND payload ? 'place_kind' ORDER BY id DESC LIMIT 1", (place,))).fetchone()
     return str(row[0] or "shared") if row else "shared"
 
@@ -164,7 +165,7 @@ async def audience(conn, place: str | None, before: int | None = None) -> frozen
     if task:
         return frozenset(task.get("audience") or ()) | delegated_actors
     query = ("SELECT who FROM events WHERE place = %s AND who IS NOT NULL "
-             "AND kind IN ('percept', 'act.out')")
+             "AND kind = 'percept'")
     params: list[Any] = [place]
     if before is not None:
         query, params = query + " AND id <= %s", params + [before]
@@ -185,20 +186,17 @@ async def audience(conn, place: str | None, before: int | None = None) -> frozen
 
 async def _share_grants(conn, place: str, before: int | None = None, *,
                         event_id: int | None = None) -> tuple[frozenset[str], frozenset[str]]:
-    """Return `(consented_persons, consented_target_places)` from `share.granted` events."""
-    if event_id is not None:
-        query = ("SELECT payload FROM events WHERE kind = 'share.granted' AND ("
-                 "payload->>'episode' = %s OR ("
-                 "payload->>'source_place' = %s AND "
-                 "(NOT (payload ? 'episode') OR payload->>'episode' IS NULL)))")
-        params: list[Any] = [str(int(event_id)), place]
-    else:
-        query = ("SELECT payload FROM events WHERE kind = 'share.granted' "
-                 "AND payload->>'source_place' = %s AND "
-                 "(NOT (payload ? 'episode') OR payload->>'episode' IS NULL)")
-        params = [place]
+    """Return `(consented_persons, consented_target_places)` from scoped `share.granted` events."""
+    del place
+    if event_id is None:
+        return frozenset(), frozenset()
+    query = (
+        "SELECT payload FROM events WHERE kind = 'share.granted' AND ("
+        "payload->>'episode' = %s OR (payload->'episodes') @> %s::jsonb)"
+    )
+    params: list[Any] = [str(int(event_id)), json.dumps([int(event_id)])]
     if before is not None:
-        query, params = query + " AND id <= %s", params + [before]
+        query, params = query + " AND id <= %s", params + [int(before)]
     rows = await (await conn.execute(query, params)).fetchall()
     people = {who for (payload,) in rows for who in (payload or {}).get("persons") or () if who}
     places = {str(payload["to"]) for (payload,) in rows if (payload or {}).get("to")}
@@ -549,11 +547,133 @@ async def _delegated_share_source(conn, event: Event, arguments: dict[str, Any],
     return None, None
 
 
+_SHARE_STOPWORDS = frozenset({
+    "yang", "dan", "dari", "the", "and", "for", "with", "itu", "ini",
+    "ada", "sudah", "kita", "ke", "di", "yg",
+})
+
+
+def _share_tokens(text: str) -> set[str]:
+    """Tokenize share item descriptions into significant lowercase terms."""
+    raw = set(re.findall(r"[a-z0-9_.@/-]{2,}", str(text or "").lower()))
+    filtered = raw - _SHARE_STOPWORDS
+    return filtered or raw
+
+
+def _event_share_text(payload: Any) -> str:
+    """Collect searchable text from one event payload, attachments and tool results."""
+    if not isinstance(payload, Mapping):
+        return str(payload or "")
+    parts = [payload_text(payload)]
+    data = payload.get("data")
+    if isinstance(data, Mapping):
+        for att in data.get("attachments") or ():
+            if isinstance(att, Mapping):
+                parts.extend(str(att.get(k) or "") for k in ("name", "ref"))
+    if "result" in payload:
+        parts.append(json.dumps(payload["result"], default=str))
+    if "arguments" in payload:
+        parts.append(json.dumps(payload["arguments"], default=str))
+    return " ".join(p for p in parts if p)
+
+
+async def _resolve_share_events(
+    conn, event: Event, item_text: str
+) -> tuple[bool, str | None, tuple[int, ...]]:
+    """Resolve `item` text to matching non-forgotten event ids the actor may share."""
+    lowered = " ".join(item_text.lower().split())
+    tokens = _share_tokens(item_text)
+    if not lowered and not tokens:
+        return False, event.place, ()
+    max_id = int(event.id) if event.id is not None else None
+    ev_query = (
+        "SELECT id, place, payload FROM events "
+        "WHERE kind IN ('percept', 'act.out', 'act.result', 'decision.note') "
+        "AND payload <> '{\"forgotten\": true}'::jsonb"
+    )
+    ev_params: list[Any] = []
+    if max_id is not None:
+        ev_query += " AND id <= %s"
+        ev_params.append(max_id)
+    ev_query += " ORDER BY id DESC LIMIT 200"
+    ev_rows = await (await conn.execute(ev_query, ev_params)).fetchall()
+    ev_place_by_id = {int(eid): (str(eplace) if eplace else None) for eid, eplace, _ in ev_rows}
+
+    mem_rows = await (await conn.execute(
+        "SELECT id, text, place, derived_from FROM memories "
+        "WHERE valid_to IS NULL ORDER BY id DESC LIMIT 100"
+    )).fetchall()
+    missing_ids = {
+        int(sid)
+        for _, _, _, derived in mem_rows
+        for sid in (derived or ())
+        if int(sid) not in ev_place_by_id
+    }
+    if missing_ids:
+        extra = await (await conn.execute(
+            "SELECT id, place FROM events WHERE id = ANY(%s) "
+            "AND payload <> '{\"forgotten\": true}'::jsonb",
+            (sorted(missing_ids),),
+        )).fetchall()
+        for eid, eplace in extra:
+            ev_place_by_id[int(eid)] = str(eplace) if eplace else None
+
+    min_overlap = max(1, (len(tokens) + 1) // 2) if tokens else 1
+    candidates: list[tuple[tuple[int, int, int], str | None, tuple[int, ...]]] = []
+    for eid, eplace, payload in ev_rows:
+        cand_text = _event_share_text(payload)
+        cand_lower = " ".join(cand_text.lower().split())
+        exact = 1 if (lowered and lowered in cand_lower) else 0
+        overlap = len(tokens & _share_tokens(cand_text)) if tokens else 0
+        if exact or overlap >= min_overlap:
+            candidates.append(((exact, overlap, 0), eplace, (int(eid),)))
+    for _, text, mplace, derived in mem_rows:
+        src_ids = tuple(int(s) for s in (derived or ()) if int(s) in ev_place_by_id)
+        if not src_ids:
+            continue
+        cand_lower = " ".join(str(text or "").lower().split())
+        exact = 1 if (lowered and lowered in cand_lower) else 0
+        overlap = len(tokens & _share_tokens(text)) if tokens else 0
+        if exact or overlap >= min_overlap:
+            src_place = mplace or ev_place_by_id.get(src_ids[0])
+            candidates.append(((exact, overlap, 1), src_place, src_ids))
+
+    if not candidates:
+        return False, event.place, ()
+
+    actor = event.origin_actor
+    allowed_candidates: list[tuple[tuple[int, int, int], str | None, tuple[int, ...]]] = []
+    for score, src_place, ep_ids in candidates:
+        ok = bool(actor)
+        for sid in ep_ids:
+            p = ev_place_by_id.get(sid) or src_place
+            if not actor or actor not in await audience(conn, p, before=sid):
+                ok = False
+                break
+        if ok:
+            allowed_candidates.append((score, src_place, ep_ids))
+
+    if not allowed_candidates:
+        return False, candidates[0][1] or event.place, candidates[0][2]
+
+    best_score = max(c[0][:2] for c in allowed_candidates)
+    chosen_ids: list[int] = []
+    chosen_place: str | None = None
+    for score, src_place, ep_ids in allowed_candidates:
+        if score[:2] == best_score:
+            if chosen_place is None and src_place:
+                chosen_place = src_place
+            for sid in ep_ids:
+                if sid not in chosen_ids:
+                    chosen_ids.append(sid)
+    return True, chosen_place or event.place, tuple(sorted(chosen_ids))
+
+
 async def consent(conn, event: Event, arguments: dict[str, Any],
-                  *, to: Any = None) -> tuple[bool, str | None, int | None]:
-    """Return whether the chain's actor may share this content, its place, and optional episode."""
+                  *, to: Any = None) -> tuple[bool, str | None, int | tuple[int, ...] | None]:
+    """Return whether the chain's actor may share this content, its place, and scoped episode(s)."""
     source = event.place
-    if arguments.get("episode"):
+    if arguments.get("episode") is not None:
         ep_id = int(arguments["episode"])
         row = await (await conn.execute(
             "SELECT place FROM events WHERE id = %s", (ep_id,))).fetchone()
@@ -563,18 +683,29 @@ async def consent(conn, event: Event, arguments: dict[str, Any],
     if delegated_ep is not None and delegated_place is not None:
         return (event.origin_actor in await audience(conn, delegated_place, before=delegated_ep),
                 delegated_place, delegated_ep)
-    return event.origin_actor in await audience(conn, source), source, None
+    item_text = str(arguments.get("item") or "").strip()
+    if not item_text:
+        return False, source, ()
+    allowed, resolved_place, matched_ids = await _resolve_share_events(conn, event, item_text)
+    return allowed, resolved_place, matched_ids
 
 
 async def grant(kernel, event: Event, arguments: dict[str, Any], to: str | None,
-                source: str | None, episode: int | None = None) -> None:
-    """Record consent for the people a `self.share` names (D46)."""
+                source: str | None, episode: int | Sequence[int] | None = None) -> None:
+    """Record consent for the specific events and people a `self.share` names (D46)."""
     people = ({str(to)} if str(to).startswith("person:")
               else await audience(kernel.conn, str(to)))
-    ep_value = arguments.get("episode") if arguments.get("episode") is not None else episode
+    raw_ep = arguments.get("episode") if arguments.get("episode") is not None else episode
+    if isinstance(raw_ep, (list, tuple, set)):
+        episodes = sorted({int(ep) for ep in raw_ep})
+    elif raw_ep is not None:
+        episodes = [int(raw_ep)]
+    else:
+        episodes = []
+    ep_scalar = episodes[0] if len(episodes) == 1 else (episodes[0] if episodes else None)
     await kernel._emit(event, "share.granted", {
-        "item": arguments.get("item"), "episode": ep_value, "to": to,
-        "persons": sorted(p for p in people if p != UNKNOWN), "source_place": source})
+        "item": arguments.get("item"), "episode": ep_scalar, "episodes": episodes,
+        "to": to, "persons": sorted(p for p in people if p != UNKNOWN), "source_place": source})
 
 
 _EXP_RE = re.compile(r"^#(\d+)\b")
@@ -719,16 +850,19 @@ def _context_values(settings: Any) -> Any:
     return load_prior()["constants"]
 
 
-def filter_context(conn, *, settings: Any = None) -> Middleware:
-    """Absolute line 2 (D45, D84): filter raw desk candidates before modules/plugins run."""
+def filter_context(conn, *, kernel: Any = None, settings: Any = None) -> Middleware:
+    """Absolute line 2 (D45, D84): single context privacy check in the last context slot."""
 
     async def rule(item: Any, ctx: Any) -> Any:
-        """Keep only what the audience may see, and note the private items withheld."""
-        if ctx.get("filtered") is item:
-            return Continue()  # the desk this rule produced, still unfiltered by anyone else
+        """Keep only what the audience may see, stop hidden reminders, and note what was withheld."""
         place = item.place
         counts = dict(item.withheld)
         cache: dict = {}  # one audience lookup per place, not one per line
+
+        trigger_ok = await _trigger_allowed(conn, place, item.trigger, cache)
+        if not trigger_ok and item.trigger is not None and item.trigger.kind == "expectation.reminded":
+            return Stop("reminder line is not visible at this place")
+        trigger_kept = item.trigger if trigger_ok else None
 
         async def keep(lines: Any, *, note_withheld: bool) -> tuple[Any, ...]:
             kept = []
@@ -741,6 +875,8 @@ def filter_context(conn, *, settings: Any = None) -> Middleware:
                     counts[label] = counts.get(label, 0) + 1
             return tuple(kept)
 
+        recent = await keep(item.recent, note_withheld=False)
+        elsewhere = await keep(item.recent_elsewhere, note_withheld=True)
         memories = []
         for memory in item.memories:
             if await memory_visible(conn, context=place,
@@ -750,22 +886,29 @@ def filter_context(conn, *, settings: Any = None) -> Middleware:
                 label = await withheld_source(
                     conn, context=place, sources=getattr(memory, "sources", ()), cache=cache)
                 counts[label] = counts.get(label, 0) + 1
+        active_kernel = kernel or ctx.get("kernel")
+        active_settings = settings or getattr(active_kernel, "settings", None)
         doing_kept, _ = await _filter_doing(
-            conn, place, item.doing, item.trigger, _context_values(settings), cache)
+            conn, place, item.doing, trigger_kept, _context_values(active_settings), cache)
         exps_kept, _ = await _filter_expectations(conn, place, item.expectations, cache)
+        people_kept, _ = await _filter_people(conn, place, item.people, trigger_kept, cache)
         core_text = item.core_memory
         core_ok, core_sources = await _filter_core_memory(conn, place, core_text, cache)
         if core_text and not core_ok:
             label = await withheld_source(conn, context=place, sources=core_sources, cache=cache)
             counts[label] = counts.get(label, 0) + 1
             core_text = ""
+        kind = await _kind(conn, place, cache)
         filtered = replace(
-            item, place_kind=await _kind(conn, place, cache), memories=tuple(memories),
-            recent_elsewhere=await keep(item.recent_elsewhere, note_withheld=True),
-            recent=await keep(item.recent, note_withheld=False),
+            item, place_kind=kind, memories=tuple(memories),
+            recent_elsewhere=elsewhere, recent=recent,
             doing=doing_kept, expectations=exps_kept, core_memory=core_text,
+            trigger=trigger_kept, people=people_kept,
             withheld=tuple(sorted(counts.items())))
-        ctx["filtered"] = filtered
+        if active_kernel is not None:
+            await _record_wake_sources(active_kernel, conn, filtered, cache)
+        if filtered == item:
+            return Continue()
         return Replace(filtered)
 
     return rule
@@ -864,83 +1007,6 @@ async def _words_hidden(kernel: Any, event: Event, target_place: str) -> bool:
     return False
 
 
-def verify_context(kernel: Any) -> Middleware:
-    """Last context line (D84): verify every context section against `visible()`, log `error`."""
-
-    async def rule(item: Any, ctx: Any) -> Any:
-        conn = kernel.conn
-        place = item.place
-        cache: dict = {}
-        failures: list[tuple[str, str]] = []
-        counts: dict[str, int] = dict(item.withheld)
-
-        async def audit_lines(lines: Sequence[Event], section: str,
-                              *, count_withheld: bool) -> tuple[Event, ...]:
-            kept: list[Event] = []
-            for line in lines:
-                if await visible(conn, context=place, source=line.place,
-                                 before=line.id, cache=cache):
-                    kept.append(line)
-                else:
-                    failures.append((section, f"{section} item not visible at place"))
-                    if count_withheld:
-                        label = await source_label(conn, line.place, line.id, cache)
-                        counts[label] = counts.get(label, 0) + 1
-            return tuple(kept)
-
-        recent = await audit_lines(item.recent, "recent", count_withheld=False)
-        elsewhere = await audit_lines(item.recent_elsewhere, "recent_elsewhere", count_withheld=True)
-        memories = []
-        for mem in item.memories:
-            sources = getattr(mem, "sources", ())
-            if await memory_visible(conn, context=place, sources=sources, cache=cache):
-                memories.append(mem)
-            else:
-                failures.append(("memories", "memory item not visible at place"))
-                label = await withheld_source(conn, context=place, sources=sources, cache=cache)
-                counts[label] = counts.get(label, 0) + 1
-        core_text = item.core_memory
-        core_ok, core_sources = await _filter_core_memory(conn, place, core_text, cache)
-        if core_text and not core_ok:
-            core_text = ""
-            failures.append(("core_memory", "core_memory not visible at place"))
-            label = await withheld_source(conn, context=place, sources=core_sources, cache=cache)
-            counts[label] = counts.get(label, 0) + 1
-        doing_kept, doing_err = await _filter_doing(
-            conn, place, item.doing, item.trigger,
-            _context_values(getattr(kernel, "settings", None)), cache)
-        failures.extend(("doing", err) for err in doing_err)
-        exps_kept, exps_err = await _filter_expectations(conn, place, item.expectations, cache)
-        failures.extend(("expectations", err) for err in exps_err)
-        trigger_ok = await _trigger_allowed(conn, place, item.trigger, cache)
-        trigger_kept = item.trigger if trigger_ok else None
-        if not trigger_ok:
-            failures.append(("trigger", "trigger not visible at place"))
-        people_kept, people_err = await _filter_people(
-            conn, place, item.people, trigger_kept, cache)
-        failures.extend(("people", err) for err in people_err)
-
-        if not failures:
-            await _record_wake_sources(kernel, conn, item, cache)
-            return Continue()
-        ts = ctx.get("now") or kernel.clock.now()
-        cause = item.trigger.id if (item.trigger and item.trigger.id) else None
-        for section, reason in failures:
-            await append_event(
-                conn, ts=ts, kind="error", place=place, caused_by=cause,
-                payload={"where": "privacy.verify_context", "section": section, "error": reason})
-        verified = replace(
-            item, recent=recent, recent_elsewhere=elsewhere, memories=tuple(memories),
-            core_memory=core_text, doing=doing_kept, expectations=exps_kept,
-            trigger=trigger_kept, people=people_kept,
-            withheld=tuple(sorted(counts.items())))
-        await _record_wake_sources(kernel, conn, verified, cache)
-        ctx["filtered"] = verified
-        return Replace(verified)
-
-    return rule
-
-
 def guard(kernel: Any, when: str) -> Middleware:
     """Absolute line 3 (D45, D46, D84): consent to share, and record deterministic cross-place flag."""
 
@@ -952,8 +1018,18 @@ def guard(kernel: Any, when: str) -> Middleware:
                 if wrong:
                     ctx["refusal"] = wrong
                     return Stop(wrong)
+                has_episode = item.get("episode") is not None
+                has_item = bool(str(item.get("item") or "").strip())
+                if not has_episode and not has_item:
+                    reason = "what item or episode do you want to share?"
+                    ctx["refusal"] = reason
+                    return Stop(reason)
                 allowed, source, grant_ep = await consent(
                     ctx["conn"], ctx["event"], item, to=ctx.get("to"))
+                if not grant_ep:
+                    reason = "which specific item or episode do you want to share?"
+                    ctx["refusal"] = reason
+                    return Stop(reason)
                 if not allowed:
                     ctx["refusal"] = "only someone who was part of it can share it"
                     return Stop("only someone who was part of it can share it")
