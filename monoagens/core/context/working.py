@@ -55,12 +55,16 @@ async def chain_root(conn, event_id: int | None) -> tuple[int | None, str]:
 
 
 async def step_spoke(conn, event: Event) -> bool:
-    """Return whether the act that produced this result already sent a message (12.16)."""
+    """Return whether the act that produced this result already sent a message (12.16).
+
+    The rule is per act, not per wake (F.4): the result of the message that spoke does not
+    wake reasoning again, while a tool's result is kept even when another act of the same
+    wake spoke, because that result is what reasoning has not seen yet.
+    """
     if event.caused_by is None:
         return False
     cur = await conn.execute(
-        "SELECT 1 FROM events act "
-        "WHERE act.id = %s AND act.kind = 'act.out' "
+        "SELECT 1 FROM events act WHERE act.id = %s AND act.kind = 'act.out' "
         "AND act.payload->>'communicative' = 'true' "
         "AND COALESCE(act.payload->>'refused', 'false') <> 'true' LIMIT 1",
         (event.caused_by,))

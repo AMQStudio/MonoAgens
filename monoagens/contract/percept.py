@@ -110,6 +110,7 @@ def from_legacy_event(event: Event) -> Event:
     raw = dict(payload)
     raw.setdefault("ts", event.ts)
     raw.setdefault("place", event.place)
+    raw.setdefault("features", dict(event.features or {}))
     percept = upcast_percept(raw)
     translated = to_event(percept, body=event.body or "", ts=event.ts, id=event.id,
                           caused_by=event.caused_by, origin_actor=event.origin_actor)

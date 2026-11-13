@@ -425,7 +425,7 @@ async def test_memory_query_falls_back_to_the_expectation_about(aconn):
     await _add_memory(aconn, "Kopi tubruk kesukaan Muqsith", importance=0.9)
     lines = await memory.candidates(aconn, FakeEmbedder(),
                                     Event(id=None, ts=START, kind="expectation.fired",
-                                          payload={"about": "kopi"}),
+                                          description="kopi"),
                                     now=START, settings=SETTINGS)
     assert lines and "Kopi tubruk" in lines[0]
 

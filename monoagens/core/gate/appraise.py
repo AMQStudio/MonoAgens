@@ -61,9 +61,8 @@ class Appraisal:
 
 
 def _addressed(event: Event) -> bool:
-    """Return whether the event, or any message in a back-fill batch, is addressed."""
-    return event.payload.get("addressed") is True or any(
-        bool(message.get("addressed")) for message in event.payload.get("messages") or ())
+    """Return whether the turn is given to the soul (a back-fill batch says so too)."""
+    return bool(event.features.get("addressed"))
 
 
 async def _engaged(event: Event, conn: Any) -> bool:
@@ -125,11 +124,9 @@ async def appraise(event: Event, *, conn: Any = None, situation: Situation | Non
                                              settings=settings)
     if situation is not None:
         signals = {name: fn(situation) for name, fn in SIGNALS.items()}
-    if event.payload.get("backfill"):
-        sent = event.payload.get("sent_at")
-        age = 0.0
-        if sent:
-            age = max(0.0, (now - datetime.fromisoformat(str(sent))).total_seconds() / 3600)
+    if event.backfill:
+        happened = event.occurred_at or event.ts
+        age = max(0.0, (now - happened).total_seconds() / 3600)
         decay = math.exp(-memory.decay_d(settings) * age)
         signals = {name: value * decay for name, value in signals.items()}
     tag = await reflex(event, conn)

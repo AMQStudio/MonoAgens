@@ -12,8 +12,7 @@ from pgvector import Vector
 
 from monoagens.core.memory.cards import merge_map
 from monoagens.infra.prior import constants, retrieval
-from monoagens.infra.store import (EVENT_COLUMNS, event_from_row, payload_text,
-                                   read_event_vector)
+from monoagens.infra.store import EVENT_COLUMNS, event_from_row, read_event_vector
 from monoagens.core.kinds import RECENT_KINDS
 from monoagens.types import Event
 
@@ -77,7 +76,7 @@ async def retrieve(conn: psycopg.AsyncConnection[Any], embedder: Any, query: str
 async def candidates(conn: psycopg.AsyncConnection[Any], embedder: Any, event: Event, *,
                      now: datetime, settings: dict[str, Any]) -> tuple[str, ...]:
     """Return the memory candidates for one event, using the prior's retrieval constants."""
-    query = payload_text(event.payload)
+    query = event.description
     if embedder is None or not query.strip():
         return ()
     return tuple(await retrieve(conn, embedder, query, now=now, event_id=event.id,

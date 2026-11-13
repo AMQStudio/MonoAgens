@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import re
 from collections.abc import Callable, Mapping, Sequence
 
 from monoagens.core.gate.situation import Situation
@@ -44,12 +43,10 @@ def _best_cosine(vector: Sequence[float] | None,
 
 @register_signal("own_name")
 def own_name(situation: Situation) -> float:
-    """Score 1 when the self's name appears without the turn being allocated to it."""
-    name = situation.self_name.strip()
-    if not name or situation.event.payload.get("addressed") is True:
+    """Score 1 when the soul's name was said without the turn being given to it."""
+    if situation.event.features.get("addressed"):
         return 0.0
-    pattern = rf"(?<!\w){re.escape(name)}(?!\w)"
-    return 1.0 if re.search(pattern, situation.text, re.IGNORECASE) else 0.0
+    return 1.0 if situation.event.features.get("named") else 0.0
 
 
 @register_signal("info_gap")
@@ -86,7 +83,7 @@ def relevance(situation: Situation) -> float:
 @register_signal("social_cost")
 def social_cost(situation: Situation) -> float:
     """Score a floor that belongs to someone else, lowered by closeness to the speaker."""
-    if situation.event.payload.get("addressed") is True:
+    if situation.event.features.get("addressed"):
         return 0.0
-    taken = situation.other_selected or situation.soul_answered
+    taken = bool(situation.event.features.get("addressed_other")) or situation.soul_answered
     return _clamp(float(taken) * (1.0 - _clamp(situation.closeness)))

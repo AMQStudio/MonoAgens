@@ -847,10 +847,10 @@ async def test_forty_unread_messages_are_appraised_once(aconn):
 
 async def test_backfill_signals_are_discounted_by_age():
     old = Event(id=1, ts=START - timedelta(hours=10), kind="percept", who="person:fulan",
-                place=PLACE, payload={"description": "Mona", "backfill": True,
-                                      "sent_at": (START - timedelta(hours=10)).isoformat()})
+                place=PLACE, description="dokumen baru", backfill=True,
+                occurred_at=START - timedelta(hours=10), features={"named": 1})
     fresh = Event(id=2, ts=START, kind="percept", who="person:fulan", place=PLACE,
-                  payload={"description": "Mona"})
+                  description="dokumen baru", features={"named": 1})
     aged = await appraise(old, situation=Situation(event=old, self_name="Mona", now=START),
                           now=START, settings=SETTINGS)
     new = await appraise(fresh, situation=Situation(event=fresh, self_name="Mona", now=START),

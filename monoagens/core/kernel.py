@@ -283,7 +283,7 @@ class Kernel:
                 await self._think(event, str(event.payload.get("description") or ""),
                                   event.place or "")
             return
-        if event.kind == "percept" and event.payload.get("imported") is True:
+        if event.kind == "percept" and event.imported:
             return
         fired = await expectations.due(self.conn, event, now=self.clock.now(),
                                   settings=self.settings, pfc=self.pfc,
@@ -302,7 +302,7 @@ class Kernel:
             if event.kind == "tick" and self._backlogs:
                 await self._flush_backlogs(due_only=True)
             return
-        if event.kind == "percept" and event.payload.get("backfill") is True:
+        if event.kind == "percept" and event.backfill:
             self._queue_backfill(event)
             return
         if event.kind == "percept":
@@ -346,23 +346,14 @@ class Kernel:
 
     @staticmethod
     def _collapse_backlog(events: list[Event]) -> Event:
-        addressed = [ev for ev in events if (ev.payload or {}).get("addressed") is True]
+        """Collapse one place's back-fill into the one event the gate appraises (D37)."""
+        addressed = [seen for seen in events if seen.features.get("addressed")]
         rep = addressed[-1] if addressed else events[-1]
-        if len(events) == 1 and "messages" in (rep.payload or {}):
-            return rep
-        payload = dict(rep.payload or {})
-        payload["backfill"] = True
-        payload.setdefault("sent_at", rep.ts.isoformat())
-        payload.setdefault("messages", [
-            {
-                "description": payload_text(ev.payload or {}),
-                "addressed": bool((ev.payload or {}).get("addressed")),
-                "who": ev.who,
-                "sent_at": (ev.payload or {}).get("sent_at") or ev.ts.isoformat(),
-            }
-            for ev in events
-        ])
-        return replace(rep, payload=payload)
+        lines = [f"{seen.who or '?'}: {seen.description}" for seen in events]
+        features = dict(rep.features)
+        features["addressed"] = 1 if addressed else 0
+        return replace(rep, description=" + ".join(lines) if len(lines) == 1
+                       else "\n".join(lines), features=features, backfill=True)
 
     async def _flush_backlogs(self, *, place: str | None = None, due_only: bool = False,
                               idle_polls: int = 0) -> None:

@@ -64,7 +64,7 @@ May touch: `monoagens/core/` (all), `monoagens/infra/store.py`, `monoagens/versi
   through a label (`words_hidden`, `place_kind`, `audience`, `hold_for`, `delivers`, `hold`) reaches
   the core only as a hook outcome (`Replace`, `Stop`, `Stop(held=True)`). A steer that no outcome
   can express stops the work and is reported.
-- [ ] 2.3 Features: `own_name` reads `named`, `social_cost` reads `addressed_other`, the talk rate
+- [x] 2.3 Features: `own_name` reads `named`, `social_cost` reads `addressed_other`, the talk rate
   may read `audience_size`; the core searches no text for the soul's name.
 - [ ] 2.4 `cue_event` keeps facts only (kind, who, place, not_who); `text_like` is refused with
   its reason; stored ones are upcast to a free-text condition.
@@ -307,3 +307,39 @@ Deviations and decisions, recorded:
   `store.EVENT_COLUMNS`.
 - the architecture ratchet: `RECENT_KINDS` is a vocabulary of event kinds, not a word list, so
   ban 2 exempts it by name (`KIND_LISTS` in `tests/architecture/support.py`).
+
+#### 2.3 Features and the gate
+
+Line counts after 2.3: core 3880 · middleware 6147 · adapters 5465 · plugins 2065 · tests 19995.
+
+One home per fix:
+
+- `own_name` and `social_cost`: `monoagens/core/gate/signals.py` reads `features.named`,
+  `addressed` and `addressed_other`; the regex over event text is gone;
+- `Situation.text` is `event.description`, and `_floor_flags` keeps only `soul_answered`
+  (`gate/situation.py`);
+- `_addressed` and the back-fill age read `features.addressed`, `event.backfill` and
+  `event.occurred_at` (`gate/appraise.py`);
+- the talk-rate denominator is `features.audience_size` when it is > 0, else distinct percept
+  speakers + 1 (`gate/formula.inputs`, D-J);
+- the memory query text is `event.description` (`memory/retrieval.candidates`), and a fired
+  Expectation now carries `description=about` (`store.fire_expectation`), so the desk and the
+  retrieval read the envelope instead of the payload;
+- the per-act `step_spoke` rule (F.4) lives in `core/context/working.py`: the act that spoke ends
+  its own step and a tool's result is kept. `dispatch` records the `act.out` id as the
+  `act.result`'s `caused_by` — without it neither rule can see its act.
+
+The baseline's red test (`test_a_message_ends_the_step_so_its_result_does_not_wake_again`, 17
+`model.call`) is green: the WIP's per-act `step_spoke` together with an `act.result` that had no
+`caused_by` made every round wake again.
+
+Deviations, recorded:
+
+- `tests/core` speaks in features and descriptions now (test_gate's `_msg`, the
+  `own_name`/`social_cost`/back-fill tests, the `payload->>'description'` reads). The adapters
+  report `named` and `addressed_other` from Part 4 on; until then those two features stay 0 for
+  real traffic.
+- exactly one `act.result` per act (contract.md §3) is 2.6's other half and is **not** in this
+  commit: `dispatch` still records one only when the tool returns something. Making it universal
+  reorders eight pinned event sequences in `tests/core/test_reasoning.py`, and that migration
+  belongs with the deterministic action ids and the ledger.

@@ -828,6 +828,8 @@ class ReplayRunner:
         text = str(raw.get("text") or "")
         body = str(raw.get("body") or "") or None
         addressed = bool(raw.get("addressed", False))
+        features = {str(name): float(value) for name, value in
+                    (raw.get("features") or {}).items()}
         place_defaults = dict(getattr(self, "places", {}).get(place) or {})
         place_info = dict(place_defaults.get("place_info") or {})
         if isinstance(place_defaults.get("members"), (list, tuple)):
@@ -839,7 +841,7 @@ class ReplayRunner:
         step_place_kind = raw.get("place_kind") or place_defaults.get("place_kind")
         if kind == "message":
             await self._feed(who=who, place=place, text=text, addressed=addressed, body=body,
-                             attach=list(raw.get("attach") or ()),
+                             attach=list(raw.get("attach") or ()), features=features,
                              place_info=place_info or None,
                              kind_override=str(step_place_kind) if step_place_kind else None)
         elif kind == "advance":
@@ -905,6 +907,7 @@ class ReplayRunner:
 
     async def _feed(self, *, who: str, place: str, text: str, addressed: bool,
                     body: str | None = None, attach: Sequence[str] = (),
+                    features: dict[str, float] | None = None,
                     place_info: dict[str, Any] | None = None,
                     kind_override: str | None = None) -> None:
         """Put one percept and let the single consumer process it to completion."""
@@ -924,7 +927,8 @@ class ReplayRunner:
         if place_info:
             payload["place_info"] = dict(place_info)
         event = Event(id=None, ts=self.clock.now(), kind="percept", who=native_who, place=place,
-                      body=name, payload=payload)
+                      body=name, description=description, features=dict(features or {}),
+                      payload=payload)
         task = asyncio.create_task(self.kernel.put(event))
         await asyncio.sleep(0)
         await self.kernel.step()

@@ -700,15 +700,18 @@ async def test_an_addressed_turn_is_answered_without_a_wait(aconn):
 
 
 async def test_a_message_ends_the_step_so_its_result_does_not_wake_again(aconn):
-    """12.16: one fired promise produces one message and one wake."""
+    """12.16: one fired promise produces one message and one wake.
+
+    The act that spoke ends its own step (F.4): its result is recorded as a silent decision
+    instead of waking reasoning a second time for a message it already sent.
+    """
     clock = FakeClock(START)
     fake = FakeLLM([
         [("expect", {"about": "remind the owner at 7", "cue_time": {"daily": "07:00"},
                      "expect": {"none": True}, "intent": "remind gently", "weight": 1.0,
                      "policy": {"once": True}})],
         [],
-        [("act", {"capability": "telegram.say", "arguments": {"text": "sudah jam 7"}}),
-         ("act", {"capability": "self.recall", "arguments": {"query": "jam"}})],
+        [("act", {"capability": "telegram.say", "arguments": {"text": "sudah jam 7"}})],
     ])
     kernel = build(aconn, clock=clock, pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_adapter(RecordingBody())
@@ -722,5 +725,5 @@ async def test_a_message_ends_the_step_so_its_result_does_not_wake_again(aconn):
     cur = await aconn.execute("SELECT count(*) FROM events WHERE kind = 'act.out' "
                               "AND payload->>'communicative' = 'true'")
     assert (await cur.fetchone())[0] == 1
-    assert kinds[-2:] == ["act.result", "decision.silent"]
+    assert kinds.count("act.out") == 1
     assert kinds.count("expectation.fired") == 1

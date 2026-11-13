@@ -5,6 +5,8 @@ description: >-
   Nama Mona disebut di grup tanpa tag dan tanpa alokasi giliran. own_name
   harus menangkap perhatian (skor 1), tetapi itu bukan kewajiban: tidak ada
   balasan. Pesan lain tanpa namanya tidak boleh mendapat skor yang sama.
+  Sejak contract v2 nama itu sampai ke gate sebagai `features.named`, yang
+  dilaporkan adapter, bukan sebagai teks yang dicari core.
 expectations:
   - type: signal
     signal: own_name
@@ -22,6 +24,8 @@ steps:
     who: person:tg:6001
     place: space:tg:-1003
     text: "Mona, dokumen baru sudah aku kirim ya."
+    # The adapter reports the fact (contract.md §3); the gate never reads the text.
+    features: {named: 1}
   - at: "2026-11-10T15:01:00+07:00"
     who: person:tg:6001
     place: space:tg:-1003

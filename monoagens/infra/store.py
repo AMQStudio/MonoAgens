@@ -322,7 +322,8 @@ async def fire_expectation(conn, row, now: datetime) -> dict[str, Any]:
                    "intent": row["intent"], "weight": row["weight"]}
         fired = await append_event(conn, ts=now, kind="expectation.fired", who=row["who"],
                                    place=row["place"], body=row["source_body"],
-                                   caused_by=row["source_event"], payload=payload)
+                                   caused_by=row["source_event"],
+                                   description=str(row["about"] or ""), payload=payload)
         await conn.execute("UPDATE expectations SET status = 'fired', "
                            "fire_count = fire_count + 1, last_fired_at = %s WHERE id = %s",
                            (now, row["id"]))

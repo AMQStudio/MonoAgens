@@ -9,9 +9,9 @@ findings:
   - {file: monoagens/core/context/parts.py, line: 260, ban: payload-read}
   - {file: monoagens/core/context/parts.py, line: 269, ban: payload-read}
   - {file: monoagens/core/context/working.py, line: 23, ban: payload-read}
-  - {file: monoagens/core/context/working.py, line: 133, ban: payload-read}
-  - {file: monoagens/core/context/working.py, line: 134, ban: payload-read}
-  - {file: monoagens/core/context/working.py, line: 140, ban: payload-read}
+  - {file: monoagens/core/context/working.py, line: 137, ban: payload-read}
+  - {file: monoagens/core/context/working.py, line: 138, ban: payload-read}
+  - {file: monoagens/core/context/working.py, line: 144, ban: payload-read}
   - {file: monoagens/core/dispatch.py, line: 129, ban: removed-field}
   - {file: monoagens/core/dispatch.py, line: 136, ban: removed-field}
   - {file: monoagens/core/expectations.py, line: 17, ban: text-parse}
@@ -25,16 +25,6 @@ findings:
   - {file: monoagens/core/expectations.py, line: 143, ban: removed-field}
   - {file: monoagens/core/expectations.py, line: 269, ban: payload-read}
   - {file: monoagens/core/expectations.py, line: 288, ban: payload-read}
-  - {file: monoagens/core/gate/appraise.py, line: 65, ban: payload-read}
-  - {file: monoagens/core/gate/appraise.py, line: 66, ban: payload-read}
-  - {file: monoagens/core/gate/appraise.py, line: 128, ban: payload-read}
-  - {file: monoagens/core/gate/appraise.py, line: 129, ban: payload-read}
-  - {file: monoagens/core/gate/appraise.py, line: 129, ban: removed-field}
-  - {file: monoagens/core/gate/signals.py, line: 6, ban: text-parse}
-  - {file: monoagens/core/gate/signals.py, line: 49, ban: payload-read}
-  - {file: monoagens/core/gate/signals.py, line: 89, ban: payload-read}
-  - {file: monoagens/core/gate/situation.py, line: 48, ban: payload-read}
-  - {file: monoagens/core/gate/situation.py, line: 77, ban: payload-read}
   - {file: monoagens/core/hooks.py, line: 17, ban: text-parse}
   - {file: monoagens/core/identity.py, line: 14, ban: text-parse}
   - {file: monoagens/core/identity.py, line: 97, ban: payload-read}
@@ -42,21 +32,10 @@ findings:
   - {file: monoagens/core/jobs.py, line: 187, ban: labels-read}
   - {file: monoagens/core/kernel.py, line: 194, ban: payload-read}
   - {file: monoagens/core/kernel.py, line: 283, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 286, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 305, ban: payload-read}
   - {file: monoagens/core/kernel.py, line: 328, ban: payload-read}
   - {file: monoagens/core/kernel.py, line: 331, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 349, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 351, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 353, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 355, ban: removed-field}
-  - {file: monoagens/core/kernel.py, line: 358, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 359, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 361, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 361, ban: removed-field}
-  - {file: monoagens/core/kernel.py, line: 555, ban: payload-read}
+  - {file: monoagens/core/kernel.py, line: 546, ban: payload-read}
   - {file: monoagens/core/memory/recall.py, line: 31, ban: payload-read}
-  - {file: monoagens/core/memory/retrieval.py, line: 80, ban: payload-read}
   - {file: monoagens/core/memory/sleep.py, line: 113, ban: removed-field}
   - {file: monoagens/core/reasoning.py, line: 243, ban: text-parse}
   - {file: monoagens/core/sends.py, line: 43, ban: payload-read}
@@ -153,7 +132,7 @@ findings:
   - {file: monoagens/middleware/roles.py, line: 673, ban: text-parse}
   - {file: monoagens/middleware/roles.py, line: 687, ban: removed-field}
   - {file: tests/adapters/test_loader.py, line: 86, ban: tests-private}
-  - {file: tests/core/test_gate.py, line: 982, ban: tests-private}
+  - {file: tests/core/test_gate.py, line: 985, ban: tests-private}
   - {file: tests/middleware/test_privacy.py, line: 755, ban: tests-private}
   - {file: tests/middleware/test_registry.py, line: 171, ban: tests-private}
   - {file: tests/middleware/test_registry.py, line: 183, ban: tests-private}

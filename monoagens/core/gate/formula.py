@@ -107,7 +107,8 @@ async def inputs(conn: Any, event: Any, *, now: Any,
         "FROM events WHERE place = %s AND ts >= %s AND kind IN ('percept', 'act.out')",
         (event.place, since))).fetchone()
     share = int(spoke or 0) / max(1, int(spoke or 0) + int(heard or 0))
-    talk_rate = max(0.0, share - 1.0 / (int(people or 0) + 1))
+    audience = int(event.features.get("audience_size") or 0) or int(people or 0) + 1
+    talk_rate = max(0.0, share - 1.0 / audience)
     due, total = (await (await conn.execute(
         "SELECT count(*) FILTER (WHERE next_check_at <= %s), count(*) FROM expectations "
         "WHERE status = 'active' AND kind = 'promise'",

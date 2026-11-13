@@ -90,10 +90,12 @@ def _pfc(fake: FakeLLM) -> Reasoning:
 
 
 def _msg(text: str = "halo", *, message_id: int = 1, place: str = PLACE,
-         place_kind: str = "direct", addressed: bool = True) -> Event:
+         place_kind: str = "direct", addressed: bool = True,
+         features: dict[str, float] | None = None) -> Event:
     return Event(id=None, ts=START, kind="percept", who=WHO, place=place, body="telegram",
-                 payload={"description": text, "addressed": addressed,
-                          "place_kind": place_kind, "data": {"message_id": message_id}})
+                 description=text,
+                 features={**({"addressed": 1} if addressed else {}), **(features or {})},
+                 payload={"place_kind": place_kind, "data": {"message_id": message_id}})
 
 
 def _situation(**overrides) -> Situation:
@@ -151,14 +153,13 @@ def test_signals_are_pure_bounded_functions_of_a_situation():
 
 
 def test_own_name_scores_one_only_when_the_turn_is_not_allocated():
-    named = _msg("Mona, dokumen baru sudah aku kirim", addressed=False)
-    tagged = _msg("Mona, lihat ini", addressed=True)
+    """`own_name` reads the two facts the adapter reports, never the text (contract.md §3)."""
+    named = _msg("dokumen baru sudah aku kirim", addressed=False, features={"named": 1})
+    tagged = _msg("lihat ini", addressed=True, features={"named": 1})
     other = _msg("dokumen baru sudah aku kirim", addressed=False)
-    lookalike = _msg("Monas lagi macet", addressed=False)
     assert SIGNALS["own_name"](_situation(event=named, self_name="Mona")) == 1.0
     assert SIGNALS["own_name"](_situation(event=tagged, self_name="Mona")) == 0.0
     assert SIGNALS["own_name"](_situation(event=other, self_name="Mona")) == 0.0
-    assert SIGNALS["own_name"](_situation(event=lookalike, self_name="Mona")) == 0.0
 
 
 def test_info_gap_is_the_cosine_to_the_centroid_of_the_prior_references():
@@ -190,10 +191,12 @@ def test_relevance_matches_active_promises_and_core_memory():
 
 
 def test_social_cost_belongs_to_someone_else_and_is_lowered_by_closeness():
-    selected = _situation(event=_msg("halo", addressed=False), other_selected=True)
+    other = _msg("halo", addressed=False, features={"addressed_other": 1})
+    selected = _situation(event=other)
     answered = _situation(event=_msg("halo", addressed=False), soul_answered=True)
-    close = _situation(event=_msg("halo", addressed=False), other_selected=True, closeness=0.8)
-    tagged = _situation(event=_msg("halo", addressed=True), other_selected=True)
+    close = _situation(event=other, closeness=0.8)
+    tagged = _situation(event=_msg("halo", addressed=True,
+                                   features={"addressed_other": 1}))
     assert SIGNALS["social_cost"](selected) == 1.0
     assert SIGNALS["social_cost"](answered) == 1.0
     assert SIGNALS["social_cost"](close) == pytest.approx(0.2)
@@ -335,7 +338,7 @@ async def test_same_event_and_seed_give_the_same_decision():
 
 async def test_the_gate_opens_on_a_salient_unaddressed_message():
     event = Event(3, START, "percept", who=WHO, place=GROUP, body="telegram",
-                  payload={"description": "Mona, ada yang tahu nggak?"})
+                  description="Mona, ada yang tahu nggak?", features={"named": 1})
     situation = _situation(event=event, vector=[1.0, 0.0], references=([1.0, 0.0],),
                            self_name="Mona", best_activation=-3.0, familiarity=1.0)
     appraisal = await appraise(event, situation=situation, settings=SETTINGS)
@@ -407,7 +410,7 @@ async def test_addressed_always_wakes_even_with_the_gate_saturated(aconn):
         await append_event(aconn, ts=START, kind="act.out", who=WHO, place=GROUP,
                            payload={"capability": "telegram.say"})
     tagged = Event(None, START, "percept", who=WHO, place=GROUP, body="telegram",
-                   payload={"description": "Mona, halo?", "addressed": True})
+                   description="Mona, halo?", features={"addressed": 1})
     appraisal = await appraise(tagged, conn=aconn, now=START, settings=runtime)
     assert (appraisal.decision, appraisal.reflex, appraisal.reason) == (
         "wake", "addressed", "addressed message")
@@ -713,7 +716,7 @@ async def test_inbound_replace_swaps_the_event_before_appraisal(aconn):
     fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "hai"}})]])
 
     async def rewrite(item, ctx):
-        return Replace(replace(item, payload={**item.payload, "addressed": True}))
+        return Replace(replace(item, features={**item.features, "addressed": 1}))
 
     kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
     kernel.register_adapter(RecordingBody())
@@ -821,7 +824,7 @@ async def test_hanging_hook_times_out_as_a_stop_and_the_loop_goes_on(aconn):
     assert (await _payload(aconn, "error"))["error"] == f"TimeoutError: {timed_out}"
     assert await _payload(aconn, "guard.stopped") == {"hook": "inbound", "reason": timed_out}
     assert second.id is not None  # the next event was recorded and processed
-    cur = await aconn.execute("SELECT payload->>'description' FROM events "
+    cur = await aconn.execute("SELECT description FROM events "
                              "WHERE kind = 'percept' ORDER BY id")
     assert [row[0] for row in await cur.fetchall()] == ["slow", "next"]
 

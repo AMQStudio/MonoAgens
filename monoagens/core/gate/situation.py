@@ -44,9 +44,8 @@ class Situation:
 
     @property
     def text(self) -> str:
-        """Return the human-readable text of the triggering event."""
-        payload = self.event.payload
-        return str(payload.get("description") or payload.get("text") or "")
+        """Return the description of the triggering event."""
+        return self.event.description
 
 
 def boredom_gamma(settings: Mapping[str, Any]) -> float:
@@ -74,12 +73,7 @@ def _floor_flags(event: Event, recent: Sequence[Event]) -> tuple[bool, bool]:
     """Return whether another speaker was selected and whether the soul just answered."""
     before = [seen for seen in recent if seen.id != event.id]
     soul_answered = bool(before) and before[-1].kind == "act.out"
-    payload = event.payload
-    targets = payload.get("addressed_to") or (payload.get("data") or {}).get("mentions") or ()
-    if isinstance(targets, str):
-        targets = (targets,)
-    other_selected = any(str(target) != str(event.who) for target in targets)
-    return other_selected, soul_answered
+    return bool(event.features.get("addressed_other")), soul_answered
 
 
 def reference_sentences(references: Mapping[str, Any], language: str) -> list[str]:
