@@ -99,7 +99,7 @@ The one middleware that is always present.
   `share.granted`, after which the new person is in the audience. Each person speaks only for
   what they were part of: the owner can share work done with the soul, not what Fulan said in
   private; the owner's view of everything is a view, not ownership.
-- **Asking on someone's behalf (D73).** When the soul sends a message on behalf of a person X
+- **Asking on someone's behalf (D80).** When the soul sends a message on behalf of a person X
   (the chain's `origin_actor` is X: "ask Budi whether it fits"), the reply that answers it is
   said to X as well: at intake the policy adds X to that reply's audience. The reply is the
   percept that matches that chain's `wait` expectation or replies to that message (`reply_to`);
