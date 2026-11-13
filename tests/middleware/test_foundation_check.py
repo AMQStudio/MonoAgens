@@ -171,6 +171,7 @@ async def test_1_private_content_never_leaves_its_audience_even_when_talked_into
     await kernel._apply(trigger, ToolCall("act", {
         "capability": "telegram.say",
         "arguments": {"text": "kunci cadanganku di laci"}}))
+    await kernel.run_until_idle()
     cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.result' "
                               "ORDER BY id DESC LIMIT 1")
     assert "may not see this content" in (await cur.fetchone())[0]["result"]["error"]
@@ -204,6 +205,7 @@ async def test_3_a_guest_is_not_offered_a_tool_and_is_refused_if_it_asks(aconn):
     assert "workspace.read" in kernel.tools.allowed("person:tg:guest", kernel.roles)
     await kernel._apply(trigger, ToolCall("act", {"capability": "workspace.run",
                                                   "arguments": {"command": "ls"}}))
+    await kernel.run_until_idle()
 
     cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.result'")
     assert (await cur.fetchone())[0]["result"]["error"] == "you may not use workspace.run"

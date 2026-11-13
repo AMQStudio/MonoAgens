@@ -209,6 +209,7 @@ async def test_a_retry_that_differs_is_asked_once_more_then_refused(aconn):
                            "arguments": {"command": "rm -rf /"}})
 
     await _call(kernel, trigger, command="rm -rf /usr", event=retry)
+    await kernel.run_until_idle()
 
     cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.result' "
                               "ORDER BY id DESC LIMIT 1")
@@ -261,6 +262,7 @@ async def test_a_network_call_carrying_a_private_memory_is_refused(aconn):
 
     await kernel._apply(trigger, ToolCall("act", {
         "capability": "dev.run", "arguments": {"command": "search rahasia kantor"}}))
+    await kernel.run_until_idle()
 
     cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.result'")
     assert "private content off the machine" in (await cur.fetchone())[0]["result"]["error"]

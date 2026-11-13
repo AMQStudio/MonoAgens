@@ -442,6 +442,7 @@ async def test_place_persisted_and_readonly_place_refuses_before_act(aconn):
     await kernel._apply(ro, ToolCall("act", {
         "capability": "telegram.say",
         "arguments": {"text": "ke sana", "to": "space:tg:-100555:9"}}))
+    await kernel.run_until_idle()
 
     assert body.actions == []
     results = await (await aconn.execute(

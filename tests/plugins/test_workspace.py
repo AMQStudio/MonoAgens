@@ -170,7 +170,9 @@ async def test_a_blocked_command_is_denied_by_the_guard(aconn, tmp_path):
 
     assert result["error"].startswith("sandbox command blocked: ")
     cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.out'")
-    assert (await cur.fetchone()) is None
+    row = await cur.fetchone()
+    assert row is not None and row[0]["refused"] is True and row[0]["communicative"] is False
+    # `workspace.run` has `communicative: False` in its descriptor.
 
 
 async def test_a_hidden_command_asks_the_owner_even_unavailable(aconn, tmp_path):

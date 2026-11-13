@@ -57,9 +57,17 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any], *,
     if ctx.get("refusal"):
         refusal = {"capability": capability, "result": {"error": str(ctx["refusal"])}}
         if ctx["to"] is not None:
-            refusal = {"capability": capability, "to": ctx["to"],
-                       "result": {"error": str(ctx["refusal"])}}
-        await kernel._emit(event, "act.result", refusal)
+            refusal["to"] = ctx["to"]
+        record = {"capability": capability, "arguments": passed,
+                  "communicative": bool(cap.get("communicative")), "refused": True}
+        stored = await kernel._emit(
+            event, "act.out", {**record, "to": ctx["to"]} if ctx["to"] is not None else record)
+        if ctx["labels"].get("hold"):
+            await kernel._emit(event, "act.result", refusal)
+        else:
+            kernel.enqueue(Event(id=None, ts=kernel.clock.now(), kind="act.result", who=event.who,
+                                 place=event.place, body=event.body, caused_by=stored.id,
+                                 origin_actor=event.origin_actor, payload=refusal))
         return Dispatch(acted=True)
     if payload is None or ctx.get("handled"):
         return Dispatch(acted=True, labels=ctx["labels"])

@@ -200,6 +200,7 @@ async def test_a_digit_string_episode_is_accepted_and_other_values_name_the_fiel
     await kernel._apply(_trigger(asked, GROUP), ToolCall("act", {
         "capability": "self.share",
         "arguments": {"item": "rapat jam sembilan", "episode": "besok", "to": GROUP}}))
+    await kernel.run_until_idle()
     cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.result' "
                               "ORDER BY id DESC LIMIT 1")
     result = (await cur.fetchone())[0]
@@ -331,6 +332,7 @@ async def test_only_a_person_who_was_part_of_it_can_share_it(aconn):
     await kernel._apply(_trigger(fulan, FULAN_A), ToolCall("act", {
         "capability": "self.share",
         "arguments": {"episode": str(fulan), "to": "person:budi"}}))
+    await kernel.run_until_idle()
     assert seen == []  # the action hook never sees content the actor was not part of
     kinds = [row[0] for row in await (await aconn.execute(
         "SELECT kind FROM events ORDER BY id")).fetchall()]
@@ -384,6 +386,7 @@ async def test_act_to_an_unreachable_person_fails_honestly(aconn):
     at = await _said(aconn, OWNER, GROUP, "shared")
     await kernel._apply(_trigger(at, GROUP), ToolCall("act", {
         "capability": "whatsapp.say", "arguments": {"text": "halo", "to": "person:budi"}}))
+    await kernel.run_until_idle()
     row = await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'act.result'")).fetchone()
     assert "no way to reach budi yet" in row[0]["result"]["error"]
@@ -394,11 +397,13 @@ async def test_a_message_to_an_unknown_place_fails_honestly(aconn):
     at = await _said(aconn, OWNER, GROUP, "shared")
     await kernel._apply(_trigger(at, GROUP), ToolCall("act", {
         "capability": "whatsapp.say", "arguments": {"text": "halo", "to": "budi_dm"}}))
+    await kernel.run_until_idle()
     row = await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'act.result'")).fetchone()
     assert "no such place: budi_dm" in row[0]["result"]["error"]
-    assert await (await aconn.execute(
-        "SELECT count(*) FROM events WHERE kind = 'act.out'")).fetchone() == (0,)
+    out = await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'act.out'")).fetchone()
+    assert out is not None and out[0]["refused"] is True and out[0]["communicative"] is True
 
 
 async def test_act_offers_the_capabilities_of_every_running_tool(aconn):
@@ -467,11 +472,12 @@ async def test_saying_private_words_in_a_place_that_may_not_see_them_is_refused(
 
     await kernel._apply(_trigger(group, GROUP), ToolCall("act", {
         "capability": "whatsapp.say", "arguments": {"text": "aku di-PHK", "to": GROUP}}))
+    await kernel.run_until_idle()
 
     rows = await (await aconn.execute("SELECT kind, payload FROM events ORDER BY id")).fetchall()
-    kinds = [kind for kind, _ in rows]
     refusal = "that place may not see this content; say it where it belongs"
-    assert "act.out" not in kinds
+    outs = [payload for kind, payload in rows if kind == "act.out"]
+    assert len(outs) == 1 and outs[0]["refused"] is True and outs[0]["communicative"] is True
     assert (await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'act.result'")).fetchone())[0]["result"] == {
             "error": refusal}
@@ -653,6 +659,7 @@ async def test_scenario_18_step_4_desk_line_is_sent_while_private_dm_in_group_is
     await kernel._apply(_trigger(group, GROUP), ToolCall("act", {
         "capability": "whatsapp.say",
         "arguments": {"text": "Kata owner kode brankas ruang rapat itu 842190.", "to": GROUP}}))
+    await kernel.run_until_idle()
     res = await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'act.result' ORDER BY id DESC LIMIT 1")
     ).fetchone()

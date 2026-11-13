@@ -1,0 +1,408 @@
+"""D82 fault-injection and refusal-recovery tests across rules, adapters, and tools."""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+from datetime import datetime, timezone
+from typing import Any
+
+import httpx
+import pytest
+
+from monoagens.__main__ import supervise_adapter
+from monoagens.adapters import telegram as telegram_adapter
+from monoagens.boot import build
+from monoagens.core import sends
+from monoagens.core.hooks import Continue
+from monoagens.core.reasoning import Reasoning
+from monoagens.infra.clock import FakeClock
+from monoagens.infra.providers import OpenAICompatibleProvider
+from monoagens.infra.store import append_event
+from monoagens.middleware import contract, interaction
+from monoagens.types import Action, Event
+from tests.support import settings
+
+START = datetime(2026, 11, 14, 2, 0, tzinfo=timezone.utc)
+SETTINGS = settings()
+
+
+class _FakeLLM:
+    """Scripted OpenAI-compatible responses recording every request."""
+
+    def __init__(self, responses: list[list[tuple[str, dict[str, Any]]]]) -> None:
+        self.responses = responses
+        self.requests: list[dict[str, Any]] = []
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(json.loads(request.content))
+        idx = min(len(self.requests) - 1, len(self.responses) - 1)
+        calls = [
+            {
+                "id": f"call_{i}",
+                "type": "function",
+                "function": {"name": name, "arguments": json.dumps(args)},
+            }
+            for i, (name, args) in enumerate(self.responses[idx])
+        ]
+        return httpx.Response(
+            200, json={"choices": [{"message": {"role": "assistant", "tool_calls": calls}}]},
+        )
+
+
+def _pfc(fake: _FakeLLM) -> Reasoning:
+    return Reasoning(
+        OpenAICompatibleProvider(
+            "https://llm.test/v1", "test-key", "fake-model",
+            retries=0, transport=httpx.MockTransport(fake.handler),
+        ),
+        settings=SETTINGS,
+    )
+
+
+class _FaultyBody:
+    """Adapter supporting all D82 shows that can fail on `show` or `act` or `run`."""
+
+    name = "telegram"
+    shows = ("typing", "read_receipts", "edit")
+    reads = ("text",)
+    gaps: dict[str, str] = {}
+
+    def __init__(self, *, fail_show: set[str] | None = None, fail_act: bool = False) -> None:
+        self.fail_show = set(fail_show or ())
+        self.fail_act = fail_act
+        self.actions: list[Action] = []
+        self.shown: list[tuple[str, str, dict[str, Any]]] = []
+
+    def capabilities(self) -> tuple[dict[str, Any], ...]:
+        return telegram_adapter.CAPABILITIES
+
+    async def act(self, action: Action) -> Any:
+        self.actions.append(action)
+        if self.fail_act:
+            raise RuntimeError("adapter send failed")
+        return None
+
+    async def show(self, place: str, kind: str, **data: Any) -> Any:
+        self.shown.append((place, kind, dict(data)))
+        if kind in self.fail_show:
+            raise RuntimeError(f"{kind} transport down")
+        return {"message_id": "shown-1"}
+
+
+class _RaisingTool:
+    """Plugin-like tool whose capability raises on call."""
+
+    name = "search"
+
+    def capabilities(self) -> tuple[dict[str, Any], ...]:
+        return (
+            {
+                "name": "query",
+                "description": "Search external docs.",
+                "schema": {"type": "object", "properties": {"q": {"type": "string"}},
+                           "required": ["q"]},
+                "communicative": False,
+                "long_running": True,
+                "identity_changing": False,
+            },
+        )
+
+    async def act(self, action: Action) -> Any:
+        del action
+        raise ConnectionError("search service unavailable")
+
+
+async def test_compose_distinguishes_guard_from_best_effort() -> None:
+    """Guards propagate failures; best-effort rules record error and continue."""
+
+    async def guard_rule(item: Any, ctx: Any) -> Any:
+        raise RuntimeError("guard failure")
+
+    async def broken_show(item: Any, ctx: Any) -> Any:
+        raise RuntimeError("show down")
+
+    class _FakeKernel:
+        def __init__(self) -> None:
+            self.errors: list[tuple[Event, str]] = []
+
+        async def _record_error(self, event: Event, message: str) -> None:
+            self.errors.append((event, message))
+
+    kernel = _FakeKernel()
+    ev = Event(id=1, ts=START, kind="percept", who="person:budi", place="space:tg:1",
+               body="telegram", payload={"description": "halo"})
+
+    show_mw = contract.compose(
+        contract.mark_rule(broken_show, name="typing", kind="best-effort", show="typing"),
+        kernel=kernel,
+    )
+    assert isinstance(await show_mw(ev, {"conn": None}), Continue)
+    assert len(kernel.errors) == 1
+    msg = kernel.errors[0][1]
+    assert "typing" in msg and "telegram" in msg and "show=typing" in msg
+
+    guard_mw = contract.compose(guard_rule, kernel=kernel)
+    with pytest.raises(RuntimeError, match="guard failure"):
+        await guard_mw(ev, {"conn": None})
+
+
+async def _feed(kernel: Any, event: Event) -> Any:
+    """Put one event and drive the kernel until idle without deadlocking on `ack`."""
+    put = asyncio.create_task(kernel.put(event))
+    await asyncio.sleep(0)
+    await kernel.run_until_idle()
+    return await put
+
+
+@pytest.mark.parametrize("failing_show", ["typing", "read_receipts", "edit"])
+async def test_show_failure_records_error_and_turn_continues(aconn, failing_show: str) -> None:
+    """Every show rule (`typing`, `read_receipts`, `progress`) failing never stops the turn."""
+    fake = _FakeLLM([
+        [("act", {"capability": "search.query", "arguments": {"q": "status"}})],
+        [("act", {"capability": "telegram.say", "arguments": {"text": "halo juga"}})],
+    ])
+    cfg = settings(bodies={"telegram": {"enabled": True, "show": {
+        "typing": "on", "read_receipts": "on", "steps": "all", "progress": "edit",
+    }}})
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=cfg)
+    body = _FaultyBody(fail_show={failing_show})
+    kernel.register_adapter(body)
+    tool = _RaisingTool()
+    kernel.tools.add_tool(tool, {"query": {"facts": ("reads",), "permission": "search.query"}})
+
+    await _feed(kernel, Event(
+        id=None, ts=START, kind="percept", who="person:owner",
+        place="space:tg:10", body="telegram", origin_actor="person:owner",
+        payload={"description": "halo", "place_kind": "direct",
+                 "addressed": True, "data": {"message_id": "m1"}},
+    ))
+
+    assert [a.payload["text"] for a in body.actions] == ["halo juga"]
+    errs = [row[0]["error"] for row in await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'error'")).fetchall()]
+    assert errs, f"expected error event when {failing_show} failed"
+    expected_show = "progress" if failing_show == "edit" else failing_show
+    assert any("telegram" in err and expected_show in err for err in errs), errs
+
+
+async def test_thinking_show_failure_records_error_and_continues(aconn) -> None:
+    """Failing `thinking` show records an error naming rule, adapter, and `thinking`."""
+    cfg = settings(bodies={"telegram": {"enabled": True, "show": {
+        "thinking": "all", "steps": "off",
+    }}})
+    kernel = build(aconn, clock=FakeClock(START), settings=cfg)
+    body = _FaultyBody(fail_show={"edit"})
+    kernel.register_adapter(body)
+    trigger = await append_event(
+        aconn, ts=START, kind="percept", who="person:owner", place="space:tg:10",
+        body="telegram", origin_actor="person:owner",
+        payload={"description": "halo", "place_kind": "direct"},
+    )
+    await kernel._emit(trigger, "decision.note", {"act": "think", "thought": "aku ragu"})
+    follow = await append_event(
+        aconn, ts=START, kind="act.out", who="person:owner", place="space:tg:10",
+        body="telegram", caused_by=trigger.id, origin_actor="person:owner", payload={},
+    )
+
+    outcome = await interaction.narrate(kernel)(follow, {"conn": aconn, "now": START})
+
+    assert isinstance(outcome, Continue)
+    errs = [row[0]["error"] for row in await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'error'")).fetchall()]
+    assert any("narrate.thinking" in e and "telegram" in e and "show=thinking" in e for e in errs)
+
+
+async def test_fault_injection_across_best_effort_progress_and_adapter_and_tool(aconn) -> None:
+    """Adapter `run`/`act`, progress show, and plugin tools fault-inject cleanly without stopping."""
+    # 1. Faulty tool raises -> honest act.result error -> reasoning still answers;
+    #    failing progress show also records error naming rule, adapter, and progress without crash.
+    fake = _FakeLLM([
+        [("act", {"capability": "search.query", "arguments": {"q": "cuaca"}})],
+        [("act", {"capability": "telegram.say", "arguments": {"text": "pencarian gagal"}})],
+    ])
+    cfg = settings(bodies={"telegram": {"enabled": True, "show": {
+        "steps": "all", "progress": "edit",
+    }}})
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=cfg)
+    body = _FaultyBody(fail_show={"edit"})
+    kernel.register_adapter(body)
+    kernel.tools.add_tool(_RaisingTool(), {
+        "query": {"facts": ("network",), "permission": "search.query"},
+    })
+
+    await _feed(kernel, Event(
+        id=None, ts=START, kind="percept", who="person:owner",
+        place="space:tg:owner", body="telegram", origin_actor="person:owner",
+        payload={"description": "cari cuaca", "place_kind": "direct", "addressed": True},
+    ))
+
+    assert [a.payload["text"] for a in body.actions] == ["pencarian gagal"]
+    results = [row[0] for row in await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'act.result' ORDER BY id")).fetchall()]
+    assert any("search.query failed (ConnectionError)" in str(r.get("result")) for r in results)
+    errs = [row[0]["error"] for row in await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'error'")).fetchall()]
+    assert any("narrate.progress" in e and "telegram" in e and "show=progress" in e for e in errs)
+
+    # 2. Adapter `act` raises -> honest act.result error (type name only), no unhandled crash.
+    body_fail_act = _FaultyBody(fail_act=True)
+    fake2 = _FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "tes"}})]])
+    kernel2 = build(aconn, clock=FakeClock(START), pfc=_pfc(fake2), settings=SETTINGS)
+    kernel2.register_adapter(body_fail_act)
+    await _feed(kernel2, Event(
+        id=None, ts=START, kind="percept", who="person:owner",
+        place="space:tg:owner2", body="telegram", origin_actor="person:owner",
+        payload={"description": "tes", "place_kind": "direct", "addressed": True},
+    ))
+    res2 = [row[0] for row in await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'act.result' ORDER BY id")).fetchall()]
+    assert any("telegram.say failed (RuntimeError)" in str(r.get("result")) for r in res2)
+
+
+async def test_tool_failure_never_leaks_exception_message_secrets_to_log(aconn, caplog) -> None:
+    """An adapter/tool exception carrying a token never writes the message to Log or logs."""
+    secret = "bot123456:FAKE_TOKEN_SECRET"
+
+    class _LeakyBody(_FaultyBody):
+        async def act(self, action: Action) -> Any:
+            self.actions.append(action)
+            raise RuntimeError(f"POST https://api.telegram.org/{secret}/sendMessage refused")
+
+    fake = _FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "halo"}})]])
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    kernel.register_adapter(_LeakyBody())
+
+    with caplog.at_level("ERROR"):
+        await _feed(kernel, Event(
+            id=None, ts=START, kind="percept", who="person:owner",
+            place="space:tg:owner_secret", body="telegram", origin_actor="person:owner",
+            payload={"description": "tes", "place_kind": "direct", "addressed": True},
+        ))
+
+    res = await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'act.result' ORDER BY id DESC LIMIT 1"
+    )).fetchone()
+    assert res is not None and res[0]["result"] == {"error": "telegram.say failed (RuntimeError)"}
+    all_rows = await (await aconn.execute("SELECT payload::text FROM events")).fetchall()
+    assert all(secret not in row[0] and "bot123456" not in row[0] for row in all_rows)
+    assert secret not in caplog.text and "bot123456" not in caplog.text
+
+
+async def test_fault_injection_adapter_run_restarts_without_stopping_soul(aconn) -> None:
+    """An adapter whose `run()` fails records an error naming it and restarts."""
+    cfg = settings(runtime={
+        "tick_seconds": 30,
+        "sleep": {"idle_minutes": 30, "retry_minutes": 30, "hour": 2},
+        "adapter_retry": {"initial_seconds": 0.01, "max_seconds": 0.02, "factor": 2.0},
+    })
+    kernel = build(aconn, clock=FakeClock(START), settings=cfg)
+
+    class _RunFailBody(_FaultyBody):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+            self.recovered = asyncio.Event()
+
+        async def run(self, put) -> None:
+            self.attempts += 1
+            if self.attempts == 1:
+                raise RuntimeError("run disconnected")
+            self.recovered.set()
+            await asyncio.Future()
+
+    adapter = _RunFailBody()
+    kernel.register_adapter(adapter)
+    stop = asyncio.Event()
+    task = asyncio.create_task(supervise_adapter(kernel, adapter, stop))
+    try:
+        await asyncio.wait_for(adapter.recovered.wait(), timeout=3.0)
+        await asyncio.sleep(0.05)
+        await kernel.run_until_idle()
+    finally:
+        stop.set()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    errs = [row[0]["error"] for row in await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'error'")).fetchall()]
+    assert any("telegram" in e and "run disconnected" in e for e in errs), errs
+
+
+async def test_refusal_to_readonly_place_returns_to_reasoning_and_answers_elsewhere(aconn) -> None:
+    """A send to `can_post: false` refuses cleanly and reasoning answers in trigger place."""
+    fake = _FakeLLM([
+        [("act", {"capability": "telegram.say",
+                  "arguments": {"text": "pengumuman", "to": "space:tg:ro"}})],
+        [("act", {"capability": "telegram.say",
+                  "arguments": {"text": "Channel itu read-only; kubalas di sini ya."}})],
+    ])
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+    body = _FaultyBody()
+    kernel.register_adapter(body)
+
+    await _feed(kernel, Event(
+        id=None, ts=START, kind="percept", who="person:owner", place="space:tg:ro",
+        body="telegram", origin_actor="person:owner",
+        payload={"description": "broadcast", "place_kind": "shared", "addressed": False,
+                 "place_info": {"form": "broadcast", "can_post": False, "name": "News"}},
+    ))
+    await _feed(kernel, Event(
+        id=None, ts=START, kind="percept", who="person:owner", place="space:tg:dm",
+        body="telegram", origin_actor="person:owner",
+        payload={"description": "kirim ke channel News dong", "place_kind": "direct",
+                 "addressed": True},
+    ))
+
+    # First call was refused; second call answered in the writable trigger place.
+    assert [(a.place, a.payload["text"]) for a in body.actions] == [
+        ("space:tg:dm", "Channel itu read-only; kubalas di sini ya."),
+    ]
+    assert len(fake.requests) == 2
+    second_user_msg = fake.requests[1]["messages"][-1]["content"]
+    assert "<doing>" in second_user_msg and "read-only place" in second_user_msg
+    outs = [row[0] for row in await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'act.out' ORDER BY id")).fetchall()]
+    assert len(outs) == 2
+    assert outs[0]["refused"] is True and outs[0]["communicative"] is True
+    assert outs[1].get("refused") is not True and outs[1]["communicative"] is True
+    assert await sends.pending(aconn) == []
+
+
+async def test_repeated_refusal_is_bounded_by_brake_and_notifies_requester(aconn) -> None:
+    """Repeated refusals of the same act stop at `max_task_steps` and tell the requester."""
+    fake = _FakeLLM([
+        [("act", {"capability": "telegram.say",
+                  "arguments": {"text": "coba terus", "to": "space:tg:ro"}})],
+    ])
+    cfg = settings(owner_settings={"max_task_steps": 2, "max_wakes_per_hour": 20})
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=cfg)
+    body = _FaultyBody()
+    kernel.register_adapter(body)
+
+    await _feed(kernel, Event(
+        id=None, ts=START, kind="percept", who="person:owner", place="space:tg:ro",
+        body="telegram", origin_actor="person:owner",
+        payload={"description": "broadcast", "place_kind": "shared", "addressed": False,
+                 "place_info": {"form": "broadcast", "can_post": False, "name": "News"}},
+    ))
+    await _feed(kernel, Event(
+        id=None, ts=START, kind="percept", who="person:owner", place="space:tg:dm",
+        body="telegram", origin_actor="person:owner",
+        payload={"description": "kirim ke channel News terus", "place_kind": "direct",
+                 "addressed": True},
+    ))
+
+    # Stops cleanly at max_task_steps=2 (2 LLM attempts + 1 brake stop), not an endless loop.
+    assert len(fake.requests) == 2
+    assert not any(ev.payload.get("refused") for ev in await sends.pending(aconn))
+    stopped = [row[0] for row in await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'guard.stopped' ORDER BY id")).fetchall()]
+    assert any("max_task_steps" in str(s.get("reason") or "") for s in stopped)
+    held = await (await aconn.execute(
+        "SELECT count(*) FROM events WHERE kind = 'brake.held'")).fetchone()
+    assert held == (1,)
+    assert any(a.place == "space:tg:dm" and "max_task_steps" in str(a.payload.get("text") or "")
+               for a in body.actions)

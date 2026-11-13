@@ -19,7 +19,8 @@ async def doing_lines(conn, place: str, task: Mapping[str, Any] | None,
     root, goal = await chain_root(conn, trigger.id if trigger is not None else None)
     events = await _chain_events(conn, root, place) if root is not None else []
     acts = [seen for seen in events if seen.kind == "act.out"]
-    if not acts or any(seen.payload.get("communicative") for seen in acts):
+    if not acts or any(seen.payload.get("communicative") and not seen.payload.get("refused")
+                       for seen in acts):
         return ()
     return _lines(events, goal, values)
 
@@ -45,7 +46,9 @@ async def step_spoke(conn, event: Event) -> bool:
     cur = await conn.execute(
         "SELECT 1 FROM events act JOIN events said ON said.caused_by = act.caused_by "
         "WHERE act.id = %s AND said.kind = 'act.out' "
-        "AND said.payload->>'communicative' = 'true' LIMIT 1", (event.caused_by,))
+        "AND said.payload->>'communicative' = 'true' "
+        "AND COALESCE(said.payload->>'refused', 'false') <> 'true' LIMIT 1",
+        (event.caused_by,))
     return await cur.fetchone() is not None
 
 

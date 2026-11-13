@@ -663,7 +663,10 @@ def _event_row(row: Sequence[Any]) -> dict[str, Any]:
 
 def said(event: dict[str, Any], capabilities: Mapping[str, Any]) -> bool:
     """Return whether one act.out is a message a person received (12.18)."""
-    capability = str((event.get("payload") or {}).get("capability") or "")
+    payload = event.get("payload") or {}
+    if payload.get("refused"):
+        return False
+    capability = str(payload.get("capability") or "")
     return bool((capabilities.get(capability) or {}).get("communicative", False))
 
 

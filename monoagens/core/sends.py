@@ -29,7 +29,8 @@ async def pending(conn) -> list[Event]:
     """Return the communicative acts recorded but neither confirmed nor closed."""
     cur = await conn.execute(
         f"SELECT {_COLUMNS} FROM events act WHERE act.kind = 'act.out' "
-        "AND act.payload->>'communicative' = 'true' AND NOT EXISTS ("
+        "AND act.payload->>'communicative' = 'true' "
+        "AND COALESCE(act.payload->>'refused', 'false') <> 'true' AND NOT EXISTS ("
         "SELECT 1 FROM events done WHERE done.caused_by = act.id "
         "AND done.kind = ANY(%s)) ORDER BY act.id", (list(CLOSING),))
     return [event_from_row(row) for row in await cur.fetchall()]

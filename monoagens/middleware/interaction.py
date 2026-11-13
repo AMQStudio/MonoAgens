@@ -487,22 +487,22 @@ async def _notes(conn: Any, chain: int, after: int) -> list[tuple[int, str, str]
             for row in await cur.fetchall()]
 
 
-def narrate(kernel: Any) -> Middleware:
-    """Inbound rule: show allowed thoughts (`off|owner_direct|all`) and steps (`edit|new`)."""
+def thinking_show(kernel: Any) -> Middleware:
+    """Inbound best-effort rule: show allowed thoughts (`off|owner_direct|all`)."""
 
     async def rule(item: Any, ctx: Any) -> Any:
-        """Show what the switches allow, only after the `privacy.visible` audience check."""
+        """Show thoughts when privacy allows."""
         del ctx
         place = str(item.place or "")
         if not place:
             return Continue()
         cat = catalog(getattr(kernel, "settings", None))
         think_prefix = str((cat.get("thinking") or {}).get("prefix") or "")
-        step_prefix = str((cat.get("step") or {}).get("prefix") or "")
-        settings_now = switches(kernel, body=str(item.body or ""))
-        think_mode = settings_now.get("thinking", "owner_direct")
+        think_mode = switches(kernel, body=str(item.body or "")).get("thinking", "owner_direct")
+        if think_mode == "off":
+            return Continue()
         chain = int(item.caused_by or item.id or 0)
-        thoughts = await _notes(kernel.conn, chain, 0) if think_mode != "off" else []
+        thoughts = await _notes(kernel.conn, chain, 0)
         eligible = think_mode == "all" or (
             think_mode == "owner_direct" and await privacy.owner_direct(kernel.conn, place)
         )
@@ -516,17 +516,40 @@ def narrate(kernel: Any) -> Middleware:
                 if await present(kernel, replace(item, place=place), "edit", line):
                     await kernel._emit(item, SHOWN, {"place": place, "kind": "thinking",
                                                      "note": note}, place=place)
-        steps_mode = settings_now.get("steps", "long")
-        if steps_mode != "off" and item.kind == "act.result":
-            capability = str((item.payload or {}).get("capability") or "")
-            declared = kernel.tools.get(capability) or {}
-            if steps_mode == "all" or declared.get("long_running"):
-                short = _short(interaction_text((item.payload or {}).get("result")))
-                line = f"{step_prefix} {capability}: {short}".strip()
-                await _present_step(kernel, item, line, chain=chain, place=place)
         return Continue()
 
-    return rule
+    return contract.mark_rule(rule, name="narrate.thinking", kind="best-effort", show="thinking")
+
+
+def progress_show(kernel: Any) -> Middleware:
+    """Inbound best-effort rule: show act progress steps (`off|long|all`)."""
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        """Show step progress when enabled."""
+        del ctx
+        place = str(item.place or "")
+        if not place or item.kind != "act.result":
+            return Continue()
+        steps_mode = switches(kernel, body=str(item.body or "")).get("steps", "long")
+        if steps_mode == "off":
+            return Continue()
+        capability = str((item.payload or {}).get("capability") or "")
+        declared = kernel.tools.get(capability) or {}
+        if steps_mode == "all" or declared.get("long_running"):
+            cat = catalog(getattr(kernel, "settings", None))
+            step_prefix = str((cat.get("step") or {}).get("prefix") or "")
+            short = _short(interaction_text((item.payload or {}).get("result")))
+            line = f"{step_prefix} {capability}: {short}".strip()
+            chain = int(item.caused_by or item.id or 0)
+            await _present_step(kernel, item, line, chain=chain, place=place)
+        return Continue()
+
+    return contract.mark_rule(rule, name="narrate.progress", kind="best-effort", show="progress")
+
+
+def narrate(kernel: Any) -> Middleware:
+    """Inbound rule: show allowed thoughts and steps under best-effort error handling."""
+    return contract.compose(thinking_show(kernel), progress_show(kernel), kernel=kernel)
 
 
 def interaction_text(result: Any) -> str:
@@ -566,7 +589,7 @@ def typing(kernel: Any) -> Middleware:
         await adapter.show(str(ctx["event"].place), "typing")
         return Continue()
 
-    return rule
+    return contract.mark_rule(rule, name="typing", kind="best-effort", show="typing")
 
 
 async def _is_shared_with_owner(conn: Any, body: str) -> bool:
@@ -637,15 +660,12 @@ def read_receipts_inbound(kernel: Any) -> Middleware:
             return Continue()
         if await _is_read_marked(kernel.conn, place, str(msg_id)):
             return Continue()
-        try:
-            await adapter.show(place, "read_receipts", message_id=msg_id, message_ids=[msg_id])
-        except Exception as exc:
-            await kernel._record_error(item, exc)
-            return Continue()
+        await adapter.show(place, "read_receipts", message_id=msg_id, message_ids=[msg_id])
         await kernel._emit(item, SHOWN, {"kind": "read", "message_id": str(msg_id)}, place=place)
         return Continue()
 
-    return rule
+    return contract.mark_rule(rule, name="read_receipts_inbound",
+                              kind="best-effort", show="read_receipts")
 
 
 def read_receipts_action(kernel: Any) -> Middleware:
@@ -674,16 +694,13 @@ def read_receipts_action(kernel: Any) -> Middleware:
         mids = await _unread_messages(kernel.conn, place, body)
         if not mids:
             return Continue()
-        try:
-            await adapter.show(place, "read_receipts", message_id=mids[-1], message_ids=mids)
-        except Exception as exc:
-            await kernel._record_error(event, exc)
-            return Continue()
+        await adapter.show(place, "read_receipts", message_id=mids[-1], message_ids=mids)
         for mid in mids:
             await kernel._emit(event, SHOWN, {"kind": "read", "message_id": mid}, place=place)
         return Continue()
 
-    return rule
+    return contract.mark_rule(rule, name="read_receipts_action",
+                              kind="best-effort", show="read_receipts")
 
 
 def install_commands(kernel: Any) -> None:

@@ -542,6 +542,7 @@ async def _chain_delegated_sends(conn, event_id: int) -> tuple[str | None, list[
     SELECT (SELECT place FROM root), id, origin_actor, place
     FROM descendants
     WHERE kind = 'act.out' AND (payload->>'communicative') = 'true'
+      AND COALESCE(payload->>'refused', 'false') <> 'true'
     ORDER BY id
     """
     rows = await (await conn.execute(query, (event_id,))).fetchall()
@@ -569,7 +570,8 @@ async def _reply_act_out(conn, item: Event) -> tuple[int, str, str | None, str |
         row = await (await conn.execute(
             "SELECT id, origin_actor, place, caused_by FROM events "
             "WHERE id = %s AND kind = 'act.out' AND place = %s "
-            "AND (payload->>'communicative') = 'true'",
+            "AND (payload->>'communicative') = 'true' "
+            "AND COALESCE(payload->>'refused', 'false') <> 'true'",
             (int(target), item.place))).fetchone()
     if row is None:
         row = await (await conn.execute(
@@ -577,6 +579,7 @@ async def _reply_act_out(conn, item: Event) -> tuple[int, str, str | None, str |
             "FROM events msg JOIN events act ON msg.caused_by = act.id "
             "WHERE act.kind = 'act.out' AND act.place = %s "
             "AND (act.payload->>'communicative') = 'true' "
+            "AND COALESCE(act.payload->>'refused', 'false') <> 'true' "
             "AND msg.kind IN ('act.confirmed', 'act.result') "
             "AND (msg.payload->>'message_id' = %s OR msg.payload->'result'->>'message_id' = %s) "
             "ORDER BY msg.id DESC LIMIT 1",
@@ -585,7 +588,9 @@ async def _reply_act_out(conn, item: Event) -> tuple[int, str, str | None, str |
         row = await (await conn.execute(
             "SELECT id, origin_actor, place, caused_by FROM events "
             "WHERE kind = 'act.out' AND place = %s "
-            "AND (payload->>'communicative') = 'true' AND payload->>'message_id' = %s "
+            "AND (payload->>'communicative') = 'true' "
+            "AND COALESCE(payload->>'refused', 'false') <> 'true' "
+            "AND payload->>'message_id' = %s "
             "ORDER BY id DESC LIMIT 1",
             (item.place, target))).fetchone()
     if row is None or not str(row[1] or "").startswith("person:"):

@@ -21,6 +21,7 @@ The action hook carries one act in a context dict. The keys the core sets are fi
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -28,6 +29,9 @@ from monoagens.types import Event
 
 from monoagens.core.hooks import (OWNER_POLICY, SLOTS, Continue, HookOutcome, Middleware,
                                   Registration, Replace, Stop)
+
+LOGGER = logging.getLogger(__name__)
+RULE_KINDS = ("guard", "best-effort")
 
 # What a tool states about itself (middleware.md §4). A tool without facts fails at boot.
 FACTS = ("reads", "changes", "runs_code", "network")
@@ -132,19 +136,67 @@ OUTPUT_MARKER = (
     "full in {ref}; continue from character {n}]"
 )
 
-__all__ = ["CALL_FACTS", "FACTS", "FALLBACKS", "OUTPUT_MARKER", "OWNER_POLICY", "READS", "SHOWS",
-           "SLOTS", "AttachmentDoor", "LogView", "adapter_fallbacks", "attachment_origins",
-           "check_coverage", "describe_attachments", "find_attachment", "open_attachment",
-           "Continue", "HookOutcome", "Middleware", "Registration", "Replace", "Stop",
-           "compose"]
+__all__ = ["CALL_FACTS", "FACTS", "FALLBACKS", "OUTPUT_MARKER", "OWNER_POLICY", "READS",
+           "RULE_KINDS", "SHOWS", "SLOTS", "AttachmentDoor", "LogView", "adapter_fallbacks",
+           "attachment_origins", "best_effort", "check_coverage", "describe_attachments",
+           "find_attachment", "mark_rule", "open_attachment", "Continue", "HookOutcome",
+           "Middleware", "Registration", "Replace", "Stop", "compose"]
 
 
-def compose(*rules: Middleware) -> Middleware:
-    """Thread several rules into one: a Stop ends them, a Replace hands on the new item."""
+def mark_rule(rule: Middleware, *, name: str, kind: str = "guard",
+              show: str = "") -> Middleware:
+    """Attach rule kind ('guard' default, or 'best-effort') and show metadata to a rule."""
+    if kind not in RULE_KINDS:
+        raise ValueError(f"unknown rule kind: {kind!r}")
+    setattr(rule, "rule_kind", kind)
+    setattr(rule, "rule_name", name)
+    if show:
+        setattr(rule, "show_kind", show)
+    return rule
+
+
+def best_effort(rule: Middleware, *, kernel: Any = None, name: str = "",
+                show: str = "") -> Middleware:
+    """Wrap one best-effort rule: failures record `error` and the hook continues."""
+    rule_name = name or str(getattr(rule, "rule_name", "") or getattr(rule, "__name__", "rule"))
+    show_kind = show or str(getattr(rule, "show_kind", "") or "")
+
+    async def wrapped(item: Any, ctx: Any) -> HookOutcome:
+        try:
+            return await rule(item, ctx)
+        except Exception as exc:
+            event = ctx.get("event") if isinstance(ctx, Mapping) else None
+            if event is None:
+                event = item
+            labels = ctx.get("labels") if isinstance(ctx, Mapping) else None
+            adapter = str((labels or {}).get("body") or getattr(event, "body", "") or "-")
+            detail = (ctx.get("show_kind") if isinstance(ctx, Mapping) else None) or show_kind
+            parts = [f"rule={rule_name}", f"adapter={adapter}"]
+            if detail:
+                parts.append(f"show={detail}")
+            message = f"best-effort rule failed ({', '.join(parts)}): {exc}"
+            rec = getattr(kernel, "_record_error", None)
+            if rec is not None and isinstance(event, Event):
+                await rec(event, message)
+            else:
+                LOGGER.warning("%s", message)
+            return Continue()
+
+    return mark_rule(wrapped, name=rule_name, kind="best-effort", show=show_kind)
+
+
+def compose(*rules: Middleware, kernel: Any = None) -> Middleware:
+    """Thread several rules into one: best-effort rules continue on error; guards fail closed."""
+    wrapped_rules = tuple(
+        best_effort(rule, kernel=kernel)
+        if getattr(rule, "rule_kind", "guard") == "best-effort"
+        else rule
+        for rule in rules
+    )
 
     async def middleware(item: Any, ctx: Any) -> HookOutcome:
         changed = False
-        for rule in rules:
+        for rule in wrapped_rules:
             outcome = await rule(item, ctx)
             if isinstance(outcome, Stop):
                 return outcome

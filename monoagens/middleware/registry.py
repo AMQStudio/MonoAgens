@@ -12,6 +12,7 @@ the facts, the permission and the output cap live here, next to it.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
@@ -23,6 +24,7 @@ from monoagens.middleware.contract import OUTPUT_MARKER, open_attachment
 from monoagens.types import Action, Event
 
 ROUTING = ("to", "via")
+LOGGER = logging.getLogger(__name__)
 DESCRIBE = "registry.describe"
 MORE = "registry.more"
 DEFAULT_OUTPUT_CAP = 8000
@@ -234,7 +236,12 @@ class ToolRegistry:
             raise RuntimeError(f"No adapter registered for {declared_by!r}")
         action = Action(kind=name, place=event.place or "", payload=payload,
                         adapter=declared_by, event_id=event_id)
-        result = await adapter.act(action)
+        try:
+            result = await adapter.act(action)
+        except Exception as exc:
+            kind = type(exc).__name__
+            LOGGER.error("tool %s failed (%s)", capability, kind)
+            return {"error": f"{capability} failed ({kind})"}
         if capability == MORE:
             return result
         return await self._cap_result(result, self.output_cap(capability))

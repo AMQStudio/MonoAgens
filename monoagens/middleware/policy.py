@@ -84,7 +84,8 @@ def modules_for(hook: str, kernel: Any) -> tuple[tuple[str, Middleware], ...]:
                         ("approval-answer", interaction.answer(kernel)),
                         ("commands", registry.commands(kernel)),
                         ("narrate", interaction.narrate(kernel)),
-                        ("read-receipts", interaction.read_receipts_inbound(kernel)),
+                        ("read-receipts", compose(interaction.read_receipts_inbound(kernel),
+                                                  kernel=kernel)),
                         ("attachment-sweep", attachment_sweep(kernel))),
             "context": (("identity-cards", identity.cards(kernel.conn, roles=kernel.roles)),
                         ("self-block", registry.self_block(kernel))),
@@ -109,14 +110,16 @@ def policy_for(hook: str, when: str, kernel: Any) -> Middleware:
     """Return the absolute lines of one hook: identity, permissions, privacy, approvals, brakes."""
     if hook == "context":
         return compose(identity.identity_line(), brake_line(kernel),
-                       privacy.filter_context(kernel.conn))
+                       privacy.filter_context(kernel.conn), kernel=kernel)
     if hook == "action":
         if when == "first":
             return compose(identity.identity_line(), permission_line(kernel),
-                           interaction.typing(kernel), privacy.guard(kernel, "first"))
+                           interaction.typing(kernel), privacy.guard(kernel, "first"),
+                           kernel=kernel)
         return compose(privacy.guard(kernel, "last"), quiet_line(kernel),
-                       approval_line(kernel), interaction.read_receipts_action(kernel))
-    return compose(identity.identity_line(), privacy.delegation(kernel))
+                       approval_line(kernel), interaction.read_receipts_action(kernel),
+                       kernel=kernel)
+    return compose(identity.identity_line(), privacy.delegation(kernel), kernel=kernel)
 
 
 def daily_limit(settings: Mapping[str, Any]) -> float:
@@ -333,6 +336,7 @@ def approval_line(kernel: Any) -> Middleware:
                if ctx["event"].kind == "intent" and ctx["event"].payload.get("approved")
                else {})})
         ctx["refusal"] = "waiting for the owner's approval"
+        ctx["labels"]["hold"] = True
         await interaction.request(kernel, ctx["event"], int(stored.id), capability,
                                   dict(ctx.get("arguments") or {}), reason)
         return Continue()
@@ -381,6 +385,7 @@ def quiet_line(kernel: Any) -> Middleware:
         if not inside:
             return Continue()
         ctx["refusal"] = f"quiet hours: the owner asked for silence until {until}"
+        ctx["labels"]["hold"] = True
         return Stop(ctx["refusal"])
 
     return rule
