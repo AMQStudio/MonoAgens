@@ -111,6 +111,19 @@ def tick_seconds(settings: dict[str, Any]) -> float:
     return float(runtime.get("tick_seconds") or DEFAULT_TICK_SECONDS)
 
 
+def adapter_retry(settings: Mapping[str, Any]) -> dict[str, float]:
+    """Return adapter supervisor backoff settings from `runtime.adapter_retry`."""
+    raw = ((settings.get("runtime") or {}).get("adapter_retry")
+           or (load_config().get("runtime") or {}).get("adapter_retry") or {})
+    if not all(key in raw for key in ("initial_seconds", "max_seconds", "factor")):
+        raise ValueError("runtime.adapter_retry must define initial_seconds, max_seconds, factor")
+    return {
+        "initial_seconds": float(raw["initial_seconds"]),
+        "max_seconds": float(raw["max_seconds"]),
+        "factor": float(raw["factor"]),
+    }
+
+
 def load_env_file(path: pathlib.Path = DEFAULT_ENV_PATH) -> dict[str, str]:
     """Read a simple KEY=VALUE .env file into a dict."""
     env_path = pathlib.Path(path)

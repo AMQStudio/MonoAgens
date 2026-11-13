@@ -148,6 +148,7 @@ class DiscordBody:
 
     async def run(self, put: Put) -> None:
         """Connect to Discord and forward incoming percepts until cancelled or closed."""
+        self._stop_event.clear()
         self._put = put
         client = self._build_client()
         if getattr(client, "user", None) is not None:
