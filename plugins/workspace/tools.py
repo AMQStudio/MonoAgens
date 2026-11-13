@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import io
+import contextlib
+import os
 import pathlib
 import re
+import secrets
+import time
 from typing import Any
 
 from . import guard, paths, sandbox
@@ -14,6 +17,7 @@ MAX_LIMIT = 2000
 # Bound what one run may hold in memory; the registry's output cap and marker then apply.
 RUN_OUTPUT_BYTES = 50 * 1024 * 1024
 DEFAULT_LINES = 400
+GREP_TIMEOUT_SECONDS = 10.0
 BINARY = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 READ = {"name": "read", "description": "Read a text file by line range, or one attachment.",
@@ -96,7 +100,11 @@ class WorkspaceTool:
         """Read lines of a file, or one attachment by its reference."""
         if action.payload.get("ref"):
             return await self._read_attachment(who, action)
-        target = paths.resolve(self.api, who, str(action.payload.get("path") or ""))
+        raw_path = str(action.payload.get("path") or "")
+        target = paths.resolve(self.api, who, raw_path)
+        ws_root = paths.root_for(self.api, who, raw_path)
+        if not paths.inside(ws_root, target):
+            raise PermissionError(f"{raw_path} is outside your workspace")
         data = await asyncio.to_thread(target.read_bytes)
         if BINARY.search(data[:4096]):
             return {"error": "that file is not text"}
@@ -150,14 +158,28 @@ class WorkspaceTool:
         pattern = str(action.payload.get("pattern") or "")
         if not pattern:
             return {"error": "empty pattern"}
-        compiled = re.compile(pattern)
-        base = paths.resolve(self.api, who, str(action.payload.get("path") or ""))
+        try:
+            compiled = re.compile(pattern)
+        except re.error as exc:
+            return {"error": f"invalid regex: {exc}"}
+        raw_path = str(action.payload.get("path") or "")
+        base = paths.resolve(self.api, who, raw_path)
+        ws_root = paths.root_for(self.api, who, raw_path)
         mask = str(action.payload.get("glob") or "*")
         mode = str(action.payload.get("mode") or "matches")
         limit = max(1, min(500, int(action.payload.get("limit") or 50)))
         cap = int(self.api.options.get("max_file_bytes") or 2_000_000)
-        return await asyncio.to_thread(_grep, self.api, who, compiled, base, mask, mode,
-                                       limit, cap)
+        timeout = float(self.api.options.get("grep_timeout_seconds") or GREP_TIMEOUT_SECONDS)
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    _grep, self.api, who, compiled, base, mask, mode, limit, cap,
+                    ws_root=ws_root, deadline=time.monotonic() + timeout,
+                ),
+                timeout,
+            )
+        except asyncio.TimeoutError:
+            return {"error": f"grep timed out after {timeout:g}s"}
 
     async def glob(self, who: str, action: Any) -> dict[str, Any]:
         """List the paths matching one pattern, sorted and capped."""
@@ -191,22 +213,43 @@ class WorkspaceTool:
 
 
 def _write(target: pathlib.Path, text: str) -> None:
-    """Write one file, creating its folder, atomically."""
+    """Write one file atomically in `target.parent` without following any symlink."""
     target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_name(target.name + ".tmp")
-    temporary.write_text(text, encoding="utf-8")
-    temporary.replace(target)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    for _ in range(8):
+        temporary = target.with_name(f".{target.name}.{secrets.token_hex(6)}.tmp")
+        try:
+            fd = os.open(temporary, flags, 0o600)
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise OSError("could not create unique temporary file")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(temporary, target)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise
 
 
 def _grep(api: Any, who: str, compiled: re.Pattern, base: pathlib.Path, mask: str,
-          mode: str, limit: int, cap: int) -> dict[str, Any]:
-    """Walk one tree and collect matches, counts or file names."""
+          mode: str, limit: int, cap: int, *, ws_root: pathlib.Path | None = None,
+          deadline: float | None = None) -> dict[str, Any]:
+    """Walk one tree and collect matches, counts or file names (staying inside workspace)."""
+    root = ws_root or base
     files = [base] if base.is_file() else sorted(base.rglob(mask))
     rows: list[str] = []
     counts: dict[str, int] = {}
     for path in files:
+        if deadline is not None and time.monotonic() > deadline:
+            raise TimeoutError("grep deadline exceeded")
         if mode == "matches" and len(rows) >= limit:
             break
+        if not paths.inside(root, path):
+            continue
         if not path.is_file() or path.stat().st_size > cap:
             continue
         data = path.read_bytes()
@@ -214,6 +257,8 @@ def _grep(api: Any, who: str, compiled: re.Pattern, base: pathlib.Path, mask: st
             continue
         shown = paths.display(api, who, path)
         for number, line in enumerate(data.decode("utf-8", "replace").splitlines(), 1):
+            if deadline is not None and number % 256 == 0 and time.monotonic() > deadline:
+                raise TimeoutError("grep deadline exceeded")
             if compiled.search(line):
                 counts[shown] = counts.get(shown, 0) + 1
                 if mode == "matches":
@@ -228,13 +273,18 @@ def _grep(api: Any, who: str, compiled: re.Pattern, base: pathlib.Path, mask: st
 
 
 def _glob(api: Any, who: str, pattern: str, limit: int) -> list[str]:
-    """Return the sorted paths matching one pattern inside every folder the person has."""
+    """Return sorted paths matching one pattern inside the person's folders (no symlink escape)."""
+    clean = str(pattern or "*").replace("\\", "/")
+    if clean.startswith("/") or ".." in pathlib.PurePosixPath(clean).parts:
+        raise PermissionError(f"{pattern} is outside your workspace")
     found: set[str] = set()
     folders = paths.roots(api, who)
     for name, base in folders.items():
         if not base.is_dir():
             continue
-        for path in base.glob(pattern):
+        for path in base.glob(clean):
+            if not paths.inside(base, path):
+                continue
             relative = str(path.relative_to(base)).replace("\\", "/")
             found.add(f"{name}/{relative}".strip("/") if name else relative)
     return sorted(found)[:limit]
@@ -245,7 +295,8 @@ def _layer_bytes(api: Any, who: str) -> int:
     folder = sandbox.sandbox_root(api) / "layers" / paths.person_folder(who) / "upper"
     if not folder.is_dir():
         return 0
-    return sum(path.stat().st_size for path in folder.rglob("*") if path.is_file())
+    return sum(path.stat().st_size for path in folder.rglob("*")
+               if not path.is_symlink() and path.is_file())
 
 
 def _over(used: int, quota: str) -> bool:

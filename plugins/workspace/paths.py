@@ -30,6 +30,26 @@ def roots(api: Any, who: str) -> dict[str, pathlib.Path]:
     return found
 
 
+def inside(base: pathlib.Path, target: pathlib.Path) -> bool:
+    """Return whether `target` resolves inside `base` without following escaping symlinks."""
+    try:
+        root = base.resolve()
+        resolved = target.resolve()
+    except OSError:
+        return False
+    return resolved == root or resolved.is_relative_to(root)
+
+
+def root_for(api: Any, who: str, path: str) -> pathlib.Path:
+    """Return the workspace folder root (`shared/<name>` or own) covering `path`."""
+    text = str(path or "").strip().replace("\\", "/")
+    folders = roots(api, who)
+    name, _, _ = text.partition("/")
+    if name in folders and name:
+        return folders[name]
+    return folders[""]
+
+
 def resolve(api: Any, who: str, path: str) -> pathlib.Path:
     """Resolve one path inside the person's folders; anything outside is refused.
 

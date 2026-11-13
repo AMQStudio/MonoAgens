@@ -324,3 +324,167 @@ async def test_workspace_registers_progress_md_standing_rule_in_self_block(aconn
     assert "progress.md" in self_text
     assert "update it after each step" in self_text
     assert "read it first when resuming" in self_text
+
+
+async def test_grep_read_glob_do_not_follow_symlinks_out_of_workspace(aconn, tmp_path):
+    kernel, _ = await _kernel(aconn, tmp_path)
+    own = tmp_path / "deployment" / "var" / "workspaces" / "person_owner"
+    own.mkdir(parents=True, exist_ok=True)
+    (own / "ok.txt").write_text("hello inside\n", encoding="utf-8")
+
+    outside = tmp_path / "secret.txt"
+    outside.write_text("SECRET_OUTSIDE\n", encoding="utf-8")
+    outside_dir = tmp_path / "outside_dir"
+    outside_dir.mkdir()
+    (outside_dir / "hidden.txt").write_text("SECRET_DIR\n", encoding="utf-8")
+
+    (own / "link.txt").symlink_to(outside)
+    (own / "nested").mkdir()
+    (own / "nested" / "escaped.txt").symlink_to(outside)
+    (own / "sublink").symlink_to(outside_dir)
+
+    read_res = await _call(kernel, aconn, "workspace.read", {"path": "link.txt"})
+    assert "error" in read_res
+
+    grep_root = await _call(kernel, aconn, "workspace.grep", {"pattern": "SECRET"})
+    assert grep_root["matches"] == [] and grep_root["count"] == 0
+
+    grep_nested = await _call(kernel, aconn, "workspace.grep",
+                              {"pattern": "SECRET", "path": "nested"})
+    assert grep_nested["matches"] == [] and grep_nested["count"] == 0
+
+    glob_res = await _call(kernel, aconn, "workspace.glob", {"pattern": "**/*"})
+    assert "link.txt" not in glob_res["paths"]
+    assert "nested/escaped.txt" not in glob_res["paths"]
+    assert "ok.txt" in glob_res["paths"]
+
+
+async def test_write_and_edit_do_not_follow_planted_tmp_symlink(aconn, tmp_path):
+    kernel, _ = await _kernel(aconn, tmp_path)
+    own = tmp_path / "deployment" / "var" / "workspaces" / "person_owner"
+    own.mkdir(parents=True, exist_ok=True)
+    outside = tmp_path / "victim.txt"
+    outside.write_text("untouched", encoding="utf-8")
+
+    (own / "doc.txt").write_text("alpha", encoding="utf-8")
+    (own / "doc.txt.tmp").symlink_to(outside)
+    (own / "new.txt.tmp").symlink_to(outside)
+
+    written = await _call(kernel, aconn, "workspace.write", {"path": "new.txt", "text": "fresh"})
+    edited = await _call(kernel, aconn, "workspace.edit",
+                         {"path": "doc.txt", "old": "alpha", "new": "beta"})
+
+    assert written["path"] == "new.txt"
+    assert edited["path"] == "doc.txt"
+    assert outside.read_text(encoding="utf-8") == "untouched"
+    assert (own / "new.txt").read_text(encoding="utf-8") == "fresh"
+    assert (own / "doc.txt").read_text(encoding="utf-8") == "beta"
+
+
+async def test_sandbox_blackhole_routes_fail_closed_with_no_or_true(monkeypatch, tmp_path):
+    from plugins.workspace import sandbox as sandbox_module
+
+    for route_cmd in sandbox_module.routes():
+        assert "|| true" not in route_cmd
+        assert "2>/dev/null" not in route_cmd
+
+    class API:
+        deployment_root = tmp_path
+        options = {"sandbox": str(tmp_path / "sandbox")}
+
+    api = API()
+    base = tmp_path / "sandbox" / "base"
+    (base / "bin").mkdir(parents=True)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    # Point `pasta` to `/bin/sh` or a tiny script simulating `ip route` failure inside pasta wrapper
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    (fake_bin / "bwrap").write_text("#!/bin/sh\necho BWRAP_RAN\n", encoding="utf-8")
+    (fake_bin / "bwrap").chmod(0o755)
+    (fake_bin / "pasta").write_text(
+        "#!/bin/sh\nwhile [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n",
+        encoding="utf-8",
+    )
+    (fake_bin / "pasta").chmod(0o755)
+    (fake_bin / "ip").write_text("#!/bin/sh\necho 'RTNETLINK denied' >&2\nexit 2\n",
+                                  encoding="utf-8")
+    (fake_bin / "ip").chmod(0o755)
+
+    monkeypatch.setattr(sandbox_module, "PATH", f"{fake_bin}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
+
+    result = await sandbox_module.run(api, "person:owner", "echo hi",
+                                      workspace=ws, shared={}, writable=True)
+    assert "error" in result
+    assert "BWRAP_RAN" not in str(result.get("output") or "")
+
+
+async def test_sandbox_caps_output_in_memory_and_sets_fsize_and_tmpfs_limits(monkeypatch, tmp_path):
+    import resource
+    from plugins.workspace import sandbox as sandbox_module
+
+    class API:
+        deployment_root = tmp_path
+        options = {"sandbox": str(tmp_path / "sandbox"), "max_output_bytes": 256,
+                   "tmpfs_mb": 32, "fsize_mb": 16}
+
+    api = API()
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    args = sandbox_module.argv(api, "person:owner", "echo hi",
+                               workspace=ws, shared={}, writable=True)
+    joined = " ".join(args)
+    assert "'--size'" in joined
+    assert f"'--size' '{32 * 1024 * 1024}' '--tmpfs' '/tmp'" in joined
+    assert f"'--size' '{32 * 1024 * 1024}' '--tmpfs' '/run'" in joined
+
+    recorded: list[tuple[int, tuple[int, int]]] = []
+    monkeypatch.setattr(resource, "setrlimit", lambda kind, vals: recorded.append((kind, vals)))
+    sandbox_module._limits(256, 1, 8, fsize_mb=16)()
+    kinds = {k: v for k, v in recorded}
+    assert resource.RLIMIT_FSIZE in kinds
+    assert kinds[resource.RLIMIT_FSIZE] == (16 * 1024 * 1024, 16 * 1024 * 1024)
+
+    # Streamed output cap: a child emitting 64 KiB never buffers all 64 KiB cleanly.
+    proc = await asyncio.create_subprocess_exec(
+        "python3", "-c", "import sys; sys.stdout.write('A' * 65536)",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+    )
+    raw = await sandbox_module._read_capped(proc.stdout, 256)
+    await proc.wait()
+    assert len(raw) <= 256
+
+
+async def test_grep_catches_invalid_regex_and_times_out_off_event_loop(aconn, tmp_path, monkeypatch):
+    import sys
+    import time
+
+    kernel, loaded = await _kernel(aconn, tmp_path)
+    api = next(item for item in loaded.apis if item.name == "workspace")
+    api.options["grep_timeout_seconds"] = 0.05
+    await _call(kernel, aconn, "workspace.write", {"path": "a.txt", "text": "halo\n"})
+
+    bad = await _call(kernel, aconn, "workspace.grep", {"pattern": "[unclosed"})
+    assert "error" in bad and "regex" in bad["error"].lower()
+
+    loaded_tools_mod = sys.modules[type(kernel.tools.adapters["workspace"]).__module__]
+
+    def slow_grep(*args, **kwargs):
+        time.sleep(0.5)
+        return {"matches": [], "count": 0}
+
+    monkeypatch.setattr(loaded_tools_mod, "_grep", slow_grep)
+    tick_kept_running = False
+
+    async def ticker() -> None:
+        nonlocal tick_kept_running
+        await asyncio.sleep(0.01)
+        tick_kept_running = True
+
+    task = asyncio.create_task(ticker())
+    timed_out = await _call(kernel, aconn, "workspace.grep", {"pattern": "halo"})
+    await task
+    assert tick_kept_running
+    assert "error" in timed_out and "timed out" in timed_out["error"].lower()

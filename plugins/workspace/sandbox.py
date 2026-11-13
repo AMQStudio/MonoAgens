@@ -31,6 +31,9 @@ BLOCKED_ROUTES = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/1
                   "169.254.0.0/16", "127.0.0.0/8", "fc00::/7", "fe80::/10", "::1/128")
 DEFAULT_TIMEOUT = 120
 MAX_OUTPUT = 50 * 1024 * 1024
+DEFAULT_TMPFS_MB = 64
+DEFAULT_FSIZE_MB = 128
+BLACKHOLE_MARKER = "sandbox refused: failed to set network blackhole"
 PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # The host's resolver is a local stub (systemd-resolved) that a sandbox network cannot reach,
 # so a sandboxed run resolves names through a public resolver, reachable through pasta. The
@@ -112,15 +115,17 @@ def _public_addresses() -> list[str]:
     found: set[str] = set()
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None):
-            found.add(str(info[4][0]))
+            addr = str(info[4][0]).split("%")[0]
+            if addr:
+                found.add(addr)
     except OSError:
         pass
     return sorted(found)
 
 
 def routes() -> list[str]:
-    """Return the blackhole routes that keep private ranges unreachable inside the sandbox."""
-    return [f"ip route add blackhole {network} 2>/dev/null || true"
+    """Return fail-closed blackhole routes keeping private ranges unreachable inside the sandbox."""
+    return [f"ip route replace blackhole {network}"
             for network in (*BLOCKED_ROUTES, *_public_addresses())]
 
 
@@ -142,7 +147,11 @@ def argv(api: Any, who: str, command: str, *, workspace: pathlib.Path,
     for name, folder in sorted(shared.items()):
         inner += [("--bind" if writable else "--ro-bind"), str(folder), f"/shared/{name}"]
     resolv = _resolv_conf(api, network)
-    inner += ["--tmpfs", "/tmp", "--tmpfs", "/run", "--proc", "/proc", "--dev", "/dev",
+    tmpfs_mb = max(1, int(api.options.get("tmpfs_mb") or DEFAULT_TMPFS_MB))
+    tmpfs_bytes = str(tmpfs_mb * 1024 * 1024)
+    inner += ["--size", tmpfs_bytes, "--tmpfs", "/tmp",
+              "--size", tmpfs_bytes, "--tmpfs", "/run",
+              "--proc", "/proc", "--dev", "/dev",
               "--ro-bind", str(resolv), "/etc/resolv.conf",
               "--setenv", "PATH", PATH, "--setenv", "HOME", "/work", "--setenv", "PWD", "/work",
               "--setenv", "LANG", "C.UTF-8", "--setenv", "TERM", "dumb",
@@ -158,8 +167,9 @@ def argv(api: Any, who: str, command: str, *, workspace: pathlib.Path,
     watchdog = ("cd / ; unset OLDPWD ; " + (
         f"main=$$; ( while kill -0 {parent} 2>/dev/null && kill -0 $main 2>/dev/null; "
         "do sleep 1; done; kill -9 $main 2>/dev/null ) & " if parent else ""))
-    wrapper = (watchdog + "; ".join(routes()) + "; exec "
-               + " ".join(_quote(part) for part in inner))
+    blackhole = " && ".join(routes())
+    wrapper = (watchdog + f"if ! {{ {blackhole}; }}; then echo {_quote(BLACKHOLE_MARKER)} >&2; "
+               f"exit 126; fi; exec " + " ".join(_quote(part) for part in inner))
     if not network or shutil.which(PASTA) is None:
         return ["sh", "-c", watchdog + "exec " + " ".join(_quote(part) for part in inner)]
     # `--dns-forward` keeps pasta from advertising the host's stub resolver it cannot use;
@@ -195,8 +205,8 @@ def _folder(who: str) -> str:
     return paths.person_folder(who)
 
 
-def _limits(memory_mb: int, cpus: int, pids: int):
-    """Return the pre-exec hook that sets memory, CPU and process limits.
+def _limits(memory_mb: int, cpus: int, pids: int, *, fsize_mb: int = DEFAULT_FSIZE_MB):
+    """Return the pre-exec hook that sets memory, file-size, CPU and process limits.
 
     `RLIMIT_NPROC` counts every task of this host user — processes *and* threads — not only
     the sandbox's, so it is set to what the user already runs plus this sandbox's allowance:
@@ -205,11 +215,13 @@ def _limits(memory_mb: int, cpus: int, pids: int):
     refuses it with EAGAIN).
     """
     room = _user_tasks() + max(1, pids)
+    fsize_bytes = max(1, int(fsize_mb)) * 1024 * 1024
 
     def apply() -> None:
         resource.setrlimit(resource.RLIMIT_AS, (memory_mb * 1024 * 1024,
                                                 memory_mb * 1024 * 1024))
         resource.setrlimit(resource.RLIMIT_CPU, (max(1, cpus * 10), max(1, cpus * 10)))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (fsize_bytes, fsize_bytes))
         resource.setrlimit(resource.RLIMIT_NPROC, (room, room))
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         _die_with_parent()
@@ -253,6 +265,19 @@ def _user_tasks() -> int:
     return count
 
 
+async def _read_capped(stream: asyncio.StreamReader | None, limit: int) -> bytes:
+    """Read a child stream in chunks, keeping only the last `limit` bytes in memory."""
+    if stream is None or limit <= 0:
+        return b""
+    buffer = bytearray()
+    chunk_size = min(65536, max(1024, limit))
+    while chunk := await stream.read(chunk_size):
+        buffer.extend(chunk)
+        if len(buffer) > limit:
+            del buffer[:len(buffer) - limit]
+    return bytes(buffer)
+
+
 async def run(api: Any, who: str, command: str, *, workspace: pathlib.Path,
               shared: dict[str, pathlib.Path], writable: bool, cwd: str = "",
               timeout: float | None = None) -> dict[str, Any]:
@@ -263,30 +288,37 @@ async def run(api: Any, who: str, command: str, *, workspace: pathlib.Path,
     network = shutil.which(PASTA) is not None
     limits = {key: int(api.options.get(key) or default) for key, default in (
         ("memory_mb", 1024), ("cpus", 1), ("pids", 64))}
+    fsize_mb = max(1, int(api.options.get("fsize_mb") or DEFAULT_FSIZE_MB))
+    cap = min(MAX_OUTPUT, max(1, int(api.options.get("max_output_bytes") or MAX_OUTPUT)))
     seconds = float(timeout or api.options.get("timeout_seconds") or DEFAULT_TIMEOUT)
     process = await asyncio.create_subprocess_exec(
         *argv(api, who, command, workspace=workspace, shared=shared, writable=writable,
               cwd=cwd, network=network, parent=os.getpid()),
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
-        preexec_fn=_limits(limits["memory_mb"], limits["cpus"], limits["pids"]),
+        preexec_fn=_limits(limits["memory_mb"], limits["cpus"], limits["pids"],
+                           fsize_mb=fsize_mb),
         env={"PATH": PATH, "HOME": "/work", "LANG": "C.UTF-8", "TERM": "dumb",
              "TMPDIR": "/tmp"})
+    reader = asyncio.create_task(_read_capped(process.stdout, cap))
     timed_out = False
     try:
-        output, _ = await asyncio.wait_for(process.communicate(), seconds)
+        output, _ = await asyncio.wait_for(asyncio.gather(reader, process.wait()), seconds)
     except asyncio.TimeoutError:
         timed_out = True
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        output, _ = await process.communicate()
+        output, _ = await asyncio.gather(reader, process.wait())
     text = output.decode("utf-8", "replace") if output else ""
     if timed_out:
         return {"error": f"timeout after {int(seconds)} seconds", "timed_out": True,
-                "output": text[-MAX_OUTPUT:]}
+                "output": text[-cap:]}
+    if network and process.returncode != 0 and BLACKHOLE_MARKER in text:
+        return {"error": BLACKHOLE_MARKER, "exit_code": process.returncode,
+                "output": text[-cap:]}
     return {"exit_code": process.returncode, "timed_out": False,
-            "output": text[-MAX_OUTPUT:]}
+            "output": text[-cap:]}
 
 
 def blocked(address: str) -> bool:
