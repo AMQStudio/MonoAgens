@@ -137,7 +137,7 @@ A sidebar of pages, grouped:
 | Settings | **Model** | provider, model, fallbacks; tokens and the daily budget |
 | | **Keys** | `.env`: write only, never shown |
 | | **Config** | `config.yaml` and `config.d/` (§7) |
-| | **Soul** | `soul.yaml`, read only: the birth certificate ([core.md §9.3](core.md)) |
+| | **Soul** | the living identity (name, language, persona, principles), editable (§7.1); `soul.yaml` shown as the birth certificate ([core.md §9.3](core.md)) |
 | Footer | — | the soul running or not, adapters up, tokens today; Restart, Update; Logs |
 
 - **Locked pages.** A page that belongs to a plugin or an adapter has its on/off switch at the
@@ -197,8 +197,22 @@ forgotten content shows as forgotten, never reconstructed.
 - **Conflicts**: Console remembers the file's hash when it opens it; if the file changed on disk
   since (a command in chat, an edit over SSH), saving is refused and the change is shown.
 - Switching modes asks to save or discard first.
-- Editable: `config.yaml`, `config.d/`. Read only: `soul.yaml`, `prior/`. `.env` only on Keys.
+- Editable: `config.yaml`, `config.d/`. Read only: `prior/`. `.env` only on Keys.
   People and Roles use the same editor on their sections.
+
+### 7.1 The soul's identity
+- **After birth** `soul.yaml` is never read again; identity lives in `state: identity`
+  ([core.md §9.3](core.md)). Editing the file would change nothing, so Console never writes it
+  after birth and shows it as the birth certificate.
+- **The Soul page edits the living identity** with the same two modes: a form (name, language,
+  persona, and principles as a list to add, remove and reorder) and raw (the current identity
+  as YAML). Saving shows the diff, then sends the owner command `/identity set …`.
+- `/identity` calls the core's own `set_identity` capability through the action hook, the same
+  door the soul uses when the owner asks in chat: the owner check of absolute line 1 holds, the
+  change is recorded as `identity.updated`, and the soul sees the new identity from its next
+  turn.
+- **Before birth** (a fresh install), `soul.yaml` is edited directly, in the wizard or in
+  Console.
 
 ## 8. Technology and weight (D79)
 - **Server**: Python, Starlette, uvicorn, Jinja2 (autoescaping on), as the `console` extra.
@@ -221,6 +235,8 @@ Written into the operator task, applied when that task runs:
   loader accepts the `operator:` section of `config.yaml` and leaves it to the operator tools.
 - `project.md` §2: the `operator:` section in the `config.yaml` example.
 - `middleware.md`: an owner command `/forget` (the core has `forget_hard`; no command reaches it).
+- `middleware.md`: an owner command `/identity show|set` that calls the core's `set_identity`
+  through the action hook (§7.1).
 - `adapters.md` §2: adapters in their own folders with a manifest; the CLI adapter built in.
 - `glossary.md`: operator, Console, catalog; the layout row for `monoagens/console/`.
 - `AGENTS.md`: the `console` and `cli` extras approved by the owner (2026-11-13).
