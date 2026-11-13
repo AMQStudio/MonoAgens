@@ -119,6 +119,7 @@ class WhatsAppBody:
         self._choices_prompts: dict[str, list[str]] = {}
         self._albums: dict[str, dict[str, Any]] = {}
         self._undecryptable: dict[str, asyncio.Task[Any]] = {}
+        self._msg_senders: dict[str, str] = {}
         self._connected_once = False
         self._connected_at: datetime | None = None
         self._backfilling = False
@@ -424,6 +425,13 @@ class WhatsAppBody:
         chat_raw = jid_text(getattr(source, "Chat", None))
         alt = getattr(source, "SenderAlt", None)
         chat_jid = self.directory.canonical_chat(chat_raw, alt=alt)
+        sender_jid = jid_text(getattr(source, "Sender", None))
+        if not sender_jid and alt is not None:
+            sender_jid = jid_text(alt)
+        if msg_id and sender_jid and not from_me:
+            if len(self._msg_senders) >= 2000:
+                self._msg_senders.pop(next(iter(self._msg_senders)))
+            self._msg_senders[msg_id] = sender_jid
         message = getattr(ev, "Message", None)
         if message is None:
             return None
@@ -595,7 +603,19 @@ class WhatsAppBody:
         return res
 
     async def show(self, place: str, kind: str, **data: Any) -> Any:
-        """Show typing, message edit, or reaction feedback on WhatsApp."""
+        """Show typing, message edit, read receipts, or reaction feedback on WhatsApp."""
+        if kind == "read_receipts" and "sender" not in data:
+            ids = [str(x) for x in (data.get("message_ids") or [data.get("message_id")] or ()) if x]
+            grouped: dict[str, list[str]] = {}
+            for mid in ids:
+                grouped.setdefault(self._msg_senders.get(mid, ""), []).append(mid)
+            last: Any = None
+            for sender_jid, group_ids in grouped.items():
+                last = await send.send_show(
+                    self._client, place, kind,
+                    message_id=group_ids[-1], message_ids=group_ids, sender=sender_jid,
+                )
+            return last
         return await send.send_show(self._client, place, kind, **data)
 
     async def place_info(self, place: str) -> dict[str, Any]:

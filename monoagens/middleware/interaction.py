@@ -637,7 +637,11 @@ def read_receipts_inbound(kernel: Any) -> Middleware:
             return Continue()
         if await _is_read_marked(kernel.conn, place, str(msg_id)):
             return Continue()
-        await adapter.show(place, "read_receipts", message_id=msg_id, message_ids=[msg_id])
+        try:
+            await adapter.show(place, "read_receipts", message_id=msg_id, message_ids=[msg_id])
+        except Exception as exc:
+            await kernel._record_error(item, exc)
+            return Continue()
         await kernel._emit(item, SHOWN, {"kind": "read", "message_id": str(msg_id)}, place=place)
         return Continue()
 
@@ -670,7 +674,11 @@ def read_receipts_action(kernel: Any) -> Middleware:
         mids = await _unread_messages(kernel.conn, place, body)
         if not mids:
             return Continue()
-        await adapter.show(place, "read_receipts", message_id=mids[-1], message_ids=mids)
+        try:
+            await adapter.show(place, "read_receipts", message_id=mids[-1], message_ids=mids)
+        except Exception as exc:
+            await kernel._record_error(event, exc)
+            return Continue()
         for mid in mids:
             await kernel._emit(event, SHOWN, {"kind": "read", "message_id": mid}, place=place)
         return Continue()

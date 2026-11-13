@@ -108,6 +108,12 @@ class FakeWAClient:
     async def send_chat_presence(self, jid, state, media):
         self.sent.append(("typing", (jid, state)))
 
+    async def mark_read(self, *message_ids: str, chat, sender, receipt, timestamp=None):
+        err = getattr(self, "mark_read_error", None)
+        if err is not None:
+            raise err
+        self.sent.append(("mark_read", (message_ids, chat, sender, receipt)))
+
     async def get_group_info(self, jid):
         key = f"{jid.User}@{jid.Server}"
         return self.group_infos.get(key)
@@ -822,3 +828,118 @@ async def test_whatsapp_undecryptable_emits_after_retry_grace_and_suppresses_whe
     assert "a message could not be read" in failed[0].payload["description"]
     assert failed[0].payload["data"]["undecryptable"] is True
     assert failed[0].payload["addressed"] is True
+
+
+async def test_whatsapp_read_receipts_passes_sender_and_receipt_and_error_never_breaks_turn(
+    aconn, tmp_path,
+) -> None:
+    """mark_read receives message_ids, chat, sender, and ReceiptType.READ; failures record errors."""
+    from neonize.utils.enum import ReceiptType
+
+    from monoagens.core.reasoning import Reasoning
+    from tests.support import settings
+
+    client = FakeWAClient()
+    wa = WhatsAppBody(client=client, session_db=tmp_path / "wa.db", clock=FakeClock(START),
+                      self_account=f"whatsapp:{OWN_PN}")
+    wa._sync_self_identity(client.me)
+    emitted: list[Event] = []
+
+    async def put(ev: Event) -> None:
+        emitted.append(ev)
+
+    # 1. DM read receipt uses the peer chat JID as sender
+    await wa.show(f"space:wa:{BUDI_PN}@s.whatsapp.net", "read_receipts",
+                  message_id="DM1", message_ids=["DM1"])
+    # 2. Group messages from two senders split mark_read calls by sender
+    grp_user = GROUP_JID.split("@")[0]
+    await wa.handle_message(_make_ev(msg_id="G1", chat_user=grp_user, chat_server="g.us",
+                                     sender_user=BUDI_PN, message=e2e.Message(conversation="hi 1")),
+                            put)
+    await wa.handle_message(_make_ev(msg_id="G2", chat_user=grp_user, chat_server="g.us",
+                                     sender_user="6281100003",
+                                     message=e2e.Message(conversation="hi 2")), put)
+    await wa.handle_message(_make_ev(msg_id="G3", chat_user=grp_user, chat_server="g.us",
+                                     sender_user=BUDI_PN, message=e2e.Message(conversation="hi 3")),
+                            put)
+    await wa.show(f"space:wa:{GROUP_JID}", "read_receipts",
+                  message_id="G3", message_ids=["G1", "G2", "G3"])
+
+    reads = [args for kind, args in client.sent if kind == "mark_read"]
+    assert len(reads) == 3
+    assert reads[0][0] == ("DM1",)
+    assert f"{reads[0][1].User}@{reads[0][1].Server}" == f"{BUDI_PN}@s.whatsapp.net"
+    assert f"{reads[0][2].User}@{reads[0][2].Server}" == f"{BUDI_PN}@s.whatsapp.net"
+    assert reads[0][3] is ReceiptType.READ
+    assert reads[1][0] == ("G1", "G3")
+    assert f"{reads[1][1].User}@{reads[1][1].Server}" == GROUP_JID
+    assert f"{reads[1][2].User}@{reads[1][2].Server}" == f"{BUDI_PN}@s.whatsapp.net"
+    assert reads[1][3] is ReceiptType.READ
+    assert reads[2][0] == ("G2",)
+    assert f"{reads[2][2].User}@{reads[2][2].Server}" == "6281100003@s.whatsapp.net"
+    assert reads[2][3] is ReceiptType.READ
+
+    # 3. Failing mark_read in a live turn records an error event without blocking the reply
+    import json
+    import httpx
+    from monoagens.core.reasoning import Reasoning
+    from monoagens.infra.providers import OpenAICompatibleProvider
+    from tests.support import settings
+
+    client.sent.clear()
+    client.mark_read_error = RuntimeError("mark_read network error")
+    replies = [
+        {"capability": "whatsapp.say", "arguments": {"text": "balasan tetap terkirim"}},
+        {"capability": "whatsapp.say", "arguments": {"text": "balasan shared account tetap terkirim"}},
+    ]
+    req_idx = 0
+
+    def _handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal req_idx
+        payload = replies[min(req_idx, len(replies) - 1)]
+        req_idx += 1
+        return httpx.Response(200, json={
+            "choices": [{"message": {"role": "assistant", "tool_calls": [
+                {"id": f"call_{req_idx}", "type": "function",
+                 "function": {"name": "act", "arguments": json.dumps(payload)}},
+            ]}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        })
+
+    cfg = settings()
+    port = OpenAICompatibleProvider(
+        model="fake-model", base_url="https://llm.invalid/v1", api_key="k",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
+    )
+    try:
+        kernel = build(aconn, clock=FakeClock(START),
+                       pfc=Reasoning(port, settings=cfg), settings=cfg)
+        wa.files = _door(aconn, tmp_path)
+        kernel.register_adapter(wa)
+        dm_ev = _make_ev(msg_id="DM_LIVE", chat_user=BUDI_PN, sender_user=BUDI_PN,
+                         message=e2e.Message(conversation="halo bot"))
+        percept = await wa.handle_message(dm_ev, put)
+        assert percept is not None
+        await _drain(kernel, kernel.put(percept))
+
+        # Also test shared-owner account path (read_receipts_action inside hooks.action)
+        from monoagens.infra.store import append_event
+        await append_event(aconn, ts=START, kind="pair.claimed", who="person:owner",
+                           place="space:wa:owner", body="whatsapp",
+                           payload={"account": f"whatsapp:{OWN_PN}"})
+        dm_ev2 = _make_ev(msg_id="DM_SHARED", chat_user="6281100004", sender_user="6281100004",
+                          message=e2e.Message(conversation="halo shared bot"))
+        percept2 = await wa.handle_message(dm_ev2, put)
+        assert percept2 is not None
+        await _drain(kernel, kernel.put(percept2))
+    finally:
+        await port.aclose()
+
+    rows = await (await aconn.execute(
+        "SELECT kind, payload FROM events ORDER BY id ASC")).fetchall()
+    kinds = [k for k, _ in rows]
+    assert kinds.count("error") == 2
+    assert "guard.stopped" not in kinds
+    assert not [pl for k, pl in rows if k == "interaction.shown" and pl.get("kind") == "read"]
+    assert sum(1 for k, _ in client.sent if k == "send_message") == 2
+    assert kinds.count("act.out") == 2

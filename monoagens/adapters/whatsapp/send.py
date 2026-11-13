@@ -202,9 +202,19 @@ async def send_show(client: Any, place: str, kind: str, **data: Any) -> Any:
     if kind == "read_receipts":
         if client is None:
             return None
-        jid = jid_of(chat_jid_from_place(place))
+        from neonize.proto.Neonize_pb2 import JID
+        from neonize.utils.enum import ReceiptType
+
+        chat_jid = chat_jid_from_place(place)
+        jid = jid_of(chat_jid)
         ids = [str(x) for x in (data.get("message_ids") or [data.get("message_id")] or ()) if x]
-        return await client.mark_read(*ids, chat=jid)
+        if not ids:
+            return None
+        raw_sender = str(data.get("sender") or "").strip()
+        if not raw_sender and not chat_jid.endswith(("@g.us", "@newsletter")):
+            raw_sender = chat_jid
+        sender_jid = jid_of(raw_sender) if raw_sender else JID()
+        return await client.mark_read(*ids, chat=jid, sender=sender_jid, receipt=ReceiptType.READ)
     if kind == "edit":
         mid = str(data.get("message_id") or "")
         if not mid:
