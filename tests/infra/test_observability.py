@@ -172,15 +172,24 @@ async def test_imported_percepts_emit_summary_every_n_from_config(aconn, caplog)
 
 
 def test_configure_logging_writes_info_lines_to_stdout_stream() -> None:
-    """configure_logging writes kernel INFO events directly to stdout stream."""
+    """configure_logging writes kernel INFO events once with timestamp to stdout stream."""
     buf = io.StringIO()
+    root_buf = io.StringIO()
+    root_handler = logging.StreamHandler(root_buf)
+    root_logger = logging.getLogger()
+    root_logger.addHandler(root_handler)
     handler = configure_logging(buf)
     logger = logging.getLogger("kernel")
     prev_level = logger.level
     try:
         logging.getLogger("kernel.events").info("kind=percept adapter=cli place=cli who=owner len=4")
-        assert "INFO kernel.events kind=percept adapter=cli place=cli who=owner len=4" in buf.getvalue()
+        lines = buf.getvalue().splitlines()
+        assert len(lines) == 1
+        assert "INFO kernel.events kind=percept adapter=cli place=cli who=owner len=4" in lines[0]
+        assert lines[0][:4].isdigit()  # leading YYYY timestamp from %(asctime)s
+        assert root_buf.getvalue() == ""
     finally:
+        root_logger.removeHandler(root_handler)
         logger.removeHandler(handler)
         logger.setLevel(prev_level)
 

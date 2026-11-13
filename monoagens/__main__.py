@@ -31,12 +31,13 @@ def configure_logging(stream: TextIO | None = None) -> logging.Handler:
     target = stream or sys.stdout
     logger = logging.getLogger("kernel")
     logger.setLevel(logging.INFO)
+    logger.propagate = False
     for existing in logger.handlers:
         if isinstance(existing, logging.StreamHandler) and existing.stream is target:
             return existing
     handler = logging.StreamHandler(target)
     handler.setLevel(logging.INFO)
-    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
     logger.addHandler(handler)
     return handler
 
