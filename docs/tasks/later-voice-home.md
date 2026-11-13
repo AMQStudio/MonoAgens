@@ -1,6 +1,6 @@
 # Later — Voice, Home Assistant and more model providers
 
-Status: todo, not yet numbered | Depends on: Task 5 and the web panel task (its place in the order is decided with the panel)
+Status: todo, not yet numbered | Depends on: Task 6 and the web panel task (its place in the order is decided with the panel)
 One task = one worker prompt, done by one worker. Work through the parts **in order**. Rules: [README](README.md).
 
 **Goal.** The soul hears and speaks on every adapter through drivers by protocol (D72), lives in
@@ -17,9 +17,9 @@ May touch: `monoagens/adapters/`, `monoagens/infra/providers/` (speech and model
   ElevenLabs and Deepgram (ported) — chosen by `.env`, shared by every adapter, each reporting its
   languages with a boot warning when the soul's language is missing. Voice notes in on WhatsApp,
   Telegram and Discord become percepts with their transcript (imported ones on open; an honest
-  description when STT fails); `say(voice: true)` sends the platform's voice note, text as the
-  fallback, the words kept in the Log. Barge-in and `spoken_until` in the contract, tested with a
-  fake device. A realtime engine, if set, only transcribes and speaks; its own replies are off,
+  description when STT fails); each chat adapter's own speaking capability takes `voice: true`
+  and sends the platform's voice note, text as the fallback, the words kept in the Log. Barge-in
+  and `spoken_until` in the receipt's result, tested with a fake device. A realtime engine, if set, only transcribes and speaks; its own replies are off,
   and a test proves no utterance reaches a reply without the gate. Tests with fake STT/TTS
   servers for each door. A websocket client, if needed, asks the owner first. Voice calls wait
   for a mature, widely released calling library (project.md §5); until then a call stays a

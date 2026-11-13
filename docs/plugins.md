@@ -9,7 +9,10 @@ and may change without a new decision. Nothing here may change the core
 A feature built on the middleware (a *package* in core.md). A plugin is a folder that bundles any
 of: tools, middleware, commands, installed skills, standing rules, knob-offset bounds,
 permissions, a state namespace and dependencies, declared in one manifest (§3). It reaches the core only through
-the middleware's six levers ([middleware.md §2](middleware.md)) (D9, D41).
+the middleware's six levers ([middleware.md §2](middleware.md)) (D9, D41), and sees only the
+contract's facts ([contract.md](contract.md)); like the middleware it never parses message text to
+understand it. Every tool names facts and a permission; a plugin's permissions live in its own
+namespace and never redefine a middleware permission (D86, D87).
 - Tools (search, files, email) are shipped by plugins (D35).
 - Role plugins (assistant, customer service, sysadmin) may ship a birth certificate, used only at
   birth; they can never overwrite identity afterwards (D20, D35).

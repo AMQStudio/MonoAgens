@@ -1,7 +1,9 @@
 # Core — Specification
 
-**Status: FINAL for v1 (2026-11-11).** This one file is the core's design, rulings and formats.
-The contract (§3 stability contract, the two absolute lines, the brain map) is frozen; internal
+**Status: FINAL for v1 (2026-11-11); contract v2 since 2026-11-14 (D86–D88).** This one file is
+the core's design, rulings and formats. The contract between the layers is
+[contract.md](contract.md) and is locked; together with the two absolute lines and the brain map
+it is frozen ([constitution §1](constitution.md)); internal
 formulas are provisional and change only with evidence from replay and real logs; prior values
 are data ([constitution §1](constitution.md)). Every rule carries the decision
 numbers it came from (Dxx); the discussion history of D1–D41 is in git (commit 32248b1 and
@@ -106,10 +108,13 @@ tests against the map, never new rows.
 ## 3. Contract
 
 **Four books** (D26, D32).
-- `events` — the log: id · ts · kind · who · place · body · origin_actor · payload · caused_by.
-  INSERT-only by trigger; the single exception is hard forgetting (§7). `who` is an opaque source id
-  (the inbound hook may map accounts to one id per person, D57), `place` an opaque space id, `body` the adapter name; `origin_actor` is
-  inherited along `caused_by`. `event_vectors` (event_id, embedding) is the log's index; rows
+- `events` — the log, one envelope for every event ([contract.md §3](contract.md)): id · ts ·
+  occurred_at · kind · who · place · body · caused_by · origin_actor · description · features ·
+  backfill · imported · payload · labels. INSERT-only by trigger; the single exception is hard
+  forgetting (§7). `who` is an opaque actor id (the inbound hook maps native actors to one id per
+  person, D57), `place` an opaque place id, `body` the adapter or plugin name; `origin_actor` is
+  inherited along `caused_by`. The core reads ids, times, `description` and `features`, and never
+  reads `payload` or `labels` (D86). `event_vectors` (event_id, embedding) is the log's index; rows
   leave only by fading or hard forgetting, each through one dedicated path that writes an event.
 - `state` — a namespaced key/value projection that can be rebuilt from events: `identity`,
   `last_seen:*`, `last_spoke:*`, `core_memory`, `self_summary`, `habit:*`, `person:*`,
@@ -166,15 +171,14 @@ it includes (every `snapshot_every_events`); a rebuild loads the latest snapshot
 later events. Snapshots are caches: deleting them loses nothing. Hard forgetting invalidates every
 snapshot that contains the forgotten data; a new one is written from the cleaned log.
 
-**Stability contract** (D42). What middleware, adapters and plugins may rely on, like a kernel's
-user-space ABI:
-- *Stable surfaces*: the percept (§9.2), the capability descriptor (§9.1), the hook contract
-  (Continue / Replace / Stop, fail closed, watchdog), the six levers, the read-only view of the
-  log and state (for dashboards, debugging, metric exporters; D43), event kinds and their
-  payloads, `recall`, the birth certificate (§9.3) and the prior format (§9.4).
-- *Within v1, changes are additive only*: new optional fields, new event kinds, new constants.
-  Readers ignore fields they do not know. Nothing that exists is renamed, removed or given a new
-  meaning.
+**Stability contract** (D42, D86–D88). What middleware, adapters and plugins may rely on is
+[contract.md](contract.md) — the event envelope, features, capability descriptor, hooks, context
+items, actions and receipts — plus the six levers, the read-only view of the log and state (for
+dashboards, debugging, metric exporters; D43), `recall`, the birth certificate (§9.3) and the
+prior format (§9.4). It is locked by a hash test and changes only by contract.md §9:
+- *Changes are additive only*: new optional fields, new feature names, new event kinds, new
+  constants. Readers ignore fields they do not know. Nothing that exists is renamed, removed or
+  given a new meaning.
 - *Events are versioned*: every event carries a `schema_version`; when a payload schema first
   changes, readers upgrade old versions on read (upcasting); stored events are never rewritten,
   except by hard forgetting.
@@ -182,13 +186,14 @@ user-space ABI:
   defines unprefixed kinds.
 - *Not part of the contract*: code modules and functions, database tables and indexes, prompt
   wording, the values in a prior. They may change at any time.
-- A change that breaks a stable surface is a core v2 ([constitution §1](constitution.md)).
+- Contract v2 (2026-11-14) was the last breaking change; v1 events are upcast on read.
 
 **Event kinds** (each with a `schema_version`; plugins use `<plugin>.<kind>`, where `<plugin>` is the plugin's name with `-` written as `_`, since event kinds hold no hyphen). percept · command · act.out · act.result · decision.silent · decision.note ·
 decision.wake · model.call · budget.exhausted · expectation.created · expectation.fired ·
 expectation.reminded · expectation.resolved · job.started · job.result · classifier.verdict · credence.updated ·
-disposition.updated · share.granted · source.merged · task.opened · task.closed · guard.stopped · forget.soft · forget.hard · fade.done · sleep.done ·
-sleep.failed · error.
+disposition.updated · share.granted · source.merged · place.audience · task.opened · task.closed · guard.stopped · forget.soft · forget.hard · fade.done · sleep.done ·
+sleep.failed · error. Every `act.out` ends in exactly one `act.result` with a `state` (`done`,
+`refused`, `held`, `failed`, `unknown`; [contract.md §3](contract.md)).
 
 **The model port** (D64). Reasoning builds neutral messages and tools and calls one injected
 model port, as the embedder and the store are injected; the core knows no provider, endpoint
@@ -200,12 +205,13 @@ that senses or acts.
 ## 4. Adapters, tools and capabilities
 
 Adapters and plugins bring what senses (`run(put)`) and what acts (`act(action)`). Each tool declares its
-capabilities (§9.1): name · JSON schema · description · `communicative` · `long_running` ·
-`identity_changing`. Reasoning's tools are the five thought acts; `act` offers the capabilities of
-every running tool, not only the one of the adapter the current percept came from, listed in a fixed order so
-the prompt cache holds (D2, D32, D46). The soul can act in any adapter from any adapter. The
-middleware's registry may present the same capability of several adapters as one neutral entry
-and route it (speaking: one `say`, D83); the core only sees the entries the registry offers.
+capabilities (§9.1): name · JSON schema · description · facts · permission. Reasoning's tools are
+the five thought acts; `act` offers the capabilities of every running tool, not only the one of
+the adapter the current percept came from, listed in a fixed order so the prompt cache holds
+(D2, D32, D46). The soul can act in any adapter from any adapter. Each body offers its own
+capabilities with its own names and schemas; the middleware's registry routes an action to the
+body that owns its place ([contract.md §4.4](contract.md), D86); the core only sees the entries
+the registry offers.
 
 - The brain decides intent and content; the adapter decides how (chat bubbles, TTS, gestures).
   Fine control stays inside the adapter (D2).
@@ -227,7 +233,8 @@ and route it (speaking: one `say`, D83); the core only sees the entries the regi
   (middleware) may rewrite them — for example one id per person across accounts — and attach
   labels; the core stores them as given and never reads their meaning. Commands are handled
   in the middleware; one command registry makes `/help` identical everywhere (D9).
-- Adapters report `addressed` (direct chat, reply, tag) as a neutral event field (D40).
+- Adapters report `addressed`, `named` and `addressed_other` as features (D40, D86); the core
+  reads them as numbers.
 - What an adapter senses enters as a `percept`: the adapter, like a sensory cortex, turns its signal
   into a short description, with raw data attached (D41).
 - On start an adapter asks for `cursor(organ)`, so input is never lost or duplicated.
@@ -246,16 +253,17 @@ never sent with text written in the current context. The core turns it into an i
 say, to whom, why — and wakes reasoning once more in the target place, with that place's context
 (§8, absolute line 2); the intent is that wake's trigger, so reasoning sees what it set out to
 say and why; the message is written there, as it would be written in Budi's chat.
-This costs one extra model call and only for messages to another place. The intent carries the
-drafted words only when the middleware's labels show that nothing private in the source context
-is hidden from the target; otherwise it carries only what to do and to whom, and the words are
-written from the target's context alone, so private content never crosses inside an intent
-(D84, [middleware.md §3](middleware.md)). No text-similarity check exists: privacy is held
-before the model, by construction.
+This costs one extra model call and only for messages to another place. What the intent carries
+is decided by the middleware in the action hook, which returns the intent's arguments: the
+drafted words only when nothing private in the source context is hidden from the target;
+otherwise only what to do and to whom, and the words are written from the target's context
+alone, so private content never crosses inside an intent (D84, [middleware.md §3](middleware.md)).
+The core carries what the hook returns and reads no label. No text-similarity check exists:
+privacy is held before the model, by construction.
 
 **History and catching up** (D37, D40). An adapter may offer `history(place, before, limit)` for
 messages the log lacks. On connect it back-fills what it missed as `percept` with
-`backfill: true` and `sent_at`. A backlog of one place is appraised once, as one percept with
+`backfill: true` and `occurred_at`. A backlog of one place is appraised once, as one percept with
 every signal discounted by age (ACT-R decay); an addressed message still trips the circuit
 breaker. History from before an adapter was connected is an **import** (D69): percepts with
 `imported: true` are recorded, embedded and searchable through `recall`, but are never appraised
@@ -284,7 +292,8 @@ fire_count · origin_actor · derived_from · expires_at (required) · created_a
 | `predict` | forward model after `act` ("a reply within 30 min", "arrived within 30 s") | only on a miss that matters |
 | `guard` | an important belief ("Budi lives in Bandung") | never by itself; see §7 |
 
-- `cue_time`: at · every · daily. `cue_event`: kind, who, place, text_like, not_who.
+- `cue_time`: at · every · daily. `cue_event`: kind, who, place, not_who — facts only; whether a
+  line says something is a free-text condition, judged by reasoning (D87).
 - `condition`: exact fast paths (`none`, `event_seen`, `state`) or a free-text
   `condition_text`.
 - `policy`: once, or cooldown + max_fires. A fifth kind needs a new decision.
@@ -312,11 +321,12 @@ continues an active goal (a result of its own action).
 
 **Signals** — pure functions `(Situation) -> [0, 1]`, at most 10 (now 5). `Situation` holds the
 event, its vector, recent messages here, memory candidates with activation, and relevant state.
-- `own_name` — its name appears (attention capture, not a turn allocation)
+- `own_name` — the `named` feature: its name was said (attention capture, not a turn
+  allocation); the adapter reports it, the core never searches text (D87)
 - `info_gap` — cosine to reference sentences in the prior (not keywords)
 - `feeling_of_knowing` — σ((max activation − τ)/s), recent messages included
 - `relevance` — to active promises and core memory
-- `social_cost` — the floor belongs to someone else (another person selected, or already
+- `social_cost` — the floor belongs to someone else (the `addressed_other` feature, or already
   answered), lowered by closeness to the speaker
 
 **Gate.**
@@ -418,12 +428,13 @@ loads a prior and never exports or shares learned state (D25).
 **Only opaque ids, labels and numbers** (D57). The core does not know what a person, the owner, a
 group or a role is. It carries:
 - **ids** — `who`, `place`, `origin_actor` (the source a chain started from), as strings;
-- **labels** — attached by the middleware in the inbound hook (for example who was present when
-  a line was said, D50, and `place_kind`, D48) or by a hook outcome (for example `share.granted`,
-  D46), stored with the event and never read by the core. A memory carries the labels of every
+- **labels** — attached by the middleware in the inbound hook (for example the audience when a
+  line was said, D50) or by a hook outcome (for example `share.granted`, D46), stored with the
+  event and never read by the core. A memory carries the labels of every
   event it was derived from (`derived_from`, D53); a thread carries its parent's labels;
-- **numbers** — what the gate needs, such as how many distinct sources are active in a place and
-  whether a line is addressed.
+- **numbers** — what the gate needs, as `features` (contract.md §3): whether a line is
+  addressed or names the soul, how many people the audience holds, how many distinct sources
+  are active in a place.
 What the soul learns about a source in sleep (closeness, reliability: theory of mind) is its own
 memory, kept under that opaque id.
 
@@ -441,7 +452,7 @@ Everything that gives ids and labels a meaning — people and the
 account map, the owner and pairing, audience, privacy, consent, routes, names and where someone can
 be reached — is middleware ([middleware.md](middleware.md) §3, §7).
 
-**Two absolute lines** ([constitution.md](constitution.md) §5), held deterministically by the
+**Two absolute lines** ([constitution.md](constitution.md) §6), held deterministically by the
 owner policy, never decided by the reasoning:
 1. **Only the owner changes who the soul is** — checked in the action hook on capabilities
    flagged `identity_changing`.
@@ -465,7 +476,10 @@ without a birth certificate the soul may ask what to be called. Role plugins may
 certificate, used only at birth.
 
 **The context and the self-model** (D12, D37). The context is the prompt, not the memory: it is rebuilt
-from the books at every wake and never compacted. Three layers, ordered for caching:
+from the books at every wake and never compacted. It is assembled as **items** — each with its
+section, text, place and source event ids — and passes the context hook as items; the text is
+rendered only after the last hook, so no hook ever parses rendered text (D86,
+[contract.md §3](contract.md)). Three layers, ordered for caching:
 - *Stable*: who I am, how I work (memories can be incomplete; I can be wrong; I act only through
   adapters and tools), honesty principles, knowledge cutoff (from per-model configuration, set slightly
   earlier than claimed; D32.13), principles, thought acts and capability schemas.
@@ -505,38 +519,44 @@ prior are not. Other formats: installed skill ([middleware.md](middleware.md)), 
 Declared by an adapter or a plugin at registration (through the middleware's tool registry). One entry per capability:
 
 ```yaml
-name: reply                 # unique within the adapter or plugin; reasoning sees "<owner>.<name>"
-description: Send a text reply in the current place.
-schema: { type: object, properties: { text: { type: string } }, required: [text] }
-communicative: true         # counts as speaking for the talk-rate drive
+name: say                   # unique within the adapter or plugin; reasoning sees "<owner>.<name>"
+description: Send a message in a place of this body.
+schema: { type: object, properties: { text: { type: string } }, required: [text] }  # closed subset
+communicative: true         # speaks to a place's audience: talk rate, one message per place per turn
 long_running: false         # true → progress and completion arrive as act.result events
 identity_changing: false    # read by the owner policy: passes only when origin_actor is the owner
+reads: false                # the generic facts (contract.md §3); the middleware reads them
+changes: false
+runs_code: false
+network: false
+permission: whatsapp.say    # every capability names one; the body declares its base (guest here)
 ```
 
-### 9.2 Percept (format version 1)
-What an adapter puts into the queue when it senses something (D41). The core reads the same fields
-for every sense.
+### 9.2 Percept (format version 2, D86)
+What an adapter puts into the queue when it senses something (D41); the full field list and its
+rules are in [contract.md §4.2](contract.md). The core reads the same fields for every sense.
 
 ```yaml
 kind: percept
-body: telegram              # adapter name (the field keeps its name)
-who: telegram:123           # the native account; the inbound hook maps it to one id per person (D65)
-place: telegram:chat:-100   # native space id; becomes a neutral place
-addressed: false            # the turn is allocated to the soul (direct chat, reply, tag)
-place_kind: shared          # optional (D48), a label for the middleware: direct (only this one person can perceive it) |
-                            # shared (others may: a chat group, a Discord channel, a room a robot
-                            # stands in, a game world). Reported by the adapter; the core never infers
-                            # it from an id; the core never reads it. Unknown → shared (the safer side)
+body: telegram              # adapter name
+actor: telegram:123         # the native actor, or unknown; the inbound hook maps it to one id per person (D65)
+place: telegram:chat:-100   # native place id
+occurred_at: 2026-11-11T13:20:05+07:00   # the body's own clock
 description: "Budi: anyone know where the meeting is?"   # short, in language; what reasoning reads
-data: { message_id: 812 }   # optional raw data for adapters or plugins; never interpreted by the core
-sent_at: 2026-11-11T13:20:05+07:00   # optional; the sense's own clock (back-fill)
+features: { addressed: 0, named: 0, addressed_other: 0 }  # numbers for the gate
+ref: "812"                  # the body's id of this event
+about: null                 # the body's id of an earlier event this one refers to (reply, edit, reaction)
+involves: []                # other actors it concerns (mentioned, quoted)
+attachments: []             # [{ref, name, mime, size}]
 backfill: false             # true when an adapter catches up on what it missed
-imported: false             # optional (D69); true for history from before the adapter was connected:
-                            # recorded and searchable, never a wake
+imported: false             # true for history from before the adapter was connected: recorded, never a wake
+data: {}                    # anything else the adapter keeps; opaque to the core and the middleware
 ```
 
-Other senses use the same shape: `description: "kitchen temperature 31 °C"` with
-`data: { celsius: 31 }`, or `description: "someone entered through the front door"`.
+Other senses use the same shape: `description: "kitchen at 31 °C"` with `actor: unknown`,
+`data: { celsius: 31 }`; or `description: "someone came in through the front door"`. Version 1
+percepts (`who`, `addressed`, `place_kind`, `sent_at`) are upcast on read: `who` → `actor`,
+`addressed` → `features.addressed`, `sent_at` → `occurred_at`; `place_kind` is dropped.
 
 ### 9.3 Birth certificate (`soul.yaml`, format version 1, D58)
 Who the soul is, read once at birth (D35). After birth, identity lives in `state: identity`; the

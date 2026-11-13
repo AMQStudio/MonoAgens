@@ -128,7 +128,7 @@ A sidebar of pages, grouped:
 | | **Timeline** | each percept and what followed: the gate's decision with its numbers (`s`, `theta`, `p`, `u`, reason), thoughts, acts, model calls and tokens; filter by place, person, decision |
 | | **Memory** | what the soul remembers, with forget |
 | | **Promises** | active expectations: promises, waits, reminders (read only) |
-| Bodies and capabilities | **Adapters** | each adapter: on or off, pairing (the WhatsApp QR), its coverage table ([adapters.md §4](adapters.md)), its `show:` settings ([middleware.md §9](middleware.md)) |
+| Bodies and capabilities | **Adapters** | each adapter: on or off, pairing (the WhatsApp QR), its surfaces from the boot report ([contract.md §4.1](contract.md)), its `render:` options ([adapters.md §4](adapters.md)) |
 | | **Plugins** | installed and available plugins, on or off, version, "restart needed" |
 | | **Skills**, **Tools** | what the registry holds, with facts and permissions |
 | | **MCP** | locked until the MCP Connect plugin exists ([project.md §5](project.md)) |

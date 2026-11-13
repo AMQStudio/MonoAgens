@@ -1,6 +1,6 @@
-# Task 7 — First users and release
+# Task 8 — First users and release
 
-Status: todo | Depends on: Task 6
+Status: todo | Depends on: Task 7
 One task = one worker prompt, done by one worker. Work through the parts **in order**. File names follow the layout of Task 3 ([glossary](../glossary.md)). Rules: [README](README.md).
 
 **Goal.** Real users, a release, an honest evaluation, and stable contracts for other

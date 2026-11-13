@@ -2,8 +2,10 @@
 
 This project is **MonoAgens**: an AI agent built as one persistent self that lives in many
 apps and devices, with a small core organised like an OS kernel (see README).
-Status: prototype. Before touching code read [docs/constitution.md](docs/constitution.md), the
-task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec sections its parts link (the core: [docs/core.md](docs/core.md)). Work ONLY on that task.
+Status: prototype. Before touching code read [docs/constitution.md](docs/constitution.md),
+[docs/contract.md](docs/contract.md), the task file you were given in
+[docs/tasks/](docs/tasks/README.md), and the spec sections its parts link (the core:
+[docs/core.md](docs/core.md)). Work ONLY on that task.
 
 ## Who writes code
 - **One task = one worker**, one task after another. The owner gives the task prompt to the
@@ -16,9 +18,12 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
 - Specifications (every `docs/*.md`) and this file are owned by the architect. Workers may tick
   boxes and write under **Notes** in their own task file in `docs/tasks/`; they never edit a
   specification or the status table.
-- **The core's contract is frozen and its formulas change only with evidence**
-  (`docs/constitution.md` §1). No task, worker or plugin changes the core design; a need the
-  core cannot meet stops and goes to the owner.
+- **The contract is locked** ([docs/contract.md](docs/contract.md), D86–D88) and the core's
+  formulas change only with evidence (`docs/constitution.md` §1). No task, worker or plugin
+  changes the contract or `contract.lock`; a need the contract cannot meet stops and goes to the
+  owner. A new case is classified first (contract.md §9): adapter fact, principles or
+  `prompt_section`, mechanism bug, or a question for the owner. It is never patched into the
+  core or the middleware.
 
 ## Secrets (never break this)
 - Never read, print, cat, grep, copy, or summarize `.env` or any file holding secrets.
@@ -46,7 +51,8 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
    those are tool capabilities. From Task 3 on (D57) the core also knows only opaque ids, labels
    and numbers: it never imports from `monoagens/middleware/` and never means a person, the owner
    or a group. From Task 5 on (D64) it also knows no model provider: it calls the injected model
-   port, and provider drivers live in `monoagens/infra/providers/`.
+   port, and provider drivers live in `monoagens/infra/providers/`. From Task 6 on (D86) it never
+   reads an event's `payload` or `labels`: it reads ids, times, `description` and `features`.
 2. **The log is immutable.** The `events` table is INSERT-only, enforced by a trigger. The only
    exception is hard forgetting (`docs/core.md` §7), through one dedicated function that the trigger
    recognizes. `event_vectors` rows are deleted only by fading or hard forgetting, each
@@ -76,6 +82,20 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
    (think, act, expect, resolve, revise), 3 hooks (inbound, context, action), 10 signals,
    3 drives and one gate formula. A change that needs another core
    primitive stops and goes to the architect.
+12. **Generic only** (D86, D87; contract.md §5). The core and the middleware never name or branch
+   on a body, a platform or a device; they translate nothing (adapters and plugins do). No code
+   in the core or the middleware tries to understand human language: no word lists, stopwords,
+   keyword or substring matching on message text, regexes over rendered text. Decisions not left
+   to the model are made from facts (actors, places, audiences, refs, capability facts), never
+   from words. The middleware never guesses what the soul means: reasoning states it as an
+   argument and the middleware checks it.
+13. **One rule, one home** (D87). Each rule is checked in exactly one place (privacy in the
+   context hook and on opening or forwarding an attachment; authority in the policy; liveness in
+   the core loop). Never add a second check of a rule that is already checked elsewhere; if a
+   fix seems to need one, stop and report.
+14. **The contract lock** (D88). `monoagens/contract/` is the contract as code and
+   `contract.lock` its hash; a test fails when they differ. Never edit either; only the owner
+   does, with a decision in `docs/contract.md`.
 
 ## Stack and versions
 - Python 3.13+, managed with `uv` (commit `uv.lock`).
@@ -109,7 +129,7 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
 
 ## Size guide (excluding tests)
 Readability comes first. The real limit on the core is the complexity budget in
-`docs/constitution.md` §3 (books, thought acts, hooks, signals, drives, one gate formula), not a
+`docs/constitution.md` §4 (books, thought acts, hooks, signals, drives, one gate formula), not a
 line count. Line numbers are only a signal for review:
 - A core module that passes about **300 lines** is a sign it may hold two jobs; split it by
   responsibility when that makes it clearer, not to hit a number.
@@ -129,6 +149,14 @@ line count. Line numbers are only a signal for review:
 - Always `git pull --rebase` before starting and before pushing.
 
 ## Tests
+- **Tests speak through the contract only** (D88, contract.md §7; from Task 6 Part 6 on). A test
+  of the core or the middleware feeds percepts and checks actions, receipts and events. It never
+  calls a private function (`_name`), never asserts on an internal payload, and never asserts on
+  prompt wording; an architecture test refuses imports of private names in `tests/`. If you feel
+  you must edit a contract test, you are changing the contract: stop and report.
+- **Invariants over cases**: the rules of the core and the middleware are held by Hypothesis
+  stateful tests (contract.md §7); scenarios are for the soul's behavior, not for one case of a
+  rule.
 - Tests use a real Postgres (the container from `compose.yaml`), never a mocked database.
 - The LLM and HTTP are always fake in tests (scripted FakeLLM, `httpx.MockTransport`). The real
   model from `.env` is used only in a task's last part, through `scripts/replay.py` without

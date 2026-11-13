@@ -22,9 +22,16 @@ the notes of Tasks 1–2, the earlier biological names appear; this table maps t
 | — | **tier role / group role** | A role with a `base` (how much) / without one (where a person belongs). |
 | — | **base** (Workspace) | The one shared, read-only system tree of the sandbox. |
 | — | **shared folder** (Workspace) | A work folder several people may use, named by a role setting. |
-| — | **account** / **person id** | A native account an adapter reports (`whatsapp:628…`) / the one opaque id of a person across accounts (`person:p_7f3a`), registered automatically; linking merges two person ids into the older (D65). |
-| — | **place info** | What an adapter reports about a place besides `place_kind`: name, `form` (chat, group, broadcast, thread), `parent`, `can_post`, platform role facts (D68). |
-| — | **back-fill / import** | Messages an adapter missed while offline (`backfill`) / history from before it was connected (`imported`, never a wake) (D69). |
+| account | **actor** / **person id** | Who caused an event as a body reports it (`whatsapp:628…`, `face:3`, or *unknown*) / the one opaque id of a person across actors (`person:p_7f3a`), registered automatically; linking merges two person ids into the older (D65, D86). |
+| space | **place** | Where an event happens and an action lands: a chat, a room, a document, a device, a game region (contract.md §2). |
+| members | **audience** | Who can perceive what happens in a place, reported by the adapter with `place.audience`; may include *unknown*. The one fact privacy needs (D85, D86). |
+| place info, `place_kind` | — | Removed in contract v2 (D86): the audience replaces them; names and structure are part of `description` or `prompt_section`. |
+| — | **feature** | A number on an event that the gate reads: `addressed`, `named`, `addressed_other`, `audience_size` (contract.md §3). |
+| — | **receipt** | The one `act.result` that ends every action: `done`, `refused`, `held`, `failed` or `unknown` (contract.md §3). |
+| — | **lifecycle event** | What the middleware tells a body the soul is doing (`composing`, `seen`, `progress`, `thought`); the body renders it its own way (contract.md §4.5). |
+| — | **prompt section** | What a body tells reasoning about itself, as text (contract.md §4.1). |
+| — | **contract** | The one locked contract between the layers, `docs/contract.md`, as code in `monoagens/contract/`, held by `contract.lock` (D86–D88). |
+| — | **back-fill / import** | Events an adapter missed while offline (`backfill`) / history from before it was connected (`imported`, never a wake) (D69). |
 | — | **format version** | `version:` in an owner's YAML file, `manifest_version:` in a plugin manifest (D58). |
 
 ## What never changes with a rename
@@ -37,10 +44,12 @@ keys, the `prior/` format and `config.yaml` keys. A rename touches code only.
 
 | Folder | Holds | Changes |
 |---|---|---|
-| `monoagens/core/` | Mechanisms only: kernel loop, gate, reasoning, context, memory, expectations, threads, the tool door (`dispatch`), the three hooks, identity, the audience labels. | Rarely: evidence, bugs, vulnerabilities. |
-| `monoagens/middleware/` | Every decision and the wiring between adapters and plugins, in eight files ([middleware.md §1](middleware.md)): `contract.py`, `policy.py`, `privacy.py`, `identity.py`, `registry.py`, `loader.py`, `interaction.py`, `roles.py`. | Often, as cases need. |
-| `monoagens/adapters/` | One folder per adapter. | Per app or device. |
+| `monoagens/contract/` | The contract as code (D88): event envelope, features, capability descriptor, hooks, context items, actions, receipts, the adapter surface, percepts, lifecycle events. Held by `contract.lock`. | Only by the owner (contract.md §9). |
+| `monoagens/core/` | Mechanisms only: kernel loop, gate, reasoning, context, memory, expectations, threads, the tool door (`dispatch`), the three hooks. | Rarely: evidence, bugs, vulnerabilities. |
+| `monoagens/middleware/` | Every decision, generic, in seven files ([middleware.md §1](middleware.md)): `policy.py`, `privacy.py`, `identity.py`, `registry.py`, `loader.py`, `interaction.py`, `roles.py`. | Bugs inside; never for one platform or case. |
+| `monoagens/adapters/` | One folder per adapter: all translation lives here. | Per app or device. |
 | `monoagens/infra/` | Store, migrations, config, clock, budget counting, embedding, versioning, attachments, model providers (`infra/providers/`). | With the stack. |
 | `plugins/` | Installable features on the middleware. | Per feature. |
 
-The rule between the layers: **the middleware decides, the core records and carries out.**
+The rule between the layers: **adapters translate, the middleware decides from facts, the core
+records and carries out.**

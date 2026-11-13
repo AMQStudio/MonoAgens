@@ -1,313 +1,207 @@
 # Adapters — Specification
 
 **Status:** points without a mark are decided; points marked **Draft** state the current intent
-and may change without a new decision. Nothing here may change the core
-([constitution §1](constitution.md)). Decision numbers (Dxx) trace to the history in git. Work:
-[tasks/](tasks/README.md).
+and may change without a new decision. Nothing here may change the contract
+([contract.md](contract.md), [constitution §1](constitution.md)). Decision numbers (Dxx) trace to
+the history in git. Work: [tasks/](tasks/README.md).
 
 ## 1. What an adapter is
-An adapter connects the soul to one platform or device (Telegram, CLI, WhatsApp, a speaker, a
-robot, a game). It senses (`run(put)`) and/or acts (`act(action)`), and it talks only to the
-middleware: it gives it percepts and the tools it offers, and receives the actions routed to it
-([constitution §4](constitution.md), D57). The core never knows which adapter something came
-from; `body` in an event is only a name it carries. Like a sensory cortex, an adapter turns its
-native signal into a short description in language plus raw data; like a motor cortex, it turns
-an intention into native actions.
+An adapter connects the soul to one platform, device or app: a chat app, the CLI, a robot, a
+speaker, a workspace app, a sensor, a game. It is where translation happens — the only place
+(D86). Like a sensory cortex it turns native signals into the contract's facts (actors, places,
+audiences, events); like a motor cortex it turns the soul's actions into native actions and
+answers with an honest receipt. The core and the middleware never know which adapter something
+came from; `body` is only a name they carry ([contract.md](contract.md)).
 
-**Native first** (D67). Every adapter, present and new (Telegram, CLI, WhatsApp, Discord, and
-any later one), uses everything its platform offers: it reads every kind of message the platform
-can deliver, and shows things the best way the platform allows. What one platform lacks is
-declared with its reason, never faked; the middleware picks the fallback (§4). No adapter is a
-special case: the same checklist and the same tests apply to all of them.
+**Native first** (D67). Every adapter uses everything its platform offers: it reads every kind of
+event the platform delivers and acts the best way the platform allows. Rich features are the
+adapter's own capabilities and arguments, explained to reasoning in its `prompt_section`; what a
+platform lacks is simply not offered. No adapter is a special case: the same contract, the same
+conformance suite ([contract.md §7](contract.md)) and the same rules apply to all of them.
 
 ## 2. Rules for every adapter
-- Declare capabilities with the core's descriptor ([core.md §9.1](core.md)): name, JSON schema,
-  description, `communicative`, `long_running`, `identity_changing`, and the tool facts of the
-  middleware's `contract.py` (`reads`, `changes`, `runs_code`, `network`); a tool without facts
-  fails at boot. The middleware's tool registry offers them to reasoning in a fixed order (D2,
-  D32).
-- The brain decides intent and content; the adapter decides how (bubbles, TTS, gestures). Fine
-  motor control stays in the adapter (D2).
-- Sense through the core's `percept` ([core.md §9.2](core.md)): who, place, `addressed`, a short
-  description, optional raw data, and `sent_at` when the sense has its own clock (D41).
-- Report `addressed` (direct chat, reply, tag) as a neutral field (D40).
-- **Report native accounts and spaces as they are** (`who: whatsapp:62812…`,
-  `place: discord:channel:123`), never a person id; the middleware's identity module maps every
-  account to one person id (D65, [middleware.md §7](middleware.md)). Accounts named inside a
-  message (mentions, the author of a quoted message) go in `data.mentions` and
-  `data.reply_to.who`, as accounts too. One platform's own quirks stay inside the adapter: when
-  the platform gives one account two forms (WhatsApp's LID and phone-number JID), the adapter
-  reports one stable form, so one account never looks like two people.
-- Translate native command syntax into a neutral `command`, adding presentation only (menus,
-  buttons); the middleware handles it (D9).
-- Report long actions through `act.result`; never block the loop (D3).
-- Mark speaking capabilities `communicative` (they count for talk rate and the forward model,
-  D2) and capabilities that change who the soul is `identity_changing`.
-- Ask for `cursor(organ)` on start, so input is never lost or duplicated.
-- Optionally offer `history(place, before, limit)`; on connect, back-fill what was missed as
-  `percept` with `backfill: true` and `sent_at`. The core appraises a backlog per place once, as
-  one age-discounted percept; an addressed message still trips the circuit breaker (D37, D40).
-  History from before the soul was connected is an import, not a back-fill (§5, D69).
-- Own retries, rate limits, reconnects and platform quirks; errors become events, never crashes
-  of the loop.
-- Tokens and URLs come from `.env`; non-secret options (enabled or not, what is shown, …) from
-  its section under `bodies:` in `config.yaml`; nothing about an adapter lives in the core or in
-  `soul.yaml`.
-- Report `place_kind` (direct | shared) in every percept; only the adapter knows it (D48). A
-  private chat (DM) is `direct`; a group, channel, thread or organisation space is `shared`.
-- Received files go to the attachment store (`put(file) → ref`, or a deferred ref when the
-  bytes are fetched later, §5) and are listed in the percept's `data.attachments`, any number per
-  message, with a `description` that sums them up; the send tool takes `attachments: [ref, …]`
-  and the adapter declares files per message, largest size and types
-  ([middleware.md §10](middleware.md)).
-- Offer **place info** (§3): a place's name, form, parent, member count, whether the soul may
-  post there, and the platform's role facts ("admin of this group"), used by `/whoami`, person
-  cards, routes and Discord role mapping; a missing part is declared, never a silent empty
-  answer.
-- Declare at boot what it can show besides messages in the vocabulary of the middleware's
-  `contract.py` (§4), and render what the middleware's `interaction.py` sends its own way; an
-  approval answer (a click, a reaction) comes back as an ordinary percept
-  ([middleware.md §9](middleware.md)). It decides nothing about what is shown or to whom.
+- **Provide the surface** of [contract.md §4.1](contract.md): `name`, `run(put)`, `stop()`,
+  `capabilities()`, `act(action) -> receipt`, `prompt_section()`, `self_actor()`; and any optional
+  surface it supports (`history`, `fetch`, `render`, `ask`). A missing member fails boot.
+- **Percepts** follow [contract.md §4.2](contract.md): the native actor (or *unknown*), the
+  native place, `occurred_at`, a short `description` in language, `ref`, `about`, `involves`,
+  `attachments`, features, and `answer` or `command` when the event is one. Write a fact only
+  when it is certain.
+- **Report one stable form per actor.** When a platform gives one account two forms (WhatsApp's
+  LID and phone-number JID), the adapter reports one, so one person never looks like two.
+- **Compute the features**: `addressed` (a direct place, a reply to the soul, a tag, a wake
+  word), `named` (the soul's name said; the middleware tells every adapter the soul's current
+  name), `addressed_other` (the turn given to someone else). The adapter is the only place that
+  reads native text for this.
+- **Report audiences** with `place.audience {place, actors, unknown}` whenever a place is first
+  seen or its membership changes, folding every platform rule into that one fact
+  ([contract.md §4.3](contract.md)). Unsure → `unknown: true`.
+- **Capabilities**: its own names and schemas, generic facts, and a permission for each (a
+  talking capability usually at base `guest`). Mark speaking `communicative` and anything that
+  changes who the soul is `identity_changing`. Explain native features in `prompt_section` (at
+  most 1,200 characters).
+- **Act and answer**: split, retry, rate-limit and fall back by itself; deduplicate by
+  `action.id`, so a resumed action is never sent twice; answer every action with exactly one
+  receipt (`done`, `refused` with a reason, `failed`, `unknown`; `held` is the policy's, never a body's). A place where the soul may not
+  post answers `refused` with the reason.
+- **Translate commands** (a slash command, a menu, a button, a CLI line) into `command: {name,
+  args}`; never interpret what a person meant by words.
+- **Render lifecycle events and ask questions its own way** (§4), from its own options; never
+  decide what is shown or to whom.
+- **History**: optionally offer `history(place, before, limit)`; on connect, back-fill what was
+  missed with `backfill: true`. History from before the body was connected is an import (§5).
+- **Files**: received files go to the attachment store (`put` → ref, or a deferred ref) and are
+  listed in `attachments`; capabilities that send files take refs.
+- Own reconnects and platform quirks; errors become events, never crashes of the loop. Tokens and
+  URLs come from `.env`; non-secret options from its section under `bodies:` in `config.yaml`.
 
-**Loading an adapter** (D49). An adapter is a module with one factory, `create(options, env)`, that
-returns the adapter: `options` is its own section of `config.yaml`, `env` gives the variables it
-declares (it reads only those). `config.yaml` lists the enabled adapters by name under `bodies:` (the key keeps its name); an adapter outside
-this repository also names its module (`module: some_package.minecraft`). The same install
-module that loads plugins ([middleware.md §5](middleware.md)) loads adapters, so there is one
-loader, not two. The entry point (`monoagens/__main__.py`) never imports an adapter: it asks the
-loader for the enabled ones. Adding an adapter means installing its module and adding a few lines
-to `config.yaml`, never editing code.
+**Loading an adapter** (D49). An adapter is a module with one factory, `create(options, env)`:
+`options` is its own section of `config.yaml`, `env` gives the variables it declares (it reads
+only those). `config.yaml` lists the enabled adapters under `bodies:`; an adapter outside this
+repository also names its module. The entry point never imports an adapter; it asks the loader.
+Adding an adapter means installing its module and adding a few lines to `config.yaml`.
 
 ```yaml
 bodies:
   telegram: { enabled: true }                       # built in: monoagens.adapters.telegram
   whatsapp:
     enabled: true
-    show: { read_receipts: on, stickers: on }       # optional; middleware.md §9
-    tools: [pin]                                    # optional platform-only tools; none by default
+    render: { composing: on, seen: on, progress: edit }   # this body's own rendering options (§4)
+    tools: [pin]                                    # optional platform-only capabilities; none by default
   minecraft: { enabled: true, module: mono_minecraft, server: localhost:25565 }
 ```
 
-## 3. Places: direct, group, channel, organisation (D68)
-Privacy needs only `place_kind` (direct | shared). Everything else about a place is place info,
-read by the middleware, never by the core:
+## 3. Places and audiences
+A place is wherever an event happens and an action lands: a private chat, a group, a channel, a
+thread, a room, a document, a device, a game region. The contract knows only its id and its
+audience; everything else about it (its name, that it is a thread of a channel of a server,
+that only admins may post) is part of a percept's `description` or the adapter's
+`prompt_section`, for reasoning to understand.
 
-| Field | Meaning |
+How adapters fold their platform into the audience:
+
+| Platform | Audience |
 |---|---|
-| `form` | `chat` (a private chat) · `group` · `broadcast` (a channel where few may post: WhatsApp Channels, a Telegram channel, a Discord announcement channel) · `thread` (a Discord thread, a Telegram forum topic) |
-| `parent` | the place this one belongs to: a Discord server for its channels, a channel for its threads, a WhatsApp Community for its groups, a Telegram forum for its topics; none for a private chat |
-| `name`, `members` | the place's name, and its members as account ids when the platform gives them (only a count means the membership is unknown); member join and leave events keep it current. Privacy reads the audience from it (D85, [middleware.md §3](middleware.md)) |
-| `can_post` | whether the soul may post there now (false in a broadcast it only follows) |
-| `roles` | platform role facts of a person there ("admin of this group"); with each percept the adapter also sends `data.platform_roles: {space, roles}` (the role ids the sender holds and the organisation place they belong to) |
-
-A post to a place where `can_post` is false fails with an honest `act.result`. The adapter
-reports the whole `parent` chain (a thread's channel, the channel's server), so the middleware
-walks it as opaque ids. A platform role mapped by the owner (`platform_role:`) holds only in
-places whose `parent` chain reaches the space it came from ([middleware.md §8](middleware.md)). The adapter refreshes place info when the platform reports
-a change (renamed, member joined or left, role changed).
+| a private chat | the other person |
+| a WhatsApp or Telegram group | the members now (newcomers do not see the past) |
+| a Discord channel | its members; `unknown` when anyone who joins later can read the history |
+| a channel that only broadcasts (WhatsApp Channels, a Telegram channel) | `unknown` |
+| a room a robot or speaker is in | the people detected; `unknown` when it cannot be sure |
+| a shared document | its collaborators |
+| a sensor | nobody |
 
 ## 4. Native: what goes in and what comes out (D67)
-**In: everything the platform delivers becomes a percept.** Text, replies and quotes,
-mentions, edits, deletions, reactions by others, stickers, locations, contact cards, polls and
-votes, view-once media, any number of files, calls (incoming, missed, ended: "Budi called, not
-answered"), and place events (joined, left, renamed, role changed). Each becomes a short `description` plus raw `data`:
+**In: everything the platform delivers becomes a percept.** Text, replies and quotes (`about`),
+mentions (`involves`), edits and deletions (`about` the earlier event), reactions by others,
+stickers, locations, contact cards, polls and votes, view-once media, any number of files, calls
+("Budi called, not answered"), and place changes (renamed, joined, left: also a new
+`place.audience`). Each becomes a short `description` plus the contract's fields:
 - a reaction by someone else on the soul's own message is `addressed`;
-- an edit is a new percept with `data.edits: <message id>` ("Budi edited: …");
-- a deletion is a percept with `data.deletes: <message id>` ("Budi deleted a message"); the
-  soul saw it, so the log keeps it, as a person remembers what was said; forgetting stays an
-  explicit request ([core.md §7](core.md));
-- a sticker is stored like any file, with a description of its emoji and pack ("Budi sent a
-  sticker 😂 from 'Kucing'"); images and stickers are opened only when reasoning chooses to,
-  through a reader (vision later).
+- a deletion stays in the log as a person remembers what was said; forgetting stays an explicit
+  request ([core.md §7](core.md));
+- a sticker or image is an attachment with a description; it is opened only when reasoning
+  chooses to.
 
-**Out: few tools for the soul, rich intents through neutral fields.** The soul's tools stay
-few and neutral, so the prompt cache holds and choices stay easy. Reasoning sees one `say`,
-`react` and `edit` whatever adapters run; the middleware's registry routes each call to the
-adapter of the place it is for (D83, [middleware.md §4](middleware.md)). Each adapter still
-registers its own speaking capabilities and draws them its way. What is a communicative
-intent — something the soul means to do, not only how it looks — is a neutral field of `say`,
-the same on every adapter, drawn the best way each platform allows:
-- `say(text, attachments?, reply_to?, mentions?, sticker?, choices?, thread?, location?)`:
-  - `sticker` — the ref of a sticker the soul has received; whether to send one is reasoning's
-    choice;
-  - `choices: [label, …]` (with `multiple: true` for a vote) — options people pick from; the
-    answer comes back as an ordinary percept with `data.choice` (`addressed`, since it answers
-    the soul);
-  - `thread: "title"` — start a new thread or topic for this message where the place allows it;
-  - `location: {lat, lon, name?}` — share a place;
-  - `voice: true` — say it aloud: a voice note on chat adapters, speech on devices (§9; [later task](tasks/later-voice-home.md));
-- `react(emoji, message_id?)`;
-- `edit(message_id, text)` for its own messages, where the platform allows it.
-Progress messages, typing, read receipts and approval prompts are not the soul's: the
-middleware's `interaction.py` decides them and the adapter draws them.
+**Out: the body's own capabilities.** Each adapter offers what it can do with its own names and
+schemas — for a chat app typically `say(text, attachments?, reply_to?, mentions?, sticker?,
+buttons?, thread?, location?)`, `react(emoji, message)`, `edit(message, text)`; for a robot
+`speak(text)`, `move(to)`, `gesture(name)`; for a document `edit(range, text)`, `comment(range,
+text)`. Its `prompt_section` tells reasoning what the arguments mean on this platform. A
+platform-only action (pin a message, manage a channel) is **off by default** and offered only
+when the owner lists it under `bodies.<adapter>.tools:`.
 
-**Platform-only actions** (pin a message, reject a call, manage a Discord role, set a group's
-description, …)
-are not neutral and are rarely needed. An adapter may offer them as its own tools, each with its
-facts and permission like any tool; they are **off by default** and offered to reasoning only
-when the owner lists them under `bodies.<adapter>.tools:`, so they never weigh on the prompt of a
-soul that does not use them.
+**Lifecycle rendering** ([contract.md §4.5](contract.md)) is the adapter's own choice, set in its
+`render:` options:
 
-**What an adapter can show** is declared in `contract.SHOWS`: `typing`, `read_receipts`,
-`edit`, `delete`, `reply`, `reactions`, `buttons`, `menus`, `polls`, `stickers`, `embeds`,
-`threads`, `locations`. **The adapter draws each intent its best way, down to plain text** (D81:
-the middleware knows no emoji, button or platform), and declares its ladder:
-- `choices` (the soul's, and the middleware's approvals): buttons (menus when there are many) →
-  a reaction per choice on the question → a poll → a numbered list, answered by number or label;
-  the `act.result` records, per choice, the native answer the adapter will recognise, and an
-  answer comes back as a percept with `data.reply_to` and `data.answer`;
-- `thread`: a new thread or topic → a reply in the place, with the title as its first line;
-- `location`: a native location → the name and coordinates as text;
-- a progress message: edit one message → a new message per step;
-- a sticker: the sticker → its emoji.
+| Event | Chat | Robot | Workspace app | Game |
+|---|---|---|---|---|
+| `composing` | typing… | turns to the person, a light | a "writing" cursor | faces the player |
+| `seen` | read mark (blue ticks) | a nod | — | — |
+| `progress` | one message edited per step, or a new message | a spoken "still working" | a status line | — |
+| `thought` | a quoted line | — | a side note | — |
 
-**Coverage is declared and tested** (D67). Every adapter declares at boot, in the vocabulary of
-`contract.py`, what it reads (the kinds of §4 "In") and what it shows (`SHOWS`), and names each
-gap with its reason ("read_receipts: the Telegram Bot API has none"). The boot report prints the
-table per adapter. One contract test runs over every adapter: each kind the platform delivers is
-either turned into a percept or declared as a gap, each declared `SHOWS` entry draws something,
-and nothing is silently dropped. Adding a platform feature means adding it to the adapter and its
-declaration, never a branch elsewhere.
+An adapter that shares an account with a person (§6) marks events seen only when the soul speaks
+there, so the person keeps their unread marks.
+
+**Questions** (`ask`, [contract.md §4.6](contract.md)): buttons or a menu where the platform has
+them, else a poll, else a reaction per choice, else a numbered message; a robot says the question
+and listens; an app opens a dialog. The adapter records how each choice will come back and returns
+`answer: {prompt, value}` when it does. A reply in words is a normal percept; reasoning
+understands it.
 
 ## 5. History: back-fill and import (D69)
-- **Back-fill** is what the adapter missed while it was offline: `backfill: true`, as in §2.
-- **Import** is the history the account already had before the soul was connected to it
-  (WhatsApp's history sync on pairing). The adapter takes all of it that the account offers, like
-  someone given WhatsApp Web, and puts it as percepts with `imported: true` and `sent_at`
-  ([core.md §9.2](core.md)). Imported percepts are recorded and searchable (`recall`, text
-  search), never wake reasoning, never trip the circuit breaker, are never marked as read, and are
+- **Back-fill** is what the adapter missed while offline: `backfill: true`.
+- **Import** is the history an account already had before the soul was connected (WhatsApp's
+  history sync on pairing): percepts with `imported: true` and their `occurred_at`. Imported
+  events are recorded and searchable, never wake reasoning, are never marked seen, and are
   summarized by sleep only for places the soul later becomes active in.
-- **Media are fetched when opened.** An imported or back-filled file is put as a deferred ref
-  (name, type, size and the adapter's locator, no bytes); the first `open` asks the adapter to
-  fetch it. When a platform link has expired, the adapter asks the platform again (WhatsApp:
-  a media re-upload request to the phone); a file that cannot be fetched is an honest error.
+- **Media are fetched when opened**: an imported or back-filled file is a deferred ref; the first
+  `open` calls `fetch(locator)`. A file that cannot be fetched is an honest error.
 
 ## 6. An account shared with a person (D66)
-Some accounts can also be used by a person at the same time (WhatsApp as a linked device: the
-soul may run on its own number or on the owner's own number). No option is needed; the adapter
-tells the two apart itself:
-- every message the soul sends carries its native message id in the `act.result`, so it is in the
-  Log and survives restarts and history sync;
-- a message from the account itself whose id is in the Log is the soul's own: it is not a
-  percept;
-- a message from the account itself whose id is not in the Log was typed by the account's
-  holder on the phone: it is a percept from that account (`addressed: false` unless it is in the
-  holder's chat with the soul, "Message yourself");
-- the adapter reports its own account at boot (`self_account`); when identity maps that account
-  to the owner (the owner paired or linked from it), the middleware adds one neutral line to the
-  context: speaking in someone else's chat on this adapter speaks through the owner's account.
-  Reasoning weighs it. No rule branches on it, except the read receipts of
-  [middleware.md §9](middleware.md).
+Some accounts can be used by a person at the same time (WhatsApp as a linked device on the
+owner's own number). The adapter tells the two apart itself: every action's receipt carries the
+native id of what it sent, so it is in the Log; an event from the account whose id is in the Log
+is the soul's own and not a percept; one whose id is not in the Log was made by the person and is
+a percept from that actor. `self_actor()` reports the account; when identity maps it to the owner,
+the middleware adds one context line ([middleware.md §7](middleware.md)).
 
 ## 7. Present and planned adapters
 | Adapter | Status | Notes |
 |---|---|---|
-| Telegram | present; native in Task 5 | long polling; everything the Bot API offers: inline buttons and the command menu, edit, delete, reply, reactions, polls, stickers, albums (media groups), locations, contacts, forum topics as `thread`, channels as `broadcast`, typing (chat action); declared gaps: no history (the soul's own log is its "scroll up") and no read receipts |
-| CLI | present; native in Task 5 | Unix socket inside the main process, thin client; text, files by path, reply; typing and progress as status lines; buttons as numbered choices; declared gaps for the rest |
-| WhatsApp | next (Task 5) | ported from V1 on neonize (a linked device); own or owner's number (§6); full history import (§5); files, stickers, polls, reactions, edits; no buttons, so approvals by reaction |
-| Discord | next (Task 5) | ported from V1 on discord.py (message content intent); servers, channels, threads, DMs; buttons and menus (an interaction is acknowledged within Discord's 3 s by deferring, inside the adapter); role mapping (§3) |
-| Voice notes | [later task](tasks/later-voice-home.md) | STT in, TTS out; description = transcript |
-| Voice calls | later | waits for a mature calling library to be widely released (WhatsApp: whatsmeow and neonize only see and reject calls; a calling stack such as meowcaller is still experimental and Go-only); then call audio ↔ STT/TTS as a `long_running` act ([project.md §5](project.md)). Until then a call is a percept and the soul answers in chat |
+| CLI | present | Unix socket inside the main process, thin client; text, files by path, reply; `composing` and `progress` as status lines; questions as numbered choices |
+| Telegram | present | long polling with `allowed_updates` for every kind it reads; inline buttons and the command menu, edit, delete, reply, reactions, polls, stickers, media groups (one percept per group), locations, forum topics; a failed download is an error percept, never a crash loop; no history and no read marks on the Bot API |
+| WhatsApp | present | neonize (a linked device); own or owner's number (§6); full history import (§5); files, stickers, polls (votes decrypted), reactions, edits; no buttons, so questions by poll; handles logout and disconnect |
+| Discord | present | discord.py (message content intent); servers, channels, threads, DMs; buttons and menus (acknowledged within Discord's 3 s inside the adapter); reactions and edits on uncached messages; `allowed_mentions` set |
 | Home Assistant | **Draft**, [later task](tasks/later-voice-home.md) | the first non-chat adapter (§8) |
-| Robot (own adapter) | later | microphone and speaker straight to the adapter, with its own reflexes (wake word, voice activity, barge-in, turning to the speaker); after Home Assistant |
+| Voice notes | [later task](tasks/later-voice-home.md) | STT in, TTS out; description = transcript |
+| Voice calls | later | waits for a mature calling library ([project.md §5](project.md)) |
+| Robot (own adapter) | later | microphone and speaker straight to the adapter, with its own reflexes (wake word, voice activity, barge-in, turning to the speaker) |
 
 Tools (search, files, email) are in the [plugin catalog](plugins.md). Model providers are not
-adapters: they are drivers behind the core's model port, in `infra/providers/` ([core.md §3](core.md)).
+adapters: they are drivers behind the core's model port, in `infra/providers/`.
 
 ## 8. Home Assistant as a body (**Draft**, D71)
-Home Assistant (HA) already runs a whole voice pipeline — wake word (openWakeWord), speech to
-text and text to speech over its Wyoming protocol (Whisper, Piper), and ESP32 voice satellites
-through ESPHome — and it already controls the home's devices. The soul does not rebuild any of
-that: HA is one adapter, and the soul is HA's conversation agent.
-- **Hearing.** A small HA custom integration (shipped in this repository, installed into HA by
-  the owner) registers the soul as a conversation agent and forwards each utterance to the
-  adapter: a percept with `addressed: true` (the wake word was said), the satellite's area as the
-  place (`homeassistant:area:kitchen`, `place_kind: shared`, since anyone in the room hears), and
-  the HA user when HA knows who spoke, otherwise an unknown speaker. Absolute line 2 then holds
-  as in any group: nothing private is said aloud in a room.
-- **Speaking.** The answer to an utterance goes back to HA as the agent's reply, which HA speaks
-  through its TTS on that satellite; a silent decision returns an empty reply. Speaking first (a
-  reminder, an announcement) goes through HA's announce or TTS service on a satellite or media
-  player of the target area. Typing has no meaning here; `voice` is the only way to speak.
-- **The home as tools.** Only the entities the owner exposes in HA (HA's own "exposed entities")
-  reach the soul: a short `home.state` (facts `reads`) and `home.control(entity, action, data?)`
-  (facts `changes`, its permission at tier `trusted` by default), so locks, alarms and heaters go
-  through the policy and approval modes like any change.
-- **The home as senses.** State changes of the entities the owner lists under
-  `bodies.homeassistant.senses:` (a door, motion, a temperature past a threshold) become
-  percepts ("front door opened"), never addressed; everything else stays in HA.
-- **Latency.** HA waits for the agent's reply, so the adapter sets a reply deadline from config
-  (`reply_seconds`); past it, it answers HA with a short holding line and speaks the real answer
-  later by announce. The gate and reasoning are never skipped: no speech-to-speech model answers
-  for the soul.
-- HA speaks with its own pipeline (Wyoming, Piper); the soul's TTS driver (§9) is used only if
-  the owner wants another voice on the home's speakers.
-- `.env`: `HA_URL`, `HA_TOKEN` (a long-lived access token). The client library for HA's
-  WebSocket API, if one is needed, asks the owner first (AGENTS.md).
+Home Assistant (HA) already runs a whole voice pipeline — wake word, speech to text and text to
+speech over its Wyoming protocol, ESP32 voice satellites — and already controls the home's
+devices. HA is one adapter, and the soul is HA's conversation agent.
+- **Hearing.** A small HA custom integration (shipped in this repository) forwards each utterance:
+  a percept with `addressed: 1` (the wake word was said), the satellite's area as the place, the
+  HA user when HA knows who spoke, else *unknown*, and the area's audience as `unknown` unless HA
+  knows who is in the room. Nothing private is said aloud in a room.
+- **Speaking.** The answer goes back as the agent's reply, which HA speaks on that satellite; a
+  silent decision returns an empty reply. Speaking first goes through HA's announce service.
+- **The home as capabilities.** Only the entities the owner exposes in HA: `home.state` (facts
+  `reads`) and `home.control(entity, action, data?)` (facts `changes`, base tier `trusted`).
+- **The home as senses.** State changes of entities listed under `bodies.homeassistant.senses:`
+  become percepts with actor *unknown*, never addressed.
+- **Latency.** HA waits for the reply; past `reply_seconds` the adapter answers with a short
+  holding line and speaks the real answer later. The gate and reasoning are never skipped.
+- `.env`: `HA_URL`, `HA_TOKEN`.
 
 ## 9. Speech: hearing and speaking (**Draft**, D72)
-**One soul, one mind.** Every speech engine is only ears and a mouth. What to say, whether to
-speak at all, memory and privacy stay with the soul: every utterance is a percept that passes the
-gate, and every spoken word comes from a `say` the soul chose. No model answers for the soul.
+**One soul, one mind.** Every speech engine is only ears and a mouth. Every utterance is a percept
+that passes the gate, and every spoken word comes from an action the soul chose.
 
-**Drivers by protocol, not by model** (`infra/providers/speech/`, ported from V1's
-`monoagens/providers/speech.py`). Local and cloud speech models are many and change every month,
-so a driver speaks a protocol and covers every model behind it:
+**Drivers by protocol, not by model** (`infra/providers/speech/`, ported from V1):
 
-| Door | Covers | Notes |
-|---|---|---|
-| OpenAI-shaped HTTP (`/audio/transcriptions`, `/audio/speech`) | OpenAI, Groq, and the many local servers that mirror the shape (faster-whisper, Kokoro, …) | in V1; a different server is a different `base_url` |
-| Wyoming (Home Assistant's voice protocol, JSON over TCP) | HA's local voice services: Whisper, Piper, openWakeWord, … | written with plain asyncio streams, no new dependency |
-| Native | ElevenLabs, Deepgram | their own APIs; in V1 |
+| Door | Covers |
+|---|---|
+| OpenAI-shaped HTTP (`/audio/transcriptions`, `/audio/speech`) | OpenAI, Groq, and local servers that mirror the shape (faster-whisper, Kokoro, …) |
+| Wyoming (JSON over TCP) | Home Assistant's local voice services: Whisper, Piper, openWakeWord |
+| Native | ElevenLabs, Deepgram |
 
-Chosen by `.env`, shared by every adapter, never tied to one:
+Chosen by `.env` (`STT_PROVIDER`, `STT_BASE_URL`, `STT_MODEL`, `TTS_PROVIDER`, `TTS_BASE_URL`,
+`TTS_VOICE`, `VOICE_REALTIME`, one key variable per cloud provider), shared by every adapter. Each
+driver reports its languages at boot; the boot report warns when the soul's language is missing.
 
-```
-STT_PROVIDER=openai            # openai | wyoming | elevenlabs | deepgram
-STT_BASE_URL=                  # a local server or Wyoming address (tcp://host:10300)
-STT_MODEL=
-TTS_PROVIDER=wyoming           # openai | wyoming | elevenlabs
-TTS_BASE_URL=tcp://localhost:10200
-TTS_VOICE=
-VOICE_REALTIME=                # optional realtime engine (§ below); empty = none
-ELEVENLABS_API_KEY=            # one key variable per cloud provider
-```
-
-Each driver reports at boot the languages it supports; when the soul's language (`soul.yaml`
-`language`) is not among them the boot report warns, so a model that only knows English never
-fails silently on Indonesian. Small models for weak devices (an in-process runtime such as
-sherpa-onnx) are a later dependency the owner approves (AGENTS.md).
-
-**Hearing.** The adapter, as the sensory cortex, turns speech into a percept: a voice note is
-stored as an attachment and transcribed, and the percept carries the transcript as its
-description (`"Budi (voice note, 0:12): …"`) and in `data.transcript`; live speech on a device is
-segmented by the adapter (wake word, voice activity) and each turn becomes a percept. Imported
-voice notes are transcribed only when opened (§5). A failed or missing STT gives an honest
-description ("Budi sent a voice note (0:12), not transcribed").
-
-**Speaking.** `say(..., voice: true)` asks for speech; reasoning chooses it. A chat adapter sends
-the platform's own voice note, a device speaks through its speaker; without TTS or a voice note
-the text is sent. The words stay in the Log as the `act.out` text, so memory keeps what was said,
-not only audio.
-
-**Listening while speaking** (a reflex of the adapter, D2). When someone speaks over the soul,
-the adapter stops talking at once (barge-in), and the `act.result` reports what was actually
-heard (`spoken_until`), so the soul and its memory know where it was cut off; the interrupting
-speech is a percept with `data.interrupted: true`. Echo cancellation, so the soul does not hear
-itself, belongs to the device (a microphone array with a DSP, a voice satellite).
-
-**Realtime engines** (OpenAI Realtime, Gemini Live, ElevenLabs, and local ones) may be used as a
-faster ear (streaming transcription, end-of-turn detection) and a more expressive mouth (speaking
-the soul's text), never as the one who answers: their own replies are switched off. The price is
-a little more latency than letting them answer, paid for one identity, one memory and privacy
-that holds.
-
-**Latency.** Streaming STT and TTS let the soul start speaking before the whole answer is
-synthesised. A websocket client, if a provider needs one, is a new dependency the owner approves.
-
-**Cost.** Seconds transcribed and characters spoken are recorded with each use (in the percept's
-`data` and the `act.result`) and appear in the metrics; a daily speech limit comes only if needed.
-
-Out of scope: voice calls (project.md §5); cloning anyone's voice but the one the owner chose for
-the soul.
-
+- **Hearing.** A voice note is stored and transcribed; the percept's description carries the
+  transcript; live speech is segmented by the adapter (wake word, voice activity). A missing STT
+  gives an honest description ("a voice note (0:12), not transcribed").
+- **Speaking.** A body's speaking capability may take `voice: true` (a voice note on chat) or
+  always speak (a device); the words stay in the Log as the action's text.
+- **Listening while speaking** (a reflex of the adapter, D2): barge-in stops speech at once, the
+  receipt reports what was actually said (`spoken_until`), and the interrupting speech is a
+  percept. Echo cancellation belongs to the device.
+- **Realtime engines** may be a faster ear and a more expressive mouth, never the one who answers.
+- **Cost**: seconds transcribed and characters spoken are recorded with each use.

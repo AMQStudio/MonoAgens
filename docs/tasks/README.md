@@ -15,10 +15,11 @@ before Task 3 name files by their earlier names; the [glossary](../glossary.md) 
 | 2 | [Core: launch](2-core-launch.md) | **done** — 321 tests, fake 133 checks, violations 0; 16 and 30 flaky; 20, 22 run in Task 3 | Task 1 |
 | 3 | [Core: clean refactor](3-core-refactor.md) | **done** — 336 tests, fake 133/133, violations 0; core imports no middleware; 22/26 real, 09 and 23 flaky, 24 open | Task 2 |
 | 4 | [Middleware and first plugins](4-middleware-plugins.md) | **done** — 539 tests, fake 133/133, launch set 24/26 (Task 3: 22/26), sandbox 53/53 real, honesty counts claims; 5.1–5.3 moved to Task 6; loop in 19 and leaks vs desk carried to Task 5 0.0 | Task 3 |
-| 5 | [Adapters: WhatsApp, Discord and more](5-adapters.md) | **next** — Part 0A providers (model port, OpenCode Go, fallback, new baseline), 0B the loop, brakes, one privacy truth, 0C full outputs, progress note, the two-day paper; then Part 1: one id per person and linking as a merge, places, WhatsApp (full import), Discord, what is shown, Discord roles (D65–D70) | Task 4 |
-| 6 | [Core: depth of mind](6-core-mind.md) | todo — last, after weeks of daily use | Task 5 and some weeks of daily use |
-| 7 | [First users and release](7-release.md) | todo | Task 6 |
-| — | [Later: voice, Home Assistant, more model providers](later-voice-home.md) | todo — moved out of Task 5 Part 2; its number and place are decided with the web panel task | Task 5 |
+| 5 | [Adapters: WhatsApp, Discord and more](5-adapters.md) | **stopped** at 1.12 P (2026-11-14) — providers, loop, brakes, full outputs, identity and linking, WhatsApp, Discord, Telegram and CLI native, the audit's S, A, F.1 and P; the rest (1.10 D83, 1.11, 1.12 F/E/O, 1.8) moved to Task 6 | Task 4 |
+| 6 | [The locked contract](6-contract.md) | **next** — contract v2 as code and its lock, the core and the middleware on the contract, adapters translating everything, tests through the contract only, five fake bodies, the remaining audit items, then daily use on WhatsApp (D86–D88) | Task 5 |
+| 7 | [Core: depth of mind](7-core-mind.md) | todo — after weeks of daily use | Task 6 and some weeks of daily use |
+| 8 | [First users and release](8-release.md) | todo | Task 7 |
+| — | [Later: voice, Home Assistant, more model providers](later-voice-home.md) | todo — moved out of Task 5 Part 2; its number and place are decided with the web panel task | Task 6 |
 
 The architect updates this table and each file's `Status:` line; workers never do.
 
@@ -50,6 +51,9 @@ moment is a failure.
    carries all its material as synthetic data (facts, people, artifacts, realistic results from
    every test tool); a failure is the soul's only after a material check shows the material was
    there ([project.md §4](../project.md), D54).
-6. Design by brain function, not by scenario: never add a rule for one case to the core.
+6. Design by brain function, not by scenario: never add a rule for one case to the core or the
+   middleware. A new case is classified first ([contract.md §9](../contract.md)).
+6a. The contract ([contract.md](../contract.md)) is locked: no task changes it or
+   `contract.lock`; a need it cannot meet stops the work.
 7. Do only what the item asks; no machinery for later.
 8. Workers may tick boxes and write under **Notes**; nothing else in the task file.

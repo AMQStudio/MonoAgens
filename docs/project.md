@@ -45,6 +45,7 @@ timezone: Asia/Jakarta              # where the soul lives; used for <now>
 owner_settings:                     # changed by hand or with /budget and /quiet, which write these lines
   daily_token_budget: 300000
   quiet_hours: { from: "22:00", to: "06:00" }
+  question_ttl_minutes: 30          # an unanswered approval or brake question expires (middleware.md §9)
 runtime:
   tick_seconds: 30
   sleep: { idle_minutes: 30, retry_minutes: 30, hour: 2 }
@@ -53,11 +54,10 @@ bodies:                             # adapters (the key keeps its name); non-sec
   cli: { enabled: true }
   whatsapp:
     enabled: true
-    show: { read_receipts: on, progress: edit }   # optional; overrides interaction: (middleware.md §9)
-interaction:                        # what the soul shows, for every adapter; /show writes these lines
+    render: { composing: on, seen: on, progress: edit }   # this body's own rendering (adapters.md §4)
+interaction:                        # what the soul shows, for every body; /show writes these lines
   thinking: owner_direct            # off | owner_direct | all
   steps: long                       # off | long | all
-  approvals: owner
 plugins:                            # which plugins are on; their settings live in config.d/<name>.yaml
   workspace:   { enabled: true }
   web-search:  { enabled: true }
@@ -67,7 +67,6 @@ roles:                              # middleware.md §8; empty = owner free, eve
   unverified: { base: guest,  label: "Unverified", context: "Not known yet; be kind, share nothing about the owner." }
   customer:   { base: guest,  label: "Customer",   context: "A shop customer; help with products and orders." }
   member:     { base: member }
-  moderator:  { base: member, platform_role: ["space:dc:guild:123/456"] }  # a platform's role, held only in that space (D68, D81)
   runner:     { allow: [workspace.run] }             # a small role for an exception
   toko-a:     { label: "Toko A", settings: { workspace.shared: toko-a } }   # a group role: no base
 people:                             # optional; keyed by person id; the only record of who holds which role
@@ -95,7 +94,8 @@ books win over the starting values in `soul.yaml` and `prior/`.
 | `README.md` (root) | people | what it is, install, run, tune with replay |
 | `AGENTS.md` (root) | coding agents | rules, stack, invariants, size guide |
 | `docs/constitution.md` | everyone | the rules that never change |
-| `docs/core.md` | everyone | the core specification (contract frozen) |
+| `docs/contract.md` | everyone | the one locked contract between the layers (D86–D88) |
+| `docs/core.md` | everyone | the core specification |
 | `docs/core-math.md` | scientists | every formula, why it was chosen, sources |
 | `docs/middleware.md`, `adapters.md`, `plugins.md`, `project.md` | everyone | one specification per layer |
 | `prior/` (root) | developers | default prior values: data, tuned with replay |

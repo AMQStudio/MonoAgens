@@ -23,8 +23,9 @@ the cheap machinery judges a moment worth it.
 ## 2. Signals
 Each signal is a pure function of the current situation with a value in [0, 1].
 
-- **own_name** ∈ {0, 1}: the soul's name appears without the turn being allocated to it
-  (attention capture, §15).
+- **own_name** ∈ {0, 1}: the `named` feature — the soul's name was said without the turn being
+  allocated to it (attention capture, §15). The adapter reports it (contract.md §3); the core
+  never searches text.
 - **info_gap** = max_r cos(v, r) over reference sentences r for the language
   (`references.yaml`), where v is the event's embedding. Rationale: curiosity and helping start
   from a perceived information gap [Loewenstein 1994, PR]; embeddings instead of keywords keep it

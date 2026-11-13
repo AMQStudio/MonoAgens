@@ -1,6 +1,10 @@
 # Task 5 — Adapters: WhatsApp, Discord and more
 
-Status: todo | Depends on: Task 4
+Status: **stopped** at 1.12 P (owner, 2026-11-14) | Depends on: Task 4
+**What remains moved to [Task 6](6-contract.md)** (the locked contract, D86–D88): 1.10's D83 and
+D84/D85 rest, 1.11, 1.12 F.2–F.12, E, O and S.6, and 1.8. They are not done here; the items stay
+unticked as history. Contract v2 removes several of their premises (the neutral `say`, `SHOWS`,
+place info, platform roles); Task 6 is the source.
 One task = one worker prompt, done by one worker. Work through the parts **in order**. File names follow the layout of Task 3 ([glossary](../glossary.md)). Rules: [README](README.md).
 
 **Goal.** The soul is usable every day: model providers as drivers with a fallback, the loop

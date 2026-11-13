@@ -12,12 +12,15 @@ knows when to stay quiet in a group, and can replay every decision it made.
   no case and no person, only opaque ids, labels and numbers, and restricts nothing itself.
 - **Middleware** — the regulator, like drivers: privacy, identity, the owner policy, limits,
   tools and commands, install. It is the only path in and out of the core and keeps it from
-  running wild.
-- **Adapters and plugins** — Telegram, WhatsApp, CLI, later devices and robots; search, files,
-  modes. They talk only to the middleware.
+  running wild. Like the core it is generic: it knows no platform and translates nothing.
+- **Adapters and plugins** — Telegram, WhatsApp, Discord, CLI, later devices, robots and apps;
+  search, files, modes. Each translates its own world into the contract's facts and talks only
+  to the middleware.
 
-The core keeps a stable contract with everything around it: it can improve inside without
-breaking what is built on top.
+One locked contract ([`docs/contract.md`](docs/contract.md)) sits between the layers: six
+generic facts (actor, place, audience, event, capability, receipt) that fit a chat, a robot, a
+workspace app, a sensor and a game alike. The inside can improve without breaking what is built
+on top, and something new enters only as an adapter or a plugin.
 
 > **Note, to avoid confusion.** "Kernel" here is an analogy for how the code is organised, not a
 > literal one: MonoAgens is not an operating system, not a scheduler that serves many agents, and
@@ -26,6 +29,7 @@ breaking what is built on top.
 > of consciousness or feelings. *Agens* is Latin for "the one who acts", the root of *agent*.
 
 - [`docs/constitution.md`](docs/constitution.md) — the rules that never change (read first).
+- [`docs/contract.md`](docs/contract.md) — the one locked contract between the layers.
 - [`docs/core.md`](docs/core.md) — the core specification (contract frozen); formulas and sources
   in [`docs/core-math.md`](docs/core-math.md).
 - [`docs/`](docs/README.md) — one specification per layer: middleware, adapters, plugins, project;
