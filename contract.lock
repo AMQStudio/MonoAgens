@@ -1,0 +1,13 @@
+# sha256 over monoagens/contract/: sorted "<relpath> <sha256 of bytes>" lines, LF-separated
+sha256:13637c808ace0d7cb4ed757d6611f4149ef62631393f38cc92364dccbdc12e3c
+# file __init__.py a454e60206dd1484b54aec165e17fdeb3bdbb99442319876d1ef70f09a47dc53
+# file action.py 9abb61c1bebb68692df661c863efe7eaef40619fe786e47a3a6ea5c8adcf78ac
+# file attachments.py 41c56029651551af1ba669d6b65fe7361b65c478b3273a2f0c21221f5c7ae4cc
+# file audience.py 3ea34cca0fa5f851871cbbce4fcbccb117be505f0acfd30693d2f02295d76c36
+# file capability.py 4058cae7466bdb2e4720423adcf3499db7f6a73424d3c42139de28efc21616a1
+# file context.py 59bea01cabbe7e37e2b9576791455d7d38afe5f5b6459b6d60226abefbb8f972
+# file envelope.py 65212b3c157a2ecba931ef07fde3262f8a1177073ef522fb6211510e61c75caf
+# file hooks.py c576bb92e78ad088aeb53b47f781785bd02d8a4f68d18a9c8184f6293ffe0e91
+# file lifecycle.py cb7a766ce1fce48f2ef324fa677ce81a40229a075423e9ba9593e31d0c88b1fc
+# file percept.py 5c0bee552bb240da753dbcb116f50fa902d36fa3c9ff770ea79c5903b7f6f79f
+# file surfaces.py f18aeecc7f40928285cec79b3b07feca08a7e3639bcf128b0d94423a58ba9cb8
