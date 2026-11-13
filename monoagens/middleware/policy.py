@@ -84,6 +84,7 @@ def modules_for(hook: str, kernel: Any) -> tuple[tuple[str, Middleware], ...]:
                         ("approval-answer", interaction.answer(kernel)),
                         ("commands", registry.commands(kernel)),
                         ("narrate", interaction.narrate(kernel)),
+                        ("read-receipts", interaction.read_receipts_inbound(kernel)),
                         ("attachment-sweep", attachment_sweep(kernel))),
             "context": (("identity-cards", identity.cards(kernel.conn, roles=kernel.roles)),
                         ("self-block", registry.self_block(kernel))),
@@ -114,7 +115,7 @@ def policy_for(hook: str, when: str, kernel: Any) -> Middleware:
             return compose(identity.identity_line(), permission_line(kernel),
                            interaction.typing(kernel), privacy.guard(kernel, "first"))
         return compose(privacy.guard(kernel, "last"), quiet_line(kernel),
-                       approval_line(kernel))
+                       approval_line(kernel), interaction.read_receipts_action(kernel))
     return compose(identity.identity_line(), privacy.delegation(kernel))
 
 
@@ -439,7 +440,9 @@ async def _quiet(kernel: Any, event: Event, arguments: list[str]) -> str:
         window = _quiet_window(before)
         return "quiet hours: off" if window is None else \
             f"quiet hours: {window[0]} to {window[1]}"
-    if len(arguments) == 1 and arguments[0].lower() in ("off", "none", "no"):
+    off_words = tuple(interaction.catalog(kernel.settings).get("quiet", {}).get("off_words")
+                      or ("off", "none"))
+    if len(arguments) == 1 and arguments[0].lower() in off_words:
         after: dict[str, Any] = {}
         rendered: Any = {}
     elif len(arguments) == 2:

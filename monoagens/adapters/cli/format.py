@@ -14,16 +14,19 @@ OWNER = "person:owner"
 
 
 def match_choice(text: str, last_prompt: tuple[str, list[str]] | None) -> tuple[str, str] | None:
-    """Match a numbered answer (`1`, `2`, ...) against the most recent terminal choices prompt."""
+    """Match a numbered answer or option label against the latest terminal choices prompt."""
     if not last_prompt:
         return None
     prompt_id, options = last_prompt
     raw = text.strip()
-    if not raw.isdigit():
-        return None
-    idx = int(raw)
-    if 1 <= idx <= len(options):
-        return options[idx - 1], prompt_id
+    if raw.isdigit():
+        idx = int(raw)
+        if 1 <= idx <= len(options):
+            return options[idx - 1], prompt_id
+    low = raw.lower()
+    for opt in options:
+        if opt.strip().lower() == low:
+            return opt, prompt_id
     return None
 
 
@@ -35,7 +38,9 @@ def event(text: str, *, clock: Clock, name: str = "cli",
     choice_matched = match_choice(text, last_prompt)
     if choice_matched is not None:
         choice_val, q_id = choice_matched
+        raw = text.strip()
         data["choice"] = choice_val
+        data["answer"] = raw if raw.isdigit() else choice_val
         data["reply_to"] = {"message_id": q_id}
     if attachments:
         data["attachments"] = [dict(item) for item in attachments]

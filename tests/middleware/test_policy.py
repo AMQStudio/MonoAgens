@@ -174,11 +174,12 @@ async def test_the_owners_yes_leads_to_exactly_one_retry(aconn):
     kernel, tool, voice = await _kernel(aconn)
     trigger = await _trigger(aconn)
     await _call(kernel, trigger)
-    assert voice.shown and voice.shown[0][1] == "buttons"
+    assert voice.actions and voice.actions[0].kind == "say"
+    assert voice.actions[0].payload["choices"] == ["Ya", "Tidak"]
     (request_id,) = [int((await (await aconn.execute(
         "SELECT id FROM events WHERE kind = 'approval.requested'")).fetchone())[0])]
 
-    await _answer(kernel, "yes")
+    await _answer(kernel, "ya")
 
     queued = await _intent(aconn)
     assert queued.payload["approved"] == request_id
@@ -193,7 +194,7 @@ async def test_a_retry_that_differs_is_asked_once_more_then_refused(aconn):
     kernel, tool, _ = await _kernel(aconn)
     trigger = await _trigger(aconn)
     await _call(kernel, trigger)
-    await _answer(kernel, "yes")
+    await _answer(kernel, "ya")
     queued = await _intent(aconn)
 
     await _call(kernel, trigger, command="rm -rf /", event=queued)
@@ -220,7 +221,7 @@ async def test_no_leads_to_no_retry(aconn):
     trigger = await _trigger(aconn)
     await _call(kernel, trigger)
 
-    await _answer(kernel, "no")
+    await _answer(kernel, "tidak")
 
     assert kernel.queue.empty()
     assert tool.actions == []
@@ -363,15 +364,16 @@ async def test_brake_stops_endless_loop_tells_owner_once_and_can_resume(aconn):
     kinds = [row[0] for row in events]
     assert kinds.count("brake.held") == 1
     assert kinds.count("guard.stopped") == 1
-    assert len(voice.shown) == 1
-    shown_place, shown_kind, shown_data = voice.shown[0]
-    assert shown_place == OWNER_DM and shown_kind == "buttons"
-    notice = shown_data["text"]
-    assert "Stopped work" in notice and "max_wakes_per_hour" in notice and "continue" in notice
+    assert len(voice.actions) == 1
+    prompt_act = voice.actions[0]
+    assert prompt_act.kind == "say" and prompt_act.place == OWNER_DM
+    assert prompt_act.payload["choices"] == ["Lanjutkan", "Berhenti"]
+    notice = prompt_act.payload["text"]
+    assert "Pekerjaan dihentikan" in notice and "max_wakes_per_hour" in notice
 
     reply = Event(id=None, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
                   body="telegram", origin_actor="person:owner",
-                  payload={"description": "yes", "place_kind": "direct", "addressed": True})
+                  payload={"description": "Lanjutkan", "place_kind": "direct", "addressed": True})
     await _drive(kernel, reply)
 
     cur = await aconn.execute("SELECT kind FROM events ORDER BY id")

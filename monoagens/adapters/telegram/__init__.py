@@ -304,11 +304,21 @@ class TelegramBody:
                                           action.place, data, info)
             if isinstance(doc_res, dict) and doc_res.get("message_id"):
                 self._sent.add(str(doc_res["message_id"]))
+        result: dict[str, Any] = {}
         if opened:
-            return {"sent": len(opened)}
+            result["sent"] = len(opened)
         if isinstance(sent_res, dict) and sent_res.get("message_id"):
-            return {"message_id": str(sent_res["message_id"])}
-        return None
+            result["message_id"] = str(sent_res["message_id"])
+        if choices:
+            if isinstance(sent_res, dict) and sent_res.get("poll"):
+                result["choices"] = [{"label": opt, "answer": opt[:100]} for opt in choices]
+            elif len(choices) <= send.MAX_INLINE_CHOICES and not bool(p.get("multiple", False)):
+                result["choices"] = [{"label": opt, "answer": f"choice:{i}:{opt[:32]}"}
+                                     for i, opt in enumerate(choices, 1)]
+            else:
+                result["choices"] = [{"label": opt, "answer": str(i)}
+                                     for i, opt in enumerate(choices, 1)]
+        return result or None
 
     async def show(self, place: str, kind: str, **data: Any) -> Any:
         """Show one non-message thing natively; unknown kinds are refused."""
@@ -319,7 +329,7 @@ class TelegramBody:
         return await send.place_info(self._call, place, bot_id=self.bot_id)
 
     def _callback(self, query: dict[str, Any]) -> Event:
-        """Turn one button callback into an approval answer or `data.choice` percept."""
+        """Turn one button callback into a `data.choice` + `data.answer` percept."""
         raw = str(query.get("data") or "")
         parts = raw.split(":")
         msg = query.get("message") or {}
@@ -327,18 +337,6 @@ class TelegramBody:
         msg_id = str(msg.get("message_id") or "")
         place, form, parent, place_kind = chat_place(chat, msg)
         sender_id = (query.get("from") or {}).get("id")
-        if len(parts) == 3 and parts[0] == "approval":
-            data: dict[str, Any] = {}
-            if msg_id:
-                data["reply_to"] = {"message_id": msg_id}
-            return Event(
-                id=None, ts=self._clock.now(), kind="percept",
-                who=f"telegram:{sender_id}", place=place, body=self.name,
-                payload={"description": parts[1], "place_kind": place_kind,
-                         "addressed": True, "approval": int(parts[2]),
-                         "answer": parts[1] == "yes",
-                         **({"data": data} if data else {})},
-            )
         selected = raw
         if len(parts) >= 3 and parts[0] == "choice":
             opts = self._choices_prompts.get(msg_id)
@@ -348,7 +346,7 @@ class TelegramBody:
             except ValueError:
                 selected = ":".join(parts[2:])
         label = str((query.get("from") or {}).get("first_name") or "someone")
-        data = {"choice": selected, "custom_id": raw}
+        data: dict[str, Any] = {"choice": selected, "answer": raw, "custom_id": raw}
         if msg_id:
             data["reply_to"] = {"message_id": msg_id}
         return Event(

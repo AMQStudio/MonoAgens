@@ -77,7 +77,7 @@ async def test_thinking_shows_in_the_owners_chat_and_never_in_a_group(aconn):
     rule = interaction.narrate(kernel)
     await rule(later, {"conn": aconn, "now": START})
 
-    assert any("(thinking) aku ragu" in data["text"] for _, kind, data in
+    assert any("(berpikir) aku ragu" in data["text"] for _, kind, data in
                kernel.tools.adapters["telegram"].shown)
 
     group = await append_event(aconn, ts=START, kind="act.out", who="person:owner",
@@ -102,7 +102,7 @@ async def test_a_thought_is_shown_once(aconn):
     await rule(later, {"conn": aconn, "now": START})
 
     shown = [data["text"] for _, kind, data in kernel.tools.adapters["telegram"].shown]
-    assert shown.count("(thinking) satu") == 1
+    assert shown.count("(berpikir) satu") == 1
     assert note.id is not None
 
 
@@ -121,7 +121,7 @@ async def test_a_long_act_shows_one_step_and_a_short_one_nothing(aconn):
     await rule(short_result, {"conn": aconn, "now": START})
 
     shown = [data["text"] for _, _, data in kernel.tools.adapters["telegram"].shown]
-    steps = [text for text in shown if text.startswith("(step)")]
+    steps = [text for text in shown if text.startswith("(langkah)")]
     assert len(steps) == 1 and "telegram.run" in steps[0]
     assert len(steps[0]) < 260
     assert trigger.id is not None
@@ -151,34 +151,30 @@ async def test_a_thought_the_place_may_not_see_is_dropped(aconn):
     assert private.id is not None
 
 
-async def test_a_missing_buttons_capability_falls_back_to_the_text_question(aconn):
-    kernel = await _kernel(aconn, body=Screen(shows=("typing",)))
+async def test_approval_and_brake_send_neutral_choices_in_configured_language(aconn):
+    kernel = await _kernel(aconn, body=_RichScreen(shows=("typing",)))
     await append_event(aconn, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
                        body="telegram",
                        payload={"description": "halo", "place_kind": "direct"})
     trigger = await _percept(aconn)
 
     place = await interaction.request(kernel, trigger, 7, "workspace.run", {"command": "ls"},
-                                      "the call runs code")
+                                      "perlu konfirmasi")
 
     assert place == OWNER_DM
-    assert kernel.tools.adapters["telegram"].actions[-1].payload["text"].startswith(
-        "Approval needed: workspace.run")
+    sent = kernel.tools.adapters["telegram"].actions[-1].payload
+    assert sent["text"].startswith("Perlu izin: workspace.run")
+    assert sent["choices"] == ["Ya", "Tidak"]
     assert not kernel.tools.adapters["telegram"].shown
 
-
-async def test_buttons_are_shown_when_the_adapter_can(aconn):
-    kernel = await _kernel(aconn, body=Screen(shows=("buttons",)))
-    await append_event(aconn, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
-                       body="telegram",
-                       payload={"description": "halo", "place_kind": "direct"})
-    trigger = await _percept(aconn)
-
-    await interaction.request(kernel, trigger, 9, "workspace.run", {}, "the call runs code")
-
-    place, kind, data = kernel.tools.adapters["telegram"].shown[-1]
-    assert kind == "buttons"
-    assert data["buttons"] == [("Yes", "approval:yes:9"), ("No", "approval:no:9")]
+    # Switching soul language to English switches catalog labels and prompts cleanly.
+    kernel.settings["identity"]["language"] = "en"
+    await interaction.notify_brake(
+        kernel, trigger, root_id=int(trigger.id), place=OWNER_DM, work="task-1",
+        reason="max_wakes_per_hour", limit="max_wakes_per_hour", value=3, cap=3)
+    brake_sent = kernel.tools.adapters["telegram"].actions[-1].payload
+    assert "Stopped work (task-1)" in brake_sent["text"]
+    assert brake_sent["choices"] == ["Continue", "Stop"]
 
 
 async def test_a_button_callback_answers_the_approval(aconn):
@@ -269,7 +265,20 @@ class _RichScreen(Screen):
         self.actions.append(action)
         if action.kind == "say":
             self._msg_seq += 1
-            return {"message_id": f"m{self._msg_seq}"}
+            mid = f"m{self._msg_seq}"
+            choices = list((action.payload or {}).get("choices") or ())
+            if choices and "reactions" in self.shows and "buttons" not in self.shows:
+                for emoji in ("👍", "👎"):
+                    self.shown.append((action.place, "reactions",
+                                       {"message_id": mid, "emoji": emoji}))
+                return {"message_id": mid, "choices": [
+                    {"label": choices[0], "answer": "👍"},
+                    {"label": choices[1], "answer": "👎"},
+                ]}
+            if choices:
+                return {"message_id": mid, "choices": [
+                    {"label": opt, "answer": str(i)} for i, opt in enumerate(choices, 1)]}
+            return {"message_id": mid}
         return {"text": "hasil" if action.kind == "run" else None}
 
     async def show(self, place: str, kind: str, **data: Any) -> Any:
@@ -326,53 +335,71 @@ async def test_thinking_all_shows_group_thoughts_but_hides_private_dm_thoughts(a
     await interaction.narrate(kernel)(later, {"conn": aconn, "now": START})
 
     texts = [data["text"] for _, _, data in screen.shown]
-    assert "(thinking) group thought" in texts
+    assert "(berpikir) group thought" in texts
     assert not any("leaked dm" in t or "private thought" in t for t in texts)
 
 
-async def test_read_receipts_respect_decision_import_and_shared_owner_account(aconn):
+async def test_read_receipts_respect_inbound_action_hooks_and_restart_dedup(aconn):
     screen = _RichScreen(name="whatsapp", shows=("read_receipts", "typing"))
     kernel = await _kernel(aconn, body=screen)
 
-    # Normal percept: read receipt emitted after decision.silent.
+    async def _noop(*_args):
+        return None
+
+    # Normal live percept: read receipt emitted by the inbound hook and recorded in the Log.
     trigger = await append_event(
         aconn, ts=START, kind="percept", who="person:budi", place="space:wa:1",
         body="whatsapp", payload={"description": "hi", "data": {"message_id": "m1"}})
-    await kernel._emit(trigger, "decision.silent", {"reason": "quiet"})
+    await kernel.hooks.inbound.run(trigger, {"conn": aconn, "now": START},
+                                   on_stop=_noop, on_error=_noop)
     assert [(k, d["message_id"]) for _, k, d in screen.shown] == [("read_receipts", "m1")]
 
-    # Imported & backfill percepts are NEVER marked read.
+    # Restarting kernel and seeing m1 again does NOT emit a duplicate read receipt.
     screen.shown.clear()
+    restarted = await _kernel(aconn, body=screen)
+    await restarted.hooks.inbound.run(trigger, {"conn": aconn, "now": START},
+                                      on_stop=_noop, on_error=_noop)
+    assert not screen.shown
+
+    # Imported & backfill percepts are NEVER marked read.
     imp = await append_event(
         aconn, ts=START, kind="percept", who="person:budi", place="space:wa:1",
         body="whatsapp", payload={"description": "old", "imported": True, "backfill": True,
                                   "data": {"message_id": "m2"}})
-    await kernel._emit(imp, "decision.silent", {"reason": "imported"})
+    await restarted.hooks.inbound.run(imp, {"conn": aconn, "now": START},
+                                      on_stop=_noop, on_error=_noop)
     assert not screen.shown
 
-    # Shared owner account: owner's own message OR unanswered friend message gets NO read receipt.
+    # Shared owner account: inbound hook leaves messages unread until soul speaks in action hook.
     await write_state(aconn, "self_account:whatsapp", {"account": "wa:+62000"}, trigger.id)
-    await write_state(aconn, "alias:wa:+62000", {"person": "person:owner"}, trigger.id)
+    await write_state(aconn, "alias:wa:+62000", {"who": "person:owner"}, trigger.id)
     owner_msg = await append_event(
         aconn, ts=START, kind="percept", who="person:owner", place="space:wa:2",
         body="whatsapp", payload={"description": "manual", "data": {"message_id": "m3"}})
-    await kernel._emit(owner_msg, "decision.silent", {"reason": "owner_manual"})
-    friend_silent = await append_event(
-        aconn, ts=START, kind="percept", who="person:budi", place="space:wa:2",
-        body="whatsapp", payload={"description": "unread on phone", "data": {"message_id": "m4"}})
-    await kernel._emit(friend_silent, "decision.silent", {"reason": "quiet"})
-    assert not screen.shown
-
-    # Once the soul replies communicatively to a friend's message, it IS marked read.
+    await restarted.hooks.inbound.run(owner_msg, {"conn": aconn, "now": START},
+                                      on_stop=_noop, on_error=_noop)
     friend_msg = await append_event(
         aconn, ts=START, kind="percept", who="person:budi", place="space:wa:2",
         body="whatsapp", payload={"description": "ping", "data": {"message_id": "m5"}})
-    soul_act = await kernel._emit(
-        friend_msg, "act.out",
-        {"capability": "whatsapp.say", "arguments": {"text": "halo"}, "communicative": True},
-        place="space:wa:2")
-    assert soul_act.id is not None
-    assert [(k, d["message_id"]) for _, k, d in screen.shown] == [("read_receipts", "m5")]
+    await restarted.hooks.inbound.run(friend_msg, {"conn": aconn, "now": START},
+                                      on_stop=_noop, on_error=_noop)
+    assert not screen.shown
+
+    # Communicative act in space:wa:2 runs action hook -> marks friend_msg m5 read (not owner m3).
+    ctx = {"conn": aconn, "event": friend_msg, "now": START, "capability": "whatsapp.say",
+           "descriptor": {"communicative": True}, "origin_actor": "person:owner",
+           "arguments": {"text": "halo"}, "to": None, "via": None, "place": None,
+           "refusal": None, "handled": False, "labels": {}, "long_running": False,
+           "identity_changing": False}
+    await restarted.hooks.action.run({"text": "halo"}, ctx, on_stop=_noop, on_error=_noop)
+    read_calls = [d["message_id"] for _, k, d in screen.shown if k == "read_receipts"]
+    assert read_calls == ["m5"]
+
+    # Another speak (or restart) does NOT re-mark m5.
+    screen.shown.clear()
+    await restarted.hooks.action.run({"text": "lagi"}, {**ctx, "place": None, "refusal": None},
+                                     on_stop=_noop, on_error=_noop)
+    assert [d["message_id"] for _, k, d in screen.shown if k == "read_receipts"] == []
 
 
 async def test_progress_edits_single_message_when_edit_mode_else_sends_new(aconn):
@@ -380,15 +407,21 @@ async def test_progress_edits_single_message_when_edit_mode_else_sends_new(aconn
     kernel = await _kernel(aconn, body=screen,
                            interaction_settings={"thinking": "off", "steps": "long", "progress": "edit"})
     trigger = await _percept(aconn)
-    rule = interaction.narrate(kernel)
-    step1 = Event(id=101, ts=START, kind="act.result", who="person:owner", place=OWNER_DM,
-                  body="telegram", caused_by=trigger.id,
-                  payload={"capability": "telegram.run", "result": {"text": "first"}})
-    step2 = Event(id=102, ts=START, kind="act.result", who="person:owner", place=OWNER_DM,
-                  body="telegram", caused_by=trigger.id,
-                  payload={"capability": "telegram.run", "result": {"text": "second"}})
-    await rule(step1, {"conn": aconn, "now": START})
-    await rule(step2, {"conn": aconn, "now": START})
+    step1 = await append_event(
+        aconn, ts=START, kind="act.result", who="person:owner", place=OWNER_DM,
+        body="telegram", caused_by=trigger.id,
+        payload={"capability": "telegram.run", "result": {"text": "first"}})
+    step2 = await append_event(
+        aconn, ts=START, kind="act.result", who="person:owner", place=OWNER_DM,
+        body="telegram", caused_by=trigger.id,
+        payload={"capability": "telegram.run", "result": {"text": "second"}})
+    await interaction.narrate(kernel)(step1, {"conn": aconn, "now": START})
+
+    # Even after a kernel restart, step2 resolves prog-1 from the Log.
+    restarted = await _kernel(
+        aconn, body=screen,
+        interaction_settings={"thinking": "off", "steps": "long", "progress": "edit"})
+    await interaction.narrate(restarted)(step2, {"conn": aconn, "now": START})
 
     assert len(screen.shown) == 2
     assert "message_id" not in screen.shown[0][2]
@@ -397,8 +430,8 @@ async def test_progress_edits_single_message_when_edit_mode_else_sends_new(aconn
 
     # Switching progress to `new` sends each step via say instead of editing.
     screen.shown.clear()
-    kernel.settings["interaction"]["progress"] = "new"
-    await rule(step2, {"conn": aconn, "now": START})
+    restarted.settings["interaction"]["progress"] = "new"
+    await interaction.narrate(restarted)(step2, {"conn": aconn, "now": START})
     assert not screen.shown
     assert len(screen.actions) == 1 and screen.actions[0].kind == "say"
 
@@ -425,31 +458,41 @@ async def test_show_switch_per_adapter_writes_config_and_refuses_gaps(aconn, tmp
     assert "bodies:" in written and ("typing: off" in written or "typing: 'off'" in written)
 
 
-async def test_reaction_fallback_prompts_and_approves_when_buttons_missing(aconn):
+async def test_reaction_approval_answered_after_restart_still_counts(aconn):
     screen = _RichScreen(shows=("typing", "reactions"))
     kernel = await _kernel(aconn, body=screen)
     await append_event(aconn, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
                        body="telegram", payload={"description": "halo", "place_kind": "direct"})
     trigger = await _percept(aconn)
     asked = await kernel._emit(trigger, interaction.REQUEST, {
-        "capability": "telegram.run", "arguments": {}, "who": "person:owner",
-        "place": OWNER_DM, "reason": "needs reaction approval"})
+        "capability": "telegram.run", "arguments": {"command": "echo hi"},
+        "who": "person:owner", "place": OWNER_DM, "reason": "needs reaction approval"})
 
-    await interaction.request(kernel, trigger, int(asked.id), "telegram.run", {}, "runs work")
+    await interaction.request(kernel, trigger, int(asked.id), "telegram.run",
+                              {"command": "echo hi"}, "runs work")
 
     assert any(k == "reactions" and d["emoji"] == "👍" for _, k, d in screen.shown)
     assert any(k == "reactions" and d["emoji"] == "👎" for _, k, d in screen.shown)
     msg_id = screen.shown[-1][2]["message_id"]
 
-    # Owner reacts 👍 -> approval.answered True + queued intent.
-    reaction_event = Event(id=None, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
-                           body="telegram",
-                           payload={"description": "", "data": {"reaction": {
-                               "emoji": "👍", "message_id": msg_id}}})
-    await interaction.answer(kernel)(reaction_event, {"conn": aconn, "now": START})
+    # Simulate a full process restart: a fresh kernel with zero in-memory prompt state.
+    restarted = await _kernel(aconn, body=_RichScreen(shows=("typing", "reactions")))
+    reaction_event = Event(
+        id=None, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
+        body="telegram",
+        payload={"description": "", "data": {
+            "reply_to": {"message_id": msg_id},
+            "reaction": {"emoji": "👍", "message_id": msg_id},
+            "answer": "👍",
+        }},
+    )
+    await interaction.answer(restarted)(reaction_event, {"conn": aconn, "now": START})
     cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'approval.answered'")
     row = await cur.fetchone()
     assert row is not None and row[0]["allowed"] is True
+    assert row[0]["request"] == asked.id
+    queued = restarted.queue.get_nowait().event
+    assert queued.kind == "intent" and queued.payload["approved"] == asked.id
 
 
 async def test_stickers_off_rewrites_sticker_argument_to_emoji_fallback(aconn):

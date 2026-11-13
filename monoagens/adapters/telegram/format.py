@@ -161,7 +161,9 @@ def event(update_id: int, message: dict[str, Any], text: str, *, clock: Clock,
     choice_matched = _match_choice(effective_text, reply_id, choices_prompts or {})
     if choice_matched is not None:
         val, q_id = choice_matched
+        clean = effective_text.strip()
         data["choice"] = val
+        data["answer"] = clean if clean.isdigit() else val
         data.setdefault("reply_to", {"message_id": int(q_id) if q_id.isdigit() else q_id})
 
     if place_ev_desc:
@@ -226,7 +228,12 @@ def reaction_event(update_id: int, update: dict[str, Any], *, clock: Clock,
         who=f"telegram:{actor['id']}", place=place, body=name,
         payload={
             "cursor": update_id,
-            "data": {"message_id": msg_id, "reaction": {"message_id": msg_id, "emoji": emoji}},
+            "data": {
+                "message_id": msg_id,
+                "reaction": {"message_id": msg_id, "emoji": emoji},
+                "answer": emoji,
+                **({"reply_to": {"message_id": msg_id}} if msg_id else {}),
+            },
             "description": f"{label} reacted {emoji} to {msg_id}",
             "place_kind": place_kind,
             "place_info": _place_meta(chat, form, parent),
@@ -258,8 +265,8 @@ def poll_answer_event(update_id: int, answer: dict[str, Any], *, clock: Clock,
         who=f"telegram:{user['id']}", place=place, body=name,
         payload={
             "cursor": update_id,
-            "data": {"choice": choice_val, "reply_to": {"message_id": msg_id},
-                     "poll_id": poll_id},
+            "data": {"choice": choice_val, "answer": choice_val,
+                     "reply_to": {"message_id": msg_id}, "poll_id": poll_id},
             "description": f"{label} chose {choice_val}",
             "place_kind": "direct" if place.count(":") == 2 and not place.split(":")[2].startswith("-") else "shared",
             "addressed": True,

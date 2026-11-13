@@ -173,6 +173,9 @@ def extract_place_info(channel: Any, *, bot_user: Any = None,
         if rids:
             info["roles"] = [f"{guild.id}/{rid}" for rid in rids]
     related[place_id(channel)] = info
+    parents = {pid: str(meta["parent"]) for pid, meta in related.items() if meta.get("parent")}
+    if parents:
+        info["parents"] = parents
     return info, related
 
 

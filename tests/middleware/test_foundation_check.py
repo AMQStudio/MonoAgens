@@ -277,7 +277,7 @@ async def test_7_thinking_never_shows_in_a_group_and_does_in_the_owner_chat(acon
     await rule(group_out, {"conn": aconn, "now": START})
 
     shown = [(place, data.get("text")) for place, kind, data in voice.shown]
-    assert (OWNER_DM, "(thinking) hati-hati") in shown
+    assert (OWNER_DM, "(berpikir) hati-hati") in shown
     assert not any(place == GROUP for place, _ in shown)
     assert note.id is not None
 

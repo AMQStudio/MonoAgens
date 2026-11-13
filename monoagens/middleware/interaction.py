@@ -7,6 +7,7 @@ import pathlib
 import re
 from collections.abc import Mapping
 from dataclasses import replace
+from functools import lru_cache
 from typing import Any
 
 import yaml
@@ -15,6 +16,8 @@ from monoagens.core.hooks import Continue, Middleware, Replace
 from monoagens.infra.store import append_event, read_state
 from monoagens.middleware import contract, identity, loader, privacy, registry
 from monoagens.types import Event
+
+_LANG_DIR = pathlib.Path(__file__).resolve().parent / "lang"
 
 DEFAULTS: dict[str, str] = {
     "thinking": "owner_direct",
@@ -46,55 +49,87 @@ REQUEST = "approval.requested"
 ANSWERED = "approval.answered"
 BRAKE_HELD = "brake.held"
 BRAKE_RESUMED = "brake.resumed"
-YES = ("yes", "ya", "👍")
-NO = ("no", "tidak", "👎")
 SHOWN = "interaction.shown"
 SPLIT = "interaction.split"
 STEP_CHARS = 200
 
 
-async def _ask_prompt(kernel: Any, body: str, place: str, text: str, request_id: int,
-                      *, prefix: str = "approval",
-                      yes_label: str = "Yes", no_label: str = "No") -> None:
-    """Deliver an approval/continue prompt via buttons -> reactions -> text (D70)."""
+@lru_cache(maxsize=16)
+def _load_lang(code: str) -> dict[str, Any]:
+    """Load one message catalog file from `lang/<code>.yaml`, with `en.yaml` fallback."""
+    en_path = _LANG_DIR / "en.yaml"
+    base = yaml.safe_load(en_path.read_text(encoding="utf-8")) or {}
+    clean = str(code or "en").strip().lower().replace("_", "-").split("-", 1)[0]
+    path = _LANG_DIR / f"{clean}.yaml"
+    if not path.exists() or path == en_path:
+        return dict(base)
+    over = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    merged = {key: (dict(val) if isinstance(val, Mapping) else val) for key, val in base.items()}
+    for key, val in over.items():
+        if isinstance(val, Mapping) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **val}
+        else:
+            merged[key] = val
+    return merged
+
+
+def catalog(settings: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Return the message catalog in the soul's configured language."""
+    ident = (settings or {}).get("identity") or {}
+    code = ident.get("language") if isinstance(ident, Mapping) else "en"
+    return _load_lang(str(code or "en"))
+
+
+def _normalize_choices(raw: Any, labels: list[str]) -> list[dict[str, str]]:
+    """Return `[{label, answer}, ...]` from an adapter's `act.result` or ordinal fallback."""
+    if isinstance(raw, list) and len(raw) >= len(labels):
+        parsed = [{"label": str(item.get("label") or ""), "answer": str(item.get("answer") or "")}
+                  for item in raw[:len(labels)] if isinstance(item, Mapping)]
+        if len(parsed) == len(labels) and all(c["answer"] for c in parsed):
+            return parsed
+    return [{"label": label, "answer": str(index + 1)} for index, label in enumerate(labels)]
+
+
+async def _send_prompt(kernel: Any, trigger: Event, place: str, text: str, *,
+                       prompt_kind: str, prompt_id: int,
+                       choices: list[str]) -> None:
+    """Deliver a neutral `choices` prompt via `say` and record its returned tokens in the Log."""
+    body = await _body_of(kernel.conn, place)
     adapter = kernel.tools.adapters.get(body)
-    if adapter is None:
-        return
-    caps = shows(adapter)
-    if "buttons" in caps:
-        await adapter.show(place, "buttons", text=text, buttons=[
-            (yes_label, f"{prefix}:yes:{request_id}"),
-            (no_label, f"{prefix}:no:{request_id}"),
-        ])
-        return
-    trigger = Event(id=None, ts=kernel.clock.now(), kind="act.out", who=OWNER,
-                    place=place, body=body)
-    result = await kernel.tools.act(trigger, f"{body}.say", {"text": text})
-    msg_id = str(result.get("message_id") or "") if isinstance(result, dict) else ""
-    if "reactions" in caps and msg_id:
-        for emoji in ("👍", "👎"):
-            await adapter.show(place, "reactions", message_id=msg_id, emoji=emoji)
-        prompts = kernel.__dict__.setdefault("_approval_reaction_prompts", {})
-        prompts[(place, msg_id)] = (prefix, request_id)
+    args: dict[str, Any] = {"text": text, "choices": list(choices)}
+    act_out = await kernel._emit(trigger, "act.out", {
+        "capability": f"{body}.say" if adapter is not None else "",
+        "arguments": args, "communicative": True}, place=place)
+    result: Any = None
+    if adapter is not None:
+        out_event = Event(id=None, ts=kernel.clock.now(), kind="act.out", who=OWNER,
+                          place=place, body=body, caused_by=act_out.id)
+        result = await kernel.tools.act(out_event, f"{body}.say", args)
+        if result is not None:
+            await kernel._emit(act_out, "act.result", {
+                "capability": f"{body}.say", "result": result}, place=place)
+    msg_id = str(result.get("message_id") or "") if isinstance(result, Mapping) else ""
+    recorded = _normalize_choices(result.get("choices") if isinstance(result, Mapping) else None,
+                                  choices)
+    await kernel._emit(act_out, SHOWN, {
+        "kind": "prompt", "prompt_kind": prompt_kind, "prompt_id": prompt_id,
+        "message_id": msg_id, "choices": recorded,
+        "positive": choices[0], "negative": choices[1],
+    }, place=place)
 
 
 async def request(kernel: Any, trigger: Event, request_id: int, capability: str,
                   arguments: dict[str, Any], reason: str) -> str | None:
-    """Ask the owner to allow one call; return the place the question went to, if any."""
+    """Ask the owner to allow one call via neutral `choices`; return the place asked, if any."""
     place = await identity.direct_place(kernel.conn, OWNER)
     if place is None:
         return None
-    body = await _body_of(kernel.conn, place)
-    adapter = kernel.tools.adapters.get(body)
-    text = (f"Approval needed: {capability} "
-            f"{json.dumps(arguments, ensure_ascii=False, sort_keys=True)}\n"
-            f"Reason: {reason}. Reply yes or no.")
-    await kernel._emit(trigger, "act.out", {
-        "capability": f"{body}.say" if adapter is not None else "",
-        "arguments": {"text": text}, "communicative": True}, place=place)
-    if adapter is None:
-        return None
-    await _ask_prompt(kernel, body, place, text, request_id, prefix="approval")
+    cat = catalog(getattr(kernel, "settings", None))["approval"]
+    args_json = json.dumps(arguments, ensure_ascii=False, sort_keys=True)
+    text = str(cat["prompt"]).format(capability=capability, arguments=args_json, reason=reason)
+    choices = [str(cat["yes_label"]), str(cat["no_label"])]
+    await _send_prompt(kernel, trigger, place, text, prompt_kind="approval",
+                       prompt_id=request_id, choices=choices)
     return place
 
 
@@ -143,9 +178,74 @@ async def brake_by_id(conn: Any, brake_id: int) -> dict[str, Any] | None:
     return dict(row[0] or {}) if row else None
 
 
+async def _prompt_by_reply(conn: Any, place: str, message_id: str) -> dict[str, Any] | None:
+    """Find the newest open approval or brake prompt rendered with `message_id` in `place`."""
+    cur = await conn.execute(
+        "SELECT payload FROM events WHERE kind = %s AND place = %s "
+        "AND payload->>'kind' = 'prompt' AND payload->>'message_id' = %s "
+        "ORDER BY id DESC LIMIT 5",
+        (SHOWN, place, message_id))
+    for row in await cur.fetchall():
+        info = dict(row[0] or {})
+        kind = str(info.get("prompt_kind") or "")
+        prompt_id = int(info.get("prompt_id") or 0)
+        if not prompt_id:
+            continue
+        if kind == "approval":
+            row_ans = await (await conn.execute(
+                "SELECT 1 FROM events WHERE kind = %s AND payload->>'request' = %s LIMIT 1",
+                (ANSWERED, str(prompt_id)))).fetchone()
+            if row_ans is None and await by_id(conn, prompt_id) is not None:
+                return info
+        elif kind == "brake":
+            row_ans = await (await conn.execute(
+                "SELECT 1 FROM events WHERE kind = %s AND payload->>'brake' = %s LIMIT 1",
+                (BRAKE_RESUMED, str(prompt_id)))).fetchone()
+            if row_ans is None and await brake_by_id(conn, prompt_id) is not None:
+                return info
+    return None
+
+
+def _match_choice_token(prompt: Mapping[str, Any], token: Any,
+                        text: str, settings: Mapping[str, Any] | None) -> bool | None:
+    """Match an opaque `answer` token or typed label against recorded choices (`[pos, neg]`)."""
+    choices = [item for item in (prompt.get("choices") or ()) if isinstance(item, Mapping)]
+    if token is not None and str(token):
+        tok = str(token)
+        for index, choice in enumerate(choices):
+            if tok == str(choice.get("answer") or ""):
+                return index == 0
+        low = tok.strip().lower()
+        for index, choice in enumerate(choices):
+            if low == str(choice.get("label") or "").strip().lower() or low == str(index + 1):
+                return index == 0
+    if text:
+        low = text.strip().lower()
+        for index, choice in enumerate(choices):
+            if low == str(choice.get("label") or "").strip().lower() or low == str(index + 1):
+                return index == 0
+        cat = catalog(settings)
+        app_cat, brake_cat = cat["approval"], cat["brake"]
+        pos = {str(w).lower() for w in (app_cat.get("yes_words") or ())} | {
+            str(app_cat.get("yes_label") or "").lower(),
+            str(brake_cat.get("continue_label") or "").lower(),
+            str(prompt.get("positive") or "").lower(),
+        }
+        neg = {str(w).lower() for w in (app_cat.get("no_words") or ())} | {
+            str(app_cat.get("no_label") or "").lower(),
+            str(brake_cat.get("stop_label") or "").lower(),
+            str(prompt.get("negative") or "").lower(),
+        }
+        if low in pos:
+            return True
+        if low in neg:
+            return False
+    return None
+
+
 async def notify_brake(kernel: Any, trigger: Event, *, root_id: int, place: str, work: str,
                        reason: str, limit: str, value: int, cap: int) -> Event:
-    """Record a held brake and tell the owner once in the owner's direct chat."""
+    """Record a held brake and ask the owner once via neutral `choices`."""
     brake = await kernel._emit(trigger, BRAKE_HELD, {
         "root": root_id, "place": place, "work": work, "reason": reason,
         "limit": limit, "value": value, "cap": cap,
@@ -154,18 +254,12 @@ async def notify_brake(kernel: Any, trigger: Event, *, root_id: int, place: str,
     direct = await identity.direct_place(kernel.conn, OWNER)
     if direct is None:
         return brake
-    body = await _body_of(kernel.conn, direct)
-    adapter = kernel.tools.adapters.get(body)
-    text = (f"Stopped work ({work}): {reason}. "
-            "Reply yes to continue, or no to leave it stopped.")
-    await kernel._emit(brake, "act.out", {
-        "capability": f"{body}.say" if adapter is not None else "",
-        "arguments": {"text": text}, "communicative": True}, place=direct)
-    if adapter is None:
-        return brake
+    cat = catalog(getattr(kernel, "settings", None))["brake"]
+    text = str(cat["prompt"]).format(work=work, reason=reason, limit=limit, value=value, cap=cap)
+    choices = [str(cat["continue_label"]), str(cat["stop_label"])]
     assert brake.id is not None
-    await _ask_prompt(kernel, body, direct, text, int(brake.id),
-                      prefix="brake", yes_label="Continue", no_label="Stop")
+    await _send_prompt(kernel, brake, direct, text, prompt_kind="brake",
+                       prompt_id=int(brake.id), choices=choices)
     return brake
 
 
@@ -187,28 +281,26 @@ async def _answer_brake(kernel: Any, item: Event, brake_id: int, held: dict[str,
                      "place_kind": held.get("place_kind")}))
 
 
-def _match_reaction_approval(kernel: Any, item: Event) -> tuple[str, int, bool] | None:
-    data = (item.payload or {}).get("data") or {}
-    react = data.get("reaction") or {}
-    if not isinstance(react, Mapping):
-        return None
-    emoji = str(react.get("emoji") or "").strip()
-    if emoji not in ("👍", "👎"):
-        return None
-    prompts = kernel.__dict__.get("_approval_reaction_prompts") or {}
-    target_id = str(react.get("message_id") or "")
-    match = prompts.get((str(item.place or ""), target_id))
-    if match is None:
-        return None
-    prefix, req_id = match
-    return prefix, req_id, emoji == "👍"
+def _reply_message_id(data: Mapping[str, Any]) -> str:
+    """Extract `data.reply_to`'s message id (falling back to reaction target id)."""
+    reply_to = data.get("reply_to")
+    if isinstance(reply_to, Mapping):
+        mid = str(reply_to.get("message_id") or reply_to.get("id") or "")
+        if mid:
+            return mid
+    elif isinstance(reply_to, str) and reply_to:
+        return reply_to
+    react = data.get("reaction")
+    if isinstance(react, Mapping):
+        return str(react.get("message_id") or "")
+    return ""
 
 
 def answer(kernel: Any) -> Middleware:
-    """Inbound rule: owner yes/no, button click or reaction answers pending approval/brake."""
+    """Inbound rule: owner or authorized reply answers pending approval/brake from the Log."""
 
     async def rule(item: Any, ctx: Any) -> Any:
-        """Turn one answer into `approval.answered` / `brake.resumed`, and yes into an intent."""
+        """Match an incoming answer against pending Log prompts and record the outcome."""
         del ctx
         if getattr(item, "kind", "") != "percept":
             return Continue()
@@ -216,6 +308,8 @@ def answer(kernel: Any) -> Middleware:
         answerer = str(item.origin_actor or item.who)
         owner = answerer == OWNER
         request_id, allowed = None, False
+        data = payload.get("data") or {}
+        reply_mid = _reply_message_id(data) if isinstance(data, Mapping) else ""
         if payload.get("approval") is not None:
             if not (owner or kernel.roles.can(answerer, "approval.answer", item.place)):
                 return Continue()
@@ -228,29 +322,53 @@ def answer(kernel: Any) -> Middleware:
                 await _answer_brake(kernel, item, int(payload["brake"]), held,
                                     bool(payload.get("answer")), answerer)
             return Continue()
-        elif (rmatch := _match_reaction_approval(kernel, item)) is not None:
-            prefix, request_id, allowed = rmatch
-            if not (owner or (prefix == "approval"
-                              and kernel.roles.can(answerer, "approval.answer", item.place))):
-                return Continue()
-            if prefix == "brake":
-                held = await brake_by_id(kernel.conn, request_id)
-                if held is not None:
-                    await _answer_brake(kernel, item, request_id, held, allowed, answerer)
-                return Continue()
+        elif reply_mid:
+            prompt = await _prompt_by_reply(kernel.conn, str(item.place or ""), reply_mid)
+            if prompt is not None:
+                token = data.get("answer")
+                if token is None:
+                    token = data.get("choice")
+                if token is None and isinstance(data.get("reaction"), Mapping):
+                    token = data["reaction"].get("emoji")
+                matched = _match_choice_token(
+                    prompt, token, str(payload.get("description") or ""),
+                    getattr(kernel, "settings", None))
+                if matched is not None:
+                    pkind = str(prompt.get("prompt_kind") or "")
+                    pid = int(prompt.get("prompt_id") or 0)
+                    if pkind == "brake":
+                        if not owner:
+                            return Continue()
+                        held = await brake_by_id(kernel.conn, pid)
+                        if held is not None:
+                            await _answer_brake(kernel, item, pid, held, matched, answerer)
+                        return Continue()
+                    if pkind == "approval":
+                        if not (owner or kernel.roles.can(
+                                answerer, "approval.answer", item.place)):
+                            return Continue()
+                        request_id, allowed = pid, matched
         else:
             text = str(payload.get("description") or "").strip().lower()
-            if owner and text in (*YES, *NO):
+            if owner and text:
+                cat = catalog(getattr(kernel, "settings", None))
+                app_cat, brake_cat = cat["approval"], cat["brake"]
+                pos_app = {str(w).lower() for w in (app_cat.get("yes_words") or ())} | {
+                    str(app_cat.get("yes_label") or "").lower()}
+                neg_app = {str(w).lower() for w in (app_cat.get("no_words") or ())} | {
+                    str(app_cat.get("no_label") or "").lower()}
+                pos_brk = pos_app | {str(brake_cat.get("continue_label") or "").lower()}
+                neg_brk = neg_app | {str(brake_cat.get("stop_label") or "").lower()}
                 found_approval = await pending(kernel.conn)
                 found_brake = await pending_brake(kernel.conn)
                 if found_brake is not None and (
                         found_approval is None or found_brake["id"] > found_approval["id"]):
-                    await _answer_brake(kernel, item, int(found_brake["id"]), found_brake,
-                                        text in YES, answerer)
+                    if text in pos_brk or text in neg_brk:
+                        await _answer_brake(kernel, item, int(found_brake["id"]), found_brake,
+                                            text in pos_brk, answerer)
                     return Continue()
-                if found_approval is None:
-                    return Continue()
-                request_id, allowed = int(found_approval["id"]), text in YES
+                if found_approval is not None and (text in pos_app or text in neg_app):
+                    request_id, allowed = int(found_approval["id"]), text in pos_app
         if request_id is None:
             return Continue()
         asked = await by_id(kernel.conn, request_id)
@@ -331,26 +449,31 @@ async def _present_step(kernel: Any, event: Event, line: str, *, chain: int, pla
     adapter = kernel.tools.adapters.get(str(event.body))
     if adapter is None:
         return
-    mode = switches(kernel, body=str(event.body)).get("progress", "edit")
+    body = str(event.body)
+    mode = switches(kernel, body=body).get("progress", "edit")
     if mode == "edit" and "edit" in shows(adapter):
-        progress = kernel.__dict__.setdefault("_progress_messages", {})
-        key = (str(event.body), place, chain)
-        mid = progress.get(key)
+        row = await (await kernel.conn.execute(
+            "SELECT payload->>'message_id' FROM events WHERE kind = %s AND place = %s "
+            "AND body = %s AND payload->>'kind' = 'progress' AND payload->>'chain' = %s "
+            "AND COALESCE(payload->>'message_id', '') <> '' ORDER BY id DESC LIMIT 1",
+            (SHOWN, place, body, str(chain)))).fetchone()
         kwargs: dict[str, Any] = {"text": line}
-        if mid:
-            kwargs["message_id"] = mid
+        if row and row[0]:
+            kwargs["message_id"] = str(row[0])
         res = await adapter.show(place, "edit", **kwargs)
-        if isinstance(res, dict) and res.get("message_id"):
-            progress[key] = res["message_id"]
+        if isinstance(res, Mapping) and res.get("message_id"):
+            await kernel._emit(event, SHOWN, {
+                "kind": "progress", "chain": str(chain),
+                "message_id": str(res["message_id"])}, place=place)
         return
-    await kernel.tools.act(event, f"{event.body}.say", {"text": line})
+    await kernel.tools.act(event, f"{body}.say", {"text": line})
 
 
 async def _last_shown(conn: Any, place: str) -> int:
     """Return the id of the last event of this place that reasoning already showed."""
     row = await (await conn.execute(
         "SELECT max((payload->>'note')::bigint) FROM events "
-        "WHERE kind = %s AND place = %s", (SHOWN, place))).fetchone()
+        "WHERE kind = %s AND place = %s AND payload ? 'note'", (SHOWN, place))).fetchone()
     return int((row or (0,))[0] or 0)
 
 
@@ -373,6 +496,9 @@ def narrate(kernel: Any) -> Middleware:
         place = str(item.place or "")
         if not place:
             return Continue()
+        cat = catalog(getattr(kernel, "settings", None))
+        think_prefix = str((cat.get("thinking") or {}).get("prefix") or "")
+        step_prefix = str((cat.get("step") or {}).get("prefix") or "")
         settings_now = switches(kernel, body=str(item.body or ""))
         think_mode = settings_now.get("thinking", "owner_direct")
         chain = int(item.caused_by or item.id or 0)
@@ -386,8 +512,8 @@ def narrate(kernel: Any) -> Middleware:
                 if not thought or not await privacy.visible(kernel.conn, context=place,
                                                             source=note_place, before=note):
                     continue
-                if await present(kernel, replace(item, place=place), "edit",
-                                 f"(thinking) {thought}"):
+                line = f"{think_prefix} {thought}".strip()
+                if await present(kernel, replace(item, place=place), "edit", line):
                     await kernel._emit(item, SHOWN, {"place": place, "kind": "thinking",
                                                      "note": note}, place=place)
         steps_mode = settings_now.get("steps", "long")
@@ -396,8 +522,8 @@ def narrate(kernel: Any) -> Middleware:
             declared = kernel.tools.get(capability) or {}
             if steps_mode == "all" or declared.get("long_running"):
                 short = _short(interaction_text((item.payload or {}).get("result")))
-                await _present_step(kernel, item, f"(step) {capability}: {short}",
-                                    chain=chain, place=place)
+                line = f"{step_prefix} {capability}: {short}".strip()
+                await _present_step(kernel, item, line, chain=chain, place=place)
         return Continue()
 
     return rule
@@ -444,78 +570,121 @@ def typing(kernel: Any) -> Middleware:
 
 
 async def _is_shared_with_owner(conn: Any, body: str) -> bool:
+    """True when `body`'s self-account is bound to `person:owner` (D70 shared account)."""
     acc = (await read_state(conn, f"self_account:{body}") or {}).get("account")
     if not acc:
         return False
     alias = await read_state(conn, f"alias:{acc}")
-    return bool(alias and alias.get("person") == OWNER)
+    return bool(alias and (alias.get("who") or alias.get("person")) == OWNER)
 
 
-async def _soul_spoke_since_message(conn: Any, place: str, event_id: int) -> bool:
-    """True when the soul sent a communicative act in `place` after `event_id`."""
-    if event_id <= 0:
-        return False
-    row_soul = await (await conn.execute(
-        "SELECT COALESCE(MAX(id), 0) FROM events WHERE kind = 'act.out' AND place = %s "
-        "AND COALESCE((payload->>'communicative')::boolean, false)",
-        (place,),
-    )).fetchone()
-    last_soul = int((row_soul or (0,))[0] or 0)
-    return last_soul > event_id
+async def _is_read_marked(conn: Any, place: str, msg_id: str) -> bool:
+    """True when `interaction.shown` (`kind='read'`) already recorded `msg_id` in `place`."""
+    row = await (await conn.execute(
+        "SELECT 1 FROM events WHERE kind = %s AND place = %s "
+        "AND payload->>'kind' = 'read' AND payload->>'message_id' = %s LIMIT 1",
+        (SHOWN, place, msg_id))).fetchone()
+    return row is not None
 
 
-async def mark_read_for(kernel: Any, trigger: Event) -> bool:
-    """Mark one percept read after its decision is recorded, respecting D69 & D66."""
-    if trigger is None or trigger.kind != "percept":
-        return False
-    payload = trigger.payload or {}
-    if payload.get("imported") is True or payload.get("backfill") is True:
-        return False
-    place = str(trigger.place or "")
-    body = str(trigger.body or "")
-    if not place or not body:
-        return False
-    if switches(kernel, body=body).get("read_receipts", "on") == "off":
-        return False
-    adapter = kernel.tools.adapters.get(body)
-    if adapter is None or "read_receipts" not in shows(adapter):
-        return False
-    msg_id = (payload.get("data") or {}).get("message_id")
-    if not msg_id:
-        return False
-    marked = kernel.__dict__.setdefault("_read_marked", set())
-    dedup_key = (body, place, str(msg_id))
-    if dedup_key in marked:
-        return False
-    if await _is_shared_with_owner(kernel.conn, body):
-        if str(trigger.origin_actor or trigger.who) == OWNER:
-            return False
-        if not await _soul_spoke_since_message(kernel.conn, place, int(trigger.id or 0)):
-            return False
-    marked.add(dedup_key)
-    await adapter.show(place, "read_receipts", message_id=msg_id, message_ids=[msg_id])
-    return True
+async def _unread_messages(conn: Any, place: str, body: str) -> list[str]:
+    """Return un-marked non-owner percept message ids in `place`, oldest first."""
+    cur = await conn.execute(
+        "SELECT e.payload->'data'->>'message_id' FROM events e "
+        "WHERE e.kind = 'percept' AND e.place = %s AND e.body = %s "
+        "AND COALESCE((e.payload->>'imported')::boolean, false) = false "
+        "AND COALESCE((e.payload->>'backfill')::boolean, false) = false "
+        "AND COALESCE(e.origin_actor, e.who, '') <> %s "
+        "AND COALESCE(e.payload->'data'->>'message_id', '') <> '' "
+        "AND NOT EXISTS ("
+        "  SELECT 1 FROM events s WHERE s.kind = %s AND s.place = e.place "
+        "  AND s.payload->>'kind' = 'read' "
+        "  AND s.payload->>'message_id' = e.payload->'data'->>'message_id') "
+        "ORDER BY e.id ASC",
+        (place, body, OWNER, SHOWN))
+    seen: set[str] = set()
+    mids: list[str] = []
+    for row in await cur.fetchall():
+        mid = str(row[0] or "")
+        if mid and mid not in seen:
+            seen.add(mid)
+            mids.append(mid)
+    return mids
+
+
+def read_receipts_inbound(kernel: Any) -> Middleware:
+    """Inbound rule: mark a live percept read on non-shared adapters and record the mark."""
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        """Mark the percept read unless imported/backfilled, disabled, or shared with owner."""
+        del ctx
+        if getattr(item, "kind", "") != "percept":
+            return Continue()
+        payload = item.payload or {}
+        if payload.get("imported") is True or payload.get("backfill") is True:
+            return Continue()
+        place = str(item.place or "")
+        body = str(item.body or "")
+        if not place or not body:
+            return Continue()
+        if switches(kernel, body=body).get("read_receipts", "on") == "off":
+            return Continue()
+        adapter = kernel.tools.adapters.get(body)
+        if adapter is None or "read_receipts" not in shows(adapter):
+            return Continue()
+        msg_id = (payload.get("data") or {}).get("message_id")
+        if not msg_id or await _is_shared_with_owner(kernel.conn, body):
+            return Continue()
+        if await _is_read_marked(kernel.conn, place, str(msg_id)):
+            return Continue()
+        await adapter.show(place, "read_receipts", message_id=msg_id, message_ids=[msg_id])
+        await kernel._emit(item, SHOWN, {"kind": "read", "message_id": str(msg_id)}, place=place)
+        return Continue()
+
+    return rule
+
+
+def read_receipts_action(kernel: Any) -> Middleware:
+    """Action rule: on an owner-shared account, mark earlier unread messages read on speak."""
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        """Mark unread non-owner messages in `place` read when an allowed communicative act fires."""
+        del item
+        if ctx.get("refusal"):
+            return Continue()
+        descriptor = ctx.get("descriptor") or {}
+        if not descriptor.get("communicative"):
+            return Continue()
+        event = ctx["event"]
+        place = str(ctx.get("place") or event.place or "")
+        if not place or place != str(event.place or ""):
+            return Continue()
+        body = str(event.body or "")
+        if not body or switches(kernel, body=body).get("read_receipts", "on") == "off":
+            return Continue()
+        adapter = kernel.tools.adapters.get(body)
+        if adapter is None or "read_receipts" not in shows(adapter):
+            return Continue()
+        if not await _is_shared_with_owner(kernel.conn, body):
+            return Continue()
+        mids = await _unread_messages(kernel.conn, place, body)
+        if not mids:
+            return Continue()
+        await adapter.show(place, "read_receipts", message_id=mids[-1], message_ids=mids)
+        for mid in mids:
+            await kernel._emit(event, SHOWN, {"kind": "read", "message_id": mid}, place=place)
+        return Continue()
+
+    return rule
 
 
 def install_commands(kernel: Any) -> None:
-    """Register `/show` and hook decision emission for D70 read receipts."""
+    """Register the `/show` command on the kernel tool registry."""
     if kernel.tools.command("show") is None:
         kernel.tools.add_command(registry.CommandEntry(
             "show",
             "Switch interaction display: /show <name> <value> [adapter].",
             "interaction.show", show_switch, owner="interaction"))
-    if not kernel.__dict__.get("_interaction_emit_wrapped") and hasattr(kernel, "_emit"):
-        orig_emit = kernel._emit
-
-        async def _emit_with_receipt(trigger: Event, kind: str, payload: dict[str, Any], *,
-                                     place: str | None = None) -> Event:
-            stored = await orig_emit(trigger, kind, payload, place=place)
-            if kind.startswith("decision.") or (kind == "act.out" and payload.get("communicative")):
-                await mark_read_for(kernel, trigger)
-            return stored
-
-        kernel.__dict__["_interaction_emit_wrapped"] = True
-        kernel._emit = _emit_with_receipt
 
 
 def _set_body_show_entry(text: str, adapter_name: str, key: str, value: str) -> str:
@@ -628,10 +797,10 @@ def split(kernel: Any) -> Middleware:
         if adapter is None or not descriptor.get("communicative"):
             return Continue()
 
-        # Sticker fallback: stickers: off (or unsupported) -> emoji text
+        # Sticker fallback: stickers: off (or unsupported) -> fallback text
         sticker_mode = switches(kernel, body=body).get("stickers", "on")
         if arguments.get("sticker") and (sticker_mode == "off" or "stickers" not in shows(adapter)):
-            emoji = str(arguments.pop("sticker_emoji", "") or "🏷️")
+            emoji = str(arguments.pop("sticker_emoji", "") or "[sticker]")
             arguments.pop("sticker", None)
             existing = str(arguments.get("text") or "").strip()
             arguments["text"] = f"{existing} {emoji}".strip() if existing else emoji

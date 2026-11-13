@@ -104,7 +104,11 @@ class CLIBody:
                 except Exception as exc:
                     return {"error": f"cannot attach {ref}: {exc}"}
                 await send.file(self._writers, info, await self._where(ref, data))
-            return {"message_id": msg_id}
+            res: dict[str, Any] = {"message_id": msg_id}
+            if choices:
+                res["choices"] = [{"label": opt, "answer": str(idx)}
+                                  for idx, opt in enumerate(choices, 1)]
+            return res
         if action.kind == "react":
             await send.broadcast(self._writers, f"[{p.get('emoji', '')}]\n")
             return {"emoji": p.get("emoji", "")}

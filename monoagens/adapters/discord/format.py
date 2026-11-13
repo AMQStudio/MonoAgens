@@ -73,12 +73,17 @@ def _reply_info(message: Any) -> tuple[dict[str, Any] | None, str | None]:
     return info, None
 
 
-def _base_guild_data(channel: Any, author: Any) -> dict[str, Any]:
+def _platform_roles_data(channel: Any, author: Any) -> dict[str, Any]:
     guild = getattr(channel, "guild", None) or getattr(author, "guild", None)
-    out: dict[str, Any] = {"discord_roles": member_roles(author) if author is not None else []}
-    if guild is not None and getattr(guild, "id", None) is not None:
-        out["guild_id"] = str(guild.id)
-    return out
+    gid = getattr(guild, "id", None) if guild is not None else None
+    if gid is None:
+        return {}
+    return {
+        "platform_roles": {
+            "space": f"space:dc:guild:{gid}",
+            "roles": member_roles(author) if author is not None else [],
+        }
+    }
 
 
 def format_message(message: Any, *, now: datetime, bot_id: str, bot_user: Any = None,
@@ -116,7 +121,7 @@ def format_message(message: Any, *, now: datetime, bot_id: str, bot_user: Any = 
 
     data: dict[str, Any] = {
         "message_id": msg_id,
-        **_base_guild_data(channel, author),
+        **_platform_roles_data(channel, author),
     }
     reply_info, reply_author_id = _reply_info(message)
     reply_id = str((reply_info or {}).get("message_id") or "")
@@ -142,7 +147,9 @@ def format_message(message: Any, *, now: datetime, bot_id: str, bot_user: Any = 
     choice_matched = _match_choice(text, reply_id, choices_prompts or {})
     if choice_matched is not None:
         val, q_id = choice_matched
+        clean = text.strip()
         data["choice"] = val
+        data["answer"] = clean if clean.isdigit() else val
         data.setdefault("reply_to", {"message_id": q_id})
         data["reply_to"].setdefault("message_id", q_id)
 
@@ -212,7 +219,7 @@ def format_edit(channel: Any, author: Any, msg_id: str, new_text: str, *,
             "addressed": dm,
             "description": f"{label} edited: {new_text}" if new_text else f"{label} edited {msg_id}",
             "data": {"message_id": msg_id, "edits": msg_id,
-                     **_base_guild_data(channel, author)},
+                     **_platform_roles_data(channel, author)},
         },
     )
 
@@ -239,7 +246,7 @@ def format_delete(channel: Any, msg_id: str, *, author: Any = None, now: datetim
             "addressed": False,
             "description": f"{label} deleted a message ({msg_id})",
             "data": {"message_id": msg_id, "deletes": msg_id,
-                     **_base_guild_data(channel, author)},
+                     **_platform_roles_data(channel, author)},
         },
     )
 
@@ -271,7 +278,9 @@ def format_reaction(channel: Any, user: Any, msg_id: str, emoji: Any, *,
             "description": f"{label} reacted {emoji_text} to {msg_id}",
             "data": {"message_id": str(msg_id),
                      "reaction": {"message_id": str(msg_id), "emoji": emoji_text},
-                     **_base_guild_data(channel, user)},
+                     "answer": emoji_text,
+                     **({"reply_to": {"message_id": str(msg_id)}} if msg_id else {}),
+                     **_platform_roles_data(channel, user)},
         },
     )
 
@@ -280,7 +289,7 @@ def format_interaction(interaction: Any, *, now: datetime, bot_id: str,
                        directory: DiscordDirectory,
                        choices_prompts: Mapping[str, list[str]] | None = None,
                        name: str = "discord") -> Event | None:
-    """Turn a button press or select-menu interaction into a percept (approval or `data.choice`)."""
+    """Turn a button press or select-menu interaction into a `data.choice` + `data.answer` percept."""
     user = getattr(interaction, "user", None)
     user_id = str(getattr(user, "id", "") or "")
     if not user_id or (bot_id and user_id == str(bot_id)):
@@ -295,33 +304,15 @@ def format_interaction(interaction: Any, *, now: datetime, bot_id: str,
     custom_id = str(raw_data.get("custom_id") or "")
     msg = getattr(interaction, "message", None)
     msg_id = str(getattr(msg, "id", "") or "")
-    guild_data = _base_guild_data(channel, user)
+    guild_data = _platform_roles_data(channel, user)
 
     parts = custom_id.split(":")
-    if len(parts) == 3 and parts[0] == "approval":
-        choice = parts[1]
-        data: dict[str, Any] = {**guild_data}
-        if msg_id:
-            data["reply_to"] = {"message_id": msg_id}
-        return Event(
-            id=None, ts=now, kind="percept", who=f"discord:{user_id}",
-            place=place_id(channel), body=name,
-            payload={
-                "source_name": label,
-                "place_kind": "direct" if dm else "shared",
-                "place_info": p_info,
-                "addressed": True,
-                "description": choice,
-                "approval": int(parts[2]),
-                "answer": choice == "yes",
-                "data": data,
-            },
-        )
-
     values = list(raw_data.get("values") or ())
     selected: str | list[str]
+    answer_val: str | list[str]
     if values:
         selected = values[0] if len(values) == 1 else [str(v) for v in values]
+        answer_val = selected
     elif len(parts) >= 3 and parts[0] == "choice":
         opts = (choices_prompts or {}).get(msg_id)
         try:
@@ -329,10 +320,12 @@ def format_interaction(interaction: Any, *, now: datetime, bot_id: str,
             selected = opts[idx] if opts and 0 <= idx < len(opts) else ":".join(parts[2:])
         except ValueError:
             selected = ":".join(parts[2:])
+        answer_val = custom_id
     else:
         selected = custom_id or str(raw_data.get("name") or "")
+        answer_val = custom_id or str(selected)
 
-    data = {"custom_id": custom_id, "choice": selected, **guild_data}
+    data = {"custom_id": custom_id, "choice": selected, "answer": answer_val, **guild_data}
     if msg_id:
         data["reply_to"] = {"message_id": msg_id}
     return Event(

@@ -89,11 +89,12 @@ def check_coverage(name: str, adapter: Any) -> tuple[str, ...]:
     return tuple(lines)
 
 
-# D70 fallback chains (adapters.md §4, middleware.md §9).
+# D70/D81 fallback chains (adapters.md §4, middleware.md §9).
 FALLBACKS: dict[str, tuple[tuple[str | None, str], ...]] = {
-    "approval": (("buttons", "buttons"), ("reactions", "reactions"), (None, "text")),
-    "choices": (("buttons", "buttons"), ("menus", "menus"), ("polls", "poll"),
-                (None, "numbered list")),
+    "approval": (("buttons", "buttons"), ("menus", "menus"), ("reactions", "reactions"),
+                 ("polls", "poll"), (None, "numbered list")),
+    "choices": (("buttons", "buttons"), ("menus", "menus"), ("reactions", "reactions"),
+                ("polls", "poll"), (None, "numbered list")),
     "thread": (("threads", "new thread"), (None, "reply with the title")),
     "location": (("locations", "native"), (None, "text")),
     "sticker": (("stickers", "sticker"), (None, "emoji")),

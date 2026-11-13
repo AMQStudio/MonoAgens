@@ -155,6 +155,15 @@ async def say(resolve_channel: ResolveChannel, files_door: Any, place: str, *,
     if msg_id and choice_list and remember_choices is not None:
         remember_choices(msg_id, choice_list)
     result: dict[str, Any] = {"message_id": msg_id, "place": place}
+    if choice_list:
+        if len(choice_list) > MAX_SELECT_OPTIONS:
+            result["choices"] = [{"label": opt, "answer": str(idx)}
+                                 for idx, opt in enumerate(choice_list, 1)]
+        elif len(choice_list) <= MAX_BUTTONS and not multiple:
+            result["choices"] = [{"label": opt, "answer": f"choice:{idx}:{opt[:40]}"}
+                                 for idx, opt in enumerate(choice_list, 1)]
+        else:
+            result["choices"] = [{"label": opt, "answer": opt[:100]} for opt in choice_list]
     if created_thread_id:
         result["thread_place"] = f"space:dc:{created_thread_id}"
     if opened_files:

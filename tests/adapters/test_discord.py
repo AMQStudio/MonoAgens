@@ -179,8 +179,9 @@ async def test_discord_hierarchy_and_role_ids_on_percepts(aconn, tmp_path) -> No
     assert ev1.place == place_id(thread)
     assert ev1.payload["addressed"] is True
     assert ev1.payload["place_kind"] == "shared"
-    assert ev1.payload["data"]["discord_roles"] == ["555"]
-    assert ev1.payload["data"]["guild_id"] == "1001"
+    assert ev1.payload["data"]["platform_roles"] == {
+        "space": guild_place_id(guild), "roles": ["555"],
+    }
 
     # Full parent chain: thread -> channel -> guild server
     t_info = await body.place_info(place_id(thread))
@@ -190,6 +191,8 @@ async def test_discord_hierarchy_and_role_ids_on_percepts(aconn, tmp_path) -> No
     assert c_info["form"] == "group"
     assert g_info["form"] == "guild"
     assert c_info["parent"] == guild_place_id(guild)
+    assert t_info["parents"][place_id(thread)] == place_id(general)
+    assert t_info["parents"][place_id(general)] == guild_place_id(guild)
     assert (await body.place_info(place_id(news)))["can_post"] is False
 
     # Role removed on next percept -> cleared; DM -> no roles, direct place_kind
@@ -203,7 +206,9 @@ async def test_discord_hierarchy_and_role_ids_on_percepts(aconn, tmp_path) -> No
     ev2 = await body.handle_message(msg_ch)
     assert ev2 is not None
     assert ev2.payload["addressed"] is False
-    assert ev2.payload["data"]["discord_roles"] == []
+    assert ev2.payload["data"]["platform_roles"] == {
+        "space": guild_place_id(guild), "roles": [],
+    }
 
     dm_author = SimpleNamespace(id=77, name="budi", display_name="Budi")
     msg_dm = SimpleNamespace(
@@ -215,7 +220,7 @@ async def test_discord_hierarchy_and_role_ids_on_percepts(aconn, tmp_path) -> No
     assert ev3 is not None
     assert ev3.payload["addressed"] is True
     assert ev3.payload["place_kind"] == "direct"
-    assert ev3.payload["data"]["discord_roles"] == []
+    assert "platform_roles" not in ev3.payload["data"]
     assert len(seen) == 3
 
 
@@ -277,8 +282,15 @@ async def test_discord_interactions_defer_before_put_and_render_buttons_menus(ac
     assert order[0] == "defer:False"
     assert ev_btn is not None
     assert ev_btn.payload["data"]["choice"] == "Blue"
+    assert ev_btn.payload["data"]["answer"] == "choice:2:Blue"
     assert ev_btn.payload["data"]["reply_to"] == {"message_id": r_btn["message_id"]}
-    assert ev_btn.payload["data"]["discord_roles"] == ["555"]
+    assert ev_btn.payload["data"]["platform_roles"] == {
+        "space": guild_place_id(guild), "roles": ["555"],
+    }
+    assert r_btn["choices"] == [
+        {"label": "Red", "answer": "choice:1:Red"},
+        {"label": "Blue", "answer": "choice:2:Blue"},
+    ]
 
     resp2 = _Resp()
     interaction_menu = SimpleNamespace(
@@ -292,6 +304,7 @@ async def test_discord_interactions_defer_before_put_and_render_buttons_menus(ac
     ev_menu = await body.handle_interaction(interaction_menu)
     assert ev_menu is not None
     assert ev_menu.payload["data"]["choice"] == "Five"
+    assert ev_menu.payload["data"]["answer"] == "Five"
     assert ev_menu.payload["data"]["reply_to"] == {"message_id": r_menu["message_id"]}
 
 

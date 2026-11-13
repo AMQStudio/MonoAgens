@@ -20,6 +20,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+from weakref import WeakKeyDictionary
 
 import yaml
 
@@ -528,7 +529,7 @@ class Loader:
             for hook, name, middleware in api.middleware:
                 self._slot(kernel, hook, f"{api.name}-{name}").target = middleware
                 touched.add((hook, f"{api.name}-{name}"))
-        for key, slot in kernel.__dict__.get("hook_slots", {}).items():
+        for key, slot in (_HOOK_SLOTS.get(kernel) or {}).items():
             if key not in touched:
                 slot.target = None  # the plugin that owned this place is gone
         for adapter in loaded.adapters:
@@ -550,10 +551,10 @@ class Loader:
         """Return the stable slot of one plugin middleware, registering it the first time.
 
         A reload swaps what a slot calls instead of adding a second middleware, so the
-        pipeline's name (and its order) never changes without a restart. The slots live on
-        the kernel, not on one loader, so a new `Loader` (a reload, a command) reuses them.
+        pipeline's name (and its order) never changes without a restart. The slots live per
+        kernel weakly, not on one loader, so a new `Loader` (a reload, a command) reuses them.
         """
-        slots = kernel.__dict__.setdefault("hook_slots", {})
+        slots = _HOOK_SLOTS.setdefault(kernel, {})
         key = (hook, name)
         if key in slots:
             return slots[key]
@@ -561,6 +562,9 @@ class Loader:
         slots[key] = slot
         kernel.hooks.get(hook).add(name, slot)
         return slot
+
+
+_HOOK_SLOTS: WeakKeyDictionary[Any, dict[tuple[str, str], "_Slot"]] = WeakKeyDictionary()
 
 
 class _Slot:

@@ -84,13 +84,17 @@ async def send_say(client: Any, directory: WhatsAppDirectory, files: Any, place:
             sent_ids.append(loc_id)
 
     choices = [str(c) for c in (payload.get("choices") or ()) if str(c).strip()]
-    choices_prompt: tuple[str, list[str]] | None = None
+    choices_prompt: tuple[str, list[str], list[dict[str, str]]] | None = None
     if choices:
-        prompt_id = await _send_choices(
+        prompt_id, used_poll = await _send_choices(
             client, jid, text or "Choose one:", choices, multiple=bool(payload.get("multiple")))
+        if used_poll:
+            meta = [{"label": opt, "answer": opt} for opt in choices]
+        else:
+            meta = [{"label": opt, "answer": str(idx)} for idx, opt in enumerate(choices, 1)]
         if prompt_id:
             sent_ids.append(prompt_id)
-            choices_prompt = (prompt_id, choices)
+        choices_prompt = (prompt_id, choices, meta)
         text = ""
 
     opened: list[tuple[bytes, dict[str, Any]]] = []
@@ -128,7 +132,9 @@ async def send_say(client: Any, directory: WhatsAppDirectory, files: Any, place:
     if opened:
         result["sent"] = len(opened)
     if choices_prompt is not None:
-        result["choices_prompt"] = {"message_id": choices_prompt[0], "options": choices_prompt[1]}
+        result["choices"] = choices_prompt[2]
+        if choices_prompt[0]:
+            result["choices_prompt"] = {"message_id": choices_prompt[0], "options": choices_prompt[1]}
     return result
 
 
@@ -144,7 +150,7 @@ async def _send_location(client: Any, jid: Any, location: dict[str, Any]) -> str
 
 
 async def _send_choices(client: Any, jid: Any, title: str, choices: list[str], *,
-                        multiple: bool = False) -> str:
+                        multiple: bool = False) -> tuple[str, bool]:
     builder = getattr(client, "build_poll_vote_creation", None)
     if callable(builder) and 2 <= len(choices) <= 12:
         from neonize.utils.enum import VoteType
@@ -153,10 +159,10 @@ async def _send_choices(client: Any, jid: Any, title: str, choices: list[str], *
         if hasattr(poll_msg, "__await__"):
             poll_msg = await poll_msg
         resp = await client.send_message(jid, poll_msg)
-        return _msg_id(resp)
+        return _msg_id(resp), True
     lines = [title, *[f"{idx}. {opt}" for idx, opt in enumerate(choices, 1)]]
     resp = await client.send_message(jid, "\n".join(lines))
-    return _msg_id(resp)
+    return _msg_id(resp), False
 
 
 async def send_react(client: Any, place: str, emoji: str, message_id: str) -> dict[str, Any]:

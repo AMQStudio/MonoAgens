@@ -1,0 +1,16 @@
+approval:
+  prompt: "Approval needed: {capability} {arguments}\nReason: {reason}."
+  yes_label: "Yes"
+  no_label: "No"
+  yes_words: ["yes"]
+  no_words: ["no"]
+brake:
+  prompt: "Stopped work ({work}): {reason}. Continue or leave it stopped?"
+  continue_label: "Continue"
+  stop_label: "Stop"
+thinking:
+  prefix: "(thinking)"
+step:
+  prefix: "(step)"
+quiet:
+  off_words: ["off", "none", "no"]

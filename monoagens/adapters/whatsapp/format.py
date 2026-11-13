@@ -221,7 +221,10 @@ def format_message(raw: Any, *, directory: WhatsAppDirectory, now: datetime,
         return Event(id=None, ts=now, kind="percept", who=who, place=place, body=name,
                      payload={**base_payload, "addressed": addr, "description": desc,
                               "data": {"message_id": msg_id,
-                                       "reaction": {"emoji": emoji, "message_id": target_id}}})
+                                       "reaction": {"emoji": emoji, "message_id": target_id},
+                                       **({"answer": emoji} if emoji else {}),
+                                       **({"reply_to": {"message_id": target_id}}
+                                          if target_id else {})}})
 
     # 3. Poll vote update
     poll_upd = getattr(message, "pollUpdateMessage", None)
@@ -276,7 +279,9 @@ def format_message(raw: Any, *, directory: WhatsAppDirectory, now: datetime,
     choice_matched = _match_choice(text, reply_id, choices_prompts or {})
     if choice_matched is not None:
         choice_val, q_id = choice_matched
+        clean = text.strip()
         data["choice"] = choice_val
+        data["answer"] = clean if clean.isdigit() else choice_val
         data.setdefault("reply_to", {"message_id": q_id})
         if "message_id" not in data["reply_to"]:
             data["reply_to"]["message_id"] = q_id

@@ -94,7 +94,7 @@ async def claim_owner(conn, event, *, now: datetime):
 
 
 def is_account(value: Any) -> bool:
-    """Return whether one id is a native adapter account (`telegram:123`), not a person id."""
+    """Return whether one id is a native adapter account (`channel:123`), not a person id."""
     text = str(value or "")
     return (bool(text) and ":" in text and not text.startswith("person:")
             and not text.startswith("space:"))
@@ -309,16 +309,18 @@ def place_tracker(conn: Any) -> Middleware:
         if not getattr(item, "place", None):
             return Continue()
         raw = dict(payload.get("place_info") or {})
+        extra_parents = raw.pop("parents", None)
         if not raw.get("form"):
             raw["form"] = "dm" if payload.get("place_kind") == "direct" else "group"
         await record_place(conn, str(item.place), raw, event_id=int(item.id))
-        guild_id = str((payload.get("data") or {}).get("guild_id") or "")
-        parent = str(raw.get("parent") or "")
-        if guild_id and parent and not parent.startswith("space:dc:guild:"):
-            existing = await read_place(conn, parent)
-            if not existing.get("parent"):
-                await record_place(conn, parent, {"parent": f"space:dc:guild:{guild_id}"},
-                                   event_id=int(item.id))
+        if isinstance(extra_parents, dict):
+            for child, parent_id in extra_parents.items():
+                child_id, par_id = str(child or ""), str(parent_id or "")
+                if child_id and par_id and child_id != str(item.place):
+                    existing = await read_place(conn, child_id)
+                    if not existing.get("parent"):
+                        await record_place(conn, child_id, {"parent": par_id},
+                                           event_id=int(item.id))
         return Continue()
 
     return rule
