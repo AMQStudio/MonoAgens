@@ -132,6 +132,9 @@ def test_describe_attachments_reads_as_one_sentence():
         "Budi sent 3 files: report.pdf, photo.jpg, data.xlsx")
     assert describe_attachments([{"name": "a.txt"}], sent_by="Budi") == "Budi sent 1 file: a.txt"
     assert describe_attachments([{"size": 17}], sent_by="Budi") == "Budi sent 1 file: 17 bytes"
+    assert describe_attachments(
+        [{"ref": "att_ab12cd34ef56", "name": "a.txt"}], sent_by="Budi") == (
+        "Budi sent 1 file: a.txt (att_ab12cd34ef56)")
 
 
 async def test_the_door_stores_and_opens_with_the_context(aconn, tmp_path):

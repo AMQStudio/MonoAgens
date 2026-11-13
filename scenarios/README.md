@@ -10,8 +10,8 @@ from the scripted fake model; real results come from the saved reports in
 `reports/`. A capability that fails with the real model is listed as FAIL, not
 hidden.
 
-Generated 2026-11-12 20:25 UTC from 30 capabilities across 8 brain functions.
-Pooled per capability: its latest runs among 7 saved fake and 4 saved real-model reports. The real column names the report behind its
+Generated 2026-11-13 03:46 UTC from 30 capabilities across 8 brain functions.
+Pooled per capability: its latest runs among 8 saved fake and 3 saved real-model reports. The real column names the report behind its
 verdict and reads `flaky` when the recorded runs both passed and failed; the
 `Real-model record` section at the end keeps those runs, so pruning the reports never
 erases evidence.
@@ -20,7 +20,7 @@ erases evidence.
 
 | Capability | Scenario | Fake result | Real model |
 |---|---|---|---|
-| A topic started on one body continues on another with its context intact. | 17_cross_body_continuity | PASS 3/3 · 2026-11-12 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| A topic started on one body continues on another with its context intact. | 17_cross_body_continuity | PASS 3/3 · 2026-11-13 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
 
 ## honesty
 
@@ -34,55 +34,55 @@ _No scenario yet._
 
 | Capability | Scenario | Fake result | Real model |
 |---|---|---|---|
-| A restart keeps the conversation's context because the same Log is read again. | 07_dm_restart_continuity | PASS 3/3 · 2026-11-12 | PASS 2/2 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| An idle stretch triggers sleep, which stores memories and records sleep.done. | 11_sleep_memory_consolidation | PASS 3/3 · 2026-11-12 | PASS 2/2 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| A preference said once is recalled later from another body after sleep. | 12_topic_recall_after_sleep | PASS 3/3 · 2026-11-12 | PASS 2/2 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| A frequently used memory outranks newer, more important unused ones (ACT-R activation) and answers the question. | 20_act_r_activation | PASS 3/3 · 2026-11-12 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| A month's episodes are recalled from the Log, with details from the original events. | 23_recall_episodes | PASS 3/3 · 2026-11-12 | flaky · PASS 7/7 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-12 · replay-20261112-061932.md |
-| An unaddressed question is answered with a fact the soul remembers. | 25_help_place_name | PASS 3/3 · 2026-11-12 | PASS 4/4 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| A fact said in the owner's direct chat stays private: the soul asks the owner and answers the group only after share.granted. | 26_help_meeting_time | PASS 3/3 · 2026-11-12 | FAIL 5/9 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2025-real-26-28.md |
-| An unaddressed question is answered with a password the soul learned in that group. | 27_help_wifi_password | PASS 3/3 · 2026-11-12 | PASS 4/4 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| A location said in the owner's direct chat stays private: the soul asks the owner and answers the group only after share.granted. | 28_help_package_location | PASS 3/3 · 2026-11-12 | FAIL 5/9 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2025-real-26-28.md |
-| An unaddressed question is answered with the clinic hours the soul remembers. | 29_help_clinic_hours | PASS 3/3 · 2026-11-12 | PASS 4/4 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| A restart keeps the conversation's context because the same Log is read again. | 07_dm_restart_continuity | PASS 3/3 · 2026-11-13 | PASS 2/2 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| An idle stretch triggers sleep, which stores memories and records sleep.done. | 11_sleep_memory_consolidation | PASS 3/3 · 2026-11-13 | PASS 2/2 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| A preference said once is recalled later from another body after sleep. | 12_topic_recall_after_sleep | PASS 3/3 · 2026-11-13 | PASS 2/2 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| A frequently used memory outranks newer, more important unused ones (ACT-R activation) and answers the question. | 20_act_r_activation | PASS 3/3 · 2026-11-13 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| A month's episodes are recalled from the Log, with details from the original events. | 23_recall_episodes | PASS 3/3 · 2026-11-13 | flaky · PASS 7/7 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-12 · replay-20261112-061932.md |
+| An unaddressed question is answered with a fact the soul remembers. | 25_help_place_name | PASS 3/3 · 2026-11-13 | PASS 4/4 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| A fact said in the owner's direct chat stays private: the soul asks the owner and answers the group only after share.granted. | 26_help_meeting_time | PASS 3/3 · 2026-11-13 | FAIL 5/9 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2025-real-26-28.md |
+| An unaddressed question is answered with a password the soul learned in that group. | 27_help_wifi_password | PASS 3/3 · 2026-11-13 | PASS 4/4 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| A location said in the owner's direct chat stays private: the soul asks the owner and answers the group only after share.granted. | 28_help_package_location | PASS 3/3 · 2026-11-13 | FAIL 5/9 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2025-real-26-28.md |
+| An unaddressed question is answered with the clinic hours the soul remembers. | 29_help_clinic_hours | PASS 3/3 · 2026-11-13 | PASS 4/4 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
 
 ## privacy
 
 | Capability | Scenario | Fake result | Real model |
 |---|---|---|---|
-| Budi's file is used when the owner is alone, moved to the owner's private channel when someone else is present, shared to Budi with consent, and Fulan's private line never leaves the owner's direct chat. | 18_game_world_file_and_share | PASS 3/3 · 2026-11-12 | FAIL 8/19 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-1859-real-18-19-26-28.md |
-| A multi-step job opens a task thread, holds a promise, delivers to Budi's direct place, asks which group before sharing, and its waiting does not block the owner's chat. | 19_task_thread_two_groups | PASS 3/3 · 2026-11-12 | FAIL 12/21 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-1859-real-18-19-26-28.md |
+| Budi's file is used when the owner is alone, moved to the owner's private channel when someone else is present, shared to Budi with consent, and Fulan's private line never leaves the owner's direct chat. | 18_game_world_file_and_share | PASS 3/3 · 2026-11-13 | FAIL 8/19 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-1859-real-18-19-26-28.md |
+| A multi-step job opens a task thread, holds a promise, delivers to Budi's direct place, asks which group before sharing, and its waiting does not block the owner's chat. | 19_task_thread_two_groups | PASS 3/3 · 2026-11-13 | FAIL 12/21 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-1859-real-18-19-26-28.md |
 
 ## promises
 
 | Capability | Scenario | Fake result | Real model |
 |---|---|---|---|
-| A reminder asked for a time fires exactly once at that time. | 08_reminder_at_time | PASS 3/3 · 2026-11-12 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| A follow-up asked for one hour later fires once while the owner stays silent. | 09_reminder_ask_again | PASS 3/3 · 2026-11-12 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-12 · replay-20261112-061932.md |
-| A recurring reminder fires again on the next day under its policy. | 10_reminder_recurring_nudge | PASS 3/3 · 2026-11-12 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| A reminder fires in the direct place it was made in, not in a busy group. | 13_fired_reminder_different_place | PASS 3/3 · 2026-11-12 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| A watch for a phrase stays silent through ordinary chatter and reports once when the phrase is said. | 16_watch_for_phrase | PASS 3/3 · 2026-11-12 | flaky · PASS 4/4 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · notes:12.8-probe |
-| A question on the topic of a promise's condition never fulfils it; the promise waits for the statement. | 30_same_topic_question | PASS 3/3 · 2026-11-12 | flaky · PASS 5/5 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · notes:12.8-probe |
+| A reminder asked for a time fires exactly once at that time. | 08_reminder_at_time | PASS 3/3 · 2026-11-13 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| A follow-up asked for one hour later fires once while the owner stays silent. | 09_reminder_ask_again | PASS 3/3 · 2026-11-13 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-12 · replay-20261112-061932.md |
+| A recurring reminder fires again on the next day under its policy. | 10_reminder_recurring_nudge | PASS 3/3 · 2026-11-13 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| A reminder fires in the direct place it was made in, not in a busy group. | 13_fired_reminder_different_place | PASS 3/3 · 2026-11-13 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| A watch for a phrase stays silent through ordinary chatter and reports once when the phrase is said. | 16_watch_for_phrase | PASS 3/3 · 2026-11-13 | flaky · PASS 4/4 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · notes:12.8-probe |
+| A question on the topic of a promise's condition never fulfils it; the promise waits for the statement. | 30_same_topic_question | PASS 3/3 · 2026-11-13 | flaky · PASS 5/5 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · notes:12.8-probe |
 
 ## silence
 
 | Capability | Scenario | Fake result | Real model |
 |---|---|---|---|
-| Unaddressed morning chit-chat in a group gets no reply. | 01_group_chitchat_greeting | PASS 3/3 · 2026-11-12 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| Unaddressed lunch chatter in a group gets no reply. | 02_group_chitchat_lunch | PASS 3/3 · 2026-11-12 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| An unaddressed traffic complaint in a group gets no reply. | 03_group_chitchat_weather | PASS 3/3 · 2026-11-12 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| An unaddressed urgent line that is not the soul's business gets no reply. | 15_urgent_unaddressed_group | PASS 3/3 · 2026-11-12 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| The soul's name captures attention without allocating the turn, so no reply follows. | 21_own_name_capture | PASS 3/3 · 2026-11-12 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| Unaddressed morning chit-chat in a group gets no reply. | 01_group_chitchat_greeting | PASS 3/3 · 2026-11-13 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| Unaddressed lunch chatter in a group gets no reply. | 02_group_chitchat_lunch | PASS 3/3 · 2026-11-13 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| An unaddressed traffic complaint in a group gets no reply. | 03_group_chitchat_weather | PASS 3/3 · 2026-11-13 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| An unaddressed urgent line that is not the soul's business gets no reply. | 15_urgent_unaddressed_group | PASS 3/3 · 2026-11-13 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| The soul's name captures attention without allocating the turn, so no reply follows. | 21_own_name_capture | PASS 3/3 · 2026-11-13 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
 
 ## turn-taking
 
 | Capability | Scenario | Fake result | Real model |
 |---|---|---|---|
-| A direct mention in a group is answered there. | 04_group_mention | PASS 3/3 · 2026-11-12 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| A group reply to the soul is treated as addressed and answered. | 05_group_reply_to_bot | PASS 3/3 · 2026-11-12 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| A direct message is answered. | 06_dm_conversation | PASS 3/3 · 2026-11-12 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| Addressed mentions in a busy group are answered despite the crowd penalty. | 14_busy_group_repeated_mention | PASS 3/3 · 2026-11-12 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-12 · replay-20261112-061932.md |
-| Patience holds the floor: the gate's go on an answerable question creates the wait, the sender's follow-up does not cancel it, another person's answer settles it as silence, and an expired window yields one reply. | 22_patience_turn_taking | PASS 3/3 · 2026-11-12 | PASS 7/7 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| The gate keeps a busy group silent, an addressed line always wakes, the decision event stores its terms, and its go on an answerable question holds a wait that wakes the soul once. | 24_gate_threshold | PASS 3/3 · 2026-11-12 | FAIL 11/12 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · replay-20261112-100338.md |
+| A direct mention in a group is answered there. | 04_group_mention | PASS 3/3 · 2026-11-13 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| A group reply to the soul is treated as addressed and answered. | 05_group_reply_to_bot | PASS 3/3 · 2026-11-13 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| A direct message is answered. | 06_dm_conversation | PASS 3/3 · 2026-11-13 | PASS 1/1 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| Addressed mentions in a busy group are answered despite the crowd penalty. | 14_busy_group_repeated_mention | PASS 3/3 · 2026-11-13 | PASS 3/3 · deepseek-ai/DeepSeek-V4.1-Flash-1017 · 2026-11-12 · replay-20261112-061932.md |
+| Patience holds the floor: the gate's go on an answerable question creates the wait, the sender's follow-up does not cancel it, another person's answer settles it as silence, and an expired window yields one reply. | 22_patience_turn_taking | PASS 3/3 · 2026-11-13 | PASS 7/7 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| The gate keeps a busy group silent, an addressed line always wakes, the decision event stores its terms, and its go on an answerable question holds a wait that wakes the soul once. | 24_gate_threshold | PASS 3/3 · 2026-11-13 | FAIL 11/12 · deepseek-ai/DeepSeek-V4.1-Flash-1017 (effort high) · 2026-11-12 · replay-20261112-100338.md |
 
 ## Real-model record
 
@@ -90,10 +90,6 @@ Kept here, so pruning `reports/` to ten never erases evidence.
 
 | Scenario | Verdict | Checks | Model | Effort | Date | Report |
 |---|---|---|---|---|---|---|
-| 26_help_meeting_time | FAIL | 5/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2025-real-26-28.md |
-| 26_help_meeting_time | FAIL | 3/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1859-real-18-19-26-28.md |
-| 28_help_package_location | FAIL | 5/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2025-real-26-28.md |
-| 28_help_package_location | FAIL | 4/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1859-real-18-19-26-28.md |
 | 17_cross_body_continuity | PASS | 1/1 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
 | 17_cross_body_continuity | PASS | 1/1 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1353-real-07-11-12-20-23-25-27-29-17-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
 | 17_cross_body_continuity | PASS | - | deepseek-ai/DeepSeek-V4.1-Flash-1017 | - | 2026-11-11 | notes:10.10 |
@@ -114,9 +110,13 @@ Kept here, so pruning `reports/` to ten never erases evidence.
 | 25_help_place_name | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
 | 25_help_place_name | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1353-real-07-11-12-20-23-25-27-29-17-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
 | 25_help_place_name | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1113-real-24-30-16-25-27-29.md |
+| 26_help_meeting_time | FAIL | 5/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2025-real-26-28.md |
+| 26_help_meeting_time | FAIL | 3/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1859-real-18-19-26-28.md |
 | 27_help_wifi_password | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
 | 27_help_wifi_password | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1353-real-07-11-12-20-23-25-27-29-17-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
 | 27_help_wifi_password | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1113-real-24-30-16-25-27-29.md |
+| 28_help_package_location | FAIL | 5/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2025-real-26-28.md |
+| 28_help_package_location | FAIL | 4/9 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1859-real-18-19-26-28.md |
 | 29_help_clinic_hours | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-2019-real-07-11-12-17-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
 | 29_help_clinic_hours | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1353-real-07-11-12-20-23-25-27-29-17-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
 | 29_help_clinic_hours | PASS | 4/4 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | high | 2026-11-12 | 2026-11-12-1113-real-24-30-16-25-27-29.md |

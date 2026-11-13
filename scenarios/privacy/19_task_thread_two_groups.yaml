@@ -1,6 +1,14 @@
 name: 19_task_thread_two_groups
 function: privacy
 capability: "A multi-step job opens a task thread, holds a promise, delivers to Budi's direct place, asks which group before sharing, and its waiting does not block the owner's chat."
+plugins:
+  workspace: {enabled: true}
+roles:
+  fallback: unverified
+  unverified: {base: guest}
+  runner: {base: trusted, approval: yolo}
+people:
+  person:owner: {roles: [runner]}
 description: >-
   Owner meminta satu pekerjaan bertingkat: selesaikan kode, kirim ke Budi lewat
   WhatsApp, lalu ke grup. Pekerjaan membuka task thread, promise Expectation
@@ -153,8 +161,8 @@ model_answers:
           policy: {once: true}
       - name: act
         arguments:
-          capability: dev.run
-          arguments: {command: "uv run pytest"}
+          capability: workspace.run
+          arguments: {command: "python3 -c \"print('12 passed')\""}
   - step: 4
     tool: decide
     calls:

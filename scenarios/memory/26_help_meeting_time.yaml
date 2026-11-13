@@ -3,6 +3,9 @@ function: memory
 capability: "A fact said in the owner's direct chat stays private: the soul asks the owner and answers the group only after share.granted."
 plugins:
   soul-tuning: {enabled: true}
+  web-search: {enabled: true}
+  workspace: {enabled: true}
+  pdf-reader: {enabled: true}
 description: >-
   Unaddressed help, case two: the owner tells Mona the meeting time in a direct
   chat and sleep keeps it. A group member who was never part of that chat asks
