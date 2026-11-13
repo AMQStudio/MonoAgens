@@ -156,7 +156,13 @@ person (a command).
   hook `policy.py` decides pass, ask or refuse from the requester's permissions, the tool's
   facts and the requester's approval mode (§8). The requester is the chain's `origin_actor`, not
   whoever is present. How an approval is asked and answered is `interaction.py` (§9).
-- **Draft**: per-person rate limits and steps-per-task limits live here.
+- **Brakes on runaway work** (D63), in `policy.py`, deterministic, no model call: at most
+  `max_task_steps` steps per task chain and at most `max_wakes_per_hour` wakes per chain;
+  both in `config.yaml` → `owner_settings`. When a brake holds, the chain stops, the event is
+  recorded, and the owner is told in the owner's direct chat which work stopped and why, with
+  the choice to continue; nothing stops silently. A brake is a fuse: the root cause of a loop
+  is still fixed where it lives.
+- **Draft**: per-person rate limits live here.
 
 ## 5. Install (plugin manager)
 - A loader outside the core reads each plugin's manifest ([plugins.md §3](plugins.md)) and
