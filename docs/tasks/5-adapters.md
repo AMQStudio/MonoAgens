@@ -146,14 +146,14 @@ adapter is a special case.
   intent to another place carries the drafted words only if every private item of the source
   context is visible at the target; the audience is the members (D85), with *unknown* for a
   shared place without a member list; a capability may declare no permission only when it is
-  communicative; a fault-injection test over every adapter method,
+  communicative, `react` or `edit` (D67); a fault-injection test over every adapter method,
   best-effort rule and tool. Tests: a show that raises does not stop the turn; a stranger's
   "halo" is answered even with many similar imported greetings; a private line from another
   chat never reaches the context of a place outside its audience (the context filter); "tell
   Budi what Fulan said" from the owner's DM reaches Budi's wake without Fulan's words; a group
   where only the owner spoke but with 200 members holds no private item; a send to a `can_post: false`
   place is refused and reasoning answers in another way; a WhatsApp message cannot be answered
-  through the CLI.
+  through the CLI. *Done so far:* D82 (1.12 F.1, 1bc9cd6); D84 and D85 are 1.12 P; D83 remains.
 - [ ] 1.11 Real-world testing loop (owner, 2026-11-14) — before the live session of 1.8, so that
   tests see what the real platforms send instead of what we imagined:
   1. **Fakes from the real thing, for every external dependency** (adapters, plugins and
@@ -190,6 +190,129 @@ adapter is a special case.
      item, and the owner's direct chat sees everything.
   The connected WhatsApp number is a test number: the owner tests it from his own phone; no
   second tester account is needed.
+- [ ] 1.12 Audit fixes (owner, 2026-11-14). Five read-only audits of the whole repo (core,
+  middleware, adapters, plugins, infra) found about a hundred faults. Almost all of them break a
+  rule that is already written (fail closed, record first, D82, D84, D85, one consumer), so no
+  new decision is needed except where marked. Every fix starts as a failing test that shows the
+  fault. Order: S, A, F.1 (done), P, the rest of F, then D83 (1.10), 1.11, E (with 1.11's fakes
+  and recordings), O. Any core file not named in the worker's prompt still needs approval first.
+
+  **S. Sandbox** (`plugins/workspace/`)
+  - [x] S.1 `read`, `grep` (each `rglob` result) and `glob` stay inside the workspace: no symlink
+    or `..` reaches a host file such as `.env` (febd0c9).
+  - [x] S.2 `write` and `edit` create their temp file with `O_EXCL | O_NOFOLLOW` and
+    `os.replace` it, so a planted `.tmp` symlink cannot overwrite a host file (febd0c9).
+  - [x] S.3 The network blackhole fails closed: if a route cannot be set, the run is refused
+    (febd0c9).
+  - [x] S.4 Output read in bounded chunks; tmpfs size and `RLIMIT_FSIZE` caps (febd0c9).
+  - [x] S.5 A bad regex is an honest error; search runs off the loop under a timeout (febd0c9).
+  - [ ] S.6 The rest: a cancelled run kills its sandbox; the run timeout has a ceiling; a plugin
+    gets only the environment variables its manifest declares; `web-fetch` has a total read
+    timeout and size cap; `pdf-reader` has page and size caps; blocking calls in `async def` go
+    through `asyncio.to_thread`.
+
+  **A. Authority** (899d5be)
+  - [x] A.1 An approved retry and a brake "continue" run with the requester's `origin_actor`;
+    `approval.consumed` makes an approval single use; the prompt names the requester.
+  - [x] A.2 A typed yes or no counts only as a reply to the prompt, or in the owner's direct
+    place within 30 minutes of the newest request; older requests expire (`approval.expired`).
+  - [x] A.3 An `allow` entry grants exactly the listed permissions, never a tier.
+  - [x] A.4 A reminder wake carries the Expectation's `origin_actor`, not the line speaker's.
+  - [x] A.5 Wrong `/link <code>` and pairing guesses are counted per guessing account (three in
+    the code's lifetime); the owner cannot redeem a code issued by someone else.
+  - [x] A.6 Plugins and `config.d/` cannot redefine a core permission or declare one outside
+    their own namespace (fails at boot).
+  - [x] A.7 `result["identity"]` applies only for `identity_changing` capabilities, is recorded,
+    and refreshes the soul's name.
+  - [x] A.8 Only communicative capabilities, `react` and `edit` may declare no permission; any
+    other fails at boot.
+
+  **F. Failures and liveness** (D82, middleware.md §2)
+  - [x] F.1 Guard and best-effort rule kinds; a refused act is recorded truthfully
+    (`refused: true`), returns to reasoning and is bounded by the brake; exception text never
+    reaches the Log or logs, only its type (1bc9cd6).
+  - [ ] F.2 A tool call runs under a watchdog (`job_timeout_seconds`); a timeout is an honest
+    `act.result`, so one hung tool cannot freeze the one consumer.
+  - [ ] F.3 One call failing inside `apply_calls` becomes an `act.result` error caused by that
+    act; the other calls of the round still run, and the task thread still counts the step.
+  - [ ] F.4 A tool result is kept when the same wake also spoke: `step_spoke` looks at the act
+    that produced the result, not at the whole wake.
+  - [ ] F.5 The kernel loop survives an exception in the backlog flush and in `recover()`; one
+    fired Expectation failing does not lose the others.
+  - [ ] F.6 Adapter I/O in hooks: a show has its own short timeout and never drops the item;
+    approval and brake prompts are sent after the hook, from the queue, and their delivery is
+    checked (no owner direct place or no adapter is an error, not "waiting").
+  - [ ] F.7 Typing is shown from the last action slot, after every refusal, at the resolved
+    place, and only when something is about to be sent.
+  - [ ] F.8 `split` sends nothing inside the hook: the parts go through the normal dispatch to
+    the resolved place, each confirmed, with the limits of the capability's own adapter; nothing
+    is re-sent after a restart.
+  - [ ] F.9 An approval or brake answer survives a restart: the retry is derived from answered
+    events that have no executed marker.
+  - [ ] F.10 `act.out` records the payload after the action hook; resuming a send goes through
+    the action hook again.
+  - [ ] F.11 A task thread closes when the soul reports to the requester. *Owner decision
+    pending* — skip until it is decided.
+  - [ ] F.12 A command handler that raises answers with an error; command replies go through the
+    action hook (quiet hours, `can_post`).
+
+  **P. Privacy** (D84, D85, middleware.md §3; with 1.10's privacy part)
+  - [ ] P.1 Audience = members from place info plus speakers (D85); a shared place with unknown
+    membership includes *unknown*; `visible()` fails closed and an empty audience of a shared
+    place is never "everyone".
+  - [ ] P.2 Every item entering a context passes `visible()` for the wake's place: recent,
+    recent_elsewhere, memories, core_memory, doing, expectations, the trigger, person cards; a
+    failing item is dropped and recorded as `error`.
+  - [ ] P.3 The text-similarity guard is removed (`leaks`, and its use in `guard` and
+    `leaving`); unused GIN indexes are reported for a migration.
+  - [ ] P.4 Speaking elsewhere: the intent never carries `because {goal}`; it carries the drafted
+    words only if every private item of the source context is visible at the target; `<doing>`
+    shows a goal only when its root is visible at that place.
+  - [ ] P.5 A reminder line from one place never reaches a wake in another place where it is not
+    visible (test: a DM line matching a group promise).
+  - [ ] P.6 `core_memory.derived_from` is the union of the old core's sources and the new batch.
+  - [ ] P.7 Sleep runs once per place with new events, so each memory carries only its own
+    place's sources (owner, 2026-11-14); lines use `sent_at`; `core_memory` and
+    `sleep:last_event` are written in the same transaction.
+  - [ ] P.8 `registry.more`: no place means deny; the result is capped.
+  - [ ] P.9 Shown steps and progress pass `visible()` for the place they are shown in.
+  - [ ] P.10 Person cards read `kernel.roles` at call time (the empty boot RoleBook is captured
+    today, so role context and the "unverified" line never reach the soul).
+  - [ ] P.11 D80 delegation applies only to the one reply to the delegated message.
+  - [ ] P.12 Report only: `share` without an episode, and what hard forgetting leaves behind
+    (core_memory text, payloads, a late vector insert), each against the spec.
+
+  **E. Adapters** (with 1.11's fakes and recordings)
+  - [ ] E.1 WhatsApp: a message without a sender is never the owner's; poll votes are decrypted
+    so choices resolve; `LoggedOut` and `Disconnected` are handled; reply quoting carries the
+    participant; reaction and revoke senders are right; members follow joins and leaves;
+    `can_post` follows admin-only groups.
+  - [ ] E.2 Telegram: media groups are not duplicated; a failed download (over 20 MB) is an
+    error percept, not an update that crash-loops; `allowed_updates` includes reactions; reply
+    threads and mention entities; `sent_at` and back-fill flags.
+  - [ ] E.3 Discord: reactions and edits on uncached messages; sent ids survive a restart;
+    back-fill; `allowed_mentions`.
+  - [ ] E.4 Every adapter: a fresh client on restart; the supervisor backoff does not reset
+    after a short run; message length limits split cleanly; choice prompts survive a restart;
+    the CLI socket is created with its final mode.
+
+  **O. Operations**
+  - [ ] O.1 `/reload` and `/plugin enable|disable` work with adapters running: running adapters
+    are not created again, the install is validated before anything changes, the config is
+    written only after validation, plugin rules do not duplicate and leave with their plugin.
+  - [ ] O.2 Config editors: each edit is parsed back and checked, else refused; `/show` keeps
+    comments; writes are atomic and backups do not overwrite each other.
+  - [ ] O.3 Model calls: every round's usage is recorded, failed ones included; the budget
+    update is atomic; cached tokens are read; a fallback provider uses its own key only.
+  - [ ] O.4 `/plugin update` reads the recorded defaults; a missing plugin requirement or
+    dependency fails at boot.
+  - [ ] O.5 Expectations: the default expiry is never before the next cue; `cooldown`, `once`
+    and `max_fires` hold on the event path and for reminders; an Expectation that can never fire
+    is refused when it is made.
+  - [ ] O.6 Small ones: `LogView.search` escapes `%` and `_`; recall uses the injected settings;
+    the active-expectations list shows the newest; retrieval counts a use once; the inbound
+    encode runs after the inbound hook; the middleware's remaining English strings (including
+    the brake message's `max_task_steps`) move to the language catalog (D81).
 - [ ] 1.8 Real-model test (this task's one exception to the last-part rule, because WhatsApp is
   needed daily): the replay launch set passes on the new adapters, then a live session on
   WhatsApp in the owner's direct chat and one group (the model in `.env`; never read or print
