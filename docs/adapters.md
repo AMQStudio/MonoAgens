@@ -131,6 +131,8 @@ the same on every adapter, drawn the best way each platform allows:
     the soul);
   - `thread: "title"` — start a new thread or topic for this message where the place allows it;
   - `location: {lat, lon, name?}` — share a place;
+  - `voice: true` — say it aloud: a voice note on chat adapters, speech on devices (§9; Task 5
+    Part 2);
 - `react(emoji, message_id?)`;
 - `edit(message_id, text)` for its own messages, where the platform allows it.
 Progress messages, typing, read receipts and approval prompts are not the soul's: the
@@ -234,6 +236,8 @@ that: HA is one adapter, and the soul is HA's conversation agent.
   (`reply_seconds`); past it, it answers HA with a short holding line and speaks the real answer
   later by announce. The gate and reasoning are never skipped: no speech-to-speech model answers
   for the soul.
+- HA speaks with its own pipeline (Wyoming, Piper); the soul's TTS driver (§9) is used only if
+  the owner wants another voice on the home's speakers.
 - `.env`: `HA_URL`, `HA_TOKEN` (a long-lived access token). The client library for HA's
   WebSocket API, if one is needed, asks the owner first (AGENTS.md).
 

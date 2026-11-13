@@ -130,14 +130,18 @@ adapter is a special case.
 Read first: [adapters.md](../adapters.md)
 May touch: `monoagens/adapters/`, `monoagens/infra/providers/` (speech and model drivers), `integrations/homeassistant/` (new: the HA custom integration), `monoagens/middleware/` (interaction, for `voice`), `.env.example`, `tests/`, `scenarios/`
 
-- [ ] 2.1 Speech for every adapter: STT/TTS drivers in `infra/providers/speech/`, ported from V1
-  (`monoagens/providers/speech.py`: OpenAI-shaped STT/TTS, which local servers such as
-  faster-whisper, Piper and Kokoro also speak, Deepgram, ElevenLabs), chosen by `.env`
-  (`STT_PROVIDER`, `TTS_PROVIDER`); shared by every adapter, never tied to one. A voice note in
-  becomes a percept with its transcript (imported ones are transcribed on open); `say` gains
-  `voice: true`, rendered as the platform's own voice note, text as the fallback; the words stay
-  in the Log. Voice calls wait for a mature, widely released calling library (project.md §5);
-  until then a call stays a percept and the soul answers in chat.
+- [ ] 2.1 Speech for every adapter (adapters.md §9, D72): drivers by protocol in
+  `infra/providers/speech/` — OpenAI-shaped HTTP (ported from V1), Wyoming (new, plain asyncio),
+  ElevenLabs and Deepgram (ported) — chosen by `.env`, shared by every adapter, each reporting its
+  languages with a boot warning when the soul's language is missing. Voice notes in on WhatsApp,
+  Telegram and Discord become percepts with their transcript (imported ones on open; an honest
+  description when STT fails); `say(voice: true)` sends the platform's voice note, text as the
+  fallback, the words kept in the Log. Barge-in and `spoken_until` in the contract, tested with a
+  fake device. A realtime engine, if set, only transcribes and speaks; its own replies are off,
+  and a test proves no utterance reaches a reply without the gate. Tests with fake STT/TTS
+  servers for each door. A websocket client, if needed, asks the owner first. Voice calls wait
+  for a mature, widely released calling library (project.md §5); until then a call stays a
+  percept and the soul answers in chat.
 - [ ] 2.2 First non-chat adapter: Home Assistant as a body (adapters.md §8, D71): the soul as HA's
   conversation agent through a small HA custom integration, satellites' areas as shared places,
   exposed entities as `home.state` and `home.control`, listed entity changes as percepts, the
