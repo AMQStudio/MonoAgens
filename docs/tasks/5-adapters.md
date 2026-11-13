@@ -156,9 +156,14 @@ adapter is a special case.
   through the CLI.
 - [ ] 1.11 Real-world testing loop (owner, 2026-11-14) — before the live session of 1.8, so that
   tests see what the real platforms send instead of what we imagined:
-  1. **Fakes from the real classes**: every fake of neonize, discord.py and Telegram's client is
-     built with `unittest.mock.create_autospec` (or a checked subclass) from the real class, so a
-     call with the wrong arguments fails the test (the `mark_read` bug would have failed).
+  1. **Fakes from the real thing, for every external dependency** (adapters, plugins and
+     providers alike): a library client is faked with `unittest.mock.create_autospec` (or a
+     checked subclass) of the real class — neonize, discord.py, `ddgs`, `pypdf` — so a call with
+     the wrong arguments fails the test (the `mark_read` bug would have failed); an HTTP API
+     (Telegram Bot API, OpenCode Go and other model providers) is faked from recorded real
+     responses, errors included (429, 5xx, cached-token usage, tool calls); a system program
+     (`bubblewrap`, `passt`) runs for real in tests where it is installed, else from recorded real
+     output. No hand-written fake of an outside thing remains.
   2. **Shadow mode**: `bodies.<adapter>.dry_run: true` — the adapter receives everything and the
      soul decides as usual, but nothing is sent, marked read or shown on the platform; each would-
      be send is recorded (`act.result` with `dry_run: true`) and printed to the owner's CLI with
