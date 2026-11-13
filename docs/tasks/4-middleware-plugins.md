@@ -1,6 +1,6 @@
 # Task 4 — Middleware and first plugins
 
-Status: todo | Depends on: Task 3
+Status: done | Depends on: Task 3
 One task = one worker prompt, done by one worker. Work through the parts **in order**. Rules: [README](README.md).
 
 **Goal.** The foundation in the middle, in eight files (contract, policy, privacy, identity,

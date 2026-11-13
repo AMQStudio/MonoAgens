@@ -88,7 +88,10 @@ The one middleware that is always present.
   before they arrived. Whether a place is direct or shared comes from the adapter
   (`place_kind`), never from the shape of an id (D48). A private item may enter a context only if
   every person who will see the result is in its audience, or the context is the owner's direct
-  chat; content from places that are not private flows freely. A memory's audience comes from the
+  chat; content from places that are not private flows freely. One source of truth: the
+  audience labels. Every privacy check (the context filter, `leaks` in the action hook,
+  `visible` for attachments and shown items) answers from them, so content visible at the
+  target is never refused as a leak; a text-similarity check only catches content that is not. A memory's audience comes from the
   labels of the events it was derived from (D53). When the policy withholds relevant items it
   leaves one line without content — how many, and whose private place they came from (D56).
 - **Sharing by consent (D46).** The policy offers the `share(item | episode, to)` capability: it
