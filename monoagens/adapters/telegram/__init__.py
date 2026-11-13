@@ -272,6 +272,16 @@ class TelegramBody:
         thread = str(p["thread"]) if p.get("thread") else None
 
         sent_res = None
+        if sticker and sticker.startswith("att_") and self.files is not None:
+            try:
+                s_data, s_info = await self.files.open(sticker, context=action.place)
+            except Exception as exc:
+                return {"error": f"cannot send sticker {sticker}: {exc}"}
+            sent_res = await send.sticker_file(self._http(), self._api_base, self._token,
+                                               action.place, s_data, s_info)
+            if isinstance(sent_res, dict) and sent_res.get("message_id"):
+                self._sent.add(str(sent_res["message_id"]))
+            sticker = None
         if text or choices or loc or sticker or mentions or thread:
             sent_res = await send.say(
                 self._call, action.place, text,

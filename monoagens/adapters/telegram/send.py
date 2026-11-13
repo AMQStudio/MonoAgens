@@ -253,18 +253,32 @@ async def place_info(call: Call, place: str, *, bot_id: int | None = None) -> di
     return info
 
 
-async def document(http: Any, base_url: str, token: str, place: str,
-                   data: bytes, info: dict[str, Any]) -> Any:
-    """Upload one attachment cleanly to Telegram (`sendSticker` for webp stickers if marked)."""
-    files = {"document": (str(info.get("name") or "file"), data,
-                          str(info.get("mime") or "application/octet-stream"))}
+async def _upload(http: Any, base_url: str, token: str, method: str, field_name: str,
+                  place: str, data: bytes, info: dict[str, Any],
+                  default_mime: str = "application/octet-stream") -> Any:
+    """Upload one attachment cleanly to Telegram (`sendDocument` or `sendSticker`)."""
+    files = {field_name: (str(info.get("name") or "file"), data,
+                          str(info.get("mime") or default_mime))}
     params: dict[str, Any] = {"chat_id": chat_id(place)}
     topic = thread_id(place)
     if topic is not None:
         params["message_thread_id"] = str(topic)
-    response = await http.post(f"{base_url}/bot{token}/sendDocument", data=params, files=files)
+    response = await http.post(f"{base_url}/bot{token}/{method}", data=params, files=files)
     response.raise_for_status()
     payload = response.json()
     if not payload.get("ok"):
-        raise RuntimeError(f"Telegram sendDocument failed: {payload.get('description')}")
+        raise RuntimeError(f"Telegram {method} failed: {payload.get('description')}")
     return payload.get("result")
+
+
+async def document(http: Any, base_url: str, token: str, place: str,
+                   data: bytes, info: dict[str, Any]) -> Any:
+    """Upload one attachment cleanly to Telegram via `sendDocument`."""
+    return await _upload(http, base_url, token, "sendDocument", "document", place, data, info)
+
+
+async def sticker_file(http: Any, base_url: str, token: str, place: str,
+                       data: bytes, info: dict[str, Any]) -> Any:
+    """Upload one opened sticker ref to Telegram via `sendSticker`."""
+    return await _upload(http, base_url, token, "sendSticker", "sticker", place, data, info,
+                         default_mime="image/webp")
