@@ -128,7 +128,7 @@ adapter is a special case.
 
 ## Part 2 — More adapters and models
 Read first: [adapters.md](../adapters.md)
-May touch: `monoagens/adapters/`, provider adapters, `tests/`, `scenarios/`
+May touch: `monoagens/adapters/`, `monoagens/infra/providers/` (speech and model drivers), `integrations/homeassistant/` (new: the HA custom integration), `monoagens/middleware/` (interaction, for `voice`), `.env.example`, `tests/`, `scenarios/`
 
 - [ ] 2.1 Speech for every adapter: STT/TTS drivers in `infra/providers/speech/`, ported from V1
   (`monoagens/providers/speech.py`: OpenAI-shaped STT/TTS, which local servers such as
