@@ -419,7 +419,7 @@ async def person_cards(conn, place: str | None, event: Event | None,
     text = payload_text(event.payload) if event is not None else ""
     named = {who for who, card in known.items()
              if card["name"] and _named(card["name"], text)}
-    people = sorted((present | named) - {OWNER})
+    people = sorted((present | named) - {OWNER, privacy.UNKNOWN})
     return tuple([await _card(conn, who, known.get(who) or {"name": None, "closeness": 0.0,
                                                             "natives": {who}},
                               roles=roles, place=place)

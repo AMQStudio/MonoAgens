@@ -258,8 +258,6 @@ class ToolRegistry:
             kind = type(exc).__name__
             LOGGER.error("tool %s failed (%s)", capability, kind)
             return {"error": f"{capability} failed ({kind})"}
-        if capability == MORE:
-            return result
         return await self._cap_result(result, self.output_cap(capability))
 
     async def more(self, ref: str, offset: int = 0, limit: int = DEFAULT_OUTPUT_CAP,
@@ -267,6 +265,8 @@ class ToolRegistry:
         """Read one character slice from an archived full tool output."""
         if not ref:
             return {"error": "ref is required"}
+        if not context:
+            return {"error": "context place is required", "ref": ref}
         attachments = getattr(self.kernel, "attachments", None)
         conn = getattr(self.kernel, "conn", None)
         if attachments is None or conn is None:
@@ -275,7 +275,8 @@ class ToolRegistry:
             raw, meta = await open_attachment(conn, attachments, ref, context=context)
         except (PermissionError, FileNotFoundError) as exc:
             return {"error": str(exc), "ref": ref}
-        sliced = await asyncio.to_thread(_slice_utf8, raw, offset, limit)
+        capped_limit = min(max(1, int(limit)), MORE_OUTPUT_CAP)
+        sliced = await asyncio.to_thread(_slice_utf8, raw, offset, capped_limit)
         return {"ref": ref, "size": meta["size"], **sliced}
 
     async def _cap_result(self, value: Any, cap: int) -> Any:

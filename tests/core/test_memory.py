@@ -471,3 +471,91 @@ def test_the_sleep_tool_does_not_ask_for_place_or_private():
     """D53: the core derives a memory's audience; the model never fills it in."""
     item = memory.STORE_MEMORIES["function"]["parameters"]["properties"]["items"]["items"]
     assert set(item["properties"]) == {"text", "importance", "who"}
+
+
+async def test_sleep_core_memory_derived_from_unions_old_and_new_sources(aconn):
+    """P.6: core_memory.derived_from unions prior core_memory sources with new batch."""
+    first = await append_event(
+        aconn, ts=START, kind="percept", who="person:fulan", place="space:tg:9",
+        body="telegram", payload={"text": "rahasia lama", "place_kind": "direct"})
+    await memory.sleep(aconn, pfc=FakePFC({"items": [], "core_memory": "Core v1"}),
+                       embedder=FakeEmbedder(), now=START + timedelta(hours=1), settings=SETTINGS)
+    second = await append_event(
+        aconn, ts=START + timedelta(hours=2), kind="percept", who="person:owner",
+        place=PLACE, body="telegram", payload={"text": "kabar baru", "place_kind": "direct"})
+    await memory.sleep(aconn, pfc=FakePFC({"items": [], "core_memory": "Core v2"}),
+                       embedder=FakeEmbedder(), now=START + timedelta(hours=3), settings=SETTINGS)
+
+    core_state = await read_state(aconn, "core_memory")
+    assert set(core_state["derived_from"]) == {first.id, second.id}
+
+
+async def test_sleep_runs_once_per_place_uses_sent_at_and_is_atomic(aconn, monkeypatch):
+    """P.7: per-place consolidation, sent_at timestamps in lines, transactional state writes."""
+    sent = START - timedelta(days=3)
+    ev1 = await append_event(
+        aconn, ts=START, kind="percept", who="person:owner", place="space:tg:1",
+        body="telegram", payload={"text": "suka teh", "sent_at": sent.isoformat()})
+    ev2 = await append_event(
+        aconn, ts=START + timedelta(minutes=1), kind="percept", who="person:fulan",
+        place="space:tg:2", body="telegram", payload={"text": "suka matcha"})
+
+    class PerPlacePFC:
+        def __init__(self) -> None:
+            self.requests: list[tuple[list[dict], list[dict]]] = []
+            self.model = "fake-model"
+            self.last_usage = {"prompt_tokens": 5, "cached_tokens": 0,
+                               "completion_tokens": 2, "total_tokens": 7}
+
+        async def call(self, messages, tools, *, tool_choice="required"):
+            self.requests.append((messages, tools))
+            body = messages[1]["content"]
+            if "suka teh" in body:
+                return [ToolCall("store_memories", {
+                    "items": [{"text": "Memori tempat 1", "importance": 0.7, "who": "person:owner"}],
+                    "core_memory": "Core after place 1",
+                })]
+            return [ToolCall("store_memories", {
+                "items": [{"text": "Memori tempat 2", "importance": 0.6, "who": "person:fulan"}],
+                "core_memory": "Core after place 2",
+            })]
+
+    # First prove transactional rollback when write_state fails after sleep.done.
+    import importlib
+    from zoneinfo import ZoneInfo
+
+    sleep_mod = importlib.import_module("monoagens.core.memory.sleep")
+
+    async def boom_write_state(*args, **kwargs):
+        raise RuntimeError("disk full on state write")
+
+    monkeypatch.setattr(sleep_mod, "write_state", boom_write_state)
+    failed = await memory.sleep(aconn, pfc=PerPlacePFC(), embedder=FakeEmbedder(),
+                                now=START + timedelta(hours=1), settings=SETTINGS)
+    assert failed is not None and failed.kind == "sleep.failed"
+    assert await (await aconn.execute("SELECT count(*) FROM memories")).fetchone() == (0,)
+    assert await (await aconn.execute(
+        "SELECT count(*) FROM events WHERE kind = 'sleep.done'")).fetchone() == (0,)
+    monkeypatch.undo()
+
+    pfc = PerPlacePFC()
+    done = await memory.sleep(aconn, pfc=pfc, embedder=FakeEmbedder(),
+                              now=START + timedelta(hours=2), settings=SETTINGS)
+    assert done is not None and done.kind == "sleep.done"
+    assert len(pfc.requests) == 2
+    sent_local = sent.astimezone(ZoneInfo(str(SETTINGS.get("timezone") or "UTC")))
+    assert f"#{ev1.id} {sent_local:%Y-%m-%d %H:%M}" in pfc.requests[0][0][1]["content"]
+    assert "suka matcha" not in pfc.requests[0][0][1]["content"]
+    assert "Core after place 1" in pfc.requests[1][0][1]["content"]
+    assert "suka teh" not in pfc.requests[1][0][1]["content"]
+
+    mem_rows = await (await aconn.execute(
+        "SELECT place, text, derived_from, private FROM memories ORDER BY id")).fetchall()
+    assert mem_rows == [
+        ("space:tg:1", "Memori tempat 1", [ev1.id], True),
+        ("space:tg:2", "Memori tempat 2", [ev2.id], True),
+    ]
+    core_state = await read_state(aconn, "core_memory")
+    assert core_state["text"] == "Core after place 2"
+    assert set(core_state["derived_from"]) == {ev1.id, ev2.id}
+

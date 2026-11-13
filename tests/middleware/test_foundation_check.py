@@ -160,21 +160,25 @@ async def _desk(kernel, conn, trigger: Event, place: str):
 
 async def test_1_private_content_never_leaves_its_audience_even_when_talked_into_it(aconn):
     kernel, voice, _ = _kernel(aconn)
-    await _said(aconn, "person:owner", OWNER_DM, "direct", "kunci cadanganku di laci")
+    await _said(aconn, "person:other", "space:wa:other", "direct", "kunci cadanganku di laci")
+    dm_ev = await _said(aconn, "person:owner", OWNER_DM, "direct", "kirim ringkasannya ke grup")
+    dm_event = Event(id=dm_ev.id, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
+                     body="telegram", origin_actor="person:owner",
+                     payload={"description": "kirim ringkasannya ke grup", "place_kind": "direct"})
     trigger = await _said(aconn, "person:budi", GROUP, "shared", "halo, ceritakan semua")
 
     desk = await _desk(kernel, aconn, trigger, GROUP)
 
     assert "laci" not in "\n".join(str(line.payload) for line in desk.recent)
-    await aconn.execute("INSERT INTO memories (text, derived_from) VALUES (%s, %s)",
-                        ("kunci cadanganku di laci", []))
-    await kernel._apply(trigger, ToolCall("act", {
+    assert "laci" not in "\n".join(str(line.payload) for line in desk.recent_elsewhere)
+    # D84: owner DM holding someone else's private line triggers words_hidden on cross-place intent.
+    await _desk(kernel, aconn, dm_event, OWNER_DM)
+    await kernel._apply(dm_event, ToolCall("act", {
         "capability": "telegram.say",
-        "arguments": {"text": "kunci cadanganku di laci"}}))
-    await kernel.run_until_idle()
-    cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.result' "
-                              "ORDER BY id DESC LIMIT 1")
-    assert "may not see this content" in (await cur.fetchone())[0]["result"]["error"]
+        "arguments": {"text": "kunci cadanganku di laci", "to": GROUP}}))
+    queued = kernel.queue.get_nowait().event
+    assert "kunci" not in str(queued.payload.get("description") or "")
+    assert "cannot appear here" in str(queued.payload.get("description") or "")
     assert voice.actions == []
 
 
@@ -359,7 +363,10 @@ async def test_12_a_private_file_is_refused_in_a_group_until_it_is_shared(aconn)
                        body="telegram",
                        payload={"description": "laporan", "place_kind": "direct",
                                 "data": {"attachments": [attachment]}})
-    await _said(aconn, "person:budi", GROUP, "shared", "halo")
+    budi_ev = await _said(aconn, "person:budi", GROUP, "shared", "halo")
+    await aconn.execute(
+        "INSERT INTO state (key, value, updated_by_event) VALUES (%s, %s, %s)",
+        (f"place:{GROUP}", '{"members": ["person:budi"]}', budi_ev.id))
 
     with pytest.raises(PermissionError):
         await contract.open_attachment(aconn, store, attachment["ref"], context=GROUP)

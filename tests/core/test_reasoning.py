@@ -823,7 +823,7 @@ async def test_recall_obeys_absolute_line_two(aconn):
 
     owner = "space:tg:1001"
     await append_event(aconn, ts=START, kind="percept", who="person:owner", place=owner,
-                       payload={"description": "halo"})
+                       payload={"description": "halo", "place_kind": "direct"})
     allowed = await tool.act(Action(kind="recall", place=owner,
                                      payload={"query": "rahasia fulan"}))
     assert "rahasia fulan" in json.dumps(allowed["found"])

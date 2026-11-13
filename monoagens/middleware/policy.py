@@ -75,6 +75,23 @@ def install(kernel: Any) -> None:
     install_commands(kernel)
     interaction.install_commands(kernel)
     kernel.after_model_call = enforce(kernel)
+    kernel.visible = privacy.visible
+
+
+class _LiveRoles:
+    """Delegate attribute access to `kernel.roles` so post-boot reloads reach cards."""
+
+    def __init__(self, kernel: Any) -> None:
+        self._kernel = kernel
+
+    def __bool__(self) -> bool:
+        return bool(getattr(self._kernel, "roles", None))
+
+    def __getattr__(self, name: str) -> Any:
+        current = getattr(self._kernel, "roles", None)
+        if current is None:
+            raise AttributeError(name)
+        return getattr(current, name)
 
 
 def modules_for(hook: str, kernel: Any) -> tuple[tuple[str, Middleware], ...]:
@@ -87,7 +104,7 @@ def modules_for(hook: str, kernel: Any) -> tuple[tuple[str, Middleware], ...]:
                         ("read-receipts", compose(interaction.read_receipts_inbound(kernel),
                                                   kernel=kernel)),
                         ("attachment-sweep", attachment_sweep(kernel))),
-            "context": (("identity-cards", identity.cards(kernel.conn, roles=kernel.roles)),
+            "context": (("identity-cards", identity.cards(kernel.conn, roles=_LiveRoles(kernel))),
                         ("self-block", registry.self_block(kernel))),
             "action": (("identity-route", identity.route(kernel.conn)),
                        ("attachments-split", interaction.split(kernel)))}.get(hook, ())
@@ -109,8 +126,11 @@ def attachment_sweep(kernel: Any) -> Middleware:
 def policy_for(hook: str, when: str, kernel: Any) -> Middleware:
     """Return the absolute lines of one hook: identity, permissions, privacy, approvals, brakes."""
     if hook == "context":
-        return compose(identity.identity_line(), brake_line(kernel),
-                       privacy.filter_context(kernel.conn), kernel=kernel)
+        if when == "first":
+            return compose(identity.identity_line(), brake_line(kernel),
+                           privacy.filter_context(kernel.conn, settings=kernel.settings),
+                           kernel=kernel)
+        return compose(privacy.verify_context(kernel), kernel=kernel)
     if hook == "action":
         if when == "first":
             return compose(identity.identity_line(), permission_line(kernel),

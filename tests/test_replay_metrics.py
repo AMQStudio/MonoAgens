@@ -168,7 +168,8 @@ async def test_the_desk_scan_counts_every_private_item_its_audience_does_not_cov
     said = await append_event(aconn, ts=NOW, kind="percept", who="person:owner", place=dm,
                               payload={"description": "rapat jam sembilan", "place_kind": "direct"})
     asked = await append_event(aconn, ts=NOW, kind="percept", who="person:budi", place=group,
-                               payload={"description": "rapat jam berapa?", "place_kind": "shared"})
+                               payload={"description": "rapat jam berapa?", "place_kind": "shared",
+                                        "place_info": {"members": ["person:budi"]}})
     leaked = replay.Desk(3, group, asked.id, (replay.DeskItem(dm, None),))
     assert await replay.desk_violations(aconn, [leaked]) == [
         f"step 3: an item from `{dm}` was on the `{group}` desk, "
@@ -188,7 +189,8 @@ async def test_the_desk_scan_judges_a_memory_by_its_sources(aconn):
     said = await append_event(aconn, ts=NOW, kind="percept", who="person:owner", place=dm,
                               payload={"description": "rapat jam sembilan", "place_kind": "direct"})
     asked = await append_event(aconn, ts=NOW, kind="percept", who="person:budi", place=group,
-                               payload={"description": "rapat jam berapa?", "place_kind": "shared"})
+                               payload={"description": "rapat jam berapa?", "place_kind": "shared",
+                                        "place_info": {"members": ["person:budi"]}})
     memory = replay.Desk(5, group, asked.id, (replay.DeskItem(None, None, (said.id,)),))
     assert await replay.desk_violations(aconn, [memory]) == [
         f"step 5: an item from `sources [{said.id}]` was on the `{group}` desk, "
@@ -215,7 +217,8 @@ async def test_the_desk_scan_counts_core_memory_by_its_sources(aconn):
     await write_state(aconn, "core_memory",
                       {"text": "rapat jam sembilan", "derived_from": [said.id]}, said.id)
     asked = await append_event(aconn, ts=NOW, kind="percept", who="person:budi", place=group,
-                               payload={"description": "rapat jam berapa?", "place_kind": "shared"})
+                               payload={"description": "rapat jam berapa?", "place_kind": "shared",
+                                        "place_info": {"members": ["person:budi"]}})
     tracker = replay.Tracker(conn=aconn)
     await tracker.record_desk(PFCContext(now=NOW, place=group, place_kind="shared",
                                          reason="test", core_memory="rapat jam sembilan",

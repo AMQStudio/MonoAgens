@@ -76,7 +76,10 @@ async def test_a_share_lets_another_place_open_the_file(aconn, tmp_path):
     store = AttachmentStore(tmp_path)
     attachment = await store.put(b"kode", name="halo.py")
     source = await _carrier(aconn, OWNER_DM, "direct", attachment)
-    await _carrier(aconn, GROUP, "shared", {"ref": "att_nothing"}, who="person:budi")
+    group_ev = await _carrier(aconn, GROUP, "shared", {"ref": "att_nothing"}, who="person:budi")
+    await aconn.execute(
+        "INSERT INTO state (key, value, updated_by_event) VALUES (%s, %s, %s)",
+        (f"place:{GROUP}", '{"members": ["person:budi"]}', group_ev.id))
 
     with pytest.raises(PermissionError):
         await contract.open_attachment(aconn, store, attachment["ref"], context=GROUP)

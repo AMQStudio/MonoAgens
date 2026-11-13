@@ -313,7 +313,7 @@ async def test_link_merges_two_ids_into_one_card_memory_and_recall(aconn):
     raw_row = await (await aconn.execute("SELECT who FROM events WHERE id = %s",
                                          (second_ev.id,))).fetchone()
     assert raw_row == (younger_id,)
-    assert await privacy.audience(aconn, "space:dc:99") == frozenset({older_id})
+    assert await privacy.audience(aconn, "space:dc:99") == frozenset({older_id, privacy.UNKNOWN})
     ctx = await build_context(aconn, second_ev, "space:dc:99", "check", now=clock.now(),
                               settings=settings(), memories=(), capabilities=())
     rendered = str(parts.messages(Reasoning(settings=settings()), ctx))

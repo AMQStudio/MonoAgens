@@ -101,7 +101,8 @@ def _percept(text: str, *, place: str = GROUP, who: str = OTHER) -> object:
 async def _promise(conn, *, text: str, expires: datetime | None = None) -> int:
     """Create one free-text promise through the module API."""
     source = await append_event(conn, ts=START, kind="percept", who=WHO, place=PLACE,
-                                body="telegram", payload={"description": "minta dikabari"})
+                                body="telegram",
+                                payload={"description": "minta dikabari", "place_kind": "direct"})
     data = {"about": f"kabari kalau {text}", "kind": "promise",
             "cue_event": {"kind": "percept", "place": GROUP}, "expect": {"text": text},
             "intent": "beri tahu owner", "weight": 0.8, "policy": {"once": True}}

@@ -64,7 +64,8 @@ class Scripted:
         """Play the next round only on the two wakes this scenario is about."""
         self.contexts.append(context)
         text = str((context.trigger.payload or {}).get("description") or "")
-        if context.results or not ("kirim" in text or "approved" in text):
+        if (context.results or not ("kirim" in text or "approved" in text
+                                    or context.trigger.kind == "intent")):
             return []
         found = self.rounds.pop(0) if self.rounds else []
         if self.replace is not None:

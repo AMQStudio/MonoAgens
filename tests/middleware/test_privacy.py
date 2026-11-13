@@ -458,31 +458,6 @@ async def test_a_paraphrase_of_a_private_line_is_not_on_the_other_places_desk(ac
         "SELECT place, payload FROM events WHERE kind = 'act.out'")).fetchone()
     assert spoken[0] == BUDI
     assert "di-PHK" not in spoken[1]["arguments"]["text"]
-    assert await privacy.leaks(aconn, BUDI, "Fulan bilang: aku di-PHK") is True
-
-
-async def test_saying_private_words_in_a_place_that_may_not_see_them_is_refused(aconn):
-    """D45: the audience rule refuses the words, records the refusal and writes nothing out."""
-    await _said(aconn, "person:fulan", FULAN_A, "direct", "aku di-PHK")
-    await aconn.execute(
-        "INSERT INTO memories (who, place, text, importance, private) "
-        "VALUES (%s, %s, %s, 0.9, true)", ("person:fulan", FULAN_A, "aku di-PHK"))
-    group = await _said(aconn, "person:charlie", GROUP, "shared", "halo semua")
-    kernel = await _kernel(aconn)
-
-    await kernel._apply(_trigger(group, GROUP), ToolCall("act", {
-        "capability": "whatsapp.say", "arguments": {"text": "aku di-PHK", "to": GROUP}}))
-    await kernel.run_until_idle()
-
-    rows = await (await aconn.execute("SELECT kind, payload FROM events ORDER BY id")).fetchall()
-    refusal = "that place may not see this content; say it where it belongs"
-    outs = [payload for kind, payload in rows if kind == "act.out"]
-    assert len(outs) == 1 and outs[0]["refused"] is True and outs[0]["communicative"] is True
-    assert (await (await aconn.execute(
-        "SELECT payload FROM events WHERE kind = 'act.result'")).fetchone())[0]["result"] == {
-            "error": refusal}
-    stopped = [payload for kind, payload in rows if kind == "guard.stopped"]
-    assert stopped == [{"hook": "action", "reason": refusal}]
 
 
 async def test_a_long_action_opens_a_task_thread_and_it_closes_when_done(aconn):
@@ -656,14 +631,9 @@ async def test_scenario_18_step_4_desk_line_is_sent_while_private_dm_in_group_is
     assert desk_quote in out[1]["arguments"]["text"]
 
     group = await _said(aconn, "person:charlie", GROUP, "shared", "halo semua")
-    await kernel._apply(_trigger(group, GROUP), ToolCall("act", {
-        "capability": "whatsapp.say",
-        "arguments": {"text": "Kata owner kode brankas ruang rapat itu 842190.", "to": GROUP}}))
-    await kernel.run_until_idle()
-    res = await (await aconn.execute(
-        "SELECT payload FROM events WHERE kind = 'act.result' ORDER BY id DESC LIMIT 1")
-    ).fetchone()
-    assert "that place may not see this content" in res[0]["result"]["error"]
+    desk = (await _desk(aconn, place=GROUP, trigger=group)).item
+    assert all(line.place != OWNER_DM for line in desk.recent_elsewhere)
+    assert "842190" not in _prompt(desk)
 
 
 async def test_delegated_reply_carries_delegator_audience_for_one_reply_only(aconn):
@@ -703,7 +673,7 @@ async def test_delegated_reply_carries_delegator_audience_for_one_reply_only(aco
     await kernel._run_hooks("inbound", later, {"conn": aconn, "now": START},
                             later, tool=later.body)
     assert await privacy.audience(aconn, BUDI, before=later.id) == frozenset({"person:budi"})
-    assert await privacy.leaks(aconn, GROUP, "Cocok kok, cuma warnanya agak terlalu terang.") is True
+    assert await privacy.visible(aconn, context=GROUP, source=BUDI, before=later.id) is False
 
     # Owner chooses to share into GROUP; only the matched reply opens, never Fulan's DM.
     reply_here = Event(id=asked_id, ts=START, kind="percept", who=OWNER, place=GROUP,
@@ -711,8 +681,7 @@ async def test_delegated_reply_carries_delegator_audience_for_one_reply_only(aco
     await kernel._apply(reply_here, ToolCall("act", {
         "capability": "self.share", "arguments": {"item": "jawaban Budi", "to": GROUP}}))
     assert await privacy.visible(aconn, context=GROUP, source=BUDI, before=budi_reply.id) is True
-    assert await privacy.leaks(aconn, GROUP, "Budi bilang cocok, cuma warnanya agak terlalu terang.") is False
-    assert await privacy.leaks(aconn, GROUP, "Aku mau cuti besok, rahasia ya.") is True
+    assert await privacy.visible(aconn, context=GROUP, source=BUDI, before=later.id) is False
 
     fulan = await _said(aconn, "person:fulan", FULAN_A, "direct", "aku di-PHK")
     await kernel._apply(_trigger(fulan, FULAN_A), ToolCall("act", {
@@ -754,67 +723,392 @@ async def test_delegated_reply_via_reply_to_grants_one_reply_only(aconn):
     assert await privacy.audience(aconn, BUDI, before=second.id) == frozenset({"person:budi"})
 
 
-async def test_leaks_protects_imported_private_lines(aconn):
-    """Imported percepts from private chats stay protected from leaking elsewhere."""
+async def test_delegation_requires_same_place_ignores_unrelated_reply_and_never_doubles(aconn):
+    """P.11: D80 delegation applies only once to the one reply to the delegated message."""
+    root_id = await _said(aconn, OWNER, GROUP, "shared", "tanya Budi cocok atau tidak")
+    await _said(aconn, "person:charlie", GROUP, "shared", "oke")
+    await _said(aconn, "person:budi", BUDI, "direct", "hai", body="whatsapp")
+    kernel = await _kernel(aconn)
+
+    asked = Event(id=root_id, ts=START, kind="percept", who=OWNER, place=GROUP,
+                  body="telegram", origin_actor=OWNER)
+    out = await kernel._emit(asked, "act.out", {
+        "capability": "whatsapp.say", "arguments": {"text": "Jadi nggak?"},
+        "communicative": True}, place=BUDI)
+    await kernel._emit(out, "act.confirmed", {"capability": "whatsapp.say",
+                                              "message_id": "wa-msg-10"}, place=BUDI)
+    await expectations.create(aconn, {
+        "kind": "wait", "about": "Budi jawab jadi",
+        "cue_event": {"who": "person:budi", "text": "jadi"}, "expect": {"none": True}},
+        now=START, settings=SETTINGS, source=asked)
+
+    # 1) Unrelated message in another place matching cue never gets delegation or burns wait.
+    in_group = await append_event(
+        aconn, ts=START, kind="percept", who="person:budi", place=GROUP, body="telegram",
+        payload={"description": "acara lain jadi", "place_kind": "shared",
+                 "place_info": {"members": ["person:budi", "person:charlie", OWNER]}})
+    await kernel._run_hooks("inbound", in_group, {"conn": aconn, "now": START},
+                            in_group, tool=in_group.body)
+    assert await privacy._delegated(aconn, in_group.id) == {"actors": frozenset(), "source_places": ()}
+
+    # 2) Explicit reply_to an unrelated message in BUDI never claims the wait delegation.
+    other_reply = await append_event(
+        aconn, ts=START, kind="percept", who="person:budi", place=BUDI, body="whatsapp",
+        payload={"description": "jadi kemarin itu lucu", "place_kind": "direct",
+                 "reply_to": "wa-unrelated"})
+    await kernel._run_hooks("inbound", other_reply, {"conn": aconn, "now": START},
+                            other_reply, tool=other_reply.body)
+    assert await privacy.audience(aconn, BUDI, before=other_reply.id) == frozenset({"person:budi"})
+
+    # 3) Reply #1 answers via reply_to (without keyword): gets delegation ONCE.
+    first_reply = await append_event(
+        aconn, ts=START, kind="percept", who="person:budi", place=BUDI, body="whatsapp",
+        payload={"description": "oke sebentar", "place_kind": "direct",
+                 "reply_to": "wa-msg-10"})
+    await kernel._run_hooks("inbound", first_reply, {"conn": aconn, "now": START},
+                            first_reply, tool=first_reply.body)
+    assert await privacy.audience(aconn, BUDI, before=first_reply.id) == frozenset({
+        "person:budi", OWNER})
+
+    # 4) Later message matching still-active wait cue must NOT grant a second delegation!
+    second_msg = await append_event(
+        aconn, ts=START, kind="percept", who="person:budi", place=BUDI, body="whatsapp",
+        payload={"description": "jadi rahasia gajiku segini", "place_kind": "direct"})
+    await kernel._run_hooks("inbound", second_msg, {"conn": aconn, "now": START},
+                            second_msg, tool=second_msg.body)
+    assert await privacy.audience(aconn, BUDI, before=second_msg.id) == frozenset({"person:budi"})
+
+
+async def test_audience_includes_place_info_members_and_mapped_speakers(aconn):
+    place = "space:tg:-901"
+    ev = await append_event(
+        aconn, ts=START, kind="percept", who="telegram:10", place=place, body="telegram",
+        payload={"description": "halo", "place_kind": "shared",
+                 "place_info": {"members": ["telegram:10", "telegram:20"]}})
+    await _link(aconn, "telegram:10", "person:a", int(ev.id))
+    await _link(aconn, "telegram:20", "person:b", int(ev.id))
+    assert await privacy.audience(aconn, place) == frozenset({"person:a", "person:b"})
+
+    alice_dm = "space:tg:alice"
+    await append_event(
+        aconn, ts=START, kind="percept", who=OWNER, place=alice_dm, body="telegram",
+        payload={"description": "catatan", "place_kind": "direct",
+                 "place_info": {"members": [OWNER, "person:alice"]}})
+    assert await privacy.audience(aconn, alice_dm) == frozenset({"person:alice"})
+    assert await privacy.owner_direct(aconn, alice_dm) is False
+
+
+async def test_shared_place_with_unknown_or_count_membership_blocks_private_items(aconn):
+    group_a, group_b = "space:tg:-902", "space:tg:-903"
+    await append_event(
+        aconn, ts=START, kind="percept", who=OWNER, place=group_a, body="telegram",
+        payload={"description": "hai", "place_kind": "shared", "place_info": {"members": 5}})
+    ev_a = await _said(aconn, "person:budi", group_a, "shared", "agenda rapat")
+    ev_b = await _said(aconn, "person:budi", group_b, "shared", "rahasia budi")
+    await _said(aconn, "person:fulan", FULAN_A, "direct", "rahasia fulan")
+
+    assert privacy.UNKNOWN in await privacy.audience(aconn, group_a)
+    assert privacy.UNKNOWN in await privacy.audience(aconn, group_b)
+    assert await privacy.visible(aconn, context=group_a, source=FULAN_A) is False
+    assert await privacy.visible(aconn, context=group_a, source=group_b) is False
+    assert await privacy.visible(aconn, context=group_a, source=group_a, before=ev_a) is True
+    assert await privacy.memory_visible(aconn, context=group_a, sources=(ev_b,)) is False
+    assert await privacy.memory_visible(aconn, context=group_a, sources=(ev_a,)) is True
+
+
+async def test_empty_direct_or_owner_only_shared_place_fails_closed(aconn):
+    await _said(aconn, "person:fulan", FULAN_A, "direct", "rahasia")
+    empty_dm = "space:tg:empty_dm"
+    assert await privacy.owner_direct(aconn, empty_dm) is False
+    assert await privacy.visible(aconn, context=empty_dm, source=FULAN_A) is False
+
+    owner_shared = "space:tg:-905"
+    await append_event(
+        aconn, ts=START, kind="percept", who=OWNER, place=owner_shared, body="telegram",
+        payload={"description": "uji", "place_kind": "shared",
+                 "place_info": {"members": [OWNER]}})
+    assert await privacy.owner_direct(aconn, owner_shared) is False
+    assert await privacy.audience(aconn, owner_shared) == frozenset({OWNER})
+    assert await privacy.visible(aconn, context=owner_shared, source=FULAN_A) is False
+    assert await privacy.visible(aconn, context=None, source=FULAN_A) is False
+    assert await privacy.visible(aconn, context=FULAN_A, source=None) is False
+
+
+async def test_labels_before_d85_fall_back_to_current_members_and_newcomer_snapshot_holds(aconn):
+    pre_place = "space:tg:-904"
+    ev1 = await _said(aconn, "person:alice", pre_place, "shared", "pesan lama")
+    await write_state(aconn, f"place:{pre_place}", {"members": ["person:alice", "person:bob"]}, ev1)
+    assert await privacy.audience(aconn, pre_place, before=ev1) == frozenset(
+        {"person:alice", "person:bob"})
+
+    snap_place = "space:tg:-906"
+    ev2 = await append_event(
+        aconn, ts=START, kind="percept", who="person:alice", place=snap_place, body="telegram",
+        payload={"description": "sebelum charlie", "place_kind": "shared",
+                 "place_info": {"members": ["person:alice", "person:bob"]}})
+    await append_event(
+        aconn, ts=START, kind="percept", who="person:charlie", place=snap_place, body="telegram",
+        payload={"description": "charlie masuk", "place_kind": "shared",
+                 "place_info": {"members": ["person:alice", "person:bob", "person:charlie"]}})
+    assert await privacy.visible(
+        aconn, context=snap_place, source=snap_place, before=int(ev2.id)) is False
+
+
+async def test_verify_context_last_checks_all_eight_sections_and_records_error(aconn):
+    from monoagens.middleware import policy
+
+    dm = await _said(aconn, OWNER, OWNER_DM, "direct", "rahasia owner")
+    fulan_ev = await _said(aconn, "person:fulan", FULAN_A, "direct", "rahasia fulan")
+    budi_ev = await append_event(
+        aconn, ts=START, kind="percept", who="person:budi", place=GROUP, body="telegram",
+        payload={"description": "halo group, tanya Andi", "place_kind": "shared",
+                 "place_info": {"members": ["person:budi"]}})
+    await append_event(
+        aconn, ts=START, kind="percept", who="person:stranger", place="space:tg:stranger",
+        body="telegram", payload={"description": "halo", "place_kind": "direct"})
+    await append_event(
+        aconn, ts=START, kind="percept", who="person:andi", place="space:tg:andi",
+        body="telegram", payload={"description": "rahasia andi", "place_kind": "direct"})
+    await write_state(aconn, "core_memory",
+                      {"text": "core dari dm", "derived_from": [dm]}, dm)
+    priv_exp = await expectations.create(aconn, {
+        "kind": "wait", "about": "rahasia exp", "cue_event": {"who": OWNER},
+        "expect": {"none": True}}, now=START, settings=SETTINGS,
+        source=Event(id=dm, ts=START, kind="percept", who=OWNER, place=OWNER_DM))
+    pub_exp = await expectations.create(aconn, {
+        "kind": "wait", "about": "grup exp", "cue_event": {"who": "person:budi"},
+        "expect": {"none": True}}, now=START, settings=SETTINGS,
+        source=Event(id=budi_ev.id, ts=START, kind="percept", who="person:budi", place=GROUP))
+
+    kernel = await _kernel(aconn)
+    rule = policy.policy_for("context", "last", kernel)
+    dm_event = Event(id=dm, ts=START, kind="percept", who=OWNER, place=OWNER_DM,
+                     payload={"description": "rahasia owner"})
+    fulan_event = Event(id=fulan_ev, ts=START, kind="percept", who="person:fulan", place=FULAN_A,
+                        payload={"description": "rahasia fulan"})
+    bad = layout.PFCContext(
+        now=START, place=GROUP, reason="test",
+        recent=(dm_event,),
+        recent_elsewhere=(fulan_event,),
+        memories=(memory.MemoryHit("- rahasia mem", place=OWNER_DM, sources=(dm,)),),
+        core_memory="core dari dm",
+        doing=("goal: rahasia goal", "result: rahasia result"),
+        expectations=(f"#{priv_exp.payload['expectation_id']} rahasia exp (no intent stated)",),
+        trigger=dm_event,
+        people=("- Stranger (person:stranger): telegram at space:tg:stranger; closeness 0.50",),
+    )
+    res = await rule(bad, {"conn": aconn, "now": START})
+    cleaned = res.item
+    assert cleaned.recent == ()
+    assert cleaned.recent_elsewhere == ()
+    assert cleaned.memories == ()
+    assert cleaned.core_memory == ""
+    assert cleaned.doing == ()
+    assert cleaned.expectations == ()
+    assert cleaned.trigger is None
+    assert cleaned.people == ()
+
+    err_rows = await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'error'")).fetchall()
+    assert len(err_rows) >= 8
+    err_blob = str(err_rows)
+    assert "rahasia" not in err_blob and "Stranger" not in err_blob
+
+    await aconn.execute("SELECT 1")
+    before_good_errors = (await (await aconn.execute(
+        "SELECT count(*) FROM events WHERE kind = 'error'")).fetchone())[0]
+    good = layout.PFCContext(
+        now=START, place=GROUP, reason="test",
+        recent=(budi_ev,),
+        expectations=(f"#{pub_exp.payload['expectation_id']} grup exp (no intent stated)",),
+        trigger=budi_ev,
+        people=(
+            "- person:budi: no direct place known yet; closeness 0.00",
+            "- Andi (person:andi): telegram at space:tg:andi; closeness 0.00",
+        ),
+    )
+    res_good = await rule(good, {"conn": aconn, "now": START})
+    assert isinstance(res_good, hooks.Continue)
+    assert await (await aconn.execute(
+        "SELECT count(*) FROM events WHERE kind = 'error'")).fetchone() == (before_good_errors,)
+
+
+async def test_filter_context_drops_cross_place_expectations_and_doing_cleanly(aconn):
+    dm = await _said(aconn, OWNER, OWNER_DM, "direct", "rahasia dm")
+    await append_event(
+        aconn, ts=START, kind="percept", who="person:budi", place=GROUP, body="telegram",
+        payload={"description": "halo", "place_kind": "shared",
+                 "place_info": {"members": ["person:budi"]}})
+    asked = await append_event(
+        aconn, ts=START, kind="percept", who="person:budi", place=GROUP, body="telegram",
+        payload={"description": "gimana?", "place_kind": "shared",
+                 "place_info": {"members": ["person:budi"]}})
+    global_exp = await expectations.create(aconn, {
+        "kind": "wait", "about": "followup rahasia", "cue_event": {"who": OWNER},
+        "expect": {"none": True}}, now=START, settings=SETTINGS,
+        source=Event(id=dm, ts=START, kind="percept", who=OWNER, place=None))
+    exp_id = int(global_exp.payload["expectation_id"])
+    await aconn.execute("UPDATE expectations SET place = NULL WHERE id = %s", (exp_id,))
+
+    kernel = await _kernel(aconn)
+    raw = await layout.build_context(
+        aconn, asked, GROUP, "test", now=START, settings=SETTINGS, memories=(), capabilities=())
+    assert any(line.startswith(f"#{exp_id} ") for line in raw.expectations)
+    cleaned = await kernel._run_hooks("context", raw, {"conn": aconn, "now": START}, asked)
+    assert cleaned is not None
+    assert not any(line.startswith(f"#{exp_id} ") for line in cleaned.expectations)
+    assert await (await aconn.execute(
+        "SELECT count(*) FROM events WHERE kind = 'error'")).fetchone() == (0,)
+
+
+async def test_text_similarity_leaks_removed_and_safe_phrase_not_refused(aconn):
+    assert not hasattr(privacy, "leaks")
     await append_event(
         aconn, ts=START, kind="percept", who="person:fulan", place=FULAN_A, body="whatsapp",
-        payload={"description": "Nomor PIN brankas kantor adalah 884219.",
-                 "place_kind": "direct", "imported": True})
-    await _said(aconn, "person:charlie", GROUP, "shared", "halo semua")
-    msg = "Pakai PIN 884219 atau nomor pin brankas kantor adalah 884219."
-    assert await privacy.leaks(aconn, GROUP, msg) is True
-    assert await privacy.leaks(aconn, FULAN_A, "Nomor PIN brankas kantor adalah 884219.") is False
+        payload={"description": "aku di-PHK kemarin", "place_kind": "direct", "imported": True})
+    group = await append_event(
+        aconn, ts=START, kind="percept", who="person:charlie", place=GROUP, body="whatsapp",
+        payload={"description": "halo semua", "place_kind": "shared",
+                 "place_info": {"members": ["person:charlie"]}})
+    kernel = await _kernel(aconn)
+    await kernel._apply(group, ToolCall("act", {
+        "capability": "whatsapp.say",
+        "arguments": {"text": "aku di-PHK kemarin", "to": GROUP}}))
+    await kernel.run_until_idle()
+    outs = await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'act.out' ORDER BY id DESC")).fetchall()
+    assert outs and outs[0][0].get("refused") is not True
+    assert await privacy.leaving(kernel, {"capability": "web.search", "event": group},
+                                 {"query": "aku di-PHK kemarin"}) is None
 
 
-async def test_leaks_at_scale_with_6000_events_and_200_chats(aconn):
-    """D45/B.3: leaks() stays <50 ms at 6,000 events across 200 chats (half imported)."""
-    import time
-    from psycopg.types.json import Jsonb
+async def test_speaking_elsewhere_intent_omits_because_goal_and_checks_context_sources(aconn):
+    await _said(aconn, "person:budi", BUDI, "direct", "hai", body="whatsapp")
+    owner_dm = await _said(aconn, OWNER, OWNER_DM, "direct",
+                           "Tolong bilang Budi rapat besok jam 10")
+    kernel = await _kernel(aconn)
 
-    rows = []
-    for i in range(6000):
-        chat = f"space:wa:chat{i % 200}"
-        who = f"person:wa:user{i % 200}"
-        text = (
-            f"Pesan nomor {i} dari obrolan {i % 200} membahas proyek tim "
-            f"ref{i % 97} untuk jadwal hari ke-{(i % 28) + 1}."
-        )
-        if i == 1234:
-            text = "aku di-PHK kemarin"
-        elif i == 2345:
-            text = ("Halo semua, kemarin aku ketemu Fulan dan katanya "
-                    "password wifi ruang tamu adalah kopi hitam panas.")
-        elif i == 5000:
-            text = "Besok kita ketemu di kafe ujung jalan ya teman."
-        payload: dict[str, Any] = {"description": text, "place_kind": "direct"}
-        if i % 2 == 0:
-            payload["imported"] = True
-        rows.append((START, "percept", who, chat, "whatsapp", Jsonb(payload), who))
-    async with aconn.cursor() as cur:
-        await cur.executemany(
-            "INSERT INTO events (ts, kind, who, place, body, payload, origin_actor) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            rows,
-        )
-    imp_row = await (await aconn.execute(
-        "SELECT id FROM events WHERE payload->>'description' = 'aku di-PHK kemarin'")).fetchone()
-    await aconn.execute(
-        "INSERT INTO memories (who, place, text, importance, private, derived_from) "
-        "VALUES (%s, %s, %s, 0.9, true, %s)",
-        ("person:wa:user34", "space:wa:chat34", "di-PHK kemarin", [int(imp_row[0])]),
-    )
-    await aconn.execute("ANALYZE events; ANALYZE memories")
+    # 1. Owner DM without any other person's private items carries drafted words, never `because`.
+    await kernel._apply(_trigger(owner_dm, OWNER_DM, text="Tolong bilang Budi rapat besok jam 10"),
+                        ToolCall("act", {"capability": "whatsapp.say",
+                                         "arguments": {"text": "Rapat besok jam 10 ya",
+                                                       "to": "person:budi", "via": "whatsapp"}}))
+    await kernel.run_until_idle()
+    clean_intent = await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'intent' ORDER BY id DESC LIMIT 1")).fetchone()
+    assert clean_intent is not None
+    desc1 = clean_intent[0]["description"]
+    assert "Rapat besok jam 10 ya" in desc1
+    assert "because " not in desc1
 
-    target = "space:wa:chat0"
-    checks = [
-        ("Hai Budi, katanya kemarin aku di-PHK kemarin dari kantor.", True),
-        ("Kalau butuh internet pakai password wifi ruang tamu saja ya.", True),
-        ("Besok kita ketemu di kafe ujung jalan ya teman.", False),
-        ("Selamat pagi semuanya, semoga hari ini lancar dan menyenangkan.", False),
-    ]
-    for outgoing, expected in checks:
-        t0 = time.perf_counter()
-        result = await privacy.leaks(aconn, target, outgoing)
-        elapsed_ms = (time.perf_counter() - t0) * 1000
-        assert result is expected
-        assert elapsed_ms < 50.0, f"leaks() took {elapsed_ms:.2f} ms for {outgoing!r}"
+    # 2. Once Fulan's private chat exists and is in view of Owner DM's wake, words never cross.
+    await _said(aconn, "person:fulan", FULAN_A, "direct", "rahasia fulan")
+    pfc = _ScriptedPFC([
+        [ToolCall("act", {"capability": "whatsapp.say",
+                          "arguments": {"text": "Kabar baik Budi",
+                                        "to": "person:budi", "via": "whatsapp"}})],
+        [],
+    ])
+    kernel2 = await _kernel(aconn, pfc=pfc)
+    trigger2 = await _said(aconn, OWNER, OWNER_DM, "direct", "Tanyakan kabar Budi")
+    await kernel2._think(
+        Event(id=trigger2, ts=START, kind="percept", who=OWNER, place=OWNER_DM,
+              payload={"description": "Tanyakan kabar Budi"}),
+        "addressed", OWNER_DM)
+    await kernel2.run_until_idle()
+    intents = await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'intent' ORDER BY id DESC LIMIT 1")).fetchone()
+    assert intents is not None
+    desc2 = intents[0]["description"]
+    assert "Kabar baik Budi" not in desc2
+    assert "its words cannot appear here" in desc2
+    assert "because " not in desc2
+
+
+async def test_doing_hides_goal_when_chain_root_is_not_visible_at_place(aconn):
+    await _said(aconn, "person:budi", BUDI, "direct", "hai")
+    root = await append_event(
+        aconn, ts=START, kind="percept", who=OWNER, place=OWNER_DM, body="telegram",
+        payload={"description": "rahasia gaji budi", "place_kind": "direct"})
+    intent_ev = await append_event(
+        aconn, ts=START, kind="intent", who=None, place=BUDI, caused_by=root.id,
+        payload={"description": "tanya budi", "place_kind": "direct"})
+    act_out = await append_event(
+        aconn, ts=START, kind="act.out", who=None, place=BUDI, caused_by=intent_ev.id,
+        payload={"capability": "dev.run", "arguments": {"command": "check"},
+                 "communicative": False})
+    act_res = await append_event(
+        aconn, ts=START, kind="act.result", who=None, place=BUDI, caused_by=act_out.id,
+        payload={"capability": "dev.run", "result": {"ok": True}})
+
+    kernel = await _kernel(aconn)
+    raw = await layout.build_context(
+        aconn, act_res, BUDI, "result", now=START, settings=SETTINGS, memories=(),
+        capabilities=())
+    assert any("rahasia gaji budi" in line for line in raw.doing)
+    cleaned = await kernel._run_hooks("context", raw, {"conn": aconn, "now": START}, act_res)
+    assert cleaned is not None
+    assert not any(line.startswith("goal:") for line in cleaned.doing)
+    assert any(line.startswith("step:") for line in cleaned.doing)
+    assert await (await aconn.execute(
+        "SELECT count(*) FROM events WHERE kind = 'error'")).fetchone() == (0,)
+
+    # Same-place chain root stays visible in <doing>.
+    budi_root = await append_event(
+        aconn, ts=START, kind="percept", who="person:budi", place=BUDI, body="whatsapp",
+        payload={"description": "tolong cek server", "place_kind": "direct"})
+    budi_out = await append_event(
+        aconn, ts=START, kind="act.out", who=None, place=BUDI, caused_by=budi_root.id,
+        payload={"capability": "dev.run", "arguments": {"command": "ping"},
+                 "communicative": False})
+    budi_res = await append_event(
+        aconn, ts=START, kind="act.result", who=None, place=BUDI, caused_by=budi_out.id,
+        payload={"capability": "dev.run", "result": {"ok": True}})
+    raw_ok = await layout.build_context(
+        aconn, budi_res, BUDI, "result", now=START, settings=SETTINGS, memories=(),
+        capabilities=())
+    cleaned_ok = await kernel._run_hooks(
+        "context", raw_ok, {"conn": aconn, "now": START}, budi_res)
+    assert cleaned_ok is not None
+    assert any(line == "goal: tolong cek server" for line in cleaned_ok.doing)
+
+
+async def test_dm_line_matching_group_promise_never_wakes_group(aconn):
+    await _said(aconn, "person:fulan", FULAN_A, "direct", "hai")
+    budi_ev = await append_event(
+        aconn, ts=START, kind="percept", who="person:budi", place=GROUP, body="telegram",
+        payload={"description": "halo grup", "place_kind": "shared",
+                 "place_info": {"members": ["person:budi"]}})
+    await expectations.create(aconn, {
+        "kind": "promise", "about": "kabari kalau server down",
+        "cue_event": {"kind": "percept"},
+        "expect": {"text": "server down"},
+        "expires_at": (START + timedelta(hours=1)).isoformat(),
+    }, now=START, settings=SETTINGS,
+        source=Event(id=budi_ev.id, ts=START, kind="percept", who=OWNER, place=GROUP))
+
+    pfc = _ScriptedPFC([[], []])
+    kernel = await _kernel(aconn, pfc=pfc, embedder=FakeEmbedder())
+    dm_ev = Event(id=None, ts=START, kind="percept", who="person:fulan", place=FULAN_A,
+                  body="whatsapp",
+                  payload={"description": "server down rahasia fulan", "place_kind": "direct"})
+    kernel.enqueue(dm_ev)
+    await kernel.run_until_idle()
+
+    assert all(ctx.place != GROUP for ctx in pfc.contexts)
+    for ctx in pfc.contexts:
+        if ctx.place == GROUP:
+            assert "rahasia fulan" not in _prompt(ctx)
+
+    # Same-place line matching the promise still wakes GROUP as a reminder.
+    group_ev = Event(id=None, ts=START, kind="percept", who="person:budi", place=GROUP,
+                     body="telegram",
+                     payload={"description": "server down di grup", "place_kind": "shared",
+                              "place_info": {"members": ["person:budi"]}})
+    kernel.enqueue(group_ev)
+    await kernel.run_until_idle()
+    assert any(ctx.place == GROUP for ctx in pfc.contexts)
+
+
+
+

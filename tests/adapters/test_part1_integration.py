@@ -241,7 +241,9 @@ async def test_conversation_and_private_context_continue_across_wa_dc_tg_after_v
     code_tg = str((await read_state(aconn, f"{identity.LINK_PREFIX}{wa_ev.who}"))["code"])
     await _put_idle(kernel, Event(
         id=None, ts=clock.now(), kind="command", who="telegram:7701",
-        place=tg_place, body="telegram", payload={"command": "link", "arguments": [code_tg]}))
+        place=tg_place, body="telegram",
+        payload={"command": "link", "arguments": [code_tg], "place_kind": "direct",
+                 "place_info": {"members": ["telegram:7701"]}}))
 
     # 4. After verified link: private context & conversation follow across Discord & Telegram.
     assert await privacy.visible(aconn, context=dc_place, source=wa_place, before=10**9)
@@ -352,7 +354,9 @@ async def test_whatsapp_deferred_file_opens_and_forwards_and_sticker_sends_back(
     link_code = str((await read_state(aconn, f"{identity.LINK_PREFIX}{wa_stored.who}"))["code"])
     await _put_idle(kernel, Event(
         id=None, ts=clock.now(), kind="command", who="telegram:7701",
-        place=tg_place, body="telegram", payload={"command": "link", "arguments": [link_code]}))
+        place=tg_place, body="telegram",
+        payload={"command": "link", "arguments": [link_code], "place_kind": "direct",
+                 "place_info": {"members": ["telegram:7701"]}}))
 
     # Materialize & read in Telegram context succeeds lazily once linked.
     opened_bytes, opened_info = await door.open(wa_ref, context=tg_place)

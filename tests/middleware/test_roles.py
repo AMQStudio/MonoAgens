@@ -489,3 +489,40 @@ def test_allow_grants_exact_permission_never_a_tier():
     assert found.can("person:tg:11", "budget.manage")
     assert not found.can("person:tg:11", "roles.manage")
     assert not found.may_give("person:tg:11", "member")
+
+
+async def test_person_cards_read_kernel_roles_at_call_time(aconn):
+    """P.10: updating kernel.roles after build() reaches person cards dynamically."""
+    cfg = settings()
+    kernel = build(aconn, clock=FakeClock(START), settings=cfg)
+    trigger = await append_event(
+        aconn, ts=START, kind="percept", who="person:stranger", place="space:tg:dm:stranger",
+        body="telegram", payload={"description": "halo", "place_kind": "direct"})
+    kernel.roles = book({
+        "roles": {
+            "fallback": "unverified",
+            "unverified": {"base": "guest", "context": "Unverified contact."},
+            "family": {"base": "member", "context": "Trusted family."},
+        },
+        "people": {
+            "person:budi": {"roles": ["family"]},
+        },
+    })
+    budi = await append_event(
+        aconn, ts=START, kind="percept", who="person:budi", place="space:tg:group:1",
+        body="telegram", payload={"description": "hi", "place_kind": "group",
+                                  "place_info": {"members": ["person:budi", "person:stranger"]}})
+
+    context = await layout.build_context(
+        aconn, budi, "space:tg:group:1", "hi", now=START, settings=cfg, memories=(), capabilities=())
+
+    async def _noop(*_args):
+        return None
+
+    updated = await kernel.hooks.context.run(
+        context, {"conn": aconn, "now": START, "event": budi}, on_stop=_noop, on_error=_noop)
+    cards_text = "\n".join(updated.people)
+    assert "Unverified contact." in cards_text
+    assert "Trusted family." in cards_text
+    assert trigger.id is not None
+

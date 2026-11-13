@@ -10,33 +10,48 @@ from monoagens.infra.store import payload_text, read_last_events
 from monoagens.types import Event
 
 
-async def doing_lines(conn, place: str, task: Mapping[str, Any] | None,
-                      values: Mapping[str, Any], trigger: Event | None = None,
-                      ) -> tuple[str, ...]:
-    """Show every chain in progress: the goal, one line per step, the latest result."""
+async def doing_entries(conn, place: str, task: Mapping[str, Any] | None,
+                        values: Mapping[str, Any], trigger: Event | None = None,
+                        ) -> tuple[tuple[str, str | None, int | None], ...]:
+    """Return `(line, source_place, source_event_id)` for every chain item in progress."""
     if task:
-        return await _task_lines(conn, place, task, values)
-    root, goal = await chain_root(conn, trigger.id if trigger is not None else None)
+        return await _task_entries(conn, place, task, values)
+    root, root_place, goal = await chain_root_info(
+        conn, trigger.id if trigger is not None else None)
     events = await _chain_events(conn, root, place) if root is not None else []
     acts = [seen for seen in events if seen.kind == "act.out"]
     if not acts or any(seen.payload.get("communicative") and not seen.payload.get("refused")
                        for seen in acts):
         return ()
-    return _lines(events, goal, values)
+    return _line_entries(events, goal, values, goal_source=(root_place or place, root))
+
+
+async def doing_lines(conn, place: str, task: Mapping[str, Any] | None,
+                      values: Mapping[str, Any], trigger: Event | None = None,
+                      ) -> tuple[str, ...]:
+    """Show every chain in progress: the goal, one line per step, the latest result."""
+    return tuple(line for line, _, _ in await doing_entries(conn, place, task, values, trigger))
+
+
+async def chain_root_info(conn, event_id: int | None) -> tuple[int | None, str | None, str]:
+    """Return `(root_id, root_place, goal_text)` for the chain an event belongs to."""
+    if event_id is None:
+        return None, None, ""
+    cur = await conn.execute(
+        "WITH RECURSIVE up AS ("
+        "SELECT id, caused_by, place, payload FROM events WHERE id = %s "
+        "UNION ALL SELECT e.id, e.caused_by, e.place, e.payload FROM events e JOIN up "
+        "ON e.id = up.caused_by) "
+        "SELECT id, place, payload FROM up WHERE caused_by IS NULL ORDER BY id LIMIT 1",
+        (event_id,))
+    row = await cur.fetchone()
+    return (int(row[0]), row[1], payload_text(row[2] or {})) if row else (None, None, "")
 
 
 async def chain_root(conn, event_id: int | None) -> tuple[int | None, str]:
     """Return the first event of the chain an event belongs to, and its goal text."""
-    if event_id is None:
-        return None, ""
-    cur = await conn.execute(
-        "WITH RECURSIVE up AS ("
-        "SELECT id, caused_by, payload FROM events WHERE id = %s "
-        "UNION ALL SELECT e.id, e.caused_by, e.payload FROM events e JOIN up "
-        "ON e.id = up.caused_by) "
-        "SELECT id, payload FROM up WHERE caused_by IS NULL ORDER BY id LIMIT 1", (event_id,))
-    row = await cur.fetchone()
-    return (int(row[0]), payload_text(row[1] or {})) if row else (None, "")
+    root, _, goal = await chain_root_info(conn, event_id)
+    return root, goal
 
 
 async def step_spoke(conn, event: Event) -> bool:
@@ -52,9 +67,9 @@ async def step_spoke(conn, event: Event) -> bool:
     return await cur.fetchone() is not None
 
 
-async def _task_lines(conn, place: str, task: Mapping[str, Any],
-                      values: Mapping[str, Any]) -> tuple[str, ...]:
-    """Show a task thread's work from its own place and the parent that started it."""
+async def _task_entries(conn, place: str, task: Mapping[str, Any],
+                        values: Mapping[str, Any]) -> tuple[tuple[str, str | None, int | None], ...]:
+    """Return a task thread's lines paired with their source place and event id."""
     since, limit = int(task.get("since") or 0), int(values["max_task_steps"]) * 3
     events = await read_last_events(conn, place, limit=limit,
                                     kinds=("task.opened", "act.out", "act.result"))
@@ -63,7 +78,10 @@ async def _task_lines(conn, place: str, task: Mapping[str, Any],
         events += await read_last_events(conn, parent, limit=limit,
                                          kinds=("act.out", "act.result"))
     events = [seen for seen in events if (seen.id or 0) >= since]
-    return _lines(events, str(task.get("goal") or "(unknown)"), values)
+    goal_src = (str(task.get("source_place") or parent or place),
+                int(since) if parent and since else None)
+    return _line_entries(events, str(task.get("goal") or "(unknown)"), values,
+                         goal_source=goal_src)
 
 
 async def _chain_events(conn, root: int, place: str) -> list[Event]:
@@ -79,27 +97,34 @@ async def _chain_events(conn, root: int, place: str) -> list[Event]:
                   payload=row[5] or {}, caused_by=row[6]) for row in await cur.fetchall()]
 
 
-def _lines(events: Sequence[Event], goal: str,
-           values: Mapping[str, Any]) -> tuple[str, ...]:
-    """Render one chain: goal, steps, earlier refs, and latest round results verbatim (D52)."""
+def _line_entries(events: Sequence[Event], goal: str,
+                  values: Mapping[str, Any], *,
+                  goal_source: tuple[str | None, int | None] = (None, None),
+                  ) -> tuple[tuple[str, str | None, int | None], ...]:
+    """Render one chain with source `(place, event_id)` attached to every line (D52, D84)."""
     events = sorted(events, key=lambda seen: seen.id or 0)
     trigger_of = {seen.id: seen.caused_by for seen in events
                   if seen.kind == "act.out" and seen.id is not None}
-    lines = [f"goal: {goal or '(unknown)'}"]
-    lines += [f"step: {_step_text(seen)}" for seen in events if seen.kind == "act.out"]
-    results = [(seen.id, seen.caused_by, _result_text(seen))
+    lines: list[tuple[str, str | None, int | None]] = [
+        (f"goal: {goal or '(unknown)'}", goal_source[0], goal_source[1]),
+    ]
+    lines += [(f"step: {_step_text(seen)}", seen.place, seen.id)
+              for seen in events if seen.kind == "act.out"]
+    results = [(seen.id, seen.caused_by, seen.place, _result_text(seen))
                for seen in events if seen.kind == "act.result"]
     if not results:
         return tuple(lines)
     latest_trigger = trigger_of.get(results[-1][1])
     cut = len(results) - 1
     if latest_trigger is not None:
-        cut = next((i for i, (_, cb, _) in enumerate(results)
+        cut = next((i for i, (_, cb, _, _) in enumerate(results)
                     if trigger_of.get(cb) == latest_trigger), len(results) - 1)
     cap = int(values["thread_result_tokens"]) * 4
-    lines += [f"earlier result #{event_id} (recall it)" for event_id, _, _ in results[:cut]]
+    lines += [(f"earlier result #{event_id} (recall it)", ev_place, event_id)
+              for event_id, _, ev_place, _ in results[:cut]]
     each = max(200, cap // max(1, len(results) - cut))
-    lines += [f"result: {text[:each]}" for _, _, text in results[cut:]]
+    lines += [(f"result: {text[:each]}", ev_place, event_id)
+              for event_id, _, ev_place, text in results[cut:]]
     return tuple(lines)
 
 

@@ -257,29 +257,29 @@ adapter is a special case.
     action hook (quiet hours, `can_post`).
 
   **P. Privacy** (D84, D85, middleware.md §3; with 1.10's privacy part)
-  - [ ] P.1 Audience = members from place info plus speakers (D85); a shared place with unknown
+  - [x] P.1 Audience = members from place info plus speakers (D85); a shared place with unknown
     membership includes *unknown*; `visible()` fails closed and an empty audience of a shared
     place is never "everyone".
-  - [ ] P.2 Every item entering a context passes `visible()` for the wake's place: recent,
+  - [x] P.2 Every item entering a context passes `visible()` for the wake's place: recent,
     recent_elsewhere, memories, core_memory, doing, expectations, the trigger, person cards; a
     failing item is dropped and recorded as `error`.
-  - [ ] P.3 The text-similarity guard is removed (`leaks`, and its use in `guard` and
+  - [x] P.3 The text-similarity guard is removed (`leaks`, and its use in `guard` and
     `leaving`); unused GIN indexes are reported for a migration.
-  - [ ] P.4 Speaking elsewhere: the intent never carries `because {goal}`; it carries the drafted
+  - [x] P.4 Speaking elsewhere: the intent never carries `because {goal}`; it carries the drafted
     words only if every private item of the source context is visible at the target; `<doing>`
     shows a goal only when its root is visible at that place.
-  - [ ] P.5 A reminder line from one place never reaches a wake in another place where it is not
+  - [x] P.5 A reminder line from one place never reaches a wake in another place where it is not
     visible (test: a DM line matching a group promise).
-  - [ ] P.6 `core_memory.derived_from` is the union of the old core's sources and the new batch.
-  - [ ] P.7 Sleep runs once per place with new events, so each memory carries only its own
+  - [x] P.6 `core_memory.derived_from` is the union of the old core's sources and the new batch.
+  - [x] P.7 Sleep runs once per place with new events, so each memory carries only its own
     place's sources (owner, 2026-11-14); lines use `sent_at`; `core_memory` and
     `sleep:last_event` are written in the same transaction.
-  - [ ] P.8 `registry.more`: no place means deny; the result is capped.
-  - [ ] P.9 Shown steps and progress pass `visible()` for the place they are shown in.
-  - [ ] P.10 Person cards read `kernel.roles` at call time (the empty boot RoleBook is captured
+  - [x] P.8 `registry.more`: no place means deny; the result is capped.
+  - [x] P.9 Shown steps and progress pass `visible()` for the place they are shown in.
+  - [x] P.10 Person cards read `kernel.roles` at call time (the empty boot RoleBook is captured
     today, so role context and the "unverified" line never reach the soul).
-  - [ ] P.11 D80 delegation applies only to the one reply to the delegated message.
-  - [ ] P.12 Report only: `share` without an episode, and what hard forgetting leaves behind
+  - [x] P.11 D80 delegation applies only to the one reply to the delegated message.
+  - [x] P.12 Report only: `share` without an episode, and what hard forgetting leaves behind
     (core_memory text, payloads, a late vector insert), each against the spec.
 
   **E. Adapters** (with 1.11's fakes and recordings)
@@ -457,3 +457,9 @@ Failing scenarios: `23_recall_episodes` (5/7), `24_gate_threshold` (10/11).
   - Trigger `1110` (`17`-char percept): drafted `whatsapp.say` (`35` chars, `6` words, `2` sentences, `5/6` tokens in Indonesian greeting/help-offer vocabulary); refused at `guard.stopped` `1117` / `act.result` `1118`.
   - Trigger `1119` (`17`-char percept): drafted `cli.say` (`111` chars, `17` words, `4` sentences, greeting + acknowledgement + help-offer); refused at `guard.stopped` `1126` / `act.result` `1127`.
   - **Matched source for both**: both drafts matched a single `act.out` event **`id=14`** (`space:cli`, `who='person:owner'`, `aud=['person:owner']`, `31` chars, `6` words, `6/6` greeting/help-offer words) via **2 overlapping 4-word shingles** (`5`-token span, `exact_substr=False`), even though that phrase existed in only `1` place (`space:cli`). No second reasoning round occurred because `dispatch.py` emitted the refusal `act.result` directly to the Log without re-waking reasoning.
+- **1.12 P (Privacy, D84/D85) implementation & audit notes (2026-11-14)**:
+  - **Surprising / extra fixes needed under D84/D85 fail-closed audiences**: `identity.person_cards` (`monoagens/middleware/identity.py`) also needed `privacy.UNKNOWN` excluded alongside `OWNER` so unknown-membership shared places do not render a `- *unknown*:` person card; `privacy.py` added `_task_parent` handling so `space:task:*` threads remain visible to their own parent place (e.g. `<doing>` lines) and updated `verify_context` to fold dropped items into `withheld` counts; pre-D84/D85 fixtures that relied on speaker-only shared groups (`place_info.members` missing), untagged owner DMs (`place_kind` missing), removed text-similarity refusals (`leaks`/`leaving`), `because {goal}` in intents, or an uncapped 30 MB `registry.more` chunk were updated (`test_identity.py`, `test_part1_integration.py`, `test_reasoning.py`, `test_attachments.py`, `test_foundation_check.py`, `test_policy.py`, `test_replay_metrics.py`, `test_expectation_conditions.py`, `test_registry.py`, `test_workspace_scenario.py`); `sleep._consolidate` (`monoagens/core/memory/sleep.py`) now also excludes `sleep.failed` alongside `sleep.done` so a retried sleep after rollback does not consolidate `sleep.failed` under `place=None`.
+  - **P.3 unused SQL objects for owner migration approval (`sql/migrations/003_privacy_indexes.sql`)**: unused GIN indexes `idx_events_privacy_trgm`, `idx_events_privacy_tsv`, `idx_memories_privacy_trgm`, `idx_memories_privacy_tsv`, and unused SQL functions `event_line_text(kind text, payload jsonb)` and `privacy_clean_text(txt text)` (`idx_events_share_granted` remains in use by `_share_grants`).
+  - **P.12 report-only findings vs spec**: (1) **`share` without `episode`**: `grant()` (`privacy.py`) writes `"episode": None, "source_place": source`, and `_share_grants()` matches `source_place = %s AND (NOT (payload ? 'episode') OR payload->>'episode' IS NULL)` across all `event_id`s whenever `before` is unset or later, granting place-wide access instead of scoped item/episode consent (`docs/middleware.md` D46). (2) **Hard forgetting (`core/memory/forget.py:forget_hard`) vs `docs/core.md` §2/§7**: does not invalidate or rebuild `state: core_memory` (or scrub `sleep.done` `core_memory` payloads) when its `derived_from` overlaps forgotten IDs; scrubs `events.payload` ONLY for `id = ANY(ids)` leaving downstream `caused_by` payloads (`act.out`, `act.result`, `decision.*`, `model.call`, `expectation.*`) intact; and `kernel._finish_job` calls `insert_event_vector` / `insert_event_vectors` (`infra/store.py`) without checking whether `events.payload` became `{"forgotten": true}`, allowing an in-flight `encode`/`embed_batch` job to re-insert vectors after `forget_hard()` finishes.
+  - **Question for owner (`scripts/replay.py` & `scenarios/` pre-D84/D85 expectations)**: `uv run pytest -q` passed (`656 passed, 1 skipped`), and `uv run python scripts/replay.py --fake` passed `156/158` checks with 2 pre-D84/D85 scenario check failures (`18_game_world_file_and_share` step 4 expects `space:game:world1` without `place_info.members` and with only the owner speaking to see Budi's DM file; `19_task_thread_two_groups` step 4 expects `"Tolong selesaikan"` from the removed `because {goal}`) and 4 `desk_violations` in `26_help_meeting_time` / `28_help_package_location` step 5 (groups lack `place_info.members`, so `*unknown*` enters `need`, while `replay.desk_violations` checks `need <= present | shared_persons` without allowing `share.granted` `"to"` / `consented_places` or seeding `place_info.members`). Approve updating `scripts/replay.py` (`desk_violations` + `_feed` `place_info.members`) and those two scenario expectations for D84/D85?
+

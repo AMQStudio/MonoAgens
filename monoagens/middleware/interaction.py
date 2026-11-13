@@ -626,11 +626,36 @@ def thinking_show(kernel: Any) -> Middleware:
     return contract.mark_rule(rule, name="narrate.thinking", kind="best-effort", show="thinking")
 
 
+async def _step_visible(conn: Any, item: Any, *, place: str) -> bool:
+    """Return whether one step's source place and causal ancestors are visible at `place`."""
+    payload = item.payload if isinstance(getattr(item, "payload", None), Mapping) else {}
+    source_place = str(payload.get("source_place") or "")
+    before = item.id or item.caused_by
+    if source_place and not await privacy.visible(conn, context=place, source=source_place,
+                                                  before=before):
+        return False
+    start = item.caused_by or item.id
+    if start is None:
+        return True
+    cur = await conn.execute(
+        "WITH RECURSIVE up AS ("
+        "SELECT id, caused_by, place FROM events WHERE id = %s "
+        "UNION ALL SELECT e.id, e.caused_by, e.place FROM events e JOIN up "
+        "ON e.id = up.caused_by) "
+        "SELECT id, place FROM up WHERE COALESCE(place, '') <> ''",
+        (int(start),))
+    for anc_id, anc_place in await cur.fetchall():
+        if not await privacy.visible(conn, context=place, source=str(anc_place),
+                                     before=int(anc_id)):
+            return False
+    return True
+
+
 def progress_show(kernel: Any) -> Middleware:
     """Inbound best-effort rule: show act progress steps (`off|long|all`)."""
 
     async def rule(item: Any, ctx: Any) -> Any:
-        """Show step progress when enabled."""
+        """Show step progress when enabled and visible at the destination place."""
         del ctx
         place = str(item.place or "")
         if not place or item.kind != "act.result":
@@ -640,7 +665,9 @@ def progress_show(kernel: Any) -> Middleware:
             return Continue()
         capability = str((item.payload or {}).get("capability") or "")
         declared = kernel.tools.get(capability) or {}
-        if steps_mode == "all" or declared.get("long_running"):
+        if (steps_mode == "all" or declared.get("long_running")) and await _step_visible(
+            kernel.conn, item, place=place
+        ):
             cat = catalog(getattr(kernel, "settings", None))
             step_prefix = str((cat.get("step") or {}).get("prefix") or "")
             short = _short(interaction_text((item.payload or {}).get("result")))

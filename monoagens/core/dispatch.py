@@ -128,8 +128,6 @@ async def _intend(kernel: Any, event: Event, capability: str, passed: dict[str, 
     reason = f"you set out to say {said!r} to {to or place}"
     if labels.get("words_hidden"):
         reason = f"you set out to send a message to {to or place}; its words cannot appear here"
-    elif goal:
-        reason += f", because {goal}"
     kernel.enqueue(Event(
         id=None, ts=kernel.clock.now(), kind="intent", who=None, place=place,
         caused_by=intent.id, origin_actor=event.origin_actor,

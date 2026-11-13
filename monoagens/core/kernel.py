@@ -484,6 +484,16 @@ class Kernel:
             return
         reminded = trigger.kind == "expectation.reminded"
         place = str(item.get("place") or trigger.place or "")
+        if reminded:
+            line_place = str((trigger.payload or {}).get("line_place") or trigger.place or "")
+            vis = getattr(self, "visible", None)
+            if vis is not None:
+                allowed = await vis(self.conn, context=place, source=line_place,
+                                    before=trigger.caused_by)
+            else:
+                allowed = bool(place) and line_place == place
+            if not allowed:
+                return
         woken = replace(trigger, place=place) if reminded else trigger
         appraisal = await self._appraise(trigger)
         if appraisal.decision != "wake":

@@ -301,13 +301,20 @@ async def test_overflow_output_archives_full_text_and_reads_50mb_in_parts(aconn,
                        place="space:tg:dm:owner",
                        payload={"capability": "bulk.dump", "result": capped})
 
+    from monoagens.middleware.registry import MORE_OUTPUT_CAP
+
     first = await kernel.tools.act(trigger, "registry.more",
                                    {"ref": ref, "offset": len(prefix), "limit": 30_000_000})
-    second = await kernel.tools.act(trigger, "registry.more",
-                                    {"ref": ref, "offset": first["next_offset"],
-                                     "limit": 30_000_000})
-    assert first["remaining"] > 0 and second["remaining"] == 0 and second["next_offset"] is None
-    assert prefix + first["text"] + second["text"] == full_text
+    tail_offset = len(full_text) - 500
+    tail = await kernel.tools.act(trigger, "registry.more",
+                                  {"ref": ref, "offset": tail_offset, "limit": 1000})
+    assert len(first["text"]) == MORE_OUTPUT_CAP
+    assert first["remaining"] == len(full_text) - len(prefix) - MORE_OUTPUT_CAP
+    assert first["next_offset"] == len(prefix) + MORE_OUTPUT_CAP
+    assert full_text[len(prefix):len(prefix) + MORE_OUTPUT_CAP] == first["text"]
+    assert tail["remaining"] == 0 and tail["next_offset"] is None
+    assert prefix + first["text"] == full_text[:len(prefix) + MORE_OUTPUT_CAP]
+    assert tail["text"] == full_text[tail_offset:]
 
 
 async def test_full_output_respects_privacy_and_hard_forget(aconn, tmp_path):
@@ -354,3 +361,48 @@ async def test_full_output_respects_privacy_and_hard_forget(aconn, tmp_path):
     assert removed == 1 and kernel.attachments.find(ref) is None
     gone = await kernel.tools.act(dm_event, "registry.more", {"ref": ref, "offset": 0})
     assert "error" in gone
+
+
+async def test_registry_more_denies_without_place_and_caps_limit(aconn, tmp_path):
+    """P.8: registry.more refuses empty/None context place and caps returned slice size."""
+    from monoagens.middleware.registry import MORE_OUTPUT_CAP
+
+    class _LargeTool:
+        name = "bulk"
+
+        def capabilities(self):
+            return ({"name": "emit", "description": "Emit >2x MORE_OUTPUT_CAP chars.",
+                     "schema": {"type": "object", "properties": {}},
+                     "communicative": False, "long_running": False,
+                     "identity_changing": False},)
+
+        async def act(self, action: Action) -> dict[str, Any]:
+            return {"output": "A" * (MORE_OUTPUT_CAP * 3)}
+
+    kernel = build(aconn, clock=FakeClock(START), settings=SETTINGS)
+    kernel.attachments = AttachmentStore(tmp_path)
+    kernel.tools.add_tool(_LargeTool(), {"emit": {"facts": ["reads"],
+                                                  "permission": "workspace.run",
+                                                  "output_cap": 100}})
+    dm_event = await append_event(aconn, ts=START, kind="percept", who="person:owner",
+                                  place="space:tg:dm:owner", body="telegram",
+                                  payload={"place_kind": "direct"})
+    capped = await kernel.tools.act(dm_event, "bulk.emit", {})
+    ref = capped["full"]["ref"]
+    await append_event(aconn, ts=START, kind="act.result", who="self",
+                       place="space:tg:dm:owner",
+                       payload={"capability": "bulk.emit", "result": capped})
+
+    no_place_event = Event(id=None, ts=START, kind="percept", who="person:owner",
+                           place="", body="telegram", payload={})
+    denied_act = await kernel.tools.act(no_place_event, "registry.more", {"ref": ref, "offset": 0})
+    assert "error" in denied_act
+    denied_direct = await kernel.tools.more(ref, offset=0, limit=100, context=None)
+    assert "error" in denied_direct
+
+    sliced = await kernel.tools.act(dm_event, "registry.more",
+                                    {"ref": ref, "offset": 0, "limit": 999_999})
+    assert len(sliced["text"]) == MORE_OUTPUT_CAP
+    assert sliced["next_offset"] == MORE_OUTPUT_CAP
+    assert sliced["remaining"] == MORE_OUTPUT_CAP * 2
+

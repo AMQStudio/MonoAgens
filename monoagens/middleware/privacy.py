@@ -8,17 +8,20 @@ never enters the desk, and sharing needs the consent of someone who was part of 
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
+from monoagens.core.context import working
 from monoagens.core.expectations import matches_cue
 from monoagens.core.hooks import Continue, Middleware, Replace, Stop
-from monoagens.infra.config import leak_candidates
-from monoagens.infra.store import payload_text, read_state, write_state
+from monoagens.core.memory.retrieval import recent_lines
+from monoagens.infra.prior import constants, load_prior
+from monoagens.infra.store import append_event, payload_text, read_state, write_state
 from monoagens.types import Event
 
 OWNER = "person:owner"
+UNKNOWN = "*unknown*"
 SHARE = "self.share"
 SHARE_CAPABILITY = {
     "name": "share",
@@ -111,6 +114,45 @@ async def _shared(conn, place: str, cache: dict | None = None,
     return cache[key]
 
 
+async def _place_members(conn, place: str, before: int | None,
+                         mapping: dict[str, str]) -> tuple[set[str], bool]:
+    """Return `(mapped_member_ids, known)` from `place_info.members` or current `place:` state."""
+    raw_members: Any = None
+    has_raw = False
+    if before is not None:
+        row = await (await conn.execute(
+            "SELECT payload->'place_info'->'members' FROM events "
+            "WHERE place = %s AND id <= %s AND payload->'place_info' ? 'members' "
+            "ORDER BY id DESC LIMIT 1",
+            (place, int(before)),
+        )).fetchone()
+        if row is not None:
+            raw_members, has_raw = row[0], True
+    if not has_raw:
+        ev_row = await (await conn.execute(
+            "SELECT id, payload->'place_info'->'members' FROM events "
+            "WHERE place = %s AND payload->'place_info' ? 'members' "
+            "ORDER BY id DESC LIMIT 1",
+            (place,),
+        )).fetchone()
+        st_row = await (await conn.execute(
+            "SELECT value, updated_by_event FROM state WHERE key = %s",
+            (f"place:{place}",),
+        )).fetchone()
+        ev_id = int(ev_row[0]) if ev_row is not None else -1
+        st_has = bool(st_row and isinstance(st_row[0], dict) and "members" in st_row[0])
+        st_id = int(st_row[1]) if (st_has and st_row[1] is not None) else -1
+        if st_has and (ev_row is None or st_id >= ev_id):
+            raw_members = st_row[0].get("members")
+        elif ev_row is not None:
+            raw_members = ev_row[1]
+    if isinstance(raw_members, (list, tuple)):
+        ids = {mapping.get(item, item) for item in raw_members if isinstance(item, str) and item}
+        if ids:
+            return ids, True
+    return set(), False
+
+
 async def audience(conn, place: str | None, before: int | None = None) -> frozenset[str]:
     """Return the person ids present at a place (at `before`, after the alias map)."""
     if not place:
@@ -123,22 +165,27 @@ async def audience(conn, place: str | None, before: int | None = None) -> frozen
         return frozenset(task.get("audience") or ()) | delegated_actors
     query = ("SELECT who FROM events WHERE place = %s AND who IS NOT NULL "
              "AND kind IN ('percept', 'act.out')")
-    params = [place]
+    params: list[Any] = [place]
     if before is not None:
         query, params = query + " AND id <= %s", params + [before]
     rows = await (await conn.execute(query, params)).fetchall()
     mapping = await aliases(conn)
-    people = {mapping.get(who, who) for (who,) in rows}
+    speakers = {mapping.get(who, who) for (who,) in rows}
+    members, members_known = await _place_members(conn, place, before, mapping)
+    people = speakers | members
     if await direct(conn, place):
         others = people - {OWNER}
         base = frozenset(others) if len(others) == 1 else frozenset(people)
         return base | delegated_actors
-    return frozenset(people) | delegated_actors
+    shared_people = set(people) | set(delegated_actors)
+    if not members_known:
+        shared_people.add(UNKNOWN)
+    return frozenset(shared_people)
 
 
-async def shared(conn, place: str, before: int | None = None, *,
-                 event_id: int | None = None) -> frozenset[str]:
-    """Return the people a `share.granted` added to a place or one episode up to `before`."""
+async def _share_grants(conn, place: str, before: int | None = None, *,
+                        event_id: int | None = None) -> tuple[frozenset[str], frozenset[str]]:
+    """Return `(consented_persons, consented_target_places)` from `share.granted` events."""
     if event_id is not None:
         query = ("SELECT payload FROM events WHERE kind = 'share.granted' AND ("
                  "payload->>'episode' = %s OR ("
@@ -152,45 +199,117 @@ async def shared(conn, place: str, before: int | None = None, *,
         params = [place]
     if before is not None:
         query, params = query + " AND id <= %s", params + [before]
-    cur = await conn.execute(query, params)
-    return frozenset(who for (payload,) in await cur.fetchall()
-                     for who in (payload or {}).get("persons") or ())
+    rows = await (await conn.execute(query, params)).fetchall()
+    people = {who for (payload,) in rows for who in (payload or {}).get("persons") or () if who}
+    places = {str(payload["to"]) for (payload,) in rows if (payload or {}).get("to")}
+    return frozenset(people), frozenset(places)
+
+
+async def shared(conn, place: str, before: int | None = None, *,
+                 event_id: int | None = None) -> frozenset[str]:
+    """Return the people a `share.granted` added to a place or one episode up to `before`."""
+    people, _ = await _share_grants(conn, place, before, event_id=event_id)
+    return people
+
+
+async def _shared_info(conn, place: str, cache: dict | None = None,
+                       event_id: int | None = None) -> tuple[frozenset[str], frozenset[str]]:
+    """Cached `_share_grants` lookup per wake."""
+    if cache is None:
+        return await _share_grants(conn, place, event_id=event_id)
+    key = ("shared_info", place, event_id)
+    if key not in cache:
+        cache[key] = await _share_grants(conn, place, event_id=event_id)
+    return cache[key]
+
+
+async def _task_parent(conn, place: str | None, cache: dict | None = None) -> str | None:
+    """Return the parent place of a `space:task:*` thread, if any."""
+    if not place or not str(place).startswith("space:task:"):
+        return None
+    if cache is not None and ("task_parent", place) in cache:
+        return cache[("task_parent", place)]
+    task = await read_state(conn, f"task:{place}")
+    parent = str(task.get("parent") or "") if isinstance(task, dict) and task.get("parent") else None
+    if cache is not None:
+        cache[("task_parent", place)] = parent
+    return parent
 
 
 async def owner_direct(conn, place: str | None, cache: dict | None = None) -> bool:
-    """Return whether this context is a direct chat with the owner."""
-    return (await direct(conn, place, cache)
-            and await _audience(conn, place, None, cache) <= frozenset({OWNER}))
+    """Return whether this context is a direct chat with only the owner present."""
+    parent = await _task_parent(conn, place, cache)
+    if parent:
+        return await owner_direct(conn, parent, cache)
+    return (bool(place)
+            and await direct(conn, place, cache)
+            and await _audience(conn, place, None, cache) == frozenset({OWNER}))
+
+
+async def _covered(conn, *, context: str, need: set[str], source: str,
+                   before: int | None, cache: dict | None,
+                   same_place: bool = False) -> bool:
+    """Return whether `source` (at `before`) covers `need` for `context`, failing closed on UNKNOWN."""
+    present = set(await _audience(conn, source, before, cache))
+    consented, consented_places = await _shared_info(conn, source, cache, event_id=before)
+    known_need = need - {UNKNOWN}
+    known_have = (present - {OWNER, UNKNOWN}) | (consented - {UNKNOWN})
+    if not known_need <= known_have:
+        return False
+    if UNKNOWN in need:
+        return source == context or same_place or context in consented_places
+    return True
 
 
 async def visible(conn, *, context: str | None, source: str | None,
                   before: int | None = None, cache: dict | None = None) -> bool:
-    """Return whether content from `source` may enter a context at `context` (D45, D50)."""
-    if not source or await owner_direct(conn, context, cache):
+    """Return whether content from `source` may enter a context at `context` (D45, D50, D85)."""
+    if not context or not source:
+        return False
+    if await owner_direct(conn, context, cache):
         return True
-    need = set(await _audience(conn, context, None, cache)) - {OWNER}
-    if not need or (source == context and before is None):
+    ctx_aud = await _audience(conn, context, None, cache)
+    if not ctx_aud:
+        return False
+    need = set(ctx_aud) - {OWNER}
+    parent = await _task_parent(conn, context, cache)
+    same_place = source == context or (parent is not None and source == parent)
+    if not need and not same_place:
+        return False
+    if source == context and before is None:
         return True
-    present = set(await _audience(conn, source, before, cache))
-    consented = set(await _shared(conn, source, cache, event_id=before))
-    return need <= (present - {OWNER}) | consented
+    return await _covered(conn, context=context, need=need, source=source,
+                          before=before, cache=cache, same_place=same_place)
 
 
 async def memory_visible(conn, *, context: str | None, sources: Any = None,
                          cache: dict | None = None) -> bool:
-    """Return whether every source of a memory was said to the people here (D53, D50)."""
+    """Return whether every source of a memory was said to the people here (D53, D50, D85)."""
+    if not context:
+        return False
+    if await owner_direct(conn, context, cache):
+        return True
     if not sources:
-        return await owner_direct(conn, context, cache)
-    need = set(await _audience(conn, context, None, cache)) - {OWNER}
+        return False
+    ctx_aud = await _audience(conn, context, None, cache)
+    if not ctx_aud:
+        return False
+    need = set(ctx_aud) - {OWNER}
+    parent = await _task_parent(conn, context, cache)
+    source_ids = [int(s) for s in sources]
     rows = await (await conn.execute(
         "SELECT id, place FROM events WHERE id = ANY(%s) AND place IS NOT NULL",
-        (list(sources),))).fetchall()
-    audiences = []
+        (source_ids,))).fetchall()
+    if len(rows) != len(set(source_ids)):
+        return False
     for source, place in rows:
-        present = set(await _audience(conn, place, source, cache))
-        consented = set(await _shared(conn, place, cache, event_id=source))
-        audiences.append((present - {OWNER}) | consented)
-    return all(need <= have for have in audiences)
+        same_place = place == context or (parent is not None and place == parent)
+        if not need and not same_place:
+            return False
+        if not await _covered(conn, context=context, need=need, source=place,
+                              before=source, cache=cache, same_place=same_place):
+            return False
+    return True
 
 
 async def source_label(conn, place: str | None, before: int | None = None,
@@ -207,12 +326,7 @@ async def source_label(conn, place: str | None, before: int | None = None,
 
 async def withheld_source(conn, *, context: str | None, sources: Any = None,
                           cache: dict | None = None) -> str:
-    """Return the label of the source one withheld item came from (D56).
-
-    A memory or core memory names the first source place whose audience this
-    context does not cover. A memory without a known source is private to the
-    owner, so its label says so.
-    """
+    """Return the label of the source one withheld item came from (D56)."""
     need = set(await _audience(conn, context, None, cache)) - {OWNER}
     rows = []
     if sources:
@@ -220,296 +334,17 @@ async def withheld_source(conn, *, context: str | None, sources: Any = None,
             "SELECT id, place FROM events WHERE id = ANY(%s) AND place IS NOT NULL",
             (list(sources),))).fetchall()
     for source, source_place in rows:
-        present = set(await _audience(conn, source_place, source, cache)) - {OWNER}
-        consented = set(await _shared(conn, source_place, cache, event_id=source))
-        if not need <= (present | consented):
+        if not context or not await _covered(conn, context=context, need=need,
+                                             source=source_place, before=source, cache=cache):
             return await source_label(conn, source_place, source, cache)
     return await source_label(conn, None, None, cache)
 
 
-def _normalize_text(text: str) -> str:
-    """Return whitespace-collapsed lower-case text for similarity checks."""
-    return re.sub(r"\s+", " ", str(text or "")).strip().lower()
-
-
-def _shingles(text: str, width: int = 4) -> set[tuple[str, ...]]:
-    """Return consecutive content-word n-grams for catching partial private quotes."""
-    tokens = re.findall(r"[0-9a-zA-ZÀ-ÿ_]{3,}", str(text or "").lower())
-    if len(tokens) < width:
-        return set()
-    return {tuple(tokens[i: i + width]) for i in range(len(tokens) - width + 1)}
-
-
-def _matches_hidden(text: str, hidden: Sequence[tuple[str, int]],
-                    visible_texts: Sequence[str]) -> bool:
-    """Return whether `text` matches or quotes only non-visible private content."""
-    norm_text = _normalize_text(text)
-    if not norm_text or not hidden:
-        return False
-    visible_blob = "\n".join(_normalize_text(item) for item in visible_texts if item)
-    visible_shingles: set[tuple[str, ...]] = set()
-    for item in visible_texts:
-        visible_shingles |= _shingles(item)
-    text_shingles = _shingles(norm_text)
-    for raw_line, min_len in hidden:
-        norm_line = _normalize_text(raw_line)
-        if len(norm_line) < min_len:
-            continue
-        if norm_line in norm_text and norm_line not in visible_blob:
-            return True
-        if min_len >= 8 and ((_shingles(norm_line) - visible_shingles) & text_shingles):
-            return True
-    return False
-
-
-def _privacy_tsqueries(text: str) -> tuple[str, str]:
-    """Build `simple` tsquery strings for candidate events (>=10 chars) and memories (>=4)."""
-    tokens = re.findall(r"[0-9a-zA-ZÀ-ÿ_]+", str(text or "").lower())
-    content = [token for token in tokens if len(token) >= 3]
-    ev_phrases = [" <5> ".join(content[i: i + 4]) for i in range(max(0, len(content) - 3))]
-    for i in range(len(tokens)):
-        length = 0
-        for j in range(i, min(len(tokens), i + 5)):
-            length += len(tokens[j]) + (1 if j > i else 0)
-            if length >= 7:
-                ev_phrases.append(" <-> ".join(tokens[i: j + 1]))
-                break
-    mem_phrases: list[str] = []
-    for i, token in enumerate(tokens):
-        if len(token) >= 4:
-            mem_phrases.append(token)
-        elif i + 1 < len(tokens) and len(token) + 1 + len(tokens[i + 1]) >= 4:
-            mem_phrases.append(f"{token} <-> {tokens[i + 1]}")
-    return (" | ".join(dict.fromkeys(ev_phrases)), " | ".join(dict.fromkeys(mem_phrases)))
-
-
-_CANDIDATES_SQL = """
-    WITH ev_trgm AS (
-        SELECT id, place, event_line_text(kind, payload) AS line,
-               similarity(event_line_text(kind, payload), %s) AS rank_score,
-               (place = %s) AS is_target
-        FROM events
-        WHERE kind IN ('percept', 'act.out', 'act.result')
-          AND place IS NOT NULL
-          AND event_line_text(kind, payload) %%> %s
-        ORDER BY (place = %s) DESC, rank_score DESC, id DESC
-        LIMIT %s
-    ),
-    ev_tsv AS (
-        SELECT id, place, event_line_text(kind, payload) AS line,
-               ts_rank(to_tsvector('simple', privacy_clean_text(event_line_text(kind, payload))),
-                       to_tsquery('simple', %s), 16) AS rank_score,
-               (place = %s) AS is_target
-        FROM events
-        WHERE kind IN ('percept', 'act.out', 'act.result')
-          AND place IS NOT NULL
-          AND %s <> ''
-          AND to_tsvector('simple', privacy_clean_text(event_line_text(kind, payload)))
-              @@ to_tsquery('simple', %s)
-        ORDER BY (place = %s) DESC, rank_score DESC, id DESC
-        LIMIT %s
-    ),
-    ev_union AS (
-        SELECT DISTINCT ON (id) id, place, line, rank_score, is_target
-        FROM (SELECT * FROM ev_trgm UNION ALL SELECT * FROM ev_tsv) s
-        ORDER BY id, is_target DESC, rank_score DESC
-    ),
-    mem_trgm AS (
-        SELECT id, place, text AS line, derived_from,
-               similarity(text, %s) AS rank_score,
-               (place = %s) AS is_target
-        FROM memories
-        WHERE valid_to IS NULL AND text %%> %s
-        ORDER BY (place = %s) DESC, rank_score DESC, id DESC
-        LIMIT %s
-    ),
-    mem_tsv AS (
-        SELECT id, place, text AS line, derived_from,
-               ts_rank(to_tsvector('simple', privacy_clean_text(text)),
-                       to_tsquery('simple', %s), 16) AS rank_score,
-               (place = %s) AS is_target
-        FROM memories
-        WHERE valid_to IS NULL
-          AND %s <> ''
-          AND to_tsvector('simple', privacy_clean_text(text))
-              @@ to_tsquery('simple', %s)
-        ORDER BY (place = %s) DESC, rank_score DESC, id DESC
-        LIMIT %s
-    ),
-    mem_union AS (
-        SELECT DISTINCT ON (id) id, place, line, derived_from, rank_score, is_target
-        FROM (SELECT * FROM mem_trgm UNION ALL SELECT * FROM mem_tsv) s
-        ORDER BY id, is_target DESC, rank_score DESC
-    ),
-    combined AS (
-        SELECT 'event'::text AS src_kind, id, place, line, NULL::bigint[] AS derived_from,
-               rank_score, is_target
-        FROM ev_union
-        UNION ALL
-        SELECT 'memory'::text AS src_kind, id, place, line, derived_from,
-               rank_score, is_target
-        FROM mem_union
-    )
-    SELECT src_kind, id, place, line, derived_from
-    FROM combined
-    ORDER BY is_target DESC, rank_score DESC, id DESC
-    LIMIT %s
-"""
-
-_BATCH_VISIBILITY_SQL = """
-    WITH mem_sources AS (
-        SELECT e.id AS event_id, e.place
-        FROM events e
-        WHERE e.id = ANY(%s::bigint[])
-          AND e.place IS NOT NULL
-    ),
-    targets AS (
-        SELECT cid AS event_id, cplace AS place
-        FROM unnest(%s::bigint[], %s::text[]) AS t(cid, cplace)
-        UNION
-        SELECT event_id, place FROM mem_sources
-    ),
-    alias_map AS (
-        SELECT substring(key FROM 7) AS native,
-               CASE
-                   WHEN jsonb_typeof(value) = 'object' AND NULLIF(value->>'who', '') IS NOT NULL
-                       THEN value->>'who'
-                   ELSE value #>> '{}'
-               END AS person
-        FROM state
-        WHERE key LIKE 'alias:%%'
-    ),
-    share_events AS (
-        SELECT DISTINCT t.event_id, p.who
-        FROM targets t
-        JOIN events sg
-          ON sg.kind = 'share.granted'
-         AND (sg.payload->>'episode' = t.event_id::text
-              OR (sg.payload->>'source_place' = t.place
-                  AND (NOT (sg.payload ? 'episode') OR sg.payload->>'episode' IS NULL)))
-        CROSS JOIN LATERAL jsonb_array_elements_text(
-            coalesce(sg.payload->'persons', '[]'::jsonb)) AS p(who)
-    ),
-    delegated_actors AS (
-        SELECT t.event_id, p.who
-        FROM targets t
-        JOIN state st ON st.key = 'delegated:' || t.event_id::text
-        CROSS JOIN LATERAL jsonb_array_elements_text(
-            coalesce(st.value->'actors', '[]'::jsonb)) AS p(who)
-    ),
-    task_audiences AS (
-        SELECT t.event_id, p.who
-        FROM targets t
-        JOIN state st ON st.key = 'task:' || t.place
-        CROSS JOIN LATERAL jsonb_array_elements_text(
-            coalesce(st.value->'audience', '[]'::jsonb)) AS p(who)
-        WHERE st.value <> '{}'::jsonb AND st.value <> 'null'::jsonb
-    ),
-    place_first_who AS (
-        SELECT p.place, ev.who, min(ev.id) AS first_id
-        FROM (
-            SELECT DISTINCT t.place
-            FROM targets t
-            LEFT JOIN state st ON st.key = 'task:' || t.place
-            WHERE st.key IS NULL OR st.value = '{}'::jsonb OR st.value = 'null'::jsonb
-        ) p
-        JOIN events ev
-          ON ev.place = p.place
-         AND ev.who IS NOT NULL
-         AND ev.kind IN ('percept', 'act.out')
-        GROUP BY p.place, ev.who
-    ),
-    chat_audiences AS (
-        SELECT DISTINCT t.event_id, coalesce(am.person, pfw.who) AS who
-        FROM targets t
-        JOIN place_first_who pfw
-          ON pfw.place = t.place AND pfw.first_id <= t.event_id
-        LEFT JOIN alias_map am ON am.native = pfw.who
-    ),
-    all_visible_people AS (
-        SELECT event_id, who FROM share_events
-        UNION
-        SELECT event_id, who FROM delegated_actors
-        UNION
-        SELECT event_id, who FROM task_audiences
-        UNION
-        SELECT event_id, who FROM chat_audiences
-    )
-    SELECT t.event_id
-    FROM targets t
-    WHERE NOT EXISTS (
-        SELECT 1
-        FROM unnest(%s::text[]) AS req(who)
-        WHERE req.who <> %s
-          AND NOT EXISTS (
-              SELECT 1 FROM all_visible_people avp
-              WHERE avp.event_id = t.event_id AND avp.who = req.who
-          )
-    )
-"""
-
-
-async def _leak_candidates(conn, target: str, text: str,
-                           *, limit: int) -> list[tuple[str, int, str, tuple[int, ...]]]:
-    """Return top `limit` candidate event and memory texts similar to `text`."""
-    ev_tsq, mem_tsq = _privacy_tsqueries(text)
-    params = (
-        text, target, text, target, limit,
-        ev_tsq or "a", target, ev_tsq, ev_tsq or "a", target, limit,
-        text, target, text, target, limit,
-        mem_tsq or "a", target, mem_tsq, mem_tsq or "a", target, limit,
-        limit,
-    )
-    rows = await (await conn.execute(_CANDIDATES_SQL, params)).fetchall()
-    return [(str(kind), int(cid), str(place or ""), str(line), tuple(int(s) for s in (src or ())))
-            for kind, cid, place, line, src in rows if line]
-
-
-async def _batch_visible_event_ids(conn, need: set[str], ev_ids: list[int],
-                                   ev_places: list[str], mem_src_ids: list[int]) -> set[int]:
-    """Return the subset of candidate/source event ids visible to `need` in one SQL query."""
-    if not ev_ids and not mem_src_ids:
-        return set()
-    if not need:
-        return set(ev_ids) | set(mem_src_ids)
-    rows = await (await conn.execute(
-        _BATCH_VISIBILITY_SQL,
-        (mem_src_ids, ev_ids, ev_places, sorted(need), OWNER),
-    )).fetchall()
-    return {int(row[0]) for row in rows}
-
-
-async def leaks(conn, target: str | None, text: str, *, limit: int | None = None) -> bool:
-    """Return whether a message would carry private content the target may not see (D45)."""
-    if not text or not target:
-        return False
-    cache: dict = {}
-    if await owner_direct(conn, target, cache):
-        return False
-    top_k = int(limit if limit is not None else leak_candidates())
-    candidates = await _leak_candidates(conn, target, text, limit=top_k)
-    if not candidates:
-        return False
-    need = set(await _audience(conn, target, None, cache)) - {OWNER}
-    ev_ids = [cid for kind, cid, _, _, _ in candidates if kind == "event"]
-    ev_places = [place for kind, _, place, _, _ in candidates if kind == "event"]
-    mem_src_ids = list(dict.fromkeys(
-        src_id for kind, _, _, _, sources in candidates if kind == "memory" for src_id in sources
-    ))
-    visible_ids = await _batch_visible_event_ids(conn, need, ev_ids, ev_places, mem_src_ids)
-    hidden: list[tuple[str, int]] = []
-    seen_visible: list[str] = []
-    for kind, cid, _, line, sources in candidates:
-        if kind == "event":
-            if not need or cid in visible_ids:
-                seen_visible.append(line)
-            else:
-                hidden.append((line, 10))
-        elif sources and all(src_id in visible_ids for src_id in sources):
-            seen_visible.append(line)
-        else:
-            hidden.append((line, 4))
-    return _matches_hidden(text, hidden, seen_visible)
+def _trim_wake_sources(store: dict[tuple[int, str], tuple[tuple[str | None, int | None], ...]],
+                       max_entries: int = 256) -> None:
+    """Keep the cached wake source map bounded."""
+    while len(store) > max_entries:
+        store.pop(next(iter(store)))
 
 
 def episode_error(arguments: dict[str, Any]) -> str:
@@ -606,11 +441,17 @@ def delegation(kernel: Any) -> Middleware:
         """Record `delegated:<id>` once for a matched `wait` expectation or `reply_to`."""
         if not isinstance(item, Event) or item.kind != "percept" or item.id is None:
             return Continue()
+        payload = item.payload or {}
+        if payload.get("imported") or not item.place:
+            return Continue()
         conn = ctx["conn"]
         now = ctx["now"]
         mapping = await aliases(conn)
         canonical_who = mapping.get(item.who, item.who) if item.who else item.who
         candidates = (item, replace(item, who=canonical_who)) if canonical_who != item.who else (item,)
+        explicit_reply = _reply_target(payload) is not None
+        matched_reply = await _reply_act_out(conn, item)
+        reply_act_id = matched_reply[0] if matched_reply is not None else None
         actors: set[str] = set()
         source_places: set[str] = set()
 
@@ -620,6 +461,8 @@ def delegation(kernel: Any) -> Middleware:
             "AND (expires_at IS NULL OR expires_at > %s) ORDER BY id",
             (now,))).fetchall()
         for exp_id, source_event, exp_origin, exp_place, cue_event in rows:
+            if explicit_reply and reply_act_id is None:
+                continue
             if not any(matches_cue(cue_event, candidate) for candidate in candidates):
                 continue
             if await read_state(conn, f"delegated_exp:{int(exp_id)}") is not None:
@@ -627,14 +470,19 @@ def delegation(kernel: Any) -> Middleware:
             if source_event is None:
                 continue
             root_place, sends = await _chain_delegated_sends(conn, int(source_event))
-            matching_sends = [send for send in sends if send[1].startswith("person:")]
-            if not matching_sends:
+            matching_sends = [
+                send for send in sends
+                if send[1].startswith("person:") and send[2] == item.place
+                and (not explicit_reply or send[0] == reply_act_id)
+            ]
+            unclaimed = [send for send in matching_sends
+                         if await read_state(conn, f"delegated_act:{send[0]}") is None]
+            if not unclaimed:
                 continue
-            for act_id, actor, act_place in matching_sends:
+            for act_id, actor, _act_place in unclaimed:
                 actors.add(actor)
-                if item.place is None or act_place == item.place:
-                    await write_state(conn, f"delegated_act:{act_id}",
-                                      {"reply_event": item.id}, item.id)
+                await write_state(conn, f"delegated_act:{act_id}",
+                                  {"reply_event": item.id}, item.id)
             if exp_origin and str(exp_origin).startswith("person:"):
                 actors.add(str(exp_origin))
             for place_ref in (exp_place, root_place):
@@ -643,7 +491,6 @@ def delegation(kernel: Any) -> Middleware:
             await write_state(conn, f"delegated_exp:{int(exp_id)}",
                               {"reply_event": item.id}, item.id)
 
-        matched_reply = await _reply_act_out(conn, item)
         if matched_reply is not None:
             act_id, actor, _act_place, root_place = matched_reply
             if await read_state(conn, f"delegated_act:{act_id}") is None:
@@ -727,11 +574,153 @@ async def grant(kernel, event: Event, arguments: dict[str, Any], to: str | None,
     ep_value = arguments.get("episode") if arguments.get("episode") is not None else episode
     await kernel._emit(event, "share.granted", {
         "item": arguments.get("item"), "episode": ep_value, "to": to,
-        "persons": sorted(people), "source_place": source})
+        "persons": sorted(p for p in people if p != UNKNOWN), "source_place": source})
 
 
-def filter_context(conn) -> Middleware:
-    """Absolute line 2 (D45): private content enters only an allowed audience."""
+_EXP_RE = re.compile(r"^#(\d+)\b")
+_PERSON_CARD_RE = re.compile(r"^- (?:(?P<name>.+?) \((?P<wrapped>person:[^\s)]+)\)|(?P<bare>person:[^\s:]+)):")
+
+
+async def _trigger_allowed(conn, place: str, trigger: Event | None, cache: dict) -> bool:
+    """Return whether `trigger` (including a reminder line source) is visible at `place`."""
+    if trigger is None:
+        return True
+    if trigger.kind == "expectation.reminded":
+        src_place = trigger.payload.get("line_place") or trigger.place
+        src_before = trigger.payload.get("line_event") or trigger.caused_by
+    else:
+        src_place = trigger.place
+        src_before = trigger.id
+    return await visible(conn, context=place, source=src_place, before=src_before, cache=cache)
+
+
+async def _filter_expectations(conn, place: str, lines: Sequence[str], cache: dict,
+                               ) -> tuple[tuple[str, ...], list[str]]:
+    """Keep only expectation lines whose source/place is visible at `place`."""
+    if not lines:
+        return (), []
+    if await owner_direct(conn, place, cache):
+        return tuple(lines), []
+    ids: list[int] = []
+    for line in lines:
+        m = _EXP_RE.match(str(line))
+        if m:
+            ids.append(int(m.group(1)))
+    by_id: dict[int, tuple[str | None, int | None, str | None]] = {}
+    if ids:
+        rows = await (await conn.execute(
+            "SELECT e.id, e.place, e.source_event, ev.place FROM expectations e "
+            "LEFT JOIN events ev ON ev.id = e.source_event WHERE e.id = ANY(%s)",
+            (ids,),
+        )).fetchall()
+        by_id = {int(eid): (exp_place, src_ev, ev_place)
+                 for eid, exp_place, src_ev, ev_place in rows}
+    kept: list[str] = []
+    dropped: list[str] = []
+    for line in lines:
+        m = _EXP_RE.match(str(line))
+        entry = by_id.get(int(m.group(1))) if m else None
+        if entry is None:
+            dropped.append("expectation without visible source")
+            continue
+        exp_place, src_ev, ev_place = entry
+        src = ev_place if (src_ev is not None and ev_place) else exp_place
+        before = int(src_ev) if (src_ev is not None and ev_place) else None
+        if src and await visible(conn, context=place, source=src, before=before, cache=cache):
+            kept.append(line)
+        else:
+            dropped.append("expectation source not visible at place")
+    return tuple(kept), dropped
+
+
+async def _filter_doing(conn, place: str, lines: Sequence[str], trigger: Event | None,
+                        values: Mapping[str, Any], cache: dict,
+                        ) -> tuple[tuple[str, ...], list[str]]:
+    """Keep only `<doing>` lines whose source event (or task) is visible at `place`."""
+    if not lines:
+        return (), []
+    if await owner_direct(conn, place, cache):
+        return tuple(lines), []
+    task = await read_state(conn, f"task:{place}") if place.startswith("space:task:") else None
+    entries = await working.doing_entries(conn, place, task, values, trigger=trigger)
+    sources_by_line: dict[str, list[tuple[str | None, int | None]]] = {}
+    for line, src_place, src_id in entries:
+        sources_by_line.setdefault(line, []).append((src_place, src_id))
+    kept: list[str] = []
+    dropped: list[str] = []
+    for line in lines:
+        queue = sources_by_line.get(line)
+        if not queue:
+            dropped.append("doing line without visible source")
+            continue
+        src_place, src_id = queue.pop(0)
+        if src_place and await visible(conn, context=place, source=src_place,
+                                       before=src_id, cache=cache):
+            kept.append(line)
+        else:
+            dropped.append("doing line source not visible at place")
+    return tuple(kept), dropped
+
+
+async def _filter_people(conn, place: str, cards: Sequence[str], trigger: Event | None,
+                         cache: dict) -> tuple[tuple[str, ...], list[str]]:
+    """Keep only person cards belonging to the place audience or named in the trigger (D55)."""
+    if not cards:
+        return (), []
+    if await owner_direct(conn, place, cache):
+        return tuple(cards), []
+    aud = set(await _audience(conn, place, None, cache))
+    trig_text = payload_text(trigger.payload) if trigger is not None else ""
+    kept: list[str] = []
+    dropped: list[str] = []
+    for card in cards:
+        first_line = str(card).splitlines()[0] if str(card) else ""
+        m = _PERSON_CARD_RE.match(first_line)
+        if not m:
+            dropped.append("person card without identifiable person id")
+            continue
+        who = m.group("wrapped") or m.group("bare")
+        if who == UNKNOWN:
+            dropped.append("person card for unknown member")
+            continue
+        if who in aud:
+            kept.append(card)
+            continue
+        name = (m.group("name") or "").strip()
+        if not name:
+            st = await read_state(conn, f"person:{who}")
+            name = str((st or {}).get("name") or "").strip()
+        named_in_trigger = bool(trig_text) and (
+            who in trig_text
+            or (bool(name) and re.search(rf"(?<!\w){re.escape(name)}(?!\w)",
+                                         trig_text, re.IGNORECASE) is not None)
+        )
+        if named_in_trigger:
+            kept.append(card)
+        else:
+            dropped.append("person card not present or named in trigger")
+    return tuple(kept), dropped
+
+
+async def _filter_core_memory(conn, place: str, core_text: str, cache: dict,
+                              ) -> tuple[bool, Any]:
+    """Return `(visible_ok, sources)` for `core_memory`."""
+    if not core_text:
+        return True, ()
+    core = await read_state(conn, "core_memory")
+    sources = (core or {}).get("derived_from")
+    return await memory_visible(conn, context=place, sources=sources, cache=cache), sources
+
+
+def _context_values(settings: Any) -> Any:
+    """Return prior constants, loading defaults when settings has none."""
+    if isinstance(settings, Mapping) and settings.get("constants"):
+        return constants(settings)
+    return load_prior()["constants"]
+
+
+def filter_context(conn, *, settings: Any = None) -> Middleware:
+    """Absolute line 2 (D45, D84): filter raw desk candidates before modules/plugins run."""
 
     async def rule(item: Any, ctx: Any) -> Any:
         """Keep only what the audience may see, and note the private items withheld."""
@@ -761,35 +750,202 @@ def filter_context(conn) -> Middleware:
                 label = await withheld_source(
                     conn, context=place, sources=getattr(memory, "sources", ()), cache=cache)
                 counts[label] = counts.get(label, 0) + 1
+        doing_kept, _ = await _filter_doing(
+            conn, place, item.doing, item.trigger, _context_values(settings), cache)
+        exps_kept, _ = await _filter_expectations(conn, place, item.expectations, cache)
+        core_text = item.core_memory
+        core_ok, core_sources = await _filter_core_memory(conn, place, core_text, cache)
+        if core_text and not core_ok:
+            label = await withheld_source(conn, context=place, sources=core_sources, cache=cache)
+            counts[label] = counts.get(label, 0) + 1
+            core_text = ""
         filtered = replace(
             item, place_kind=await _kind(conn, place, cache), memories=tuple(memories),
             recent_elsewhere=await keep(item.recent_elsewhere, note_withheld=True),
-            recent=await keep(item.recent, note_withheld=False))
-        core = await read_state(conn, "core_memory")
-        sources = (core or {}).get("derived_from")
-        if filtered.core_memory and not await memory_visible(conn, context=place,
-                                                             sources=sources, cache=cache):
-            label = await withheld_source(conn, context=place, sources=sources, cache=cache)
-            counts[label] = counts.get(label, 0) + 1
-            filtered = replace(filtered, core_memory="")
-        filtered = replace(filtered, withheld=tuple(sorted(counts.items())))
+            recent=await keep(item.recent, note_withheld=False),
+            doing=doing_kept, expectations=exps_kept, core_memory=core_text,
+            withheld=tuple(sorted(counts.items())))
         ctx["filtered"] = filtered
         return Replace(filtered)
 
     return rule
 
 
-def guard(kernel: Any, when: str) -> Middleware:
-    """Absolute line 3 (D45, D46): consent to share, and no private words in a place.
+async def _source_refs_for_ids(conn, ids: Sequence[int]) -> list[tuple[str | None, int | None]]:
+    """Resolve `derived_from` event ids into `(place, event_id)` tuples."""
+    clean = [int(i) for i in ids if i is not None]
+    if not clean:
+        return [(None, None)]
+    rows = await (await conn.execute(
+        "SELECT id, place FROM events WHERE id = ANY(%s)", (clean,))).fetchall()
+    by_id = {int(row[0]): row[1] for row in rows}
+    return [(by_id.get(i), i) if i in by_id else (None, None) for i in clean]
 
-    On the way in it asks consent for `self.share`; on the way out, once the route is
-    resolved, it records the grant and refuses a message whose words the target place
-    may not see.
-    """
-    refused = "that place may not see this content; say it where it belongs"
+
+async def _context_private_sources(conn, place: str, item: Any, cache: dict,
+                                   ) -> tuple[tuple[str | None, int | None], ...]:
+    """Return every private `(source_place, source_id)` held in this wake's verified desk (D84)."""
+    is_owner_dm = await owner_direct(conn, place, cache)
+    collected: list[tuple[str | None, int | None]] = []
+
+    def add(src_place: str | None, src_id: int | None) -> None:
+        if is_owner_dm and src_place == place:
+            return
+        pair = (src_place, int(src_id) if src_id is not None else None)
+        if pair not in collected:
+            collected.append(pair)
+
+    for line in (*item.recent, *item.recent_elsewhere):
+        add(line.place, line.id)
+    if item.trigger is not None:
+        if item.trigger.kind == "expectation.reminded":
+            add(item.trigger.payload.get("line_place") or item.trigger.place,
+                item.trigger.payload.get("line_event") or item.trigger.caused_by)
+        else:
+            add(item.trigger.place, item.trigger.id)
+    for mem in item.memories:
+        refs = await _source_refs_for_ids(conn, getattr(mem, "sources", ()) or ())
+        for src_place, src_id in refs:
+            add(src_place, src_id)
+    if item.core_memory:
+        core = await read_state(conn, "core_memory")
+        for src_place, src_id in await _source_refs_for_ids(conn, (core or {}).get("derived_from") or ()):
+            add(src_place, src_id)
+    return tuple(collected)
+
+
+async def _record_wake_sources(kernel: Any, conn: Any, item: Any, cache: dict) -> None:
+    """Remember the private sources a verified wake context held, keyed by `(trigger.id, place)`."""
+    if item.trigger is None or item.trigger.id is None:
+        return
+    sources = await _context_private_sources(conn, item.place, item, cache)
+    store = getattr(kernel, "_wake_private_sources", None)
+    if store is None:
+        store = {}
+        setattr(kernel, "_wake_private_sources", store)
+    store[(int(item.trigger.id), str(item.place))] = sources
+    _trim_wake_sources(store)
+
+
+async def _words_hidden(kernel: Any, event: Event, target_place: str) -> bool:
+    """Return whether anything private in the source wake's view is hidden from `target_place`."""
+    conn = kernel.conn
+    cache: dict = {}
+    if await owner_direct(conn, target_place, cache):
+        return False
+    store = getattr(kernel, "_wake_private_sources", None) or {}
+    key = (int(event.id), str(event.place or "")) if event.id is not None else None
+    if key is not None and key in store:
+        sources = store[key]
+    else:
+        origin = event.place
+        is_owner_dm = await owner_direct(conn, origin, cache)
+        sources_list: list[tuple[str | None, int | None]] = []
+        if not is_owner_dm:
+            sources_list.append((origin, event.id))
+        if origin:
+            limit = int(_context_values(getattr(kernel, "settings", None))["recent_elsewhere"])
+            for line in await recent_lines(conn, origin, limit=limit):
+                if await visible(conn, context=origin, source=line.place, before=line.id,
+                                 cache=cache):
+                    sources_list.append((line.place, line.id))
+        core = await read_state(conn, "core_memory")
+        if core and core.get("text"):
+            core_refs = core.get("derived_from") or ()
+            if await memory_visible(conn, context=origin, sources=core_refs, cache=cache):
+                for src_place, src_id in await _source_refs_for_ids(conn, core_refs):
+                    if not (is_owner_dm and src_place == origin):
+                        sources_list.append((src_place, src_id))
+        sources = tuple(dict.fromkeys(sources_list))
+    for src_place, src_id in sources:
+        if not src_place or not await visible(conn, context=target_place, source=src_place,
+                                             before=src_id, cache=cache):
+            return True
+    return False
+
+
+def verify_context(kernel: Any) -> Middleware:
+    """Last context line (D84): verify every context section against `visible()`, log `error`."""
 
     async def rule(item: Any, ctx: Any) -> Any:
-        """Apply the sharing and leaking lines to one act."""
+        conn = kernel.conn
+        place = item.place
+        cache: dict = {}
+        failures: list[tuple[str, str]] = []
+        counts: dict[str, int] = dict(item.withheld)
+
+        async def audit_lines(lines: Sequence[Event], section: str,
+                              *, count_withheld: bool) -> tuple[Event, ...]:
+            kept: list[Event] = []
+            for line in lines:
+                if await visible(conn, context=place, source=line.place,
+                                 before=line.id, cache=cache):
+                    kept.append(line)
+                else:
+                    failures.append((section, f"{section} item not visible at place"))
+                    if count_withheld:
+                        label = await source_label(conn, line.place, line.id, cache)
+                        counts[label] = counts.get(label, 0) + 1
+            return tuple(kept)
+
+        recent = await audit_lines(item.recent, "recent", count_withheld=False)
+        elsewhere = await audit_lines(item.recent_elsewhere, "recent_elsewhere", count_withheld=True)
+        memories = []
+        for mem in item.memories:
+            sources = getattr(mem, "sources", ())
+            if await memory_visible(conn, context=place, sources=sources, cache=cache):
+                memories.append(mem)
+            else:
+                failures.append(("memories", "memory item not visible at place"))
+                label = await withheld_source(conn, context=place, sources=sources, cache=cache)
+                counts[label] = counts.get(label, 0) + 1
+        core_text = item.core_memory
+        core_ok, core_sources = await _filter_core_memory(conn, place, core_text, cache)
+        if core_text and not core_ok:
+            core_text = ""
+            failures.append(("core_memory", "core_memory not visible at place"))
+            label = await withheld_source(conn, context=place, sources=core_sources, cache=cache)
+            counts[label] = counts.get(label, 0) + 1
+        doing_kept, doing_err = await _filter_doing(
+            conn, place, item.doing, item.trigger,
+            _context_values(getattr(kernel, "settings", None)), cache)
+        failures.extend(("doing", err) for err in doing_err)
+        exps_kept, exps_err = await _filter_expectations(conn, place, item.expectations, cache)
+        failures.extend(("expectations", err) for err in exps_err)
+        trigger_ok = await _trigger_allowed(conn, place, item.trigger, cache)
+        trigger_kept = item.trigger if trigger_ok else None
+        if not trigger_ok:
+            failures.append(("trigger", "trigger not visible at place"))
+        people_kept, people_err = await _filter_people(
+            conn, place, item.people, trigger_kept, cache)
+        failures.extend(("people", err) for err in people_err)
+
+        if not failures:
+            await _record_wake_sources(kernel, conn, item, cache)
+            return Continue()
+        ts = ctx.get("now") or kernel.clock.now()
+        cause = item.trigger.id if (item.trigger and item.trigger.id) else None
+        for section, reason in failures:
+            await append_event(
+                conn, ts=ts, kind="error", place=place, caused_by=cause,
+                payload={"where": "privacy.verify_context", "section": section, "error": reason})
+        verified = replace(
+            item, recent=recent, recent_elsewhere=elsewhere, memories=tuple(memories),
+            core_memory=core_text, doing=doing_kept, expectations=exps_kept,
+            trigger=trigger_kept, people=people_kept,
+            withheld=tuple(sorted(counts.items())))
+        await _record_wake_sources(kernel, conn, verified, cache)
+        ctx["filtered"] = verified
+        return Replace(verified)
+
+    return rule
+
+
+def guard(kernel: Any, when: str) -> Middleware:
+    """Absolute line 3 (D45, D46, D84): consent to share, and record deterministic cross-place flag."""
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        """Apply sharing consent and cross-place drafted-words check to one act."""
         if ctx.get("capability") == SHARE:
             if when == "first":
                 wrong = episode_error(item)
@@ -822,12 +978,10 @@ def guard(kernel: Any, when: str) -> Middleware:
         place = ctx.get("place") or ctx["event"].place
         if ctx.get("long_running"):
             ctx["labels"]["audience"] = sorted(await audience(ctx["conn"], ctx["event"].place))
-        hidden = await leaks(ctx["conn"], place, str(item.get("text") or ""),
-                             limit=leak_candidates(getattr(kernel, "settings", None)))
-        ctx["labels"]["words_hidden"] = hidden
-        if hidden and place == ctx["event"].place:
-            ctx["refusal"] = refused
-            return Stop(refused)
+        ctx["labels"]["words_hidden"] = (
+            await _words_hidden(kernel, ctx["event"], str(place))
+            if place and place != ctx["event"].place else False
+        )
         return Continue()
 
     return rule
@@ -892,17 +1046,6 @@ def _mentions_text(text: str, words: Sequence[str]) -> bool:
     return any(re.search(rf"(?<!\w){re.escape(word)}(?!\w)", lowered) for word in words)
 
 
-def _strings(value: Any) -> list[str]:
-    """Return every string inside one argument value, at any depth."""
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, dict):
-        return [found for item in value.values() for found in _strings(item)]
-    if isinstance(value, (list, tuple)):
-        return [found for item in value for found in _strings(item)]
-    return []
-
-
 def carries_file(arguments: Any, descriptor: Any) -> bool:
     """Return whether one act carries a file attachment with a communicative capability."""
     if not (descriptor or {}).get("communicative"):
@@ -912,13 +1055,8 @@ def carries_file(arguments: Any, descriptor: Any) -> bool:
 
 
 async def leaving(kernel: Any, ctx: Any, arguments: Any) -> str | None:
-    """Return the refusal when a network call would carry content this place may not see."""
-    if "network" not in kernel.tools.facts(str(ctx.get("capability") or "")):
-        return None
-    top_k = leak_candidates(getattr(kernel, "settings", None))
-    for value in _strings(arguments):
-        if await leaks(kernel.conn, ctx["event"].place, value, limit=top_k):
-            return LEAVING
+    """Return None (D84 removed text-similarity checking; plugins narrow deterministically)."""
+    del kernel, ctx, arguments
     return None
 
 

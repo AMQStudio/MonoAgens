@@ -247,8 +247,8 @@ async def test_quiet_hours_refuse_a_group_and_allow_the_owners_own_chat(aconn):
     assert [action.payload["text"] for action in voice.actions] == ["halo"]
 
 
-async def test_a_network_call_carrying_a_private_memory_is_refused(aconn):
-    kernel, _, _ = await _kernel(aconn, facts=("network",), permission="search.run")
+async def test_leaving_no_longer_uses_text_similarity_while_context_hides_private_memory(aconn):
+    kernel, tool, _ = await _kernel(aconn, facts=("network",), permission="search.run")
     source = await append_event(aconn, ts=START, kind="percept", who="person:owner",
                                 place="space:tg:9", body="telegram",
                                 payload={"description": "rahasia kantor pindah", "place_kind":
@@ -257,15 +257,16 @@ async def test_a_network_call_carrying_a_private_memory_is_refused(aconn):
                         ("rahasia kantor", [source.id]))
     await append_event(aconn, ts=START, kind="percept", who="person:budi", place=GROUP,
                        body="telegram",
-                       payload={"description": "halo semua", "place_kind": "shared"})
+                       payload={"description": "halo semua", "place_kind": "shared",
+                                "place_info": {"members": ["person:budi", "person:owner"]}})
     trigger = await _trigger(aconn, place=GROUP, who="person:owner")
 
     await kernel._apply(trigger, ToolCall("act", {
         "capability": "dev.run", "arguments": {"command": "search rahasia kantor"}}))
     await kernel.run_until_idle()
 
-    cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.result'")
-    assert "private content off the machine" in (await cur.fetchone())[0]["result"]["error"]
+    assert len(tool.actions) == 1
+    assert await privacy.memory_visible(aconn, context=GROUP, sources=[source.id]) is False
 
 
 async def test_a_public_search_still_passes(aconn):

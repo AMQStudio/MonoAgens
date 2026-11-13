@@ -507,3 +507,31 @@ async def test_stickers_off_rewrites_sticker_argument_to_emoji_fallback(aconn):
     )
 
     assert outcome.item == {"text": "hi 🐱"}
+
+
+async def test_progress_step_from_invisible_source_place_is_not_shown(aconn):
+    """P.9: progress_show skips steps whose source/causal chain is not visible at the target place."""
+    screen = _RichScreen(shows=("edit",))
+    kernel = await _kernel(aconn, body=screen,
+                           interaction_settings={"thinking": "off", "steps": "long", "progress": "edit"})
+    dm_trigger = await _percept(aconn, place=OWNER_DM, who="person:owner", text="check secret")
+    group_trigger = await _percept(aconn, place=GROUP, who="person:budi", text="halo")
+    assert group_trigger.id is not None
+
+    # A long-running act result rendered in GROUP whose causal root is OWNER_DM must be suppressed.
+    leaked_step = await append_event(
+        aconn, ts=START, kind="act.result", who="person:owner", place=GROUP,
+        body="telegram", caused_by=dm_trigger.id,
+        payload={"capability": "telegram.run", "result": {"text": "secret output"}})
+    await interaction.narrate(kernel)(leaked_step, {"conn": aconn, "now": START})
+    assert not screen.shown and not screen.actions
+
+    # Same-place step in GROUP IS visible and shown.
+    group_step = await append_event(
+        aconn, ts=START, kind="act.result", who="person:budi", place=GROUP,
+        body="telegram", caused_by=group_trigger.id,
+        payload={"capability": "telegram.run", "result": {"text": "public progress"}})
+    await interaction.narrate(kernel)(group_step, {"conn": aconn, "now": START})
+    assert len(screen.shown) == 1
+    assert "public progress" in screen.shown[0][2]["text"]
+
