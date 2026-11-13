@@ -418,8 +418,9 @@ bodies:
 edit, delete, reply, reactions, buttons, menus, polls, stickers, embeds, threads;
 [adapters.md §4](adapters.md)), like V1 ADR-0018's optional parts and the channel matrix of chat
 frameworks. A missing capability is never a silent no-op: `interaction.py` picks the fallback it
-knows (approval: buttons → reactions → "reply yes or no" as text; progress: edit → new message;
-sticker → its emoji; no typing → nothing), so what is lost is a choice, visible in the code and
+knows (choices: buttons → poll → numbered list; thread: new thread → reply with the title;
+location: native → text; approval: buttons → reactions → "reply yes or no" as text; progress:
+edit → new message; sticker → its emoji; no typing → nothing), so what is lost is a choice, visible in the code and
 the boot report.
 
 ## 10. Attachments

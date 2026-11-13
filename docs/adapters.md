@@ -84,6 +84,7 @@ bodies:
   whatsapp:
     enabled: true
     show: { read_receipts: on, stickers: on }       # optional; middleware.md §9
+    tools: [pin]                                    # optional platform-only tools; none by default
   minecraft: { enabled: true, module: mono_minecraft, server: localhost:25565 }
 ```
 
@@ -118,19 +119,37 @@ changed). Each becomes a short `description` plus raw `data`:
   sticker 😂 from 'Kucing'"); images and stickers are opened only when reasoning chooses to,
   through a reader (vision later).
 
-**Out: few tools for the soul, rich presentation in the middleware.** The soul's tools stay
-few and neutral, so the prompt cache holds and choices stay easy:
-- `say(text, attachments?, reply_to?, mentions?, sticker?)` — `sticker` is the ref of a
-  sticker the soul has received; whether to send one is reasoning's choice;
+**Out: few tools for the soul, rich intents through neutral fields.** The soul's tools stay
+few and neutral, so the prompt cache holds and choices stay easy. What is a communicative
+intent — something the soul means to do, not only how it looks — is a neutral field of `say`,
+the same on every adapter, drawn the best way each platform allows:
+- `say(text, attachments?, reply_to?, mentions?, sticker?, choices?, thread?, location?)`:
+  - `sticker` — the ref of a sticker the soul has received; whether to send one is reasoning's
+    choice;
+  - `choices: [label, …]` (with `multiple: true` for a vote) — options people pick from; the
+    answer comes back as an ordinary percept with `data.choice` (`addressed`, since it answers
+    the soul);
+  - `thread: "title"` — start a new thread or topic for this message where the place allows it;
+  - `location: {lat, lon, name?}` — share a place;
 - `react(emoji, message_id?)`;
 - `edit(message_id, text)` for its own messages, where the platform allows it.
-Buttons, menus, embeds, progress messages, typing and approval prompts are not tools: the
-middleware's `interaction.py` chooses them and the adapter draws them.
+Progress messages, typing, read receipts and approval prompts are not the soul's: the
+middleware's `interaction.py` decides them and the adapter draws them.
+
+**Platform-only actions** (pin a message, manage a Discord role, set a group's description, …)
+are not neutral and are rarely needed. An adapter may offer them as its own tools, each with its
+facts and permission like any tool; they are **off by default** and offered to reasoning only
+when the owner lists them under `bodies.<adapter>.tools:`, so they never weigh on the prompt of a
+soul that does not use them.
 
 **What an adapter can show** is declared in `contract.SHOWS`: `typing`, `read_receipts`,
 `edit`, `delete`, `reply`, `reactions`, `buttons`, `menus`, `polls`, `stickers`, `embeds`,
-`threads`. `interaction.py` uses the best one available, in a fixed fallback order, so what is
-lost is visible in the code and the boot report:
+`threads`, `locations`. `interaction.py` uses the best one available, in a fixed fallback order,
+so what is lost is visible in the code and the boot report:
+- `choices`: buttons (menus when there are many) → a poll → a numbered list, answered by
+  number;
+- `thread`: a new thread or topic → a reply in the place, with the title as its first line;
+- `location`: a native location → the name and coordinates as text;
 - an approval: buttons → reactions (👍 / 👎 on the question) → "reply yes or no" as text;
 - a progress message: edit one message → a new message per step;
 - a sticker: the sticker → its emoji.

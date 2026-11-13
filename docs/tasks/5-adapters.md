@@ -80,7 +80,7 @@ adapter is a special case.
   number are one account); everything in as percepts (text, replies, mentions, edits,
   deletions, reactions, stickers, locations, contact cards, polls, view-once, albums as one
   percept with several attachments, group events); out through `say` (attachments, reply_to,
-  mentions, sticker), `react`, `edit`; the shared account told apart by message ids in the Log
+  mentions, sticker, choices, thread, location), `react`, `edit`; the shared account told apart by message ids in the Log
   (D66); full history import with `imported: true` (core: never appraised as a wake, summarized
   by sleep only for places that become active) and back-fill on reconnect; media as deferred
   refs, fetched on open, with a re-upload request when the link expired; WhatsApp Channels as
@@ -98,7 +98,11 @@ adapter is a special case.
   `say`, `react` and `edit` as on the others; the CLI shows what a terminal can (typing and
   progress as status lines, buttons as numbered choices). The coverage declaration and the
   contract test of adapters.md §4 run over every adapter (Telegram, CLI, WhatsApp, Discord);
-  each gap is declared with its reason (Telegram: no history, no read receipts).
+  each gap is declared with its reason (Telegram: no history, no read receipts). `say`'s
+  neutral fields (`choices`, `thread`, `location`) work on every adapter through its best native
+  form or the fallback. Platform-only actions (pin, Discord role management, …) are adapter-own
+  tools, off by default, offered only when listed under `bodies.<adapter>.tools:`; test that an
+  unlisted one is not in the prompt.
 - [ ] 1.5 What is shown (D70, middleware.md §9): `contract.SHOWS` with the full vocabulary;
   settings from `interaction:` and `bodies.<adapter>.show:`; `/show <name> <value> [adapter]`;
   thinking `off | owner_direct | all` (all still passes `privacy.visible` per thought); typing only
@@ -106,6 +110,7 @@ adapter is a special case.
   read receipts after the decision is recorded, never for imported or back-filled percepts, and
   on an account shared with the owner only where the soul has spoken since; progress by edit or
   new message; the fallbacks in the code and the boot report (approval: buttons → reactions →
+  text; choices: buttons → poll → numbered list; thread → reply with the title; location →
   text; sticker → emoji). The decisions stay in `interaction.py`; adapters only draw. Test per
   setting; a silent decision shows no typing.
 - [ ] 1.6 Roles from Discord (D68, middleware.md §8): `discord_role:` on a role, by ids; held only
