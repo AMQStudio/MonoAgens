@@ -39,9 +39,11 @@ async def sleep_due(conn: psycopg.AsyncConnection[Any], now: datetime,
     zone = ZoneInfo(str(settings.get("timezone") or "UTC"))
     last_id = int((await read_state(conn, "sleep:last_event") or {}).get("id") or 0)
     cur = await conn.execute(
-        "SELECT max(id) FILTER (WHERE kind IN ('percept', 'act.out')), "
+        "SELECT max(id) FILTER (WHERE kind IN ('percept', 'act.out') "
+        "AND COALESCE((payload->>'imported')::boolean, false) = false), "
         "max(ts) FILTER (WHERE kind = 'sleep.failed'), "
-        "max(ts) FILTER (WHERE kind IN ('percept', 'act.out')), "
+        "max(ts) FILTER (WHERE kind IN ('percept', 'act.out') "
+        "AND COALESCE((payload->>'imported')::boolean, false) = false), "
         "max(ts) FILTER (WHERE kind = 'sleep.done') FROM events")
     newest, last_failed, idle_since, slept = await cur.fetchone()
     if newest is None or int(newest) <= last_id:
@@ -70,10 +72,25 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
                        now: datetime, settings: dict[str, Any]) -> Event | None:
     """Summarize new events into memories, refresh core_memory, record sleep.done."""
     last_id = int((await read_state(conn, "sleep:last_event") or {}).get("id") or 0)
-    cur = await conn.execute("SELECT id, ts, kind, who, place, payload FROM events WHERE id > %s "
-                             "AND kind NOT IN ('sleep.done', 'tick', 'model.call', "
-                             "'budget.exhausted', 'job.started', 'job.result') "
-                             "ORDER BY id", (last_id,))
+    cur = await conn.execute(
+        "WITH active_places AS ("
+        "  SELECT place, min(id) AS first_live_id FROM events "
+        "  WHERE place IS NOT NULL AND kind IN ('percept', 'act.out') "
+        "  AND COALESCE((payload->>'imported')::boolean, false) = false "
+        "  GROUP BY place"
+        ") "
+        "SELECT e.id, e.ts, e.kind, e.who, e.place, e.payload FROM events e "
+        "LEFT JOIN active_places ap ON ap.place = e.place "
+        "WHERE e.kind NOT IN ('sleep.done', 'tick', 'model.call', "
+        "'budget.exhausted', 'job.started', 'job.result') "
+        "AND ("
+        "  (e.id > %s AND COALESCE((e.payload->>'imported')::boolean, false) = false "
+        "   AND NOT (e.kind = 'identity.registered' AND e.place IS NOT NULL "
+        "            AND ap.first_live_id IS NULL)) "
+        "  OR (COALESCE((e.payload->>'imported')::boolean, false) = true "
+        "      AND ap.first_live_id IS NOT NULL "
+        "      AND (e.id > %s OR ap.first_live_id > %s))"
+        ") ORDER BY e.id", (last_id, last_id, last_id))
     rows = await cur.fetchall()
     if not rows:
         return None

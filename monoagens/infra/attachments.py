@@ -9,7 +9,9 @@ is deleted when no such event remains.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable, Mapping
 import hashlib
+import json
 import os
 import pathlib
 import re
@@ -21,7 +23,9 @@ DEFAULT_MIME = "application/octet-stream"
 REF_PREFIX = "att_"
 REF_DIGITS = 24
 MAX_NAME = 120
+DEFERRED_META = ".deferred.json"
 _UNSAFE = re.compile(r"[^A-Za-z0-9._ -]+")
+Fetcher = Callable[[str, dict[str, Any]], Awaitable[bytes]]
 
 
 def safe_filename(name: str) -> str:
@@ -37,6 +41,15 @@ class AttachmentStore:
     def __init__(self, root: pathlib.Path) -> None:
         """Store files under this root (created on the first put)."""
         self.root = pathlib.Path(root)
+        self._fetchers: dict[str, Fetcher] = {}
+
+    def register_fetcher(self, body: str, fn: Fetcher) -> None:
+        """Register the async callback an adapter uses to materialize deferred refs."""
+        self._fetchers[str(body)] = fn
+
+    def fetcher(self, body: str) -> Fetcher | None:
+        """Return the registered deferred-attachment fetcher for one adapter, if any."""
+        return self._fetchers.get(str(body))
 
     async def put(self, data: bytes, *, name: str, mime: str = DEFAULT_MIME) -> dict[str, Any]:
         """Write one file and return its attachment: ref, name, mime and size."""
@@ -47,6 +60,43 @@ class AttachmentStore:
         if not target.is_file():
             await asyncio.to_thread(self._write, target, data)
         return {"ref": ref, "name": target.name, "mime": mime, "size": len(data)}
+
+    async def put_deferred(self, *, key: str, name: str, mime: str = DEFAULT_MIME,
+                           size: int = 0, body: str = "",
+                           locator: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """Record metadata and a platform locator without downloading bytes yet (D69)."""
+        digest = hashlib.sha256(f"{body}:{key}".encode("utf-8")).hexdigest()[:REF_DIGITS]
+        ref = f"{REF_PREFIX}{digest}"
+        safe = safe_filename(name)
+        meta_path = self._meta_path(ref)
+        if self.find(ref) is None and not meta_path.is_file():
+            payload = {"name": safe, "mime": mime, "size": int(size or 0),
+                       "body": str(body), "locator": dict(locator or {})}
+            await asyncio.to_thread(self._write, meta_path, json.dumps(payload).encode("utf-8"))
+        return {"ref": ref, "name": safe, "mime": mime, "size": int(size or 0), "deferred": True}
+
+    def _meta_path(self, ref: str) -> pathlib.Path:
+        """Return the deferred locator sidecar path for one ref."""
+        return self.root / ref[len(REF_PREFIX):len(REF_PREFIX) + 2] / ref / DEFERRED_META
+
+    async def read_deferred(self, ref: str) -> dict[str, Any] | None:
+        """Return the deferred locator metadata for `ref`, if present."""
+        path = self._meta_path(ref)
+        if not path.is_file():
+            return None
+        raw = await asyncio.to_thread(path.read_text, encoding="utf-8")
+        return dict(json.loads(raw) or {})
+
+    async def materialize(self, ref: str, data: bytes, *, name: str) -> pathlib.Path:
+        """Store downloaded bytes for a deferred ref and remove its sidecar manifest."""
+        if len(data) > MAX_BYTES:
+            raise ValueError(f"file too large: {len(data)}")
+        target = self.path(ref, name)
+        await asyncio.to_thread(self._write, target, data)
+        meta = self._meta_path(ref)
+        if meta.is_file():
+            await asyncio.to_thread(meta.unlink)
+        return target
 
     def _write(self, target: pathlib.Path, data: bytes) -> None:
         """Write one file atomically (.tmp then os.replace); never half a file."""
@@ -65,7 +115,8 @@ class AttachmentStore:
         folder = self.root / ref[len(REF_PREFIX):len(REF_PREFIX) + 2] / ref
         if not folder.is_dir():
             return None
-        files = sorted(found for found in folder.iterdir() if found.is_file())
+        files = sorted(found for found in folder.iterdir()
+                       if found.is_file() and found.name != DEFERRED_META)
         return files[0] if files else None
 
     async def read(self, ref: str) -> bytes:

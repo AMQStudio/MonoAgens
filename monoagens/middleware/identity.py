@@ -13,12 +13,13 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from monoagens.core.context.parts import VOLATILE, Part
 from monoagens.core.hooks import Continue, Middleware, Replace, Stop
 from monoagens.core.memory.cards import canonical, merge_map
 from monoagens.infra.clock import Clock
 from monoagens.infra.store import append_event, payload_text, read_state, write_state
 from monoagens.middleware import privacy
-from monoagens.middleware.registry import CommandEntry
+from monoagens.middleware.registry import RULE_BLOCK_ORDER, CommandEntry
 from monoagens.types import Event
 
 LOGGER = logging.getLogger(__name__)
@@ -202,18 +203,48 @@ def claim(conn) -> Middleware:
     """Inbound rule: claim the owner when a percept carries the pairing code."""
 
     async def rule(item: Any, ctx: Any) -> Any:
+        if (getattr(item, "payload", None) or {}).get("imported") is True:
+            return Continue()
         await claim_owner(conn, item, now=ctx["now"])
         return Continue()
 
     return rule
 
 
+async def shared_account_blocks(conn: Any) -> tuple[Part, ...]:
+    """Return neutral context notes for adapters whose self_account belongs to the owner (D66)."""
+    cur = await conn.execute(
+        "SELECT key, value FROM state WHERE key LIKE 'self_account:%' ORDER BY key")
+    rows = await cur.fetchall()
+    if not rows:
+        return ()
+    owner = await read_state(conn, OWNER_KEY) or {}
+    mapping = await privacy.aliases(conn)
+    merges = await merge_map(conn)
+    notes: list[Part] = []
+    for key, value in rows:
+        body = str(key).removeprefix("self_account:")
+        account = str((value or {}).get("account") or "")
+        if not body or not account:
+            continue
+        mapped = merges.get(mapping.get(account, account), mapping.get(account, account))
+        if owner.get("who") != account and mapped != OWNER:
+            continue
+        notes.append(Part(
+            f"shared_{body}", VOLATILE, RULE_BLOCK_ORDER,
+            text=(f"Shared account ({body}): speaking in someone else's chat on {body} "
+                  f"speaks through the owner's account ({account}).")))
+    return tuple(notes)
+
+
 def cards(conn, *, roles: Any = None) -> Middleware:
-    """Context rule: add one card per person present here or named in the trigger (D55)."""
+    """Context rule: add person cards and shared-account notes (D55, D66)."""
 
     async def rule(item: Any, ctx: Any) -> Any:
-        return Replace(replace(item, people=await person_cards(conn, item.place, item.trigger,
-                                                               roles=roles)))
+        people = await person_cards(conn, item.place, item.trigger, roles=roles)
+        extra = await shared_account_blocks(conn)
+        blocks = (*item.blocks, *extra) if extra else item.blocks
+        return Replace(replace(item, people=people, blocks=blocks))
 
     return rule
 
@@ -263,12 +294,20 @@ async def record_place(conn: Any, place: str, info: Mapping[str, Any], *,
 
 
 def place_tracker(conn: Any) -> Middleware:
-    """Inbound rule: persist structured place metadata reported on incoming percepts (D68)."""
+    """Inbound rule: persist structured place metadata and shared self_account (D66, D68)."""
 
     async def rule(item: Any, ctx: Any) -> Any:
-        if getattr(item, "kind", "") != "percept" or not getattr(item, "place", None) or not item.id:
+        if getattr(item, "kind", "") != "percept" or not item.id:
             return Continue()
         payload = item.payload or {}
+        self_account = str(payload.get("self_account") or "")
+        if self_account and getattr(item, "body", None):
+            key = f"self_account:{item.body}"
+            current = await read_state(conn, key)
+            if (current or {}).get("account") != self_account:
+                await write_state(conn, key, {"account": self_account}, int(item.id))
+        if not getattr(item, "place", None):
+            return Continue()
         raw = dict(payload.get("place_info") or {})
         if not raw.get("form"):
             raw["form"] = "dm" if payload.get("place_kind") == "direct" else "group"

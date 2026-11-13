@@ -184,6 +184,18 @@ class AttachmentDoor:
         """Store one received file and return its attachment."""
         return await self.store.put(data, name=name, mime=mime)
 
+    async def put_deferred(self, *, key: str, name: str,
+                           mime: str = "application/octet-stream", size: int = 0,
+                           body: str = "", locator: Mapping[str, Any] | None = None
+                           ) -> dict[str, Any]:
+        """Record one deferred attachment reference without downloading its bytes yet."""
+        return await self.store.put_deferred(key=key, name=name, mime=mime, size=size,
+                                             body=body, locator=locator)
+
+    def register_fetcher(self, body: str, fn: Any) -> None:
+        """Register the adapter callback that materializes deferred refs for `body`."""
+        self.store.register_fetcher(body, fn)
+
     async def open(self, ref: str, *, context: str | None) -> tuple[bytes, dict[str, Any]]:
         """Return one file's bytes when this context may see where it came from."""
         return await open_attachment(self._conn, self.store, ref, context=context)
@@ -219,6 +231,14 @@ async def open_attachment(conn: Any, store: Any, ref: str, *, context: str | Non
         raise PermissionError("that file came with content this place may not see")
     found = store.find(ref)
     if found is None:
+        meta = await store.read_deferred(ref) if hasattr(store, "read_deferred") else None
+        if meta is not None:
+            fetch = store.fetcher(str(meta.get("body") or "")) if hasattr(store, "fetcher") else None
+            if fetch is None:
+                raise FileNotFoundError(f"no fetcher registered for deferred file {ref}")
+            data = await fetch(ref, meta)
+            target = await store.materialize(ref, data, name=str(meta.get("name") or "attachment"))
+            return data, {"ref": ref, "name": target.name, "size": len(data)}
         raise FileNotFoundError(f"no stored file for {ref}")
     return await store.read(ref), {"ref": ref, "name": found.name,
                                    "size": found.stat().st_size}

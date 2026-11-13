@@ -163,6 +163,8 @@ class Kernel:
                 await self._think(event, str(event.payload.get("description") or ""),
                                   event.place or "")
             return
+        if event.kind == "percept" and event.payload.get("imported") is True:
+            return
         fired = await expectations.due(self.conn, event, now=self.clock.now(),
                                   settings=self.settings, pfc=self.pfc,
                                   embedder=self.embedder)
