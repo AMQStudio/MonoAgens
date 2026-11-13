@@ -84,8 +84,8 @@ two principle lines of 5.0d, decided by the owner (2026-11-13) on the evidence i
   - a new line after it: "Say something is done only after its result came back; until then say it is under way.".
   Record the stable-prefix hash change under Notes (the prompt cache restarts once).
 - [x] 5.0e Workspace: default `pids` 64 (the 120 s fork loop in Notes). — done: default `pids` 64.
-- [ ] 5.0f Language-neutral `info_gap` (owner decision 2026-11-13): today `prior/references.yaml` holds only `id:`, so a soul in any other language gets no references and `info_gap` is silently 0. The embedder is multilingual, so: the references are written in English under one key that applies to every language (per-language lists stay optional and are added to it, never required); the signal compares the message with the **centroid** (mean vector) of the references instead of the best single sentence; a language without its own list uses the English one, never nothing. Measure `info_gap` and the gate on the launch set before and after (fake and real); recalibrate the related prior values with replay if needed, and record the numbers under Notes as the evidence (constitution §1).
-- [ ] 5.0g Soul Tuning examples: `examples.yaml` in English with the labels `person` and `you` (no soul name); the `<soul_tuning>` block says the examples show the style, not the language, and the soul answers in the speaker's language; the owner may give their own examples through `config.d/soul-tuning.yaml` (`options.examples`), validated like the file. Keep the stable-prefix hash test.
+- [x] 5.0f Language-neutral `info_gap` (owner decision 2026-11-13): today `prior/references.yaml` holds only `id:`, so a soul in any other language gets no references and `info_gap` is silently 0. The embedder is multilingual, so: the references are written in English under one key that applies to every language (per-language lists stay optional and are added to it, never required); the signal compares the message with the **centroid** (mean vector) of the references instead of the best single sentence; a language without its own list uses the English one, never nothing. Measure `info_gap` and the gate on the launch set before and after (fake and real); recalibrate the related prior values with replay if needed, and record the numbers under Notes as the evidence (constitution §1).
+- [x] 5.0g Soul Tuning examples: `examples.yaml` in English with the labels `person` and `you` (no soul name); the `<soul_tuning>` block says the examples show the style, not the language, and the soul answers in the speaker's language; the owner may give their own examples through `config.d/soul-tuning.yaml` (`options.examples`), validated like the file. Keep the stable-prefix hash test.
 
 - [ ] 5.1 Scenario 18 (game adapter, Budi's file, sharing to Budi with consent, Fulan never shared): passes with the real model, its material checked (facts and capabilities).
 - [ ] 5.2 Scenario 19 (task thread, delivery to Budi, ask which group): passes with the real model, with Workspace.
@@ -886,3 +886,35 @@ prompt cache restarts once; the golden `EXPECTED_STABLE` and `PREFIX_HASH` in
 **5.0e — `pids` 64.** `plugins/workspace/plugin.yaml` and `sandbox.run`'s default: the 120 s
 fork loop of the earlier Notes showed 256 spinning tasks for the full timeout were allowed on
 top of the account's own; 64 bounds a run without touching a normal build or test run.
+
+**5.0f — `info_gap` is language-neutral.** `prior/references.yaml` holds an English `all` list
+(`I forgot, what was it called?` …) that applies to every language, plus the Indonesian list
+under `id`; `situation.reference_sentences()` returns `all` + this language's own, so a soul
+whose language has no list still gets `all` — before this, `(references).get(language)` returned
+nothing and `info_gap` was **silently 0** for every line in that language. The signal is the
+cosine to the **centroid** of the reference vectors, not the best single sentence
+(`tests/core/test_gate.py` now pins `1/sqrt(2)` for the two-axis case). Measured on the launch
+set (26 scenarios, 140 step texts; `FakeEmbedder` and the real `FastEmbedder`):
+
+| References | Embedder | best cosine (before) | centroid (after) |
+|---|---|---|---|
+| id only / all+id | fake | mean 0.144, max 0.632 | mean 0.068, max 0.404 |
+| id only / all+id | fastembed | mean 0.287, min 0.064, max 0.579 | mean 0.263, min 0.010, max 0.565 |
+| an `en` soul | any | **no references at all** (0.0) | `all`, e.g. 0.822 for "I forgot…" |
+
+Both languages score the forgotten question with the real embedder ("I forgot, what was it
+called?" 0.822 with `all`; "aku lupa, apa ya namanya?" 0.730) — the test does that with
+`FastEmbedder` (`tests/core/test_info_gap.py`), the numbers above come from the same model. The
+fake launch run before and after is identical in every gate decision (140 of 140 steps, 75/75
+checks), and the real embedder's mean moves by 0.024, so no prior value was recalibrated; the
+next real launch-set run (5.4) is the check that it stays so.
+
+**5.0g — the soul-tuning examples speak about style, not language.** `examples.yaml` is English
+with the labels `person` and `you` (no soul name), and the `<soul_tuning>` block now carries
+"These examples show the style, not the language: answer in the speaker's language." between the
+mode's rule and the exchanges. The owner may replace any mode's exchanges through
+`config.d/soul-tuning.yaml` → `options.examples` (declared as an object in the manifest);
+`modes.from_options()` validates it exactly like the file (unknown mode, a pair that is not
+speaker+text, more than five exchanges) and `register()` runs it at boot, so a bad option fails
+the boot instead of the first wake. The block is volatile, so the stable-prefix hash stays
+`8535fcd5…` and the prefix test is unchanged.
