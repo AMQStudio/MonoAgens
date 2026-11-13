@@ -3,6 +3,18 @@ function: privacy
 capability: "A multi-step job opens a task thread, holds a promise, delivers to Budi's direct place, asks which group before sharing, and its waiting does not block the owner's chat."
 plugins:
   workspace: {enabled: true}
+workspace_files:
+  src/parser.py: |
+    def parse(text):
+        # TODO: the tests say this drops the last line
+        return text.splitlines()
+  tests/test_parser.py: |
+    from src.parser import parse
+
+
+    def test_keeps_the_last_line():
+        assert parse("a\nb\nc") == ["a", "b", "c"]
+
 roles:
   fallback: unverified
   unverified: {base: guest}

@@ -462,6 +462,7 @@ class Scenario:
     files: dict[str, str] = field(default_factory=dict)
     roles: dict[str, Any] = field(default_factory=dict)
     people: dict[str, Any] = field(default_factory=dict)
+    workspace_files: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -548,6 +549,10 @@ def load_scenario(path: pathlib.Path, zone: ZoneInfo) -> Scenario:
     files = data.get("files") or {}
     if not isinstance(files, dict) or not all(isinstance(item, str) for item in files.values()):
         raise ValueError(f"{path}: files must be a map of file name to its text")
+    workspace_files = data.get("workspace_files") or {}
+    if not isinstance(workspace_files, dict) or not all(
+            isinstance(item, str) for item in workspace_files.values()):
+        raise ValueError(f"{path}: workspace_files must be a map of relative path to its text")
     declared_roles = data.get("roles") or {}
     declared_people = data.get("people") or {}
     if not isinstance(declared_roles, dict) or not isinstance(declared_people, dict):
@@ -559,7 +564,7 @@ def load_scenario(path: pathlib.Path, zone: ZoneInfo) -> Scenario:
                     function=function, capability=capability,
                     plugins=dict(plugins), bodies_extra=dict(bodies_extra),
                     files=dict(files), roles=dict(declared_roles),
-                    people=dict(declared_people))
+                    people=dict(declared_people), workspace_files=dict(workspace_files))
 
 
 def load_answers(path: pathlib.Path,
@@ -664,6 +669,7 @@ class ReplayRunner:
         self.extra_bodies: dict[str, Any] = {}
         self.files: dict[str, str] = {}
         self.declared: dict[str, Any] = {}
+        self.workspace_files: dict[str, str] = {}
         self.loaded: Any = None
         self._last_id = 0
         self._message_id = 0
@@ -731,6 +737,7 @@ class ReplayRunner:
         self.answers = scenario.answers
         self.files = dict(scenario.files)
         self.declared = {"roles": dict(scenario.roles), "people": dict(scenario.people)}
+        self.workspace_files = dict(scenario.workspace_files)
         self.selected = dict(scenario.plugins)
         self.extra_bodies = dict(scenario.bodies_extra)
         self._last_id = 0
@@ -743,6 +750,7 @@ class ReplayRunner:
             await migrate(conn, backup_dir=REPORT_DIR / "backups")
             await register_vector_async(conn)
             await self._make_kernel()
+            self._materialize_workspace()
             await self.kernel.recover()
             await self.kernel.run_until_idle()
             steps = [await self._run_step(index, raw)
@@ -834,6 +842,18 @@ class ReplayRunner:
         await self.kernel.step()
         await asyncio.wait_for(task, 120.0)
         await self.kernel.run_until_idle()
+
+    def _materialize_workspace(self) -> None:
+        """Write the scenario's workspace files into the owner's own sandbox folder."""
+        if not self.workspace_files:
+            return
+        from plugins.workspace import paths as workspace_paths
+
+        base = ROOT / "var" / "workspaces" / workspace_paths.person_folder(OWNER)
+        for name, text in self.workspace_files.items():
+            target = base / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
 
     async def _attach(self, names: Sequence[str], place: str) -> list[dict[str, Any]]:
         """Write the scenario's named files into the attachment store, one entry each."""
