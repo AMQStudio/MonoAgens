@@ -33,14 +33,14 @@ the same name (`registry/tools.py`, …); the eight concepts stay.
 | [Contract](#2-the-api-six-levers-d41) | `contract.py` | the rules of the game for every plugin and adapter: hook outcomes (pass, replace, stop, annotate), the read-only view of the log and state, the vocabulary of tool facts (§4), of what an adapter can show (§9) and of attachments (§10) | Task 3; view and vocabulary in Task 4 |
 | [Policy](#3-policy) | `policy.py` | the owner policy, first and last in every hook: the identity line, daily model budget, quiet hours; whether a tool call passes, asks for approval or is refused (roles + tool facts + approval mode, §8); the owner commands that change these settings | Task 3 (as `owner_policy.py` + `limits.py`, merged in Task 4) |
 | [Privacy](#3-policy) | `privacy.py` | absolute line 2: audience labels, what a context may hold, the withheld note, `share`, data leaving the machine, stricter rules from plugins | Task 3 |
-| [Identity](#7-identity-alias-map-owner-person-cards) | `identity.py` | alias map, pairing the owner, person cards, routes (`to:`); account linking | Task 3; linking in Task 5 |
+| [Identity](#7-identity-account-map-owner-person-cards) | `identity.py` | account map (one person id per person, registered automatically), pairing the owner, person cards, place info, routes (`to:`); linking as a merge | Task 3; linking in Task 5 |
 | [Registry](#4-registry-tools-commands-skills) | `registry.py` | tools (used by the soul), commands (typed by people), skills (read by the soul): one list of names and short descriptions, the full entry on request, collisions; assembles tool facts; offers a turn only what its requester may use; `/help` | Task 3 (as `tools.py`); commands and skills in Task 4 |
 | [Loader](#5-install-plugin-manager) | `loader.py` | reads `config.yaml`, `config.d/` and manifests (with their format versions), loads adapters and plugins in dependency order, collisions and the fail-closed check at boot | Task 4 |
 | [Interaction](#9-interaction) | `interaction.py` | what the soul shows people besides its messages (typing, tool steps, thinking) and approvals asked and answered: what, to whom, how much | Task 4; rendering per adapter in Task 5 |
 | [Roles](#8-roles-and-permissions) | `roles.py` | what each person may do: roles with a base tier, permissions declared by plugins, settings per role, approval mode per role; always present, empty by default (owner free, everyone else only talks) | Task 4 |
 
 **What the middleware itself offers.** Only commands and tools that regulate the middleware:
-`share` (privacy), pairing and later `/link` (identity), budget and quiet-hour settings and
+`share` (privacy), pairing, `/link` and `/unlink` (identity), budget and quiet-hour settings and
 approval answers (policy), `/help`, `/plugin` (registry, loader), `/reload` (loader),
 `/whoami` and `/whois` (identity), switching what is shown (interaction), `/role` and
 `/roles show` (roles). They are gated by permissions like any tool (§8). Anything
@@ -84,7 +84,7 @@ The one middleware that is always present.
   refuses to run without this policy (fail-closed, D57).
 - **Private content (absolute line 2, D45).** Privacy follows people, not places. In the inbound
   hook the policy labels every line with its audience: the people present where it was said,
-  after the alias map, fixed at that moment (D50), so a newcomer never receives what was said
+  after the account map, fixed at that moment (D50), so a newcomer never receives what was said
   before they arrived. Whether a place is direct or shared comes from the adapter
   (`place_kind`), never from the shape of an id (D48). A private item may enter a context only if
   every person who will see the result is in its audience, or the context is the owner's direct
@@ -236,13 +236,36 @@ version: 1
 Steps …
 ```
 
-## 7. Identity (alias map, owner, person cards)
-- Maps every native account (`telegram:123`, `whatsapp:628…`) to one person id in the inbound
-  hook; the core never sees raw accounts (D10).
-- Every mapping is an event and can be undone. Only the owner, or the person via a verification
-  code sent from the second account, may link two accounts; the soul may suspect and ask the
-  owner, never links silently, because linking makes two accounts one person, and private
-  context then follows that person across adapters (D10, D45). A wrong link is a privacy leak.
+## 7. Identity (account map, owner, person cards)
+**One person, one id** (D65). The core never sees an account, only a person id (D10, D57).
+- **The account map** (`state: alias:<account>` → person id): the inbound hook maps every native
+  account an adapter reports (`telegram:123`, `whatsapp:628…`) to a person id, in `who` and in
+  `data.mentions` / `data.reply_to.who`. No account is an alias of another account.
+- **Registration is automatic.** An account seen for the first time — as sender, mentioned, or
+  the author of a quoted message — gets a new opaque person id (`person:p_7f3a`) on the spot,
+  recorded as `identity.registered {account, person}`. Members of a group who never appear in a
+  percept are not registered. One account has one id (a unique constraint), so two percepts
+  racing cannot create two. The owner's id is always `person:owner`.
+- **Linking is a merge.** Linking two accounts of one person merges their two person ids into
+  the **older** one (`person:owner` always wins): every account of the younger id now maps to the
+  older, recorded as `identity.merged {from, into}`, and the middleware puts the core's
+  `source.merged {from, into}` so the soul's own memory of both becomes one
+  ([core.md §8](core.md)). The log is never rewritten; reads follow the merge.
+- **Who may link.** The owner (`/link <account|person|name> <account|person|name>`), or the
+  person themselves: `/link` from account A gives a six-digit code (single use, valid 10 minutes,
+  three tries); the same code sent as `/link <code>` from account B merges B into A's person.
+  The owner links his own accounts the same way. The soul may suspect and ask the owner; it has
+  no tool that links. Linking makes private context follow the person across adapters (D45), so
+  a wrong link is a privacy leak.
+- **Unlinking** (`/unlink <account>`, by the owner or the person) gives that account a new person
+  id from now on, recorded as `identity.unlinked`. What was merged stays merged: the soul's memory
+  is not split again, and what the account already saw cannot be taken back. `/link` says so
+  before it merges.
+- **Roles after a merge**: the `people:` entry of the younger id keeps applying until the owner
+  moves it; the boot report names it and suggests the surviving id (§8).
+- **The account shared with the owner** (D66, [adapters.md §6](adapters.md)): when an adapter's
+  own account (`self_account`) maps to the owner, identity adds one neutral context line for that
+  adapter: speaking in someone else's chat there speaks through the owner's account.
 - **Becoming the owner** (D33). On first start the soul shows a short pairing code; the first
   person who sends it from any adapter becomes the owner. Changing the owner later needs the
   current owner. The core never knows who the owner is; the owner policy does.
@@ -258,7 +281,11 @@ Steps …
   is one, never to the group.
 - **`/whois <name or account>`**: another person's id, label and linked accounts; permission
   `identity.whois`.
-- Linking accounts arrives with the second chat app (Task 5).
+- **Places** (D68): identity keeps the place info each adapter reports
+  ([adapters.md §3](adapters.md)) — name, `form`, `parent`, `can_post`, platform role facts — for
+  `/whoami`, person cards, routes (`to:` a place where `can_post` is false is refused with its
+  reason) and role mapping (§8). The core sees none of it.
+- Linking arrives with WhatsApp and Discord (Task 5 Part 1).
 
 ## 8. Roles and permissions
 `roles.py` answers **what this person may do**; `policy.py` turns that into pass, ask or refuse
@@ -300,9 +327,9 @@ their permissions to the bases automatically).
   - `label` is for people reading the file or a panel; the soul's name for the person stays in
     identity. `/whois <name or account>` shows the id and its linked accounts.
   - No `allow`, `deny` or `settings` per person: those come only from roles.
-  - An unknown id is reported at boot and ignored; after two accounts are linked, the old id
-    stays an alias in identity, so its entry still applies and the boot report suggests the
-    new id.
+  - An unknown id is reported at boot and ignored; after a merge (§7) the younger id's entry
+    still applies to the merged person, and the boot report suggests moving it to the
+    surviving id.
 - **Context on person cards**: through the context hook each person present gets one line per
   role's `context`, then their own `context`, in the volatile part, within a per-card length
   cap. It is for the soul to understand who it is talking with, not something to announce.
@@ -328,30 +355,72 @@ their permissions to the bases automatically).
   source (manifest, `config.d/` or `config.yaml`).
 - Role facts reported by a platform ("admin of this group") are recorded as facts about that
   person, so the soul's social understanding can use them; they grant nothing by themselves
-  (D31). Mapping Discord's own roles arrives in Task 5.
+  (D31).
+- **Platform roles mapped by the owner** (D68): a role may name the platform roles that give it,
+  `moderator: { base: member, discord_role: ["<server id>/<role id>"] }` (ids, not names, since
+  names change). The adapter reports the Discord role ids a person holds with each percept;
+  `roles.py` reads them when it decides, so a role taken away on Discord is gone at once. A
+  mapped role holds **only in places whose `parent` chain reaches that server**, never in a DM
+  or on another adapter. A Discord role grants nothing until the owner maps it.
 - No permission overrides the two absolute lines or buys dishonesty (D24, D31). Scoping a
   permission to one group ("admin only inside toko A") is not supported; a place override
-  covers the common case.
+  covers the common case. The one exception is a mapped platform role, scoped to its server by
+  construction.
 
 ## 9. Interaction
 What the soul shows people besides its messages, and approvals asked and answered. Three parts,
 three places:
 - **The core records, and changes nothing.** Everything needed is already an event (`job.started`,
   `think`, `act.out`, `act.result`); thinking and tool steps are never plugins.
-- **`interaction.py` decides** what is shown, to whom and how much. Defaults: thinking only to
-  the owner in the owner's direct chat, never in a shared place; tool steps only for work that
-  takes long; an approval asks the person the policy names. The owner switches these with a
-  command that writes `config.yaml` → `interaction:` (§5). Everything shown passes the audience check of `privacy.py` first: a thought can hold
-  private content.
+- **`interaction.py` decides** what is shown, to whom and how much, from the settings below.
+  Everything shown passes the audience check of `privacy.py` first: a thought can hold private
+  content.
 - **The adapter renders**, its own way: WhatsApp's "typing…", an edited Telegram message,
-  buttons on Telegram, reactions on WhatsApp. An approval answer (a click, a reaction) comes
-  back as an ordinary event to the middleware.
+  buttons on Discord and Telegram, reactions on WhatsApp. An approval answer (a click, a
+  reaction) comes back as an ordinary event to the middleware.
 
-**What an adapter can show** is declared at boot in the vocabulary of `contract.py` (typing,
-edit message, buttons, reactions, …), like V1 ADR-0018's optional parts and the channel matrix
-of chat frameworks. A missing capability is never a silent no-op: `interaction.py` picks the
-fallback it knows (no buttons → "reply yes or no" as text; no typing → nothing), so what is lost
-is a choice, visible in the code and the boot report.
+**Settings** (D70). Defaults live in `interaction.py`; `config.yaml` → `interaction:` sets them
+for every adapter; `bodies.<adapter>.show:` overrides them for one adapter. `/show <name>
+<value> [adapter]` writes the line (§5); a value the adapter cannot show is refused with the
+reason.
+
+```yaml
+interaction:                 # for every adapter; /show writes these lines
+  thinking: owner_direct     # off | owner_direct (the owner's direct chat only) | all
+  steps: long                # off | long (work that takes long) | all
+  approvals: owner           # who is asked: the person the policy names
+bodies:
+  whatsapp:
+    enabled: true
+    show:                    # optional; overrides interaction: for this adapter only
+      typing: on             # on | off
+      read_receipts: on      # on | off
+      progress: edit         # edit (one message, updated) | new (a message per step)
+      stickers: on           # on | off (off → the sticker's emoji)
+```
+
+- **Thinking.** `owner_direct` shows thoughts only in the owner's direct chat. `all` shows them
+  in every place, but each thought still passes `privacy.visible` for that place: a thought that
+  holds content its audience may not see is not shown there.
+- **Typing** shows only when the soul is going to speak: from the moment a reasoning result
+  carries a communicative act until the last message of it is delivered (the extra wake for
+  speaking elsewhere included). Appraisal and a reasoning that ends silent show nothing. Work
+  before an answer is shown by `steps`, not by typing. No artificial delay.
+- **Read receipts** mark a message read once the soul has processed it (its decision is
+  recorded, whether it spoke or stayed silent). Never for imported or back-filled percepts
+  ([adapters.md §5](adapters.md)). On an account shared with the owner
+  ([adapters.md §6](adapters.md)), only in places where the soul has spoken since the message,
+  so the owner keeps the unread marks on the phone.
+- **Steps and progress**: with `progress: edit` one message is updated per step; an adapter
+  without `edit` falls back to `new`.
+
+**What an adapter can show** is declared at boot in `contract.SHOWS` (typing, read receipts,
+edit, delete, reply, reactions, buttons, menus, polls, stickers, embeds, threads;
+[adapters.md §4](adapters.md)), like V1 ADR-0018's optional parts and the channel matrix of chat
+frameworks. A missing capability is never a silent no-op: `interaction.py` picks the fallback it
+knows (approval: buttons → reactions → "reply yes or no" as text; progress: edit → new message;
+sticker → its emoji; no typing → nothing), so what is lost is a choice, visible in the code and
+the boot report.
 
 ## 10. Attachments
 Files that arrive with a message or leave with one, any number per message. The core never
@@ -365,8 +434,14 @@ reads them: they ride in a percept's `data` and in an act's arguments (D61).
   chat opens or goes on to someone else only after `share`. The same file sent in several places
   is one stored file: `open` allows it when any non-forgotten event carrying it is visible to the
   requester. The file is deleted when no such event remains (hard forgetting included).
+- **Deferred refs** (D69): an adapter may put a file without its bytes (`put_deferred(name,
+  mime, size, locator) → ref`) for imported and back-filled media; the first `open` that passes
+  the privacy check asks that adapter to fetch it (`fetch(locator)`), stores the bytes and
+  returns them. A fetch that fails is an honest error; the ref stays and may be tried again.
+- **Stickers** are attachments like any file; `say`'s `sticker: ref` sends one the soul has
+  received ([adapters.md §4](adapters.md)), through the same privacy check as any forwarded file.
 - **Reading**: Workspace's `read` takes a `ref`, through the same readers as any file
-  ([plugins.md §5.3](plugins.md)).
+  ([plugins.md §5.3](plugins.md)). Images and stickers are opened only when reasoning chooses to.
 - **Sending**: an adapter's send tool takes `attachments: [ref, …]`. The adapter declares how
   many files per message, the largest size and the types it supports; when it can send fewer
   than asked, `interaction.py` splits them into several messages and says so. The policy's

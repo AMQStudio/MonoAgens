@@ -51,6 +51,13 @@ runtime:
 bodies:                             # adapters (the key keeps its name); non-secret options only; tokens in .env
   telegram: { enabled: true }
   cli: { enabled: true }
+  whatsapp:
+    enabled: true
+    show: { read_receipts: on, progress: edit }   # optional; overrides interaction: (middleware.md §9)
+interaction:                        # what the soul shows, for every adapter; /show writes these lines
+  thinking: owner_direct            # off | owner_direct | all
+  steps: long                       # off | long | all
+  approvals: owner
 plugins:                            # which plugins are on; their settings live in config.d/<name>.yaml
   workspace:   { enabled: true }
   web-search:  { enabled: true }
@@ -60,6 +67,7 @@ roles:                              # middleware.md §8; empty = owner free, eve
   unverified: { base: guest,  label: "Unverified", context: "Not known yet; be kind, share nothing about the owner." }
   customer:   { base: guest,  label: "Customer",   context: "A shop customer; help with products and orders." }
   member:     { base: member }
+  moderator:  { base: member, discord_role: ["<server id>/<role id>"] }   # held only in that server (D68)
   runner:     { allow: [workspace.run] }             # a small role for an exception
   toko-a:     { label: "Toko A", settings: { workspace.shared: toko-a } }   # a group role: no base
 people:                             # optional; keyed by person id; the only record of who holds which role

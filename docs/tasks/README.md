@@ -15,7 +15,7 @@ before Task 3 name files by their earlier names; the [glossary](../glossary.md) 
 | 2 | [Core: launch](2-core-launch.md) | **done** — 321 tests, fake 133 checks, violations 0; 16 and 30 flaky; 20, 22 run in Task 3 | Task 1 |
 | 3 | [Core: clean refactor](3-core-refactor.md) | **done** — 336 tests, fake 133/133, violations 0; core imports no middleware; 22/26 real, 09 and 23 flaky, 24 open | Task 2 |
 | 4 | [Middleware and first plugins](4-middleware-plugins.md) | **done** — 539 tests, fake 133/133, launch set 24/26 (Task 3: 22/26), sandbox 53/53 real, honesty counts claims; 5.1–5.3 moved to Task 6; loop in 19 and leaks vs desk carried to Task 5 0.0 | Task 3 |
-| 5 | [Adapters: WhatsApp, Discord and more](5-adapters.md) | **next** — Part 0A providers (model port, OpenCode Go, fallback, new baseline), 0B the loop, brakes, one privacy truth, 0C full outputs, progress note, the two-day paper; then WhatsApp and Discord | Task 4 |
+| 5 | [Adapters: WhatsApp, Discord and more](5-adapters.md) | **next** — Part 0A providers (model port, OpenCode Go, fallback, new baseline), 0B the loop, brakes, one privacy truth, 0C full outputs, progress note, the two-day paper; then Part 1: one id per person and linking as a merge, places, WhatsApp (full import), Discord, what is shown, Discord roles (D65–D70) | Task 4 |
 | 6 | [Core: depth of mind](6-core-mind.md) | todo — last, after weeks of daily use | Task 5 and some weeks of daily use |
 | 7 | [First users and release](7-release.md) | todo | Task 6 |
 

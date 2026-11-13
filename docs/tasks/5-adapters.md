@@ -5,8 +5,8 @@ One task = one worker prompt, done by one worker. Work through the parts **in or
 
 **Goal.** The soul is usable every day: model providers as drivers with a fallback, the loop
 and privacy fixes, nothing lost when work continues; then one soul across WhatsApp, Discord and
-Telegram with linked identities so privacy follows people; then voice, a non-chat adapter and
-more provider drivers.
+Telegram with one id per person so privacy follows people, each adapter using everything its
+platform offers; then voice notes, a non-chat adapter and more provider drivers.
 
 ---
 
@@ -39,32 +39,80 @@ May touch: `monoagens/middleware/`, `monoagens/infra/` (attachment store), `plug
 - [ ] C.2 Workspace progress note (plugins.md §5.3): the standing rule for work of more than a few steps; `progress.md` in the workspace, updated after each step, read first on resuming.
 - [ ] C.3 Scenario "paper over two days" (D54, all material in the scenario): (1) the owner asks to write a paper; (2) asks for a revision; (3) asks to send it to Budi (consent and file forwarding apply); (4) says "continue tonight" (an expectation with a time); **the process is restarted mid-work** before tonight; (5) the next day asks for a new paper in the same format. Checks: the work resumes from the right step after the restart (progress.md and `<doing>`), tonight's expectation fires once, the next day's paper follows the earlier format found in the workspace, nothing is claimed as done without its result, and every long output is reachable through its ref. Fake replay first, then the real model once with B.4's run.
 
-## Part 1 — Identity linking, WhatsApp and Discord
-Read first: [adapters.md](../adapters.md), [middleware.md](../middleware.md) §7 (identity), [core.md](../core.md) §4, §8
-May touch: `monoagens/adapters/`, `monoagens/middleware/` (identity part), `monoagens/infra/providers/` (speech only), `tests/`, `scenarios/`
+## Part 1 — Identity, places, WhatsApp and Discord
+Read first: [adapters.md](../adapters.md) (all), [middleware.md](../middleware.md) §7 (identity), §8 (platform roles), §9 (interaction), §10 (attachments), [core.md](../core.md) §4 (history and import), §8 (two ids become one), §9.2
+May touch: `monoagens/adapters/`, `monoagens/middleware/` (identity, interaction, roles, contract), `monoagens/infra/` (attachment store: deferred refs), `config.yaml`, `tests/`, `scenarios/`, `scripts/replay.py`; `monoagens/core/` only for `source.merged` (1.1) and `imported` (1.3), and only after the plan names the files (`kernel.py` or `store.py` included only if named)
 
-V1 (branch `archived`) already has working WhatsApp (media, history sync, identity), Discord,
-Slack and speech provider code under `monoagens/gateways/` and
+V1 (branch `archived`) already has working WhatsApp (neonize: media, history sync, identity,
+directory), Discord (discord.py) and speech provider code under `monoagens/gateways/` and
 `monoagens/providers/`. Port it to the adapter contract of Task 4 instead of starting over; leave
 its per-gateway policy and roles out, since policy lives in the middleware. Model providers were
-ported in Part 0A.
+ported in Part 0A. Decisions: D65 one person one id, D66 an account shared with a person, D67
+native first, D68 places, D69 back-fill and import, D70 what is shown.
 
-Linking comes first: it is what lets a person's private context follow them (D45), so a wrong
+Identity comes first: it is what lets a person's private context follow them (D45), so a wrong
 link is a leak.
 
-- [ ] 1.1 Identity linking (`/link`): the owner links accounts, or the person confirms with a verification code sent from the second account; every link is an event and can be undone; the soul may suspect and ask, never link silently.
-- [ ] 1.2 WhatsApp with `history` and back-fill on connect; receiving and sending several files per message through the attachment store (middleware.md §10): refs in `data.attachments`, a description that sums them up, declared limits per message.
-- [ ] 1.3 Discord, with several attachments per message (middleware.md §10).
-- [ ] 1.3b Interaction rendering (middleware.md §9): WhatsApp and Discord declare what they can show and render typing, tool steps and approvals their own way (WhatsApp: "typing…", approval by reaction; Discord: typing, buttons); the decisions stay in `interaction.py`.
-- [ ] 1.3c Roles from Discord: map Discord's own roles of a server to roles in `roles.py` (middleware.md §8) in the role definitions (e.g. `discord_role:` on a role), not per person; a Discord role grants nothing until the owner maps it.
-- [ ] 1.4 Check: one conversation continues across WhatsApp, Discord and Telegram; a person's private context follows them only after a verified link; a file received on WhatsApp can be read and sent on.
-- [ ] 1.5 Real-model test (this task's one exception to the last-part rule, because WhatsApp is needed daily): the replay launch set passes on the new adapters, then a live session on WhatsApp in the owner's direct chat and one group (the model in `.env`; never read or print it). Report what happened and the metrics. From here the owner uses the soul daily on WhatsApp.
+- [ ] 1.0 Accounts in, person ids out (D65): adapters report native accounts (`telegram:123`,
+  never `person:tg:123`); the inbound hook maps `who`, `data.mentions` and `data.reply_to.who`
+  through the account map and registers an unknown account at once (`identity.registered`,
+  `person:p_<random>`, one id per account under a unique key); the owner stays `person:owner`.
+  Existing development data uses the old ids: ask the owner whether to convert it once or reset
+  the development database, before doing either. Test: a new account gets one id, two racing
+  percepts of it get the same id, a mention is mapped, the core sees no account.
+- [ ] 1.1 Linking as a merge (D65, middleware.md §7, core.md §8): `/link` by the owner and by
+  code (single use, 10 minutes, three tries), `/unlink`; `identity.merged` into the older id
+  (`person:owner` always wins); the middleware puts `source.merged` and the core applies it to
+  its own books as core.md §8 says, reads of the log following the merge. Tests: two ids with
+  history merge into one card and one memory, `recall` finds both sides, audience labels of old
+  lines follow the merge, a wrong or expired code links nothing, `/unlink` gives a new id from
+  then on and splits nothing, the soul has no tool that links.
+- [ ] 1.2 Places (D68, adapters.md §3): place info with `form`, `parent`, `can_post`, `name`,
+  `members` and platform role facts, kept by identity; Telegram reports it first (private chat,
+  group, forum topic as `thread`, channel as `broadcast`). Test: a send to a place where
+  `can_post` is false is refused with its reason; `/whoami` shows the place's form and parent.
+- [ ] 1.3 WhatsApp (neonize, adapters.md §4–§6): one stable form per account (LID and phone
+  number are one account); everything in as percepts (text, replies, mentions, edits,
+  deletions, reactions, stickers, locations, contact cards, polls, view-once, albums as one
+  percept with several attachments, group events); out through `say` (attachments, reply_to,
+  mentions, sticker), `react`, `edit`; the shared account told apart by message ids in the Log
+  (D66); full history import with `imported: true` (core: never appraised as a wake, summarized
+  by sleep only for places that become active) and back-fill on reconnect; media as deferred
+  refs, fetched on open, with a re-upload request when the link expired; WhatsApp Channels as
+  `broadcast`, Communities as `parent`. Tests: an import of 2,000 messages in 40 chats makes no
+  model call; a message typed on the owner's phone is a percept from the owner and the soul's
+  own message is not; an album of three photos is one percept; a deferred photo opens once
+  fetched.
+- [ ] 1.4 Discord (discord.py, adapters.md §4): servers as `parent`, channels, threads, DMs;
+  everything in as on WhatsApp; buttons and menus drawn by the adapter, interactions
+  acknowledged within 3 s by deferring inside the adapter; several attachments per message;
+  the Discord role ids of the sender reported with each percept.
+- [ ] 1.5 What is shown (D70, middleware.md §9): `contract.SHOWS` with the full vocabulary;
+  settings from `interaction:` and `bodies.<adapter>.show:`; `/show <name> <value> [adapter]`;
+  thinking `off | owner_direct | all` (all still passes `privacy.visible` per thought); typing only
+  when the soul is going to speak (replace Task 4's rule that also shows it for long actions);
+  read receipts after the decision is recorded, never for imported or back-filled percepts, and
+  on an account shared with the owner only where the soul has spoken since; progress by edit or
+  new message; the fallbacks in the code and the boot report (approval: buttons → reactions →
+  text; sticker → emoji). The decisions stay in `interaction.py`; adapters only draw. Test per
+  setting; a silent decision shows no typing.
+- [ ] 1.6 Roles from Discord (D68, middleware.md §8): `discord_role:` on a role, by ids; held only
+  in places whose `parent` chain reaches that server; a role taken away on Discord is gone at the
+  next percept; an unmapped Discord role grants nothing. Test: the same person is a moderator in
+  the server's channel and not in a DM or on WhatsApp.
+- [ ] 1.7 Check: one conversation continues across WhatsApp, Discord and Telegram; a person's
+  private context follows them only after a verified link; a file received on WhatsApp can be
+  read and sent on; a sticker received can be sent back.
+- [ ] 1.8 Real-model test (this task's one exception to the last-part rule, because WhatsApp is
+  needed daily): the replay launch set passes on the new adapters, then a live session on
+  WhatsApp in the owner's direct chat and one group (the model in `.env`; never read or print
+  it). Report what happened and the metrics. From here the owner uses the soul daily on WhatsApp.
 
 ## Part 2 — More adapters and models
 Read first: [adapters.md](../adapters.md)
 May touch: `monoagens/adapters/`, provider adapters, `tests/`, `scenarios/`
 
-- [ ] 2.1 Voice (STT/TTS).
+- [ ] 2.1 Voice notes (STT/TTS); calls later, on the adapters that support them.
 - [ ] 2.2 First non-chat adapter (a game such as Minecraft, an IoT device or a robot simulation) with its own reflexes inside the adapter.
 - [ ] 2.3 More provider drivers in `infra/providers/` (Part 0A's port): native Claude (prompt caching), native Gemini, DeepSeek; optional separate models for sleep and the classifier.
 - [ ] 2.4 Check: a non-chat adapter senses and acts through the same contract; switching provider is a `.env` change (`LLM_PROVIDER`).

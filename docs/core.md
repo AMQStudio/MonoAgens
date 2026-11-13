@@ -84,7 +84,7 @@ tests against the map, never new rows.
 **One turn of the loop.**
 1. Take one event from the queue (one consumer).
 2. Record it and update state in one transaction; release the intake ack; embed its text.
-3. **Inbound hook** (alias map, commands, owner policy). A Stop ends the turn (recorded).
+3. **Inbound hook** (account map, commands, owner policy). A Stop ends the turn (recorded).
 4. Check Expectations (time path on ticks, event path on events) through the wake gate.
 5. **Appraise** without any model call: the circuit breaker on commitments, or signals →
    salience → threshold → draw.
@@ -113,8 +113,8 @@ tests against the map, never new rows.
   leave only by fading or hard forgetting, each through one dedicated path that writes an event.
 - `state` — a namespaced key/value projection that can be rebuilt from events: `identity`,
   `last_seen:*`, `last_spoke:*`, `core_memory`, `self_summary`, `habit:*`, `person:*`,
-  `alias:*`, `credence:*`, `cognition:weights`, `cognition:dispositions`, `budget:<date>`, and
-  `<plugin>:*` namespaces.
+  `alias:*`, `merged:*`, `credence:*`, `cognition:weights`, `cognition:dispositions`,
+  `budget:<date>`, and `<plugin>:*` namespaces.
 - `expectations` — §5. `memories` — §7.
 
 **One door, one language, one way to remember** (D41). Everything that reaches the brain is an
@@ -187,7 +187,7 @@ user-space ABI:
 **Event kinds** (each with a `schema_version`; plugins use `<plugin>.<kind>`, where `<plugin>` is the plugin's name with `-` written as `_`, since event kinds hold no hyphen). percept · command · act.out · act.result · decision.silent · decision.note ·
 decision.wake · model.call · budget.exhausted · expectation.created · expectation.fired ·
 expectation.reminded · expectation.resolved · job.started · job.result · classifier.verdict · credence.updated ·
-disposition.updated · share.granted · task.opened · task.closed · guard.stopped · forget.soft · forget.hard · fade.done · sleep.done ·
+disposition.updated · share.granted · source.merged · task.opened · task.closed · guard.stopped · forget.soft · forget.hard · fade.done · sleep.done ·
 sleep.failed · error.
 
 **The model port** (D64). Reasoning builds neutral messages and tools and calls one injected
@@ -253,7 +253,10 @@ replay metric.
 messages the log lacks. On connect it back-fills what it missed as `percept` with
 `backfill: true` and `sent_at`. A backlog of one place is appraised once, as one percept with
 every signal discounted by age (ACT-R decay); an addressed message still trips the circuit
-breaker.
+breaker. History from before an adapter was connected is an **import** (D69): percepts with
+`imported: true` are recorded, embedded and searchable through `recall`, but are never appraised
+as a wake, never trip the circuit breaker, and are summarized by sleep only for places the soul
+later becomes active in, so a long imported history costs no model calls until it matters.
 
 **The `self` tool** (D37, D38) is the only tool inside the core. It offers one
 non-communicative capability, `recall(query | event_id, place?, from?, to?)`: a deeper search of
@@ -379,9 +382,9 @@ valid_to · superseded_by · derived_from · created_at · last_accessed_at · u
     "I don't know";
   - absence is weighed by coverage; gaps are filled with `inferred` hypotheses said as guesses.
 - **Sleep** (D27, D31; a gated background job, only on new conversational events; failures back
-  off). Summarize new events per place into memories with `derived_from`; update person cards
-  (closeness from interaction activation; reliability per domain as α/β), core memory and
-  `self_summary`; distill lessons and procedures (generic → layer 2 with credence, person- or
+  off; imported percepts count only in places the soul has become active in, D69). Summarize new
+  events per place into memories with `derived_from`; update person cards (closeness from
+  interaction activation; reliability per domain as α/β), core memory and `self_summary`; distill lessons and procedures (generic → layer 2 with credence, person- or
   place-specific → layer 3); check `guard` beliefs; drop expired Expectations; fade vectors.
 - **Belief maintenance** (D40). A contradiction of a belief is a prediction error weighted by
   precision (the belief's credence × the new source's reliability): relevant now → reasoning sees
@@ -418,8 +421,20 @@ group or a role is. It carries:
 - **numbers** — what the gate needs, such as how many distinct sources are active in a place and
   whether a line is addressed.
 What the soul learns about a source in sleep (closeness, reliability: theory of mind) is its own
-memory, kept under that opaque id. Everything that gives ids and labels a meaning — people and the
-alias map, the owner and pairing, audience, privacy, consent, routes, names and where someone can
+memory, kept under that opaque id.
+
+**Two ids become one** (D65). When the middleware finds that two source ids are one source, it
+puts `source.merged {from, into}` (as it puts `share.granted`); the core never knows why. The core
+applies it to its own books, generically: `state: merged:<from>` records `into`; the `person:`
+card of `from` folds into `into` (closeness the higher, reliability counts added); `habit:*`,
+`last_seen:*` and open threads move to `into`; `who` and `source_who` in `memories` and `who` in
+`expectations` are rewritten to `into`. The log is never rewritten: every read of the log by
+source (recall, working memory, habits, cards) treats `from` as `into`. Merges are not undone:
+a later split only starts a new id from then on, and what was merged stays one memory. This is
+an event kind, not a primitive; the complexity budget is unchanged.
+
+Everything that gives ids and labels a meaning — people and the
+account map, the owner and pairing, audience, privacy, consent, routes, names and where someone can
 be reached — is middleware ([middleware.md](middleware.md) §3, §7).
 
 **Two absolute lines** ([constitution.md](constitution.md) §5), held deterministically by the
@@ -500,7 +515,7 @@ for every sense.
 ```yaml
 kind: percept
 body: telegram              # adapter name (the field keeps its name)
-who: telegram:123           # opaque to the core; the inbound hook may map it (alias map)
+who: telegram:123           # the native account; the inbound hook maps it to one id per person (D65)
 place: telegram:chat:-100   # native space id; becomes a neutral place
 addressed: false            # the turn is allocated to the soul (direct chat, reply, tag)
 place_kind: shared          # optional (D48), a label for the middleware: direct (only this one person can perceive it) |
@@ -511,6 +526,8 @@ description: "Budi: anyone know where the meeting is?"   # short, in language; w
 data: { message_id: 812 }   # optional raw data for adapters or plugins; never interpreted by the core
 sent_at: 2026-11-11T13:20:05+07:00   # optional; the sense's own clock (back-fill)
 backfill: false             # true when an adapter catches up on what it missed
+imported: false             # optional (D69); true for history from before the adapter was connected:
+                            # recorded and searchable, never a wake
 ```
 
 Other senses use the same shape: `description: "kitchen temperature 31 °C"` with

@@ -22,6 +22,9 @@ the notes of Tasks 1–2, the earlier biological names appear; this table maps t
 | — | **tier role / group role** | A role with a `base` (how much) / without one (where a person belongs). |
 | — | **base** (Workspace) | The one shared, read-only system tree of the sandbox. |
 | — | **shared folder** (Workspace) | A work folder several people may use, named by a role setting. |
+| — | **account** / **person id** | A native account an adapter reports (`whatsapp:628…`) / the one opaque id of a person across accounts (`person:p_7f3a`), registered automatically; linking merges two person ids into the older (D65). |
+| — | **place info** | What an adapter reports about a place besides `place_kind`: name, `form` (chat, group, broadcast, thread), `parent`, `can_post`, platform role facts (D68). |
+| — | **back-fill / import** | Messages an adapter missed while offline (`backfill`) / history from before it was connected (`imported`, never a wake) (D69). |
 | — | **format version** | `version:` in an owner's YAML file, `manifest_version:` in a plugin manifest (D58). |
 
 ## What never changes with a rename
