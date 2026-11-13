@@ -79,7 +79,7 @@ adapter is a special case.
 - [ ] 1.3 WhatsApp (neonize, adapters.md §4–§6): one stable form per account (LID and phone
   number are one account); everything in as percepts (text, replies, mentions, edits,
   deletions, reactions, stickers, locations, contact cards, polls, view-once, albums as one
-  percept with several attachments, group events); out through `say` (attachments, reply_to,
+  percept with several attachments, calls as percepts (incoming, missed, ended), group events); out through `say` (attachments, reply_to,
   mentions, sticker, choices, thread, location), `react`, `edit`; the shared account told apart by message ids in the Log
   (D66); full history import with `imported: true` (core: never appraised as a wake, summarized
   by sleep only for places that become active) and back-fill on reconnect; media as deferred
@@ -100,7 +100,7 @@ adapter is a special case.
   contract test of adapters.md §4 run over every adapter (Telegram, CLI, WhatsApp, Discord);
   each gap is declared with its reason (Telegram: no history, no read receipts). `say`'s
   neutral fields (`choices`, `thread`, `location`) work on every adapter through its best native
-  form or the fallback. Platform-only actions (pin, Discord role management, …) are adapter-own
+  form or the fallback. Platform-only actions (pin, reject a call, Discord role management, …) are adapter-own
   tools, off by default, offered only when listed under `bodies.<adapter>.tools:`; test that an
   unlisted one is not in the prompt.
 - [ ] 1.5 What is shown (D70, middleware.md §9): `contract.SHOWS` with the full vocabulary;
@@ -130,7 +130,8 @@ adapter is a special case.
 Read first: [adapters.md](../adapters.md)
 May touch: `monoagens/adapters/`, provider adapters, `tests/`, `scenarios/`
 
-- [ ] 2.1 Voice notes (STT/TTS); calls later, on the adapters that support them.
+- [ ] 2.1 Voice notes (STT/TTS). Voice calls wait for a mature, widely released calling library
+  (project.md §5); until then a call stays a percept and the soul answers in chat.
 - [ ] 2.2 First non-chat adapter (a game such as Minecraft, an IoT device or a robot simulation) with its own reflexes inside the adapter.
 - [ ] 2.3 More provider drivers in `infra/providers/` (Part 0A's port): native Claude (prompt caching), native Gemini, DeepSeek; optional separate models for sleep and the classifier.
 - [ ] 2.4 Check: a non-chat adapter senses and acts through the same contract; switching provider is a `.env` change (`LLM_PROVIDER`).

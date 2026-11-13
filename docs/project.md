@@ -125,3 +125,12 @@ not hidden.
 ## 5. Later ideas (not scheduled)
 - A small learned classifier for the gate from recorded decisions (> 10k labeled).
 - Multi-process deployment (inbox table with `FOR UPDATE SKIP LOCKED`).
+- **MCP Connect** as a plugin: each MCP server the owner installs (`config.d/mcp.yaml`, `/plugin`)
+  becomes a source of tools in the registry, which already follows MCP's pattern of tools,
+  prompts and resources ([middleware.md §4](middleware.md)). Every MCP tool declares facts and a
+  permission like any tool and passes the same policy and approval modes; an outside server never
+  bypasses them.
+- **Voice calls** on chat adapters, once a mature library for the platform is widely released
+  (for WhatsApp, a linked-device calling stack such as meowcaller on top of whatsmeow, which would
+  run as a Go sidecar and needs the owner's approval as a dependency): call audio → STT → the soul
+  → TTS → call audio, as a `long_running` act ([adapters.md §7](adapters.md)).

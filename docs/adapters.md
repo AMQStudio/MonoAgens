@@ -108,8 +108,8 @@ a change (renamed, member joined or left, role changed).
 ## 4. Native: what goes in and what comes out (D67)
 **In: everything the platform delivers becomes a percept.** Text, replies and quotes,
 mentions, edits, deletions, reactions by others, stickers, locations, contact cards, polls and
-votes, view-once media, any number of files, and place events (joined, left, renamed, role
-changed). Each becomes a short `description` plus raw `data`:
+votes, view-once media, any number of files, calls (incoming, missed, ended: "Budi called, not
+answered"), and place events (joined, left, renamed, role changed). Each becomes a short `description` plus raw `data`:
 - a reaction by someone else on the soul's own message is `addressed`;
 - an edit is a new percept with `data.edits: <message id>` ("Budi edited: …");
 - a deletion is a percept with `data.deletes: <message id>` ("Budi deleted a message"); the
@@ -136,7 +136,8 @@ the same on every adapter, drawn the best way each platform allows:
 Progress messages, typing, read receipts and approval prompts are not the soul's: the
 middleware's `interaction.py` decides them and the adapter draws them.
 
-**Platform-only actions** (pin a message, manage a Discord role, set a group's description, …)
+**Platform-only actions** (pin a message, reject a call, manage a Discord role, set a group's
+description, …)
 are not neutral and are rarely needed. An adapter may offer them as its own tools, each with its
 facts and permission like any tool; they are **off by default** and offered to reasoning only
 when the owner lists them under `bodies.<adapter>.tools:`, so they never weigh on the prompt of a
@@ -199,7 +200,8 @@ tells the two apart itself:
 | CLI | present; native in Task 5 | Unix socket inside the main process, thin client; text, files by path, reply; typing and progress as status lines; buttons as numbered choices; declared gaps for the rest |
 | WhatsApp | next (Task 5) | ported from V1 on neonize (a linked device); own or owner's number (§6); full history import (§5); files, stickers, polls, reactions, edits; no buttons, so approvals by reaction |
 | Discord | next (Task 5) | ported from V1 on discord.py (message content intent); servers, channels, threads, DMs; buttons and menus (an interaction is acknowledged within Discord's 3 s by deferring, inside the adapter); role mapping (§3) |
-| Voice notes and calls | later | STT in, TTS out; description = transcript; the contract keeps room through `long_running` acts |
+| Voice notes | Task 5 Part 2 | STT in, TTS out; description = transcript |
+| Voice calls | later | waits for a mature calling library to be widely released (WhatsApp: whatsmeow and neonize only see and reject calls; a calling stack such as meowcaller is still experimental and Go-only); then call audio ↔ STT/TTS as a `long_running` act ([project.md §5](project.md)). Until then a call is a percept and the soul answers in chat |
 | IoT device / robot sim | **Draft** | first non-chat adapter; sensor readings as described percepts |
 
 Tools (search, files, email) are in the [plugin catalog](plugins.md). Model providers are not
