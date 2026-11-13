@@ -46,7 +46,7 @@ May touch: `monoagens/contract/` (new), `contract.lock` (new), `tests/contract/`
   as a test over the source tree; today's violations are listed in
   `tests/architecture/baseline.yaml` (file, line, ban). The test fails on a new violation **and**
   on a listed one that no longer exists, so the list can only shrink. It must be empty by 6.4.
-- [ ] 1.4 The five fake bodies (`tests/bodies/`: chat, robot, workspace app, sensor, game,
+- [x] 1.4 The five fake bodies (`tests/bodies/`: chat, robot, workspace app, sensor, game,
   contract.md §8) as adapters on the contract surface only, and the conformance suite
   (`tests/contract/test_conformance.py`) over them: members of §4.1, percepts of §4.2, one receipt
   per action, deduplication by action id. They run through the kernel in Part 6.
@@ -228,3 +228,35 @@ Decisions carried from the plan (one line each):
   `contract.percept.from_legacy_event` until Part 4 deletes the call.
 - **D-N** the database default of `events.schema_version` stays 1; `append_event` passes
   `schema_version=SCHEMA_VERSION` explicitly.
+
+### Part 1 — the contract as code, the lock and the ratchet
+
+Line counts after Part 1: core 3842 · middleware 6144 · adapters 5465 · plugins 2065 ·
+tests 19949 (baseline 18577). New: `monoagens/contract/` 805, `contract.lock` 13.
+Nothing production-side moved yet; the only new test trees are `tests/contract/`,
+`tests/architecture/`, `tests/bodies/`.
+
+One home per fix:
+
+- the contract types and validators: `monoagens/contract/` (11 modules, no `monoagens` import);
+- the lock: `contract.lock` written by `tests/contract/test_lock.py` (`--write`), compared by
+  the same module; only the owner rewrites the hash;
+- the seven bans: `tests/architecture/support.py` (one finder per ban), the ratchet test in
+  `tests/architecture/test_ratchet.py`, today's 161 findings in `baseline.yaml`;
+- the five bodies: `tests/bodies/` on `tests/bodies/base.py`; the one conformance suite in
+  `tests/contract/test_conformance.py` (parametrized, later over the four adapters).
+
+Decisions taken while implementing (not questions, recorded so the reader sees them):
+
+- `Answer` and `Command` are defined in `contract/percept.py`: contract.md §4.2 names them as
+  percept fields, the plan's module list gave them no home, and they belong to the percept.
+- `descriptor_errors(..., require_facts=True)` requires the `facts` **key**, not a non-empty
+  list: a talking capability states `facts: ()` honestly (every adapter descriptor does today),
+  so "a capability without facts fails boot" means the key. `FLAGS` (`communicative`,
+  `long_running`, `identity_changing`) are validated as booleans.
+- a "word list" (ban 2) is **one name** bound to a literal of at least three strings; `__all__`
+  and a tuple unpacked into several names are name lists, not word lists.
+- imports inside `monoagens/contract/` are relative, so `test_contract_package_imports_nothing_from_monoagens`
+  and ban 6 hold literally.
+
+Carried audit items: none yet (S.6, E.1-E.4, F.x, O.x belong to Parts 3-5).
