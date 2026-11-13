@@ -20,10 +20,68 @@ async def open_tasks(conn) -> list[dict[str, Any]]:
     return [task for task in tasks if task.get("status") == OPEN]
 
 
+async def is_open(conn, place: str) -> bool:
+    """Return whether one task thread exists and is still open."""
+    task = await read_state(conn, KEY + place)
+    return bool(task and task.get("status") == OPEN)
+
+
+async def closed_reason(conn, event) -> str | None:
+    """Return the close reason if this event comes from a task thread that is now closed."""
+    anchor = event.id or event.caused_by
+    if anchor is None:
+        return None
+    cur = await conn.execute(
+        "WITH RECURSIVE chain AS ("
+        "SELECT id, caused_by FROM events WHERE id = %s "
+        "UNION ALL SELECT e.id, e.caused_by FROM events e JOIN chain c ON e.id = c.caused_by"
+        ") SELECT s.value->>'reason' FROM chain c "
+        "JOIN state s ON s.key = 'task:space:task:' || c.id::text "
+        "WHERE s.value->>'status' <> %s ORDER BY c.id DESC LIMIT 1",
+        (int(anchor), OPEN),
+    )
+    row = await cur.fetchone()
+    if row is not None:
+        return str(row[0] or "closed")
+    if getattr(event, "kind", None) == "act.result" and event.caused_by is not None and event.place:
+        cur = await conn.execute(
+            "SELECT value->>'reason' FROM state WHERE key LIKE 'task:%%' "
+            "AND value->>'status' <> %s AND value->>'parent' = %s "
+            "AND COALESCE((value->>'since')::bigint, 0) <= %s "
+            "AND COALESCE((value->>'closed_event')::bigint, 0) > %s LIMIT 1",
+            (OPEN, str(event.place), int(event.caused_by), int(event.caused_by)),
+        )
+        row = await cur.fetchone()
+        if row is not None:
+            return str(row[0] or "closed")
+    return None
+
+
+async def _goal_for(conn, event) -> str:
+    """Return the chain's triggering description or text when opening on a follow-up act."""
+    text = str(event.payload.get("description") or event.payload.get("text") or "")
+    if text or event.caused_by is None:
+        return text
+    cur = await conn.execute(
+        "WITH RECURSIVE chain AS ("
+        "SELECT id, caused_by, payload FROM events WHERE id = %s "
+        "UNION ALL SELECT e.id, e.caused_by, e.payload FROM events e JOIN chain c "
+        "ON e.id = c.caused_by) SELECT payload FROM chain ORDER BY id",
+        (int(event.caused_by),),
+    )
+    for (payload,) in await cur.fetchall():
+        found = str((payload or {}).get("description") or (payload or {}).get("text") or "")
+        if found:
+            return found
+    return ""
+
+
 async def open_for(kernel, event, audience) -> dict[str, Any] | None:
     """Open a task place for one chain when it does not already have one."""
     conn, place = kernel.conn, event.place
     if place and await read_state(conn, KEY + str(place)):
+        return None
+    if event.kind == "act.result" and await closed_reason(conn, event) is not None:
         return None
     tasks = await open_tasks(conn)
     if any(task.get("parent") == place for task in tasks):
@@ -33,7 +91,7 @@ async def open_for(kernel, event, audience) -> dict[str, Any] | None:
     task_place = f"space:task:{event.id}"
     opened = await kernel._emit(event, "task.opened",
                                {"parent": place, "audience": sorted(audience)}, place=task_place)
-    goal = str(event.payload.get("description") or event.payload.get("text") or "")
+    goal = await _goal_for(conn, event)
     task = {"place": task_place, "parent": place, "audience": sorted(audience),
             "status": OPEN, "steps": 0, "waiting_for": None, "opened_event": opened.id,
             "goal": goal, "since": event.id}
@@ -83,7 +141,7 @@ async def close(kernel, task: dict[str, Any], event, reason: str) -> None:
     closed = await kernel._emit(event, "task.closed",
                                 {"parent": task.get("parent"), "reason": reason},
                                 place=str(task["place"]))
-    await _save(kernel, task, closed, status="closed")
+    await _save(kernel, task, closed, status="closed", reason=reason, closed_event=closed.id)
 
 
 async def _save(kernel, task: dict[str, Any], event, **changes) -> None:

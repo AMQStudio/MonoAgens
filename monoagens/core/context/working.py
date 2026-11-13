@@ -78,14 +78,25 @@ async def _chain_events(conn, root: int, place: str) -> list[Event]:
 
 def _lines(events: Sequence[Event], goal: str,
            values: Mapping[str, Any]) -> tuple[str, ...]:
-    """Render one chain: the goal, a line per step, the latest result verbatim (D52)."""
+    """Render one chain: goal, steps, earlier refs, and latest round results verbatim (D52)."""
     events = sorted(events, key=lambda seen: seen.id or 0)
+    trigger_of = {seen.id: seen.caused_by for seen in events
+                  if seen.kind == "act.out" and seen.id is not None}
     lines = [f"goal: {goal or '(unknown)'}"]
     lines += [f"step: {_step_text(seen)}" for seen in events if seen.kind == "act.out"]
-    results = [(seen.id, _result_text(seen)) for seen in events if seen.kind == "act.result"]
-    lines += [f"earlier result #{event_id} (recall it)" for event_id, _ in results[:-1]]
-    if results:
-        lines.append(f"result: {results[-1][1][: int(values['thread_result_tokens']) * 4]}")
+    results = [(seen.id, seen.caused_by, _result_text(seen))
+               for seen in events if seen.kind == "act.result"]
+    if not results:
+        return tuple(lines)
+    latest_trigger = trigger_of.get(results[-1][1])
+    cut = len(results) - 1
+    if latest_trigger is not None:
+        cut = next((i for i, (_, cb, _) in enumerate(results)
+                    if trigger_of.get(cb) == latest_trigger), len(results) - 1)
+    cap = int(values["thread_result_tokens"]) * 4
+    lines += [f"earlier result #{event_id} (recall it)" for event_id, _, _ in results[:cut]]
+    each = max(200, cap // max(1, len(results) - cut))
+    lines += [f"result: {text[:each]}" for _, _, text in results[cut:]]
     return tuple(lines)
 
 

@@ -170,10 +170,15 @@ class Kernel:
                                       partial(self.jobs.sleep, now))
         if fired or self.pfc is None or event.kind not in ("percept", "act.result"):
             return
-        if event.kind == "act.result" and await working.step_spoke(self.conn, event):
-            await self._emit(event, "decision.silent",
-                             {"reason": "a message already ended this step"})
-            return
+        if event.kind == "act.result":
+            if await working.step_spoke(self.conn, event):
+                await self._emit(event, "decision.silent",
+                                 {"reason": "a message already ended this step"})
+                return
+            if await threads.closed_reason(self.conn, event) in ("max_task_steps", "stopped"):
+                await self._emit(event, "decision.silent",
+                                 {"reason": "the task chain already stopped"})
+                return
         appraisal = await self._appraise(event)
         if event.kind == "act.result":
             if appraisal.decision == "wake":
@@ -198,13 +203,22 @@ class Kernel:
         """
         if event.caused_by is None or not self._batches:
             return False
+        candidates = [int(event.caused_by)]
         row = await (await self.conn.execute(
             "SELECT caused_by FROM events WHERE id = %s", (event.caused_by,))).fetchone()
-        if row is None or row[0] is None:
-            return False
-        key = (int(row[0]), event.place or "")
-        batch = self._batches.get(key)
-        if batch is None:
+        if row is not None and row[0] is not None:
+            candidates.append(int(row[0]))
+        key, batch = None, None
+        for trigger_id in candidates:
+            direct = (trigger_id, event.place or "")
+            if direct in self._batches:
+                key, batch = direct, self._batches[direct]
+                break
+            match = next(((k, b) for k, b in self._batches.items() if k[0] == trigger_id), None)
+            if match is not None:
+                key, batch = match
+                break
+        if batch is None or key is None:
             return False
         batch["remaining"] -= 1
         if batch["remaining"] > 0 and self.clock.now() < batch["deadline"]:
@@ -219,11 +233,15 @@ class Kernel:
         never arrives must not also wait for an unrelated event in its own place).
         """
         now = self.clock.now()
-        for key in [key for key, batch in self._batches.items()
-                    if (place is None or key[1] == place) and now >= batch["deadline"]]:
+        due = [key for key, batch in self._batches.items()
+               if (place is None or place in (key[1], batch["trigger"].place))
+               and now >= batch["deadline"]]
+        for key in due:
             batch = self._batches.pop(key)
-            await self._think(batch["trigger"], "the results of one round are in",
-                              str(key[1]))
+            target = str(key[1])
+            if target.startswith("space:task:") and not await threads.is_open(self.conn, target):
+                continue
+            await self._think(batch["trigger"], "the results of one round are in", target)
 
     def _track_batch(self, job: Any, acts: list[tuple[dict[str, Any], Any]]) -> None:
         """Remember how many results one finished round still awaits, and until when.
@@ -233,7 +251,7 @@ class Kernel:
         middleware handles itself (`share` records its own outcome) never hold a round open,
         so no place ever waits on a result that cannot arrive.
         """
-        results = 0
+        fast, slow = 0, 0
         for raw, _labels in acts:
             capability = str((raw.get("arguments") or {}).get("capability") or "")
             declared = self.tools.get(capability)
@@ -241,10 +259,14 @@ class Kernel:
                 continue  # no such tool, so no result will come
             if not self.tools.produces_result(capability):
                 continue  # the middleware handled it and recorded its own outcome
-            if declared.get("long_running") or declared.get("communicative"):
+            if declared.get("communicative"):
                 continue
-            results += 1
-        if results <= 0:
+            if declared.get("long_running"):
+                slow += 1
+            else:
+                fast += 1
+        results = fast + slow
+        if results == 0 or (results == 1 and slow == 1):
             return
         values = self.settings.get("constants") or {}
         milliseconds = int(values.get("batch_wake_timeout_ms") or 2000)
@@ -297,7 +319,10 @@ class Kernel:
         elif job.name == "encode" and isinstance(result.get("vector"), list):
             await insert_event_vector(self.conn, int(result["event_id"]), result["vector"])
         if job.re_wake is not None:
-            await self._think(*job.re_wake)
+            re_place = str(job.re_wake[2])
+            if not (re_place.startswith("space:task:") and not await threads.is_open(
+                    self.conn, re_place)):
+                await self._think(*job.re_wake)
 
     async def _expect_wake(self, item: dict[str, Any]) -> None:
         now = self.clock.now()

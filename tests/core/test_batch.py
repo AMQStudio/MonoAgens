@@ -224,3 +224,48 @@ async def test_a_slow_call_is_not_counted_and_wakes_on_its_own(aconn):
     assert tool.calls == 3
     assert kinds.count("act.result") == 3
     assert kinds.count("model.call") >= 2
+
+
+async def test_multi_tool_round_inside_a_task_thread_batches_and_shows_all_results(aconn):
+    kernel, pfc, tool = _kernel(aconn, [
+        [("act", {"capability": "demo.build", "arguments": {"q": "init"}})],
+        _round(PLACE, count=2),
+        [("act", {"capability": "telegram.say", "arguments": {"text": "done"}})],
+        [],
+    ])
+
+    await _feed(kernel, _percept())
+
+    kinds = await _kinds(aconn)
+    assert tool.calls == 3
+    assert kinds.count("task.opened") == 1
+    assert kinds.count("model.call") == 3  # init, one batched wake for the 2 fast tools, done
+    assert pfc.contexts[-1].doing.count("result: hasil") == 2
+
+
+async def test_closed_task_ignores_late_act_result_and_never_reopens(aconn):
+    values = settings()
+    values["constants"] = {**values["constants"], "max_task_steps": 1}
+    call = [("act", {"capability": "demo.build", "arguments": {"q": "step"}})]
+    pfc = Scripted([call, call, call, []])
+    kernel = build(aconn, clock=FakeClock(START), pfc=pfc, settings=values)
+    tool = Tool()
+    kernel.register_adapter(Voice())
+    kernel.tools.add_tool(tool, {"look": {"facts": ["reads"], "permission": "demo.look"},
+                                 "build": {"facts": ["reads"], "permission": "demo.build"}})
+    kernel.roles = open_book("person:owner", "demo.build")
+
+    await _feed(kernel, _percept())
+    before_calls = (await _kinds(aconn)).count("model.call")
+
+    row = await (await aconn.execute(
+        "SELECT id FROM events WHERE kind = 'act.out' ORDER BY id DESC LIMIT 1")).fetchone()
+    late = Event(id=None, ts=START, kind="act.result", who="person:owner", place=PLACE,
+                 body="demo", caused_by=row[0],
+                 payload={"capability": "demo.build", "result": {"text": "late"}})
+    await _feed(kernel, late)
+
+    kinds = await _kinds(aconn)
+    assert kinds.count("task.opened") == 1
+    assert kinds.count("task.closed") == 1
+    assert kinds.count("model.call") == before_calls
