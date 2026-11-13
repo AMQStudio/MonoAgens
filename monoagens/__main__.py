@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
+import sys
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, TextIO
 
 import psycopg
 from pgvector.psycopg import register_vector_async
@@ -22,6 +24,21 @@ from monoagens.infra.providers import build_provider
 from monoagens.middleware.identity import ensure as ensure_pairing
 from monoagens.middleware.loader import Loader
 from monoagens.types import Event
+
+
+def configure_logging(stream: TextIO | None = None) -> logging.Handler:
+    """Attach an INFO stdout handler to the kernel logger for live observability."""
+    target = stream or sys.stdout
+    logger = logging.getLogger("kernel")
+    logger.setLevel(logging.INFO)
+    for existing in logger.handlers:
+        if isinstance(existing, logging.StreamHandler) and existing.stream is target:
+            return existing
+    handler = logging.StreamHandler(target)
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
+    logger.addHandler(handler)
+    return handler
 
 
 async def supervise_adapter(
@@ -65,6 +82,7 @@ async def supervise_adapter(
 
 async def main() -> None:
     """Run the kernel with the clock and the enabled adapters until stopped."""
+    configure_logging()
     root, env = config.DEFAULT_ROOT, config.load_env()
     llm = config.load_provider_config()
     notes: list[str] = []

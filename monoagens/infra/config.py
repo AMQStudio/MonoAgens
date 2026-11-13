@@ -124,6 +124,17 @@ def adapter_retry(settings: Mapping[str, Any]) -> dict[str, float]:
     }
 
 
+def import_summary_every(settings: Mapping[str, Any]) -> int:
+    """Return the batch size for imported-percept INFO summary log lines."""
+    raw = (settings.get("runtime") or {}).get("import_summary_every")
+    if raw is None:
+        raw = (load_config().get("runtime") or {}).get("import_summary_every")
+    count = int(raw or 0)
+    if count <= 0:
+        raise ValueError("runtime.import_summary_every must be a positive integer")
+    return count
+
+
 def load_env_file(path: pathlib.Path = DEFAULT_ENV_PATH) -> dict[str, str]:
     """Read a simple KEY=VALUE .env file into a dict."""
     env_path = pathlib.Path(path)

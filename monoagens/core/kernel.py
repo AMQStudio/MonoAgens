@@ -15,7 +15,7 @@ from monoagens.core import dispatch, expectations, hooks, jobs, memory, sends, t
 from monoagens.core.context import layout, working
 from monoagens.core.gate import Appraisal, appraise, validate_signals
 from monoagens.core.reasoning import Reasoning, ToolCall
-from monoagens.infra import budget, config
+from monoagens.infra import budget, config, observability
 from monoagens.infra.clock import Clock
 from monoagens.infra.prior import load_settings, signal_weights
 from monoagens.infra.store import (append_event, cursor as store_cursor, insert_event_vector,
@@ -65,6 +65,10 @@ class Kernel:
         self.hooks = hooks.HookRegistry(self.settings)
         self._batches: dict[tuple[int, str], dict[str, Any]] = {}
         self._results_this_round = 0
+        self._observer = observability.EventObserver(
+            summary_every=config.import_summary_every(self.settings),
+            conn=self.conn,
+        )
         validate_signals(signal_weights(self.settings))
 
     def require_installed(self) -> None:
@@ -129,6 +133,7 @@ class Kernel:
                     dst = str((stored.payload or {}).get("into") or "")
                     if src and dst:
                         await memory.apply_merge(self.conn, src, dst, stored.id)
+        self._observer.observe(stored)
         return stored
 
     async def _encode(self, event: Event, text: str | None = None) -> None:
@@ -239,6 +244,8 @@ class Kernel:
             if await expectations.create_wait(self.conn, event, now=self.clock.now(),
                                         settings=self.settings):
                 return
+        else:
+            self._observer.observe_decision(event, "decision.wake", appraisal.reason)
         await self._think(event, appraisal.reason, event.place or "")
 
     async def _batch_holds(self, event: Event) -> bool:
