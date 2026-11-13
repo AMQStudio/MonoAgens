@@ -39,14 +39,15 @@ May touch: `monoagens/middleware/`, `monoagens/infra/` (attachment store), `plug
 - [ ] C.2 Workspace progress note (plugins.md §5.3): the standing rule for work of more than a few steps; `progress.md` in the workspace, updated after each step, read first on resuming.
 - [ ] C.3 Scenario "paper over two days" (D54, all material in the scenario): (1) the owner asks to write a paper; (2) asks for a revision; (3) asks to send it to Budi (consent and file forwarding apply); (4) says "continue tonight" (an expectation with a time); **the process is restarted mid-work** before tonight; (5) the next day asks for a new paper in the same format. Checks: the work resumes from the right step after the restart (progress.md and `<doing>`), tonight's expectation fires once, the next day's paper follows the earlier format found in the workspace, nothing is claimed as done without its result, and every long output is reachable through its ref. Fake replay first, then the real model once with B.4's run.
 
-## Part 1 — Identity linking, WhatsApp and Discord (first)
+## Part 1 — Identity linking, WhatsApp and Discord
 Read first: [adapters.md](../adapters.md), [middleware.md](../middleware.md) §7 (identity), [core.md](../core.md) §4, §8
-May touch: `monoagens/adapters/`, `monoagens/middleware/` (identity part), provider adapters, `tests/`, `scenarios/`
+May touch: `monoagens/adapters/`, `monoagens/middleware/` (identity part), `monoagens/infra/providers/` (speech only), `tests/`, `scenarios/`
 
 V1 (branch `archived`) already has working WhatsApp (media, history sync, identity), Discord,
-Slack and provider (Anthropic, Gemini, OpenAI, speech) code under `monoagens/gateways/` and
+Slack and speech provider code under `monoagens/gateways/` and
 `monoagens/providers/`. Port it to the adapter contract of Task 4 instead of starting over; leave
-its per-gateway policy and roles out, since policy lives in the middleware.
+its per-gateway policy and roles out, since policy lives in the middleware. Model providers were
+ported in Part 0A.
 
 Linking comes first: it is what lets a person's private context follow them (D45), so a wrong
 link is a leak.
