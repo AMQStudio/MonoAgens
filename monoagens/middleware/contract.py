@@ -37,7 +37,10 @@ CALL_FACTS = FACTS + ("sensitive",)  # `sensitive` is added to one call, never d
 SHOWS = ("typing", "edit", "buttons", "reactions")
 
 # The one marker for a cut tool output; a tool never invents a second one.
-OUTPUT_MARKER = "\n...[truncated: output exceeds {limit} chars; next: continue from character {n}]"
+OUTPUT_MARKER = (
+    "\n...[truncated: output exceeds {limit} chars; "
+    "full in {ref}; continue from character {n}]"
+)
 
 __all__ = ["CALL_FACTS", "FACTS", "OUTPUT_MARKER", "OWNER_POLICY", "SHOWS", "SLOTS",
            "AttachmentDoor", "LogView", "attachment_origins", "describe_attachments",
@@ -187,12 +190,14 @@ class AttachmentDoor:
 
 
 async def attachment_origins(conn: Any, ref: str) -> list[tuple[int, str]]:
-    """Return every non-forgotten event that carried one attachment, oldest first."""
+    """Return every non-forgotten event that carried or archived one attachment, oldest first."""
     cur = await conn.execute(
-        "SELECT id, place FROM events WHERE payload @> jsonb_build_object('data', "
-        "jsonb_build_object('attachments', jsonb_build_array("
-        "jsonb_build_object('ref', %s::text)))) "
-        "AND payload <> '{\"forgotten\": true}'::jsonb ORDER BY id", (ref,))
+        "SELECT id, place FROM events WHERE ("
+        "payload @> jsonb_build_object('data', jsonb_build_object("
+        "'attachments', jsonb_build_array(jsonb_build_object('ref', %s::text)))) "
+        "OR payload @> jsonb_build_object('result', jsonb_build_object("
+        "'full', jsonb_build_object('ref', %s::text)))"
+        ") AND payload <> '{\"forgotten\": true}'::jsonb ORDER BY id", (ref, ref))
     return [(int(found), str(place or "")) for found, place in await cur.fetchall()]
 
 

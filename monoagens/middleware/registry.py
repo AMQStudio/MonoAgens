@@ -11,6 +11,7 @@ the facts, the permission and the output cap live here, next to it.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
@@ -18,12 +19,14 @@ from typing import Any
 from monoagens.core.context.parts import VOLATILE, Part
 from monoagens.core.hooks import Continue, Middleware, Replace
 from monoagens.infra.store import payload_text
-from monoagens.middleware.contract import OUTPUT_MARKER
+from monoagens.middleware.contract import OUTPUT_MARKER, open_attachment
 from monoagens.types import Action, Event
 
 ROUTING = ("to", "via")
 DESCRIBE = "registry.describe"
+MORE = "registry.more"
 DEFAULT_OUTPUT_CAP = 8000
+MORE_OUTPUT_CAP = 16000
 SKILL_WORD = 4
 RULE_BLOCK_ORDER = 5  # before the core's `now` block (order 10)
 
@@ -32,6 +35,21 @@ DESCRIBE_CAPABILITY = {
     "description": "Show the full schema of one tool, or the body of one skill.",
     "schema": {"type": "object", "properties": {"name": {"type": "string"}},
                "required": ["name"]},
+    "communicative": False, "long_running": False, "identity_changing": False,
+}
+
+MORE_CAPABILITY = {
+    "name": "more",
+    "description": "Read a slice of a truncated tool output by its attachment ref.",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "ref": {"type": "string"},
+            "offset": {"type": "integer"},
+            "limit": {"type": "integer"},
+        },
+        "required": ["ref"],
+    },
     "communicative": False, "long_running": False, "identity_changing": False,
 }
 
@@ -73,8 +91,9 @@ class SkillEntry:
 class ToolRegistry:
     """The adapters and plugins registered with the kernel, their capabilities and commands."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, kernel: Any = None) -> None:
         """Start with no tool, no command and no skill present."""
+        self.kernel = kernel
         self.adapters: dict[str, Any] = {}
         self.capabilities: dict[str, dict[str, Any]] = {}
         self.entries: dict[str, ToolEntry] = {}
@@ -215,7 +234,49 @@ class ToolRegistry:
             raise RuntimeError(f"No adapter registered for {declared_by!r}")
         action = Action(kind=name, place=event.place or "", payload=payload,
                         adapter=declared_by, event_id=event_id)
-        return _capped(await adapter.act(action), self.output_cap(capability))
+        result = await adapter.act(action)
+        if capability == MORE:
+            return result
+        return await self._cap_result(result, self.output_cap(capability))
+
+    async def more(self, ref: str, offset: int = 0, limit: int = DEFAULT_OUTPUT_CAP,
+                   *, context: str | None = None) -> dict[str, Any]:
+        """Read one character slice from an archived full tool output."""
+        if not ref:
+            return {"error": "ref is required"}
+        attachments = getattr(self.kernel, "attachments", None)
+        conn = getattr(self.kernel, "conn", None)
+        if attachments is None or conn is None:
+            return {"error": "attachment store is not configured", "ref": ref}
+        try:
+            raw, meta = await open_attachment(conn, attachments, ref, context=context)
+        except (PermissionError, FileNotFoundError) as exc:
+            return {"error": str(exc), "ref": ref}
+        sliced = await asyncio.to_thread(_slice_utf8, raw, offset, limit)
+        return {"ref": ref, "size": meta["size"], **sliced}
+
+    async def _cap_result(self, value: Any, cap: int) -> Any:
+        """Cap a tool result and archive overflowing text into the attachment store."""
+        text_key = _overflow_key(value, cap)
+        if text_key is None:
+            return _capped(value, cap)
+        raw_text = value if isinstance(value, str) else value[text_key]
+        archived = await self._archive_text(raw_text)
+        if archived is None:
+            return _capped(value, cap)
+        full = {"ref": archived["ref"], "size": archived["size"]}
+        cut_text = _cut(raw_text, cap, ref=full["ref"])
+        if isinstance(value, str):
+            return {"text": cut_text, "full": full}
+        return {**value, text_key: cut_text, "full": full}
+
+    async def _archive_text(self, text: str) -> dict[str, Any] | None:
+        """Write full output text to the kernel's attachment store when configured."""
+        attachments = getattr(self.kernel, "attachments", None)
+        if attachments is None:
+            return None
+        data = await asyncio.to_thread(text.encode, "utf-8")
+        return await attachments.put(data, name="output.txt", mime="text/plain; charset=utf-8")
 
     # ---------------------------------------------------------- commands
 
@@ -275,7 +336,7 @@ class ToolRegistry:
 
 
 class RegistryTool:
-    """The middleware's own `describe` tool: the full entry on request (ADR 0015)."""
+    """The middleware's own `registry` tool: `describe` and `more` (middleware.md §4)."""
 
     name = "registry"
 
@@ -284,18 +345,29 @@ class RegistryTool:
         self.registry = registry
 
     def capabilities(self) -> tuple[dict[str, Any], ...]:
-        """Declare the one `describe` capability."""
-        return (DESCRIBE_CAPABILITY,)
+        """Declare `describe` and `more`."""
+        return (DESCRIBE_CAPABILITY, MORE_CAPABILITY)
 
     async def act(self, action: Action) -> dict[str, Any]:
-        """Return the full entry of the named tool or skill."""
-        return self.registry.describe(str(action.payload.get("name") or ""))
+        """Return a tool/skill entry (`describe`) or a slice of archived output (`more`)."""
+        payload = action.payload or {}
+        if action.kind == "more":
+            limit = payload.get("limit")
+            return await self.registry.more(
+                str(payload.get("ref") or ""),
+                offset=int(payload.get("offset") or 0),
+                limit=DEFAULT_OUTPUT_CAP if limit is None else int(limit),
+                context=action.place or None,
+            )
+        return self.registry.describe(str(payload.get("name") or ""))
 
 
 def install_own(registry: ToolRegistry) -> None:
-    """Declare the middleware's own `registry.describe` tool on the registry."""
+    """Declare the middleware's own `registry.describe` and `registry.more` tools."""
     registry.add_tool(RegistryTool(registry), {
-        "describe": {"facts": ["reads"], "permission": DESCRIBE, "output_cap": 4000}})
+        "describe": {"facts": ["reads"], "permission": DESCRIBE, "output_cap": 4000},
+        "more": {"facts": ["reads"], "permission": MORE, "output_cap": MORE_OUTPUT_CAP},
+    })
 
 
 def may_use(permission: str, who: Any, roles: Any, place: str | None = None) -> bool:
@@ -305,23 +377,63 @@ def may_use(permission: str, who: Any, roles: Any, place: str | None = None) -> 
     return roles is not None and roles.can(who, permission, place)
 
 
-def _capped(value: Any, cap: int) -> Any:
+def _overflow_key(value: Any, cap: int) -> str | None:
+    """Return the string key exceeding `cap` (or `""` for a bare string), else None."""
+    if cap <= 0:
+        return None
+    if isinstance(value, str):
+        return "" if len(value) > cap else None
+    if isinstance(value, dict):
+        for key in ("text", "content", "output", "stdout"):
+            item = value.get(key)
+            if isinstance(item, str) and len(item) > cap:
+                return key
+    return None
+
+
+def _slice_utf8(raw: bytes, offset: int, limit: int) -> dict[str, Any]:
+    """Decode archived UTF-8 output and return one character slice."""
+    text = raw.decode("utf-8", errors="replace")
+    total = len(text)
+    start = max(0, min(offset, total))
+    end = min(total, start + max(1, limit))
+    remaining = total - end
+    return {
+        "text": text[start:end],
+        "offset": start,
+        "next_offset": end if remaining > 0 else None,
+        "remaining": remaining,
+        "total_chars": total,
+    }
+
+
+def _capped(value: Any, cap: int, *, ref: str = "none") -> Any:
     """Cut one tool result to its output cap with the one continue-from-here marker."""
     if isinstance(value, str):
-        return _cut(value, cap)
+        return _cut(value, cap, ref=ref)
     if isinstance(value, dict):
         for key in ("text", "content", "output", "stdout"):
             if isinstance(value.get(key), str):
-                return {**value, key: _cut(value[key], cap)}
+                return {**value, key: _cut(value[key], cap, ref=ref)}
     return value
 
 
-def _cut(text: str, cap: int) -> str:
+def _cut(text: str, cap: int, *, ref: str = "none") -> str:
     """Keep the first characters of a text and mark where the next read continues."""
     if cap <= 0 or len(text) <= cap:
         return text
-    marker = OUTPUT_MARKER.format(limit=cap, n=cap)
-    return text[:max(0, cap - len(marker))] + marker
+    keep = max(0, cap - len(OUTPUT_MARKER.format(limit=cap, ref=ref, n=cap)))
+    for _ in range(3):
+        marker = OUTPUT_MARKER.format(limit=cap, ref=ref, n=keep)
+        next_keep = max(0, cap - len(marker))
+        if next_keep == keep:
+            break
+        keep = next_keep
+    marker = OUTPUT_MARKER.format(limit=cap, ref=ref, n=keep)
+    if keep + len(marker) > cap:
+        keep = max(0, cap - len(marker))
+        marker = OUTPUT_MARKER.format(limit=cap, ref=ref, n=keep)
+    return text[:keep] + marker
 
 
 # ---------------------------------------------------------------- commands

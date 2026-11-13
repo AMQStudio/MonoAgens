@@ -12,7 +12,7 @@ from . import guard, paths, sandbox
 
 MAX_LIMIT = 2000
 # Bound what one run may hold in memory; the registry's output cap and marker then apply.
-RUN_OUTPUT_BYTES = 80_000
+RUN_OUTPUT_BYTES = 50 * 1024 * 1024
 DEFAULT_LINES = 400
 BINARY = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 

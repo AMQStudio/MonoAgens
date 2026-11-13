@@ -30,7 +30,7 @@ IP = "ip"
 BLOCKED_ROUTES = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10",
                   "169.254.0.0/16", "127.0.0.0/8", "fc00::/7", "fe80::/10", "::1/128")
 DEFAULT_TIMEOUT = 120
-MAX_OUTPUT = 200_000
+MAX_OUTPUT = 50 * 1024 * 1024
 PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # The host's resolver is a local stub (systemd-resolved) that a sandbox network cannot reach,
 # so a sandboxed run resolves names through a public resolver, reachable through pasta. The

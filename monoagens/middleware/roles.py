@@ -32,6 +32,7 @@ CORE_PERMISSIONS: dict[str, str | None] = {
     "self.recall": "guest",
     "privacy.share": "guest",
     "registry.describe": "guest",
+    "registry.more": "guest",
     "config.reload": "admin",
     "plugin.manage": "admin",
     "roles.manage": "admin",

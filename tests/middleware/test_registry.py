@@ -13,9 +13,11 @@ from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.boot import build
 from monoagens.core.context import layout
 from monoagens.core.context.parts import VOLATILE
+from monoagens.core.memory.forget import forget_hard
+from monoagens.infra.attachments import AttachmentStore
 from monoagens.infra.clock import FakeClock
 from monoagens.infra.store import append_event
-from monoagens.middleware import registry
+from monoagens.middleware import privacy, registry
 from monoagens.middleware.contract import OUTPUT_MARKER
 from monoagens.middleware.registry import (CommandEntry, SkillEntry, ToolRegistry, help_text,
                                            self_block)
@@ -154,11 +156,12 @@ def test_the_output_cap_cuts_with_the_one_marker():
 
     long_text = "x" * 400
     assert tools.output_cap("workspace.read") == 200
-    result = registry._capped(long_text, tools.output_cap("workspace.read"))
-    marker = OUTPUT_MARKER.format(limit=200, n=200)
+    result = registry._capped(long_text, tools.output_cap("workspace.read"), ref="att:abc")
+    expected_n = 200 - len(OUTPUT_MARKER.format(limit=200, ref="att:abc", n=100))
+    marker = OUTPUT_MARKER.format(limit=200, ref="att:abc", n=expected_n)
     assert result.endswith(marker)
     assert len(result) == 200
-    assert result == long_text[:200 - len(marker)] + marker
+    assert result == long_text[:expected_n] + marker
 
 
 def test_a_dict_result_keeps_its_other_keys_and_caps_its_text():
@@ -168,7 +171,8 @@ def test_a_dict_result_keeps_its_other_keys_and_caps_its_text():
     capped = registry._capped({"text": "y" * 400, "path": "a.txt", "lines": 3}, 200)
 
     assert capped["path"] == "a.txt" and capped["lines"] == 3
-    assert capped["text"].endswith(OUTPUT_MARKER.format(limit=200, n=200))
+    expected_n = 200 - len(OUTPUT_MARKER.format(limit=200, ref="none", n=100))
+    assert capped["text"].endswith(OUTPUT_MARKER.format(limit=200, ref="none", n=expected_n))
 
 
 async def test_a_skill_enters_the_self_block_by_name_only(aconn):
@@ -245,3 +249,96 @@ def test_help_text_without_a_roles_book_lists_nothing_but_tools():
     tools.register(_Body("telegram", TELEGRAM_CAPABILITIES))
 
     assert help_text(tools, "person:owner") == "Commands:\nnone\n\nTools:\nnone"
+
+
+async def test_overflow_output_archives_full_text_and_reads_50mb_in_parts(aconn, tmp_path):
+    class _BulkTool:
+        name = "bulk"
+
+        def __init__(self, text: str) -> None:
+            self._text = text
+
+        def capabilities(self):
+            return ({"name": "dump", "description": "Emit lots of text.",
+                     "schema": {"type": "object", "properties": {}},
+                     "communicative": False, "long_running": False,
+                     "identity_changing": False},)
+
+        async def act(self, action: Action) -> dict[str, Any]:
+            return {"output": self._text}
+
+    full_text = ("0123456789ABCDEF" * 3_276_800)  # exact 50 MiB ASCII
+    assert len(full_text) == 50 * 1024 * 1024
+    kernel = build(aconn, clock=FakeClock(START), settings=SETTINGS)
+    kernel.attachments = AttachmentStore(tmp_path)
+    kernel.tools.add_tool(_BulkTool(full_text), {"dump": {"facts": ["reads"],
+                                                          "permission": "workspace.run",
+                                                          "output_cap": 8000}})
+    trigger = Event(id=1, ts=START, kind="percept", who="person:owner",
+                    place="space:tg:dm:owner", body="telegram", payload={})
+
+    capped = await kernel.tools.act(trigger, "bulk.dump", {})
+    ref = capped["full"]["ref"]
+    assert capped["full"] == {"ref": ref, "size": 50 * 1024 * 1024}
+    marker_idx = capped["output"].index("\n...[truncated:")
+    prefix = capped["output"][:marker_idx]
+    assert f"full in {ref}; continue from character {len(prefix)}]" in capped["output"]
+    assert len(capped["output"]) <= 8000
+
+    await append_event(aconn, ts=START, kind="act.result", who="self",
+                       place="space:tg:dm:owner",
+                       payload={"capability": "bulk.dump", "result": capped})
+
+    first = await kernel.tools.act(trigger, "registry.more",
+                                   {"ref": ref, "offset": len(prefix), "limit": 30_000_000})
+    second = await kernel.tools.act(trigger, "registry.more",
+                                    {"ref": ref, "offset": first["next_offset"],
+                                     "limit": 30_000_000})
+    assert first["remaining"] > 0 and second["remaining"] == 0 and second["next_offset"] is None
+    assert prefix + first["text"] + second["text"] == full_text
+
+
+async def test_full_output_respects_privacy_and_hard_forget(aconn, tmp_path):
+    class _SecretTool:
+        name = "bulk"
+
+        def capabilities(self):
+            return ({"name": "dump", "description": "Emit secret output.",
+                     "schema": {"type": "object", "properties": {}},
+                     "communicative": False, "long_running": False,
+                     "identity_changing": False},)
+
+        async def act(self, action: Action) -> dict[str, Any]:
+            return {"output": "TOP-SECRET-CHUNK-" + ("Z" * 500)}
+
+    kernel = build(aconn, clock=FakeClock(START), settings=SETTINGS)
+    kernel.attachments = AttachmentStore(tmp_path)
+    kernel.tools.add_tool(_SecretTool(), {"dump": {"facts": ["reads"],
+                                                   "permission": "workspace.run",
+                                                   "output_cap": 200}})
+    dm_event = await append_event(aconn, ts=START, kind="percept", who="person:bob",
+                                  place="space:tg:dm:bob", body="telegram",
+                                  payload={"place_kind": "direct"})
+    capped = await kernel.tools.act(dm_event, "bulk.dump", {})
+    ref = capped["full"]["ref"]
+    stored = await append_event(aconn, ts=START, kind="act.result", who="self",
+                                place="space:tg:dm:bob",
+                                payload={"capability": "bulk.dump", "result": capped})
+
+    group_event = await append_event(aconn, ts=START, kind="percept", who="person:alice",
+                                     place=PLACE, body="telegram",
+                                     payload={"place_kind": "group"})
+    blocked = await kernel.tools.act(group_event, "registry.more", {"ref": ref, "offset": 0})
+    assert "may not see" in blocked["error"]
+
+    await privacy.grant(kernel, dm_event, {"item": "secret output"},
+                        to=PLACE, source="space:tg:dm:bob")
+    opened = await kernel.tools.act(group_event, "registry.more",
+                                    {"ref": ref, "offset": 0, "limit": 50})
+    assert opened["text"].startswith("TOP-SECRET-CHUNK-")
+
+    await forget_hard(aconn, [stored.id], now=START)
+    removed = await kernel.attachments.sweep(aconn)
+    assert removed == 1 and kernel.attachments.find(ref) is None
+    gone = await kernel.tools.act(dm_event, "registry.more", {"ref": ref, "offset": 0})
+    assert "error" in gone

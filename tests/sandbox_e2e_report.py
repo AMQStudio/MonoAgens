@@ -353,7 +353,8 @@ async def limits(h: Harness) -> None:
                       lambda r, t: "timeout after" in t))
     await check(Check("output cap", "person:owner", "yes | head -c 50000000",
                       "cut with the output marker",
-                      lambda r, t: OUTPUT_MARKER.format(limit=8000, n=8000) in t))
+                      lambda r, t: "output exceeds 8000 chars;" in t
+                      and "continue from character " in t))
     await check(Check("quota", "person:owner",
                       "dd if=/dev/zero of=/opt/big bs=1M count=3 2>&1 | tail -1; "
                       "du -sh /opt",
