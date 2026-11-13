@@ -99,6 +99,14 @@ The one middleware that is always present.
   `share.granted`, after which the new person is in the audience. Each person speaks only for
   what they were part of: the owner can share work done with the soul, not what Fulan said in
   private; the owner's view of everything is a view, not ownership.
+- **Asking on someone's behalf (D73).** When the soul sends a message on behalf of a person X
+  (the chain's `origin_actor` is X: "ask Budi whether it fits"), the reply that answers it is
+  said to X as well: at intake the policy adds X to that reply's audience. The reply is the
+  percept that matches that chain's `wait` expectation or replies to that message (`reply_to`);
+  only that one reply, never the person's later lines, which keep their own audience. X is then
+  part of it and may share it (`share`), and the soul may offer the choice where X is ("Budi
+  answered; tell it here or in private?"). Nothing is shared without that explicit act; the
+  answer is never said in a shared place before it.
 - **Data leaving the machine** (D43): by default nothing does. Data goes out only through a
   plugin the owner installed and configured for it. Such a plugin sends numbers (counts,
   tokens, timings, decisions), not conversation content; sending content outside counts as
