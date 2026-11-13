@@ -200,8 +200,10 @@ async def send_show(client: Any, place: str, kind: str, **data: Any) -> Any:
         ids = [str(x) for x in (data.get("message_ids") or [data.get("message_id")] or ()) if x]
         return await client.mark_read(*ids, chat=jid)
     if kind == "edit":
-        return await send_edit(client, place, str(data.get("message_id") or ""),
-                               str(data.get("text") or ""))
+        mid = str(data.get("message_id") or "")
+        if not mid:
+            return await send_say(client, None, None, place, {"text": str(data.get("text") or "")})
+        return await send_edit(client, place, mid, str(data.get("text") or ""))
     if kind == "delete":
         if client is None or not data.get("message_id"):
             return None

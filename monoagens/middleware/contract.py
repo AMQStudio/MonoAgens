@@ -85,6 +85,31 @@ def check_coverage(name: str, adapter: Any) -> tuple[str, ...]:
     ]
     for kind in sorted(gaps):
         lines.append(f"adapter {name} gap {kind}: {gaps[kind]}")
+    lines.extend(adapter_fallbacks(name, adapter))
+    return tuple(lines)
+
+
+# D70 fallback chains (adapters.md §4, middleware.md §9).
+FALLBACKS: dict[str, tuple[tuple[str | None, str], ...]] = {
+    "approval": (("buttons", "buttons"), ("reactions", "reactions"), (None, "text")),
+    "choices": (("buttons", "buttons"), ("menus", "menus"), ("polls", "poll"),
+                (None, "numbered list")),
+    "thread": (("threads", "new thread"), (None, "reply with the title")),
+    "location": (("locations", "native"), (None, "text")),
+    "sticker": (("stickers", "sticker"), (None, "emoji")),
+    "progress": (("edit", "edit"), (None, "new message")),
+}
+
+
+def adapter_fallbacks(name: str, adapter: Any) -> tuple[str, ...]:
+    """Return the fallback choice per D70 chain for `adapter` so the boot report shows it."""
+    shows = set(getattr(adapter, "shows", ()) or ())
+    lines: list[str] = []
+    for feature, chain in FALLBACKS.items():
+        chosen = next((label for cap, label in chain if cap is None or cap in shows), "none")
+        top = chain[0][1]
+        note = chosen if chosen == top else f"{chosen} (fallback from {top})"
+        lines.append(f"adapter {name} fallback {feature}: {note}")
     return tuple(lines)
 
 # The one marker for a cut tool output; a tool never invents a second one.
@@ -93,9 +118,9 @@ OUTPUT_MARKER = (
     "full in {ref}; continue from character {n}]"
 )
 
-__all__ = ["CALL_FACTS", "FACTS", "OUTPUT_MARKER", "OWNER_POLICY", "READS", "SHOWS", "SLOTS",
-           "AttachmentDoor", "LogView", "attachment_origins", "check_coverage",
-           "describe_attachments", "find_attachment", "open_attachment",
+__all__ = ["CALL_FACTS", "FACTS", "FALLBACKS", "OUTPUT_MARKER", "OWNER_POLICY", "READS", "SHOWS",
+           "SLOTS", "AttachmentDoor", "LogView", "adapter_fallbacks", "attachment_origins",
+           "check_coverage", "describe_attachments", "find_attachment", "open_attachment",
            "Continue", "HookOutcome", "Middleware", "Registration", "Replace", "Stop",
            "compose"]
 

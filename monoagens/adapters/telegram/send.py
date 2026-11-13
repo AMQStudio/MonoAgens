@@ -149,8 +149,12 @@ async def show(call: Call, place: str, kind: str, **data: Any) -> Any:
     if kind == "typing":
         return await call("sendChatAction", chat_id=cid, action="typing", **t_extra)
     if kind == "edit":
+        mid = data.get("message_id")
+        if not mid:
+            return await call("sendMessage", chat_id=cid, text=str(data.get("text") or ""),
+                              **t_extra)
         return await call("editMessageText", chat_id=cid,
-                          message_id=data.get("message_id"), text=str(data.get("text") or ""))
+                          message_id=mid, text=str(data.get("text") or ""))
     if kind == "delete":
         return await call("deleteMessage", chat_id=cid, message_id=data.get("message_id"))
     if kind in ("buttons", "menus"):

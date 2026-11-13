@@ -196,8 +196,13 @@ async def show(resolve_channel: ResolveChannel, place: str, kind: str,
         async with channel.typing():
             return None
     if kind == "edit":
-        msg = await channel.fetch_message(int(str(data.get("message_id"))))
-        return await msg.edit(content=str(data.get("text") or ""))
+        mid = data.get("message_id")
+        if not mid:
+            sent = await channel.send(str(data.get("text") or "\u200b"))
+            return {"message_id": str(getattr(sent, "id", "") or "")}
+        msg = await channel.fetch_message(int(str(mid)))
+        await msg.edit(content=str(data.get("text") or ""))
+        return {"message_id": str(mid)}
     if kind == "delete":
         msg = await channel.fetch_message(int(str(data.get("message_id"))))
         return await msg.delete()
