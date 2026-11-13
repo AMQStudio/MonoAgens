@@ -417,3 +417,34 @@ async def test_wrong_and_expired_link_codes_and_unlink(aconn):
     assert after_unlink.who.startswith("person:p_")
     assert await read_state(aconn, f"merged:{b_ev.who}") == {"into": a_ev.who}
     assert len(await _events(aconn, identity.UNLINKED)) == 1
+
+
+async def test_place_persisted_and_readonly_place_refuses_before_act(aconn):
+    body = _SayBody()
+    kernel = build(aconn, clock=FakeClock(START), pfc=_FakePFC(), settings=settings())
+    kernel.register_adapter(body)
+
+    [ro] = await _put_idle(kernel, Event(
+        id=None, ts=START, kind="percept", who="telegram:10",
+        place="space:tg:-100555:9", body="telegram",
+        payload={"description": "pengumuman", "place_kind": "shared", "addressed": False,
+                 "place_info": {"form": "thread", "parent": "space:tg:-100555",
+                                "can_post": False, "name": "Topik"}}))
+    saved = await read_state(aconn, "place:space:tg:-100555:9")
+    assert saved["form"] == "thread"
+    assert saved["parent"] == "space:tg:-100555"
+    assert saved["can_post"] is False
+    assert saved["name"] == "Topik"
+
+    await kernel._apply(ro, ToolCall("act", {
+        "capability": "telegram.say",
+        "arguments": {"text": "coba balas"}}))
+    await kernel._apply(ro, ToolCall("act", {
+        "capability": "telegram.say",
+        "arguments": {"text": "ke sana", "to": "space:tg:-100555:9"}}))
+
+    assert body.actions == []
+    results = await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'act.result' ORDER BY id")).fetchall()
+    assert len(results) == 2
+    assert all("read-only" in str(r[0]["result"]["error"]) for r in results)

@@ -434,8 +434,16 @@ async def whoami(kernel: Any, event: Event, arguments: list[str]) -> str:
         lines.append("accounts: " + ", ".join(accounts))
     lines.append(f"roles: {_held_line(book, who)}; tier {book.tier(who)}; "
                  f"approval {book.approval(who)}")
-    info = await place_info(kernel, event, place)
-    lines.append(f"place: {place} — {await privacy.place_kind(conn, place)}, {event.body}"
+    stored = await identity.read_place(conn, place)
+    live = await place_info(kernel, event, place)
+    if live and event.id is not None and any(
+            k in live for k in ("form", "parent", "can_post", "name")):
+        await identity.record_place(conn, place, live, event_id=int(event.id))
+    info = {**stored, **{k: v for k, v in live.items() if v not in (None, "") or k == "parent"}}
+    form = info.get("form") or await privacy.place_kind(conn, place)
+    parent = f", parent {info['parent']}" if info.get("parent") else ""
+    readonly = ", read-only" if info.get("can_post") is False else ""
+    lines.append(f"place: {place} — {form}, {event.body}{parent}{readonly}"
                  + (f', "{info["name"]}"' if info.get("name") else "")
                  + (f' ({info["member_count"]} members)' if info.get("member_count") else ""))
     if info.get("role_facts"):

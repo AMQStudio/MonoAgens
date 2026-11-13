@@ -326,6 +326,23 @@ async def test_merged_younger_people_entry_keeps_applying_and_warns(aconn):
     assert any("person:p_young" in line and "person:p_old" in line for line in report.lines)
 
 
+async def test_whoami_shows_place_form_and_parent(aconn):
+    kernel = await _kernel(aconn)
+
+    class _ThreadBody:
+        name = "telegram"
+        def capabilities(self):
+            return ()
+        async def place_info(self, place: str) -> dict[str, object]:
+            return {"form": "thread", "parent": "space:tg:-100", "can_post": True,
+                    "name": "Diskusi", "member_count": 5, "role_facts": []}
+
+    kernel.tools.adapters["telegram"] = _ThreadBody()
+    reply = await kernel.tools.command("whoami").handler(
+        kernel, _command("space:tg:-100:44"), [])
+    assert "place: space:tg:-100:44 — thread, telegram, parent space:tg:-100" in reply
+
+
 async def test_an_admin_cannot_grant_admin(aconn):
     kernel = await _kernel(aconn)
 

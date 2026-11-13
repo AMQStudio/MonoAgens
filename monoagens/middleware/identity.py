@@ -229,6 +229,55 @@ def identity_line() -> Middleware:
     return rule
 
 
+async def read_place(conn: Any, place: str | None) -> dict[str, Any]:
+    """Return persisted metadata `{form, parent, can_post, name, members, roles}` for a place."""
+    if not place:
+        return {}
+    return dict(await read_state(conn, f"place:{place}") or {})
+
+
+async def can_post(conn: Any, place: str | None) -> bool:
+    """Return whether the soul may post to `place` (defaults to True when unknown)."""
+    info = await read_place(conn, place)
+    return info.get("can_post", True) is not False
+
+
+async def record_place(conn: Any, place: str, info: Mapping[str, Any], *,
+                       event_id: int) -> dict[str, Any]:
+    """Persist structured place metadata in `state: place:<id>` (D68)."""
+    current = await read_place(conn, place)
+    updated = {
+        "form": info.get("form") or current.get("form") or "group",
+        "parent": info.get("parent") if "parent" in info else current.get("parent"),
+        "can_post": (info["can_post"] if "can_post" in info and info["can_post"] is not None
+                     else current.get("can_post", True)),
+        "name": info.get("name") or current.get("name") or "",
+        "members": list(info.get("members") if info.get("members") is not None
+                        else current.get("members") or ()),
+        "roles": list(info.get("roles") if info.get("roles") is not None
+                      else current.get("roles") or ()),
+    }
+    if updated != current:
+        await write_state(conn, f"place:{place}", updated, event_id)
+    return updated
+
+
+def place_tracker(conn: Any) -> Middleware:
+    """Inbound rule: persist structured place metadata reported on incoming percepts (D68)."""
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        if getattr(item, "kind", "") != "percept" or not getattr(item, "place", None) or not item.id:
+            return Continue()
+        payload = item.payload or {}
+        raw = dict(payload.get("place_info") or {})
+        if not raw.get("form"):
+            raw["form"] = "dm" if payload.get("place_kind") == "direct" else "group"
+        await record_place(conn, str(item.place), raw, event_id=int(item.id))
+        return Continue()
+
+    return rule
+
+
 def route(conn) -> Middleware:
     """Action rule: resolve `to:`/`via:` to a place and attach the routing labels."""
 
@@ -237,7 +286,10 @@ def route(conn) -> Middleware:
             return Continue()
         to, via = ctx.get("to"), ctx.get("via")
         if not to:
-            return Continue()  # the current place
+            target = ctx.get("place") or ctx["event"].place
+            if target and not await can_post(conn, target):
+                ctx["refusal"] = f"cannot post in {target}: read-only place"
+            return Continue()
         place, error = await resolve_to(conn, str(to), via)
         if place is None and str(to) == ctx["event"].who:
             place, error = ctx["event"].place, None  # the person is here: answer them here
@@ -249,6 +301,9 @@ def route(conn) -> Middleware:
             ctx["refusal"] = error
             return Continue()
         ctx["place"] = place or ctx["event"].place
+        if not await can_post(conn, ctx["place"]):
+            ctx["refusal"] = f"cannot post in {ctx['place']}: read-only place"
+            return Continue()
         labels = ctx["labels"]
         labels["place_kind"] = await privacy.place_kind(conn, ctx["place"])
         labels["hold_for"] = str(to) if is_owner(to) else None
@@ -421,7 +476,9 @@ async def resolve_to(conn, to: str, via: str | None = None) -> tuple[str | None,
     if not is_person(to):
         found = await (await conn.execute(
             "SELECT 1 FROM events WHERE place = %s LIMIT 1", (str(to),))).fetchone()
-        return (str(to), None) if found else (None, f"no such place: {to}")
+        if found or await read_state(conn, f"place:{to}") is not None:
+            return str(to), None
+        return None, f"no such place: {to}"
     place = await direct_place(conn, str(to), via)
     if place is None:
         return None, f"no way to reach {str(to).removeprefix('person:')} yet"

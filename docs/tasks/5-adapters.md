@@ -73,7 +73,7 @@ adapter is a special case.
   history merge into one card and one memory, `recall` finds both sides, audience labels of old
   lines follow the merge, a wrong or expired code links nothing, `/unlink` gives a new id from
   then on and splits nothing, the soul has no tool that links.
-- [ ] 1.2 Places (D68, adapters.md §3): place info with `form`, `parent`, `can_post`, `name`,
+- [x] 1.2 Places (D68, adapters.md §3): place info with `form`, `parent`, `can_post`, `name`,
   `members` and platform role facts, kept by identity; Telegram reports it first (private chat,
   group, forum topic as `thread`, channel as `broadcast`). Test: a send to a place where
   `can_post` is false is refused with its reason; `/whoami` shows the place's form and parent.
@@ -209,3 +209,4 @@ Failing scenarios: `23_recall_episodes` (5/7), `24_gate_threshold` (10/11).
   - `monoagens/core/memory/recall.py`: use `cards.merge_map` and `cards.equivalent_sources` so `recall.search` matches both merged ids when searching by source or query and resolves returned event `who` fields through `merge_map`.
   - `monoagens/core/memory/retrieval.py` and `monoagens/core/memory/sleep.py`: canonicalize event and memory `who` through `cards.merge_map` during ACT-R retrieval formatting and sleep consolidation.
 - **Progress 1.1**: done — implemented `/link` (owner 2-arg + 6-digit single-use 10m 3-try code) & `/unlink` commands in `identity.py` (never exposed as soul tools); emits `identity.merged` (`person:owner` always wins, else older id) + `source.merged`; core `cards.apply_merge` folds `person:` closeness/reliability, moves `habit:*`/`last_seen:*`/open `task:*`, updates `memories` & `expectations`, and core log reads (`layout`, `situation`, `recall`, `retrieval`, `sleep`) + `privacy.audience` (via `alias:`) + `roles.reconcile_merges` follow the merge cleanly without rewriting `events`; `563 passed, 1 skipped` (`uv run pytest -q`); fake replay `158/158` passed; core import invariant clean.
+- **Progress 1.2**: done — Telegram `place_info` (`send.py`), `format.py`, and `__init__.py` report structured `{form, parent, can_post, name, members, roles}` for DMs (`dm`), groups (`group`), forum topics (`thread` with `message_thread_id`), and channels (`broadcast`, `channel_post`, `can_post` from permissions/membership); `identity.place_tracker` persists `state: place:<id>`, `identity.route` refuses sends to `can_post: false` places before any act runs, and `/whoami` renders `form` and `parent`; `567 passed, 1 skipped` (`uv run pytest -q`); fake replay `158/158` passed; core import invariant clean.

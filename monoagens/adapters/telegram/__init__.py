@@ -109,7 +109,7 @@ class TelegramBody:
                         await put(self._callback(update["callback_query"]))
                         offset = update["update_id"] + 1
                         continue
-                    message = update.get("message")
+                    message = update.get("message") or update.get("channel_post")
                     if not message:
                         offset = update["update_id"] + 1
                         continue
@@ -199,7 +199,7 @@ class TelegramBody:
 
     async def place_info(self, place: str) -> dict[str, Any]:
         """Return what Telegram reports about one chat."""
-        return await send.place_info(self._call, place)
+        return await send.place_info(self._call, place, bot_id=self.bot_id)
 
     def _callback(self, query: dict[str, Any]) -> Event:
         """Turn one button press into an ordinary percept that answers an approval."""

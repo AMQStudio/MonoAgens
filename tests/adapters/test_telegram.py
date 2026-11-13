@@ -287,3 +287,61 @@ def test_capability_descriptors():
     for cap in caps.values():
         assert cap["long_running"] is False
         assert cap["identity_changing"] is False
+
+
+async def test_place_info_reports_dm_group_thread_and_channel():
+    chats = {
+        "777": {"id": 777, "type": "private", "first_name": "Muqsith"},
+        "-100123": {"id": -100123, "type": "supergroup", "title": "Tim Alpha"},
+        "-100999": {"id": -100999, "type": "channel", "title": "Pengumuman"},
+    }
+    members = {
+        "-100123": {"status": "member"},
+        "-100999": {"status": "member"},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        method = request.url.path.rsplit("/", 1)[-1]
+        params = json.loads(request.content or b"{}")
+        if method == "getChat":
+            return httpx.Response(200, json={"ok": True, "result": chats[str(params["chat_id"])]})
+        if method == "getChatMember":
+            return httpx.Response(200, json={"ok": True,
+                                              "result": members.get(str(params["chat_id"]), {})})
+        if method == "getChatMemberCount":
+            return httpx.Response(200, json={"ok": True, "result": 12})
+        return httpx.Response(200, json={"ok": True, "result": True})
+
+    body = TelegramBody("token", transport=httpx.MockTransport(handler))
+    body.bot_id = BOT_ID
+
+    dm = await body.place_info("space:tg:777")
+    group = await body.place_info("space:tg:-100123")
+    thread = await body.place_info("space:tg:-100123:9")
+    channel = await body.place_info("space:tg:-100999")
+
+    assert dm["form"] == "dm" and dm["parent"] is None and dm["can_post"] is True
+    assert group["form"] == "group" and group["parent"] is None and group["can_post"] is True
+    assert thread["form"] == "thread" and thread["parent"] == "space:tg:-100123"
+    assert channel["form"] == "broadcast" and channel["can_post"] is False
+
+
+async def test_forum_topic_percept_and_say_carry_thread():
+    topic_msg = {
+        **_message(message_id=91, chat_id=CHAT_GROUP, chat_type="supergroup",
+                   text="@mona_bot cek topic",
+                   entities=[{"type": "mention", "offset": 0, "length": 9}]),
+        "message_thread_id": 44,
+    }
+    fake = FakeTelegram([{"update_id": 200, "message": topic_msg}])
+    body = _body(fake)
+    events = await _drive(body, fake, expected=1, polls=1)
+
+    assert events[0].place == f"space:tg:{CHAT_GROUP}:44"
+    assert events[0].payload["place_info"]["form"] == "thread"
+    assert events[0].payload["place_info"]["parent"] == f"space:tg:{CHAT_GROUP}"
+
+    await body.act(Action(kind="say", place=f"space:tg:{CHAT_GROUP}:44",
+                          payload={"text": "siap"}))
+    assert ("sendMessage", {"chat_id": str(CHAT_GROUP), "text": "siap",
+                            "message_thread_id": 44}) in fake.calls
