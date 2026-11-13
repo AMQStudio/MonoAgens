@@ -246,10 +246,12 @@ never sent with text written in the current context. The core turns it into an i
 say, to whom, why — and wakes reasoning once more in the target place, with that place's context
 (§8, absolute line 2); the intent is that wake's trigger, so reasoning sees what it set out to
 say and why; the message is written there, as it would be written in Budi's chat.
-This costs one extra model call and only for messages to another place. A paraphrase of private
-content cannot leak, because the content was never in the target's context. A check that a reply
-quotes no private content its audience may not see stays only as an audit and a replay metric
-(`privacy.suspect`), never as a block (D84): privacy is held before the model, by construction.
+This costs one extra model call and only for messages to another place. The intent carries the
+drafted words only when the middleware's labels show that nothing private in the source context
+is hidden from the target; otherwise it carries only what to do and to whom, and the words are
+written from the target's context alone, so private content never crosses inside an intent
+(D84, [middleware.md §3](middleware.md)). No text-similarity check exists: privacy is held
+before the model, by construction.
 
 **History and catching up** (D37, D40). An adapter may offer `history(place, before, limit)` for
 messages the log lacks. On connect it back-fills what it missed as `percept` with

@@ -96,7 +96,7 @@ read by the middleware, never by the core:
 |---|---|
 | `form` | `chat` (a private chat) · `group` · `broadcast` (a channel where few may post: WhatsApp Channels, a Telegram channel, a Discord announcement channel) · `thread` (a Discord thread, a Telegram forum topic) |
 | `parent` | the place this one belongs to: a Discord server for its channels, a channel for its threads, a WhatsApp Community for its groups, a Telegram forum for its topics; none for a private chat |
-| `name`, `members` | the place's name and member count, when the platform gives them |
+| `name`, `members` | the place's name, and its members as account ids when the platform gives them (only a count means the membership is unknown); member join and leave events keep it current. Privacy reads the audience from it (D85, [middleware.md §3](middleware.md)) |
 | `can_post` | whether the soul may post there now (false in a broadcast it only follows) |
 | `roles` | platform role facts of a person there ("admin of this group"); with each percept the adapter also sends `data.platform_roles: {space, roles}` (the role ids the sender holds and the organisation place they belong to) |
 

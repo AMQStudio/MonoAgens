@@ -140,13 +140,18 @@ adapter is a special case.
   policy, privacy, identity and roles stay guards); a refused communicative act returns to
   reasoning with its reason for one more round; one neutral `say`, `react`, `edit` routed to the
   trigger's place (or `to:` / `via:`), the `<adapter>.say` entries hidden from the prompt;
-  privacy enforced before the model only (D84, middleware.md §3): `privacy.leaks` no longer
-  blocks; it records `privacy.suspect` (act id, matched id, audience; no text) and the message is
-  sent; replay reports the suspect count; a fault-injection test over every adapter method,
+  privacy enforced before the model only (D84, middleware.md §3): the text-similarity check is
+  removed entirely (no `privacy.leaks`, no suspect events); every item entering a context is
+  checked against the place's audience and a failure is dropped and recorded as `error`; an
+  intent to another place carries the drafted words only if every private item of the source
+  context is visible at the target; the audience is the members (D85), with *unknown* for a
+  shared place without a member list; a capability may declare no permission only when it is
+  communicative; a fault-injection test over every adapter method,
   best-effort rule and tool. Tests: a show that raises does not stop the turn; a stranger's
   "halo" is answered even with many similar imported greetings; a private line from another
-  chat never reaches the context of a place outside its audience (the context filter); a reply
-  close to such a line is sent and recorded as `privacy.suspect`; a send to a `can_post: false`
+  chat never reaches the context of a place outside its audience (the context filter); "tell
+  Budi what Fulan said" from the owner's DM reaches Budi's wake without Fulan's words; a group
+  where only the owner spoke but with 200 members holds no private item; a send to a `can_post: false`
   place is refused and reasoning answers in another way; a WhatsApp message cannot be answered
   through the CLI.
 - [ ] 1.8 Real-model test (this task's one exception to the last-part rule, because WhatsApp is

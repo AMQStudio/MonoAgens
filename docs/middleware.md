@@ -141,13 +141,28 @@ The one middleware that is always present.
   filter (what the model may see in this place), speaking elsewhere through a new wake in the
   target place with that place's context ([core.md §4](core.md), D48), and the audience check on
   opening or forwarding an attachment. The model never sees private content it may not use
-  here, so it has nothing to leak. A text-similarity check after the model writes is **an audit,
-  never a block**: when a reply looks close to a line its audience may not see, the policy
-  records `privacy.suspect` (the reply's act id, the matched event or memory id and its
-  audience; ids only, no text) and the message is still sent. Replay counts it as a metric, and
-  every suspect is a lead to a labelling bug, fixed where it lives. Refusals that remain are
-  deterministic and give their reason: a place where the soul may not post, a permission, quiet
-  hours, a brake.
+  here, so it has nothing to leak. **No text-similarity check** exists, before or after the
+  model: guessing from the words can only find coincidences (the soul's own greeting once
+  matched as a "leak"), never a real leak.
+  - **Every item is checked as it enters a context.** When the context is laid out, each line,
+    memory, card note, `<doing>` result and the trigger is checked against the place's audience
+    from its labels; an item that fails is dropped and recorded as `error` (a labelling or
+    filter bug, fixed where it lives), never silently kept. The filter itself is tested this way.
+  - **Words that cross places** (D48): the context of a wake records which private items it
+    held. An intent to speak elsewhere carries the drafted words only if every private item that
+    context held is visible at the target; otherwise the target wake receives the intent without
+    the words ("you set out to send a message to Budi") and writes it from the target's own
+    context. The owner's direct chat holds everyone's private lines, so its drafts reach another
+    place word for word only when nothing private from someone else was in view.
+  - Refusals that remain are deterministic and give their reason: a place where the soul may not
+    post, a permission, quiet hours, a brake.
+- **The audience is who can perceive, not who has spoken (D85).** A place's audience is its
+  members as the adapter reports them (place info `members` as ids, kept current from member
+  events), together with everyone who spoke there; for a direct place, the other person. When a
+  shared place's membership is unknown or only a count, its audience includes *unknown*, and no
+  private item enters it (the safer side, as unknown `place_kind` counts as shared). An audience
+  is never empty for a shared place: a group where only the owner has spoken is not open to
+  everything. Labels written before D85 are read with this rule from the place's current members.
 - **Sharing by consent (D46).** The policy offers the `share(item | episode, to)` capability: it
   passes only when the chain's `origin_actor` is in the item's audience, and records
   `share.granted`, after which the new person is in the audience. Each person speaks only for
