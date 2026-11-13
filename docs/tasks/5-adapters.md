@@ -154,6 +154,37 @@ adapter is a special case.
   where only the owner spoke but with 200 members holds no private item; a send to a `can_post: false`
   place is refused and reasoning answers in another way; a WhatsApp message cannot be answered
   through the CLI.
+- [ ] 1.11 Real-world testing loop (owner, 2026-11-14) — before the live session of 1.8, so that
+  tests see what the real platforms send instead of what we imagined:
+  1. **Fakes from the real classes**: every fake of neonize, discord.py and Telegram's client is
+     built with `unittest.mock.create_autospec` (or a checked subclass) from the real class, so a
+     call with the wrong arguments fails the test (the `mark_read` bug would have failed).
+  2. **Shadow mode**: `bodies.<adapter>.dry_run: true` — the adapter receives everything and the
+     soul decides as usual, but nothing is sent, marked read or shown on the platform; each would-
+     be send is recorded (`act.result` with `dry_run: true`) and printed to the owner's CLI with
+     its place and reason. Default false.
+  3. **Recording mode**: `bodies.<adapter>.record: true` writes every raw platform event the
+     adapter receives (and every client call it makes) to `var/recordings/<adapter>/` (git-
+     ignored; it holds private data), with the thread it arrived on and its timing. A tool
+     `scripts/recording.py anonymize` turns a recording into a fixture: account and chat ids
+     mapped to stable fakes, every text replaced by a placeholder of the same length and the same
+     character classes (keeping `\u0000`, emoji, newlines), media bytes dropped; only anonymized
+     fixtures are committed (`tests/fixtures/recordings/`). A replay test feeds a fixture through
+     the real adapter code with its original threads and timing (fake client from 1), then the
+     middleware and the core with the fake model, and checks: every event is a percept or an
+     error event, nothing is lost, the invariants hold.
+  4. **Tonight's live failures become permanent scenarios or tests**, each from its Log or
+     recording: silent intake loss (threads, shared connection), `\u0000` payloads, `mark_read`
+     arguments, a show failure stopping the turn, the offline backlog waking on an old message,
+     `len=0` in the log, an undecryptable message, a history burst delaying a DM, the greeting
+     stopped as a "leak", the reply sent through `cli.say`.
+  5. **Hypothesis** (dev dependency, approved): stateful tests of the privacy and identity
+     invariants — random places with members, messages, links, merges, unlinks, shares and
+     delegations; after every step no context holds an item whose audience does not cover the
+     place's members, a merge never splits, an unknown-membership shared place holds no private
+     item, and the owner's direct chat sees everything.
+  The connected WhatsApp number is a test number: the owner tests it from his own phone; no
+  second tester account is needed.
 - [ ] 1.8 Real-model test (this task's one exception to the last-part rule, because WhatsApp is
   needed daily): the replay launch set passes on the new adapters, then a live session on
   WhatsApp in the owner's direct chat and one group (the model in `.env`; never read or print

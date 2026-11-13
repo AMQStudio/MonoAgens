@@ -87,7 +87,8 @@ task file you were given in [docs/tasks/](docs/tasks/README.md), and the spec se
   - `fastembed`
   - `httpx >= 0.28, < 0.29`
   - `pyyaml`
-- Dev dependencies: `pytest`, `pytest-asyncio >= 1.3` (1.x: set `asyncio_mode = "auto"` in
+- Dev dependencies: `pytest`, `hypothesis` (property-based and stateful tests of invariants,
+  approved by the owner 2026-11-14), `pytest-asyncio >= 1.3` (1.x: set `asyncio_mode = "auto"` in
   `pyproject.toml`; do not use the removed `event_loop` fixture).
 - No new dependency, ORM, agent framework, or platform SDK without the owner's approval.
 - **Plugin dependencies** live with the plugin (declared in its manifest, installed only when it
