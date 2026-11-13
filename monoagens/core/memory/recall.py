@@ -8,7 +8,7 @@ from typing import Any
 
 from monoagens.core.memory.cards import equivalent_sources, merge_map
 from monoagens.infra.store import payload_text
-from monoagens.types import RECENT_KINDS
+from monoagens.core.kinds import RECENT_KINDS
 
 RECALL = {
     "name": "recall",

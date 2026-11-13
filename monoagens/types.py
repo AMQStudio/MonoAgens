@@ -1,37 +1,24 @@
-"""Core types: Event, Action, and StateEntry."""
+"""Core-facing types: the contract's event, and the store's state row.
+
+`Event` and the schema version come from `monoagens.contract` (contract.md §7). `Action`
+is still the version 1 shape the adapters and the tool registry build; Part 4 switches them
+to `monoagens.contract.Action`, which is why it is spelled here for now.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 
-# The only kinds the PFC's <recent> section may show; internal bookkeeping stays out.
-RECENT_KINDS = ("percept", "act.out", "expectation.fired")
+from monoagens.contract import SCHEMA_VERSION as CURRENT_SCHEMA_VERSION
+from monoagens.contract import Event
 
-# The payload schema every event is written with; readers upcast older ones (core.md §3).
-CURRENT_SCHEMA_VERSION = 1
-
-
-@dataclass(frozen=True, slots=True)
-class Event:
-    """One immutable entry in the Log."""
-
-    id: int | None
-    ts: datetime
-    kind: str
-    who: str | None = None
-    place: str | None = None
-    body: str | None = None
-    payload: dict[str, Any] = field(default_factory=dict)
-    caused_by: int | None = None
-    origin_actor: str | None = None
-    schema_version: int = CURRENT_SCHEMA_VERSION
+__all__ = ["CURRENT_SCHEMA_VERSION", "Action", "Event", "StateEntry"]
 
 
 @dataclass(frozen=True, slots=True)
 class Action:
-    """One thing an adapter should do in the world."""
+    """One thing an adapter should do in the world (version 1 shape, until Part 4)."""
 
     kind: str
     place: str

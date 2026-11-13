@@ -1,13 +1,13 @@
 version: 1
 findings:
-  - {file: monoagens/core/context/parts.py, line: 21, ban: text-parse}
-  - {file: monoagens/core/context/parts.py, line: 243, ban: payload-read}
-  - {file: monoagens/core/context/parts.py, line: 245, ban: payload-read}
-  - {file: monoagens/core/context/parts.py, line: 247, ban: payload-read}
+  - {file: monoagens/core/context/parts.py, line: 22, ban: text-parse}
+  - {file: monoagens/core/context/parts.py, line: 244, ban: payload-read}
+  - {file: monoagens/core/context/parts.py, line: 246, ban: payload-read}
   - {file: monoagens/core/context/parts.py, line: 248, ban: payload-read}
-  - {file: monoagens/core/context/parts.py, line: 256, ban: payload-read}
-  - {file: monoagens/core/context/parts.py, line: 259, ban: payload-read}
-  - {file: monoagens/core/context/parts.py, line: 268, ban: payload-read}
+  - {file: monoagens/core/context/parts.py, line: 249, ban: payload-read}
+  - {file: monoagens/core/context/parts.py, line: 257, ban: payload-read}
+  - {file: monoagens/core/context/parts.py, line: 260, ban: payload-read}
+  - {file: monoagens/core/context/parts.py, line: 269, ban: payload-read}
   - {file: monoagens/core/context/working.py, line: 23, ban: payload-read}
   - {file: monoagens/core/context/working.py, line: 133, ban: payload-read}
   - {file: monoagens/core/context/working.py, line: 134, ban: payload-read}
@@ -33,34 +33,30 @@ findings:
   - {file: monoagens/core/gate/signals.py, line: 6, ban: text-parse}
   - {file: monoagens/core/gate/signals.py, line: 49, ban: payload-read}
   - {file: monoagens/core/gate/signals.py, line: 89, ban: payload-read}
-  - {file: monoagens/core/gate/situation.py, line: 47, ban: payload-read}
-  - {file: monoagens/core/gate/situation.py, line: 76, ban: payload-read}
+  - {file: monoagens/core/gate/situation.py, line: 48, ban: payload-read}
+  - {file: monoagens/core/gate/situation.py, line: 77, ban: payload-read}
   - {file: monoagens/core/hooks.py, line: 17, ban: text-parse}
   - {file: monoagens/core/identity.py, line: 14, ban: text-parse}
   - {file: monoagens/core/identity.py, line: 97, ban: payload-read}
   - {file: monoagens/core/jobs.py, line: 105, ban: payload-read}
   - {file: monoagens/core/jobs.py, line: 187, ban: labels-read}
-  - {file: monoagens/core/kernel.py, line: 139, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 140, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 147, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 150, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 188, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 241, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 244, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 263, ban: payload-read}
+  - {file: monoagens/core/kernel.py, line: 194, ban: payload-read}
+  - {file: monoagens/core/kernel.py, line: 283, ban: payload-read}
   - {file: monoagens/core/kernel.py, line: 286, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 289, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 307, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 309, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 311, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 313, ban: removed-field}
-  - {file: monoagens/core/kernel.py, line: 316, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 317, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 319, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 319, ban: removed-field}
-  - {file: monoagens/core/kernel.py, line: 513, ban: payload-read}
+  - {file: monoagens/core/kernel.py, line: 305, ban: payload-read}
+  - {file: monoagens/core/kernel.py, line: 328, ban: payload-read}
+  - {file: monoagens/core/kernel.py, line: 331, ban: payload-read}
+  - {file: monoagens/core/kernel.py, line: 349, ban: payload-read}
+  - {file: monoagens/core/kernel.py, line: 351, ban: payload-read}
+  - {file: monoagens/core/kernel.py, line: 353, ban: payload-read}
+  - {file: monoagens/core/kernel.py, line: 355, ban: removed-field}
+  - {file: monoagens/core/kernel.py, line: 358, ban: payload-read}
+  - {file: monoagens/core/kernel.py, line: 359, ban: payload-read}
+  - {file: monoagens/core/kernel.py, line: 361, ban: payload-read}
+  - {file: monoagens/core/kernel.py, line: 361, ban: removed-field}
+  - {file: monoagens/core/kernel.py, line: 555, ban: payload-read}
   - {file: monoagens/core/memory/recall.py, line: 31, ban: payload-read}
-  - {file: monoagens/core/memory/retrieval.py, line: 78, ban: payload-read}
+  - {file: monoagens/core/memory/retrieval.py, line: 80, ban: payload-read}
   - {file: monoagens/core/memory/sleep.py, line: 113, ban: removed-field}
   - {file: monoagens/core/reasoning.py, line: 243, ban: text-parse}
   - {file: monoagens/core/sends.py, line: 43, ban: payload-read}
@@ -69,11 +65,11 @@ findings:
   - {file: monoagens/core/threads.py, line: 62, ban: payload-read}
   - {file: monoagens/core/threads.py, line: 128, ban: removed-field}
   - {file: monoagens/core/threads.py, line: 132, ban: removed-field}
-  - {file: monoagens/middleware/contract.py, line: 37, ban: text-parse}
-  - {file: monoagens/middleware/contract.py, line: 41, ban: text-parse}
-  - {file: monoagens/middleware/contract.py, line: 47, ban: text-parse}
-  - {file: monoagens/middleware/contract.py, line: 139, ban: removed-field}
+  - {file: monoagens/middleware/contract.py, line: 38, ban: text-parse}
+  - {file: monoagens/middleware/contract.py, line: 42, ban: text-parse}
+  - {file: monoagens/middleware/contract.py, line: 48, ban: text-parse}
   - {file: monoagens/middleware/contract.py, line: 140, ban: removed-field}
+  - {file: monoagens/middleware/contract.py, line: 141, ban: removed-field}
   - {file: monoagens/middleware/identity.py, line: 8, ban: text-parse}
   - {file: monoagens/middleware/identity.py, line: 323, ban: removed-field}
   - {file: monoagens/middleware/identity.py, line: 333, ban: removed-field}

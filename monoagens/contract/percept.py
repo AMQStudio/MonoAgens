@@ -113,7 +113,7 @@ def from_legacy_event(event: Event) -> Event:
     percept = upcast_percept(raw)
     translated = to_event(percept, body=event.body or "", ts=event.ts, id=event.id,
                           caused_by=event.caused_by, origin_actor=event.origin_actor)
-    return replace(translated, kind=event.kind)
+    return replace(translated, kind=event.kind, body=event.body)
 
 
 def _payload(percept: Percept) -> dict[str, Any]:

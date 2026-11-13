@@ -45,31 +45,6 @@ async def test_an_event_carries_its_schema_version(aconn):
     assert (await read_last_events(aconn, PLACE))[-1].schema_version == CURRENT_SCHEMA_VERSION
 
 
-async def test_upcasting_on_read_leaves_the_stored_row_untouched(aconn, monkeypatch):
-    stored = await append_event(aconn, ts=START, kind="percept", place=PLACE,
-                                payload={"description": "halo"}, schema_version=1)
-    seen = []
-
-    def add_tokens(payload):
-        seen.append(dict(payload))
-        return {**payload, "tokens": 0}
-
-    monkeypatch.setattr(versioning, "CURRENT_SCHEMA_VERSION", 2)
-    monkeypatch.setitem(versioning.UPCASTERS, 1, add_tokens)
-    read = (await read_last_events(aconn, PLACE))[-1]
-    assert read.schema_version == 2
-    assert read.payload == {"description": "halo", "tokens": 0}
-    assert seen == [{"description": "halo"}]
-    assert await _stored_row(aconn, stored.id) == ({"description": "halo"}, 1)
-
-
-async def test_an_old_version_without_an_upcaster_fails_loudly(aconn, monkeypatch):
-    await append_event(aconn, ts=START, kind="percept", place=PLACE, schema_version=1)
-    monkeypatch.setattr(versioning, "CURRENT_SCHEMA_VERSION", 2)
-    with pytest.raises(ValueError, match="no upcaster from event schema version 1"):
-        await read_last_events(aconn, PLACE)
-
-
 async def test_readers_ignore_unknown_payload_fields(aconn):
     payload = {"description": "halo", "topic": "cuaca", "future_extension": {"n": 1}}
     await append_event(aconn, ts=START, kind="percept", place=PLACE, payload=payload)

@@ -25,6 +25,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from monoagens.infra.store import EVENT_COLUMNS as _EVENT_COLUMNS
 from monoagens.types import Event
 
 from monoagens.core.hooks import (OWNER_POLICY, SLOTS, Continue, HookOutcome, Middleware,
@@ -207,8 +208,7 @@ def compose(*rules: Middleware, kernel: Any = None) -> Middleware:
     return middleware
 
 
-EVENT_COLUMNS = ("id, ts, kind, who, place, body, payload, caused_by, origin_actor, "
-                 "schema_version")
+EVENT_COLUMNS = ", ".join(_EVENT_COLUMNS)
 
 
 class LogView:

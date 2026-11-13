@@ -11,12 +11,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from monoagens.infra.store import event_from_row
+from monoagens.infra.store import EVENT_COLUMNS, event_from_row
 from monoagens.types import Event
 
 CONFIRMED = "act.confirmed"
 CLOSING = (CONFIRMED, "act.result", "error")
-_COLUMNS = ("id, ts, kind, who, place, body, payload, caused_by, origin_actor, schema_version")
+_COLUMNS = ", ".join(EVENT_COLUMNS)
 
 
 async def confirm(kernel: Any, act: Event, capability: str, to: str | None) -> Event:

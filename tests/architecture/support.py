@@ -34,6 +34,9 @@ EMOJI_RANGES = ((0x1F300, 0x1FAFF), (0x2600, 0x2600), (0x2705, 0x2705), (0x274C,
                 (0xFE0F, 0xFE0F))
 
 PARSE_METHODS = ("lower", "casefold", "split", "rsplit", "splitlines")
+
+# A vocabulary of event kinds names facts, never human language, so it is not a word list.
+KIND_LISTS = frozenset({"RECENT_KINDS"})
 REMOVED_FIELDS = ("place_kind", "place_info", "can_post", "sent_at", "words_hidden",
                   "hold_for", "delivers", "platform_role", "text_like", "yes_words",
                   "SHOWS", "READS", "FALLBACKS")
@@ -147,7 +150,7 @@ def _assigned_word_list(statement: ast.stmt) -> bool:
         value = statement.value
     else:
         return False
-    if isinstance(target, ast.Name) and target.id == "__all__":
+    if isinstance(target, ast.Name) and target.id in {"__all__"} | KIND_LISTS:
         return False
     if not isinstance(value, (ast.Tuple, ast.List, ast.Set)) or len(value.elts) < 3:
         return False

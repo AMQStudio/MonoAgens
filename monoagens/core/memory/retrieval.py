@@ -12,8 +12,10 @@ from pgvector import Vector
 
 from monoagens.core.memory.cards import merge_map
 from monoagens.infra.prior import constants, retrieval
-from monoagens.infra.store import event_from_row, payload_text, read_event_vector
-from monoagens.types import RECENT_KINDS, Event
+from monoagens.infra.store import (EVENT_COLUMNS, event_from_row, payload_text,
+                                   read_event_vector)
+from monoagens.core.kinds import RECENT_KINDS
+from monoagens.types import Event
 
 _ROWS = ("id, text, who, place, importance, last_accessed_at, private, use_count, created_at, "
          "derived_from, coalesce(1 - (embedding <=> %s), 0) AS similarity")
@@ -123,7 +125,6 @@ async def recent_lines(conn: psycopg.AsyncConnection[Any], exclude_place: str,
         "GROUP BY place ORDER BY newest DESC LIMIT %s), "
         "lines AS (SELECT e.*, row_number() OVER (PARTITION BY e.place ORDER BY e.id DESC) "
         "AS rn FROM events e JOIN places p ON p.place = e.place WHERE e.kind = ANY(%s)) "
-        "SELECT id, ts, kind, who, place, body, payload, caused_by, origin_actor, "
-        "schema_version FROM lines WHERE rn <= 3 ORDER BY id",
+        "SELECT " + ", ".join(EVENT_COLUMNS) + " FROM lines WHERE rn <= 3 ORDER BY id",
         (exclude_place, list(RECENT_KINDS), max(1, limit // 2), list(RECENT_KINDS)))
     return [event_from_row(row) for row in await cur.fetchall()]

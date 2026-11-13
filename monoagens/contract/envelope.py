@@ -77,7 +77,8 @@ def upcast_event(row: Mapping[str, Any]) -> Event:
                  description=description, who=row.get("who"), place=row.get("place"),
                  body=row.get("body"), caused_by=row.get("caused_by"),
                  origin_actor=row.get("origin_actor"), features=features, backfill=backfill,
-                 imported=imported, payload=payload, labels=labels, schema_version=version)
+                 imported=imported, payload=payload, labels=labels,
+                 schema_version=SCHEMA_VERSION)
 
 
 def _v1_description(kind: str, payload: Mapping[str, Any]) -> str:

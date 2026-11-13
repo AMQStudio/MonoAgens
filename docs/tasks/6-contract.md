@@ -56,7 +56,7 @@ Read first: contract.md §3, [core.md](../core.md) §3–§6, §8–§9
 May touch: `monoagens/core/` (all), `monoagens/infra/store.py`, `monoagens/versioning.py`,
 `sql/migrations/` (one new migration), `tests/core/`, `scripts/replay.py`
 
-- [ ] 2.1 Event envelope v2 (core.md §3, §9.2): `occurred_at`, `description`, `features`,
+- [x] 2.1 Event envelope v2 (core.md §3, §9.2): `occurred_at`, `description`, `features`,
   `backfill`, `imported`, `labels` as envelope fields, `schema_version` 2; version 1 events and
   percepts upcast on read (`sent_at` → `occurred_at`, `addressed` → `features.addressed`,
   `place_kind` dropped).
@@ -260,3 +260,50 @@ Decisions taken while implementing (not questions, recorded so the reader sees t
   and ban 6 hold literally.
 
 Carried audit items: none yet (S.6, E.1-E.4, F.x, O.x belong to Parts 3-5).
+
+### Part 2 — the core on waist 1
+
+#### 2.1 Event envelope v2
+
+Line counts after 2.1: core 3878 (+36) · middleware 6147 (+3) · adapters 5465 · plugins 2065 ·
+tests 19992 (baseline 18577). Contract 812.
+
+One home per fix:
+
+- the envelope and the one v1 upcast: `monoagens/contract/envelope.py` (`upcast_event`);
+- the envelope's columns: `sql/migrations/005_envelope_v2.sql` + `sql/schema.sql`
+  (`occurred_at` is filled from `ts` by the `events_set_occurred_at` trigger, so every existing
+  INSERT keeps working, and the immutability trigger now also allows hard forgetting to scrub
+  `description` and `features`);
+- writing an event: `monoagens/infra/store.py` (`EVENT_COLUMNS`, `append_event`,
+  `append_envelope`) — `append_envelope` is the one place the core hands an event's opaque
+  fields to the Log, so the core never reads `labels`;
+- incoming percepts: `Kernel.put`/`_incoming` (`Percept` → `to_event`, v1 `Event` →
+  `from_legacy_event`), `Kernel.act_via_hooks` for the middleware's own acts (D-H);
+- the recent kinds: `monoagens/core/kinds.py` (`RECENT_KINDS`).
+
+Deviations and decisions, recorded:
+
+- `monoagens/types.py` re-exports `Event` and `CURRENT_SCHEMA_VERSION` from the contract but keeps
+  the version 1 `Action` shape until Part 4: the adapters and the tool registry still build
+  `Action(kind=, place=, payload=)` and both are outside Part 2's reach. The re-export of `Action`
+  happens with the cutover that makes it true.
+- `payload_text` stays in `monoagens/infra/store.py`: `infra/observability.py` (outside every
+  part's reach) and four middleware modules read it, and it reads a payload dict, not an event.
+  The core's own uses go in 2.2.
+- `append_event` derives the fields a caller leaves empty from the payload **through
+  `upcast_event`**, one home for the version 1 shape, so the transitional producers need no
+  change while the envelope fills up.
+- `tests/infra/test_versioning.py` loses its two tests of the version 1 payload upcaster
+  (`UPCASTERS`): that mechanism is replaced by `contract.envelope.upcast_event`, and the tests
+  asserted its internals. The version column, the kind namespaces and the plugin kinds stay.
+- `contract.lock` was rewritten twice while 2.1 was in flight: `upcast_event` now returns the row
+  at `schema_version` 2 (a row read at the current version cannot claim version 1) and
+  `from_legacy_event` keeps `body=None` as `None`. Both are meaning fixes inside the same
+  envelope; the contract does not change again from this commit on, which is what 6.2 tests.
+- two stale envelopes had to be healed together with the columns, because the row shape moved
+  under them: `monoagens/core/sends.py` and `monoagens/middleware/contract.py` (`LogView`) built
+  their own 10-column list, and `memory/retrieval.recent_lines` selected one. All three now use
+  `store.EVENT_COLUMNS`.
+- the architecture ratchet: `RECENT_KINDS` is a vocabulary of event kinds, not a word list, so
+  ban 2 exempts it by name (`KIND_LISTS` in `tests/architecture/support.py`).

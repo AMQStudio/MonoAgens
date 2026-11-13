@@ -35,7 +35,12 @@ async def fade(conn: psycopg.AsyncConnection, *, now: datetime, before: datetime
 async def forget_hard(conn: psycopg.AsyncConnection, event_ids: Sequence[int], *,
                       now: datetime, who: str | None = None,
                       place: str | None = None) -> Event:
-    """Replace payloads with ``{"forgotten": true}`` and delete the derived lineage."""
+    """Scrub an event's content and delete the lineage derived from it.
+
+    The payload becomes ``{"forgotten": true}``, the description and the features
+    are wiped: those are the three fields that hold what was forgotten
+    (contract.md §3).
+    """
     ids = sorted({int(event_id) for event_id in event_ids})
     if not ids:
         raise ValueError("forget_hard needs at least one event id")
@@ -58,8 +63,8 @@ async def forget_hard(conn: psycopg.AsyncConnection, event_ids: Sequence[int], *
         if core_sources & set(ids):
             await conn.execute("DELETE FROM state WHERE key = 'core_memory'")
         await conn.execute(
-            "UPDATE events SET payload = %s WHERE id = ANY(%s) OR ("
-            "kind = 'sleep.done' AND EXISTS ("
+            "UPDATE events SET payload = %s, description = '', features = '{}'::jsonb "
+            "WHERE id = ANY(%s) OR (kind = 'sleep.done' AND EXISTS ("
             "SELECT 1 FROM jsonb_array_elements_text("
             "COALESCE(payload->'derived_from', '[]'::jsonb)) elem "
             "WHERE elem::bigint = ANY(%s)))",

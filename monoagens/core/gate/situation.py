@@ -13,7 +13,8 @@ from monoagens.core.gate import formula
 from monoagens.infra.prior import constants
 from monoagens.infra.store import (read_event_vector, read_expectations, read_last_events,
                                    read_state, write_state)
-from monoagens.types import RECENT_KINDS, Event
+from monoagens.core.kinds import RECENT_KINDS
+from monoagens.types import Event
 
 
 @dataclass(frozen=True, slots=True)

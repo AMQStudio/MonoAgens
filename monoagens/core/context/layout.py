@@ -13,7 +13,8 @@ from monoagens.core.memory.cards import canonical, merge_map
 from monoagens.core.memory.retrieval import recent_lines
 from monoagens.infra.prior import constants
 from monoagens.infra.store import active_expectation_lines, read_last_events, read_state
-from monoagens.types import RECENT_KINDS, Event
+from monoagens.core.kinds import RECENT_KINDS
+from monoagens.types import Event
 
 if TYPE_CHECKING:  # the parts render the desk; importing them here would be a cycle
     from monoagens.core.context.parts import Part

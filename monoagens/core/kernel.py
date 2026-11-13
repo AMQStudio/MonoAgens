@@ -8,7 +8,7 @@ import logging
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from functools import partial
 from typing import Any
 
@@ -19,8 +19,10 @@ from monoagens.core.reasoning import Reasoning, ToolCall
 from monoagens.infra import budget, config, observability
 from monoagens.infra.clock import Clock
 from monoagens.infra.prior import load_settings, signal_weights
-from monoagens.infra.store import (append_event, cursor as store_cursor, insert_event_vector,
-                                   insert_event_vectors, payload_text, project_event,
+from monoagens.contract import Percept, from_legacy_event, to_event
+from monoagens.infra.store import (append_envelope, append_event, cursor as store_cursor,
+                                   insert_event_vector, insert_event_vectors, merge_source,
+                                   payload_text, project_event,
                                    unembedded_imported_percepts)
 from monoagens.types import Event
 
@@ -84,15 +86,38 @@ class Kernel:
             raise RuntimeError(NOT_INSTALLED)
         self.hooks.require_policy()
 
-    async def put(self, event: Event) -> Event | None:
-        """Accept one event from an adapter or the clock (ticks are not acknowledged)."""
+    async def put(self, item: Percept | Event, *, body: str | None = None) -> Event | None:
+        """Accept one percept or event from an adapter or the clock (ticks are not acked).
+
+        A percept becomes a version 2 event here; an adapter that still builds a version 1
+        event goes through the contract's one upcast (D-M). `body` names the adapter, which
+        the loader binds per adapter from Part 4 on.
+        """
         if self.intake is None:
             raise RuntimeError(NOT_INSTALLED)
         loop = asyncio.get_running_loop()
         self._loop = loop
+        event = self._incoming(item, body)
         ack = None if event.kind == "tick" else loop.create_future()
         await self.queue.put(_Queued(event, ack))
         return await ack if ack is not None else None
+
+    def _incoming(self, item: Percept | Event, body: str | None) -> Event:
+        """Return the version 2 event one incoming percept or event becomes."""
+        if isinstance(item, Percept):
+            return to_event(item, body=body or "unknown", ts=self.clock.now())
+        return from_legacy_event(item)
+
+    async def act_via_hooks(self, trigger: Event, capability: str,
+                            arguments: Mapping[str, Any]) -> dispatch.Dispatch:
+        """Ask the action hook for one act the middleware itself decided to make (D-H).
+
+        Command answers, approval prompts and brake prompts go through this one door, so the
+        authority stays in the action hook and is never derived a second time.
+        """
+        return await dispatch.dispatch(self, trigger,
+                                       {"capability": capability,
+                                        "arguments": dict(arguments)})
 
     async def cursor(self, body: str) -> Any | None:
         """Return the last recorded cursor for an adapter."""
@@ -127,24 +152,43 @@ class Kernel:
 
     async def _append(self, event: Event, kind: str, payload: dict[str, Any], *,
                       caused_by: int | None = None, project: bool = True,
-                      place: str | None = None) -> Event:
+                      place: str | None = None, description: str | None = None,
+                      features: Mapping[str, float] | None = None,
+                      backfill: bool = False, imported: bool = False,
+                      labels: Mapping[str, Any] | None = None,
+                      occurred_at: datetime | None = None) -> Event:
         async with self.conn.transaction():
             stored = await append_event(self.conn, ts=self.clock.now(), kind=kind, who=event.who,
                                         place=place or event.place, body=event.body,
                                         payload=payload, caused_by=caused_by,
-                                        origin_actor=event.origin_actor)
-            if project:
-                await project_event(self.conn, stored)
-                if stored.kind == "source.merged" and stored.id is not None:
-                    src = str((stored.payload or {}).get("from") or "")
-                    dst = str((stored.payload or {}).get("into") or "")
-                    if src and dst:
-                        await memory.apply_merge(self.conn, src, dst, stored.id)
+                                        origin_actor=event.origin_actor,
+                                        occurred_at=occurred_at, description=description,
+                                        features=features, backfill=backfill, imported=imported,
+                                        labels=labels)
+            await self._project(stored, project=project)
         self._observer.observe(stored)
         return stored
 
+    async def _append_received(self, event: Event) -> Event:
+        """Write one received event exactly as its adapter and the inbound hook left it."""
+        async with self.conn.transaction():
+            stored = await append_envelope(self.conn, event, ts=self.clock.now())
+            await self._project(stored, project=True)
+        self._observer.observe(stored)
+        return stored
+
+    async def _project(self, stored: Event, *, project: bool) -> None:
+        """Project one stored event onto the Status Board, and apply a merge it records."""
+        if not project:
+            return
+        await project_event(self.conn, stored)
+        if stored.kind == "source.merged" and stored.id is not None:
+            merged = await merge_source(stored)
+            if merged is not None:
+                await memory.apply_merge(self.conn, merged[0], merged[1], stored.id)
+
     async def _encode(self, event: Event, text: str | None = None) -> None:
-        text = text or str(event.payload.get("description") or event.payload.get("text") or "")
+        text = text or event.description
         if self.embedder is None or event.id is None or not text.strip():
             return
         if event.kind == "percept" and (event.payload or {}).get("imported") is True:
@@ -181,11 +225,9 @@ class Kernel:
             if item.event.kind == "tick":
                 stored = item.event
             else:
-                async with self.conn.transaction():
-                    if self.intake is not None:
-                        resolved = await self.intake(item.event)
-                    stored = await self._append(
-                        resolved, resolved.kind, resolved.payload, caused_by=resolved.caused_by)
+                if self.intake is not None:
+                    resolved = await self.intake(item.event)
+                stored = await self._append_received(resolved)
         except BaseException as exc:
             if isinstance(exc, Exception) and item.event.kind != "error":
                 await self._record_error(resolved, exc)

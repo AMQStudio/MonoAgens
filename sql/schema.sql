@@ -8,33 +8,72 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE TABLE IF NOT EXISTS events (
     id        bigserial PRIMARY KEY,
     ts        timestamptz NOT NULL DEFAULT now(),
+    occurred_at timestamptz,
     kind      text NOT NULL,
+    description text NOT NULL DEFAULT '',
     who       text,
     place     text,
     body      text,
-    payload   jsonb NOT NULL DEFAULT '{}'::jsonb,
     caused_by bigint REFERENCES events (id),
-    origin_actor text
+    origin_actor text,
+    features  jsonb NOT NULL DEFAULT '{}'::jsonb,
+    backfill  boolean NOT NULL DEFAULT false,
+    imported  boolean NOT NULL DEFAULT false,
+    payload   jsonb NOT NULL DEFAULT '{}'::jsonb,
+    labels    jsonb NOT NULL DEFAULT '{}'::jsonb,
+    schema_version integer NOT NULL DEFAULT 1
 );
 
 ALTER TABLE events ADD COLUMN IF NOT EXISTS origin_actor text;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS schema_version integer NOT NULL DEFAULT 1;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS occurred_at timestamptz;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS description text NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN IF NOT EXISTS features jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS backfill boolean NOT NULL DEFAULT false;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS imported boolean NOT NULL DEFAULT false;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS labels jsonb NOT NULL DEFAULT '{}'::jsonb;
+UPDATE events SET occurred_at = ts WHERE occurred_at IS NULL;
+ALTER TABLE events ALTER COLUMN occurred_at SET NOT NULL;
+
+-- A row written without a time of its own happened when it was recorded (contract.md §3).
+CREATE OR REPLACE FUNCTION events_default_occurred_at() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.occurred_at IS NULL THEN
+        NEW.occurred_at := NEW.ts;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS events_set_occurred_at ON events;
+CREATE TRIGGER events_set_occurred_at
+    BEFORE INSERT ON events
+    FOR EACH ROW
+    EXECUTE FUNCTION events_default_occurred_at();
 
 CREATE INDEX IF NOT EXISTS idx_events_place_id ON events (place, id);
+CREATE INDEX IF NOT EXISTS idx_events_description_trgm
+    ON events USING gin (description gin_trgm_ops);
 
 -- The Log is immutable: reject INSERT-after-the-fact rewrites, UPDATE and DELETE.
 -- The one UPDATE exception is hard forgetting: a dedicated function sets
--- monoagens.forgetting and replaces the payload with {"forgotten": true} only.
+-- monoagens.forgetting and scrubs the payload, the description and the features only.
 CREATE OR REPLACE FUNCTION events_immutable() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
     IF TG_OP = 'UPDATE'
        AND current_setting('monoagens.forgetting', true) = 'on'
        AND NEW.payload = '{"forgotten": true}'::jsonb
+       AND NEW.description = ''
+       AND NEW.features = '{}'::jsonb
        AND (NEW.id, NEW.ts, NEW.kind, NEW.who, NEW.place, NEW.body, NEW.caused_by,
-            NEW.origin_actor)
+            NEW.origin_actor, NEW.schema_version, NEW.occurred_at, NEW.backfill, NEW.imported,
+            NEW.labels)
            IS NOT DISTINCT FROM
            (OLD.id, OLD.ts, OLD.kind, OLD.who, OLD.place, OLD.body, OLD.caused_by,
-            OLD.origin_actor) THEN
+            OLD.origin_actor, OLD.schema_version, OLD.occurred_at, OLD.backfill, OLD.imported,
+            OLD.labels) THEN
         RETURN NEW;
     END IF;
     RAISE EXCEPTION 'events table is append-only';

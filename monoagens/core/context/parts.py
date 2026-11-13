@@ -16,7 +16,8 @@ from typing import Any
 from monoagens.core.context.layout import PFCContext, withheld_note
 from monoagens.core.principles import work_guidance
 from monoagens.infra.prior import constants
-from monoagens.types import RECENT_KINDS, Event
+from monoagens.core.kinds import RECENT_KINDS
+from monoagens.types import Event
 
 STABLE, SEMI, VOLATILE = "stable", "semi", "volatile"
 _SEPARATORS = {STABLE: "\n\n", SEMI: "\n", VOLATILE: "\n"}

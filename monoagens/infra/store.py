@@ -10,8 +10,9 @@ from zoneinfo import ZoneInfo
 from pgvector import Vector
 from psycopg.types.json import Jsonb
 
-from monoagens.types import CURRENT_SCHEMA_VERSION, Event, StateEntry
-from monoagens.infra.versioning import is_valid_event_kind, upcast
+from monoagens.contract import SCHEMA_VERSION, Action, Event, Receipt, upcast_event
+from monoagens.types import StateEntry
+from monoagens.infra.versioning import is_valid_event_kind
 
 EXPECTATION_COLUMNS = (
     "id", "kind", "who", "place", "about", "cue_time", "cue_event", "condition",
@@ -28,42 +29,76 @@ _INSERT_EXPECTATION = (
     "origin_actor, expires_at) VALUES "
     "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s, %s) RETURNING id"
 )
-_EVENT_COLS = ("id, ts, kind, who, place, body, payload, caused_by, origin_actor, "
-               "schema_version")
+# The whole envelope of contract.md §3, in the order every read uses.
+EVENT_COLUMNS = ("id", "ts", "occurred_at", "kind", "description", "who", "place", "body",
+                 "caused_by", "origin_actor", "features", "backfill", "imported", "payload",
+                 "labels", "schema_version")
+_EVENT_COLS = ", ".join(EVENT_COLUMNS)
 
 
-def event_from_row(row):
-    """Return the event one row of the Log's columns describes, at the current version."""
-    payload = row[6] if row[6] is not None else {}
-    event = Event(row[0], row[1], row[2], row[3], row[4], row[5], payload, row[7], row[8],
-                  row[9])
-    return upcast(event)
+def event_from_row(row) -> Event:
+    """Return the event one row of the Log's columns describes, upcast on read."""
+    return upcast_event(dict(zip(EVENT_COLUMNS, row)))
 
 
 def payload_text(payload: dict[str, Any]) -> str:
-    """Return the human-readable text of one event payload."""
+    """Return the human-readable text of one event payload.
+
+    The middleware and the adapters read their own payload this way; the core reads
+    `Event.description` instead (contract.md §3).
+    """
     text = next((payload[key] for key in ("description", "text", "reason", "about")
                  if payload.get(key)), "")
     return str(text or (payload.get("arguments") or {}).get("text") or "")
 
 
 async def append_event(conn, *, ts, kind, who=None, place=None, body=None, payload=None,
-                       caused_by=None, origin_actor=None,
-                       schema_version=CURRENT_SCHEMA_VERSION) -> Event:
-    """Append one event to the immutable Log; origin inherits along caused_by."""
+                       caused_by=None, origin_actor=None, occurred_at=None,
+                       description: str | None = None, features=None, backfill: bool = False,
+                       imported: bool = False, labels=None,
+                       schema_version: int = SCHEMA_VERSION) -> Event:
+    """Append one event to the immutable Log; origin inherits along caused_by.
+
+    A field the caller leaves empty is read from the payload through the contract's own upcast
+    rule, so no caller has to repeat the version 1 shape while it moves to the envelope.
+    """
     if ts is None or kind is None:
         raise ValueError("ts and kind must be explicitly provided")
     if not is_valid_event_kind(kind):
         raise ValueError(f"invalid event kind: {kind!r}")
     if schema_version < 1:
         raise ValueError(f"schema_version must be positive: {schema_version!r}")
-    query = ("INSERT INTO events (ts, kind, who, place, body, payload, caused_by, origin_actor, "
-             "schema_version) VALUES (%s, %s, %s, %s, %s, %s, %s, COALESCE(%s, "
-             "(SELECT origin_actor FROM events WHERE id = %s), %s), %s) "
+    translated = upcast_event({"ts": ts, "kind": kind, "payload": dict(payload or {})})
+    written = description or translated.description
+    occurred_at = occurred_at or translated.occurred_at
+    features = {**translated.features, **dict(features or {})}
+    backfill = backfill or translated.backfill
+    imported = imported or translated.imported
+    query = ("INSERT INTO events (ts, occurred_at, kind, description, who, place, body, "
+             "caused_by, origin_actor, features, backfill, imported, payload, labels, "
+             "schema_version) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, "
+             "(SELECT origin_actor FROM events WHERE id = %s), %s), %s, %s, %s, %s, %s, %s) "
              f"RETURNING {_EVENT_COLS}")
-    cur = await conn.execute(query, (ts, kind, who, place, body, Jsonb(payload or {}), caused_by,
-                                    origin_actor, caused_by, who, schema_version))
+    cur = await conn.execute(query, (ts, occurred_at, kind, written, who, place, body,
+                                    caused_by, origin_actor, caused_by, who,
+                                    Jsonb(dict(features or {})), backfill, imported,
+                                    Jsonb(dict(payload or {})), Jsonb(dict(labels or {})),
+                                    schema_version))
     return event_from_row(await cur.fetchone())
+
+
+async def append_envelope(conn, event: Event, *, ts) -> Event:
+    """Append one received event's whole envelope as it stands.
+
+    This is the one place the envelope's opaque fields (`labels` among them) are handed to
+    the Log; the core stores an event without reading what the middleware attached to it.
+    """
+    return await append_event(
+        conn, ts=ts, kind=event.kind, who=event.who, place=event.place, body=event.body,
+        payload=dict(event.payload or {}), caused_by=event.caused_by,
+        origin_actor=event.origin_actor, occurred_at=event.occurred_at,
+        description=event.description or None, features=event.features,
+        backfill=event.backfill, imported=event.imported, labels=event.labels)
 
 
 async def insert_event_vector(conn, event_id: int, embedding: Sequence[float],
@@ -93,14 +128,10 @@ async def insert_event_vectors(conn, items: Sequence[tuple[int, Sequence[float]]
 async def unembedded_imported_percepts(conn) -> list[tuple[int, str]]:
     """Return imported percept `(id, text)` pairs that still lack an embedding vector."""
     cur = await conn.execute(
-        "SELECT e.id, COALESCE(NULLIF(e.payload->>'description', ''), e.payload->>'text', '') "
-        "FROM events e "
+        "SELECT e.id, e.description FROM events e "
         "LEFT JOIN event_vectors v ON v.event_id = e.id "
-        "WHERE e.kind = 'percept' "
-        "  AND COALESCE((e.payload->>'imported')::boolean, false) = true "
-        "  AND v.event_id IS NULL "
-        "  AND BTRIM(COALESCE(NULLIF(e.payload->>'description', ''), e.payload->>'text', '')) <> '' "
-        "ORDER BY e.id ASC"
+        "WHERE e.kind = 'percept' AND e.imported = true AND v.event_id IS NULL "
+        "  AND BTRIM(e.description) <> '' ORDER BY e.id ASC"
     )
     return [(int(eid), str(text)) for eid, text in await cur.fetchall()]
 
@@ -163,6 +194,59 @@ async def write_state(conn, key, value, updated_by_event) -> None:
              "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "
              "updated_by_event = EXCLUDED.updated_by_event")
     await conn.execute(query, (key, Jsonb(value), updated_by_event))
+
+
+async def merge_source(event: Event) -> tuple[str, str] | None:
+    """Return the `(from, into)` source ids of a merge event, or None when it names none.
+
+    A merge carries two ids in one event and the envelope has one `place` column, so this is
+    the one place the core lets the store read a payload for it (D-B).
+    """
+    payload = event.payload or {}
+    src, dst = str(payload.get("from") or ""), str(payload.get("into") or "")
+    return (src, dst) if src and dst else None
+
+
+async def write_action(conn, action: Action, event_id: int) -> None:
+    """Record one action in the ledger, before it is handed to its body (D-F)."""
+    await write_state(conn, f"action:{action.id}", {
+        "capability": action.capability,
+        "place": action.place,
+        "arguments": dict(action.arguments),
+        "caused_by": action.caused_by,
+        "receipt": None,
+    }, event_id)
+
+
+async def close_action(conn, action_id: str, receipt: Receipt, event_id: int) -> None:
+    """Write one action's receipt into its ledger row."""
+    key = f"action:{action_id}"
+    current = await read_state(conn, key)
+    if current is None:
+        return
+    await write_state(conn, key, {**current, "receipt": {
+        "state": receipt.state,
+        "reason": receipt.reason,
+        "result": receipt.result,
+    }}, event_id)
+
+
+async def unresolved_actions(conn) -> list[dict[str, Any]]:
+    """Return every ledger row whose action still has no receipt, oldest first."""
+    cur = await conn.execute(
+        "SELECT key, value FROM state WHERE key LIKE 'action:%' "
+        "AND (value->>'receipt') IS NULL ORDER BY key")
+    found = []
+    for key, value in await cur.fetchall():
+        ledger = dict(value or {})
+        found.append({
+            "id": str(key)[len("action:"):],
+            "capability": str(ledger.get("capability") or ""),
+            "place": str(ledger.get("place") or ""),
+            "arguments": dict(ledger.get("arguments") or {}),
+            "caused_by": ledger.get("caused_by"),
+        })
+    return found
 
 
 async def add_budget_usage(conn, *, now: datetime, timezone: str, usage: dict[str, int],
