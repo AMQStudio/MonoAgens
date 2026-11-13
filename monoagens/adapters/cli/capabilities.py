@@ -80,14 +80,16 @@ OPTIONAL_CAPABILITIES: dict[str, dict[str, Any]] = {
 }
 
 READS = ("text", "reply", "files", "choices_answer")
-SHOWS = ("typing", "reply", "reactions", "locations")
+SHOWS = ("typing", "reply")
 GAPS: dict[str, str] = {
     "mention": "the local terminal is a 1:1 owner stream with no user mentions",
     "edit": "line-oriented socket input is append-only; lines cannot be edited in place",
     "delete": "line-oriented socket input is append-only; lines cannot be deleted retroactively",
     "reaction": "the plain-text socket client sends text lines, not emoji reactions",
+    "reactions": "the plain-text terminal stream cannot render emoji reactions; choices use numbered lines",
     "sticker": "the terminal client sends file paths via @path, not sticker packs",
     "location": "the terminal client has no GPS location picker",
+    "locations": "the terminal stream has no native map picker; location falls back to text coordinates",
     "contact": "the terminal client has no contact card picker",
     "poll": "the terminal client has no interactive poll widget",
     "view_once": "local files attached over Unix socket are regular filesystem files",

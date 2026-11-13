@@ -102,12 +102,25 @@ FALLBACKS: dict[str, tuple[tuple[str | None, str], ...]] = {
 }
 
 
+def fallback_choice(feature: str, shows: Sequence[str] | set[str]) -> tuple[str | None, str]:
+    """Return `(required_show_cap, label)` for `feature`, never picking an unshown capability."""
+    show_set = set(shows)
+    for cap, label in FALLBACKS[feature]:
+        if cap is None or cap in show_set:
+            if cap is not None and cap not in SHOWS:
+                raise ValueError(f"unknown fallback capability {cap!r} for {feature}")
+            return cap, label
+    raise ValueError(f"fallback chain for {feature!r} has no plain-text terminal step")
+
+
 def adapter_fallbacks(name: str, adapter: Any) -> tuple[str, ...]:
     """Return the fallback choice per D70 chain for `adapter` so the boot report shows it."""
     shows = set(getattr(adapter, "shows", ()) or ())
     lines: list[str] = []
     for feature, chain in FALLBACKS.items():
-        chosen = next((label for cap, label in chain if cap is None or cap in shows), "none")
+        cap, chosen = fallback_choice(feature, shows)
+        if cap is not None and cap not in shows:
+            raise ValueError(f"adapter {name} fallback {feature} chose unshown {cap!r}")
         top = chain[0][1]
         note = chosen if chosen == top else f"{chosen} (fallback from {top})"
         lines.append(f"adapter {name} fallback {feature}: {note}")

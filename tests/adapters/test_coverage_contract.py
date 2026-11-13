@@ -185,6 +185,20 @@ async def test_all_adapters_declare_valid_coverage_and_draw_shows_and_say_fields
     }))
     assert res is not None or name == "whatsapp"
 
+    # Every fallback in the boot report uses a capability in adapter.shows or plain text.
+    shows = set(adapter.shows)
+    for feature, chain in contract.FALLBACKS.items():
+        cap, chosen = contract.fallback_choice(feature, shows)
+        assert cap is None or cap in shows
+        expected_line = (f"adapter {name} fallback {feature}: {chosen}"
+                         if chosen == chain[0][1]
+                         else f"adapter {name} fallback {feature}: {chosen} (fallback from {chain[0][1]})")
+        assert expected_line in report.lines
+    if name == "cli":
+        assert "adapter cli fallback approval: numbered list (fallback from buttons)" in joined
+        assert "adapter cli fallback choices: numbered list (fallback from buttons)" in joined
+        assert "adapter cli fallback location: text (fallback from native)" in joined
+
 
 @pytest.mark.parametrize("name,opt_tool", [
     ("cli", "pin"),

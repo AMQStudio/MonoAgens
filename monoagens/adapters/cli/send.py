@@ -71,10 +71,5 @@ async def show(writers: set[asyncio.StreamWriter], kind: str, **data: Any) -> No
         await broadcast(writers, f"[step] {data.get('text') or ''}\n")
     elif kind == "reply":
         await broadcast(writers, f"{data.get('text') or ''}\n")
-    elif kind == "reactions":
-        await broadcast(writers, f"[{data.get('emoji') or ''}]\n")
-    elif kind == "locations":
-        loc = data.get("location") if isinstance(data.get("location"), dict) else data
-        await broadcast(writers, f"{format_location(loc)}\n")
     else:
         raise ValueError(f"cannot show {kind!r}")
