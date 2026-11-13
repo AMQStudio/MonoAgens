@@ -14,9 +14,11 @@ from; `body` in an event is only a name it carries. Like a sensory cortex, an ad
 native signal into a short description in language plus raw data; like a motor cortex, it turns
 an intention into native actions.
 
-**Native first** (D67). An adapter uses everything its platform offers: it reads every kind of
-message the platform can deliver, and shows things the best way the platform allows. What one
-platform lacks is declared, never faked; the middleware picks the fallback (§4).
+**Native first** (D67). Every adapter, present and new (Telegram, CLI, WhatsApp, Discord, and
+any later one), uses everything its platform offers: it reads every kind of message the platform
+can deliver, and shows things the best way the platform allows. What one platform lacks is
+declared with its reason, never faked; the middleware picks the fallback (§4). No adapter is a
+special case: the same checklist and the same tests apply to all of them.
 
 ## 2. Rules for every adapter
 - Declare capabilities with the core's descriptor ([core.md §9.1](core.md)): name, JSON schema,
@@ -133,6 +135,14 @@ lost is visible in the code and the boot report:
 - a progress message: edit one message → a new message per step;
 - a sticker: the sticker → its emoji.
 
+**Coverage is declared and tested** (D67). Every adapter declares at boot, in the vocabulary of
+`contract.py`, what it reads (the kinds of §4 "In") and what it shows (`SHOWS`), and names each
+gap with its reason ("read_receipts: the Telegram Bot API has none"). The boot report prints the
+table per adapter. One contract test runs over every adapter: each kind the platform delivers is
+either turned into a percept or declared as a gap, each declared `SHOWS` entry draws something,
+and nothing is silently dropped. Adding a platform feature means adding it to the adapter and its
+declaration, never a branch elsewhere.
+
 ## 5. History: back-fill and import (D69)
 - **Back-fill** is what the adapter missed while it was offline: `backfill: true`, as in §2.
 - **Import** is the history the account already had before the soul was connected to it
@@ -166,8 +176,8 @@ tells the two apart itself:
 ## 7. Present and planned adapters
 | Adapter | Status | Notes |
 |---|---|---|
-| Telegram | present | long polling; the Bot API cannot read history, so the soul's own log is its "scroll up"; buttons, edits, reactions, forum topics |
-| CLI | present | Unix socket inside the main process, thin client |
+| Telegram | present; native in Task 5 | long polling; everything the Bot API offers: inline buttons and the command menu, edit, delete, reply, reactions, polls, stickers, albums (media groups), locations, contacts, forum topics as `thread`, channels as `broadcast`, typing (chat action); declared gaps: no history (the soul's own log is its "scroll up") and no read receipts |
+| CLI | present; native in Task 5 | Unix socket inside the main process, thin client; text, files by path, reply; typing and progress as status lines; buttons as numbered choices; declared gaps for the rest |
 | WhatsApp | next (Task 5) | ported from V1 on neonize (a linked device); own or owner's number (§6); full history import (§5); files, stickers, polls, reactions, edits; no buttons, so approvals by reaction |
 | Discord | next (Task 5) | ported from V1 on discord.py (message content intent); servers, channels, threads, DMs; buttons and menus (an interaction is acknowledged within Discord's 3 s by deferring, inside the adapter); role mapping (§3) |
 | Voice notes and calls | later | STT in, TTS out; description = transcript; the contract keeps room through `long_running` acts |

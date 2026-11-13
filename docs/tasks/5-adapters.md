@@ -5,8 +5,8 @@ One task = one worker prompt, done by one worker. Work through the parts **in or
 
 **Goal.** The soul is usable every day: model providers as drivers with a fallback, the loop
 and privacy fixes, nothing lost when work continues; then one soul across WhatsApp, Discord and
-Telegram with one id per person so privacy follows people, each adapter using everything its
-platform offers; then voice notes, a non-chat adapter and more provider drivers.
+Telegram with one id per person so privacy follows people, every adapter (Telegram and CLI
+included) using everything its platform offers; then voice notes, a non-chat adapter and more provider drivers.
 
 ---
 
@@ -53,6 +53,11 @@ native first, D68 places, D69 back-fill and import, D70 what is shown.
 Identity comes first: it is what lets a person's private context follow them (D45), so a wrong
 link is a leak.
 
+**Every adapter is native** (D67, adapters.md §1, §4). What Part 1 says of WhatsApp and Discord
+holds for every adapter, Telegram and CLI included: everything the platform delivers becomes a
+percept, everything the platform can show is used, and each gap is declared with its reason. No
+adapter is a special case.
+
 - [ ] 1.0 Accounts in, person ids out (D65): adapters report native accounts (`telegram:123`,
   never `person:tg:123`); the inbound hook maps `who`, `data.mentions` and `data.reply_to.who`
   through the account map and registers an unknown account at once (`identity.registered`,
@@ -87,6 +92,13 @@ link is a leak.
   everything in as on WhatsApp; buttons and menus drawn by the adapter, interactions
   acknowledged within 3 s by deferring inside the adapter; several attachments per message;
   the Discord role ids of the sender reported with each percept.
+- [ ] 1.4b Telegram and CLI to native (D67, adapters.md §4, §7): Telegram reads and shows
+  everything the Bot API offers (inline buttons and the command menu, edit, delete, reply,
+  reactions, polls, stickers, albums, locations, contacts, forum topics, channels, typing), with
+  `say`, `react` and `edit` as on the others; the CLI shows what a terminal can (typing and
+  progress as status lines, buttons as numbered choices). The coverage declaration and the
+  contract test of adapters.md §4 run over every adapter (Telegram, CLI, WhatsApp, Discord);
+  each gap is declared with its reason (Telegram: no history, no read receipts).
 - [ ] 1.5 What is shown (D70, middleware.md §9): `contract.SHOWS` with the full vocabulary;
   settings from `interaction:` and `bodies.<adapter>.show:`; `/show <name> <value> [adapter]`;
   thinking `off | owner_direct | all` (all still passes `privacy.visible` per thought); typing only
@@ -100,7 +112,8 @@ link is a leak.
   in places whose `parent` chain reaches that server; a role taken away on Discord is gone at the
   next percept; an unmapped Discord role grants nothing. Test: the same person is a moderator in
   the server's channel and not in a DM or on WhatsApp.
-- [ ] 1.7 Check: one conversation continues across WhatsApp, Discord and Telegram; a person's
+- [ ] 1.7 Check: one conversation continues across WhatsApp, Discord and Telegram; the
+  coverage table of every adapter is in the boot report with no undeclared gap; a person's
   private context follows them only after a verified link; a file received on WhatsApp can be
   read and sent on; a sticker received can be sent back.
 - [ ] 1.8 Real-model test (this task's one exception to the last-part rule, because WhatsApp is
