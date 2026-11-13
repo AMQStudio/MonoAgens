@@ -72,8 +72,32 @@ async def test_installing_adds_the_mode_block_with_its_rule_and_examples(aconn, 
     text = await _block_text(aconn, kernel)
     assert text.startswith("<soul_tuning>\nmode: daily\nSpeak casually")
     assert "Examples:" in text
-    assert text.index("pagi!") < text.index("santai kok")
+    assert "the style, not the language" in text
+    assert text.index("morning!") < text.index("not really")
+    assert "person:" in text and "you:" in text
     assert "professional" not in text
+
+
+async def test_the_owner_may_bring_examples_through_the_option(aconn, tmp_path):
+    root = _root(tmp_path, "soul-tuning")
+    (root / "config.d").mkdir(exist_ok=True)
+    (root / "config.d" / "soul-tuning.yaml").write_text(
+        "version: 1\noptions:\n  examples:\n    daily:\n"
+        "      - [person, \"hey\"]\n      - [you, \"hey, what's up?\"]\n",
+        encoding="utf-8")
+    kernel, _loaded = await _kernel(aconn, root, "soul-tuning")
+
+    text = await _block_text(aconn, kernel)
+    assert "person: hey" in text and "you: hey, what's up?" in text
+    assert "morning!" not in text
+    assert "person: good morning" not in text  # the other mode keeps the file's examples
+
+    import sys
+    modes = sys.modules["monoagens_plugins_soul_tuning"].modes
+    assert modes.from_options({"examples": {"daily": [["person", "a"], ["you", "b"]]}})[
+        "daily"] == [("person", "a"), ("you", "b")]
+    with pytest.raises(ValueError, match="unknown mode"):
+        modes.from_options({"examples": {"rapping": [["person", "a"]]}})
 
 
 async def test_the_stable_prefix_does_not_change(aconn, tmp_path):

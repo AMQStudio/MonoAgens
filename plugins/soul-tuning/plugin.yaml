@@ -11,6 +11,7 @@ features:
 tools: {}
 settings:
   mode: {type: string, default: daily}
+  examples: {type: object, default: {}}
 permissions:
   soul-tuning.mode: {label: "Switch the mode",
                      description: "Only the owner tunes how it speaks."}

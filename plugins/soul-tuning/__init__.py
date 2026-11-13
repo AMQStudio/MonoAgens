@@ -27,6 +27,7 @@ PERMISSION = "soul-tuning.mode"
 
 def register(api: Any) -> None:
     """Add the `<soul_tuning>` block and the owner's `/mode` command."""
+    modes.from_options(getattr(api, "options", {}) or {})  # a bad option fails at boot
     api.add_middleware("context", "tuning", block(api))
     api.add_command("mode", "Switch how the soul speaks: /mode daily|professional.",
                     command(api), permission=PERMISSION)
@@ -38,16 +39,20 @@ def block(api: Any):
     async def rule(item: Any, ctx: Any) -> Any:
         """Add one volatile block: the mode first, then its rule, then the examples."""
         mode = await current_mode(ctx.get("conn"), api)
-        blocks = (*item.blocks, Part(BLOCK, VOLATILE, BLOCK_ORDER, text=render(mode)))
+        examples = modes.from_options(getattr(api, "options", {}) or {})
+        blocks = (*item.blocks, Part(BLOCK, VOLATILE, BLOCK_ORDER, text=render(mode, examples)))
         return Replace(replace(item, blocks=blocks))
 
     return rule
 
 
-def render(mode: str) -> str:
-    """Render the block: mode first, its rule, then the examples in file order."""
-    pairs = modes.EXAMPLES.get(mode) or modes.EXAMPLES[modes.DEFAULT_MODE]
-    lines = ["<soul_tuning>", f"mode: {mode}", modes.MODES[mode]["rule"], "Examples:"]
+def render(mode: str, examples: dict[str, list[tuple[str, str]]] | None = None) -> str:
+    """Render the block: mode first, its rule, what the examples are, then the examples."""
+    found = examples or modes.EXAMPLES
+    pairs = found.get(mode) or found[modes.DEFAULT_MODE]
+    lines = ["<soul_tuning>", f"mode: {mode}", modes.MODES[mode]["rule"],
+             "These examples show the style, not the language: answer in the speaker's "
+             "language.", "Examples:"]
     lines += [f"{speaker}: {text}" for speaker, text in pairs]
     lines.append("</soul_tuning>")
     return "\n".join(lines)
