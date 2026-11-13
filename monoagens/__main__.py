@@ -15,7 +15,7 @@ from monoagens.infra.clock import Clock
 from monoagens.infra.embedding import FastEmbedder
 from monoagens.infra.migrate import migrate
 from monoagens.infra.prior import load_settings
-from monoagens.infra.providers import OpenAICompatibleProvider
+from monoagens.infra.providers import build_provider
 from monoagens.middleware.identity import ensure as ensure_pairing
 from monoagens.middleware.loader import Loader
 
@@ -23,11 +23,7 @@ from monoagens.middleware.loader import Loader
 async def main() -> None:
     """Run the kernel with the clock and the enabled adapters until stopped."""
     root, env = config.DEFAULT_ROOT, config.load_env()
-    llm = config.load_llm_config()
-    if not llm["base_url"] or not llm["model"]:
-        raise RuntimeError(
-            "PFC is not configured: set LLM_BASE_URL and LLM_MODEL (and LLM_API_KEY) in .env"
-        )
+    llm = config.load_provider_config()
     notes: list[str] = []
     settings = load_settings(notes=notes)
     database_url = env.get("DATABASE_URL")
@@ -40,10 +36,8 @@ async def main() -> None:
         settings["identity"] = await identity.ensure(conn, settings["identity"],
                                                     now=clock.now())
         retries = int(settings["constants"]["model_call_retries"])
-        port = OpenAICompatibleProvider(
-            llm["base_url"], llm["api_key"], llm["model"], effort=llm["effort"],
-            retries=retries, parallel_tool_calls=llm["parallel_tool_calls"],
-        )
+        soul_id = str(settings["identity"].get("name") or "monoagens")
+        port = build_provider(llm, env, retries=retries, soul_id=soul_id, notes=notes)
         pfc = Reasoning(port, settings=settings)
         kernel = build(conn, clock=clock, pfc=pfc, settings=settings, embedder=FastEmbedder())
         await warm(kernel)

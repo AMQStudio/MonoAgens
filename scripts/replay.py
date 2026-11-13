@@ -52,13 +52,14 @@ from monoagens.adapters.cli import CAPABILITIES as CLI_CAPABILITIES
 from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.infra.clock import FakeClock
 from monoagens.core.gate import Appraisal
-from monoagens.infra.config import DEFAULT_ENV_PATH, EFFORTS, load_env_file, load_llm_config
+from monoagens.infra.config import (DEFAULT_ENV_PATH, EFFORTS, load_env, load_env_file,
+                                    load_provider_config)
 from monoagens.infra.prior import constants, load_settings
 from monoagens.infra.duration import parse_duration
 from monoagens.core.kernel import Kernel
 from monoagens.infra.embedding import FastEmbedder, FakeEmbedder
 from monoagens.infra.migrate import migrate, migrate_url
-from monoagens.infra.providers import OpenAICompatibleProvider
+from monoagens.infra.providers import DEFAULT_OPENCODE_GO_MODEL, build_provider
 from monoagens.core.context.layout import PFCContext, withheld_note
 from monoagens.core.reasoning import Reasoning, ToolCall
 from monoagens.types import Action, Event
@@ -159,16 +160,23 @@ def ensure_database(url: str) -> None:
             conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(dbname)))
 
 
-def llm_settings() -> dict[str, str]:
-    """Resolve LLM_BASE_URL, LLM_API_KEY, LLM_MODEL and the effort with defaults."""
-    config = load_llm_config()
+def llm_settings() -> dict[str, Any]:
+    """Resolve provider, base_url, api_key, model, fallbacks and effort with defaults."""
+    config = load_provider_config()
+    env = load_env()
+    provider = str(config.get("provider") or "openai-compatible").lower()
+    if provider == "opencode-go":
+        api_key = config.get("api_key") or env.get("OPENCODE_API_KEY") or ""
+        if not api_key:
+            raise RuntimeError("OPENCODE_API_KEY is required for opencode-go replay (or use --fake)")
+        model = config.get("model") or DEFAULT_OPENCODE_GO_MODEL
+        return {**config, "api_key": api_key, "model": model}
     base_url = config.get("base_url") or DEFAULT_BASE_URL
     model = config.get("model") or DEFAULT_MODEL
     api_key = config.get("api_key") or ""
     if not api_key:
         raise RuntimeError("LLM_API_KEY is required for a real-LLM replay (or use --fake)")
-    return {"base_url": base_url, "api_key": api_key, "model": model,
-            "effort": config.get("effort") or ""}
+    return {**config, "base_url": base_url, "api_key": api_key, "model": model}
 
 
 # ------------------------------------------------------------------- usage
@@ -682,9 +690,9 @@ class ReplayRunner:
         client = httpx.AsyncClient(
             transport=UsageTransport(httpx.AsyncHTTPTransport(), self.tracker), timeout=90.0)
         retries = int(self.settings["constants"]["model_call_retries"])
-        port = OpenAICompatibleProvider(
-            self.llm["base_url"], self.llm["api_key"], self.llm["model"],
-            effort=self.llm.get("effort") or "", retries=retries, client=client, timeout=90.0)
+        soul_id = str((self.settings.get("identity") or {}).get("name") or "monoagens")
+        port = build_provider(self.llm, load_env(), retries=retries, soul_id=soul_id,
+                              client=client, timeout=90.0)
         return TrackedPFC(self.tracker, port, settings=self.settings)
 
     async def _make_kernel(self) -> Kernel:

@@ -87,8 +87,9 @@ uv run python scripts/replay.py scenarios/silence/01_group_chitchat_greeting.yam
 
 The replay database comes from `REPLAY_DATABASE_URL` and its name must end with `_replay`;
 the tool creates it when missing and rebuilds its schema for every scenario, so it can never
-touch the production database. Real mode uses the model provider set in `.env` (`LLM_PROVIDER`,
-its key and model, optional `LLM_FALLBACKS`; see `.env.example`), or the environment.
+touch the production database. Real mode uses the model provider set in `.env` (`LLM_PROVIDER`:
+`openai-compatible` default or `opencode-go`, `LLM_MODEL`, optional `LLM_FALLBACKS` using
+`<PROVIDER>_API_KEY` / `<PROVIDER>_MODEL`; see `.env.example`), or the environment.
 
 Every run writes `reports/<YYYY-MM-DD-HHMM>-<real|fake>-<scenarios>.md` and `reports/latest.md`;
 the newest ten are kept. Each report has, per scenario, the step-by-step inputs with the gate's

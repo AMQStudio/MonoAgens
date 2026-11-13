@@ -142,6 +142,17 @@ def load_llm_config(env_path: pathlib.Path = DEFAULT_ENV_PATH) -> dict[str, str]
     return config
 
 
+def load_provider_config(env_path: pathlib.Path = DEFAULT_ENV_PATH) -> dict[str, Any]:
+    """Resolve provider selection and fallback list on top of load_llm_config()."""
+    file_values = load_env_file(env_path)
+    config: dict[str, Any] = dict(load_llm_config(env_path))
+    provider = (os.environ.get("LLM_PROVIDER") or file_values.get("LLM_PROVIDER") or "").strip()
+    config["provider"] = provider.lower() or "openai-compatible"
+    raw_fb = os.environ.get("LLM_FALLBACKS") or file_values.get("LLM_FALLBACKS") or ""
+    config["fallbacks"] = [item.strip().lower() for item in raw_fb.split(",") if item.strip()]
+    return config
+
+
 _PASSWORD_TOKEN = re.compile(
     r"(?i)\b(password|passfile|sslpassword)\s*=\s*(?:'[^']*'|\"[^\"]*\"|\S+)")
 _URL_CREDENTIALS = re.compile(r"([a-z][a-z0-9+.-]*://[^:/@\s]*:)[^@\s]*@")

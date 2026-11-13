@@ -40,10 +40,17 @@ async def record_call(conn, trigger_id: int | None, pfc: Any, *, purpose: str,
         return None, {}
     raw = usage if usage is not None else getattr(pfc, "last_usage", None) or {}
     totals_usage = {name: int(raw.get(name) or 0) for name in COUNTERS}
+    payload: dict[str, Any] = {
+        "purpose": purpose,
+        "model": str(getattr(pfc, "model", "") or ""),
+        "usage": totals_usage,
+    }
+    if raw.get("provider"):
+        payload["provider"] = str(raw["provider"])
+    if raw.get("fallbacks"):
+        payload["fallbacks"] = list(raw["fallbacks"])
     call = await append_event(
-        conn, ts=now, kind="model.call", caused_by=trigger_id,
-        payload={"purpose": purpose, "model": str(getattr(pfc, "model", "") or ""),
-                 "usage": totals_usage})
+        conn, ts=now, kind="model.call", caused_by=trigger_id, payload=payload)
     totals = await add_budget_usage(
         conn, now=now, timezone=str(settings.get("timezone") or "UTC"),
         usage=totals_usage, updated_by_event=call.id)
