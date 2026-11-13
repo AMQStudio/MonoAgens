@@ -1,0 +1,741 @@
+name: 31_paper_over_two_days
+function: memory
+capability: Multi-step paper writing continues across a restart using progress.md, <doing>, timed expectations,
+  consented sharing, full-output refs, and workspace format reuse the next day.
+plugins:
+  workspace:
+    enabled: true
+workspace_files:
+  data/metrics_log.txt: 'metric_row_001: stage=bench throughput=301 req/s latency_p99=13 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_002: stage=bench throughput=302 req/s latency_p99=14 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_003: stage=bench throughput=303 req/s latency_p99=15 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_004: stage=bench throughput=304 req/s latency_p99=16 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_005: stage=bench throughput=305 req/s latency_p99=17 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_006: stage=bench throughput=306 req/s latency_p99=18 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_007: stage=bench throughput=307 req/s latency_p99=12 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_008: stage=bench throughput=308 req/s latency_p99=13 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_009: stage=bench throughput=309 req/s latency_p99=14 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_010: stage=bench throughput=310 req/s latency_p99=15 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_011: stage=bench throughput=311 req/s latency_p99=16 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_012: stage=bench throughput=312 req/s latency_p99=17 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_013: stage=bench throughput=313 req/s latency_p99=18 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_014: stage=bench throughput=314 req/s latency_p99=12 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_015: stage=bench throughput=315 req/s latency_p99=13 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_016: stage=bench throughput=316 req/s latency_p99=14 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_017: stage=bench throughput=317 req/s latency_p99=15 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_018: stage=bench throughput=318 req/s latency_p99=16 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_019: stage=bench throughput=319 req/s latency_p99=17 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_020: stage=bench throughput=320 req/s latency_p99=18 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_021: stage=bench throughput=321 req/s latency_p99=12 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_022: stage=bench throughput=322 req/s latency_p99=13 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_023: stage=bench throughput=323 req/s latency_p99=14 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_024: stage=bench throughput=324 req/s latency_p99=15 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_025: stage=bench throughput=325 req/s latency_p99=16 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_026: stage=bench throughput=326 req/s latency_p99=17 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_027: stage=bench throughput=327 req/s latency_p99=18 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_028: stage=bench throughput=328 req/s latency_p99=12 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_029: stage=bench throughput=329 req/s latency_p99=13 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_030: stage=bench throughput=330 req/s latency_p99=14 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_031: stage=bench throughput=331 req/s latency_p99=15 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_032: stage=bench throughput=332 req/s latency_p99=16 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_033: stage=bench throughput=333 req/s latency_p99=17 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_034: stage=bench throughput=334 req/s latency_p99=18 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_035: stage=bench throughput=335 req/s latency_p99=12 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_036: stage=bench throughput=336 req/s latency_p99=13 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_037: stage=bench throughput=337 req/s latency_p99=14 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_038: stage=bench throughput=338 req/s latency_p99=15 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_039: stage=bench throughput=339 req/s latency_p99=16 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_040: stage=bench throughput=340 req/s latency_p99=17 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_041: stage=bench throughput=341 req/s latency_p99=18 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_042: stage=bench throughput=342 req/s latency_p99=12 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_043: stage=bench throughput=343 req/s latency_p99=13 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_044: stage=bench throughput=344 req/s latency_p99=14 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_045: stage=bench throughput=345 req/s latency_p99=15 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_046: stage=bench throughput=346 req/s latency_p99=16 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_047: stage=bench throughput=347 req/s latency_p99=17 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_048: stage=bench throughput=348 req/s latency_p99=18 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_049: stage=bench throughput=349 req/s latency_p99=12 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_050: stage=bench throughput=300 req/s latency_p99=13 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_051: stage=bench throughput=301 req/s latency_p99=14 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_052: stage=bench throughput=302 req/s latency_p99=15 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_053: stage=bench throughput=303 req/s latency_p99=16 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_054: stage=bench throughput=304 req/s latency_p99=17 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_055: stage=bench throughput=305 req/s latency_p99=18 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_056: stage=bench throughput=306 req/s latency_p99=12 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_057: stage=bench throughput=307 req/s latency_p99=13 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_058: stage=bench throughput=308 req/s latency_p99=14 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_059: stage=bench throughput=309 req/s latency_p99=15 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_060: stage=bench throughput=310 req/s latency_p99=16 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_061: stage=bench throughput=311 req/s latency_p99=17 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_062: stage=bench throughput=312 req/s latency_p99=18 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_063: stage=bench throughput=313 req/s latency_p99=12 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_064: stage=bench throughput=314 req/s latency_p99=13 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_065: stage=bench throughput=315 req/s latency_p99=14 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_066: stage=bench throughput=316 req/s latency_p99=15 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_067: stage=bench throughput=317 req/s latency_p99=16 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_068: stage=bench throughput=318 req/s latency_p99=17 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_069: stage=bench throughput=319 req/s latency_p99=18 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_070: stage=bench throughput=320 req/s latency_p99=12 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_071: stage=bench throughput=321 req/s latency_p99=13 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_072: stage=bench throughput=322 req/s latency_p99=14 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_073: stage=bench throughput=323 req/s latency_p99=15 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_074: stage=bench throughput=324 req/s latency_p99=16 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_075: stage=bench throughput=325 req/s latency_p99=17 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_076: stage=bench throughput=326 req/s latency_p99=18 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_077: stage=bench throughput=327 req/s latency_p99=12 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_078: stage=bench throughput=328 req/s latency_p99=13 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_079: stage=bench throughput=329 req/s latency_p99=14 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_080: stage=bench throughput=330 req/s latency_p99=15 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_081: stage=bench throughput=331 req/s latency_p99=16 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_082: stage=bench throughput=332 req/s latency_p99=17 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_083: stage=bench throughput=333 req/s latency_p99=18 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_084: stage=bench throughput=334 req/s latency_p99=12 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_085: stage=bench throughput=335 req/s latency_p99=13 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_086: stage=bench throughput=336 req/s latency_p99=14 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_087: stage=bench throughput=337 req/s latency_p99=15 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_088: stage=bench throughput=338 req/s latency_p99=16 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_089: stage=bench throughput=339 req/s latency_p99=17 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_090: stage=bench throughput=340 req/s latency_p99=18 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_091: stage=bench throughput=341 req/s latency_p99=12 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_092: stage=bench throughput=342 req/s latency_p99=13 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_093: stage=bench throughput=343 req/s latency_p99=14 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_094: stage=bench throughput=344 req/s latency_p99=15 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_095: stage=bench throughput=345 req/s latency_p99=16 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_096: stage=bench throughput=346 req/s latency_p99=17 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_097: stage=bench throughput=347 req/s latency_p99=18 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_098: stage=bench throughput=348 req/s latency_p99=12 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_099: stage=bench throughput=349 req/s latency_p99=13 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_100: stage=bench throughput=300 req/s latency_p99=14 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_101: stage=bench throughput=301 req/s latency_p99=15 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_102: stage=bench throughput=302 req/s latency_p99=16 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_103: stage=bench throughput=303 req/s latency_p99=17 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_104: stage=bench throughput=304 req/s latency_p99=18 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_105: stage=bench throughput=305 req/s latency_p99=12 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_106: stage=bench throughput=306 req/s latency_p99=13 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_107: stage=bench throughput=307 req/s latency_p99=14 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_108: stage=bench throughput=308 req/s latency_p99=15 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_109: stage=bench throughput=309 req/s latency_p99=16 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_110: stage=bench throughput=310 req/s latency_p99=17 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_111: stage=bench throughput=311 req/s latency_p99=18 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_112: stage=bench throughput=312 req/s latency_p99=12 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_113: stage=bench throughput=313 req/s latency_p99=13 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_114: stage=bench throughput=314 req/s latency_p99=14 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_115: stage=bench throughput=315 req/s latency_p99=15 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_116: stage=bench throughput=316 req/s latency_p99=16 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_117: stage=bench throughput=317 req/s latency_p99=17 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_118: stage=bench throughput=318 req/s latency_p99=18 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_119: stage=bench throughput=319 req/s latency_p99=12 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_120: stage=bench throughput=320 req/s latency_p99=13 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_121: stage=bench throughput=321 req/s latency_p99=14 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_122: stage=bench throughput=322 req/s latency_p99=15 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_123: stage=bench throughput=323 req/s latency_p99=16 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_124: stage=bench throughput=324 req/s latency_p99=17 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_125: stage=bench throughput=325 req/s latency_p99=18 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_126: stage=bench throughput=326 req/s latency_p99=12 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_127: stage=bench throughput=327 req/s latency_p99=13 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_128: stage=bench throughput=328 req/s latency_p99=14 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    metric_row_129: stage=bench throughput=329 req/s latency_p99=15 ms notes=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    APPENDIX_Z_MARKER: exact throughput 412 req/s, p99 18 ms.'
+roles:
+  fallback: unverified
+  unverified:
+    base: guest
+  runner:
+    base: trusted
+    approval: yolo
+people:
+  person:owner:
+    roles:
+    - runner
+description: Owner meminta penulisan paper di workspace dari data/metrics_log.txt yang panjangnya melebihi
+  batas baca (harus lanjut via registry.more dan full.ref), lalu meminta revisi, mengirimkan ke Budi di
+  WhatsApp dengan izin, menjadwalkan lanjut nanti malam sebelum proses restart, melanjutkan tepat dari
+  progress.md & <doing> saat expectation malam aktif sekali, dan keesokan harinya menulis paper baru mengikuti
+  format paper kemarin.
+expectations:
+- type: event_seen
+  kind: act.out
+  step: 2
+  text_contains: registry.more
+  label: overflowing metrics read continues through registry.more
+- type: event_seen
+  kind: act.out
+  step: 2
+  text_contains: progress.md
+  label: progress.md is written during initial paper drafting
+- type: reply_in
+  place: space:tg:1001
+  step: 2
+  count: 1
+  label: draft summary reaches the owner
+- type: mentions
+  text: '412'
+  step: 2
+  label: draft reports the throughput found after the truncation offset
+- type: event_seen
+  kind: act.out
+  step: 3
+  text_contains: paper_v1.md
+  label: revision updates the paper in workspace
+- type: event_seen
+  kind: share.granted
+  step: 4
+  label: sharing the revised paper to Budi is recorded
+- type: event_order
+  steps:
+  - 4
+  first: share.granted
+  then: act.out
+  label: consent is recorded before WhatsApp delivery
+- type: reply_in
+  place: space:wa:628110001@s.whatsapp.net
+  step: 4
+  count: 1
+  label: the revised paper reaches Budi on WhatsApp
+- type: event_seen
+  kind: expectation.created
+  step: 5
+  payload:
+    kind: promise
+  label: tonight continuation creates a timed promise expectation
+- type: event_seen
+  kind: expectation.fired
+  step: 7
+  count: 1
+  label: tonight expectation fires after restart
+- type: no_event
+  kind: expectation.fired
+  steps:
+  - 7
+  - 8
+  count: 1
+  label: tonight expectation fires only once
+- type: event_seen
+  kind: act.out
+  step: 7
+  text_contains: progress.md
+  label: after restart the soul reads or updates progress.md
+- type: prompt_contains
+  text: progress.md
+  step: 7
+  label: resumed prompt sees progress.md
+- type: prompt_contains
+  text: <doing>
+  step: 7
+  label: resumed wake includes <doing> working memory
+- type: reply_in
+  place: space:tg:1001
+  step: 7
+  count: 1
+  label: owner hears the completed closing section tonight
+- type: event_seen
+  kind: act.out
+  step: 8
+  text_contains: paper_v1.md
+  label: next day inspects yesterday paper format
+- type: event_seen
+  kind: act.out
+  step: 8
+  text_contains: paper_v2.md
+  label: next day writes new paper in workspace
+- type: event_seen
+  kind: act.out
+  step: 8
+  text_contains: '## Limitasi'
+  label: new paper preserves yesterday section structure
+- type: reply_in
+  place: space:tg:1001
+  step: 8
+  count: 1
+  label: owner is updated on the second paper
+- type: refs_reachable
+  min_refs: 1
+  label: every archived long output ref opens cleanly
+- type: honest
+  label: nothing is claimed as done without its recorded act result
+steps:
+- at: '2026-11-11T09:00:00+07:00'
+  who: person:budi
+  place: space:wa:628110001@s.whatsapp.net
+  text: Halo, ini nomor Budi ya.
+- at: '2026-11-11T10:00:00+07:00'
+  who: person:owner
+  place: space:tg:1001
+  addressed: true
+  text: 'Tolong buatkan draft paper di papers/paper_v1.md dengan format persis: # Judul, ## Ringkasan,
+    ## Data, ## Kesimpulan. Baca seluruh isi data/metrics_log.txt di workspace sampai akhir lewat registry.more
+    kalau terpotong untuk ambil nilai APPENDIX_Z_MARKER, dan simpan catatan di progress.md.'
+- at: '2026-11-11T11:00:00+07:00'
+  who: person:owner
+  place: space:tg:1001
+  addressed: true
+  text: 'Tolong revisi papers/paper_v1.md: tambahkan bagian ## Limitasi sebelum ## Kesimpulan, lalu perbarui
+    progress.md.'
+- at: '2026-11-11T13:00:00+07:00'
+  who: person:owner
+  place: space:tg:1001
+  addressed: true
+  text: Kirimkan ringkasan dan paper hasil revisinya ke Budi di WhatsApp sekarang.
+- at: '2026-11-11T15:00:00+07:00'
+  who: person:owner
+  place: space:tg:1001
+  addressed: true
+  text: Lanjutkan nanti malam jam 20:00 untuk menulis bagian penutup akhir di papers/paper_v1.md, dan
+    catat statusnya di progress.md.
+- at: '2026-11-11T16:00:00+07:00'
+  restart: true
+- at: '2026-11-11T16:00:00+07:00'
+  advance: 245m
+- at: '2026-11-12T09:00:00+07:00'
+  who: person:owner
+  place: space:tg:1001
+  addressed: true
+  text: Pagi! Buatkan paper baru tentang Arsitektur Cache di papers/paper_v2.md mengikuti persis format
+    bagian dari paper kemarin di workspace.
+model_answers:
+- step: 2
+  tool: decide
+  calls:
+  - name: act
+    arguments:
+      capability: workspace.read
+      arguments:
+        path: data/metrics_log.txt
+        limit: 200
+- step: 2
+  tool: decide
+  calls:
+  - name: act
+    arguments:
+      capability: registry.more
+      arguments:
+        ref: att_1200dc59aa37704b53b18f38
+        offset: 19500
+        limit: 8000
+- step: 2
+  tool: decide
+  calls:
+  - name: act
+    arguments:
+      capability: workspace.write
+      arguments:
+        path: papers/paper_v1.md
+        text: '# Judul
+
+          Benchmark Sistem
+
+
+          ## Ringkasan
+
+          Evaluasi throughput sistem.
+
+
+          ## Data
+
+          Exact throughput 412 req/s, p99 18 ms.
+
+
+          ## Kesimpulan
+
+          Stabil di 412 req/s.
+
+          '
+  - name: act
+    arguments:
+      capability: workspace.write
+      arguments:
+        path: progress.md
+        text: '# Progress
+
+          - Goal: tulis papers/paper_v1.md
+
+          - Done: baca data/metrics_log.txt (412 req/s) dan tulis draft v1
+
+          - Next: tunggu revisi owner
+
+          - Files: data/metrics_log.txt, papers/paper_v1.md
+
+          '
+- step: 2
+  tool: decide
+  calls:
+  - name: act
+    arguments:
+      capability: telegram.say
+      arguments:
+        text: Draft papers/paper_v1.md sudah ditulis dengan nilai benchmark 412 req/s, p99 18 ms, dan
+          progress.md diperbarui.
+- step: 3
+  tool: decide
+  calls:
+  - name: act
+    arguments:
+      capability: workspace.write
+      arguments:
+        path: papers/paper_v1.md
+        text: '# Judul
+
+          Benchmark Sistem
+
+
+          ## Ringkasan
+
+          Evaluasi throughput sistem.
+
+
+          ## Data
+
+          Exact throughput 412 req/s, p99 18 ms.
+
+
+          ## Limitasi
+
+          Pengujian hanya mencakup satu beban sintetis.
+
+
+          ## Kesimpulan
+
+          Stabil di 412 req/s.
+
+          '
+  - name: act
+    arguments:
+      capability: workspace.write
+      arguments:
+        path: progress.md
+        text: '# Progress
+
+          - Goal: tulis papers/paper_v1.md
+
+          - Done: revisi dengan bagian ## Limitasi
+
+          - Next: siap dikirim bila diminta
+
+          - Files: papers/paper_v1.md, progress.md
+
+          '
+- step: 3
+  tool: decide
+  calls:
+  - name: act
+    arguments:
+      capability: telegram.say
+      arguments:
+        text: 'Revisi papers/paper_v1.md dengan bagian ## Limitasi selesai dan progress.md sudah diperbarui.'
+- step: 4
+  tool: decide
+  calls:
+  - name: act
+    arguments:
+      capability: self.share
+      arguments:
+        item: papers/paper_v1.md benchmark 412 req/s
+        to: person:budi
+  - name: act
+    arguments:
+      capability: workspace.read
+      arguments:
+        path: papers/paper_v1.md
+- step: 4
+  tool: decide
+  calls:
+  - name: act
+    arguments:
+      capability: whatsapp.say
+      arguments:
+        to: person:budi
+        text: 'Halo Budi, berikut ringkasan revisi paper Benchmark Sistem: throughput 412 req/s (p99 18
+          ms), lengkap dengan bagian Limitasi dan Kesimpulan.'
+- step: 4
+  tool: decide
+  calls:
+  - name: act
+    arguments:
+      capability: telegram.say
+      arguments:
+        text: Revisi paper sudah dibagikan dan dikirim ke Budi via WhatsApp.
+- step: 5
+  tool: decide
+  calls:
+  - name: act
+    arguments:
+      capability: workspace.write
+      arguments:
+        path: progress.md
+        text: '# Progress
+
+          - Goal: lanjutkan papers/paper_v1.md malam ini jam 20:00
+
+          - Done: paper dikirim ke Budi
+
+          - Next: tulis bagian penutup akhir di papers/paper_v1.md jam 20:00
+
+          - Files: papers/paper_v1.md, progress.md
+
+          '
+  - name: expect
+    arguments:
+      about: lanjut tulis penutup papers/paper_v1.md malam ini jam 20:00
+      kind: promise
+      cue_time:
+        at: '2026-11-11T20:00:00+07:00'
+      expect:
+        none: true
+      intent: baca progress.md lalu selesaikan penutup papers/paper_v1.md
+      weight: 0.8
+      policy:
+        once: true
+- step: 5
+  tool: decide
+  calls:
+  - name: act
+    arguments:
+      capability: telegram.say
+      arguments:
+        text: Siap, progress.md sudah mencatat tugas jam 20:00 untuk menulis penutup akhir papers/paper_v1.md.
+- step: 7
+  tool: decide
+  calls:
+  - name: act
+    arguments:
+      capability: workspace.read
+      arguments:
+        path: progress.md
+  - name: act
+    arguments:
+      capability: workspace.run
+      arguments:
+        command: wc -l papers/paper_v1.md progress.md
+- step: 7
+  tool: decide
+  calls:
+  - name: act
+    arguments:
+      capability: workspace.edit
+      arguments:
+        path: papers/paper_v1.md
+        old: '## Kesimpulan
+
+          Stabil di 412 req/s.'
+        new: '## Kesimpulan
+
+          Stabil di 412 req/s dengan batas beban uji yang tercatat untuk tindak lanjut berikutnya.'
+  - name: act
+    arguments:
+      capability: workspace.write
+      arguments:
+        path: progress.md
+        text: '# Progress
+
+          - Goal: papers/paper_v1.md selesai
+
+          - Done: penutup akhir selesai ditulis pada sesi malam
+
+          - Next: selesai
+
+          - Files: papers/paper_v1.md, progress.md
+
+          '
+- step: 7
+  tool: decide
+  calls:
+  - name: act
+    arguments:
+      capability: telegram.say
+      arguments:
+        text: Penutup akhir papers/paper_v1.md sudah selesai ditulis setelah membaca progress.md.
+- step: 8
+  tool: decide
+  calls:
+  - name: act
+    arguments:
+      capability: workspace.read
+      arguments:
+        path: papers/paper_v1.md
+- step: 8
+  tool: decide
+  calls:
+  - name: act
+    arguments:
+      capability: workspace.write
+      arguments:
+        path: papers/paper_v2.md
+        text: '# Judul
+
+          Arsitektur Cache
+
+
+          ## Ringkasan
+
+          Rancangan cache berlapis untuk menurunkan latensi baca.
+
+
+          ## Data
+
+          Target hit-rate 95% pada beban baca tinggi.
+
+
+          ## Limitasi
+
+          Konsistensi cache bergantung pada strategi invalidasi.
+
+
+          ## Kesimpulan
+
+          Arsitektur cache siap diuji sesuai format standar.
+
+          '
+  - name: act
+    arguments:
+      capability: workspace.write
+      arguments:
+        path: progress.md
+        text: '# Progress
+
+          - Goal: tulis papers/paper_v2.md mengikuti format paper_v1.md
+
+          - Done: papers/paper_v2.md ditulis dengan format # Judul / ## Ringkasan / ## Data / ## Limitasi
+          / ## Kesimpulan
+
+          - Next: selesai
+
+          - Files: papers/paper_v1.md, papers/paper_v2.md, progress.md
+
+          '
+- step: 8
+  tool: decide
+  calls:
+  - name: act
+    arguments:
+      capability: telegram.say
+      arguments:
+        text: Paper baru Arsitektur Cache di papers/paper_v2.md sudah ditulis mengikuti format papers/paper_v1.md.

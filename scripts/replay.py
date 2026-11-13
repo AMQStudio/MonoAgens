@@ -32,6 +32,7 @@ import mimetypes
 import os
 import pathlib
 import re
+import shutil
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -93,7 +94,9 @@ PLACE_BODIES = (("space:game", GAME_BODY), ("space:wa", WHATSAPP_BODY),
 # A test organ only needs the two chat capabilities of a real body.
 CHAT_CAPABILITIES = (
     {"name": "say", "description": "Send a text message in the current place.",
-     "schema": {"type": "object", "properties": {"text": {"type": "string"}},
+     "schema": {"type": "object",
+                "properties": {"text": {"type": "string"},
+                               "attachments": {"type": "array", "items": {"type": "string"}}},
                 "required": ["text"]},
      "communicative": True, "long_running": False, "identity_changing": False,
      "permission": None},
@@ -310,13 +313,15 @@ class UsageTransport(httpx.AsyncBaseTransport):
 
 def _fake_context_text(context: PFCContext) -> str:
     """Render a fake-mode prompt from the pieces the kernel handed over."""
-    parts: list[str] = [context.core_memory, *context.people, *context.memories,
-                        *context.doing]
+    parts: list[str] = [context.core_memory, *context.people, *context.memories]
+    if context.doing:
+        parts.extend(["<doing>", *context.doing, "</doing>"])
     note = withheld_note(context)
     if note:
         parts.append(note)
     parts.extend(str(event.payload.get("description") or "") for event in context.recent)
     parts.extend(str(event.payload.get("description") or "") for event in context.recent_elsewhere)
+    parts.extend(json.dumps(item, default=str) for item in context.results)
     if context.trigger is not None:
         parts.append(str(context.trigger.payload.get("description") or ""))
     return "\n".join(part for part in parts if part)
@@ -525,6 +530,7 @@ class ScenarioResult:
     checks: list[CheckResult] = field(default_factory=list)
     violations: list[str] = field(default_factory=list)
     log_texts: list[str] = field(default_factory=list)
+    unreachable_refs: list[str] = field(default_factory=list)
 
 
 def load_scenario(path: pathlib.Path, zone: ZoneInfo) -> Scenario:
@@ -761,6 +767,7 @@ class ReplayRunner:
             await migrate(conn, backup_dir=REPORT_DIR / "backups")
             await register_vector_async(conn)
             await self._make_kernel()
+            self._clear_workspace()
             self._materialize_workspace()
             await self.kernel.recover()
             await self.kernel.run_until_idle()
@@ -768,15 +775,17 @@ class ReplayRunner:
                      for index, raw in enumerate(scenario.steps, 1)]
             replies = self._replies(steps)
             desks = list(self.tracker.desks)
+            all_events = [event for step in steps for event in step.events]
             result = ScenarioResult(
                 scenario=scenario, steps=steps,
                 replies=replies, prompts=list(self.tracker.prompts), desks=desks,
-                events=[event for step in steps for event in step.events],
+                events=all_events,
                 memories=await self._memory_count(),
                 usage=self.tracker.usage.minus(start_usage),
                 violations=(await self._leak_violations(replies)
                             + await desk_violations(self.conn, desks)),
-                log_texts=await self._log_texts(steps))
+                log_texts=await self._log_texts(steps),
+                unreachable_refs=await self._unreachable_refs(all_events))
         self.conn = self.tracker.conn = None
         result.checks = evaluate_all(result)
         return result
@@ -853,6 +862,16 @@ class ReplayRunner:
         await self.kernel.step()
         await asyncio.wait_for(task, 120.0)
         await self.kernel.run_until_idle()
+
+    def _clear_workspace(self) -> None:
+        """Reset the owner's sandbox folder before starting a workspace scenario."""
+        if not self.selected.get("workspace") and not self.workspace_files:
+            return
+        from plugins.workspace import paths as workspace_paths
+
+        base = ROOT / "var" / "workspaces" / workspace_paths.person_folder(OWNER)
+        if base.exists():
+            shutil.rmtree(base)
 
     def _materialize_workspace(self) -> None:
         """Write the scenario's workspace files into the owner's own sandbox folder."""
@@ -951,6 +970,25 @@ class ReplayRunner:
         texts += [str(row[0]) for row in await cur.fetchall() if row[0]]
         texts += [step.text for step in steps if step.kind == "message"]
         return texts
+
+    async def _unreachable_refs(self, events: Sequence[dict[str, Any]]) -> list[str]:
+        """Return every archived `full.ref` whose full text cannot be read back via more."""
+        tools = getattr(self.kernel, "tools", None)
+        if tools is None:
+            return []
+        missing: list[str] = []
+        for event in events:
+            if event.get("kind") != "act.result":
+                continue
+            outcome = (event.get("payload") or {}).get("result")
+            full = outcome.get("full") if isinstance(outcome, dict) else None
+            if not isinstance(full, dict) or not full.get("ref"):
+                continue
+            ref = str(full["ref"])
+            chunk = await tools.more(ref, offset=0, limit=64, context=event.get("place"))
+            if "error" in chunk or "text" not in chunk:
+                missing.append(f"{ref}: {chunk.get('error') or 'unreadable'}")
+        return missing
 
 
 # ------------------------------------------------------------------- checks
@@ -1248,6 +1286,30 @@ def _check_signal(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:
                        f"{name} max {peak:.3f} over {len(values)} appraisals")
 
 
+def _check_refs_reachable(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:
+    """Confirm every truncated tool output's `full.ref` can be read back via `registry.more`."""
+    refs = []
+    for event in _scoped_events(spec, result):
+        if event.get("kind") != "act.result":
+            continue
+        outcome = (event.get("payload") or {}).get("result")
+        full = outcome.get("full") if isinstance(outcome, dict) else None
+        if isinstance(full, dict) and full.get("ref"):
+            refs.append(str(full["ref"]))
+    min_refs = int(spec.get("min_refs") or 0)
+    ok = not result.unreachable_refs and len(refs) >= min_refs
+    detail = (", ".join(result.unreachable_refs) if result.unreachable_refs
+              else f"{len(refs)} full ref(s) reachable")
+    return CheckResult(str(spec["label"]), ok, detail)
+
+
+def _check_honest(spec: dict[str, Any], result: ScenarioResult) -> CheckResult:
+    """Confirm every reply claims only completed acts and logged text (D48)."""
+    issues = _honesty_details(result)
+    return CheckResult(str(spec["label"]), not issues,
+                       issues[0] if issues else f"{len(result.replies)} replies honest")
+
+
 CHECKS: dict[str, Callable[[dict[str, Any], ScenarioResult], CheckResult]] = {
     "no_reply": _check_no_reply,
     "reply": _check_reply,
@@ -1266,6 +1328,8 @@ CHECKS: dict[str, Callable[[dict[str, Any], ScenarioResult], CheckResult]] = {
     "signal": _check_signal,
     "max_calls": _check_max_calls,
     "no_repeat_call": _check_no_repeat_call,
+    "refs_reachable": _check_refs_reachable,
+    "honest": _check_honest,
 }
 
 
