@@ -98,11 +98,12 @@ read by the middleware, never by the core:
 | `parent` | the place this one belongs to: a Discord server for its channels, a channel for its threads, a WhatsApp Community for its groups, a Telegram forum for its topics; none for a private chat |
 | `name`, `members` | the place's name and member count, when the platform gives them |
 | `can_post` | whether the soul may post there now (false in a broadcast it only follows) |
-| `roles` | platform role facts of a person there ("admin of this group", Discord role ids) |
+| `roles` | platform role facts of a person there ("admin of this group"); with each percept the adapter also sends `data.platform_roles: {space, roles}` (the role ids the sender holds and the organisation place they belong to) |
 
-A post to a place where `can_post` is false fails with an honest `act.result`. A Discord role
-mapped by the owner holds only in places whose `parent` chain reaches the server it came from
-([middleware.md §8](middleware.md)). The adapter refreshes place info when the platform reports
+A post to a place where `can_post` is false fails with an honest `act.result`. The adapter
+reports the whole `parent` chain (a thread's channel, the channel's server), so the middleware
+walks it as opaque ids. A platform role mapped by the owner (`platform_role:`) holds only in
+places whose `parent` chain reaches the space it came from ([middleware.md §8](middleware.md)). The adapter refreshes place info when the platform reports
 a change (renamed, member joined or left, role changed).
 
 ## 4. Native: what goes in and what comes out (D67)
@@ -146,13 +147,14 @@ soul that does not use them.
 
 **What an adapter can show** is declared in `contract.SHOWS`: `typing`, `read_receipts`,
 `edit`, `delete`, `reply`, `reactions`, `buttons`, `menus`, `polls`, `stickers`, `embeds`,
-`threads`, `locations`. `interaction.py` uses the best one available, in a fixed fallback order,
-so what is lost is visible in the code and the boot report:
-- `choices`: buttons (menus when there are many) → a poll → a numbered list, answered by
-  number;
+`threads`, `locations`. **The adapter draws each intent its best way, down to plain text** (D81:
+the middleware knows no emoji, button or platform), and declares its ladder:
+- `choices` (the soul's, and the middleware's approvals): buttons (menus when there are many) →
+  a reaction per choice on the question → a poll → a numbered list, answered by number or label;
+  the `act.result` records, per choice, the native answer the adapter will recognise, and an
+  answer comes back as a percept with `data.reply_to` and `data.answer`;
 - `thread`: a new thread or topic → a reply in the place, with the title as its first line;
 - `location`: a native location → the name and coordinates as text;
-- an approval: buttons → reactions (👍 / 👎 on the question) → "reply yes or no" as text;
 - a progress message: edit one message → a new message per step;
 - a sticker: the sticker → its emoji.
 

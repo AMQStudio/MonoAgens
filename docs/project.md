@@ -67,7 +67,7 @@ roles:                              # middleware.md §8; empty = owner free, eve
   unverified: { base: guest,  label: "Unverified", context: "Not known yet; be kind, share nothing about the owner." }
   customer:   { base: guest,  label: "Customer",   context: "A shop customer; help with products and orders." }
   member:     { base: member }
-  moderator:  { base: member, discord_role: ["<server id>/<role id>"] }   # held only in that server (D68)
+  moderator:  { base: member, platform_role: ["space:dc:guild:123/456"] }  # a platform's role, held only in that space (D68, D81)
   runner:     { allow: [workspace.run] }             # a small role for an exception
   toko-a:     { label: "Toko A", settings: { workspace.shared: toko-a } }   # a group role: no base
 people:                             # optional; keyed by person id; the only record of who holds which role

@@ -13,6 +13,25 @@ The three layers ([constitution §4](constitution.md), D57):
   and everything else, and it may limit or add what reaches the core.
 - **Adapters and plugins** — talk only to the middleware: they give it data and ask it for data.
 
+**Neutral to what sits on it (D81).** The middleware favors no adapter and no plugin; it is as
+stable and as neutral as the core below it. Concretely:
+- **No platform in the middleware.** No adapter or plugin name, no platform id format (no
+  parsing of `space:<platform>:…`), no emoji, no native button or reaction. It reads only the
+  vocabulary of `contract.py` and opaque ids; everything native is drawn and parsed by the
+  adapter. A platform feature is added in its adapter and its coverage declaration, never as a
+  branch in the middleware.
+- **No language in the code.** The middleware's own words (an approval question, "Yes" and "No",
+  a brake notice) come from a small message catalog per language
+  (`monoagens/middleware/lang/<code>.yaml`, English as the fallback) in the soul's language
+  (`soul.yaml` → `language`).
+- **Only hooks and levers.** It acts through the three hooks and the six levers (§2); it never
+  replaces or wraps a core function or attribute.
+- **State only through events** (lever 4): anything it must remember across a restart (a
+  pending approval and the message that asks it, a progress message, a read mark) is an event or
+  its projection, never a variable in the running process.
+- An architecture test holds these: the middleware imports no adapter or plugin, and its code
+  names no adapter, platform id prefix or emoji.
+
 The middleware runs in the core's three hooks (inbound, context, action) and offers one API
 (§2). It is static and never learns — learning belongs to the soul (D34).
 
@@ -364,12 +383,16 @@ their permissions to the bases automatically).
 - Role facts reported by a platform ("admin of this group") are recorded as facts about that
   person, so the soul's social understanding can use them; they grant nothing by themselves
   (D31).
-- **Platform roles mapped by the owner** (D68): a role may name the platform roles that give it,
-  `moderator: { base: member, discord_role: ["<server id>/<role id>"] }` (ids, not names, since
-  names change). The adapter reports the Discord role ids a person holds with each percept;
-  `roles.py` reads them when it decides, so a role taken away on Discord is gone at once. A
-  mapped role holds **only in places whose `parent` chain reaches that server**, never in a DM
-  or on another adapter. A Discord role grants nothing until the owner maps it.
+- **Platform roles mapped by the owner** (D68, generic since D81): a role may name the platform
+  roles that give it, `moderator: { base: member, platform_role: ["<space>/<role id>"] }`, where
+  `<space>` is the opaque place id of the organisation the role belongs to (a Discord server, a
+  Slack workspace, …) and the role is named by its id, not its name, since names change. The
+  adapter reports, with each percept, the platform role ids the person holds and the space they
+  belong to (`data.platform_roles: {space, roles}`), and reports the whole `parent` chain in
+  place info; `roles.py` walks `parent` as opaque ids and never reads a platform id format. A
+  role taken away on the platform is gone at the next percept. A mapped role holds **only in
+  places whose `parent` chain reaches that space**, never in a DM or on another adapter; an
+  unmapped platform role grants nothing.
 - No permission overrides the two absolute lines or buys dishonesty (D24, D31). Scoping a
   permission to one group ("admin only inside toko A") is not supported; a place override
   covers the common case. The one exception is a mapped platform role, scoped to its server by
@@ -414,22 +437,36 @@ bodies:
   carries a communicative act until the last message of it is delivered (the extra wake for
   speaking elsewhere included). Appraisal and a reasoning that ends silent show nothing. Work
   before an answer is shown by `steps`, not by typing. No artificial delay.
-- **Read receipts** mark a message read once the soul has processed it (its decision is
-  recorded, whether it spoke or stayed silent). Never for imported or back-filled percepts
-  ([adapters.md §5](adapters.md)). On an account shared with the owner
-  ([adapters.md §6](adapters.md)), only in places where the soul has spoken since the message,
-  so the owner keeps the unread marks on the phone.
-- **Steps and progress**: with `progress: edit` one message is updated per step; an adapter
-  without `edit` falls back to `new`.
+- **Read receipts** mark a message read in the inbound hook, once it is recorded and being
+  processed (the decision follows in the same turn), whether the soul then speaks or stays
+  silent. Never for imported or back-filled percepts ([adapters.md §5](adapters.md)). On an
+  account shared with the owner ([adapters.md §6](adapters.md)), only when the soul speaks in
+  that place: the action hook of that communicative act marks the earlier messages there read,
+  so the owner keeps the unread marks on the phone otherwise. Each mark is recorded
+  (`interaction.shown`, kind `read`), so a restart marks nothing twice.
+- **Steps and progress**: with `progress: edit` one message is updated per step; the id of that
+  message comes from its `act.result` in the Log; an adapter without `edit` falls back to `new`.
+- **Approvals are choices** (D81). An approval, a brake's "continue?" and any yes/no the
+  middleware asks are the same neutral `choices` intent the soul uses (D67): the question and
+  the labels from the message catalog. The adapter draws them its best way (buttons, menus, a
+  reaction per choice, a poll, a numbered list), and its `act.result` records the message id and,
+  per choice, the native answer it will recognise (`choices: [{label, answer}]`: a button
+  payload, an emoji, a number). An answer is an ordinary percept that names the message it
+  answers (`data.reply_to`) and carries the native answer (`data.answer`) or a typed label;
+  `interaction.py` matches it against the recorded choices from the Log, comparing opaque
+  tokens, and the pending `approval.requested` event names that message. Nothing about a
+  pending approval lives in the running process, so an answer after a restart still counts.
 
 **What an adapter can show** is declared at boot in `contract.SHOWS` (typing, read receipts,
-edit, delete, reply, reactions, buttons, menus, polls, stickers, embeds, threads;
+edit, delete, reply, reactions, buttons, menus, polls, stickers, embeds, threads, locations;
 [adapters.md §4](adapters.md)), like V1 ADR-0018's optional parts and the channel matrix of chat
-frameworks. A missing capability is never a silent no-op: `interaction.py` picks the fallback it
-knows (choices: buttons → poll → numbered list; thread: new thread → reply with the title;
-location: native → text; voice: voice note or speech → text; approval: buttons → reactions → "reply yes or no" as text; progress:
-edit → new message; sticker → its emoji; no typing → nothing), so what is lost is a choice, visible in the code and
-the boot report.
+frameworks. The middleware asks for an intent (choices, a thread, a location, voice, a
+progress message, a sticker); **the adapter draws it its best way, down to plain text**, and its
+coverage declaration says how (choices: buttons → reactions → poll → numbered list; thread: new
+thread → reply with the title; location: native → text; voice: voice note or speech → text;
+progress: edit → new message; sticker → its emoji). The boot report prints each adapter's
+ladder, so what is lost is visible. The middleware only decides what is shown and to whom, and
+refuses a `/show` value the adapter declares it cannot draw.
 
 ## 10. Attachments
 Files that arrive with a message or leave with one, any number per message. The core never

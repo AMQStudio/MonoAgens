@@ -122,6 +122,19 @@ adapter is a special case.
   coverage table of every adapter is in the boot report with no undeclared gap; a person's
   private context follows them only after a verified link; a file received on WhatsApp can be
   read and sent on; a sticker received can be sent back.
+- [ ] 1.9 Neutral middleware (D81, middleware.md §1, §8, §9; adapters.md §3, §4) — before the
+  live session of 1.8: remove every platform from the middleware (no adapter names, platform id
+  prefixes such as `space:dc:guild:`, `guild_id`, emoji or yes/no words in `middleware/`);
+  `discord_role` becomes `platform_role: ["<space>/<role id>"]` with `data.platform_roles` from the
+  adapter and the full `parent` chain in place info; approvals and brake prompts use `choices`
+  drawn by the adapter, matched from the Log by `data.reply_to` and `data.answer`; the message
+  catalog `monoagens/middleware/lang/<code>.yaml` (en, id) in the soul's language; read receipts
+  in the inbound hook and, on a shared owner account, in the action hook of a communicative act,
+  each mark recorded; no wrapping of `kernel._emit` or any core function; no state in
+  `kernel.__dict__` or any process variable (pending approvals, progress message ids, read marks
+  come from the Log). An architecture test fails on any of these. Tests: an approval answered by
+  reaction after a restart still counts; a brake prompt in Indonesian with `language: id`; the
+  same moderator test as 1.6 with `platform_role`.
 - [ ] 1.8 Real-model test (this task's one exception to the last-part rule, because WhatsApp is
   needed daily): the replay launch set passes on the new adapters, then a live session on
   WhatsApp in the owner's direct chat and one group (the model in `.env`; never read or print
