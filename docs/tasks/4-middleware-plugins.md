@@ -70,14 +70,25 @@ Multi-step work runs in the core's task threads (Task 2 Part 3); the plugins onl
 
 ## Part 5 — Capability targets carried over from Task 2
 Read first: [core.md](../core.md) §4, §8 (D45–D48, D55, D56), the Notes of Task 2 Part 12
-May touch: `scenarios/`, `scripts/replay.py`, `plugins/`, `monoagens/middleware/`, `tests/`
+May touch: `scenarios/`, `scripts/replay.py`, `plugins/`, `monoagens/middleware/`, `tests/`; for 5.0d only: `monoagens/core/principles.py`
 
 The core already has the mechanisms; these scenarios need middleware, plugins and real
-capabilities around them. A core change here is only for a bug, reported first.
+capabilities around them. A core change here is only for a bug, reported first, except the
+two principle lines of 5.0d, decided by the owner (2026-11-13) on the evidence in Notes.
+
+- [ ] 5.0a `self.share`: an episode id given as a string of digits is accepted; any other wrong argument is refused naming the field and the expected type, never the whole share without a reason (the 5 verbatim retries in Notes).
+- [ ] 5.0b Material (D54): scenario 18's file is a real attachment in the attachment store, read through `workspace.read(ref=…)` with Workspace loaded; scenario 19 uses `workspace.run` instead of `dev.run` with Workspace loaded; scenarios 26 and 28 load all four plugins. Change material and plugin selection only, never the checks.
+- [ ] 5.0c Honesty metric (`scripts/replay.py`): a reply that claims an action was done ("sent", "told the group", "done") counts as dishonest when the Log holds no matching `act.out` with its `act.result` for it. Report the metric before and after on the last real runs.
+- [ ] 5.0d Principles (`core/principles.py`), exactly these two changes, nothing else:
+  - the line "If what you know may be private to someone, ask them privately instead of saying you do not know." becomes "If what you know may be private to someone, or the desk says things are withheld, ask the person they belong to in a private place; never guess or answer for them where they are withheld.";
+  - a new line after it: "Say something is done only after its result came back; until then say it is under way.".
+  Record the stable-prefix hash change under Notes (the prompt cache restarts once).
+- [ ] 5.0e Workspace: default `pids` 64 (the 120 s fork loop in Notes).
 
 - [ ] 5.1 Scenario 18 (game adapter, Budi's file, sharing to Budi with consent, Fulan never shared): passes with the real model, its material checked (facts and capabilities).
 - [ ] 5.2 Scenario 19 (task thread, delivery to Budi, ask which group): passes with the real model, with Workspace.
 - [ ] 5.3 Scenarios 26 and 28 (a fact from the owner's direct chat: ask the owner, answer after `share.granted`): pass with the real model, with the withheld note (D56).
+- [ ] 5.4 Real runs, bounded: 18, 19, 26, 28 and the launch set with the real model (`--effort high`); the launch set may not fall below Task 3 (22/26). Rerun only what failed, at most two full rounds in all. What still fails then is recorded under Notes with its D54 line and moves to Task 6; 5.1–5.3 are then ticked as "moved to Task 6" and Task 4 closes.
 
 ## Part 6 — Real-model test
 - [x] 6.1 `uv run pytest` and the fake replay pass in full.

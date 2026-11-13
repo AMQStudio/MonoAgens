@@ -14,7 +14,7 @@ before Task 3 name files by their earlier names; the [glossary](../glossary.md) 
 | 1 | [Core: align with the frozen contract](1-core-align.md) | **done** — 181 tests; fake replay 17/25, fixed in Task 2 Part 2 | — |
 | 2 | [Core: launch](2-core-launch.md) | **done** — 321 tests, fake 133 checks, violations 0; 16 and 30 flaky; 20, 22 run in Task 3 | Task 1 |
 | 3 | [Core: clean refactor](3-core-refactor.md) | **done** — 336 tests, fake 133/133, violations 0; core imports no middleware; 22/26 real, 09 and 23 flaky, 24 open | Task 2 |
-| 4 | [Middleware and first plugins](4-middleware-plugins.md) | **next** — eight middleware files; Soul Tuning, Web Search, Workspace (sandbox), PDF Reader | Task 3 |
+| 4 | [Middleware and first plugins](4-middleware-plugins.md) | **closing** — Parts 1–4 and 6 done (530 tests, fake 133/133, launch set 22/26 as Task 3, sandbox 53/53 real); Part 5 open (5.0a–5.4) | Task 3 |
 | 5 | [Adapters: WhatsApp, Discord and more](5-adapters.md) | todo — WhatsApp and Discord first, so the soul is usable daily | Task 4 |
 | 6 | [Core: depth of mind](6-core-mind.md) | todo — last, after weeks of daily use | Task 5 and some weeks of daily use |
 | 7 | [First users and release](7-release.md) | todo | Task 6 |
