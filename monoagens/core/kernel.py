@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import timedelta
@@ -13,7 +15,7 @@ from monoagens.core import dispatch, expectations, hooks, jobs, memory, sends, t
 from monoagens.core.context import layout, working
 from monoagens.core.gate import Appraisal, appraise, validate_signals
 from monoagens.core.reasoning import Reasoning, ToolCall
-from monoagens.infra import budget
+from monoagens.infra import budget, config
 from monoagens.infra.clock import Clock
 from monoagens.infra.prior import load_settings, signal_weights
 from monoagens.infra.store import (append_event, cursor as store_cursor, insert_event_vector,
@@ -22,6 +24,14 @@ from monoagens.types import Event
 
 NOT_INSTALLED = ("the middleware is not installed: build the kernel with "
                  "monoagens.boot.build()")
+LOGGER = logging.getLogger("kernel")
+
+
+def _clean_text(value: str | None) -> str | None:
+    """Strip Postgres-rejected NUL bytes from error and identity fields."""
+    if value is None:
+        return None
+    return str(value).replace("\x00", "")
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +54,9 @@ class Kernel:
         self.settings = dict(settings) if settings is not None else load_settings()
         self.embedder = embedder
         self.queue: asyncio.Queue[_Queued] = asyncio.Queue()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        with contextlib.suppress(RuntimeError):
+            self._loop = asyncio.get_running_loop()
         self.jobs = jobs.JobRunner(self)
         self.tools: Any | None = None
         self.intake: Callable[[Event], Awaitable[Event]] | None = None
@@ -64,8 +77,9 @@ class Kernel:
         """Accept one event from an adapter or the clock (ticks are not acknowledged)."""
         if self.intake is None:
             raise RuntimeError(NOT_INSTALLED)
-        event = await self.intake(event)
-        ack = None if event.kind == "tick" else asyncio.get_running_loop().create_future()
+        loop = asyncio.get_running_loop()
+        self._loop = loop
+        ack = None if event.kind == "tick" else loop.create_future()
         await self.queue.put(_Queued(event, ack))
         return await ack if ack is not None else None
 
@@ -74,8 +88,25 @@ class Kernel:
         return await store_cursor(self.conn, body)
 
     def enqueue(self, event: Event) -> None:
-        """Queue an internal event without waiting for an intake acknowledgement."""
-        self.queue.put_nowait(_Queued(event, None))
+        """Queue an internal event safely from any thread without waiting for an intake ack."""
+        item = _Queued(event, None)
+        loop = self._loop
+        if loop is not None and not loop.is_closed():
+            try:
+                running = asyncio.get_running_loop()
+            except RuntimeError:
+                running = None
+            if running is not loop:
+                loop.call_soon_threadsafe(self.queue.put_nowait, item)
+                return
+        self.queue.put_nowait(item)
+
+    def put_threadsafe(self, event: Event) -> Any:
+        """Submit one event onto the kernel queue from another thread cleanly."""
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            raise RuntimeError("kernel loop is not running")
+        return asyncio.run_coroutine_threadsafe(self.put(event), loop)
 
     def register_adapter(self, adapter: Any) -> None:
         """Register an adapter and the capabilities it declares."""
@@ -109,10 +140,19 @@ class Kernel:
                               place=event.place or "")
 
     async def _settle(self, item: _Queued) -> Event:
+        resolved = item.event
         try:
-            stored = item.event if item.event.kind == "tick" else await self._append(
-                item.event, item.event.kind, item.event.payload, caused_by=item.event.caused_by)
+            if item.event.kind == "tick":
+                stored = item.event
+            else:
+                async with self.conn.transaction():
+                    if self.intake is not None:
+                        resolved = await self.intake(item.event)
+                    stored = await self._append(
+                        resolved, resolved.kind, resolved.payload, caused_by=resolved.caused_by)
         except BaseException as exc:
+            if isinstance(exc, Exception) and item.event.kind != "error":
+                await self._record_error(resolved, exc)
             if item.ack is not None and not item.ack.done():
                 item.ack.set_exception(exc)
             self.queue.task_done()
@@ -387,21 +427,34 @@ class Kernel:
         return await self._append(trigger, kind, payload, caused_by=trigger.id, place=place)
 
     async def _record_error(self, event: Event, exc: BaseException | str) -> None:
+        raw = jobs.describe_failure(exc) if isinstance(exc, BaseException) else str(exc)
+        text = config.redact_connection_secrets(_clean_text(raw) or "unknown error", self.conn)
+        LOGGER.error("kernel error on %s (%s): %s", event.kind, event.body or "-", text)
+        safe_event = Event(
+            id=None,
+            ts=event.ts,
+            kind="error",
+            who=_clean_text(event.who),
+            place=_clean_text(event.place),
+            body=_clean_text(event.body),
+            origin_actor=_clean_text(event.origin_actor),
+        )
         try:
-            text = jobs.describe_failure(exc) if isinstance(exc, BaseException) else str(exc)
-            await self._append(event, "error", {"error": text, "event_id": event.id},
+            await self._append(safe_event, "error", {"error": text, "event_id": event.id},
                                caused_by=event.id, project=False)
-        except Exception:
-            pass  # the Log itself is unreachable; nothing left to record.
+        except Exception as rec_exc:
+            LOGGER.error("failed to record error event: %s", rec_exc)
 
     async def step(self) -> Event:
         """Process exactly one queued event."""
         self.require_installed()
+        self._loop = asyncio.get_running_loop()
         return await self._settle(await self.queue.get())
 
     async def run_until_idle(self) -> int:
         """Process every queued event and every in-flight background job."""
         self.require_installed()
+        self._loop = asyncio.get_running_loop()
         count = 0
         while True:
             while not self.queue.empty():
@@ -415,9 +468,15 @@ class Kernel:
     async def run(self, stop_event: asyncio.Event) -> None:
         """Run the consumer loop until the stop event is set."""
         self.require_installed()
+        self._loop = asyncio.get_running_loop()
         await self.recover()
         while not stop_event.is_set():
             try:
-                await self._settle(await asyncio.wait_for(self.queue.get(), timeout=0.1))
-            except Exception:
-                continue  # an empty queue or one broken event never kills the loop.
+                item = await asyncio.wait_for(self.queue.get(), timeout=0.1)
+            except TimeoutError:
+                continue
+            try:
+                await self._settle(item)
+            except Exception as exc:
+                LOGGER.error("kernel settle failed: %s", jobs.describe_failure(exc))
+                continue  # one broken event never kills the loop.

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -463,3 +465,144 @@ async def test_channels_broadcast_and_communities_parent_and_say_outputs(aconn, 
 
     # Unrelated extra sanity: props contains field 15
     assert b"MonoAgens" in history_props(False).SerializeToString()
+
+
+class _FakeThreadedWAClient(FakeWAClient):
+    """Fake neonize NewAClient dispatching registered async handlers from a worker thread."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._handlers: dict[type, object] = {}
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._stop = asyncio.Event()
+
+    def event(self, event_cls):
+        def _register(fn):
+            self._handlers[event_cls] = fn
+            return fn
+        return _register
+
+    async def connect(self) -> None:
+        self._loop = asyncio.get_running_loop()
+
+    async def idle(self) -> None:
+        await self._stop.wait()
+
+    async def stop(self) -> None:
+        self._stop.set()
+
+    def fire_from_thread(self, event_cls, ev) -> None:
+        """Invoke a handler exactly like neonize's Go/C thread (dropping the Future)."""
+        assert self._loop is not None
+        fn = self._handlers[event_cls]
+        asyncio.run_coroutine_threadsafe(fn(self, ev), self._loop)
+
+
+async def test_threaded_neonize_events_and_nul_payloads_become_percepts_or_errors(
+    aconn, tmp_path, caplog, monkeypatch
+):
+    """D81/0: threaded neonize callbacks, \\u0000 payloads, and intake errors never vanish silently."""
+    from neonize.aioze.events import ConnectedEv, HistorySyncEv, MessageEv
+
+    clock = FakeClock(START)
+    client = _FakeThreadedWAClient()
+    body = WhatsAppBody(clock=clock, client=client, self_account=f"whatsapp:{OWN_PN}")
+    body.files = _door(aconn, tmp_path)
+    kernel = build(aconn, clock=clock)
+    stop = asyncio.Event()
+
+    caplog.set_level(logging.ERROR)
+    kernel_task = asyncio.create_task(kernel.run(stop))
+    adapter_task = asyncio.create_task(body.run(kernel.put))
+    while client._loop is None:
+        await asyncio.sleep(0.01)
+
+    sync = HistorySync(conversations=[Conversation(
+        ID=f"{BUDI_PN}@s.whatsapp.net",
+        messages=[
+            HistorySyncMsg(message=WebMessageInfo(
+                key=MessageKey(ID="H1", remoteJID=f"{BUDI_PN}@s.whatsapp.net", fromMe=False),
+                message=e2e.Message(conversation="imported\x00text"),
+                messageTimestamp=1762800000,
+                pushName="Bu\x00di",
+            )),
+            HistorySyncMsg(message=WebMessageInfo(
+                key=MessageKey(ID="H2", remoteJID=f"{BUDI_PN}@s.whatsapp.net", fromMe=False),
+                message=e2e.Message(conversation="imported ok"),
+                messageTimestamp=1762800001,
+            )),
+        ],
+    )])
+    live_dm = _make_ev(msg_id="LIVE_1", chat_user=BUDI_PN, sender_user=BUDI_PN,
+                       message=e2e.Message(conversation="live dm\x00hello"))
+
+    errors: list[BaseException] = []
+
+    def _fire_events() -> None:
+        try:
+            client.fire_from_thread(ConnectedEv, SimpleNamespace(status=True))
+            client.fire_from_thread(HistorySyncEv, SimpleNamespace(Data=sync))
+            client.fire_from_thread(MessageEv, live_dm)
+            fut = kernel.put_threadsafe(Event(
+                id=None, ts=START, kind="percept", who="whatsapp:6289990001",
+                place="space:wa:6289990001@s.whatsapp.net", body="whatsapp",
+                payload={"description": "raw\x00nul", "addressed": True},
+            ))
+            try:
+                fut.result(timeout=5)
+            except Exception as exc:
+                errors.append(exc)
+        except Exception as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=_fire_events, daemon=True)
+    worker.start()
+    worker.join(timeout=5)
+
+    for _ in range(100):
+        await asyncio.sleep(0.02)
+        cur = await aconn.execute(
+            "SELECT kind, payload FROM events ORDER BY id ASC"
+        )
+        rows = await cur.fetchall()
+        percept_msgs = [r[1].get("description", "") for r in rows if r[0] == "percept"]
+        error_rows = [r[1] for r in rows if r[0] == "error"]
+        if len(percept_msgs) >= 3 and error_rows:
+            break
+
+    # Also test intake failing after resolving one account rolls back cleanly and records an error
+    orig_resolve = identity.resolve_account
+
+    async def _boom_on_second(conn, account, **kw):
+        if account == "whatsapp:6287770002":
+            raise RuntimeError("boom after resolve_account")
+        return await orig_resolve(conn, account, **kw)
+
+    monkeypatch.setattr(identity, "resolve_account", _boom_on_second)
+    with __import__("contextlib").suppress(RuntimeError):
+        await kernel.put(Event(
+            id=None, ts=START, kind="percept", who="whatsapp:6287770001",
+            place="space:wa:group1@g.us", body="whatsapp",
+            payload={"description": "hi", "data": {"mentions": ["whatsapp:6287770002"]}},
+        ))
+
+    stop.set()
+    await body.aclose()
+    await asyncio.gather(kernel_task, adapter_task, return_exceptions=True)
+
+    assert len(errors) == 1  # raw \u0000 put raised cleanly via put_threadsafe
+    cur = await aconn.execute(
+        "SELECT id, kind, who, payload FROM events ORDER BY id ASC"
+    )
+    all_rows = await cur.fetchall()
+    kinds = [r[1] for r in all_rows]
+    assert kinds.count("percept") == 3
+    descriptions = [r[3]["description"] for r in all_rows if r[1] == "percept"]
+    assert any("importedtext" in d for d in descriptions)
+    assert any("imported ok" in d for d in descriptions)
+    assert any("live dmhello" in d for d in descriptions)
+    assert kinds.count("error") >= 2
+    assert any("kernel error" in rec.message for rec in caplog.records)
+    # Failed intake rolled back identity.registered for whatsapp:6287770001 cleanly
+    reg_accounts = [r[3].get("account") for r in all_rows if r[1] == "identity.registered"]
+    assert "whatsapp:6287770001" not in reg_accounts

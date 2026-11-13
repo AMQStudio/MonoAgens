@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from datetime import datetime
 from typing import Any
 
-from monoagens.adapters.whatsapp.format import album_parent_id, format_album, format_message
+from monoagens.adapters.whatsapp.format import (
+    album_parent_id,
+    clean_text,
+    format_album,
+    format_message,
+)
 from monoagens.adapters.whatsapp.identity import WhatsAppDirectory, jid_text, place_id
 from monoagens.adapters.whatsapp.media import store_deferred
 from monoagens.types import Event
+
+LOGGER = logging.getLogger(__name__)
 
 HISTORY_DAYS = 730
 HISTORY_SIZE_MB = 5000
@@ -170,20 +178,30 @@ async def extract_sync_events(sync: Any, *, directory: WhatsAppDirectory, files:
         fallback_ts = int(getattr(conv, "conversationTimestamp", 0) or 0)
         albums: dict[str, list[Event]] = {}
         for item in getattr(conv, "messages", ()) or ():
-            web = getattr(item, "message", item)
-            msg = getattr(web, "message", None)
-            if msg is None:
+            try:
+                web = getattr(item, "message", item)
+                msg = getattr(web, "message", None)
+                if msg is None:
+                    continue
+                key = getattr(web, "key", None)
+                msg_id = str(getattr(key, "ID", "") or "")
+                atts, spec = await store_deferred(files, body=name, chat_jid=chat_jid,
+                                                  message_id=msg_id, message=msg)
+                ev = format_message(
+                    web, directory=directory, now=now, name=name, self_account=self_account,
+                    own_sent=sent_set, attachments=atts, media_spec=spec,
+                    imported=not backfill, backfill=backfill,
+                    fallback_chat=chat_jid, fallback_ts=fallback_ts,
+                )
+            except Exception as exc:
+                detail = clean_text(f"{type(exc).__name__}: {exc}")
+                LOGGER.exception("whatsapp history_sync failed on item in %s: %s", place, detail)
+                events.append(Event(
+                    id=None, ts=now, kind="error", who=name, place=clean_text(place), body=name,
+                    payload={"adapter": name, "handler": "history_sync",
+                             "error": f"{name} history_sync: {detail}"},
+                ))
                 continue
-            key = getattr(web, "key", None)
-            msg_id = str(getattr(key, "ID", "") or "")
-            atts, spec = await store_deferred(files, body=name, chat_jid=chat_jid,
-                                              message_id=msg_id, message=msg)
-            ev = format_message(
-                web, directory=directory, now=now, name=name, self_account=self_account,
-                own_sent=sent_set, attachments=atts, media_spec=spec,
-                imported=not backfill, backfill=backfill,
-                fallback_chat=chat_jid, fallback_ts=fallback_ts,
-            )
             if ev is None:
                 continue
             parent_id = album_parent_id(msg)

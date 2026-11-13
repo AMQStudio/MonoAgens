@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import pathlib
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -19,6 +20,8 @@ from monoagens.adapters.whatsapp.capabilities import (
 from monoagens.adapters.whatsapp.format import (
     album_expected_count,
     album_parent_id,
+    clean_event,
+    clean_text,
     format_album,
     format_call,
     format_message,
@@ -40,9 +43,18 @@ from monoagens.infra.clock import Clock
 from monoagens.types import Action, Event
 
 Put = Callable[[Event], Awaitable[None]]
+LOGGER = logging.getLogger(__name__)
 REQUIRES: tuple[str, ...] = ()
 FILES = {"per_message": 20, "max_bytes": 100_000_000, "mimes": ()}
 DEFAULT_ALBUM_WINDOW = 0.8
+
+
+class _PutFailed(RuntimeError):
+    """Wrap an error already handled/recorded by kernel `put()` so adapter won't duplicate it."""
+
+    def __init__(self, cause: BaseException) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
 
 
 def create(options: dict[str, Any], env: dict[str, str]) -> "WhatsAppBody":
@@ -84,10 +96,12 @@ class WhatsAppBody:
         self.album_window = album_window
         self.enabled_tools = tuple(t for t in enabled_tools if t in OPTIONAL_CAPABILITIES)
         self._sent: set[str] = set()
+        self._sent_loaded = False
         self._choices_prompts: dict[str, list[str]] = {}
         self._albums: dict[str, dict[str, Any]] = {}
         self._connected_once = False
         self._backfilling = False
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     @property
     def files(self) -> Any:
@@ -117,10 +131,12 @@ class WhatsAppBody:
             return False
         if message_id in self._sent:
             return True
-        conn = getattr(self._files, "_conn", None)
-        if conn is not None:
-            found = await sent_ids_from_log(conn, body=self.name)
-            self._sent.update(found)
+        if not self._sent_loaded:
+            conn = getattr(self._files, "_conn", None)
+            if conn is not None:
+                found = await sent_ids_from_log(conn, body=self.name)
+                self._sent.update(found)
+                self._sent_loaded = True
         return message_id in self._sent
 
     def _sync_self_identity(self, me: Any) -> None:
@@ -141,11 +157,14 @@ class WhatsAppBody:
 
     async def run(self, put: Put) -> None:
         """Connect to WhatsApp, stream percepts into `put`, and flush media albums."""
+        self._loop = asyncio.get_running_loop()
         if self._files is not None and hasattr(self._files, "register_fetcher"):
             self._files.register_fetcher(self.name, self.fetch_attachment)
-        conn = getattr(self._files, "_conn", None)
-        if conn is not None:
-            self._sent.update(await sent_ids_from_log(conn, body=self.name))
+        if not self._sent_loaded:
+            conn = getattr(self._files, "_conn", None)
+            if conn is not None:
+                self._sent.update(await sent_ids_from_log(conn, body=self.name))
+            self._sent_loaded = True
         if self._client is None:
             self.session_db.parent.mkdir(parents=True, exist_ok=True)
             if callable(self._client_factory):
@@ -157,7 +176,8 @@ class WhatsAppBody:
                 self._client = NewAClient(str(self.session_db),
                                           props=history_props(self.full_sync))
         client = self._client
-        self._register_handlers(client, put)
+        safe_put = self._wrap_put(put)
+        self._register_handlers(client, safe_put)
         try:
             await client.connect()
             idle = getattr(client, "idle", None)
@@ -165,6 +185,45 @@ class WhatsAppBody:
                 await idle()
         finally:
             await self.aclose()
+
+    def _wrap_put(self, put: Put) -> Put:
+        """Marshal puts onto the adapter's event loop and tag errors already handled by put()."""
+        async def safe_put(ev: Event) -> Any:
+            target_loop = self._loop
+            try:
+                running = asyncio.get_running_loop()
+            except RuntimeError:
+                running = None
+            try:
+                if target_loop is not None and not target_loop.is_closed() and running is not target_loop:
+                    return await asyncio.wrap_future(
+                        asyncio.run_coroutine_threadsafe(put(ev), target_loop)
+                    )
+                return await put(ev)
+            except Exception as exc:
+                raise _PutFailed(exc) from exc
+
+        return safe_put
+
+    async def _emit_adapter_error(self, put: Put, exc: BaseException, *, label: str) -> None:
+        """Record one adapter-layer failure as an `error` event and log it."""
+        detail = clean_text(f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__)
+        LOGGER.exception("whatsapp %s failed: %s", label, detail)
+        if isinstance(exc, _PutFailed):
+            return
+        err_ev = Event(
+            id=None,
+            ts=self._clock.now(),
+            kind="error",
+            who=self.name,
+            place="",
+            body=self.name,
+            payload={"adapter": self.name, "handler": label, "error": f"{self.name} {label}: {detail}"},
+        )
+        try:
+            await put(err_ev)
+        except Exception as emit_exc:
+            LOGGER.error("whatsapp failed to emit error event for %s: %s", label, emit_exc)
 
     def _register_handlers(self, client: Any, put: Put) -> None:
         from neonize.aioze.events import (
@@ -182,12 +241,22 @@ class WhatsAppBody:
             OfflineSyncPreviewEv,
         )
 
+        async def _guarded(label: str, coro: Awaitable[Any]) -> None:
+            try:
+                await coro
+            except Exception as exc:
+                await self._emit_adapter_error(put, exc, label=label)
+
         @client.event(ConnectedEv)
         async def _on_connected(accepted: Any, _ev: Any) -> None:
-            self._sync_self_identity(getattr(accepted, "me", None) or getattr(client, "me", None))
-            await asyncio.to_thread(import_contacts_sqlite, self.session_db, self.directory)
-            await self._sync_places(accepted)
-            self._connected_once = True
+            async def work() -> None:
+                self._sync_self_identity(
+                    getattr(accepted, "me", None) or getattr(client, "me", None))
+                await asyncio.to_thread(import_contacts_sqlite, self.session_db, self.directory)
+                await self._sync_places(accepted)
+                self._connected_once = True
+
+            await _guarded("connected", work())
 
         @client.event(OfflineSyncPreviewEv)
         async def _on_offline_preview(_accepted: Any, _ev: Any) -> None:
@@ -199,54 +268,71 @@ class WhatsAppBody:
 
         @client.event(MessageEv)
         async def _on_message(accepted: Any, ev: Any) -> None:
-            self._sync_self_identity(getattr(accepted, "me", None))
-            await self.handle_message(ev, put)
+            async def work() -> None:
+                self._sync_self_identity(
+                    getattr(accepted, "me", None) or getattr(client, "me", None))
+                await self.handle_message(ev, put)
+
+            await _guarded("message", work())
 
         @client.event(HistorySyncEv)
         async def _on_history(_accepted: Any, ev: Any) -> None:
             if getattr(ev, "Data", None) is not None:
-                await self.handle_history_sync(ev.Data, put)
+                await _guarded("history_sync", self.handle_history_sync(ev.Data, put))
 
         @client.event(GroupInfoEv)
         async def _on_group_info(_accepted: Any, ev: Any) -> None:
-            await self.handle_group_info(ev, put)
+            await _guarded("group_info", self.handle_group_info(ev, put))
 
         @client.event(JoinedGroupEv)
         async def _on_joined_group(_accepted: Any, ev: Any) -> None:
-            info = getattr(ev, "GroupInfo", None)
-            if info is not None:
-                self.directory.record_group(info, self_digits=digits_of(self.self_account or ""))
+            async def work() -> None:
+                info = getattr(ev, "GroupInfo", None)
+                if info is not None:
+                    self.directory.record_group(info, self_digits=digits_of(self.self_account or ""))
+
+            await _guarded("joined_group", work())
 
         @client.event(NewsletterJoinEv)
         async def _on_news_join(_accepted: Any, ev: Any) -> None:
-            self.directory.record_newsletter(ev)
+            async def work() -> None:
+                self.directory.record_newsletter(ev)
+
+            await _guarded("newsletter_join", work())
 
         @client.event(NewsletterLiveUpdateEv)
         async def _on_news_update(_accepted: Any, ev: Any) -> None:
-            self.directory.record_newsletter(ev)
+            async def work() -> None:
+                self.directory.record_newsletter(ev)
+
+            await _guarded("newsletter_update", work())
 
         @client.event(CallOfferEv)
         async def _on_call_offer(_accepted: Any, ev: Any) -> None:
-            await self.handle_call("incoming", ev.basicCallMeta, put)
+            await _guarded("call_offer", self.handle_call("incoming", ev.basicCallMeta, put))
 
         @client.event(CallOfferNoticeEv)
         async def _on_call_notice(_accepted: Any, ev: Any) -> None:
             is_video = str(getattr(ev, "media", "") or "").lower() == "video"
-            await self.handle_call("incoming", ev.basicCallMeta, put, is_video=is_video)
+            await _guarded("call_notice",
+                           self.handle_call("incoming", ev.basicCallMeta, put, is_video=is_video))
 
         @client.event(CallTerminateEv)
         async def _on_call_end(_accepted: Any, ev: Any) -> None:
             reason = str(getattr(ev, "reason", "") or "")
             status = "missed" if "miss" in reason.lower() or "timeout" in reason.lower() else "ended"
-            await self.handle_call(status, ev.basicCallMeta, put, reason=reason)
+            await _guarded("call_end",
+                           self.handle_call(status, ev.basicCallMeta, put, reason=reason))
 
     async def _sync_places(self, client: Any) -> None:
         own_digits = digits_of(self.self_account or "")
         getter = getattr(client, "get_joined_groups", None)
         if callable(getter):
-            with contextlib.suppress(Exception):
+            try:
                 for info in await getter() or ():
                     self.directory.record_group(info, self_digits=own_digits)
+            except Exception as exc:
+                LOGGER.warning("whatsapp _sync_places failed: %s", exc)
 
     async def handle_message(self, ev: Any, put: Put, *, backfill: bool = False) -> Event | None:
         """Convert one live `MessageEv` into a percept (collapsing albums) and emit via `put`."""
@@ -300,7 +386,10 @@ class WhatsAppBody:
         if entry.get("task") is None or entry["task"].done():
             async def _timer() -> None:
                 await asyncio.sleep(self.album_window)
-                await self.flush_album(album_id)
+                try:
+                    await self.flush_album(album_id)
+                except Exception as exc:
+                    await self._emit_adapter_error(put, exc, label="album_flush")
 
             entry["task"] = asyncio.create_task(_timer())
 
@@ -320,16 +409,21 @@ class WhatsAppBody:
     async def handle_history_sync(self, sync: Any, put: Put, *,
                                   backfill: bool = False) -> list[Event]:
         """Ingest one `HistorySync` payload into percepts and put each without waking."""
-        conn = getattr(self._files, "_conn", None)
-        if conn is not None:
-            self._sent.update(await sent_ids_from_log(conn, body=self.name))
+        if not self._sent_loaded:
+            conn = getattr(self._files, "_conn", None)
+            if conn is not None:
+                self._sent.update(await sent_ids_from_log(conn, body=self.name))
+            self._sent_loaded = True
         events = await extract_sync_events(
             sync, directory=self.directory, files=self._files, now=self._clock.now(),
             name=self.name, self_account=self.self_account, own_sent=self._sent,
             backfill=backfill,
         )
         for ev in events:
-            await put(ev)
+            try:
+                await put(ev)
+            except Exception as exc:
+                await self._emit_adapter_error(put, exc, label="history_sync_put")
         return events
 
     async def handle_group_info(self, ev: Any, put: Put) -> Event | None:
@@ -359,13 +453,13 @@ class WhatsAppBody:
         if not changes:
             return None
         sender = self.directory.canonical_account(getattr(ev, "Sender", None)) or f"whatsapp:{jid}"
-        ev_out = Event(
+        ev_out = clean_event(Event(
             id=None, ts=self._clock.now(), kind="percept", who=sender, place=place, body=self.name,
             payload={"description": "; ".join(changes), "addressed": False, "place_kind": "shared",
                      "place_info": self.directory.place_meta(place),
                      **({"self_account": self.self_account} if self.self_account else {}),
                      "data": {"group_event": changes, "joined": joined, "left": left}},
-        )
+        ))
         await put(ev_out)
         return ev_out
 

@@ -147,45 +147,46 @@ async def as_owner(conn, event: Event) -> Event:
 
 
 async def resolve_event(conn, event: Event, *, now: datetime) -> Event:
-    """Map native accounts in `who`, `origin_actor`, `data.mentions`, and `data.reply_to`."""
+    """Map native accounts in `who`, `origin_actor`, `data.mentions`, and `data.reply_to` atomically."""
     if event.kind not in ("percept", "command"):
         return await as_owner(conn, event)
-    who = event.who
-    if who and is_account(who):
-        who = await resolve_account(conn, who, now=now, place=event.place, body=event.body)
-    origin = event.origin_actor
-    if origin and is_account(origin):
-        origin = await resolve_account(conn, origin, now=now, place=event.place, body=event.body)
-    payload = dict(event.payload or {})
-    data = payload.get("data")
-    if isinstance(data, Mapping):
-        updated_data = dict(data)
-        changed = False
-        mentions = updated_data.get("mentions")
-        if isinstance(mentions, (list, tuple)):
-            mapped_mentions = [
-                (await resolve_account(conn, str(item), now=now, place=event.place,
-                                       body=event.body)
-                 if is_account(item) else item)
-                for item in mentions
-            ]
-            if list(mentions) != mapped_mentions:
-                updated_data["mentions"] = mapped_mentions
-                changed = True
-        reply_to = updated_data.get("reply_to")
-        if isinstance(reply_to, Mapping) and reply_to.get("who"):
-            rwho = str(reply_to["who"])
-            mapped_rwho = (
-                await resolve_account(conn, rwho, now=now, place=event.place, body=event.body)
-                if is_account(rwho) else rwho
-            )
-            if mapped_rwho != rwho:
-                updated_data["reply_to"] = {**reply_to, "who": mapped_rwho}
-                changed = True
-        if changed:
-            payload["data"] = updated_data
-    resolved = replace(event, who=who, origin_actor=origin, payload=payload)
-    return await as_owner(conn, resolved)
+    async with conn.transaction():
+        who = event.who
+        if who and is_account(who):
+            who = await resolve_account(conn, who, now=now, place=event.place, body=event.body)
+        origin = event.origin_actor
+        if origin and is_account(origin):
+            origin = await resolve_account(conn, origin, now=now, place=event.place, body=event.body)
+        payload = dict(event.payload or {})
+        data = payload.get("data")
+        if isinstance(data, Mapping):
+            updated_data = dict(data)
+            changed = False
+            mentions = updated_data.get("mentions")
+            if isinstance(mentions, (list, tuple)):
+                mapped_mentions = [
+                    (await resolve_account(conn, str(item), now=now, place=event.place,
+                                           body=event.body)
+                     if is_account(item) else item)
+                    for item in mentions
+                ]
+                if list(mentions) != mapped_mentions:
+                    updated_data["mentions"] = mapped_mentions
+                    changed = True
+            reply_to = updated_data.get("reply_to")
+            if isinstance(reply_to, Mapping) and reply_to.get("who"):
+                rwho = str(reply_to["who"])
+                mapped_rwho = (
+                    await resolve_account(conn, rwho, now=now, place=event.place, body=event.body)
+                    if is_account(rwho) else rwho
+                )
+                if mapped_rwho != rwho:
+                    updated_data["reply_to"] = {**reply_to, "who": mapped_rwho}
+                    changed = True
+            if changed:
+                payload["data"] = updated_data
+        resolved = replace(event, who=who, origin_actor=origin, payload=payload)
+        return await as_owner(conn, resolved)
 
 
 def intake(conn, *, clock: Clock | None = None):

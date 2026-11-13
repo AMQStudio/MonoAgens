@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -24,6 +25,40 @@ from monoagens.adapters.whatsapp.media import (
 )
 from monoagens.middleware.contract import describe_attachments
 from monoagens.types import Event
+
+
+def clean_text(value: Any) -> str:
+    """Return string stripped of NUL bytes rejected by Postgres text/jsonb."""
+    return str(value).replace("\x00", "")
+
+
+def clean_json(value: Any) -> Any:
+    """Coerce nested values into Postgres-safe JSON types with no NUL bytes."""
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).decode("utf-8", errors="replace").replace("\x00", "")
+    if isinstance(value, Mapping):
+        return {clean_text(k): clean_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [clean_json(item) for item in value]
+    if isinstance(value, Iterable):
+        return [clean_json(item) for item in value]
+    return clean_text(value)
+
+
+def clean_event(event: Event) -> Event:
+    """Normalize event fields and payload so Postgres jsonb/text never reject a valid message."""
+    return replace(
+        event,
+        who=clean_text(event.who) if event.who is not None else None,
+        place=clean_text(event.place) if event.place is not None else None,
+        body=clean_text(event.body) if event.body is not None else None,
+        origin_actor=clean_text(event.origin_actor) if event.origin_actor is not None else None,
+        payload=clean_json(dict(event.payload or {})),
+    )
 
 
 def iso_timestamp(raw_ts: Any, *, fallback: datetime | None = None) -> str:
@@ -192,21 +227,24 @@ def format_message(raw: Any, *, directory: WhatsAppDirectory, now: datetime,
         ptype = int(getattr(proto, "type", 0) or 0)
         target_id = str(getattr(getattr(proto, "key", None), "ID", "") or "")
         if ptype == 0 and target_id:  # REVOKE
-            return Event(id=None, ts=now, kind="percept", who=who, place=place, body=name,
-                         payload={**base_payload, "addressed": False,
-                                  "description": f"{sender_label} deleted a message",
-                                  "data": {"message_id": msg_id, "deletes": target_id}})
+            return clean_event(Event(id=None, ts=now, kind="percept", who=who, place=place,
+                                     body=name,
+                                     payload={**base_payload, "addressed": False,
+                                              "description": f"{sender_label} deleted a message",
+                                              "data": {"message_id": msg_id,
+                                                       "deletes": target_id}}))
         if ptype == 14 and target_id:  # MESSAGE_EDIT
             edited = getattr(proto, "editedMessage", None)
             new_text = message_text(edited) if edited is not None else ""
             addr = _is_self_addressed(edited or message, chat_jid, from_me=from_me,
                                       directory=directory, own_digits=own_digits,
                                       own_sent=own_sent)
-            return Event(id=None, ts=now, kind="percept", who=who, place=place, body=name,
-                         payload={**base_payload, "addressed": addr,
-                                  "description": f"{sender_label} edited: {new_text}".strip(),
-                                  "data": {"message_id": msg_id, "edits": target_id,
-                                           "text": new_text}})
+            return clean_event(Event(id=None, ts=now, kind="percept", who=who, place=place,
+                                     body=name,
+                                     payload={**base_payload, "addressed": addr,
+                                              "description": f"{sender_label} edited: {new_text}".strip(),
+                                              "data": {"message_id": msg_id, "edits": target_id,
+                                                       "text": new_text}}))
 
     # 2. Reactions
     reaction = getattr(message, "reactionMessage", None)
@@ -218,24 +256,28 @@ def format_message(raw: Any, *, directory: WhatsAppDirectory, now: datetime,
         else:
             desc = f"{sender_label} reacted {emoji}"
         addr = bool(target_id and target_id in own_sent) and not from_me
-        return Event(id=None, ts=now, kind="percept", who=who, place=place, body=name,
-                     payload={**base_payload, "addressed": addr, "description": desc,
-                              "data": {"message_id": msg_id,
-                                       "reaction": {"emoji": emoji, "message_id": target_id},
-                                       **({"answer": emoji} if emoji else {}),
-                                       **({"reply_to": {"message_id": target_id}}
-                                          if target_id else {})}})
+        return clean_event(Event(id=None, ts=now, kind="percept", who=who, place=place,
+                                 body=name,
+                                 payload={**base_payload, "addressed": addr, "description": desc,
+                                          "data": {"message_id": msg_id,
+                                                   "reaction": {"emoji": emoji, "message_id": target_id},
+                                                   **({"answer": emoji} if emoji else {}),
+                                                   **({"reply_to": {"message_id": target_id}}
+                                                      if target_id else {})}}))
 
     # 3. Poll vote update
     poll_upd = getattr(message, "pollUpdateMessage", None)
     if poll_upd is not None and _has_fields(poll_upd):
         poll_id = str(getattr(getattr(poll_upd, "pollCreationMessageKey", None), "ID", "") or "")
         addr = bool(poll_id and poll_id in own_sent) and not from_me
-        return Event(id=None, ts=now, kind="percept", who=who, place=place, body=name,
-                     payload={**base_payload, "addressed": addr,
-                              "description": f"{sender_label} voted on poll",
-                              "data": {"message_id": msg_id, "poll_vote": {"poll_id": poll_id},
-                                       **({"reply_to": {"message_id": poll_id}} if poll_id else {})}})
+        return clean_event(Event(id=None, ts=now, kind="percept", who=who, place=place,
+                                 body=name,
+                                 payload={**base_payload, "addressed": addr,
+                                          "description": f"{sender_label} voted on poll",
+                                          "data": {"message_id": msg_id,
+                                                   "poll_vote": {"poll_id": poll_id},
+                                                   **({"reply_to": {"message_id": poll_id}}
+                                                      if poll_id else {})}}))
 
     # 4. Content message (text, attachments, sticker, location, contact, poll)
     text = message_text(message)
@@ -289,9 +331,9 @@ def format_message(raw: Any, *, directory: WhatsAppDirectory, now: datetime,
     addressed = choice_matched is not None or _is_self_addressed(
         message, chat_jid, from_me=from_me, directory=directory, own_digits=own_digits,
         own_sent=own_sent, reply_msg_id=reply_id)
-    return Event(id=None, ts=now, kind="percept", who=who, place=place, body=name,
-                 payload={**base_payload, "addressed": addressed, "description": desc,
-                          "data": data})
+    return clean_event(Event(id=None, ts=now, kind="percept", who=who, place=place, body=name,
+                             payload={**base_payload, "addressed": addressed, "description": desc,
+                                      "data": data}))
 
 
 def format_album(events: Sequence[Event], *, album_id: str,
@@ -324,8 +366,8 @@ def format_album(events: Sequence[Event], *, album_id: str,
     data["message_ids"] = msg_ids
     data["attachments"] = all_atts
     payload = {**first.payload, "addressed": addressed, "description": desc, "data": data}
-    return Event(id=None, ts=first.ts, kind="percept", who=first.who,
-                 place=first.place, body=first.body, payload=payload)
+    return clean_event(Event(id=None, ts=first.ts, kind="percept", who=first.who,
+                             place=first.place, body=first.body, payload=payload))
 
 
 def format_call(status: str, meta: Any, *, reason: str = "", is_video: bool = False,
@@ -348,7 +390,7 @@ def format_call(status: str, meta: Any, *, reason: str = "", is_video: bool = Fa
         desc = f"{label} called, not answered ({kind_word})"
     else:
         desc = f"Call with {label} ended" + (f" ({reason})" if reason else "")
-    return Event(
+    return clean_event(Event(
         id=None, ts=now, kind="percept", who=who, place=place, body=name,
         payload={
             "description": desc,
@@ -360,7 +402,7 @@ def format_call(status: str, meta: Any, *, reason: str = "", is_video: bool = Fa
             "data": {"call": {"status": status, "call_id": call_id, "video": is_video,
                               **({"reason": reason} if reason else {})}},
         },
-    )
+    ))
 
 
 def _match_choice(text: str, reply_id: str,
