@@ -247,7 +247,10 @@ class Kernel:
                                   settings=self.settings, pfc=self.pfc,
                                   embedder=self.embedder)
         for item in fired:
-            await self._expect_wake(item)
+            try:
+                await self._expect_wake(item)
+            except Exception as exc:
+                await self._record_error(event, exc)
         if event.kind == "tick" and self.pfc is not None and self.embedder is not None:
             now = self.clock.now()
             if await memory.sleep_due(self.conn, now, self.settings):
@@ -336,7 +339,11 @@ class Kernel:
                 continue
             if self.pfc is None:
                 continue
-            await self._appraise_and_wake(self._collapse_backlog(entry["events"]))
+            collapsed = self._collapse_backlog(entry["events"])
+            try:
+                await self._appraise_and_wake(collapsed)
+            except Exception as exc:
+                await self._record_error(collapsed, exc)
 
     async def _batch_holds(self, event: Event) -> bool:
         """Hold one result of a round whose other results have not arrived yet.
@@ -518,16 +525,35 @@ class Kernel:
 
     async def recover(self) -> None:
         """Resend what was recorded but never confirmed, then wake for fired expectations."""
-        await sends.resume(self)
-        for item in await expectations.recovery(self.conn, now=self.clock.now()):
-            await self._expect_wake(item)
+        now = self.clock.now()
+        try:
+            await sends.resume(self)
+        except Exception as exc:
+            await self._record_error(Event(id=None, ts=now, kind="tick"), exc)
+        try:
+            recovered = await expectations.recovery(self.conn, now=now)
+        except Exception as exc:
+            await self._record_error(Event(id=None, ts=now, kind="tick"), exc)
+            recovered = []
+        for item in recovered:
+            try:
+                await self._expect_wake(item)
+            except Exception as exc:
+                err_ev = item.get("trigger") or Event(
+                    id=item.get("fired_event"), ts=now, kind="expectation.fired",
+                    who=item.get("who"), place=item.get("place"),
+                    body=item.get("source_body"))
+                await self._record_error(err_ev, exc)
         if self.embedder is not None:
-            known = {eid for eid, _ in self._pending_embeds}
-            missing = [item for item in await unembedded_imported_percepts(self.conn)
-                       if item[0] not in known]
-            if missing:
-                self._pending_embeds.extend(missing)
-                await self._flush_embed_batch(force=True)
+            try:
+                known = {eid for eid, _ in self._pending_embeds}
+                missing = [item for item in await unembedded_imported_percepts(self.conn)
+                           if item[0] not in known]
+                if missing:
+                    self._pending_embeds.extend(missing)
+                    await self._flush_embed_batch(force=True)
+            except Exception as exc:
+                await self._record_error(Event(id=None, ts=now, kind="tick"), exc)
 
     async def _apply(self, event: Event, call: ToolCall,
                      said: set[str] | None = None) -> dispatch.Dispatch:

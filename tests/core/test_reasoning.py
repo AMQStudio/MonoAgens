@@ -1025,3 +1025,34 @@ async def test_a_pending_intent_is_on_the_place_desk(aconn):
 
     assert "intent: you set out to say 'halo' to person:budi" in volatile
     assert intent.id is not None
+
+
+async def test_f4_step_spoke_checks_the_result_act_not_the_whole_wake(aconn):
+    """F.4: a non-communicative act's result is kept even when another act in the wake spoke."""
+    from monoagens.core.context import working
+
+    root = await append_event(
+        aconn, ts=START, kind="percept", who="person:owner", place=PLACE,
+        payload={"description": "cek dulu dan kabari"},
+    )
+    spoke = await append_event(
+        aconn, ts=START, kind="act.out", place=PLACE, caused_by=root.id,
+        payload={"capability": "telegram.say", "communicative": True,
+                 "arguments": {"text": "sebentar kucek."}},
+    )
+    tool = await append_event(
+        aconn, ts=START, kind="act.out", place=PLACE, caused_by=root.id,
+        payload={"capability": "search.query", "communicative": False,
+                 "arguments": {"q": "status"}},
+    )
+    tool_res = await append_event(
+        aconn, ts=START, kind="act.result", place=PLACE, caused_by=tool.id,
+        payload={"capability": "search.query", "result": {"ok": True}},
+    )
+    spoke_res = await append_event(
+        aconn, ts=START, kind="act.result", place=PLACE, caused_by=spoke.id,
+        payload={"capability": "telegram.say", "result": {"message_id": "m1"}},
+    )
+
+    assert await working.step_spoke(aconn, tool_res) is False
+    assert await working.step_spoke(aconn, spoke_res) is True

@@ -406,3 +406,185 @@ async def test_repeated_refusal_is_bounded_by_brake_and_notifies_requester(aconn
     assert held == (1,)
     assert any(a.place == "space:tg:dm" and "max_task_steps" in str(a.payload.get("text") or "")
                for a in body.actions)
+
+
+async def test_f2_hung_tool_times_out_under_watchdog_and_records_honest_act_result(aconn) -> None:
+    """F.2: a hung tool times out under job_timeout_seconds and yields an honest act.result."""
+    class _HangingTool:
+        name = "slow"
+
+        def capabilities(self) -> tuple[dict[str, Any], ...]:
+            return ({
+                "name": "hang",
+                "description": "Hang forever.",
+                "schema": {"type": "object", "properties": {}, "required": []},
+                "communicative": False, "long_running": False, "identity_changing": False,
+            },)
+
+        async def act(self, action: Action) -> Any:
+            del action
+            await asyncio.sleep(5)
+            return {"ok": True}
+
+    fake = _FakeLLM([
+        [("act", {"capability": "slow.hang", "arguments": {}})],
+        [("act", {"capability": "telegram.say", "arguments": {"text": "alatnya timeout"}})],
+    ])
+    cfg = settings(constants={"job_timeout_seconds": 0.05})
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=cfg)
+    body = _FaultyBody()
+    kernel.register_adapter(body)
+    kernel.tools.add_tool(_HangingTool(), {"hang": {"facts": ("reads",), "permission": "slow.hang"}})
+
+    await asyncio.wait_for(
+        _feed(kernel, Event(
+            id=None, ts=START, kind="percept", who="person:owner",
+            place="space:tg:10", body="telegram", origin_actor="person:owner",
+            payload={"description": "coba", "place_kind": "direct", "addressed": True},
+        )),
+        timeout=2.0,
+    )
+
+    assert [a.payload["text"] for a in body.actions] == ["alatnya timeout"]
+    results = [row[0] for row in await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'act.result' ORDER BY id")).fetchall()]
+    assert any(
+        r.get("capability") == "slow.hang" and "timed out" in str((r.get("result") or {}).get("error") or "")
+        for r in results
+    ), results
+
+
+async def test_f3_failing_call_in_apply_calls_lets_siblings_run_and_counts_task_step(
+        aconn, monkeypatch) -> None:
+    """F.3: one failing call inside apply_calls becomes act.result error, siblings run, task counts step."""
+    from monoagens.core import jobs, threads
+    from monoagens.infra.store import read_state
+
+    class _RecordingTool:
+        name = "work"
+
+        def __init__(self) -> None:
+            self.actions: list[Action] = []
+
+        def capabilities(self) -> tuple[dict[str, Any], ...]:
+            return (
+                {"name": "first", "description": "First step.",
+                 "schema": {"type": "object", "properties": {}, "required": []},
+                 "communicative": False, "long_running": True, "identity_changing": False},
+                {"name": "second", "description": "Second step.",
+                 "schema": {"type": "object", "properties": {}, "required": []},
+                 "communicative": False, "long_running": False, "identity_changing": False},
+            )
+
+        async def act(self, action: Action) -> Any:
+            self.actions.append(action)
+            return {"ok": True, "ran": action.kind}
+
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(_FakeLLM([])), settings=SETTINGS)
+    tool = _RecordingTool()
+    kernel.tools.add_tool(tool, {
+        "first": {"facts": ("reads",), "permission": "work.first"},
+        "second": {"facts": ("reads",), "permission": "work.second"},
+    })
+    root = await append_event(
+        aconn, ts=START, kind="percept", who="person:owner", place="space:tg:10",
+        body="telegram", origin_actor="person:owner",
+        payload={"description": "kerjakan dua hal", "place_kind": "direct"},
+    )
+    task = await threads.open_for(kernel, root, ("person:owner",))
+    assert task is not None
+
+    real_tools_act = kernel.tools.act
+
+    async def boom_tools_act(event: Event, capability: str, payload: dict[str, Any], **kw: Any) -> Any:
+        if capability == "work.first":
+            raise RuntimeError("broken tool dispatcher on first call")
+        return await real_tools_act(event, capability, payload, **kw)
+
+    monkeypatch.setattr(kernel.tools, "act", boom_tools_act)
+    acts = await jobs.apply_calls(kernel, root, [
+        {"name": "act", "arguments": {"capability": "work.first", "arguments": {}}},
+        {"name": "act", "arguments": {"capability": "work.second", "arguments": {}}},
+    ])
+    fake_job = jobs.Job("pfc", f"pfc:{task['place']}", root, task["place"])
+    await threads.after_step(kernel, fake_job, root, acts)
+    await kernel.run_until_idle()
+
+    assert [a.kind for a in tool.actions] == ["second"]
+    rows = await (await aconn.execute(
+        "SELECT id, caused_by, payload FROM events WHERE kind IN ('act.out', 'act.result') "
+        "ORDER BY id"
+    )).fetchall()
+    first_out = next(eid for eid, _, p in rows if p.get("capability") == "work.first" and "arguments" in p)
+    first_res = next(p for _, cb, p in rows if p.get("capability") == "work.first" and "result" in p)
+    first_cb = next(cb for _, cb, p in rows if p.get("capability") == "work.first" and "result" in p)
+    assert first_cb == first_out
+    assert "RuntimeError" in str((first_res.get("result") or {}).get("error") or "")
+    saved_task = await read_state(aconn, f"task:{task['place']}")
+    assert saved_task is not None and saved_task["steps"] == 2
+
+
+async def test_f5_kernel_survives_backlog_flush_recover_and_expect_wake_errors(
+        aconn, monkeypatch) -> None:
+    """F.5: exceptions in backlog flush, recover(), and one fired expectation never kill the rest."""
+    from monoagens.core import expectations
+
+    # 1. Backlog flush exception in place A never blocks place B.
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(_FakeLLM([])), settings=SETTINGS)
+    ev_a = await append_event(aconn, ts=START, kind="percept", who="person:owner",
+                              place="space:tg:a", body="telegram",
+                              payload={"description": "a", "backfill": True})
+    ev_b = await append_event(aconn, ts=START, kind="percept", who="person:owner",
+                              place="space:tg:b", body="telegram",
+                              payload={"description": "b", "backfill": True})
+    kernel._queue_backfill(ev_a)
+    kernel._queue_backfill(ev_b)
+    seen_places: list[str] = []
+
+    async def flaky_wake(event: Event) -> None:
+        seen_places.append(str(event.place))
+        if event.place == "space:tg:a":
+            raise RuntimeError("backlog a boom")
+
+    monkeypatch.setattr(kernel, "_appraise_and_wake", flaky_wake)
+    await kernel._flush_backlogs()
+    assert seen_places == ["space:tg:a", "space:tg:b"]
+
+    # 2. One fired expectation failing never drops the remaining fired expectations.
+    fired_a = {"id": 1, "fired_event": ev_a.id, "who": "person:owner", "place": "space:tg:a",
+               "source_body": "telegram", "about": "one", "intent": "one"}
+    fired_b = {"id": 2, "fired_event": ev_b.id, "who": "person:owner", "place": "space:tg:b",
+               "source_body": "telegram", "about": "two", "intent": "two"}
+    woken_ids: list[int] = []
+
+    async def flaky_expect_wake(item: dict[str, Any]) -> None:
+        woken_ids.append(int(item["id"]))
+        if item["id"] == 1:
+            raise RuntimeError("expect 1 boom")
+
+    async def fake_due(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        return [fired_a, fired_b]
+
+    monkeypatch.setattr(kernel, "_expect_wake", flaky_expect_wake)
+    monkeypatch.setattr(expectations, "due", fake_due)
+    tick = await append_event(aconn, ts=START, kind="tick")
+    await kernel._wake(tick)
+    assert woken_ids == [1, 2]
+
+    # 3. recover() survives failure in sends.resume / one expectation and continues remaining items.
+    woken_ids.clear()
+
+    async def fake_recovery(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        return [fired_a, fired_b]
+
+    monkeypatch.setattr(expectations, "recovery", fake_recovery)
+    monkeypatch.setattr(sends, "resume",
+                        lambda _k: (_ for _ in ()).throw(RuntimeError("resume boom")))
+    await kernel.recover()
+    assert woken_ids == [1, 2]
+
+    errs = [row[0]["error"] for row in await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'error'")).fetchall()]
+    assert any("backlog a boom" in e for e in errs)
+    assert any("expect 1 boom" in e for e in errs)
+    assert any("resume boom" in e for e in errs)

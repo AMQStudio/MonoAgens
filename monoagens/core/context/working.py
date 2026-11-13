@@ -55,14 +55,14 @@ async def chain_root(conn, event_id: int | None) -> tuple[int | None, str]:
 
 
 async def step_spoke(conn, event: Event) -> bool:
-    """Return whether the wake that produced this result already sent a message (12.16)."""
+    """Return whether the act that produced this result already sent a message (12.16)."""
     if event.caused_by is None:
         return False
     cur = await conn.execute(
-        "SELECT 1 FROM events act JOIN events said ON said.caused_by = act.caused_by "
-        "WHERE act.id = %s AND said.kind = 'act.out' "
-        "AND said.payload->>'communicative' = 'true' "
-        "AND COALESCE(said.payload->>'refused', 'false') <> 'true' LIMIT 1",
+        "SELECT 1 FROM events act "
+        "WHERE act.id = %s AND act.kind = 'act.out' "
+        "AND act.payload->>'communicative' = 'true' "
+        "AND COALESCE(act.payload->>'refused', 'false') <> 'true' LIMIT 1",
         (event.caused_by,))
     return await cur.fetchone() is not None
 

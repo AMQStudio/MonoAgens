@@ -150,7 +150,38 @@ async def apply_calls(kernel: Any, trigger: Event, calls: list[dict[str, Any]],
         if raw.get("refused"):
             continue
         call = ToolCall(str(raw.get("name")), dict(raw.get("arguments") or {}))
-        outcome = await kernel._apply(trigger, call, said)
+        prev_row = await (await kernel.conn.execute("SELECT COALESCE(MAX(id), 0) FROM events")).fetchone()
+        prev_id = int(prev_row[0]) if prev_row else 0
+        try:
+            outcome = await kernel._apply(trigger, call, said)
+        except Exception as exc:
+            await kernel._record_error(trigger, exc)
+            if call.name == "act":
+                cap = str(call.arguments.get("capability") or "")
+                out_row = await (await kernel.conn.execute(
+                    "SELECT id, place FROM events WHERE kind = 'act.out' AND caused_by = %s "
+                    "AND id > %s AND payload->>'capability' = %s ORDER BY id DESC LIMIT 1",
+                    (trigger.id, prev_id, cap),
+                )).fetchone()
+                if out_row is not None:
+                    cause_id, act_place = int(out_row[0]), out_row[1] or trigger.place
+                else:
+                    stored = await kernel._emit(trigger, "act.out", {
+                        "capability": cap,
+                        "arguments": dict(call.arguments.get("arguments") or {}),
+                        "communicative": False, "refused": True,
+                    })
+                    cause_id, act_place = stored.id, stored.place or trigger.place
+                kernel.enqueue(Event(
+                    id=None, ts=kernel.clock.now(), kind="act.result", who=trigger.who,
+                    place=act_place, body=trigger.body, caused_by=cause_id,
+                    origin_actor=trigger.origin_actor,
+                    payload={"capability": cap,
+                             "result": {"error": f"{cap or 'act'} failed ({type(exc).__name__})"}},
+                ))
+                acted = True
+                acts.append((raw, {}))
+            continue
         acted = outcome.acted or acted
         if call.name == "act":
             acts.append((raw, outcome.labels))
