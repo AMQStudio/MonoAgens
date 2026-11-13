@@ -195,8 +195,8 @@ async def test_a_skill_enters_the_self_block_by_name_only(aconn):
     text = "\n".join(part.text for part in outcome.item.blocks if part.layer == VOLATILE)
 
     assert "<self>" in text and "</self>" in text
-    assert ("Commands: /budget, /help, /plugin, /quiet, /role, /roles, /show, /whoami, "
-            "/whois") in text
+    assert ("Commands: /budget, /help, /link, /plugin, /quiet, /role, /roles, /show, /unlink, "
+            "/whoami, /whois") in text
     assert "coffee-brewing — How to brew coffee well." in text
     assert "tax-filing" not in text
     assert "SECRET BODY" not in text

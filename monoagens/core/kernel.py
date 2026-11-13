@@ -93,6 +93,11 @@ class Kernel:
                                         origin_actor=event.origin_actor)
             if project:
                 await project_event(self.conn, stored)
+                if stored.kind == "source.merged" and stored.id is not None:
+                    src = str((stored.payload or {}).get("from") or "")
+                    dst = str((stored.payload or {}).get("into") or "")
+                    if src and dst:
+                        await memory.apply_merge(self.conn, src, dst, stored.id)
         return stored
 
     async def _encode(self, event: Event, text: str | None = None) -> None:

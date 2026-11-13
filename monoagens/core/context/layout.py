@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Sequence
 
 import psycopg
 
 from monoagens.core.context.working import doing_lines
+from monoagens.core.memory.cards import canonical, merge_map
 from monoagens.core.memory.retrieval import recent_lines
 from monoagens.infra.prior import constants
 from monoagens.infra.store import active_expectation_lines, read_last_events, read_state
@@ -62,14 +63,19 @@ async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place:
                         ) -> PFCContext:
     """Lay out the desk for one wake: recent events, memories, state and expectations."""
     values = constants(settings)
-    recent = await read_last_events(conn, place, limit=int(values["recent_events"]),
-                                    kinds=(*RECENT_KINDS, "intent"))
-    recent_elsewhere = await recent_lines(conn, place, limit=int(values["recent_elsewhere"]))
+    merges = await merge_map(conn)
+    relabel = lambda item: replace(item, who=merges[item.who]) if item.who in merges else item
+    recent = [relabel(seen) for seen in await read_last_events(
+        conn, place, limit=int(values["recent_events"]), kinds=(*RECENT_KINDS, "intent"))]
+    recent_elsewhere = [relabel(seen) for seen in await recent_lines(
+        conn, place, limit=int(values["recent_elsewhere"]))]
     core = await read_state(conn, "core_memory")
     task = await read_state(conn, "task:" + place) if place.startswith("space:task:") else None
-    doing = await doing_lines(conn, place, task, values, trigger=event)
+    source_who = await canonical(conn, event.who)
+    shown_event = relabel(event)
+    doing = await doing_lines(conn, place, task, values, trigger=shown_event)
     last = None
-    for key in (f"last_spoke:{place}", f"last_seen:{event.who}"):
+    for key in (f"last_spoke:{place}", f"last_seen:{source_who}"):
         value = await read_state(conn, key)
         if value and value.get("ts"):
             last = datetime.fromisoformat(value["ts"])
@@ -78,6 +84,6 @@ async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place:
         now=now, place=place, reason=reason,
         core_memory=str((core or {}).get("text") or ""),
         expectations=await active_expectation_lines(conn, place), memories=memories,
-        recent=[seen for seen in recent if seen.id != event.id],
-        recent_elsewhere=recent_elsewhere, doing=doing, trigger=event, last_interaction=last,
-        capabilities=capabilities)
+        recent=[seen for seen in recent if seen.id != shown_event.id],
+        recent_elsewhere=recent_elsewhere, doing=doing, trigger=shown_event,
+        last_interaction=last, capabilities=capabilities)

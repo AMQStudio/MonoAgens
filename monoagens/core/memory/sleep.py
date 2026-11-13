@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import psycopg
 from pgvector import Vector
 
+from monoagens.core.memory.cards import merge_map
 from monoagens.infra import budget
 from monoagens.infra.store import (append_event, payload_text, read_expectations, read_state,
                                    resolve_expectation, write_state)
@@ -81,8 +82,9 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
     place = next(iter(places)) if len(places) == 1 else None
     zone = ZoneInfo(str(settings.get("timezone") or "UTC"))
     identity = settings.get("identity") or {}
-    lines = [f"#{r[0]} {r[1].astimezone(zone):%Y-%m-%d %H:%M} [{r[2]}] {r[3] or '?'} @ "
-             f"{r[4] or '?'}: {payload_text(r[5])}"
+    merges = await merge_map(conn)
+    lines = [f"#{r[0]} {r[1].astimezone(zone):%Y-%m-%d %H:%M} [{r[2]}] "
+             f"{merges.get(r[3], r[3]) or '?'} @ {r[4] or '?'}: {payload_text(r[5])}"
              for r in rows]
     old_core = str((await read_state(conn, "core_memory") or {}).get("text") or "")
     messages = [
@@ -106,7 +108,7 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
                 "INSERT INTO memories (who, place, text, embedding, importance, private, "
                 "valid_from, last_accessed_at, derived_from) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                (item.get("who") or None, place, str(item["text"]),
+                (merges.get(item.get("who"), item.get("who")) or None, place, str(item["text"]),
                  Vector(vector), float(item.get("importance", 0.5)),
                  bool(places), now, now, sources))
         for row in await read_expectations(conn, "ex.status = 'active' AND ex.expires_at <= %s",

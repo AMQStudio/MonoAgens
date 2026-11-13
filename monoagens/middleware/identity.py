@@ -10,13 +10,15 @@ import secrets
 import weakref
 from collections.abc import Mapping
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from monoagens.core.hooks import Continue, Middleware, Replace, Stop
+from monoagens.core.memory.cards import canonical, merge_map
 from monoagens.infra.clock import Clock
 from monoagens.infra.store import append_event, payload_text, read_state, write_state
 from monoagens.middleware import privacy
+from monoagens.middleware.registry import CommandEntry
 from monoagens.types import Event
 
 LOGGER = logging.getLogger(__name__)
@@ -27,6 +29,11 @@ OWNER_KEY = "owner"
 CREATED = "pair.created"
 CLAIMED = "pair.claimed"
 REGISTERED = "identity.registered"
+MERGED = "identity.merged"
+UNLINKED = "identity.unlinked"
+LINK_PREFIX = "link_code:"
+LINK_TTL = timedelta(minutes=10)
+LINK_TRIES = 3
 _CONN_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = weakref.WeakKeyDictionary()
 
 
@@ -274,10 +281,12 @@ async def name_of(conn, who: str) -> str | None:
 async def accounts_of(conn, who: str) -> tuple[str, ...]:
     """Return the native accounts linked to one person id, as `<body>:<native id>`."""
     mapping = await privacy.aliases(conn)
-    found = [account for account, person in mapping.items() if person == str(who)]
-    if not found and str(who).startswith("person:"):
-        native = str(who).removeprefix("person:")
-        if native != "owner":
+    target = await canonical(conn, str(who)) or str(who)
+    found = [account for account, person in mapping.items()
+             if person == target and is_account(account)]
+    if not found and target.startswith("person:"):
+        native = target.removeprefix("person:")
+        if native != "owner" and not native.startswith("p_"):
             found.append(native)
     return tuple(sorted(found))
 
@@ -290,13 +299,14 @@ async def find_person(conn, query: str, *, labels: Mapping[str, str] | None = No
         return None
     mapping = await privacy.aliases(conn)
     if text in mapping:
-        return mapping[text]
+        return await canonical(conn, mapping[text])
+    resolved = await canonical(conn, text)
     known = await _known_people(conn)
-    if text in known:
-        return text
+    if resolved in known:
+        return resolved
     for who, label in (labels or {}).items():
         if str(label).lower() == text.lower():
-            return who
+            return await canonical(conn, who)
     for who, card in known.items():
         if card["name"] and str(card["name"]).lower() == text.lower():
             return who
@@ -306,16 +316,19 @@ async def find_person(conn, query: str, *, labels: Mapping[str, str] | None = No
 async def _known_people(conn) -> dict[str, dict[str, Any]]:
     """Return the card data of every person the alias map or the Log has seen."""
     mapping = await privacy.aliases(conn)
+    merges = await merge_map(conn)
     cur = await conn.execute("SELECT DISTINCT who FROM events WHERE who IS NOT NULL")
     rows = await cur.fetchall()
     states = await _person_states(conn)
-    known = {}
-    for who in {mapping.get(native, native) for (native,) in rows} | set(mapping.values()):
+    known: dict[str, dict[str, Any]] = {}
+    resolve = lambda raw: merges.get(mapping.get(raw, raw), mapping.get(raw, raw))
+    for who in {resolve(native) for (native,) in rows} | {resolve(v) for v in mapping.values()}:
         state = states.get(who) or {}
         known[who] = {"name": _name(who, state),
                       "closeness": float(state.get("closeness") or 0.0),
                       "natives": {who}}
-    for native, who in mapping.items():
+    for native, person in mapping.items():
+        who = merges.get(person, person)
         known.setdefault(who, {"name": None, "closeness": 0.0, "natives": set()})
         known[who]["natives"].add(native)
     return known
@@ -357,25 +370,49 @@ async def _direct_places(conn, natives: set[str]) -> dict[str, tuple[str, dateti
     """Return the direct place, and when it was last active, per adapter for one person."""
     if not natives:
         return {}
+    mapping = await privacy.aliases(conn)
+    merges = await merge_map(conn)
+    owners = {merges.get(mapping.get(n, n), mapping.get(n, n)) for n in natives}
+    unlinked_rows = await (await conn.execute(
+        "SELECT payload->>'account' FROM events WHERE kind = %s AND payload->>'from' = ANY(%s)",
+        (UNLINKED, sorted(owners)))).fetchall()
+    excluded: set[str] = set()
+    for (acc,) in unlinked_rows:
+        if not acc:
+            continue
+        reg = await (await conn.execute(
+            "SELECT place FROM events WHERE kind = %s AND payload->>'account' = %s LIMIT 1",
+            (REGISTERED, acc))).fetchone()
+        if reg and reg[0]:
+            excluded.add(str(reg[0]))
+        _, _, native_id = str(acc).partition(":")
+        if native_id:
+            excluded.add(native_id)
     cur = await conn.execute(
         "SELECT DISTINCT ON (body) body, place, ts FROM events WHERE kind = 'percept' "
         "AND place IS NOT NULL AND who = ANY(%s) AND payload->>'place_kind' = 'direct' "
         "ORDER BY body, id DESC", (sorted(natives),))
-    return {str(body or "?"): (place, seen) for body, place, seen in await cur.fetchall()}
+    places: dict[str, tuple[str, datetime]] = {}
+    for body, place, seen in await cur.fetchall():
+        if place in excluded or str(place).rsplit(":", 1)[-1] in excluded:
+            continue
+        places[str(body or "?")] = (place, seen)
+    return places
 
 
 async def direct_place(conn, who: str, via: str | None = None) -> str | None:
     """Return the 1:1 place where one person was last active, optionally on one adapter."""
-    mapping = await privacy.aliases(conn)
-    cur = await conn.execute(
-        "SELECT who, place, body, payload->>'place_kind' FROM events "
-        "WHERE kind = 'percept' AND place IS NOT NULL AND who IS NOT NULL "
-        "ORDER BY id DESC")
-    for native, place, body, kind in await cur.fetchall():
-        if mapping.get(native, native) != who or (via and str(body or "").lower() != via.lower()):
-            continue
-        if kind == "direct":
-            return place
+    target = await canonical(conn, str(who)) or str(who)
+    known = await _known_people(conn)
+    natives = (known.get(target) or {}).get("natives") or {target}
+    places = await _direct_places(conn, set(natives))
+    if via:
+        for body, (place, _) in places.items():
+            if body.lower() == via.lower():
+                return place
+        return None
+    if places:
+        return max(places.values(), key=lambda pair: pair[1])[0]
     return None
 
 
@@ -389,3 +426,213 @@ async def resolve_to(conn, to: str, via: str | None = None) -> tuple[str | None,
     if place is None:
         return None, f"no way to reach {str(to).removeprefix('person:')} yet"
     return place, None
+
+
+async def _first_seen_id(conn, person: str) -> int:
+    """Return the earliest event id introducing or sent by `person`, or a large sentinel."""
+    row = await (await conn.execute(
+        "SELECT min(id) FROM events WHERE who = %s "
+        "OR (kind = %s AND payload->>'person' = %s)",
+        (person, REGISTERED, person))).fetchone()
+    return int(row[0]) if row and row[0] is not None else 10**15
+
+
+async def _older_person(conn, first: str, second: str) -> tuple[str, str]:
+    """Return `(from_id, into_id)`: `person:owner` always wins, else the older person id."""
+    a = await canonical(conn, first) or first
+    b = await canonical(conn, second) or second
+    if a == OWNER:
+        return b, a
+    if b == OWNER:
+        return a, b
+    id_a, id_b = await _first_seen_id(conn, a), await _first_seen_id(conn, b)
+    if id_a < id_b or (id_a == id_b and a <= b):
+        return b, a
+    return a, b
+
+
+async def merge_people(kernel: Any, first: str, second: str, *, by: str, now: datetime,
+                       place: str | None = None, body: str | None = None,
+                       caused_by: int | None = None,
+                       trigger: Event | None = None) -> tuple[str, str]:
+    """Merge two person ids into the older surviving one, emitting `source.merged` (D65)."""
+    conn = kernel.conn
+    src, dst = await _older_person(conn, first, second)
+    if src == dst:
+        return src, dst
+    async with conn.transaction():
+        merged = await append_event(
+            conn, ts=now, kind=MERGED, who=dst, place=place, body=body,
+            payload={"from": src, "into": dst, "by": by}, caused_by=caused_by)
+        await conn.execute(
+            "UPDATE state SET value = %s, updated_by_event = %s "
+            "WHERE key LIKE 'alias:%%' AND value->>'who' = %s",
+            (json.dumps({"who": dst}), merged.id, src))
+        await write_state(conn, f"alias:{src}", {"who": dst}, merged.id)
+    base = trigger or Event(id=merged.id, ts=now, kind=MERGED, who=dst, place=place, body=body)
+    await kernel._append(base, "source.merged", {"from": src, "into": dst}, caused_by=merged.id)
+    if hasattr(kernel, "roles") and kernel.roles is not None:
+        kernel.roles = kernel.roles.with_merges({src: dst})
+    return src, dst
+
+
+async def unlink_account(conn: Any, account: str, *, actor: str, now: datetime,
+                         place: str | None = None, body: str | None = None,
+                         caused_by: int | None = None) -> tuple[str, str]:
+    """Give `account` a new person id from now on without splitting merged history (D65)."""
+    mapping = await privacy.aliases(conn)
+    if not is_account(account) or account not in mapping:
+        raise ValueError(f"unknown account: {account}")
+    old_person = await canonical(conn, mapping[account]) or mapping[account]
+    new_person = f"person:p_{secrets.token_hex(4)}"
+    async with conn.transaction():
+        unlinked = await append_event(
+            conn, ts=now, kind=UNLINKED, who=new_person, place=place, body=body,
+            payload={"account": account, "from": old_person, "to": new_person, "by": actor},
+            caused_by=caused_by)
+        await write_state(conn, f"alias:{account}", {"who": new_person}, unlinked.id)
+    return old_person, new_person
+
+
+def _norm_code(raw: str) -> str:
+    return "".join(ch for ch in str(raw) if ch.isdigit())
+
+
+def _role_labels(kernel: Any) -> dict[str, str]:
+    book = getattr(kernel, "roles", None)
+    if book is None:
+        return {}
+    return {who: str(p.label) for who, p in book.people.items() if p.label}
+
+
+async def _issue_link_code(conn: Any, caller: str, event: Event, now: datetime) -> str:
+    code = new_code()
+    expires = (now + LINK_TTL).isoformat()
+    key = f"{LINK_PREFIX}{caller}"
+    async with conn.transaction():
+        ev = await append_event(conn, ts=now, kind="link.offered", who=caller,
+                                place=event.place, body=event.body,
+                                payload={"person": caller, "expires_at": expires},
+                                caused_by=event.id)
+        await write_state(conn, key, {
+            "code": _norm_code(code), "person": caller, "expires_at": expires, "tries": 0},
+            ev.id)
+    return (f"/link code (from the other account, send /link {code}): {code} — "
+            "single use, expires in 10 minutes (3 tries). Merging combines memory and private "
+            "context permanently; unlinking later gives a new id without splitting memory.")
+
+
+async def _consume_link_code(kernel: Any, event: Event, caller: str, guess: str,
+                             now: datetime) -> str:
+    conn = kernel.conn
+    digits = _norm_code(guess)
+    rows = await (await conn.execute(
+        "SELECT key, value, updated_by_event FROM state WHERE key LIKE %s",
+        (f"{LINK_PREFIX}%",))).fetchall()
+    matched = None
+    active: list[tuple[str, dict[str, Any], int]] = []
+    expired_match = False
+    for key, raw, upd_id in rows:
+        data = dict(raw or {})
+        expires = datetime.fromisoformat(str(data.get("expires_at")))
+        if expires <= now:
+            await conn.execute("DELETE FROM state WHERE key = %s", (key,))
+            if digits and data.get("code") == digits:
+                expired_match = True
+            continue
+        if digits and data.get("code") == digits:
+            matched = (str(key), data)
+        else:
+            active.append((str(key), data, int(upd_id)))
+    if matched is not None:
+        key, data = matched
+        target = str(data.get("person") or "")
+        await conn.execute("DELETE FROM state WHERE key = %s", (key,))
+        if not target or target == caller:
+            return f"that account already belongs to {caller}"
+        src, dst = await merge_people(
+            kernel, caller, target, by=caller, now=now, place=event.place,
+            body=event.body, caused_by=event.id, trigger=event)
+        return (f"linked: {src} merged into {dst}. Remembered history stays together "
+                "(unlinking later only starts a new id from then on).")
+    locked = False
+    for key, data, upd_id in active:
+        tries = int(data.get("tries") or 0) + 1
+        if tries >= LINK_TRIES:
+            await conn.execute("DELETE FROM state WHERE key = %s", (key,))
+            locked = True
+        else:
+            await write_state(conn, key, {**data, "tries": tries}, upd_id)
+    if expired_match:
+        return "that /link code has expired; run /link again for a new code"
+    if locked:
+        return "too many wrong /link codes; run /link again for a new code"
+    return "invalid or expired /link code"
+
+
+async def link_command(kernel: Any, event: Event, arguments: list[str]) -> str:
+    """Link two accounts as one person (`/link`, `/link <code>`, or owner `/link <a> <b>`)."""
+    conn, now = kernel.conn, kernel.clock.now()
+    caller = await canonical(conn, str(event.origin_actor or event.who or "")) or ""
+    if not arguments:
+        return await _issue_link_code(conn, caller, event, now)
+    if len(arguments) == 1:
+        return await _consume_link_code(kernel, event, caller, arguments[0], now)
+    if len(arguments) != 2:
+        return "usage: /link | /link <code> | /link <account|person|name> <account|person|name>"
+    if not is_owner(caller):
+        return "/link with two targets belongs to the owner; send /link for a one-time code"
+    labels = _role_labels(kernel)
+    first = await find_person(conn, arguments[0], labels=labels)
+    second = await find_person(conn, arguments[1], labels=labels)
+    if first is None or second is None:
+        missing = arguments[0] if first is None else arguments[1]
+        return f"unknown person or account: {missing}"
+    if first == second:
+        return f"already the same person: {first}"
+    src, dst = await merge_people(
+        kernel, first, second, by=caller, now=now, place=event.place,
+        body=event.body, caused_by=event.id, trigger=event)
+    return (f"linked: {src} merged into {dst}. Remembered history stays together "
+            "(unlinking later only starts a new id from then on).")
+
+
+async def unlink_command(kernel: Any, event: Event, arguments: list[str]) -> str:
+    """Give an account a new person id from now on without splitting merged history."""
+    conn, now = kernel.conn, kernel.clock.now()
+    caller = await canonical(conn, str(event.origin_actor or event.who or "")) or ""
+    mapping = await privacy.aliases(conn)
+    if arguments:
+        account = str(arguments[0]).strip()
+    else:
+        body_accounts = [acc for acc in await accounts_of(conn, caller)
+                         if acc.startswith(f"{event.body}:")]
+        if len(body_accounts) != 1:
+            return "usage: /unlink <account>"
+        account = body_accounts[0]
+    if not is_account(account) or account not in mapping:
+        return f"unknown account: {account}"
+    owner_of_account = await canonical(conn, mapping[account]) or mapping[account]
+    if not is_owner(caller) and owner_of_account != caller:
+        return f"you may only unlink your own account ({account} belongs elsewhere)"
+    remaining = await accounts_of(conn, owner_of_account)
+    if owner_of_account == OWNER and len(remaining) <= 1:
+        return "cannot unlink the owner's only remaining account"
+    old_person, new_person = await unlink_account(
+        conn, account, actor=caller, now=now, place=event.place,
+        body=event.body, caused_by=event.id)
+    return (f"unlinked {account}: new id {new_person} from now on "
+            f"(earlier merged memory remains under {old_person})")
+
+
+def install_commands(kernel: Any) -> None:
+    """Register `/link` and `/unlink` (human/owner commands only; never soul tools)."""
+    tools = kernel.tools
+    for name, description, permission, handler in (
+            ("link", "Link accounts into one person (/link, /link <code>, /link <a> <b>).",
+             "identity.link", link_command),
+            ("unlink", "Unlink an account to a fresh person id from now on: /unlink <account>.",
+             "identity.unlink", unlink_command)):
+        if tools.command(name) is None:
+            tools.add_command(CommandEntry(name, description, permission, handler,
+                                           owner="identity"))

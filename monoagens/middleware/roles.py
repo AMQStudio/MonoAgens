@@ -28,6 +28,8 @@ DEFAULT_APPROVAL = "default"
 CORE_PERMISSIONS: dict[str, str | None] = {
     "help": "guest",
     "identity.whoami": "guest",
+    "identity.link": "guest",
+    "identity.unlink": "guest",
     "identity.set": None,
     "self.recall": "guest",
     "privacy.share": "guest",
@@ -95,6 +97,7 @@ class RoleBook:
     places: Mapping[str, Mapping[str, frozenset[str]]] = field(default_factory=dict)
     role_settings: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     sources: Mapping[str, str] = field(default_factory=dict)
+    merges: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def empty(cls) -> "RoleBook":
@@ -148,10 +151,31 @@ class RoleBook:
         person = self.people.get(who) or Person(who)
         return replace(self, people={**self.people, who: replace(person, roles=tuple(held))})
 
+    def with_merges(self, merges: Mapping[str, str], report: Any = None) -> "RoleBook":
+        """Attach `merged:` links so younger entries keep applying and boot warns once."""
+        combined = {**self.merges, **{str(src): str(dst) for src, dst in merges.items() if dst}}
+        if report is not None:
+            for younger, surviving in sorted(combined.items()):
+                if younger in self.people and younger != surviving:
+                    report.add(
+                        f"roles: people.{younger} was merged into {surviving}; "
+                        f"keeping its entry until moved to people.{surviving}")
+        return replace(self, merges=combined)
+
+    def _aliases_for(self, who: str) -> tuple[str, ...]:
+        """Return this person id first, followed by any younger merged ids."""
+        target = self.merges.get(str(who), str(who))
+        younger = sorted(src for src, dst in self.merges.items() if dst == target and src != target)
+        return (target, *younger) if target == str(who) else (str(who), target, *younger)
+
     def held(self, who: str) -> tuple[Role, ...]:
         """Return the roles one person holds, in the order the configuration names them."""
-        person = self.people.get(str(who))
-        names = list(person.roles if person is not None else [])
+        names: list[str] = []
+        for alias in self._aliases_for(str(who)):
+            person = self.people.get(alias)
+            for name in (person.roles if person is not None else ()):
+                if name not in names:
+                    names.append(name)
         if self.fallback and self.fallback not in names:
             names.append(self.fallback)
         return tuple(self.roles[name] for name in names if name in self.roles)
@@ -220,10 +244,11 @@ class RoleBook:
         return DEFAULT_APPROVAL
 
     def label(self, who: str) -> str | None:
-        """Return one person's label: theirs first, then a role's."""
-        person = self.people.get(str(who))
-        if person is not None and person.label:
-            return person.label
+        """Return one person's label: theirs first, merged entry next, then a role's."""
+        for alias in self._aliases_for(str(who)):
+            person = self.people.get(alias)
+            if person is not None and person.label:
+                return person.label
         for role in self.held(who):
             if role.label:
                 return role.label
@@ -232,9 +257,10 @@ class RoleBook:
     def contexts(self, who: str) -> tuple[str, ...]:
         """Return the context lines for one person: each role's, then their own."""
         lines = [role.context for role in self.held(who) if role.context]
-        person = self.people.get(str(who))
-        if person is not None and person.context:
-            lines.append(person.context)
+        for alias in self._aliases_for(str(who)):
+            person = self.people.get(alias)
+            if person is not None and person.context:
+                lines.append(person.context)
         return tuple(lines)
 
     def may_give(self, giver: str, role_name: str) -> bool:
@@ -342,6 +368,14 @@ def describe_role(book: RoleBook, role_name: str) -> str:
 
 
 # ---------------------------------------------------------------- commands
+
+
+async def reconcile_merges(conn: Any, book: RoleBook, report: Any = None) -> RoleBook:
+    """Load `state: merged:*` into the running role book and warn on younger `people:` entries."""
+    from monoagens.core.memory.cards import merge_map  # local: avoid top-level cycle
+
+    merges = await merge_map(conn)
+    return book.with_merges(merges, report=report)
 
 
 def install_commands(kernel: Any) -> None:

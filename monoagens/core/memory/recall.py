@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 
+from monoagens.core.memory.cards import equivalent_sources, merge_map
 from monoagens.infra.store import payload_text
 from monoagens.types import RECENT_KINDS
 
@@ -31,13 +32,16 @@ async def search(conn, action, *, visible, memory_visible) -> dict[str, Any]:
     query = str(args.get("query") or "").strip()
     start, end = _stamp(args.get("from")), _stamp(args.get("to"))
     limit = int(prior.constants(prior.load_settings())["recall_results"])
+    merges = await merge_map(conn)
+    family = list(await equivalent_sources(conn, query)) if query else []
     clause, params = ["kind = ANY(%s)"], [list(RECENT_KINDS)]
     for value, condition in ((args.get("place"), "place = %s"), (start, "ts >= %s"),
                              (end, "ts < %s")):
         if value is not None:
             clause, params = [*clause, condition], [*params, value]
     if query:
-        clause, params = [*clause, "payload::text ILIKE %s"], [*params, f"%{query}%"]
+        clause, params = [*clause, "(payload::text ILIKE %s OR who = ANY(%s))"], [
+            *params, f"%{query}%", family]
     sql = ("SELECT id, ts, kind, who, place, payload FROM events WHERE "
            + " AND ".join(clause) + " ORDER BY id DESC LIMIT %s")
     if args.get("event_id") is not None:
@@ -49,25 +53,25 @@ async def search(conn, action, *, visible, memory_visible) -> dict[str, Any]:
     lineage = args.get("event_id") is not None
     rows = await _rows(conn, sql, params if lineage else (*params, limit))
     found = [{"kind": "event", "event_id": row[0], "ts": row[1].isoformat(),
-              "place": row[4], "text": payload_text(row[5])}
+              "who": merges.get(row[3], row[3]), "place": row[4], "text": payload_text(row[5])}
              for row in rows
              if await visible(conn, context=context, source=row[4], before=row[0])]
-    memory_sql = ("SELECT id, text, place, derived_from FROM memories "
-                  "WHERE valid_to IS NULL" + (" AND text ILIKE %s" if query else "")
-                  + " ORDER BY id DESC LIMIT %s")
-    for memory_id, text, place, derived in await _rows(
-            conn, memory_sql, ((f"%{query}%",) if query else ()) + (limit * 4,)):
+    mem_where = "WHERE valid_to IS NULL" + (
+        " AND (text ILIKE %s OR who = ANY(%s))" if query else "")
+    mem_params: tuple[Any, ...] = ((f"%{query}%", family) if query else ()) + (limit * 4,)
+    memory_sql = f"SELECT id, text, who, place, derived_from FROM memories {mem_where} ORDER BY id DESC LIMIT %s"
+    for memory_id, text, who, place, derived in await _rows(conn, memory_sql, mem_params):
         details = [{"event_id": row[0], "ts": row[1].isoformat(),
-                    "text": payload_text(row[4])}
+                    "who": merges.get(row[2], row[2]), "text": payload_text(row[5])}
                    for row in await _rows(
-                       conn, "SELECT id, ts, kind, place, payload FROM events "
+                       conn, "SELECT id, ts, who, kind, place, payload FROM events "
                              "WHERE id = ANY(%s) ORDER BY id", (derived,))
                    if _inside(row[1], start, end)
-                   and await visible(conn, context=context, source=row[3])]
+                   and await visible(conn, context=context, source=row[4])]
         allowed = await memory_visible(conn, context=context, sources=derived)
         if allowed and (details or not (start or end)):
             found.append({"kind": "memory", "memory_id": memory_id, "text": text,
-                          "place": place, "details": details})
+                          "who": merges.get(who, who), "place": place, "details": details})
     found = found[:limit]
     return {"searched": {"query": query or None, "event_id": args.get("event_id"),
                          "place": args.get("place"),

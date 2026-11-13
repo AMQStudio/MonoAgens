@@ -122,10 +122,11 @@ async def assemble_situation(conn, event: Event, *, now: datetime,
                                     limit=int(values["recent_events"]),
                                     kinds=RECENT_KINDS) if event.place else []
     vector = await read_event_vector(conn, event.id) if event.id is not None else None
+    source_who = await cards.canonical(conn, event.who)
     state: dict[str, Any] = {}
     keys = ["cognition:weights"]
     if event.place:
-        keys.append(f"habit:{event.place}:{event.who}")
+        keys.append(f"habit:{event.place}:{source_who}")
     keys.append(f"budget:{now.astimezone(zone).date().isoformat()}")
     for key in keys:
         value = await read_state(conn, key)
@@ -133,12 +134,12 @@ async def assemble_situation(conn, event: Event, *, now: datetime,
             state[key] = value
     habituation = 0.0
     if event.place:
-        habit_key = f"habit:{event.place}:{event.who}"
+        habit_key = f"habit:{event.place}:{source_who}"
         habituation = habituate(state.get(habit_key), now, boredom_gamma(settings))
         state[habit_key] = {"h": habituation, "ts": now.isoformat()}
         if event.id is not None:
             await write_state(conn, habit_key, state[habit_key], event.id)
-    closeness = await cards.closeness(conn, event.who)
+    closeness = await cards.closeness(conn, source_who)
     promise_vectors, reference_vectors, core_vectors = await _vectors(
         conn, settings, embedder)
     activation = await memory.best_activation(conn, embedder, event, now=now,

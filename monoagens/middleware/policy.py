@@ -71,6 +71,7 @@ def install(kernel: Any) -> None:
             pipeline.add(name, middleware)
     registry.install_commands(kernel)
     roles.install_commands(kernel)
+    identity.install_commands(kernel)
     install_commands(kernel)
     interaction.install_commands(kernel)
     kernel.after_model_call = enforce(kernel)

@@ -247,3 +247,173 @@ async def test_mentions_and_reply_to_are_mapped_before_core_sees_them(aconn):
                for ctx in fake.contexts
                for line in (*ctx.people, *ctx.memories, ctx.trigger.who,
                             str(ctx.trigger.payload)))
+
+
+async def test_link_merges_two_ids_into_one_card_memory_and_recall(aconn):
+    from datetime import timedelta
+    from pgvector import Vector
+    from monoagens.core.context import parts
+    from monoagens.core.context.layout import build_context
+    from monoagens.core.memory import cards, recall
+    from monoagens.core.reasoning import Reasoning
+    from monoagens.middleware import privacy
+
+    clock = FakeClock(START)
+    kernel = build(aconn, clock=clock, pfc=_FakePFC(), settings=settings())
+    kernel.register_adapter(_SayBody())
+
+    [first_ev] = await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="percept", who="telegram:111",
+        place="space:tg:-10", body="telegram",
+        payload={"description": "suka kopi hitam", "place_kind": "shared", "addressed": False}))
+    clock.advance(timedelta(minutes=5))
+    [second_ev] = await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="percept", who="discord:222",
+        place="space:dc:99", body="discord",
+        payload={"description": "alergi kacang", "place_kind": "shared", "addressed": False}))
+    older_id, younger_id = first_ev.who, second_ev.who
+    assert older_id != younger_id
+
+    await write_state(aconn, f"person:{older_id}", {
+        "name": "Budi", "closeness": 0.4, "reliability": {"promises": {"kept": 2}}}, first_ev.id)
+    await write_state(aconn, f"person:{younger_id}", {
+        "closeness": 0.8, "reliability": {"promises": {"kept": 3, "broken": 1}}}, second_ev.id)
+    await write_state(aconn, f"habit:space:dc:99:{younger_id}", {"h": 2.5, "ts": clock.now().isoformat()}, second_ev.id)
+    await aconn.execute(
+        "INSERT INTO memories (who, place, text, embedding, importance, valid_from, "
+        "last_accessed_at, derived_from) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        (younger_id, "space:dc:99", "Budi alergi kacang", Vector([0.1] * 384), 0.9,
+         clock.now(), clock.now(), [second_ev.id]))
+
+    # Person links via 6-digit /link code across accounts
+    [req_ev] = await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="command", who="telegram:111",
+        place="space:tg:111", body="telegram", payload={"command": "link", "arguments": []}))
+    code_row = await read_state(aconn, f"{identity.LINK_PREFIX}{older_id}")
+    code = str(code_row["code"])
+    assert len(code) == 6
+    await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="command", who="discord:222",
+        place="space:dc:222", body="discord", payload={"command": "link", "arguments": [code]}))
+
+    # Merged into the older id; cards, memories, habit, last_seen follow without rewriting Log
+    assert await cards.canonical(aconn, younger_id) == older_id
+    assert await read_state(aconn, f"merged:{younger_id}") == {"into": older_id}
+    merged_card = await read_state(aconn, f"person:{older_id}")
+    assert merged_card["closeness"] == pytest.approx(0.8)
+    assert merged_card["reliability"] == {"promises": {"kept": 5, "broken": 1}}
+    assert await read_state(aconn, f"person:{younger_id}") is None
+    assert await read_state(aconn, f"habit:space:dc:99:{older_id}") == {
+        "h": 2.5, "ts": clock.now().isoformat()}
+    assert await identity.accounts_of(aconn, older_id) == ("discord:222", "telegram:111")
+    people_cards = await identity.person_cards(aconn, "space:tg:-10", first_ev)
+    assert len(people_cards) == 1 and older_id in people_cards[0] and younger_id not in people_cards[0]
+
+    # Log is untouched, yet audience labels, working context and recall follow the merge
+    raw_row = await (await aconn.execute("SELECT who FROM events WHERE id = %s",
+                                         (second_ev.id,))).fetchone()
+    assert raw_row == (younger_id,)
+    assert await privacy.audience(aconn, "space:dc:99") == frozenset({older_id})
+    ctx = await build_context(aconn, second_ev, "space:dc:99", "check", now=clock.now(),
+                              settings=settings(), memories=(), capabilities=())
+    rendered = str(parts.messages(Reasoning(settings=settings()), ctx))
+    assert f"<event>{older_id}: alergi kacang</event>" in rendered
+    assert f"{younger_id}:" not in rendered
+    res = await recall.search(
+        aconn, Event(id=None, ts=clock.now(), kind="act.out", place="space:dc:99",
+                     payload={"query": older_id}),
+        visible=privacy.visible, memory_visible=privacy.memory_visible)
+    found_texts = [item["text"] for item in res["found"]]
+    assert "Budi alergi kacang" in found_texts
+    assert any("alergi kacang" in text for text in found_texts)
+
+
+async def test_link_owner_always_wins_and_soul_has_no_link_tool(aconn):
+    kernel = build(aconn, clock=FakeClock(START), pfc=_FakePFC(), settings=settings())
+    kernel.register_adapter(_SayBody())
+    code = await identity.ensure(aconn, now=START)
+
+    [early] = await _put_idle(kernel, Event(
+        id=None, ts=START, kind="percept", who="discord:700",
+        place="space:dc:700", body="discord",
+        payload={"description": "halo", "place_kind": "direct", "addressed": True}))
+    early_id = early.who
+    await _put_idle(kernel, Event(
+        id=None, ts=START, kind="percept", who="telegram:1",
+        place="space:tg:1", body="telegram",
+        payload={"description": code, "place_kind": "direct", "addressed": True}))
+
+    await _put_idle(kernel, Event(
+        id=None, ts=START, kind="command", who="telegram:1",
+        place="space:tg:1", body="telegram",
+        payload={"command": "link", "arguments": ["person:owner", "discord:700"]}))
+
+    assert await identity.find_person(aconn, "discord:700") == "person:owner"
+    assert await read_state(aconn, f"merged:{early_id}") == {"into": "person:owner"}
+    assert not any("link" in name for name in kernel.tools.entries)
+
+
+async def test_wrong_and_expired_link_codes_and_unlink(aconn):
+    from datetime import timedelta
+
+    clock = FakeClock(START)
+    body = _SayBody()
+    kernel = build(aconn, clock=clock, pfc=_FakePFC(), settings=settings())
+    kernel.register_adapter(body)
+
+    [a_ev] = await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="percept", who="telegram:501",
+        place="space:tg:501", body="telegram",
+        payload={"description": "hi", "place_kind": "direct", "addressed": True}))
+    [b_ev] = await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="percept", who="discord:502",
+        place="space:dc:502", body="discord",
+        payload={"description": "yo", "place_kind": "direct", "addressed": True}))
+
+    # Wrong code 3 times locks out and links nothing even on try 4 with the real code
+    await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="command", who="telegram:501",
+        place="space:tg:501", body="telegram", payload={"command": "link", "arguments": []}))
+    real_code = str((await read_state(aconn, f"{identity.LINK_PREFIX}{a_ev.who}"))["code"])
+    for wrong in ("000000", "111111", "222222", real_code):
+        await _put_idle(kernel, Event(
+            id=None, ts=clock.now(), kind="command", who="discord:502",
+            place="space:dc:502", body="discord",
+            payload={"command": "link", "arguments": [wrong]}))
+    assert await identity.find_person(aconn, "discord:502") == b_ev.who
+
+    # Expired code links nothing
+    await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="command", who="telegram:501",
+        place="space:tg:501", body="telegram", payload={"command": "link", "arguments": []}))
+    fresh_code = str((await read_state(aconn, f"{identity.LINK_PREFIX}{a_ev.who}"))["code"])
+    clock.advance(timedelta(minutes=11))
+    await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="command", who="discord:502",
+        place="space:dc:502", body="discord",
+        payload={"command": "link", "arguments": [fresh_code]}))
+    assert await identity.find_person(aconn, "discord:502") == b_ev.who
+
+    # Valid link then /unlink gives a new id from then on and splits nothing
+    await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="command", who="telegram:501",
+        place="space:tg:501", body="telegram", payload={"command": "link", "arguments": []}))
+    valid_code = str((await read_state(aconn, f"{identity.LINK_PREFIX}{a_ev.who}"))["code"])
+    await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="command", who="discord:502",
+        place="space:dc:502", body="discord",
+        payload={"command": "link", "arguments": [valid_code]}))
+    assert await identity.find_person(aconn, "discord:502") == a_ev.who
+
+    await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="command", who="discord:502",
+        place="space:dc:502", body="discord",
+        payload={"command": "unlink", "arguments": ["discord:502"]}))
+    [after_unlink] = await _put_idle(kernel, Event(
+        id=None, ts=clock.now(), kind="percept", who="discord:502",
+        place="space:dc:502", body="discord",
+        payload={"description": "baru", "place_kind": "direct", "addressed": True}))
+    assert after_unlink.who not in (a_ev.who, b_ev.who)
+    assert after_unlink.who.startswith("person:p_")
+    assert await read_state(aconn, f"merged:{b_ev.who}") == {"into": a_ev.who}
+    assert len(await _events(aconn, identity.UNLINKED)) == 1

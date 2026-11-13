@@ -10,6 +10,7 @@ from typing import Any
 import psycopg
 from pgvector import Vector
 
+from monoagens.core.memory.cards import merge_map
 from monoagens.infra.prior import constants, retrieval
 from monoagens.infra.store import event_from_row, payload_text, read_event_vector
 from monoagens.types import RECENT_KINDS, Event
@@ -64,7 +65,9 @@ async def retrieve(conn: psycopg.AsyncConnection[Any], embedder: Any, query: str
     if ranked:
         await conn.execute("UPDATE memories SET last_accessed_at = %s, use_count = use_count + 1 "
                            "WHERE id = ANY(%s)", (now, [row[0] for _, row in ranked]))
-    return [MemoryHit(f"- {row[1]} ({row[2] or '?'} at {row[3] or '?'}; importance {row[4]:.2f})",
+    merges = await merge_map(conn) if ranked else {}
+    return [MemoryHit(f"- {row[1]} ({merges.get(row[2], row[2]) or '?'} at {row[3] or '?'}; "
+                      f"importance {row[4]:.2f})",
                       place=row[3], sources=row[9], activation=activation)
             for activation, row in ranked]
 

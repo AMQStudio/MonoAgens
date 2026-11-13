@@ -305,6 +305,27 @@ async def test_a_role_command_writes_one_line_and_applies_without_restart(aconn,
                                         "role": "toko-a", "added": True}
 
 
+async def test_merged_younger_people_entry_keeps_applying_and_warns(aconn):
+    from monoagens.middleware.loader import BootReport
+    from monoagens.middleware.roles import RoleBook, reconcile_merges
+
+    ev = await append_event(aconn, ts=START, kind="source.merged", who="person:p_old",
+                            payload={"from": "person:p_young", "into": "person:p_old"})
+    await write_state(aconn, "merged:person:p_young", {"into": "person:p_old"}, ev.id)
+    report = BootReport()
+    book = RoleBook.build(
+        {"roles": {"friend": {"base": "member", "label": "Friend", "context": "close friend"}},
+         "people": {"person:p_young": {"roles": ["friend"], "label": "Budi",
+                                       "context": "college friend"}}},
+        roles.CORE_PERMISSIONS, {}, {}, report)
+
+    reconciled = await reconcile_merges(aconn, book, report)
+    assert [r.name for r in reconciled.held("person:p_old")] == ["friend"]
+    assert reconciled.label("person:p_old") == "Budi"
+    assert reconciled.contexts("person:p_old") == ("close friend", "college friend")
+    assert any("person:p_young" in line and "person:p_old" in line for line in report.lines)
+
+
 async def test_an_admin_cannot_grant_admin(aconn):
     kernel = await _kernel(aconn)
 
