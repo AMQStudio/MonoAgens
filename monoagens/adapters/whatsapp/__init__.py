@@ -7,6 +7,7 @@ import contextlib
 import logging
 import pathlib
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from typing import Any
 
 from monoagens.adapters.whatsapp import send
@@ -25,6 +26,7 @@ from monoagens.adapters.whatsapp.format import (
     format_album,
     format_call,
     format_message,
+    parse_timestamp,
 )
 from monoagens.adapters.whatsapp.history_sync import (
     extract_sync_events,
@@ -109,6 +111,7 @@ class WhatsAppBody:
         self._choices_prompts: dict[str, list[str]] = {}
         self._albums: dict[str, dict[str, Any]] = {}
         self._connected_once = False
+        self._connected_at: datetime | None = None
         self._backfilling = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._history_lock = asyncio.Lock()
@@ -189,6 +192,7 @@ class WhatsAppBody:
         safe_put = self._wrap_put(put)
         self._register_handlers(client, safe_put)
         try:
+            self._connected_at = self._clock.now()
             await client.connect()
             idle = getattr(client, "idle", None)
             if callable(idle):
@@ -260,6 +264,7 @@ class WhatsAppBody:
         @client.event(ConnectedEv)
         async def _on_connected(accepted: Any, _ev: Any) -> None:
             async def work() -> None:
+                self._connected_at = self._clock.now()
                 self._sync_self_identity(
                     getattr(accepted, "me", None) or getattr(client, "me", None))
                 await asyncio.to_thread(import_contacts_sqlite, self.session_db, self.directory)
@@ -344,6 +349,16 @@ class WhatsAppBody:
             except Exception as exc:
                 LOGGER.warning("whatsapp _sync_places failed: %s", exc)
 
+    def _is_before_connect(self, ev: Any) -> bool:
+        """Return whether `ev` carries a transport timestamp older than this connection."""
+        if self._connected_at is None:
+            return False
+        info = getattr(ev, "Info", None)
+        sent = parse_timestamp(getattr(info, "Timestamp", 0))
+        if sent is None:
+            return False
+        return sent < self._connected_at.replace(microsecond=0)
+
     async def handle_message(self, ev: Any, put: Put, *, backfill: bool = False) -> Event | None:
         """Convert one live `MessageEv` into a percept (collapsing albums) and emit via `put`."""
         info = getattr(ev, "Info", None)
@@ -366,12 +381,13 @@ class WhatsAppBody:
             return None
         atts, spec = await store_deferred(self._files, body=self.name, chat_jid=chat_jid,
                                           message_id=msg_id, message=message)
+        is_backfill = backfill or self._backfilling or self._is_before_connect(ev)
         event = format_message(
             ev, directory=self.directory, now=self._clock.now(), name=self.name,
             self_account=self.self_account, own_sent=self._sent,
             attachments=atts, media_spec=spec,
             choices_prompts=self._choices_prompts,
-            backfill=backfill or self._backfilling,
+            backfill=is_backfill,
         )
         if event is None:
             return None

@@ -82,6 +82,15 @@ async def candidates(conn: psycopg.AsyncConnection[Any], embedder: Any, event: E
                                 settings=settings, k=int(retrieval(settings)["k"])))
 
 
+def _effective_ts(ts: datetime, raw_sent: str | None) -> datetime:
+    if raw_sent:
+        try:
+            return datetime.fromisoformat(raw_sent)
+        except ValueError:
+            pass
+    return ts
+
+
 async def best_activation(conn: psycopg.AsyncConnection[Any], embedder: Any, event: Event, *,
                           now: datetime, settings: dict[str, Any]) -> float:
     """Return the highest activation among candidates, recent messages included (FOK)."""
@@ -91,15 +100,17 @@ async def best_activation(conn: psycopg.AsyncConnection[Any], embedder: Any, eve
     if vector is None or not event.place:
         return peak
     cur = await conn.execute(
-        "SELECT 1 - (v.embedding <=> %s), e.ts FROM event_vectors v "
+        "SELECT 1 - (v.embedding <=> %s), e.ts, e.payload->>'sent_at' FROM event_vectors v "
         "JOIN events e ON e.id = v.event_id WHERE e.place = %s AND e.kind = ANY(%s) "
         "AND e.id <> %s ORDER BY e.id DESC LIMIT %s",
         (Vector(vector), event.place, list(RECENT_KINDS), event.id,
          int(constants(settings)["recent_messages"])))
     values, d = constants(settings), decay_d(settings)
-    scores = [base_level(0, max(0.0, (now - ts).total_seconds() / 3600.0), d)
-              + float(values["context_weight"]) * float(similarity)
-              for similarity, ts in await cur.fetchall()]
+    scores = [
+        base_level(0, max(0.0, (now - _effective_ts(ts, sent_at)).total_seconds() / 3600.0), d)
+        + float(values["context_weight"]) * float(similarity)
+        for similarity, ts, sent_at in await cur.fetchall()
+    ]
     return max([peak, *scores])
 
 

@@ -168,6 +168,17 @@ def leak_candidates(settings: Mapping[str, Any] | None = None) -> int:
     return count
 
 
+def backfill_settle_seconds(settings: Mapping[str, Any] | None = None) -> float:
+    """Return idle settle window before a place's queued backfill batch is appraised."""
+    raw = ((settings or {}).get("runtime") or {}).get("backfill_settle_seconds")
+    if raw is None:
+        raw = (load_config().get("runtime") or {}).get("backfill_settle_seconds")
+    value = float(raw if raw is not None else 0.5)
+    if value <= 0:
+        raise ValueError("runtime.backfill_settle_seconds must be positive")
+    return value
+
+
 def load_env_file(path: pathlib.Path = DEFAULT_ENV_PATH) -> dict[str, str]:
     """Read a simple KEY=VALUE .env file into a dict."""
     env_path = pathlib.Path(path)

@@ -20,7 +20,7 @@ from monoagens.infra import budget, config, observability
 from monoagens.infra.clock import Clock
 from monoagens.infra.prior import load_settings, signal_weights
 from monoagens.infra.store import (append_event, cursor as store_cursor, insert_event_vector,
-                                   insert_event_vectors, project_event,
+                                   insert_event_vectors, payload_text, project_event,
                                    unembedded_imported_percepts)
 from monoagens.types import Event
 
@@ -66,10 +66,12 @@ class Kernel:
         self.after_model_call: Callable[[int, Mapping[str, int]], Awaitable[None]] | None = None
         self.hooks = hooks.HookRegistry(self.settings)
         self._batches: dict[tuple[int, str], dict[str, Any]] = {}
+        self._backlogs: dict[str, dict[str, Any]] = {}
         self._results_this_round = 0
         self._pending_embeds: deque[tuple[int, str]] = deque()
         self._embed_trigger: Event | None = None
         self._embed_batch_size: int = config.embed_batch_size(self.settings)
+        self._backfill_settle_seconds: float = config.backfill_settle_seconds(self.settings)
         self._observer = observability.EventObserver(
             summary_every=config.import_summary_every(self.settings),
             conn=self.conn,
@@ -252,7 +254,14 @@ class Kernel:
                 await self.jobs.start("sleep", "sleep", event,
                                       partial(self.jobs.sleep, now))
         if fired or self.pfc is None or event.kind not in ("percept", "act.result"):
+            if event.kind == "tick" and self._backlogs:
+                await self._flush_backlogs(due_only=True)
             return
+        if event.kind == "percept" and event.payload.get("backfill") is True:
+            self._queue_backfill(event)
+            return
+        if event.kind == "percept":
+            await self._flush_backlogs(place=event.place or "")
         if event.kind == "act.result":
             if await working.step_spoke(self.conn, event):
                 await self._emit(event, "decision.silent",
@@ -262,6 +271,9 @@ class Kernel:
                 await self._emit(event, "decision.silent",
                                  {"reason": "the task chain already stopped"})
                 return
+        await self._appraise_and_wake(event)
+
+    async def _appraise_and_wake(self, event: Event) -> None:
         appraisal = await self._appraise(event)
         if event.kind == "act.result":
             if appraisal.decision == "wake":
@@ -278,6 +290,53 @@ class Kernel:
         else:
             self._observer.observe_decision(event, "decision.wake", appraisal.reason)
         await self._think(event, appraisal.reason, event.place or "")
+
+    def _queue_backfill(self, event: Event) -> None:
+        key = event.place or ""
+        entry = self._backlogs.setdefault(key, {"events": [], "idle_polls": 0,
+                                                "deadline": self.clock.now()})
+        entry["events"].append(event)
+        entry["idle_polls"] = 0
+        entry["deadline"] = self.clock.now() + timedelta(seconds=self._backfill_settle_seconds)
+
+    @staticmethod
+    def _collapse_backlog(events: list[Event]) -> Event:
+        addressed = [ev for ev in events if (ev.payload or {}).get("addressed") is True]
+        rep = addressed[-1] if addressed else events[-1]
+        if len(events) == 1 and "messages" in (rep.payload or {}):
+            return rep
+        payload = dict(rep.payload or {})
+        payload["backfill"] = True
+        payload.setdefault("sent_at", rep.ts.isoformat())
+        payload.setdefault("messages", [
+            {
+                "description": payload_text(ev.payload or {}),
+                "addressed": bool((ev.payload or {}).get("addressed")),
+                "who": ev.who,
+                "sent_at": (ev.payload or {}).get("sent_at") or ev.ts.isoformat(),
+            }
+            for ev in events
+        ])
+        return replace(rep, payload=payload)
+
+    async def _flush_backlogs(self, *, place: str | None = None, due_only: bool = False,
+                              idle_polls: int = 0) -> None:
+        if not self._backlogs:
+            return
+        now = self.clock.now()
+        poll_due = idle_polls * 0.1 >= self._backfill_settle_seconds
+        keys = [
+            key for key, entry in list(self._backlogs.items())
+            if (place is None or key == place)
+            and (not due_only or now >= entry["deadline"] or poll_due)
+        ]
+        for key in keys:
+            entry = self._backlogs.pop(key, None)
+            if not entry or not entry["events"]:
+                continue
+            if self.pfc is None:
+                continue
+            await self._appraise_and_wake(self._collapse_backlog(entry["events"]))
 
     async def _batch_holds(self, event: Event) -> bool:
         """Hold one result of a round whose other results have not arrived yet.
@@ -511,6 +570,9 @@ class Kernel:
             while not self.queue.empty():
                 await self.step()
                 count += 1
+            if self._backlogs:
+                await self._flush_backlogs()
+                continue
             if not self.jobs.in_flight:
                 return count
             pending = [task for task in self.jobs.tasks if not task.done()]
@@ -521,11 +583,16 @@ class Kernel:
         self.require_installed()
         self._loop = asyncio.get_running_loop()
         await self.recover()
+        idle_polls = 0
         while not stop_event.is_set():
             try:
                 item = await asyncio.wait_for(self.queue.get(), timeout=0.1)
             except TimeoutError:
+                idle_polls += 1
+                if self._backlogs:
+                    await self._flush_backlogs(due_only=True, idle_polls=idle_polls)
                 continue
+            idle_polls = 0
             try:
                 await self._settle(item)
             except Exception as exc:

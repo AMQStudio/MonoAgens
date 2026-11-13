@@ -723,3 +723,47 @@ async def test_whatsapp_real_protobuf_shapes_keep_text_and_non_zero_log_len(tmp_
     for desc, line in zip(descriptions, percept_lines):
         assert f"len={len(desc)}" in line
         assert len(desc) > 0
+
+
+async def test_whatsapp_marks_pre_connect_and_offline_sync_messages_as_backfill(tmp_path) -> None:
+    """Messages sent before connect or during offline sync get backfill=True and sent_at."""
+    client = FakeWAClient()
+    clock = FakeClock(START)
+    wa = WhatsAppBody(client=client, session_db=tmp_path / "wa.db", clock=clock)
+    wa._sync_self_identity(client.me)
+    wa._connected_at = START  # simulate ConnectedEv at START
+
+    emitted: list[Event] = []
+
+    async def put(ev: Event) -> None:
+        emitted.append(ev)
+
+    old_ts = int((START - timedelta(minutes=20)).timestamp())
+    live_ts = int((START + timedelta(seconds=10)).timestamp())
+
+    pre_conn = _make_ev(
+        msg_id="M_PRE_CONN", chat_user=GROUP_JID.split("@")[0], chat_server="g.us",
+        sender_user=BUDI_PN, ts=old_ts, message=e2e.Message(conversation="old group line"),
+    )
+    wa._backfilling = True
+    offline_sync = _make_ev(
+        msg_id="M_SYNC", chat_user=GROUP_JID.split("@")[0], chat_server="g.us",
+        sender_user=BUDI_PN, ts=live_ts, message=e2e.Message(conversation="during offline preview"),
+    )
+    await wa.handle_message(pre_conn, put)
+    await wa.handle_message(offline_sync, put)
+    wa._backfilling = False
+
+    live = _make_ev(
+        msg_id="M_LIVE", chat_user=GROUP_JID.split("@")[0], chat_server="g.us",
+        sender_user=BUDI_PN, ts=live_ts, message=e2e.Message(conversation="fresh live message"),
+    )
+    await wa.handle_message(live, put)
+
+    assert len(emitted) == 3
+    assert emitted[0].payload["backfill"] is True
+    assert emitted[0].payload["sent_at"]
+    assert emitted[1].payload["backfill"] is True
+    assert emitted[1].payload["sent_at"]
+    assert "backfill" not in emitted[2].payload
+    assert emitted[2].payload["sent_at"]

@@ -934,3 +934,84 @@ async def test_identity_changing_capability_passes_for_the_owner(aconn):
     assert len(body.actions) == 1
     # set_identity is not communicative, so no act.confirmed closes it.
     assert await _kinds(aconn) == ["percept", "model.call", "act.out"]
+
+
+async def test_forty_offline_messages_across_three_groups_appraised_once_per_group(aconn):
+    """D37: 40 offline messages in 3 groups appraise <=1 per group; old unaddressed stay silent."""
+    fake = FakeLLM([[("act", {"capability": "telegram.say", "arguments": {"text": "siap, aku cek"}})]])
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS,
+                   embedder=FakeEmbedder())
+    body = RecordingBody()
+    kernel.register_adapter(body)
+
+    g1, g2, g3 = "space:wa:g1@g.us", "space:wa:g2@g.us", "space:wa:g3@g.us"
+    for idx in range(40):
+        if idx < 15:
+            place, addressed, text = g1, False, f"obrolan grup 1 #{idx}"
+        elif idx < 30:
+            place, addressed, text = g2, False, f"obrolan grup 2 #{idx}"
+        elif idx < 39:
+            place, addressed, text = g3, False, f"obrolan grup 3 #{idx}"
+        else:
+            place, addressed, text = g3, True, "tolong cek catatan ini dong"
+        await kernel.queue.put(_make_queued(Event(
+            id=None, ts=START, kind="percept", who=f"person:u{idx % 5}",
+            place=place, body="telegram",
+            payload={
+                "description": text, "place_kind": "shared",
+                "addressed": addressed, "backfill": True,
+                "sent_at": (START - timedelta(minutes=30 + idx)).isoformat(),
+            },
+        )))
+
+    await kernel.run_until_idle()
+
+    rows = await (await aconn.execute(
+        "SELECT kind, place, payload FROM events ORDER BY id ASC")).fetchall()
+    assert sum(1 for k, _, _ in rows if k == "percept") == 40
+    decisions = [(k, p, pl) for k, p, pl in rows if k.startswith("decision.")]
+    # G1 and G2 each get 1 silent/note decision; G3 wakes via addressed reflex (1 model call).
+    for g in (g1, g2, g3):
+        assert sum(1 for _, p, _ in decisions if p == g) <= 1
+    assert [p for k, p, _ in decisions if p in (g1, g2) and k == "decision.wake"] == []
+    assert [a.place for a in body.actions] == [g3]
+    assert len(fake.requests) == 1
+
+
+def _make_queued(event: Event):
+    from monoagens.core.kernel import _Queued
+
+    return _Queued(event, None)
+
+
+async def test_kernel_run_flushes_backfill_batch_once_after_settle(aconn):
+    """Live Kernel.run() accumulates sequential backfill events and appraises once after settle."""
+    cfg = settings()
+    cfg["runtime"] = {**cfg.get("runtime", {}), "backfill_settle_seconds": 0.15}
+    fake = FakeLLM()
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=cfg,
+                   embedder=FakeEmbedder())
+    kernel.register_adapter(RecordingBody())
+    stop = asyncio.Event()
+    runner = asyncio.create_task(kernel.run(stop))
+    try:
+        for idx in range(5):
+            await kernel.put(Event(
+                id=None, ts=START, kind="percept", who=f"person:u{idx}",
+                place=GROUP, body="telegram",
+                payload={
+                    "description": f"pesan lama {idx}", "place_kind": "shared",
+                    "addressed": False, "backfill": True,
+                    "sent_at": (START - timedelta(hours=2)).isoformat(),
+                },
+            ))
+        await asyncio.sleep(0.35)
+    finally:
+        stop.set()
+        await runner
+
+    decisions = await (await aconn.execute(
+        "SELECT kind FROM events WHERE kind LIKE 'decision.%' ORDER BY id ASC")).fetchall()
+    assert len(decisions) == 1
+    assert decisions[0][0] == "decision.silent"
+    assert fake.requests == []

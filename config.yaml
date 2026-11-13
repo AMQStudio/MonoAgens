@@ -12,6 +12,7 @@ runtime:
   import_summary_every: 100
   embed_batch_size: 64
   leak_candidates: 50
+  backfill_settle_seconds: 0.5
 bodies:                             # adapters; tokens stay in .env
   whatsapp: { enabled: true, history_chunk_size: 25 }
   cli: { enabled: true }

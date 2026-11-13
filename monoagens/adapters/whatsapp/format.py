@@ -61,20 +61,28 @@ def clean_event(event: Event) -> Event:
     )
 
 
-def iso_timestamp(raw_ts: Any, *, fallback: datetime | None = None) -> str:
-    """Convert a seconds/milliseconds transport epoch into an ISO UTC timestamp string."""
+def parse_timestamp(raw_ts: Any) -> datetime | None:
+    """Parse a seconds or milliseconds epoch into a UTC datetime, or None when unset."""
     try:
         value = int(raw_ts or 0)
     except (TypeError, ValueError):
-        value = 0
+        return None
     if value > 10**12:
         value //= 1000
     if value <= 0:
-        return (fallback or datetime.now(timezone.utc)).isoformat()
+        return None
     try:
-        return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
+        return datetime.fromtimestamp(value, tz=timezone.utc)
     except (OverflowError, OSError, ValueError):
+        return None
+
+
+def iso_timestamp(raw_ts: Any, *, fallback: datetime | None = None) -> str:
+    """Convert a seconds/milliseconds transport epoch into an ISO UTC timestamp string."""
+    parsed = parse_timestamp(raw_ts)
+    if parsed is None:
         return (fallback or datetime.now(timezone.utc)).isoformat()
+    return parsed.isoformat()
 
 
 def album_parent_id(message: Any) -> str | None:
