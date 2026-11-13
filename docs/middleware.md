@@ -100,7 +100,7 @@ decided in one place, not by scattered try/except:
 
 | Layer | On failure | Examples |
 |---|---|---|
-| Guard rule (policy, privacy, identity, roles) | the item stops (fail closed), `guard.stopped` or `error` | the leak check, a permission, the identity line |
+| Guard rule (policy, privacy, identity, roles) | the item stops (fail closed), `guard.stopped` or `error` | the context filter, an attachment's audience, a permission, the identity line |
 | Best-effort rule (what is only shown) | `error` naming the rule, the adapter and the show kind; the item **continues** | typing, read receipts, progress, thinking |
 | Adapter | `error` naming the adapter; that adapter alone restarts with backoff; the soul and the other adapters keep running | a timeout, a lost connection |
 | Tool or plugin call | an honest `act.result` with the error, so reasoning knows the act failed | a search that failed, a missing file |
@@ -113,7 +113,7 @@ method, each best-effort rule and each tool raise in turn and checks that the so
 and records the error.
 
 **A refused message is not the end of the turn (D82).** When a guard stops a communicative act
-(a leak, a wrong place), the refusal returns to reasoning as that act's `act.result` with its
+(a wrong place, a missing permission), the refusal returns to reasoning as that act's `act.result` with its
 reason, and reasoning gets one more round in the same place to say something it may say, within
 the thought-round limit and the budget. A refusal alone never leaves a person without an answer;
 quiet hours and brakes are not refusals of content and keep their own rules.
@@ -132,11 +132,22 @@ The one middleware that is always present.
   (`place_kind`), never from the shape of an id (D48). A private item may enter a context only if
   every person who will see the result is in its audience, or the context is the owner's direct
   chat; content from places that are not private flows freely. One source of truth: the
-  audience labels. Every privacy check (the context filter, `leaks` in the action hook,
-  `visible` for attachments and shown items) answers from them, so content visible at the
-  target is never refused as a leak; a text-similarity check only catches content that is not. A memory's audience comes from the
+  audience labels. Every privacy check (the context filter, `visible` for attachments and shown
+  items) answers from them. A memory's audience comes from the
   labels of the events it was derived from (D53). When the policy withholds relevant items it
   leaves one line without content — how many, and whose private place they came from (D56).
+- **Enforced before the model, by construction (D84).** Absolute line 2 is held only by
+  deterministic checks on the labels, all of them before or outside the model: the context
+  filter (what the model may see in this place), speaking elsewhere through a new wake in the
+  target place with that place's context ([core.md §4](core.md), D48), and the audience check on
+  opening or forwarding an attachment. The model never sees private content it may not use
+  here, so it has nothing to leak. A text-similarity check after the model writes is **an audit,
+  never a block**: when a reply looks close to a line its audience may not see, the policy
+  records `privacy.suspect` (the reply's act id, the matched event or memory id and its
+  audience; ids only, no text) and the message is still sent. Replay counts it as a metric, and
+  every suspect is a lead to a labelling bug, fixed where it lives. Refusals that remain are
+  deterministic and give their reason: a place where the soul may not post, a permission, quiet
+  hours, a brake.
 - **Sharing by consent (D46).** The policy offers the `share(item | episode, to)` capability: it
   passes only when the chain's `origin_actor` is in the item's audience, and records
   `share.granted`, after which the new person is in the audience. Each person speaks only for

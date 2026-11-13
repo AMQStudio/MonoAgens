@@ -248,8 +248,8 @@ say, to whom, why — and wakes reasoning once more in the target place, with th
 say and why; the message is written there, as it would be written in Budi's chat.
 This costs one extra model call and only for messages to another place. A paraphrase of private
 content cannot leak, because the content was never in the target's context. A check that a reply
-quotes no private content its audience may not see stays as a second line of defence and as a
-replay metric.
+quotes no private content its audience may not see stays only as an audit and a replay metric
+(`privacy.suspect`), never as a block (D84): privacy is held before the model, by construction.
 
 **History and catching up** (D37, D40). An adapter may offer `history(place, before, limit)` for
 messages the log lacks. On connect it back-fills what it missed as `percept` with
@@ -444,8 +444,9 @@ owner policy, never decided by the reasoning:
 1. **Only the owner changes who the soul is** — checked in the action hook on capabilities
    flagged `identity_changing`.
 2. **Private content never reaches anyone who was not part of it** (D45, D46, D50, D56) —
-   checked in the context and action hooks from the labels; the rules are in
-   [middleware.md](middleware.md) §3.
+   held by construction before the model (the context filter, speaking elsewhere through a wake
+   in the target place, attachment audience), from the labels; the rules are in
+   [middleware.md](middleware.md) §3 (D84).
 The owner policy is always installed, first and last in every hook; the core refuses to run
 without it (fail-closed), so both lines hold with no other middleware. Other middleware and
 plugins may only narrow them.

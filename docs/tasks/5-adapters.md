@@ -139,13 +139,16 @@ adapter is a special case.
   session of 1.8: rule kinds guard / best-effort in the composer (every show is best-effort;
   policy, privacy, identity and roles stay guards); a refused communicative act returns to
   reasoning with its reason for one more round; one neutral `say`, `react`, `edit` routed to the
-  trigger's place (or `to:` / `via:`), the `<adapter>.say` entries hidden from the prompt; the
-  leak check counts only distinctive overlap (minimum matching words from config, phrases common
-  across many places ignored) and its `guard.stopped` names the matched event or memory id and
-  audience; a fault-injection test over every adapter method, best-effort rule and tool. Tests:
-  a show that raises does not stop the turn; a stranger's "halo" gets an answer even with many
-  similar imported greetings; a scripted first draft that leaks is followed by a safe answer; a
-  WhatsApp message cannot be answered through the CLI.
+  trigger's place (or `to:` / `via:`), the `<adapter>.say` entries hidden from the prompt;
+  privacy enforced before the model only (D84, middleware.md §3): `privacy.leaks` no longer
+  blocks; it records `privacy.suspect` (act id, matched id, audience; no text) and the message is
+  sent; replay reports the suspect count; a fault-injection test over every adapter method,
+  best-effort rule and tool. Tests: a show that raises does not stop the turn; a stranger's
+  "halo" is answered even with many similar imported greetings; a private line from another
+  chat never reaches the context of a place outside its audience (the context filter); a reply
+  close to such a line is sent and recorded as `privacy.suspect`; a send to a `can_post: false`
+  place is refused and reasoning answers in another way; a WhatsApp message cannot be answered
+  through the CLI.
 - [ ] 1.8 Real-model test (this task's one exception to the last-part rule, because WhatsApp is
   needed daily): the replay launch set passes on the new adapters, then a live session on
   WhatsApp in the owner's direct chat and one group (the model in `.env`; never read or print
