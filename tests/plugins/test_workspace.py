@@ -299,3 +299,26 @@ def test_the_sandbox_quota_parses_and_compares():
     assert tools_module._over(10, "1G") is False
     assert tools_module._over(2 * 1024 ** 3, "1G") is True
     assert tools_module._over(10, "0") is False
+
+
+async def test_workspace_registers_progress_md_standing_rule_in_self_block(aconn, tmp_path):
+    from monoagens.core.context import layout
+    from monoagens.core.context.parts import VOLATILE
+    from monoagens.middleware.registry import self_block
+
+    kernel, _ = await _kernel(aconn, tmp_path)
+    assert any("progress.md" in rule for rule in kernel.tools.rules)
+
+    trigger = await append_event(aconn, ts=START, kind="percept", who="person:owner",
+                                 place=PLACE, body="telegram",
+                                 payload={"description": "continue writing",
+                                          "place_kind": "direct"})
+    context = await layout.build_context(aconn, trigger, PLACE, "test", now=START,
+                                         settings=kernel.settings, memories=(),
+                                         capabilities=kernel.tools.descriptors())
+    outcome = await self_block(kernel)(context, {"conn": aconn, "event": trigger, "now": START})
+    self_text = "\n".join(part.text for part in outcome.item.blocks if part.layer == VOLATILE)
+
+    assert "progress.md" in self_text
+    assert "update it after each step" in self_text
+    assert "read it first when resuming" in self_text

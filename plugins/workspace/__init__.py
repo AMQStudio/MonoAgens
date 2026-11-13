@@ -18,6 +18,10 @@ def register(api: Any) -> None:
     api.add_middleware("action", "guard", guard_rule(api))
     api.add_command("workspace", "Reset your workspace: /workspace reset.",
                     workspace_command(api), permission="workspace.run")
+    api.add_rule(
+        "For multi-step workspace work, keep `progress.md` in your workspace (goal, done, "
+        "next step, files involved); update it after each step and read it first when resuming."
+    )
     sandbox.resolvers(api)  # a private or loopback resolver is refused at boot
     ready, reason = sandbox.available(api)
     if not ready:
