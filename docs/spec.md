@@ -88,6 +88,13 @@ Like a kernel: the interface to the outside never breaks, the inside may improve
   words (the contract's *Absolute rules*).
 - **Simple is king.** Covering scenarios one by one is not design. A case that does not fit is
   classified, never patched.
+- **The spec defines the platform, not what runs on it.** It is written for developers anywhere:
+  it states the contract, the mechanisms and the rules that hold for every adapter and every
+  plugin, and names no platform, device or plugin as a rule. A real name appears only as an
+  example. What holds for one adapter or plugin is documented in that adapter's or plugin's own
+  folder, by whoever builds it.
+- **The repository holds what is built or being built.** An idea without a task is not written
+  down here; the future is decided when it comes.
 
 ### 2.3 Design by brain function, not by scenario
 - The core is a closed list of brain functions: the brain map in *Mental model*. Each row
@@ -390,7 +397,7 @@ asks which one instead of guessing: a message sent to the wrong place cannot be 
 never sent with text written in the current context. The core turns it into an intent — what to
 say, to whom, why — and wakes reasoning once more in the target place, with that place's context
 (absolute line 2); the intent is that wake's trigger, so reasoning sees what it set out to
-say and why; the message is written there, as it would be written in Budi's chat.
+say and why; the message is written there, as it would be written in Sam's chat.
 This costs one extra model call and only for messages to another place. What the intent carries
 is what the action hook returns (the rule is *Policy*, Speaking elsewhere); the core reads no label
 for it.
@@ -423,7 +430,7 @@ fire_count · origin_actor · derived_from · expires_at (required) · created_a
 | `promise` | promises, reminders, approvals awaiting the owner | yes, after the wake gate |
 | `wait` | patience: does someone else take the floor first? | yes, if nobody does |
 | `predict` | forward model opened by the core after every `act` toward whom it acted, where, until it expires ("a reply within 30 min", "arrived within 30 s"); a reply answers it; from wave 1 also after a chosen silence, and with the content it expects | an answer wakes through the circuit breaker; otherwise only on a miss that matters — no reply, or (wave 1) a reply whose content misses what was expected |
-| `guard` | an important belief ("Budi lives in Bandung") | never by itself; see *Memory, sleep and forgetting* |
+| `guard` | an important belief ("Sam lives in Lisbon") | never by itself; see *Memory, sleep and forgetting* |
 
 - `cue_time`: at · every · daily. `cue_event`: kind, who, place, not_who — facts only; whether a
   line says something is a free-text condition, judged by reasoning.
@@ -514,7 +521,7 @@ valid_to · superseded_by · derived_from · created_at · last_accessed_at · u
 - **Activation (ACT-R).** B = ln(n/(1−d)) − d·ln(L); A = B + w_ctx·cos(context, memory) +
   w_imp·importance; L in hours from the injected clock. Candidates: top 40 by vector ∪ top 20 by
   text; ranked by A; use_count updated.
-- **Attribution**. Memories say who said it ("Budi said X"). A non-owner's claim never
+- **Attribution**. Memories say who said it ("Sam said X"). A non-owner's claim never
   supersedes the owner's fact; conflicts stay as conflicting claims.
 - **Knowing and misremembering** (see research.md), modeled on brain functions:
   - source monitoring: every memory carries its `basis`; the model's own knowledge counts as
@@ -614,8 +621,8 @@ rendered only after the last hook, so no hook ever parses rendered text. Three l
   cards of the sources present or named in the trigger: what the soul has learned of them,
   under their id, plus what the middleware adds through the context hook — name and where they
   can be reached. A card is never what someone said; knowing someone is not private content, so a
-  card is never withheld by absolute line 2. This is how the soul can reach Budi from a place
-  where Budi's messages may not appear.
+  card is never withheld by absolute line 2. This is how the soul can reach Sam from a place
+  where Sam's messages may not appear.
 - *Volatile, last*: `<now>` (local time, timezone, time since the last interaction), `<place>`,
   `<why_awake>`, `<doing>`, `<next>`, `<memories>` with basis, source and age, `<recent>`,
   `<event>` with any middleware notes attached to it. Messages from non-owners are delimited as
@@ -764,7 +771,7 @@ sense for every column does not belong in the contract.
 | **actor** | who caused an event: an opaque id, or *unknown* | an account | a recognised face or voice | a user | none (the world) | a player |
 | **place** | where an event happens and where an action lands | a chat | a room, or the robot itself | a document or workspace | the device | a world or region |
 | **audience** | who can perceive what happens in that place; may include *unknown* | the members | the people detected in the room | the collaborators | nobody | the players in range |
-| **event** | what happened: when, a description for the model, refs to content, numeric features | a message | "Budi walked into the kitchen" | "paragraph 3 changed" | "kitchen at 31 °C" | "a player waved" |
+| **event** | what happened: when, a description for the model, refs to content, numeric features | a message | "Sam walked into the kitchen" | "paragraph 3 changed" | "kitchen at 31 °C" | "a player waved" |
 | **capability** | what the body can do, with generic facts | send a message | speak, move, pick up | edit, comment | read, switch on | walk, build |
 | **receipt** | the honest outcome of an action | sent / refused | done / blocked | saved / conflict | ok / timeout | ok / failed |
 
@@ -817,7 +824,7 @@ reads: false                # the generic facts; the middleware reads them
 changes: false
 runs_code: false
 network: false
-permission: whatsapp.say    # every capability names one; the body declares its base (guest here)
+permission: chat.say        # every capability names one; the body declares its base (guest here)
 ```
 
 **Hooks**: inbound, context, action; `async (item, ctx) -> Continue | Replace | Stop(reason,
@@ -879,7 +886,7 @@ What an adapter puts into the queue:
 
 | Field | Meaning |
 |---|---|
-| `actor` | the native actor id the body observed (`whatsapp:628…`, `face:3`), or *unknown* when it is not certain |
+| `actor` | the native actor id the body observed (`chat:123`, `face:3`), or *unknown* when it is not certain |
 | `place` | the native place id |
 | `occurred_at` | when it happened, by the body's clock |
 | `description` | short natural language for reasoning, written by the adapter |
@@ -898,11 +905,11 @@ reports *unknown*; it never guesses.
 
 ```yaml
 kind: percept
-body: telegram              # adapter name
-actor: telegram:123         # the native actor, or unknown; the inbound hook maps it to one id per person
-place: telegram:chat:-100   # native place id
-occurred_at: 2026-11-11T13:20:05+07:00   # the body's own clock
-description: "Budi: anyone know where the meeting is?"   # short, in language; what reasoning reads
+body: chat                  # adapter name
+actor: chat:123             # the native actor, or unknown; the inbound hook maps it to one id per person
+place: chat:group:42        # native place id
+occurred_at: 2026-11-11T13:20:05+01:00   # the body's own clock
+description: "Sam: anyone know where the meeting is?"   # short, in language; what reasoning reads
 features: { addressed: 0, named: 0, addressed_other: 0 }  # numbers for the gate
 ref: "812"                  # the body's id of this event
 about: null                 # the body's id of an earlier event this one refers to (reply, edit, reaction)
@@ -921,9 +928,8 @@ percepts (`who`, `addressed`, `place_kind`, `sent_at`) are upcast on read: `who`
 #### 5.4.3 Audiences
 An adapter reports who can perceive a place with the event `place.audience {place, actors,
 unknown}`, when it first sees the place and whenever it changes. It folds every platform rule
-into this one fact: when people who join later can read the past (a Discord channel open to
-anyone), it reports `unknown: true`; when they cannot (a WhatsApp group), it reports the members
-now. A body that cannot know reports `unknown: true`. The middleware derives everything else
+into this one fact: when people who join later can read the past (a channel open to anyone), it
+reports `unknown: true`; when they cannot (a closed group), it reports the members now. A body that cannot know reports `unknown: true`. The middleware derives everything else
 from this fact: a place whose audience is only the owner is the owner's direct place; one person
 is a direct place with that person; more is shared; *unknown* means no private item enters.
 There is no `place_kind`, `form`, `parent`, `can_post` or platform role in the contract; a name
@@ -935,7 +941,7 @@ platform offers (quoting, mentions, stickers, buttons, threads, locations, polls
 voice) is an argument of that body's capability, explained in its `prompt_section`. The
 middleware registry lists every capability of every body in a fixed order, and routes an action
 to the body that owns its place; an action for a place another body owns is refused with the
-reason ("this place is reached through whatsapp"). A body splits, retries, rate-limits and
+reason ("this place is reached through another adapter"). A body splits, retries, rate-limits and
 falls back by itself, and answers with one receipt. A place where the soul may not post answers
 `refused` with its reason; there is no fact for it.
 
@@ -1064,7 +1070,7 @@ contract and nothing else, under the absolute rules of the contract. In addition
 The middleware runs in the core's three hooks and offers one API. It is static and never learns — learning belongs to the soul.
 
 ```
-   Plugins (Soul Tuning, Web Search, Workspace…)  Adapters (CLI, WhatsApp, a robot, an app…)
+   Plugins (tools, behaviors, roles…)             Adapters (a chat app, a robot, an app…)
                    \                                  /
                     ──────── contract, waist 2 ───────
                                  Middleware
@@ -1187,7 +1193,7 @@ and needs one fact: the audience.
 - **Routes**: the action hook resolves a target that is not a place (`to:` a person,
   optionally `via:` a body) to a place: a place of that body whose audience is that person and
   the soul, else the place where the person was last active. Several fitting places → the soul
-  asks which; none → a `refused` receipt ("no way to reach Budi yet"). A route rule may change the
+  asks which; none → a `refused` receipt ("no way to reach Sam yet"). A route rule may change the
   default.
 
 **Default owner policy**, active out of the box: the two absolute lines, the daily model budget,
@@ -1225,7 +1231,6 @@ collisions failing at boot.
   origin; the result carries the cut text plus `full: {ref, size}`. `registry.more(ref, offset,
   limit)` reads the rest, capped, through the attachment privacy check; without a place it is
   refused.
-- **Draft**: per-person rate limits live here.
 
 ### 6.5 Install
 - The loader reads each plugin's manifest and each enabled
@@ -1260,7 +1265,8 @@ collisions failing at boot.
 
 ### 6.6 Skills
 Part of the registry.
-- **Installed skills** are static SKILL.md files shipped by plugins. Only the names and
+- **Installed skills** are static instruction documents shipped by plugins: a name, a
+  description, a version and a body (the common `SKILL.md` layout below). Only the names and
   descriptions of relevant skills enter the prompt; the body is loaded on request; versioned; use
   counts feed the same ACT-R activation as memories.
 - Skills do not learn; what the soul learns is a core `procedure` or `lesson` memory.
@@ -1323,15 +1329,15 @@ on the base roles of GitHub and Google Cloud.
   a **group role** has none and gives nothing but what it lists; either may add `allow`, `deny`,
   `settings`, an `approval` mode, a `label` and a `context`. An `allow` gives exactly the listed
   permissions, never a tier.
-- **People** (`config.yaml` → `people:`), keyed by person id: `p_7f3a: { label: "Budi", roles:
-  [member, toko-a], context: "The owner's brother." }`. `roles` is the only record of who holds
+- **People** (`config.yaml` → `people:`), keyed by person id: `p_7f3a: { label: "Sam", roles:
+  [member, shop-a], context: "The owner's brother." }`. `roles` is the only record of who holds
   which role; a person not listed holds the `fallback` role. Roles are given to person ids only;
   nothing a platform reports grants anything. A plugin may give roles through the same role
   operation the owner uses, under its own permission.
 - **Which value wins**: all of the person's roles together (a `deny` beats an `allow`), then the
   tiers in `config.d/`, then the manifest's. A place may override with the same `allow` and `deny`.
 - **Approval modes**, per role: `yolo` passes everything except calls marked `sensitive`;
-  `default` asks before `runs_code` or `changes` outside the person's own workspace; `strict` asks
+  `default` asks before `runs_code` or `changes` outside what the person owns; `strict` asks
   before every step. The owner answers, and so may anyone with `approval.answer`. An approval
   is consumed by the act it approved; the approved act runs as the requester, never as the owner.
 - **The middleware's own permissions**: `config.reload`, `plugin.manage`, `roles.manage`,
@@ -1382,8 +1388,8 @@ Files that arrive with an event or leave with an action, any number. The core ne
   each ref's audience against the target place (the same one check), and "confirm before
   forwarding a file" applies per attachment. How many files fit in one native message is the
   body's business: it splits by itself and answers with one receipt.
-- **Reading**: Workspace's `read` takes a `ref`. Images are opened
-  only when reasoning chooses to; vision is a separate, later decision.
+- **Reading**: a plugin's reading tool takes a `ref`. Images are opened only when reasoning
+  chooses to.
 
 ## 7. Adapters
 
@@ -1403,8 +1409,8 @@ conformance suite and the same rules apply to all of them.
 ### 7.2 Rules for every adapter
 The surface, percepts, audiences, capabilities, receipts and commands are defined in *Waist 2: middleware ↔ adapters and plugins*; this
 is what an adapter adds to them:
-- **One stable form per actor.** When a platform gives one account two forms (WhatsApp's LID and
-  phone-number JID), the adapter reports one, so one person never looks like two.
+- **One stable form per actor.** When a platform gives one account two forms, the adapter reports
+  one, so one person never looks like two.
 - **Features**: it computes `addressed`, `named` (the middleware tells every adapter the soul's
   current name) and `addressed_other`. The adapter is the only place that reads native text for
   this.
@@ -1436,12 +1442,12 @@ that only admins may post) is part of a percept's `description` or the adapter's
 
 How adapters fold their platform into the audience:
 
-| Platform | Audience |
+| Kind of place | Audience |
 |---|---|
 | a private chat | the other person |
-| a WhatsApp or Telegram group | the members now (newcomers do not see the past) |
-| a Discord channel | its members; `unknown` when anyone who joins later can read the history |
-| a channel that only broadcasts (WhatsApp Channels, a Telegram channel) | `unknown` |
+| a group whose newcomers do not see the past | the members now |
+| a channel whose history anyone who joins can read | `unknown` |
+| a channel that only broadcasts | `unknown` |
 | a room a robot or speaker is in | the people detected; `unknown` when it cannot be sure |
 | a shared document | its collaborators |
 | a sensor | nobody |
@@ -1450,7 +1456,7 @@ How adapters fold their platform into the audience:
 **In: everything the platform delivers becomes a percept.** Text, replies and quotes (`about`),
 mentions (`involves`), edits and deletions (`about` the earlier event), reactions by others,
 stickers, locations, contact cards, polls and votes, view-once media, any number of files, calls
-("Budi called, not answered"), and place changes (renamed, joined, left: also a new
+("Sam called, not answered"), and place changes (renamed, joined, left: also a new
 `place.audience`). Each becomes a short `description` plus the contract's fields:
 - a reaction by someone else on the soul's own message is `addressed`;
 - a deletion stays in the log as a person remembers what was said; forgetting stays an explicit
@@ -1488,79 +1494,24 @@ understands it.
 ### 7.5 History: back-fill and import
 - **Back-fill** is what the adapter missed while offline: `backfill: true`, from its optional
   `history(place, before, limit)`.
-- **Import** is the history an account already had before the soul was connected (WhatsApp's
-  history sync on pairing): all of it, as percepts with `imported: true` and their
+- **Import** is the history an account already had before the soul was connected (a history sync
+  on pairing): all of it, as percepts with `imported: true` and their
   `occurred_at`. What the core does with both is *Adapters, tools and capabilities* (History and catching up).
 - **Media are fetched when opened**: an imported or back-filled file is a deferred ref;
   when a platform link has expired, the adapter asks the platform again.
 
 ### 7.6 An account shared with a person
-Some accounts can be used by a person at the same time (WhatsApp as a linked device on the
-owner's own number). The adapter tells the two apart itself: every action's receipt carries the
+Some accounts can be used by a person at the same time (a linked device on the owner's own
+account). The adapter tells the two apart itself: every action's receipt carries the
 native id of what it sent, so it is in the Log; an event from the account whose id is in the Log
 is the soul's own and not a percept; one whose id is not in the Log was made by the person and is
 a percept from that actor. `self_actor()` reports the account; when identity maps it to the owner,
 the middleware adds one context line.
 
-### 7.7 Present and planned adapters
-| Adapter | Status | Notes |
-|---|---|---|
-| CLI | present | Unix socket inside the main process, thin client; text, files by path, reply; `composing` and `progress` as status lines; questions as numbered choices |
-| Telegram | present | long polling with `allowed_updates` for every kind it reads; inline buttons and the command menu, edit, delete, reply, reactions, polls, stickers, media groups (one percept per group), locations, forum topics; a failed download is an error percept, never a crash loop; no history and no read marks on the Bot API |
-| WhatsApp | present | neonize (a linked device); own or owner's number; full history import; files, stickers, polls (votes decrypted), reactions, edits; no buttons, so questions by poll; handles logout and disconnect |
-| Discord | present | discord.py (message content intent); servers, channels, threads, DMs; buttons and menus (acknowledged within Discord's 3 s inside the adapter); reactions and edits on uncached messages; `allowed_mentions` set |
-| Home Assistant | **Draft**, [later task](tasks/later-voice-home.md) | the first non-chat adapter |
-| Voice notes | [later task](tasks/later-voice-home.md) | STT in, TTS out; description = transcript |
-| Voice calls | later | waits for a mature calling library |
-| Robot (own adapter) | later | microphone and speaker straight to the adapter, with its own reflexes (wake word, voice activity, barge-in, turning to the speaker) |
-
-Tools (search, files, email) are in the plugin catalog. Model providers are not
-adapters: they are drivers behind the core's model port, in `infra/providers/`.
-
-### 7.8 Home Assistant as a body (**Draft**)
-Home Assistant (HA) already runs a whole voice pipeline — wake word, speech to text and text to
-speech over its Wyoming protocol, ESP32 voice satellites — and already controls the home's
-devices. HA is one adapter, and the soul is HA's conversation agent.
-- **Hearing.** A small HA custom integration (shipped in this repository) forwards each utterance:
-  a percept with `addressed: 1` (the wake word was said), the satellite's area as the place, the
-  HA user when HA knows who spoke, else *unknown*, and the area's audience as `unknown` unless HA
-  knows who is in the room. Nothing private is said aloud in a room.
-- **Speaking.** The answer goes back as the agent's reply, which HA speaks on that satellite; a
-  silent decision returns an empty reply. Speaking first goes through HA's announce service.
-- **The home as capabilities.** Only the entities the owner exposes in HA: `home.state` (facts
-  `reads`) and `home.control(entity, action, data?)` (facts `changes`, base tier `trusted`).
-- **The home as senses.** State changes of entities listed under `bodies.homeassistant.senses:`
-  become percepts with actor *unknown*, never addressed.
-- **Latency.** HA waits for the reply; past `reply_seconds` the adapter answers with a short
-  holding line and speaks the real answer later. The gate and reasoning are never skipped.
-- `.env`: `HA_URL`, `HA_TOKEN`.
-
-### 7.9 Speech: hearing and speaking (**Draft**)
-**One soul, one mind.** Every speech engine is only ears and a mouth. Every utterance is a percept
-that passes the gate, and every spoken word comes from an action the soul chose.
-
-**Drivers by protocol, not by model** (`infra/providers/speech/`, ported from V1):
-
-| Door | Covers |
-|---|---|
-| OpenAI-shaped HTTP (`/audio/transcriptions`, `/audio/speech`) | OpenAI, Groq, and local servers that mirror the shape (faster-whisper, Kokoro, …) |
-| Wyoming (JSON over TCP) | Home Assistant's local voice services: Whisper, Piper, openWakeWord |
-| Native | ElevenLabs, Deepgram |
-
-Chosen by `.env` (`STT_PROVIDER`, `STT_BASE_URL`, `STT_MODEL`, `TTS_PROVIDER`, `TTS_BASE_URL`,
-`TTS_VOICE`, `VOICE_REALTIME`, one key variable per cloud provider), shared by every adapter. Each
-driver reports its languages at boot; the boot report warns when the soul's language is missing.
-
-- **Hearing.** A voice note is stored and transcribed; the percept's description carries the
-  transcript; live speech is segmented by the adapter (wake word, voice activity). A missing STT
-  gives an honest description ("a voice note (0:12), not transcribed").
-- **Speaking.** A body's speaking capability may take `voice: true` (a voice note on chat) or
-  always speak (a device); the words stay in the Log as the action's text.
-- **Listening while speaking** (a reflex of the adapter): barge-in stops speech at once, the
-  receipt reports what was actually said (`spoken_until`), and the interrupting speech is a
-  percept. Echo cancellation belongs to the device.
-- **Realtime engines** may be a faster ear and a more expressive mouth, never the one who answers.
-- **Cost**: seconds transcribed and characters spoken are recorded with each use.
+### 7.7 Adapters in the repository
+Each adapter documents its platform, its options and its own dependencies in a `README.md` in its
+folder. Model providers are not adapters: they are drivers behind the core's model port, in
+`infra/providers/`.
 
 ## 8. Plugins
 
@@ -1579,23 +1530,10 @@ namespace and never redefine a middleware permission.
   Uninstalling removes the plugin's tools, middleware, rules and knob offsets; its events stay
   in the log as history.
 
-### 8.2 Catalog
-| Plugin | Kind | Status | What it brings |
-|---|---|---|---|
-| **Soul Tuning** | behavior | present | modes and example conversations |
-| **Web Search** | tool | present | `web_search`, `web_fetch` over many providers |
-| **Workspace** | tool | present, on by default | `read`, `write`, `edit`, `grep`, `glob`, `run` in a sandbox |
-| **PDF Reader** | extension of Workspace | present | a native reader for `.pdf` |
-| Word / Spreadsheet readers | extensions of Workspace | planned | the same pattern as PDF Reader |
-| simulated emotions | behavior | idea | own state via events, notes, rules, knob offsets |
-| plugin suggestions | feature | **Draft** | a note to the owner from the local catalog |
-| moderation, content filters | feature | idea | pass/replace/stop |
-
-- Removed: memory-view (2026-11-12). Roles and permissions are not a plugin: they are the
-  middleware's `roles.py`, because every plugin brings tools
-  and commands that need limits.
-- **Plugin suggestions** (Draft): only to the owner, only from the local catalog, at most
-  once per missing capability per habituation window, never installs anything.
+### 8.2 Plugins in the repository
+Each plugin documents what it brings, its settings and its own dependencies in a `README.md` in
+its folder. Roles and permissions are not a plugin: they are the middleware's `roles.py`, because
+every plugin brings tools and commands that need limits.
 
 ### 8.3 Manifest
 One file at the root of a plugin, `plugin.yaml`, declares everything it brings and every default. The install module reads it; the core never does. The owner never edits it: it is
@@ -1603,32 +1541,30 @@ replaced on update and removed on uninstall.
 
 ```yaml
 manifest_version: 1                  # format of this file
-name: workspace
+name: notebook
 version: 0.1.0                       # the plugin's release
-description: Read, write and run code in a sandboxed folder per person.
+description: Keep and search notes, per person.
 dependencies: []                     # must load first; missing or failing fails boot
 optional_dependencies: []            # used when present
-state_namespace: workspace           # its state keys are workspace:* (projected from its events); its
-                                     # event kinds are workspace.<kind> (a `-` in the name becomes `_`)
+state_namespace: notebook            # its state keys are notebook:* (projected from its events); its
+                                     # event kinds are notebook.<kind> (a `-` in the name becomes `_`)
 features:                            # each can be switched off in config.d/
-  tools: [read, write, edit, grep, glob, run]
-  commands: [workspace]
+  tools: [list, write, search]
+  commands: [notebook]
   middleware: []
 tools:                               # facts per tool
-  read:  { facts: [reads] }
-  write: { facts: [changes] }
-  run:   { facts: [runs_code, network] }
+  list:   { facts: [reads] }
+  write:  { facts: [changes] }
+  search: { facts: [reads] }
 settings:                            # schema with defaults; the owner overrides in config.d/
-  base: { type: string, default: debian-slim }
-  timeout_seconds: { type: int, default: 120 }
+  max_note_kb: { type: int, default: 64 }
 permissions:                         # roles.py; base = lowest tier that gets it by default
-  workspace.read:  { label: "Read files",        base: guest }
-  workspace.write: { label: "Write and edit",    base: member }
-  workspace.run:   { label: "Run code",          base: trusted }
+  notebook.read:  { label: "Read notes",  base: guest }
+  notebook.write: { label: "Write notes", base: member }
 role_settings:                       # a value per tier; roles may override
-  quota: { guest: 0, member: 1G, trusted: 5G }
+  quota: { guest: 0, member: 10M, trusted: 100M }
 extension_points:
-  opens: [reader]                    # other plugins may fill it
+  opens: [importer]                  # other plugins may fill it
   fills: []
 skills: []
 rules: []                            # standing rules shown in <self>, in this order
@@ -1643,16 +1579,15 @@ knob_offsets: {}                     # bounded, temporary; recorded as dispositi
 | `config.d/<plugin>.yaml` | the owner | one plugin: `features`, `options`, and `permissions` / `role_settings` (written by `/plugin enable`) |
 
 ```yaml
-# config.d/workspace.yaml — written by /plugin enable from workspace 0.1.0
+# config.d/notebook.yaml — written by /plugin enable from notebook 0.1.0
 version: 1
-features: { run: true }
-options:  { timeout_seconds: 300 }
+features: { search: true }
+options:  { max_note_kb: 128 }
 permissions:                   # lowest tier per permission; edit to move a permission
-  workspace.read:  guest
-  workspace.write: member
-  workspace.run:   trusted
+  notebook.read:  guest
+  notebook.write: member
 role_settings:
-  quota: { guest: 0, member: 1G, trusted: 5G }
+  quota: { guest: 0, member: 10M, trusted: 100M }
 ```
 
 - **Merge rules** (as Helm values): maps merge, lists replace whole, `[]` switches everything
@@ -1667,68 +1602,6 @@ role_settings:
 - Which tier gets a permission is in `config.d/`; which roles exist and who holds them is in
   `config.yaml` (`roles:`, `people:`).
 
-### 8.5 First plugins
-
-#### 8.5.1 Soul Tuning
-Tunes expression, never identity; only the owner changes it (absolute line 1).
-- **Modes** (daily, professional, …): standing rules in `<self>`, knob offsets within bounds,
-  the `/mode` command.
-- **Example conversations**: short exchanges in the stable prompt, in a fixed order.
-- Who a person is to the soul ("a customer; help with orders") is not here: it is each role's
-  and person's `context` in `roles.py`.
-
-#### 8.5.2 Web Search
-- Tools `web_search` and `web_fetch`; permissions `web-search.search` and `web-search.fetch`,
-  base `guest`.
-- Providers in an ordered fallback chain set in `options`: SearXNG, Tavily, Brave, Exa,
-  Serper, Google, and DDGS always last. Each normalizes its results to one shape and fails
-  with a structured reason, never a crash. Port V1's `engine/tools/web_search.py` (ADR
-  `engine/0026-search`).
-- `web_fetch` runs in the MonoAgens process, so it refuses internal addresses (SSRF): resolve
-  the host, check every address against the same blocked set as the sandbox, connect to
-  the checked address only. Port V1's `fetch.py`.
-
-#### 8.5.3 Workspace
-On by default through the shipped `config.yaml`; off with one line.
-- Tools: `read` (line ranges; also attachments received by adapters, through their
-  reference), `write`, `edit` (exact text replacement), `grep`, `glob`, `run`. Output is capped
-  with a "continue from here" marker.
-- **Progress note for long work** (a standing rule, lever 3): work of more than a few steps
-  keeps `progress.md` in the workspace it works in — the goal, what is done, the next step,
-  the files involved — updated after each step and read first whenever the work resumes. The
-  owner can open and edit it like any file.
-- Opens the `reader` extension point: one reader per file type; `read` without a reader for a
-  type says so and names the extension it needs, never returns raw bytes.
-- Folders: each person's own workspace; **shared folders** named by the setting
-  `workspace.shared` on the person's roles (a person in two group roles sees two).
-
-**Sandbox for `run`**. Python drives two native tools, bubblewrap (files) and pasta from
-`passt` (network); no Node, no container runtime.
-- **Base**: one shared, read-only Debian slim tree (Python, pip/uv, bash, coreutils, git, curl,
-  CA certificates), prepared once when the plugin is first enabled and used by everyone.
-- **Layer per person**: an overlay on the base where `pip install` and `apt install` land;
-  quota from the role setting `workspace.quota` as a soft limit (checked after each run; the
-  next run is refused while over); can be reset.
-- **Visible inside**: the base and the person's layer, their workspace, shared folders they
-  may use, an empty `/tmp` per run, a private `/proc` and `/dev`, copies of `resolv.conf` and
-  the CA certificates. The host's system, home, `.env` and database are not visible at all.
-- **Network**: outbound to the internet allowed. Blocked: the host's loopback (`--no-map-gw`
-  plus `-T none -U none`), private ranges by blackhole routes inside the sandbox's network
-  namespace (10/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16, fc00::/7, fe80::/10) and the
-  server's own public addresses. No inbound (`-t none -u none`).
-- **Limits**: a computed environment without secrets (V1 ADR `engine/0024-tool-input-contract`),
-  time, CPU, memory and process limits, capped output; the sandbox dies with MonoAgens.
-- **Guard**: marks a call `sensitive` (sudo, mount, network scans, download-and-execute, …),
-  which asks for approval even in `yolo`. It is a marker, not the wall: patterns can always be
-  evaded; the wall is the sandbox and the limits. Port V1's two-stage guard.
-- **Fail-closed**: no pasta → no network at all (`--unshare-net`); no bubblewrap or no base →
-  `run` unavailable. The boot report says which.
-- Shares the host kernel: right for a personal or community soul; a microVM runner can later be
-  an extension.
-
-#### 8.5.4 PDF Reader
-Fills Workspace's `reader` point for `.pdf`; native (pypdf), no cloud; `dependencies:
-[workspace]`. Its library is installed only with it.
 
 ## 9. Operator
 
@@ -1775,7 +1648,7 @@ on both stacks.
   terminal, plain text; `NO_COLOR` is honored.
 
 #### 9.2.1 Service control
-How the soul runs as a service belongs to the deployment (OpenRC, systemd, compose). The owner
+How the soul runs as a service belongs to the deployment (an init system, a container stack). The owner
 sets the commands once in `config.yaml` → `operator:`; `start`, `stop`, `restart`, `status` and
 Console's buttons call them, and a command left empty hides its button.
 
@@ -1783,11 +1656,11 @@ Console's buttons call them, and a command left empty hides its button.
 # config.yaml
 operator:
   service:
-    start:   "rc-service monoagens start"
-    stop:    "rc-service monoagens stop"
-    restart: "rc-service monoagens restart"
-    status:  "rc-service monoagens status"
-    logs:    "tail -n 500 /var/log/monoagens.log"
+    start:   "<your command to start the service>"
+    stop:    "<your command to stop the service>"
+    restart: "<your command to restart the service>"
+    status:  "<your command to status the service>"
+    logs:    "<your command to show the last log lines>"
   console:
     listen: 127.0.0.1:8470
 ```
@@ -1878,7 +1751,7 @@ in memory):
 
 ```yaml
 version: 2
-timezone: Asia/Jakarta              # where the soul lives; used for <now>
+timezone: Europe/Amsterdam          # where the soul lives; used for <now>
 owner_settings:                     # changed by hand or with /budget and /quiet, which write these lines
   daily_token_budget: 300000
   quiet_hours: { from: "22:00", to: "06:00" }
@@ -1887,29 +1760,27 @@ runtime:
   tick_seconds: 30
   sleep: { idle_minutes: 30, retry_minutes: 30, hour: 2 }
 bodies:                             # adapters (the key keeps its name); non-secret options only; tokens in .env
-  telegram: { enabled: true }       # built in: monoagens.adapters.telegram
-  cli: { enabled: true }
-  whatsapp:
+  cli: { enabled: true }            # built in
+  chat-app:
     enabled: true
     render: { composing: on, seen: on, progress: edit }   # this body's own rendering
     tools: [pin]                    # optional platform-only capabilities; none by default
-  minecraft: { enabled: true, module: mono_minecraft, server: localhost:25565 }   # an outside adapter
+  game-world: { enabled: true, module: example_game, server: localhost:25565 }   # an outside adapter
 interaction:                        # what the soul shows, for every body; /show writes these lines
   thinking: owner_direct            # off | owner_direct | all
   steps: long                       # off | long | all
 plugins:                            # which plugins are on; their settings live in config.d/<name>.yaml
-  workspace:   { enabled: true }
+  notebook:    { enabled: true }
   web-search:  { enabled: true }
-  soul-tuning: { enabled: true }
 roles:                              # *Roles and permissions*; empty = owner free, everyone else only talks
   fallback: unverified
   unverified: { base: guest,  label: "Unverified", context: "Not known yet; be kind, share nothing about the owner." }
   customer:   { base: guest,  label: "Customer",   context: "A shop customer; help with products and orders." }
   member:     { base: member }
-  runner:     { allow: [workspace.run] }             # a small role for an exception
-  toko-a:     { label: "Toko A", settings: { workspace.shared: toko-a } }   # a group role: no base
+  writer:     { allow: [notebook.write] }            # a small role for an exception
+  shop-a:     { label: "Shop A", settings: { notebook.shared: shop-a } }    # a group role: no base
 people:                             # optional; keyed by person id; the only record of who holds which role
-  p_7f3a:     { label: "Budi", roles: [member, toko-a, runner], context: "The owner's brother." }
+  p_7f3a:     { label: "Sam", roles: [member, shop-a, writer], context: "The owner's brother." }
 ```
 
 **`config.d/<plugin>.yaml`**: one per plugin, only what the owner changed.
@@ -1936,9 +1807,8 @@ the starting values in `prior/`. Identity is not learned: `soul.yaml` is its one
   `hypothesis`.
 - No ORM, agent framework or platform SDK in the core. A plugin's or an adapter's own dependencies
   live with it — declared in its manifest or as its optional extra in `pyproject.toml`, installed
-  only when it is enabled — and each one needs the owner's approval: today `ddgs` (web search),
-  `pypdf` (PDF reader), the system tools `bubblewrap` and `passt` (workspace), `neonize` with
-  `segno` and its `protobuf` override (WhatsApp), `discord.py` (Discord).
+  only when it is enabled — and each one needs the owner's approval; each adapter's and plugin's
+  `README.md` lists its own.
 
 ### 10.4 Documents
 | File | For | Holds |
@@ -1949,6 +1819,7 @@ the starting values in `prior/`. Identity is not learned: `soul.yaml` is its one
 | `docs/research.md` | people | every formula, why it was chosen, and its sources |
 | `docs/panel.md` | the owner and the code architect | the design of MonoAgens Console, the operator's web panel |
 | `docs/tasks/` | the code architect | the active task files, written as behavior to achieve and how to prove it; the code architect ticks items and writes notes; finished ones in `docs/tasks/done/` |
+| `README.md` in each adapter's and plugin's folder | developers | what holds for that one adapter or plugin: what it does, its settings, its own dependencies |
 | `prior/` | developers | default prior values: data, tuned with replay |
 | `config.yaml`, `.env.example` | owners | deployment files |
 | `soul.yaml` | the core and the owner | the soul's identity: part of the core, tuned by the owner |
@@ -1987,25 +1858,12 @@ the latest runs: per capability, whether it holds with the fake model and with t
 that this record does not show. A capability that fails with the real model is listed as such,
 not hidden.
 
-### 10.6 Later ideas (not scheduled)
-- A small learned classifier for the gate from recorded decisions (> 10k labeled).
-- Multi-process deployment (inbox table with `FOR UPDATE SKIP LOCKED`).
-- **MCP Connect** as a plugin: each MCP server the owner installs (`config.d/mcp.yaml`, `/plugin`)
-  becomes a source of tools in the registry, which already follows MCP's pattern of tools,
-  prompts and resources. Every MCP tool declares facts and a
-  permission like any tool and passes the same policy and approval modes; an outside server never
-  bypasses them.
-- **Voice calls** on chat adapters, once a mature library for the platform is widely released
-  (for WhatsApp, a linked-device calling stack such as meowcaller on top of whatsmeow, which would
-  run as a Go sidecar and needs the owner's approval as a dependency): call audio → STT → the soul
-  → TTS → call audio, as a `long_running` act.
-
 ## 11. Terms
 
 ### 11.1 Terms
 | Term | Meaning |
 |---|---|
-| **adapter** | Connects the soul to one app, platform or device (Telegram, WhatsApp, CLI, a game, a robot). |
+| **adapter** | Connects the soul to one app, platform or device (a chat app, the CLI, a game, a robot). |
 | **tool** | Something the soul can use; what it can do is a **capability**. |
 | **context** | What the model sees in one turn. |
 | **working memory**, part of the context | The chains in progress. |
@@ -2018,9 +1876,7 @@ not hidden.
 | **provider** (driver) | Where the soul thinks: a model API reached through the core's model port, implemented in `infra/providers/`. Not an adapter: it neither senses nor acts. |
 | **tier** | One of `guest < member < trusted < admin`; a role's `base`. |
 | **tier role / group role** | A role with a `base` (how much) / without one (where a person belongs). |
-| **base** (Workspace) | The one shared, read-only system tree of the sandbox. |
-| **shared folder** (Workspace) | A work folder several people may use, named by a role setting. |
-| **actor** / **person id** | Who caused an event as a body reports it (`whatsapp:628…`, `face:3`, or *unknown*) / the one opaque id of a person across actors (`person:p_7f3a`), registered automatically; linking merges two person ids into the older. |
+| **actor** / **person id** | Who caused an event as a body reports it (`chat:123`, `face:3`, or *unknown*) / the one opaque id of a person across actors (`person:p_7f3a`), registered automatically; linking merges two person ids into the older. |
 | **place** | Where an event happens and an action lands: a chat, a room, a document, a device, a game region. |
 | **audience** | Who can perceive what happens in a place, reported by the adapter with `place.audience`; may include *unknown*. The one fact privacy needs. |
 | **feature** | A number on an event that the gate reads: `addressed`, `named`, `addressed_other`, `audience_size`. |

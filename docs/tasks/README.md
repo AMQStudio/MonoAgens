@@ -46,7 +46,6 @@ Short items may keep only the lines they need. Rules:
 | 6 | [The locked contract](6-contract.md) | **done** (2026-11-14) — contract v2 as code (no hash lock: the owner dropped it, the ratchet and `tests/contract/` hold it), core and middleware on v2, four adapters translating everything with their own `ask`/`render`/`audience`, tests through the contract only, five fake bodies through the real kernel, 684 tests green, fake replay 158/158, ratchet 0; real launch set 113/158 reported, live WhatsApp findings fixed (LID addressing, owner claim, command wake, conversation window) | Task 5 |
 | 7 | [Core: depth of mind](7-core-mind.md) | todo — Parts 1–2 now; Parts 3–7 after weeks of daily use | Task 6 |
 | 8 | [First users and release](8-release.md) | todo | Task 7 |
-| — | [Later: voice, Home Assistant, more model providers](later-voice-home.md) | todo — moved out of Task 5 Part 2; its number and place are decided with the web panel task | Task 6 |
 
 The code architect updates this table and each file's `Status` line.
 

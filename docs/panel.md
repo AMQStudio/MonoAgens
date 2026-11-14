@@ -20,7 +20,6 @@ A sidebar of pages, grouped:
 | Bodies and capabilities | **Adapters** | each adapter: on or off, pairing (the WhatsApp QR), its surfaces from the boot report, its `render:` options |
 | | **Plugins** | installed and available plugins, on or off, version, "restart needed" |
 | | **Skills**, **Tools** | what the registry holds, with facts and permissions |
-| | **MCP** | locked until the MCP Connect plugin exists |
 | People and rules | **People** | persons, linked accounts, `/link`, the owner pairing code |
 | | **Roles** | roles, who holds which, approvals waiting |
 | Settings | **Model** | provider, model, fallbacks; tokens and the daily budget |
