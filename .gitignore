@@ -16,3 +16,6 @@ backups/
 
 # runtime data: sandbox base, workspaces, attachments
 var/
+
+# Graphify knowledge graph (rebuildable)
+graphify-out/
