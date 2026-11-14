@@ -76,7 +76,7 @@ asserts behavior the contract removes, e.g. `text_like`), `scenarios/`, `scripts
   can express stops the work and is reported.
 - [x] 2.3 Features: `own_name` reads `named`, `social_cost` reads `addressed_other`, the talk rate
   may read `audience_size`; the core searches no text for the soul's name.
-- [ ] 2.4 `cue_event` keeps facts only (kind, who, place, not_who); `text_like` is refused with
+- [x] 2.4 `cue_event` keeps facts only (kind, who, place, not_who); `text_like` is refused with
   its reason; stored ones are upcast to a free-text condition.
 - [ ] 2.5 The context as items with sources (contract.md §3); the context hook receives items;
   the text is rendered after the last hook.
@@ -409,6 +409,29 @@ Deviations and decisions, recorded:
   write their ledger rows and read `<doing>` through them; `_rich()` and every hand-built `Event`
   carry their `description`; the `notes` payload branch's test is deleted (the contract removed
   that field).
+
+#### 2.4 Cues keep facts only
+
+Line counts after 2.4: core 3996 · middleware 6144 · adapters 5465 · plugins 2065 · tests 19988.
+
+One home per fix:
+
+- the refusal: `core/expectations._refuse_words`, called for `cue_event` and for an
+  `event_seen` pattern, with the reason
+  `cue_event takes facts only (kind, who, place, not_who), not <keys>; use expect: {text: ...}
+  for words`;
+- matching: `core/expectations.matches_cue` compares kind, who, place and `not_who` only;
+  `is_met` reads `not_who` as `who <> %s` and no longer searches text;
+- the one upcast: `infra/store._upcast_cue` at `read_expectations`, so a stored `text_like`
+  becomes `condition {"text": phrase}` in memory and the row is never rewritten (D-K);
+- the wait cue's read: `middleware/privacy` now goes through `store.read_expectations`, so a
+  wait's cue is upcast the same way and there is no second reader;
+- what the model is told: the `expect` tool's `cue_event` description names the four fact keys
+  and says words belong to `expect.text`.
+
+Decisions, recorded: the refusal is an allowlist (any key outside the four facts), not a check
+for one name: a cue that carries a second word key would otherwise pass silently. The message
+names the offending keys from the call, so no removed field name is written in the core.
 
 ### Where the work stands (session of 2026-11-14)
 

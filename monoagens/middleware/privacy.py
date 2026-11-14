@@ -18,7 +18,8 @@ from monoagens.core.expectations import matches_cue
 from monoagens.core.hooks import Continue, Middleware, Replace, Stop
 from monoagens.core.memory.retrieval import recent_lines
 from monoagens.infra.prior import constants, load_prior
-from monoagens.infra.store import append_event, payload_text, read_state, write_state
+from monoagens.infra.store import (append_event, payload_text, read_expectations, read_state,
+                                   write_state)
 from monoagens.types import Event
 
 OWNER = "person:owner"
@@ -453,12 +454,12 @@ def delegation(kernel: Any) -> Middleware:
         actors: set[str] = set()
         source_places: set[str] = set()
 
-        rows = await (await conn.execute(
-            "SELECT id, source_event, origin_actor, place, cue_event FROM expectations "
-            "WHERE kind = 'wait' AND status = 'active' AND cue_event IS NOT NULL "
-            "AND (expires_at IS NULL OR expires_at > %s) ORDER BY id",
-            (now,))).fetchall()
-        for exp_id, source_event, exp_origin, exp_place, cue_event in rows:
+        waits = await read_expectations(
+            conn, "ex.kind = 'wait' AND ex.status = 'active' AND ex.cue_event IS NOT NULL "
+                  "AND (ex.expires_at IS NULL OR ex.expires_at > %s)", (now,))
+        for row in waits:
+            exp_id, source_event = row["id"], row["source_event"]
+            cue_event = row["cue_event"]
             if explicit_reply and reply_act_id is None:
                 continue
             if not any(matches_cue(cue_event, candidate) for candidate in candidates):
@@ -481,9 +482,10 @@ def delegation(kernel: Any) -> Middleware:
                 actors.add(actor)
                 await write_state(conn, f"delegated_act:{act_id}",
                                   {"reply_event": item.id}, item.id)
-            if exp_origin and str(exp_origin).startswith("person:"):
-                actors.add(str(exp_origin))
-            for place_ref in (exp_place, root_place):
+            origin = row["origin_actor"]
+            if origin and str(origin).startswith("person:"):
+                actors.add(str(origin))
+            for place_ref in (row["place"], root_place):
                 if place_ref:
                     source_places.add(str(place_ref))
             await write_state(conn, f"delegated_exp:{int(exp_id)}",

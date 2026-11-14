@@ -4,15 +4,13 @@ findings:
   - {file: monoagens/core/dispatch.py, line: 48, ban: payload-read}
   - {file: monoagens/core/dispatch.py, line: 195, ban: removed-field}
   - {file: monoagens/core/dispatch.py, line: 202, ban: removed-field}
-  - {file: monoagens/core/expectations.py, line: 17, ban: text-parse}
-  - {file: monoagens/core/expectations.py, line: 35, ban: text-parse}
-  - {file: monoagens/core/expectations.py, line: 136, ban: removed-field}
-  - {file: monoagens/core/expectations.py, line: 139, ban: removed-field}
+  - {file: monoagens/core/expectations.py, line: 18, ban: text-parse}
+  - {file: monoagens/core/expectations.py, line: 36, ban: text-parse}
   - {file: monoagens/core/hooks.py, line: 17, ban: text-parse}
   - {file: monoagens/core/identity.py, line: 14, ban: text-parse}
   - {file: monoagens/core/jobs.py, line: 108, ban: payload-read}
   - {file: monoagens/core/jobs.py, line: 172, ban: labels-read}
-  - {file: monoagens/core/reasoning.py, line: 243, ban: text-parse}
+  - {file: monoagens/core/reasoning.py, line: 240, ban: text-parse}
   - {file: monoagens/core/threads.py, line: 62, ban: payload-read}
   - {file: monoagens/core/threads.py, line: 128, ban: removed-field}
   - {file: monoagens/core/threads.py, line: 132, ban: removed-field}
@@ -82,14 +80,14 @@ findings:
   - {file: monoagens/middleware/policy.py, line: 365, ban: removed-field}
   - {file: monoagens/middleware/policy.py, line: 481, ban: text-parse}
   - {file: monoagens/middleware/privacy.py, line: 11, ban: text-parse}
-  - {file: monoagens/middleware/privacy.py, line: 558, ban: text-parse}
-  - {file: monoagens/middleware/privacy.py, line: 584, ban: text-parse}
-  - {file: monoagens/middleware/privacy.py, line: 625, ban: text-parse}
-  - {file: monoagens/middleware/privacy.py, line: 634, ban: text-parse}
-  - {file: monoagens/middleware/privacy.py, line: 808, ban: text-parse}
-  - {file: monoagens/middleware/privacy.py, line: 1056, ban: removed-field}
-  - {file: monoagens/middleware/privacy.py, line: 1089, ban: text-parse}
-  - {file: monoagens/middleware/privacy.py, line: 1120, ban: text-parse}
+  - {file: monoagens/middleware/privacy.py, line: 560, ban: text-parse}
+  - {file: monoagens/middleware/privacy.py, line: 586, ban: text-parse}
+  - {file: monoagens/middleware/privacy.py, line: 627, ban: text-parse}
+  - {file: monoagens/middleware/privacy.py, line: 636, ban: text-parse}
+  - {file: monoagens/middleware/privacy.py, line: 810, ban: text-parse}
+  - {file: monoagens/middleware/privacy.py, line: 1058, ban: removed-field}
+  - {file: monoagens/middleware/privacy.py, line: 1091, ban: text-parse}
+  - {file: monoagens/middleware/privacy.py, line: 1122, ban: text-parse}
   - {file: monoagens/middleware/registry.py, line: 515, ban: text-parse}
   - {file: monoagens/middleware/registry.py, line: 599, ban: text-parse}
   - {file: monoagens/middleware/roles.py, line: 22, ban: text-parse}

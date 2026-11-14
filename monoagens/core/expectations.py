@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from psycopg.types.json import Jsonb
@@ -48,6 +49,17 @@ def matches_cue(pattern, event):
     return pattern.get("not_who") is None or pattern["not_who"] != event.who
 
 
+def _refuse_words(pattern: Any, label: str = "cue_event") -> None:
+    """Refuse a cue that carries anything but facts: words belong to `expect.text`."""
+    if not isinstance(pattern, dict):
+        return
+    unknown = sorted(str(key) for key in pattern
+                     if key not in ("kind", "who", "place", "not_who"))
+    if unknown:
+        raise ValueError(f"{label} takes facts only (kind, who, place, not_who), not "
+                         f"{', '.join(unknown)}; use expect: {{text: ...}} for words")
+
+
 def validate(data, *, now, settings):
     """Validate one `expect` tool call and return the row values to insert."""
     about = str(data.get("about") or "").strip()
@@ -66,6 +78,7 @@ def validate(data, *, now, settings):
     if policy.get("cooldown"):
         parse_duration(policy["cooldown"])
     cue_time, cue_event = data.get("cue_time"), data.get("cue_event")
+    _refuse_words(cue_event)
     expires = data.get("expires_at")
     if not cue_time and not cue_event:
         raise ValueError("expect needs cue_time or cue_event")
@@ -133,10 +146,9 @@ async def is_met(conn, condition, now):
         pattern = condition["event_seen"]
         fields = [f for f in ("kind", "who", "place") if pattern.get(f) is not None]
         clauses, params = [f"{f} = %s" for f in fields], [pattern[f] for f in fields]
-        if pattern.get("text_like") is not None:
-            clauses.append("position(lower(%s) in lower(coalesce(payload->>'description', "
-                           "payload->>'text', ''))) > 0")
-            params.append(str(pattern["text_like"]))
+        if pattern.get("not_who") is not None:
+            clauses.append("who <> %s")
+            params.append(pattern["not_who"])
         params.extend([now - parse_duration(condition["within"]), now])
         sql = ("SELECT 1 FROM events WHERE "
                + " AND ".join([*clauses, "ts BETWEEN %s AND %s"]) + " LIMIT 1")
@@ -234,6 +246,7 @@ def operator(expect):
         seen = expect["event_seen"] if isinstance(expect["event_seen"], dict) else {}
         stated = dict(seen.get("pattern") or seen)
         pattern = {key: value for key, value in stated.items() if key != "within"}
+        _refuse_words(pattern, "event_seen")
         within = expect.get("within") or seen.get("within")
         if not pattern or not within:
             raise ValueError("event_seen needs a pattern and a within window")

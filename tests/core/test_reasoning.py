@@ -465,7 +465,7 @@ async def test_a_refusal_returns_even_when_the_same_round_acted(aconn):
                      ("expect", {"about": "kabari kalau server down",
                                  "expect": {"none": True}})],
                     [("expect", {"about": "kabari kalau server down",
-                                 "cue_event": {"kind": "percept", "text_like": "server down"},
+                                 "cue_event": {"kind": "percept", "place": PLACE},
                                  "expect": {"none": True}, "policy": {"once": True}})],
                     []])
     kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
@@ -482,7 +482,7 @@ async def test_a_refusal_returns_even_when_the_same_round_acted(aconn):
                                    "expectation.created"]
     cur = await aconn.execute("SELECT about, cue_event FROM expectations")
     assert await cur.fetchall() == [("kabari kalau server down",
-                                     {"kind": "percept", "text_like": "server down"})]
+                                     {"kind": "percept", "place": PLACE})]
 
 
 async def test_a_refused_round_never_runs_past_max_thought_rounds(aconn):
@@ -726,23 +726,21 @@ def test_the_expect_tool_offers_the_free_text_watch():
 
 
 def test_the_expect_tool_describes_the_cue_exactly():
-    """12.8: every key matches_cue reads is named, and text_like is a plain phrase."""
+    """12.8: every key matches_cue reads is named, and a cue carries no words."""
     expect_tool = next(tool for tool in TOOLS if tool["function"]["name"] == "expect")
     description = expect_tool["function"]["parameters"]["properties"]["cue_event"]["description"]
     assert "event kind exactly as the desk shows it" in description
     assert "percept" in description
-    for key in ("who", "place", "not_who", "text_like"):
+    for key in ("who", "place", "not_who"):
         assert key in description
-    assert "plain phrase" in description
-    assert "NOT a regex" in description
-    assert "no | alternation" in description
+    assert "expect.text is" in description
     assert "all of which must match" in description
 
 
 async def test_the_expect_tool_accepts_a_free_text_condition():
     check = turn_check(_desk(), START, SETTINGS)
     call = ToolCall("expect", {"about": "tell the owner when the document is finished",
-                               "cue_event": {"place": PLACE, "text_like": "dokumen"},
+                               "cue_event": {"place": PLACE},
                                "expect": {"text": "the document is finished"}})
     assert await check(call) is None
 

@@ -16,7 +16,7 @@ from monoagens.infra.duration import parse_duration
 from monoagens.core.kernel import Kernel
 from monoagens.core.reasoning import Reasoning
 from monoagens.infra.providers import OpenAICompatibleProvider
-from monoagens.infra.store import append_event, write_state
+from monoagens.infra.store import append_event, read_expectations, write_state
 from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
 from monoagens.boot import build
@@ -193,11 +193,11 @@ async def test_operator_event_seen_checks_the_window(aconn):
     old = await append_event(aconn, ts=START - timedelta(days=3), kind="percept", who=WHO, place=PLACE,
                              body="telegram", payload={"text": "I did my WORKOUT"})
     assert old.id is not None
-    pattern = {"kind": "percept", "who": WHO, "text_like": "workout"}
+    pattern = {"kind": "percept", "who": WHO}
     assert await expectations.is_met(aconn, {"event_seen": pattern, "within": "4d"}, START) is True
     assert await expectations.is_met(aconn, {"event_seen": pattern, "within": "2d"}, START) is False
-    assert await expectations.is_met(aconn, {"event_seen": {"kind": "percept", "text_like": "swim"}, "within": "4d"},
-                               START) is False
+    other = {"event_seen": {"kind": "percept", "who": "person:other"}, "within": "4d"}
+    assert await expectations.is_met(aconn, other, START) is False
 
 
 async def test_operator_state_compares_eq_gt_lt(aconn):
@@ -562,8 +562,7 @@ async def test_guard_never_fires_or_wakes_the_pfc_on_a_tick(aconn):
 
 async def test_guard_never_fires_when_its_cue_event_arrives(aconn):
     exp_id, _ = await _create(aconn, kind="guard", cue_time=None,
-                              cue_event={"kind": "percept", "who": WHO,
-                                         "text_like": "workout"})
+                              cue_event={"kind": "percept", "who": WHO})
     kernel = build(aconn, clock=FakeClock(START), pfc=None, settings=SETTINGS)
 
     await _feed(kernel, _msg("saya sudah WORKOUT"))
@@ -729,3 +728,44 @@ async def test_a_message_ends_the_step_so_its_result_does_not_wake_again(aconn):
     assert (await cur.fetchone())[0] == 1
     assert kinds.count("act.out") == 1
     assert kinds.count("expectation.fired") == 1
+
+
+async def test_a_cue_with_words_is_refused_with_its_reason(aconn):
+    """A cue states facts; the words it would match belong to `expect.text`."""
+    fake = FakeLLM([[("expect", {"about": "nudge me", "cue_event": {"kind": "percept",
+                                                                   "text_like": "workout"},
+                              "expect": {"none": True}, "policy": {"once": True}})],
+                    []])
+    kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
+
+    await _feed(kernel, _msg("nudge me about workouts"))
+
+    assert "cue_event takes facts only (kind, who, place, not_who)" in fake.last_prompt
+    assert "use expect: {text: ...} for words" in fake.last_prompt
+    cur = await aconn.execute("SELECT count(*) FROM expectations")
+    assert await cur.fetchone() == (0,)
+
+
+async def test_a_stored_cue_with_words_is_read_as_a_free_text_condition(aconn):
+    """A row stored before the contract spoke only facts still reminds on its phrase."""
+    cur = await aconn.execute(
+        "INSERT INTO expectations (kind, who, place, about, cue_event, condition, "
+        "condition_text, intent, weight, policy, status, next_check_at, source_event, "
+        "derived_from, origin_actor, expires_at) VALUES "
+        "('promise', %s, %s, 'minta dikabari', %s, %s, NULL, 'beri tahu', 0.8, %s, 'active', "
+        "NULL, NULL, '{}'::bigint[], %s, %s) RETURNING id",
+        (WHO, PLACE, json.dumps({"kind": "percept", "who": WHO, "text_like": "server down"}),
+         json.dumps({"event_seen": {"kind": "percept", "text_like": "server down"},
+                     "within": "2d"}), json.dumps({"once": True}), WHO,
+         START + timedelta(days=1)))
+    exp_id = int((await cur.fetchone())[0])
+
+    rows = await read_expectations(aconn, "ex.id = %s", (exp_id,))
+
+    assert rows[0]["cue_event"] == {"kind": "percept", "who": WHO}
+    assert rows[0]["condition"] == {"text": "server down"}
+    assert rows[0]["condition_text"] == "server down"
+    # The stored row is never rewritten (contract.md §9).
+    raw = await (await aconn.execute(
+        "SELECT cue_event FROM expectations WHERE id = %s", (exp_id,))).fetchone()
+    assert raw[0]["text_like"] == "server down"

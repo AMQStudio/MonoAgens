@@ -329,7 +329,11 @@ async def read_expectations(conn, where="TRUE", params=()) -> list[dict[str, Any
 
 
 def _upcast_cue(row: dict[str, Any]) -> dict[str, Any]:
-    """Rewrite one stored `text_like` cue as a free-text condition, or return it unchanged."""
+    """Rewrite one stored `text_like` cue as a free-text condition, or return it unchanged.
+
+    A cue stored before the contract spoke only facts may still carry the phrase it matched;
+    that phrase becomes the condition's words, and the stored row is left alone (D-K).
+    """
     cue = row.get("cue_event")
     if not isinstance(cue, dict):
         return row
@@ -338,7 +342,9 @@ def _upcast_cue(row: dict[str, Any]) -> dict[str, Any]:
     if phrase is None:
         seen = cue.get("event_seen")
         if not isinstance(seen, dict) or seen.get("text_like") is None:
-            return row
+            seen = (row.get("condition") or {}).get("event_seen")
+            if not isinstance(seen, dict) or seen.get("text_like") is None:
+                return row
         phrase = seen["text_like"]
         cleaned = {**cleaned, "event_seen": {key: value for key, value in seen.items()
                                              if key != "text_like"}}

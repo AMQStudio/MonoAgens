@@ -46,13 +46,10 @@ TOOLS: list[dict[str, Any]] = [
            "cue_time": {"type": "object",
                         "description": '{"at": ISO}, {"every": "2d"} or {"daily": "07:00"}.'},
            "cue_event": {"type": "object",
-                         "description": 'Keys, all of which must match: kind (the event kind '
-                         'exactly as the desk shows it, e.g. percept for what someone says), '
-                         'who (a speaker id), place (place id), not_who (a speaker id to '
-                         'ignore), text_like (a plain phrase the line contains, '
-                         'case-insensitive: NOT a regex and no | alternation; for several '
-                         'phrasings make several expectations or pick the most distinctive '
-                         'word). '
+                         "description": 'Facts only, all of which must match: kind (the event '
+                         'kind exactly as the desk shows it, e.g. percept for what someone '
+                         'says), who (a speaker id), place (place id), not_who (a speaker id '
+                         'to ignore). No words: what a line says is what expect.text is for. '
                          'who and place are ids copied exactly as the desk and the recent '
                          'lines show them, prefix included: a cue whose place does not match '
                          'the line never fires.'},

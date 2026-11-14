@@ -742,7 +742,7 @@ async def test_delegation_requires_same_place_ignores_unrelated_reply_and_never_
                                               "message_id": "wa-msg-10"}, place=BUDI)
     await expectations.create(aconn, {
         "kind": "wait", "about": "Budi jawab jadi",
-        "cue_event": {"who": "person:budi", "text": "jadi"}, "expect": {"none": True}},
+        "cue_event": {"who": "person:budi"}, "expect": {"none": True}},
         now=START, settings=SETTINGS, source=asked)
 
     # 1) Unrelated message in another place matching cue never gets delegation or burns wait.
