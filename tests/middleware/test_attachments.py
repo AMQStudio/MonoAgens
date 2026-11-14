@@ -13,7 +13,7 @@ from monoagens.infra.clock import FakeClock
 from monoagens.infra.store import append_event
 from monoagens.core.memory.forget import forget_hard
 from monoagens.middleware import contract, interaction
-from monoagens.middleware.contract import describe_attachments
+from monoagens.contract import describe_attachments
 from tests.support import settings
 
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)

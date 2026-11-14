@@ -23,7 +23,7 @@ from monoagens.adapters.whatsapp.media import (
     unwrap_message,
     views_once,
 )
-from monoagens.middleware.contract import describe_attachments
+from monoagens.contract import describe_attachments
 from monoagens.types import Event
 
 

@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from monoagens.infra.clock import Clock
-from monoagens.middleware.contract import describe_attachments
+from monoagens.contract import describe_attachments
 from monoagens.types import Event
 
 PLACE = "space:cli"

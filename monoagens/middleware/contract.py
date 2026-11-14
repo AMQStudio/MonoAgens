@@ -138,9 +138,9 @@ OUTPUT_MARKER = (
 
 __all__ = ["CALL_FACTS", "FACTS", "FALLBACKS", "OUTPUT_MARKER", "OWNER_POLICY", "READS",
            "RULE_KINDS", "SHOWS", "SLOTS", "AttachmentDoor", "LogView", "adapter_fallbacks",
-           "attachment_origins", "best_effort", "check_coverage", "describe_attachments",
-           "find_attachment", "mark_rule", "open_attachment", "Continue", "HookOutcome",
-           "Middleware", "Registration", "Replace", "Stop", "compose"]
+           "attachment_origins", "best_effort", "check_coverage", "find_attachment",
+           "mark_rule", "open_attachment", "Continue", "HookOutcome", "Middleware",
+           "Registration", "Replace", "Stop", "compose"]
 
 
 def mark_rule(rule: Middleware, *, name: str, kind: str = "guard",
@@ -289,27 +289,6 @@ class LogView:
 
 
 # ------------------------------------------------------------ attachments
-
-
-def describe_attachments(attachments: Sequence[Mapping[str, Any]], *,
-                         sent_by: str = "someone") -> str:
-    """Render the one line reasoning sees: `Budi sent 3 files: report.pdf (att_ab12…)`.
-
-    The reference is part of the line because it is the handle the soul reads the file
-    with (`workspace.read(ref=…)`); a name alone would leave the file unreadable.
-    """
-
-    def label(item: Mapping[str, Any]) -> str:
-        name = str(item.get("name") or f"{int(item.get('size') or 0)} bytes")
-        ref = str(item.get("ref") or "")
-        return f"{name} ({ref})" if ref else name
-
-    found = list(attachments or ())
-    names = [label(item) for item in found]
-    if not names:
-        return f"{sent_by} sent no file"
-    plural = "" if len(names) == 1 else "s"
-    return f"{sent_by} sent {len(names)} file{plural}: " + ", ".join(names)
 
 
 class AttachmentDoor:

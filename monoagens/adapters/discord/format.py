@@ -14,7 +14,7 @@ from monoagens.adapters.discord.identity import (
     member_roles,
     place_id,
 )
-from monoagens.middleware.contract import describe_attachments
+from monoagens.contract import describe_attachments
 from monoagens.types import Event
 
 

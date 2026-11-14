@@ -48,7 +48,7 @@ import yaml
 
 from monoagens.boot import install
 from monoagens.middleware import privacy
-from monoagens.middleware.contract import describe_attachments
+from monoagens.contract import describe_attachments
 from monoagens.adapters.cli import CAPABILITIES as CLI_CAPABILITIES
 from monoagens.adapters.discord.capabilities import CAPABILITIES as DISCORD_CAPABILITIES
 from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES

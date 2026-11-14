@@ -502,6 +502,12 @@ From this commit on the contract does not move again (6.2's promise).
 `rule`, `HookPipeline.run` calls `on_stop(reason, held)`, and `guard.stopped` carries
 `{"hook", "reason", "held"}` — the one place a held action is visible in the Log.
 
+#### 3.1 (first half): the contract owns `describe_attachments`
+
+`middleware/contract.py`'s copy is deleted; the four adapters and `scripts/replay.py` import
+`describe_attachments` from `monoagens.contract` (one renderer for the one line reasoning
+reads). The hook vocabulary already came from there (DEC-2).
+
 ### Where the work stands (session of 2026-11-14)
 
 Green and pushed: Part 1 (1.1-1.4), Part 2 items 2.1 and 2.3. `uv run pytest -q` is **687 passed,
