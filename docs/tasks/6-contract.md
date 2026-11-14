@@ -527,18 +527,10 @@ replay are **red**, and the next session resumes from the list below. Nothing he
 the architect must take: the shape is settled by DEC-1/DEC-2/DEC-8 and the work left is finishing
 it, not choosing.
 
-Measured at this commit: **643 passed, 24 failed, 1 skipped**; `scripts/replay.py --fake`
+Measured at this commit: **657 passed, 8 failed, 1 skipped**; `scripts/replay.py --fake`
 **158/158 with absolute-line violations 0**; the architecture ratchet **70 findings** (from 101):
 `text-parse 54 · payload-read 1 (jobs.py) · labels-read 0 · removed-field 11 · tests-private 4 ·
 body-name 0 · layer-import 0`.
-
-**The two absolute-line violations are gone.** They came from a memory whose `derived_from`
-included an event with no place at all (`pair.claimed`): its audience was "unknown", and unknown
-content flows freely. `privacy.item_audience` now treats a memory as only as visible as its least
-known source (D53) — a memory with a source from nowhere enters the owner's own place and nothing
-else — while any other item said where nobody was certain still flows freely (middleware.md §3).
-`Kernel._expect_wake` also stopped quoting a fired expectation's `about`/`intent` in `<why_awake>`:
-the reason names the expectation's id and lets the desk decide what may be shown (D45).
 
 What this commit implements, one home each:
 
@@ -548,39 +540,42 @@ What this commit implements, one home each:
   `results`; `parts.messages` renders the three messages after the last hook has run, with the
   section budgets kept per section and a section no rule filled costing nothing.
 - **one privacy fact and one check** (DEC-1, 3.3): `audience` reads the newest `place.audience` at
-  or before a moment (`None` = unknown), `admits` is the only predicate, `items_rule` the only
-  context check; `share` names event ids, a grant folds into an event's audience; every regex,
+  or before a moment (`None` = unknown); `admits` is the only predicate; `items_rule` the only
+  context check; `direct_for` answers "is this a 1:1 chat with that person" from the audience;
+  `share` names event ids and a grant folds into an event's audience. Every regex,
   `.lower()`/`.split()`, `place_kind`, `place_info`, `_share_tokens`, `topic_rule`, `narrowing` and
   `filter_context` are gone.
+- **the two absolute-line violations are gone**: a memory is only as visible as its least known
+  source (D53), so one whose `derived_from` includes an event with no place enters the owner's own
+  place and nothing else; `Kernel._expect_wake` no longer quotes a fired expectation's
+  `about`/`intent` (D45) — the expectation's own line reaches the desk as a sourced item and the
+  one check decides.
 - **no labels in the core**: `Dispatch` carries `place`/`receipt`; a held act is `ctx["held"]`;
   `threads.after_step` reads the act's `to` and the receipt's state; `labels-read` is 0.
-- **identity on actors**: `cards` builds card items, `person_cards` reads the place's audience and
-  the trigger's `involves`, `_direct_places` reads `place.audience`, `record_self_account` writes
-  an adapter's own actor once at install; the place tracker and `read_place`/`can_post` are gone.
-- **registry**: `self_text` (D-I), `PermissionError` from a body answers `refused` (§4.4).
-- **the harness**: a step reports its place's audience before its percept, the fake prompt is the
-  real rendering, `@act`/`@percept` resolve `share` ids, and the desk scan skips cards and notes
-  because they are not content (D55, D56).
+- **identity on actors**: cards are items, `person_cards` reads the place's audience and the
+  trigger's `involves`, `_direct_places` reads `place.audience`, `record_self_account` writes an
+  adapter's own actor once at install; the place tracker and `read_place`/`can_post` are gone.
+- **registry**: `self_text` (D-I) and a body's `PermissionError` answers `refused` (§4.4).
+- **tests**: every suite that exercises the desk publishes `place.audience` for its places,
+  unwraps the hook outcome rather than reading the old field names, and asserts receipts and items.
+  Deleting a test is limited to subjects the contract removed (the read-only place fact, the
+  platform-role subtree, `whoami`'s place line).
 
-### The one open bug, and the 24 failures
+### What is left
 
-**A foreign-key failure that looks like a leftover task.** In `tests/middleware/test_policy.py`
-seven tests fail with `events_caused_by_fkey` on an id that existed in an *earlier* test, raised at
-`policy.py:362` (`kernel._emit(ctx["event"], interaction.REQUEST, ...)`) through
-`_run_hooks → stopped → _emit`. The same shape appears in `test_interaction`. Running one such test
-alone does not reproduce it, so a task from a previous test is still writing into the truncated
-schema. It is the first thing to chase: find the `asyncio.create_task` that outlives its test (start
-with `jobs.start` and `interaction.request`), await or cancel it, and the cluster should clear.
-
-The rest, by the step that owns them:
-
-| where | count | why it is still red |
+| where | count | next action |
 |---|---|---|
-| `tests/middleware/test_policy.py` | 8 | the FK bug above, plus approval/brake tests that still drive `ctx["labels"]["hold"]` (3.5) |
-| `tests/middleware/test_roles.py` | 5 | `whoami`'s place line and the platform-role subtree are deleted by 3.6; their tests go with them |
-| `tests/middleware/test_interaction.py` | ~1 | `read_receipts` and `/show`'s body half are step 3.5 |
-| `tests/adapters/test_part1_integration.py` | 2 | the cross-body link and deferred-file tests need audiences |
-| `tests/plugins/*` | 3 | one task-thread step count, one approval-mode flag, one scenario count (4.x/5.x) |
+| `tests/middleware/test_policy.py` | 3 | approval/brake still drive `ctx["labels"]["hold"]`; read the held receipt and the `approval.*` events (3.5) |
+| `tests/middleware/test_interaction.py` | 1 | `read_receipts` and `/show`'s body half (3.5) |
+| `tests/adapters/test_part1_integration.py` | 2 | the cross-body link and deferred-file tests need their places' audiences |
+| `tests/plugins/test_workspace*.py` | 2 | one task-thread step count, one approval-mode flag (4.x/5.x) |
+
+**A bug worth chasing first**: several of these used to fail with `events_caused_by_fkey` on an id
+from an *earlier* test — a kernel task outliving its test and writing into the truncated schema.
+Draining the loop after each applied act (`test_policy._call`) removed it there; the same discipline
+is what the remaining files need. Cancelling every leftover task in the `aconn` fixture made it
+*worse* (23 failures), so the fix belongs in the test helpers that start the work, not in the
+fixture.
 
 ### Where the work stands (session of 2026-11-14, evening)
 

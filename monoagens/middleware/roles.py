@@ -586,7 +586,7 @@ async def whoami(kernel: Any, event: Event, arguments: list[str]) -> str:
     """Show the asker's id and roles; accounts only ever in a direct chat."""
     conn, book = kernel.conn, _book(kernel)
     who, place = str(event.origin_actor or event.who), str(event.place or "")
-    shared = not await privacy.owner_direct(conn, place)
+    shared = not await privacy.direct_for(conn, place, who)
     name = await identity.name_of(conn, who)
     person = book.people.get(who)
     label = (person.label if person is not None and person.label else None) \

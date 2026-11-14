@@ -115,6 +115,14 @@ async def owner_direct(conn, place: str | None, cache: dict | None = None) -> bo
     return await audience(conn, place, None, cache) == frozenset({OWNER})
 
 
+async def direct_for(conn, place: str | None, who: Any, cache: dict | None = None) -> bool:
+    """Return whether a place is a 1:1 chat with one person (and the owner), by its audience."""
+    found = await audience(conn, place, None, cache)
+    if not found or who not in found:
+        return False
+    return found <= {str(who), OWNER}
+
+
 # ------------------------------------------------------------ the one predicate
 
 
@@ -545,4 +553,4 @@ async def leaving(kernel: Any, ctx: Any, arguments: Any) -> str | None:
 __all__ = ["OWNER", "SHARE", "SHARE_CAPABILITY", "UNKNOWN", "admits", "aliases", "audience",
            "bind_store", "carries_file", "consent", "delegation", "episode_error", "grant",
            "guard", "intent_words", "item_audience", "items_rule", "memory_visible",
-           "owner_direct", "register", "source_audience", "visible", "withheld_line"]
+           "direct_for", "owner_direct", "register", "source_audience", "visible", "withheld_line"]

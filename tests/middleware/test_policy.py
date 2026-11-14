@@ -72,6 +72,7 @@ async def _kernel(aconn, *, facts=("runs_code",), permission="dev.run", mode=Non
     values = settings()
     if quiet:
         values["owner_settings"] = {**values["owner_settings"], "quiet_hours": quiet}
+    await _audiences(aconn)
     kernel = build(aconn, clock=FakeClock(START), settings=values)
     tool, voice = Tool(facts, permission), Voice()
     kernel.register_adapter(voice)
@@ -89,10 +90,18 @@ def _with_mode(book: roles.RoleBook, mode: str) -> roles.RoleBook:
                           people=book.people, fallback=book.fallback, bases=book.bases)
 
 
+async def _audiences(conn) -> None:
+    """Report who can perceive this file's places, the one privacy fact."""
+    for place, actors in ((OWNER_DM, ["person:owner"]),
+                          (GROUP, ["person:owner", "person:budi"])):
+        await append_event(conn, ts=START, kind="place.audience", place=place,
+                           payload={"place": place, "actors": actors})
+
+
 async def _trigger(aconn, place: str = PLACE, who: str = "person:owner") -> Event:
+    await _audiences(aconn)
     return await append_event(aconn, ts=START, kind="percept", who=who, place=place,
-                              body="telegram",
-                              payload={"description": "jalankan", "place_kind": "direct"})
+                              body="telegram", payload={"description": "jalankan"})
 
 
 async def _kinds(aconn) -> list[str]:
@@ -122,8 +131,11 @@ async def _answer(kernel, text: str) -> None:
 
 
 async def _call(kernel, trigger: Event, command: str = "ls", event: Event | None = None):
-    return await kernel._apply(event or trigger, ToolCall("act", {
+    """Apply one act and let the loop finish, so nothing outlives the test."""
+    outcome = await kernel._apply(event or trigger, ToolCall("act", {
         "capability": "dev.run", "arguments": {"command": command}}))
+    await kernel.run_until_idle()
+    return outcome
 
 
 async def test_a_capability_without_its_permission_is_refused_by_name(aconn):
@@ -439,8 +451,9 @@ async def test_typed_approval_requires_direct_place_30m_and_newest_only(aconn):
     kernel.register_adapter(voice)
     kernel.tools.add_tool(tool, {"run": {"facts": ["runs_code"], "permission": "dev.run"}})
     kernel.roles = open_book("person:owner", "dev.run")
+    await _audiences(aconn)
     await append_event(aconn, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
-                       body="telegram", payload={"description": "hi", "place_kind": "direct"})
+                       body="telegram", payload={"description": "hi"})
     trigger = await _trigger(aconn)
 
     # Request 1 in GROUP; owner types "ya" in GROUP (no reply_to) -> must NOT count.

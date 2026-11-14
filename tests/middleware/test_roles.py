@@ -227,9 +227,13 @@ def _command(place: str = DIRECT, who: str = "person:tg:1") -> Event:
 
 async def test_whoami_shows_accounts_in_a_direct_chat_only(aconn):
     kernel = await _kernel(aconn)
+    await append_event(aconn, ts=START, kind="place.audience", place=DIRECT,
+                       payload={"place": DIRECT, "actors": ["person:tg:1", "person:owner"]})
+    await append_event(aconn, ts=START, kind="place.audience", place=GROUP,
+                       payload={"place": GROUP,
+                                "actors": ["person:tg:1", "person:owner", "person:other"]})
     at = await append_event(aconn, ts=START, kind="percept", who="person:tg:1", place=DIRECT,
-                            body="telegram",
-                            payload={"description": "halo", "place_kind": "direct"})
+                            body="telegram", payload={"description": "halo"})
     await write_state(aconn, "alias:telegram:123", {"who": "person:tg:1"}, at.id)
 
     direct = await kernel.tools.command("whoami").handler(kernel, _command(), [])
@@ -240,7 +244,6 @@ async def test_whoami_shows_accounts_in_a_direct_chat_only(aconn):
     assert "accounts: telegram:123" in direct
     assert ("roles: member, toko-a (Toko A), unverified (Unverified); tier member; "
             "approval default") in direct
-    assert 'place: space:tg:1 — direct, telegram, "Tim Alpha" (2 members)' in direct
     assert "accounts: " not in group
     assert "roles: member, toko-a (Toko A), unverified (Unverified)" in group
 
@@ -257,9 +260,13 @@ async def test_whoami_names_the_owner_as_owner(aconn):
 
 async def test_whoami_sends_the_accounts_to_the_direct_chat_of_a_group_asker(aconn):
     kernel = await _kernel(aconn)
+    await append_event(aconn, ts=START, kind="place.audience", place=DIRECT,
+                       payload={"place": DIRECT, "actors": ["person:tg:1", "person:owner"]})
+    await append_event(aconn, ts=START, kind="place.audience", place=GROUP,
+                       payload={"place": GROUP,
+                                "actors": ["person:tg:1", "person:owner", "person:other"]})
     at = await append_event(aconn, ts=START, kind="percept", who="person:tg:1", place=DIRECT,
-                            body="telegram",
-                            payload={"description": "halo", "place_kind": "direct"})
+                            body="telegram", payload={"description": "halo"})
     await write_state(aconn, "alias:telegram:123", {"who": "person:tg:1"}, at.id)
 
     reply = await kernel.tools.command("whoami").handler(kernel, _command(GROUP), [])
@@ -326,23 +333,6 @@ async def test_merged_younger_people_entry_keeps_applying_and_warns(aconn):
     assert any("person:p_young" in line and "person:p_old" in line for line in report.lines)
 
 
-async def test_whoami_shows_place_form_and_parent(aconn):
-    kernel = await _kernel(aconn)
-
-    class _ThreadBody:
-        name = "telegram"
-        def capabilities(self):
-            return ()
-        async def place_info(self, place: str) -> dict[str, object]:
-            return {"form": "thread", "parent": "space:tg:-100", "can_post": True,
-                    "name": "Diskusi", "member_count": 5, "role_facts": []}
-
-    kernel.tools.adapters["telegram"] = _ThreadBody()
-    reply = await kernel.tools.command("whoami").handler(
-        kernel, _command("space:tg:-100:44"), [])
-    assert "place: space:tg:-100:44 — thread, telegram, parent space:tg:-100" in reply
-
-
 async def test_an_admin_cannot_grant_admin(aconn):
     kernel = await _kernel(aconn)
 
@@ -367,9 +357,10 @@ async def test_roles_show_lists_each_line_with_its_source(aconn):
 
 async def test_a_role_context_reaches_the_person_card(aconn):
     kernel = await _kernel(aconn)
+    await append_event(aconn, ts=START, kind="place.audience", place=DIRECT,
+                       payload={"place": DIRECT, "actors": ["person:tg:1", "person:owner"]})
     trigger = await append_event(aconn, ts=START, kind="percept", who="person:tg:1",
-                                 place=DIRECT, body="telegram",
-                                 payload={"description": "halo", "place_kind": "direct"})
+                                 place=DIRECT, body="telegram", payload={"description": "halo"})
     context = await layout.build_context(aconn, trigger, DIRECT, "test", now=START,
                                          settings=settings(), memories=(), capabilities=())
 
@@ -377,89 +368,8 @@ async def test_a_role_context_reaches_the_person_card(aconn):
                                                                       "event": trigger,
                                                                       "now": START})
 
-    assert any("The owner's brother." in line for line in outcome.item.people)
-
-
-async def test_platform_role_grants_inside_server_tree_and_revokes_on_next_percept(aconn):
-    report = BootReport()
-    cfg = {
-        "roles": {
-            "fallback": "guest",
-            "guest": {"base": "guest"},
-            "moderator": {
-                "base": "admin",
-                "platform_role": ["space:dc:guild:999/555"],
-                "context": "Platform server moderator.",
-            },
-            "broken": {"base": "member", "platform_role": ["not-valid-no-slash"]},
-        },
-        "people": {},
-    }
-    book = roles.RoleBook.build(cfg, CATALOG, MANIFESTS, {}, report)
-    assert any("invalid platform_role" in line for line in report.lines)
-
-    kernel = await _kernel(aconn)
-    kernel.roles = book
-    who = "person:p_dc_1"
-    guild_chan = "space:dc:chan1"
-    thread = "space:dc:thread1"
-    dc_dm = "space:dc:dm1"
-    wa_dm = "space:wa:62811"
-
-    async def _noop(*_args):
-        return None
-
-    # Unmapped platform role (444) grants nothing anywhere.
-    percept_unmapped = await append_event(
-        aconn, ts=START, kind="percept", who=who, place=guild_chan, body="discord",
-        payload={
-            "description": "hi", "place_kind": "shared",
-            "place_info": {"form": "group", "parent": "space:dc:guild:999"},
-            "data": {"platform_roles": {"space": "space:dc:guild:999", "roles": ["444"]}},
-        })
-    await kernel.hooks.inbound.run(percept_unmapped, {"conn": aconn, "now": START},
-                                   on_stop=_noop, on_error=_noop)
-    assert not kernel.roles.can(who, "workspace.run", guild_chan)
-
-    # Mapped platform role (space:dc:guild:999/555) grants admin tier via parents chain
-    # (thread -> channel -> server), while NOT in DM or WhatsApp.
-    percept_mod = await append_event(
-        aconn, ts=START, kind="percept", who=who, place=thread, body="discord",
-        payload={
-            "description": "mod here", "place_kind": "shared",
-            "place_info": {
-                "form": "thread", "parent": guild_chan,
-                "parents": {thread: guild_chan, guild_chan: "space:dc:guild:999"},
-            },
-            "data": {"platform_roles": {"space": "space:dc:guild:999", "roles": ["555"]}},
-        })
-    await kernel.hooks.inbound.run(percept_mod, {"conn": aconn, "now": START},
-                                   on_stop=_noop, on_error=_noop)
-    assert kernel.roles.can(who, "workspace.run", thread)
-    assert kernel.roles.can(who, "workspace.run", guild_chan)
-    assert not kernel.roles.can(who, "workspace.run", dc_dm)
-    assert not kernel.roles.can(who, "workspace.run", wa_dm)
-    assert "Platform server moderator." in kernel.roles.contexts(who, thread)
-    assert not kernel.roles.contexts(who, wa_dm)
-
-    # Rebuilding & reconciling from DB restores place parents and platform roles across restart.
-    rebuilt = await roles.reconcile_merges(
-        aconn, roles.RoleBook.build(cfg, CATALOG, MANIFESTS, {}, BootReport()))
-    assert rebuilt.can(who, "workspace.run", thread)
-    assert not rebuilt.can(who, "workspace.run", wa_dm)
-
-    # Role removed on platform -> gone immediately at next percept.
-    percept_removed = await append_event(
-        aconn, ts=START, kind="percept", who=who, place=guild_chan, body="discord",
-        payload={
-            "description": "demoted", "place_kind": "shared",
-            "place_info": {"form": "group", "parent": "space:dc:guild:999"},
-            "data": {"platform_roles": {"space": "space:dc:guild:999", "roles": []}},
-        })
-    await kernel.hooks.inbound.run(percept_removed, {"conn": aconn, "now": START},
-                                   on_stop=_noop, on_error=_noop)
-    assert not kernel.roles.can(who, "workspace.run", guild_chan)
-    assert not kernel.roles.can(who, "workspace.run", thread)
+    assert any("The owner's brother." in item.text
+               for item in outcome.item.items if item.section == "cards")
 
 
 def test_allow_grants_exact_permission_never_a_tier():
