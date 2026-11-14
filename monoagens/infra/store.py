@@ -10,9 +10,9 @@ from zoneinfo import ZoneInfo
 from pgvector import Vector
 from psycopg.types.json import Jsonb
 
-from monoagens.contract import SCHEMA_VERSION, Action, Event, Receipt, upcast_event
+from monoagens.contract import SCHEMA_VERSION, Action, Event, Receipt
 from monoagens.types import StateEntry
-from monoagens.infra.versioning import is_valid_event_kind
+from monoagens.infra.versioning import is_valid_event_kind, upcast_event
 
 EXPECTATION_COLUMNS = (
     "id", "kind", "who", "place", "about", "cue_time", "cue_event", "condition",

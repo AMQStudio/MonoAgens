@@ -13,7 +13,7 @@ from .audience import PLACE_AUDIENCE, Audience, audience_event, audience_of
 from .capability import (FACTS, FLAGS, KEYWORDS, PERMISSION, TYPES,
                                            descriptor_errors, schema_errors)
 from .context import SECTIONS, Context, ContextItem
-from .envelope import FEATURES, SCHEMA_VERSION, Event, upcast_event
+from .envelope import FEATURES, SCHEMA_VERSION, Event
 from .hooks import (OWNER_POLICY, RULE_KINDS, SLOTS, Continue, HookOutcome,
                                       Middleware, Registration, Replace, Stop)
 from .lifecycle import LIFECYCLE, Lifecycle, composing, progress, seen, thought
@@ -31,5 +31,5 @@ __all__ = [
     "Middleware", "Percept", "Receipt", "Registration", "Render", "Replace", "Stop",
     "action_id", "audience_event", "audience_of", "composing", "describe_attachments",
     "descriptor_errors", "from_legacy_event", "missing_members", "progress", "schema_errors",
-    "seen", "surfaces", "thought", "to_event", "upcast_event", "upcast_percept",
+    "seen", "surfaces", "thought", "to_event", "upcast_percept",
 ]

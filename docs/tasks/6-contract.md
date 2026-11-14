@@ -91,7 +91,7 @@ asserts behavior the contract removes, e.g. `text_like`), `scenarios/`, `scripts
   in the backlog flush and in `recover()`, and one failing fired Expectation loses no other.
 - [x] 2.8 Speaking elsewhere: the intent's content is what the action hook returns; it never
   carries the goal's or the trigger's text; the core reads no label for it.
-- [ ] 2.9 The contract package holds types and validators only: `upcast_event` and its helpers
+- [x] 2.9 The contract package holds types and validators only: `upcast_event` and its helpers
   move from `monoagens/contract/envelope.py` to `monoagens/infra/versioning.py`, so a fix to
   upcasting never needs the lock; regenerate `contract.lock` once in this item and say so in the
   commit message.
@@ -474,6 +474,24 @@ Decisions, recorded: the core builds the neutral line when the hook's item carri
 `middleware/privacy.intent_words` (an inbound rule) is the safety net for an intent whose source
 was only known after the act — it replaces the line on the way in, and the immutable Log keeps
 the row the core wrote.
+
+#### 2.9 The contract holds types and validators only
+
+Line counts after 2.9: core 4045 · middleware 6165 · adapters 5465 · plugins 2065 · tests 20055.
+Contract 749 (-58); `monoagens/infra/versioning.py` 72 -> 132.
+
+One home per fix:
+
+- the one version 1 -> 2 upcast: `monoagens/infra/versioning.py` (`upcast_event`,
+  `_v1_description`, `_as_time`), outside the lock, so a fix to how an old row is read never
+  needs the owner;
+- the envelope: `monoagens/contract/envelope.py` keeps `Event`, `SCHEMA_VERSION`, `FEATURES` and
+  the one `__post_init__` rule; `monoagens/contract/__init__.py` no longer exports the upcast;
+- the store's reads: `monoagens/infra/store.py` imports it from `monoagens.infra.versioning`.
+
+`contract.lock` was regenerated **once**, here, because `upcast_event` left the package:
+`sha256:cadfbadac4a03cda5e0ab0d8c25d95b3167c8304fcf9383a1539f2d5dcdcb72f`.
+From this commit on the contract does not move again (6.2's promise).
 
 ### Where the work stands (session of 2026-11-14)
 
