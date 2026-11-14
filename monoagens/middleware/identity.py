@@ -266,11 +266,14 @@ async def shared_account_items(conn: Any) -> tuple[ContextItem, ...]:
     cur = await conn.execute(
         "SELECT key, value FROM state WHERE key LIKE 'self_account:%' ORDER BY key")
     rows = await cur.fetchall()
+    mapping = await privacy.aliases(conn)
+    merges = await merge_map(conn)
     items: list[ContextItem] = []
     for key, value in rows:
         body = str(key).removeprefix("self_account:")
         account = str((value or {}).get("account") or "")
-        person = str((value or {}).get("person") or "")
+        person = str((value or {}).get("person") or "") or mapping.get(account, account)
+        person = merges.get(person, person)
         if not body or not account:
             continue
         if person != OWNER and account != OWNER:

@@ -431,9 +431,12 @@ async def test_memory_query_falls_back_to_the_expectation_about(aconn):
 
 
 async def test_private_memories_follow_people_not_places(aconn):
+    await append_event(aconn, ts=START, kind="place.audience", place="space:tg:9",
+                       payload={"place": "space:tg:9",
+                                "actors": ["person:fulan", "person:owner"]})
     source = await append_event(aconn, ts=START, kind="percept", who="person:fulan",
                                 place="space:tg:9", body="telegram",
-                                payload={"place_kind": "direct", "description": "tato rahasia"})
+                                payload={"description": "tato rahasia"})
     await _add_memory(aconn, "Muqsith punya tato rahasia", importance=0.9)
     await aconn.execute("UPDATE memories SET private = true, place = 'space:tg:9', "
                         "derived_from = %s", ([source.id],))
@@ -442,11 +445,16 @@ async def test_private_memories_follow_people_not_places(aconn):
                     embedder=FakeEmbedder())
 
     async def said(who: str, place: str, kind: str) -> Event:
+        actors = [who, "person:owner"]
+        if kind == "shared":
+            actors.append("person:charlie")
+        await append_event(aconn, ts=START, kind="place.audience", place=place,
+                           payload={"place": place, "actors": actors})
         await append_event(aconn, ts=START, kind="percept", who=who, place=place,
-                           body="telegram", payload={"place_kind": kind})
+                           body="telegram", payload={"description": "tato rahasia"})
         return Event(id=None, ts=START, kind="percept", who=who, place=place, body="telegram",
-                     payload={"description": "tato rahasia", "addressed": True,
-                              "place_kind": kind}, description="tato rahasia")
+                     payload={"description": "tato rahasia"},
+                     features={"addressed": 1}, description="tato rahasia")
 
     def memories() -> str:
         prompt = fake.requests[-1]["messages"][2]["content"]

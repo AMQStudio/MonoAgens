@@ -335,7 +335,9 @@ async def test_shared_account_d66_distinguishes_soul_vs_phone_and_adds_context_n
 
     # Context hook adds the neutral shared-account note when self_account maps to owner
     await _drain(kernel, kernel.put(captured[0]))
-    notes = await identity.shared_account_blocks(aconn)
+    await identity.record_self_account(aconn, "whatsapp", f"whatsapp:{OWN_PN}",
+                                       now=START)
+    notes = await identity.shared_account_items(aconn)
     assert any("through the owner's account" in note.text for note in notes)
 
 

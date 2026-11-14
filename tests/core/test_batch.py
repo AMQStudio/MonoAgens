@@ -13,6 +13,11 @@ from monoagens.infra.store import append_event
 from monoagens.types import Action, Event
 from tests.support import open_book, settings
 
+def _doing(context) -> str:
+    """Return the desk's `<doing>` text: one line per chain item in progress."""
+    return "\n".join(item.text for item in context.items if item.section == "doing")
+
+
 START = datetime(2026, 1, 1, 3, 0, tzinfo=timezone.utc)
 PLACE = "space:tg:1001"
 OTHER = "space:tg:-500"
@@ -240,7 +245,7 @@ async def test_multi_tool_round_inside_a_task_thread_batches_and_shows_all_resul
     assert tool.calls == 3
     assert kinds.count("task.opened") == 1
     assert kinds.count("model.call") == 3  # init, one batched wake for the 2 fast tools, done
-    assert pfc.contexts[-1].doing.count("result: hasil") == 2
+    assert _doing(pfc.contexts[-1]).count("result: hasil") == 2
 
 
 async def test_closed_task_ignores_late_act_result_and_never_reopens(aconn):

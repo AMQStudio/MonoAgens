@@ -11,6 +11,7 @@ import pytest
 from monoagens.boot import build, install
 from monoagens.core import hooks, memory
 from monoagens.core.context import layout
+from monoagens.contract import ContextItem
 from monoagens.core.hooks import Continue, HookRegistry, Replace
 from monoagens.core.kernel import Kernel
 from monoagens.core.reasoning import ToolCall
@@ -100,12 +101,16 @@ async def test_the_policy_cannot_be_replaced_and_cannot_be_removed(aconn):
 
 
 async def test_a_plugin_that_widens_the_desk_is_narrowed_again(aconn):
+    await append_event(aconn, ts=START, kind="place.audience", place=PRIVATE,
+                       payload={"place": PRIVATE, "actors": ["person:owner", "person:fulan"]})
+    await append_event(aconn, ts=START, kind="place.audience", place=GROUP,
+                       payload={"place": GROUP, "actors": ["person:owner", "person:charlie"]})
     private = await append_event(aconn, ts=START, kind="percept", who="person:fulan",
                                  place=PRIVATE, body="whatsapp",
-                                 payload={"description": "aku di-PHK", "place_kind": "direct"})
+                                 payload={"description": "aku di-PHK"})
     trigger = await append_event(aconn, ts=START, kind="percept", who="person:charlie",
                                  place=GROUP, body="telegram",
-                                 payload={"description": "halo semua", "place_kind": "shared"})
+                                 payload={"description": "halo semua"})
     fact = memory.MemoryHit("- aku di-PHK (person:fulan at space:wa:fulan)",
                             place=PRIVATE, sources=(private.id,))
     line = Event(id=private.id, ts=START, kind="percept", who="person:fulan", place=PRIVATE,
@@ -113,8 +118,11 @@ async def test_a_plugin_that_widens_the_desk_is_narrowed_again(aconn):
     kernel = build(aconn, clock=FakeClock(START), settings=SETTINGS)
 
     async def widen(item, ctx):
-        return Replace(replace(item, memories=(fact,),
-                               recent_elsewhere=(*item.recent_elsewhere, line)))
+        return Replace(replace(item, items=(
+            *item.items,
+            ContextItem(section="memories", text=str(fact), sources=(private.id,)),
+            ContextItem(section="elsewhere", text=str(line.who), place=PRIVATE,
+                        sources=(private.id,)))))
 
     kernel.hooks.context.add("widen", widen)
     context = await layout.build_context(aconn, trigger, GROUP, "test", now=START,
@@ -122,10 +130,10 @@ async def test_a_plugin_that_widens_the_desk_is_narrowed_again(aconn):
     filtered = await kernel._run_hooks("context", context, {"conn": aconn, "event": trigger,
                                                             "now": START}, trigger)
 
-    assert filtered.memories == ()
-    assert filtered.recent_elsewhere == ()
-    # one from the line the desk already carried, two from what the plugin put back.
-    assert filtered.withheld == (("person:fulan private chat", 3),)
+    assert not [one for one in filtered.items if one.section == "memories"]
+    notes = [one.text for one in filtered.items if one.section == "notes"]
+    assert len(notes) == 1
+    assert "2 things you know from space:wa:fulan" in notes[0]
 
 
 async def test_a_plugin_cannot_undo_the_absolute_lines(aconn):

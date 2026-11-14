@@ -144,10 +144,15 @@ def _tmp_root():
 
 async def _said(conn, who: str, place: str, kind: str, text: str, *,
                 addressed: bool = False) -> Event:
+    """Record one percept; `kind` says whether its place is a direct one or a shared one."""
+    actors = [who, "person:owner"] if kind == "direct" else [who, "person:owner",
+                                                             "person:budi"]
+    await append_event(conn, ts=START, kind="place.audience", place=place,
+                       payload={"place": place, "actors": actors})
     return await append_event(conn, ts=START, kind="percept", who=who, place=place,
                               body="telegram",
-                              payload={"description": text, "place_kind": kind,
-                                       "addressed": addressed})
+                              payload={"description": text},
+                              features={"addressed": 1} if addressed else {})
 
 
 async def _desk(kernel, conn, trigger: Event, place: str):
@@ -169,8 +174,7 @@ async def test_1_private_content_never_leaves_its_audience_even_when_talked_into
 
     desk = await _desk(kernel, aconn, trigger, GROUP)
 
-    assert "laci" not in "\n".join(str(line.payload) for line in desk.recent)
-    assert "laci" not in "\n".join(str(line.payload) for line in desk.recent_elsewhere)
+    assert "laci" not in "\n".join(item.text for item in desk.items)
     # D84: owner DM holding someone else's private line triggers words_hidden on cross-place intent.
     await _desk(kernel, aconn, dm_event, OWNER_DM)
     await kernel._apply(dm_event, ToolCall("act", {
@@ -190,15 +194,18 @@ async def test_2_a_plugin_that_widens_is_narrowed_again(aconn):
     async def widen(item, ctx):
         from dataclasses import replace
 
+        from monoagens.contract import ContextItem
         from monoagens.core.hooks import Replace
 
-        return Replace(replace(item, recent=tuple(item.recent) + (private,)))
+        return Replace(replace(item, items=(*item.items, ContextItem(
+            section="elsewhere", text="aku di-PHK", place="space:wa:other",
+            sources=(private.id,)))))
 
     kernel.hooks.context.add("widen", widen)
     desk = await _desk(kernel, aconn, trigger, GROUP)
 
-    assert all(line.id != private.id for line in desk.recent)
-    assert desk.withheld
+    assert all(private.id not in item.sources for item in desk.items)
+    assert [item for item in desk.items if item.section == "notes"]
 
 
 async def test_3_a_guest_is_not_offered_a_tool_and_is_refused_if_it_asks(aconn):
@@ -359,21 +366,20 @@ async def test_12_a_private_file_is_refused_in_a_group_until_it_is_shared(aconn)
     kernel, _, _ = _kernel(aconn)
     store = kernel.attachments
     attachment = await store.put(b"laporan", name="laporan.txt")
+    await append_event(aconn, ts=START, kind="place.audience", place=OWNER_DM,
+                       payload={"place": OWNER_DM, "actors": ["person:owner"]})
     source = await append_event(
         aconn, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
         body="telegram",
-        payload={"description": "laporan", "place_kind": "direct",
+        payload={"description": "laporan",
                  "data": {"attachments": [attachment]}})
     budi_ev = await _said(aconn, "person:budi", GROUP, "shared", "halo")
-    await aconn.execute(
-        "INSERT INTO state (key, value, updated_by_event) VALUES (%s, %s, %s)",
-        (f"place:{GROUP}", '{"members": ["person:budi"]}', budi_ev.id))
 
     with pytest.raises(PermissionError):
         await contract.open_attachment(aconn, store, attachment["ref"], context=GROUP)
     await append_event(aconn, ts=START, kind="share.granted", place=OWNER_DM,
                        payload={"persons": ["person:budi"], "source_place": OWNER_DM,
-                                "episode": source.id})
+                                "episodes": [int(source.id)]})
 
     data, _ = await contract.open_attachment(aconn, store, attachment["ref"], context=GROUP)
     assert data == b"laporan"

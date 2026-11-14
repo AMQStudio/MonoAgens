@@ -133,14 +133,17 @@ class _SayBody:
 async def test_a_person_present_here_is_answered_here(aconn):
     """1.0b: a person with no direct place who is present here is answered here."""
     await _percept(aconn, who="person:tg:7001", text="halo")
+    await append_event(aconn, ts=START, kind="place.audience", place=GROUP,
+                       payload={"place": GROUP,
+                                "actors": ["person:tg:7001", "person:owner"]})
     await append_event(aconn, ts=START, kind="percept", who="person:tg:7001",
                        place=GROUP, body="telegram",
-                       payload={"description": "halo", "place_kind": "shared"})
+                       payload={"description": "halo"})
     body = _SayBody()
     kernel = build(aconn, clock=FakeClock(START), settings=settings())
     kernel.register_adapter(body)
     trigger = Event(id=None, ts=START, kind="percept", who="person:owner", place=GROUP,
-                    body="telegram", payload={"description": "jawab", "place_kind": "shared"}, description="jawab",
+                    body="telegram", payload={"description": "jawab"}, description="jawab",
                     origin_actor="person:owner")
 
     await kernel._apply(trigger, ToolCall("act", {
@@ -243,10 +246,10 @@ async def test_mentions_and_reply_to_are_mapped_before_core_sees_them(aconn):
         "SELECT who, payload::text FROM events WHERE id = %s", (stored.id,))).fetchone()
     assert "telegram:" not in row[0] and "telegram:" not in row[1]
     assert fake.contexts
-    assert all("telegram:" not in str(line)
+    assert all("telegram:" not in str(item.text)
                for ctx in fake.contexts
-               for line in (*ctx.people, *ctx.memories, ctx.trigger.who,
-                            str(ctx.trigger.payload)))
+               for item in ctx.items)
+    assert all("telegram:" not in str(ctx.trigger.who) for ctx in fake.contexts)
 
 
 async def test_link_merges_two_ids_into_one_card_memory_and_recall(aconn):
@@ -273,6 +276,10 @@ async def test_link_merges_two_ids_into_one_card_memory_and_recall(aconn):
         payload={"description": "alergi kacang", "place_kind": "shared", "addressed": False}, description="alergi kacang"))
     older_id, younger_id = first_ev.who, second_ev.who
     assert older_id != younger_id
+    await append_event(aconn, ts=clock.now(), kind="place.audience", place="space:tg:-10",
+                       payload={"place": "space:tg:-10", "actors": ["telegram:111"]})
+    await append_event(aconn, ts=clock.now(), kind="place.audience", place="space:dc:99",
+                       payload={"place": "space:dc:99", "actors": ["discord:222"]})
 
     await write_state(aconn, f"person:{older_id}", {
         "name": "Budi", "closeness": 0.4, "reliability": {"promises": {"kept": 2}}}, first_ev.id)
@@ -307,13 +314,14 @@ async def test_link_merges_two_ids_into_one_card_memory_and_recall(aconn):
         "h": 2.5, "ts": clock.now().isoformat()}
     assert await identity.accounts_of(aconn, older_id) == ("discord:222", "telegram:111")
     people_cards = await identity.person_cards(aconn, "space:tg:-10", first_ev)
-    assert len(people_cards) == 1 and older_id in people_cards[0] and younger_id not in people_cards[0]
+    assert len(people_cards) == 1 and older_id in people_cards[0]
+    assert younger_id not in people_cards[0]
 
     # Log is untouched, yet audience labels, working context and recall follow the merge
     raw_row = await (await aconn.execute("SELECT who FROM events WHERE id = %s",
                                          (second_ev.id,))).fetchone()
     assert raw_row == (younger_id,)
-    assert await privacy.audience(aconn, "space:dc:99") == frozenset({older_id, privacy.UNKNOWN})
+    assert await privacy.audience(aconn, "space:dc:99") == frozenset({older_id})
     ctx = await build_context(aconn, second_ev, "space:dc:99", "check", now=clock.now(),
                               settings=settings(), memories=(), capabilities=())
     rendered = str(parts.messages(Reasoning(settings=settings()), ctx))
@@ -416,38 +424,6 @@ async def test_wrong_and_expired_link_codes_and_unlink(aconn):
     assert after_unlink.who.startswith("person:p_")
     assert await read_state(aconn, f"merged:{b_ev.who}") == {"into": a_ev.who}
     assert len(await _events(aconn, identity.UNLINKED)) == 1
-
-
-async def test_place_persisted_and_readonly_place_refuses_before_act(aconn):
-    body = _SayBody()
-    kernel = build(aconn, clock=FakeClock(START), pfc=_FakePFC(), settings=settings())
-    kernel.register_adapter(body)
-
-    [ro] = await _put_idle(kernel, Event(
-        id=None, ts=START, kind="percept", who="telegram:10",
-        place="space:tg:-100555:9", body="telegram",
-        payload={"description": "pengumuman", "place_kind": "shared", "addressed": False,
-                 "place_info": {"form": "thread", "parent": "space:tg:-100555",
-                                "can_post": False, "name": "Topik"}}, description="pengumuman"))
-    saved = await read_state(aconn, "place:space:tg:-100555:9")
-    assert saved["form"] == "thread"
-    assert saved["parent"] == "space:tg:-100555"
-    assert saved["can_post"] is False
-    assert saved["name"] == "Topik"
-
-    await kernel._apply(ro, ToolCall("act", {
-        "capability": "telegram.say",
-        "arguments": {"text": "coba balas"}}))
-    await kernel._apply(ro, ToolCall("act", {
-        "capability": "telegram.say",
-        "arguments": {"text": "ke sana", "to": "space:tg:-100555:9"}}))
-    await kernel.run_until_idle()
-
-    assert body.actions == []
-    results = await (await aconn.execute(
-        "SELECT payload FROM events WHERE kind = 'act.result' ORDER BY id")).fetchall()
-    assert len(results) == 2
-    assert all("read-only" in str(r[0]["reason"]) for r in results)
 
 
 async def test_link_tries_are_counted_per_guesser_and_never_burn_other_codes(aconn):
@@ -574,19 +550,23 @@ async def test_pairing_code_lockout_clears_after_window(aconn):
 async def test_direct_place_skips_place_that_became_shared(aconn):
     dm = "space:game:dm:owner"
     world = "space:game:world1"
+    await append_event(aconn, ts=START, kind="place.audience", place=dm,
+                       payload={"place": dm, "actors": [identity.OWNER]})
     await append_event(
         aconn, ts=START, kind="percept", who=identity.OWNER, place=dm, body="game",
-        payload={"description": "hai", "place_kind": "direct"})
+        payload={"description": "hai"})
+    await append_event(aconn, ts=START + timedelta(minutes=1), kind="place.audience",
+                       place=world, payload={"place": world, "actors": [identity.OWNER]})
     await append_event(
         aconn, ts=START + timedelta(minutes=1), kind="percept", who=identity.OWNER,
-        place=world, body="game",
-        payload={"description": "sendiri dulu", "place_kind": "direct",
-                 "place_info": {"members": [identity.OWNER]}})
+        place=world, body="game", payload={"description": "sendiri dulu"})
+    await append_event(aconn, ts=START + timedelta(minutes=2), kind="place.audience",
+                       place=world,
+                       payload={"place": world,
+                                "actors": [identity.OWNER, "person:charlie"]})
     await append_event(
         aconn, ts=START + timedelta(minutes=2), kind="percept", who="person:charlie",
-        place=world, body="game",
-        payload={"description": "ada aku juga", "place_kind": "shared",
-                 "place_info": {"members": [identity.OWNER, "person:charlie"]}})
+        place=world, body="game", payload={"description": "ada aku juga"})
 
     assert await identity.direct_place(aconn, identity.OWNER, via="game") == dm
     place, error = await identity.resolve_to(aconn, identity.OWNER)

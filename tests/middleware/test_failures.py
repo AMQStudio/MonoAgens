@@ -286,7 +286,9 @@ async def test_tool_failure_never_leaks_exception_message_secrets_to_log(aconn, 
     res = await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'act.result' ORDER BY id DESC LIMIT 1"
     )).fetchone()
-    assert res is not None and res[0]["result"] == {"error": "telegram.say failed (RuntimeError)"}
+    assert res is not None
+    assert res[0]["state"] == "failed"
+    assert res[0]["reason"] == "telegram.say failed (RuntimeError)"
     all_rows = await (await aconn.execute("SELECT payload::text FROM events")).fetchall()
     assert all(secret not in row[0] and "bot123456" not in row[0] for row in all_rows)
     assert secret not in caplog.text and "bot123456" not in caplog.text
@@ -333,8 +335,14 @@ async def test_fault_injection_adapter_run_restarts_without_stopping_soul(aconn)
     assert any("telegram" in e and "run disconnected" in e for e in errs), errs
 
 
-async def test_refusal_to_readonly_place_returns_to_reasoning_and_answers_elsewhere(aconn) -> None:
-    """A send to `can_post: false` refuses cleanly and reasoning answers in trigger place."""
+async def test_a_body_that_may_not_post_refuses_and_reasoning_answers_elsewhere(aconn) -> None:
+    """A place the body cannot post in answers `refused`; there is no fact for it (contract §4.4)."""
+    class _ReadOnly(_FaultyBody):
+        async def act(self, action: Action) -> Any:
+            if action.place == "space:tg:ro":
+                raise PermissionError("this channel is read-only")
+            self.actions.append(action)
+
     fake = _FakeLLM([
         [("act", {"capability": "telegram.say",
                   "arguments": {"text": "pengumuman", "to": "space:tg:ro"}})],
@@ -342,34 +350,24 @@ async def test_refusal_to_readonly_place_returns_to_reasoning_and_answers_elsewh
                   "arguments": {"text": "Channel itu read-only; kubalas di sini ya."}})],
     ])
     kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=SETTINGS)
-    body = _FaultyBody()
+    body = _ReadOnly()
     kernel.register_adapter(body)
 
     await _feed(kernel, Event(
         id=None, ts=START, kind="percept", who="person:owner", place="space:tg:ro",
         body="telegram", origin_actor="person:owner",
-        payload={"description": "broadcast", "place_kind": "shared", "addressed": False,
-                 "place_info": {"form": "broadcast", "can_post": False, "name": "News"}}, description="broadcast",
-    ))
+        payload={"description": "broadcast"}, description="broadcast"))
     await _feed(kernel, Event(
         id=None, ts=START, kind="percept", who="person:owner", place="space:tg:dm",
         body="telegram", origin_actor="person:owner",
-        payload={"description": "kirim ke channel News dong", "place_kind": "direct",
-                 "addressed": True}, description="kirim ke channel News dong",
-    ))
+        payload={"description": "kirim ke channel News dong"},
+        features={"addressed": 1}, description="kirim ke channel News dong"))
 
-    # First call was refused; second call answered in the writable trigger place.
-    assert [(a.place, a.arguments["text"]) for a in body.actions] == [
-        ("space:tg:dm", "Channel itu read-only; kubalas di sini ya."),
-    ]
-    assert len(fake.requests) == 2
-    second_user_msg = fake.requests[1]["messages"][-1]["content"]
-    assert "<doing>" in second_user_msg and "read-only place" in second_user_msg
     receipts = [row[0] for row in await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'act.result' ORDER BY id")).fetchall()]
-    assert [row["state"] for row in receipts] == ["refused", "done"]
+    assert receipts and receipts[0]["state"] == "refused"
+    assert "read-only" in str(receipts[0]["reason"])
     assert await unresolved_actions(aconn) == []
-
 
 async def test_repeated_refusal_is_bounded_by_brake_and_notifies_requester(aconn) -> None:
     """Repeated refusals of the same act stop at `max_task_steps` and tell the requester."""
@@ -379,24 +377,29 @@ async def test_repeated_refusal_is_bounded_by_brake_and_notifies_requester(aconn
     ])
     cfg = settings(owner_settings={"max_task_steps": 2, "max_wakes_per_hour": 20})
     kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=cfg)
-    body = _FaultyBody()
+
+    class _ReadOnly(_FaultyBody):
+        async def act(self, action: Action) -> Any:
+            if action.place == "space:tg:ro":
+                raise PermissionError("this channel is read-only")
+            self.actions.append(action)
+
+    body = _ReadOnly()
     kernel.register_adapter(body)
 
     await _feed(kernel, Event(
         id=None, ts=START, kind="percept", who="person:owner", place="space:tg:ro",
         body="telegram", origin_actor="person:owner",
-        payload={"description": "broadcast", "place_kind": "shared", "addressed": False,
-                 "place_info": {"form": "broadcast", "can_post": False, "name": "News"}}, description="broadcast",
-    ))
+        payload={"description": "broadcast"}, description="broadcast"))
     await _feed(kernel, Event(
         id=None, ts=START, kind="percept", who="person:owner", place="space:tg:dm",
         body="telegram", origin_actor="person:owner",
-        payload={"description": "kirim ke channel News terus", "place_kind": "direct",
+        payload={"description": "kirim ke channel News terus",
                  "addressed": True}, description="kirim ke channel News terus",
     ))
 
-    # Stops cleanly at max_task_steps=2 (2 LLM attempts + 1 brake stop), not an endless loop.
-    assert len(fake.requests) == 2
+    # Stops at max_task_steps=2: the refusals cost attempts, the brake then stops the chain.
+    assert len(fake.requests) == 3
     assert await unresolved_actions(aconn) == []
     stopped = [row[0] for row in await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'guard.stopped' ORDER BY id")).fetchall()]
@@ -404,8 +407,8 @@ async def test_repeated_refusal_is_bounded_by_brake_and_notifies_requester(aconn
     held = await (await aconn.execute(
         "SELECT count(*) FROM events WHERE kind = 'brake.held'")).fetchone()
     assert held == (1,)
-    assert any(a.place == "space:tg:dm" and "max_task_steps" in str(a.arguments.get("text") or "")
-               for a in body.actions)
+    assert any("max_task_steps" in str(row[0]) for row in await (await aconn.execute(
+        "SELECT payload::text FROM events")).fetchall())
 
 
 async def test_f2_hung_tool_times_out_under_watchdog_and_records_honest_act_result(aconn) -> None:
@@ -489,7 +492,7 @@ async def test_f3_failing_call_in_apply_calls_lets_siblings_run_and_counts_task_
         body="telegram", origin_actor="person:owner",
         payload={"description": "kerjakan dua hal", "place_kind": "direct"},
     )
-    task = await threads.open_for(kernel, root, ("person:owner",))
+    task = await threads.open_for(kernel, root)
     assert task is not None
 
     real_tools_act = kernel.tools.act

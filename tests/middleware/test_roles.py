@@ -508,10 +508,12 @@ async def test_person_cards_read_kernel_roles_at_call_time(aconn):
             "person:budi": {"roles": ["family"]},
         },
     })
+    await append_event(aconn, ts=START, kind="place.audience", place="space:tg:group:1",
+                       payload={"place": "space:tg:group:1",
+                                "actors": ["person:budi", "person:stranger"]})
     budi = await append_event(
         aconn, ts=START, kind="percept", who="person:budi", place="space:tg:group:1",
-        body="telegram", payload={"description": "hi", "place_kind": "group",
-                                  "place_info": {"members": ["person:budi", "person:stranger"]}})
+        body="telegram", payload={"description": "hi"})
 
     context = await layout.build_context(
         aconn, budi, "space:tg:group:1", "hi", now=START, settings=cfg, memories=(), capabilities=())
@@ -521,7 +523,8 @@ async def test_person_cards_read_kernel_roles_at_call_time(aconn):
 
     updated = await kernel.hooks.context.run(
         context, {"conn": aconn, "now": START, "event": budi}, on_stop=_noop, on_error=_noop)
-    cards_text = "\n".join(updated.people)
+    cards_text = "\n".join(item.text for item in updated.items
+                             if item.section == "cards")
     assert "Unverified contact." in cards_text
     assert "Trusted family." in cards_text
     assert trigger.id is not None

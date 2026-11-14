@@ -55,7 +55,7 @@ async def _block_text(conn, kernel) -> str:
                                          capabilities=kernel.tools.descriptors())
     ctx = {"conn": conn, "event": trigger, "now": START}
     filtered = await kernel._run_hooks("context", context, ctx, trigger)
-    return "\n".join(part.text for part in sorted(filtered.blocks, key=lambda part: part.order))
+    return "\n".join(item.text for item in filtered.items if item.section == "notes")
 
 
 async def _mode(kernel, arguments: list[str], who: str = "person:owner") -> str:
@@ -195,5 +195,5 @@ async def test_uninstalling_returns_the_knobs_to_the_prior(aconn, tmp_path):
                                        {"conn": aconn, "event": trigger, "now": START},
                                        trigger)
     assert kernel.settings["knobs"]["talkativeness"] == pytest.approx(0.45)
-    assert not any(part.name == "soul-tuning" for part in filtered.blocks)
+    assert not any(item.kind == "soul-tuning" for item in filtered.items)
     assert kernel.tools.command("mode") is None

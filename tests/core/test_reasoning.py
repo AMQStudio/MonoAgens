@@ -198,7 +198,9 @@ async def test_layered_prompt_structure(aconn):
     assert "Language: id." in stable
     assert "You act only through the tools. Staying silent is a valid choice." in stable
 
-    assert messages[1]["content"] == "<core_memory>The owner likes coffee.</core_memory>"
+    semi = messages[1]["content"]
+    assert semi.startswith("<core_memory>The owner likes coffee.</core_memory>")
+    assert semi.endswith("</self>")  # what is installed rides in the semi-stable message (D-I)
 
     volatile = messages[2]["content"]
     tags = ["<now>", "<place>", "<why_awake>", "<expectations>", "<memories>", "<recent>", "<event>"]
@@ -834,8 +836,12 @@ async def test_recall_lists_the_month_after_vectors_faded_and_sleep_failed(aconn
 async def test_recall_obeys_absolute_line_two(aconn):
     private = "space:tg:2002"
     group = "space:tg:-100"
+    await append_event(aconn, ts=START, kind="place.audience", place=private,
+                       payload={"place": private, "actors": ["person:fulan", "person:owner"]})
     await append_event(aconn, ts=START, kind="percept", who="person:fulan", place=private,
                        payload={"description": "rahasia fulan tentang kafe"})
+    await append_event(aconn, ts=START, kind="place.audience", place=group,
+                       payload={"place": group, "actors": ["person:charlie", "person:owner"]})
     await append_event(aconn, ts=START, kind="percept", who="person:charlie", place=group,
                        payload={"description": "halo semua"})
     tool = SelfTool(aconn, FakeClock(START), visible=privacy.visible,
@@ -846,8 +852,10 @@ async def test_recall_obeys_absolute_line_two(aconn):
     assert hidden["found"] == []
 
     owner = "space:tg:1001"
+    await append_event(aconn, ts=START, kind="place.audience", place=owner,
+                       payload={"place": owner, "actors": ["person:owner"]})
     await append_event(aconn, ts=START, kind="percept", who="person:owner", place=owner,
-                       payload={"description": "halo", "place_kind": "direct"})
+                       payload={"description": "halo"})
     allowed = await tool.act(Action(kind="recall", place=owner,
                                      arguments={"query": "rahasia fulan"}))
     assert "rahasia fulan" in json.dumps(allowed["found"])

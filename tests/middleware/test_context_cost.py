@@ -43,14 +43,24 @@ async def _world(conn) -> None:
 
 async def test_the_items_check_fits_the_hook_watchdog(aconn):
     await _world(aconn)
+    await append_event(aconn, ts=START, kind="place.audience", place=DESK,
+                       payload={"place": DESK, "actors": ["person:owner", "person:tg:7"]})
+    await append_event(aconn, ts=START, kind="place.audience", place="space:tg:10001",
+                       payload={"place": "space:tg:10001", "actors": ["person:owner"]})
     trigger = await append_event(aconn, ts=START, kind="percept", who="person:tg:1",
                                  place=DESK, body="telegram",
-                                 payload={"description": "halo", "place_kind": "shared"})
-    hits = [memory.MemoryHit(f"memory {index} (person:owner private chat)", place=None,
-                             sources=()) for index in range(5)]
+                                 payload={"description": "halo"})
+    private = "space:tg:dm:owner"
+    await append_event(aconn, ts=START, kind="place.audience", place=private,
+                       payload={"place": private, "actors": ["person:owner"]})
+    source = await append_event(aconn, ts=START, kind="percept", who="person:owner",
+                                place=private, body="telegram", description="rahasia")
+    hits = [memory.MemoryHit(f"memory {index} (person:owner private chat)", place=private,
+                             sources=(source.id,)) for index in range(5)]
     context = await layout.build_context(aconn, trigger, DESK, "test", now=START,
                                          settings=SETTINGS, memories=hits, capabilities=())
-    assert len(context.recent) + len(context.recent_elsewhere) >= 10
+    assert len([item for item in context.items
+            if item.section in ("recent", "elsewhere")]) >= 10
 
     started = time.perf_counter()
     outcome = await privacy.items_rule()(context, {"conn": aconn, "now": START})
@@ -58,7 +68,7 @@ async def test_the_items_check_fits_the_hook_watchdog(aconn):
 
     filtered = outcome.item if isinstance(outcome, Replace) else context
     assert filtered.place == DESK
-    assert filtered.withheld  # the owner-only memories came from a private chat
+    assert [item for item in filtered.items if item.section == "notes"]  # withheld
     print(f"\nthe items check on {EVENTS} events, {MEMORIES} memories, {PLACES} places: "
           f"{elapsed * 1000:.1f} ms")
     assert elapsed < 0.5 * HOOK_TIMEOUT_SECONDS

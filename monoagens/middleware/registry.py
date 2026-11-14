@@ -17,6 +17,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
+from monoagens import contract
 from monoagens.core.hooks import Continue, Middleware, Replace
 from monoagens.infra.store import payload_text
 from monoagens.middleware.contract import OUTPUT_MARKER, open_attachment
@@ -251,6 +252,9 @@ class ToolRegistry:
                         adapter=declared_by, event_id=event_id)
         try:
             result = await adapter.act(action)
+        except PermissionError as exc:
+            # A place the body may not post in answers `refused` with its reason (§4.4).
+            return contract.Receipt("refused", reason=str(exc))
         except Exception as exc:
             kind = type(exc).__name__
             LOGGER.error("tool %s failed (%s)", capability, kind)
