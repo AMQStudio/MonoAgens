@@ -2,7 +2,7 @@
 
 MonoAgens is one persistent AI agent (a soul) that lives in many apps and devices: a generic
 core, a generic middleware, and adapters and plugins that translate their own world into one
-locked contract. This file is how you work here; the design is in `docs/spec.md`.
+stable contract. This file is how you work here; the design is in `docs/spec.md`.
 
 ## Read first
 - `docs/spec.md`: *Principles* and *The contract*, always; then the sections your task names.

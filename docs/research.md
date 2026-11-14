@@ -317,7 +317,7 @@ kernel.
 - **Ports and adapters.** The core is isolated from its devices behind ports [Cockburn 2005, IND]
   — percept and capability descriptor are the ports; adapters and plugin tools are the adapters.
 - **Stable user-space contract.** Internals change freely, the interface to the outside does not
-  break [Linux kernel ABI policy, IND] — the stability contract in [spec.md](spec.md) *Contract*.
+  break [Linux kernel ABI policy, IND] — the stable skin in [spec.md](spec.md) *A stable skin, an inside that answers to evidence*.
 - **Capability-based isolation** (not adopted in v1): every access through an unforgeable token
   [Klein et al. 2009 (seL4), PR]. Plugins are trusted in-process code for now; per-plugin lever
   declarations in the manifest are the path toward least privilege without changing the core.
@@ -458,7 +458,7 @@ Each component of an agent architecture is justified by removing it and measurin
 shortcuts; holdouts should match the level of generality claimed, and cost must be reported with
 accuracy [Kapoor et al. 2025, *AI Agents That Matter*, TMLR, PR]. Mapping: every mechanism has a
 neutral value and a measured claim (*Mental model*); scenarios are split into development,
-validation and sealed sets (*Evaluation (later)*), with sealed sets grouped by generality: small
+validation and sealed sets (*Evaluation*), with sealed sets grouped by generality: small
 alterations, new kinds of surprise, other bodies. The main thread, the task threads and the gate
 already form a global workspace with ignition [Mashour, Roelfsema, Changeux & Dehaene 2020, PR],
 so it needs no row of its own.

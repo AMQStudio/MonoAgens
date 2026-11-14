@@ -40,6 +40,7 @@ list, a payload read, a removed field or an upward import.
   middleware, adapters, plugins, operator, project, terms. Every rule written once.
 - [`docs/research.md`](docs/research.md) — the formulas behind the core, why each was chosen, and
   their sources.
+- [`docs/panel.md`](docs/panel.md) — the design of MonoAgens Console, the operator's web panel.
 - [`AGENTS.md`](AGENTS.md) — how coding agents work on this repository: rules, invariants, tests.
 - [`docs/tasks/`](docs/tasks/README.md) — the work, in order: behavior to achieve and how to prove
   it; finished tasks in `docs/tasks/done/`.

@@ -13,7 +13,7 @@ lets go of what it should forget. The theory is in the spec (*Layers*, *Mental m
 
 ## Part 1 — Settle what Task 6 left (now)
 
-*Theory:* spec *Expectations*, *Cognition*, *What the core knows, the absolute lines and the
+*Theory:* spec *Expectations*, *Cognition*, *What the core knows, its identity and the
 self-model*, *Identity*; research *Grounding: every act waits for evidence it landed*,
 *Expectations and the wake gate*.
 
@@ -86,7 +86,7 @@ sets*, *Engineering principles behind the core's shape*.
 
 ## Part 3 — Inner thought, theory of mind and the self
 
-*Theory:* spec *Mental model*, *Cognition*, *What the core knows, the absolute lines and the
+*Theory:* spec *Mental model*, *Cognition*, *What the core knows, its identity and the
 self-model*; research *Patience and inner thought*, *Theory of mind as a perception ledger*,
 *Grounding in time*.
 
@@ -192,7 +192,7 @@ boundaries*.
 
 ## Part 6 — Trust, fading and forgetting
 
-*Theory:* spec *Memory, sleep and forgetting*, *What the core knows, the absolute lines and the
+*Theory:* spec *Memory, sleep and forgetting*, *What the core knows, its identity and the
 self-model*; research *Trust, credence and reliability (beta reputation)*, *Memory activation
 (ACT-R)*, *Safety mechanics*.
 
@@ -211,7 +211,7 @@ The fade and hard-forget paths exist since Task 1; this part adds the policy aro
 
 ## Part 7 — Sealed sets and the real model
 
-*Theory:* spec *Evaluation (later)*; research *Proving a mechanism: ablation and sealed sets*,
+*Theory:* spec *Evaluation*; research *Proving a mechanism: ablation and sealed sets*,
 *Measuring human-likeness honestly*.
 
 - [ ] **7.1 A sealed set is written before Part 3 starts** and is not read while Parts 3–6 are

@@ -3,14 +3,14 @@
 Status: todo | Depends on: Task 7
 
 **Goal.** Real users, a release, an honest evaluation, and stable contracts for other
-developers. The theory is in the spec (*Rulings*, *Evaluation (later)*, *Plugins*, *Middleware*,
+developers. The theory is in the spec (*Rulings*, *Evaluation*, *Plugins*, *Middleware*,
 *Adapters*).
 
 ---
 
 ## Part 1 — First users and the release gate
 
-*Theory:* spec *Rulings*, *Evaluation (later)*, *Layers*.
+*Theory:* spec *Rulings*, *Evaluation*, *Layers*.
 
 - [ ] **1.1 The owner alone for a few days.**
   - *Must hold:* every change in this period is followed by a replay check.
@@ -27,7 +27,7 @@ developers. The theory is in the spec (*Rulings*, *Evaluation (later)*, *Plugins
 
 ## Part 2 — Honest human-likeness evaluation
 
-*Theory:* spec *Evaluation (later)*; research *Measuring human-likeness honestly*, *Proving a
+*Theory:* spec *Evaluation*; research *Measuring human-likeness honestly*, *Proving a
 mechanism: ablation and sealed sets*.
 
 - [ ] **2.1 The metrics are registered before measuring.**

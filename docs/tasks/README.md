@@ -62,6 +62,6 @@ moment is a failure.
   changes.
 - The full prior loader with its loading rules ([spec.md](../spec.md) *Prior (format version 1)*);
   until then only the dispositions are read.
-- Snapshots of `state` ([spec.md](../spec.md) *Contract*).
+- Snapshots of `state` ([spec.md](../spec.md) *Books, thought acts and hooks*).
 
 How the code architect and workers work is in [AGENTS.md](../../AGENTS.md).
