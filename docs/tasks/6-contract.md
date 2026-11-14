@@ -991,3 +991,38 @@ in the same turn. Both are guidance-level (the "say what you promised before you
 Everything else keeps the checks it had; `20`, `29` and `16` each lose one and need the same kind
 of prompt-level work. `18`, `19`, `26`, `28`, `30`, `31` were never measured with the real model
 before this run; they are the ones that now need it.
+
+### Review packet for 7.3 (for the owner)
+
+`contract.lock` today: `sha256:cadfbada…` over 749 lines of `monoagens/contract/` in 12 files
+(`__init__`, `action`, `attachments`, `audience`, `capability`, `context`, `envelope`, `hooks`,
+`lifecycle`, `percept`, `surfaces`, plus the package docstring). It was regenerated once, by the
+owner's commit `fc60ac9` (2.9), and **nothing under `monoagens/contract/` or in `contract.lock`
+has changed since** — every later commit of this task is outside the package:
+
+```
+git log --oneline 15424c0..HEAD -- monoagens/contract contract.lock
+fc60ac9  feat(task6): 2.9 upcast_event leaves the contract; contract.lock regenerated once
+b47d615  core: signals read features, never text (2.3)
+da521fa  core: event envelope v2 and the v1 upcast (2.1)
+15424c0  contract: hash lock (1.2)
+d3a555b  contract: the locked contract as code (1.1)
+```
+
+What the contract package now says, in the order a reviewer would read it:
+
+| File | Holds | Proved by |
+|---|---|---|
+| `envelope.py` | the event envelope v2 and its version | `tests/contract/test_envelope.py` |
+| `percept.py` | `Percept`, `Answer`, `Command`, `to_event`, `upcast_percept` | `tests/contract/test_percept.py` |
+| `audience.py` | `Audience`, `PLACE_AUDIENCE`, `audience_event` | `tests/contract/test_audience.py` |
+| `action.py`, `capability.py`, `surfaces.py` | actions, receipts, descriptors, the boot surface | `tests/contract/test_*` |
+| `context.py`, `hooks.py`, `lifecycle.py` | context items, hook outcomes, lifecycle events | `tests/contract/test_*` |
+
+Three guards run with it and are green: `tests/contract/test_lock.py` (the hash matches),
+`tests/contract` (29 tests, the package's own behaviour) and the architecture ratchet (0 findings,
+so no core or middleware module imports the contract's internals or writes a removed field).
+
+**7.4 can only be done by the owner**: it needs a live WhatsApp pairing and a real conversation in
+the owner's direct chat and one group. The failures it is meant to collect have to come from a
+real session, not from a replay.
