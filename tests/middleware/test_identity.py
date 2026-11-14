@@ -572,3 +572,25 @@ async def test_direct_place_skips_place_that_became_shared(aconn):
     assert await identity.direct_place(aconn, identity.OWNER, via="game") == dm
     place, error = await identity.resolve_to(aconn, identity.OWNER)
     assert (place, error) == (dm, None)
+
+
+async def test_an_answer_names_the_log_event_it_is_for(aconn):
+    """3.2: a percept's `about` becomes the id of the event it answers, not a platform id."""
+    asked = await append_event(aconn, ts=START, kind="act.out", who="person:owner",
+                               place=GROUP, body="telegram",
+                               payload={"capability": "telegram.say", "arguments": {"text": "halo"},
+                                        "ref": "tg-42", "communicative": True},
+                               description="halo")
+    fake = _FakePFC()
+    kernel = build(aconn, clock=FakeClock(START), pfc=fake, settings=settings())
+    kernel.register_adapter(_SayBody())
+
+    [stored] = await _put_idle(kernel, Event(
+        id=None, ts=START, kind="percept", who="telegram:202", place=GROUP, body="telegram",
+        payload={"description": "iya", "addressed": True, "about": "tg-42",
+                 "data": {"message_id": 11}}, description="iya"))
+
+    assert stored.payload["about"] == str(asked.id)
+    row = await (await aconn.execute(
+        "SELECT payload FROM events WHERE id = %s", (stored.id,))).fetchone()
+    assert row[0]["about"] == str(asked.id)

@@ -196,7 +196,12 @@ async def as_owner(conn, event: Event) -> Event:
 
 
 async def resolve_event(conn, event: Event, *, now: datetime) -> Event:
-    """Map native accounts in `who`, `origin_actor`, `data.mentions`, and `data.reply_to` atomically."""
+    """Map native accounts, and resolve the event this one answers, atomically (contract.md §4.2).
+
+    The actors are the percept's `actor` and `involves`; a version 1 body still names them inside
+    `data` (`mentions`, `reply_to`), and both shapes are mapped here, once. `about` becomes the id
+    of the Log event the answer is for, so nothing downstream matches platform message ids.
+    """
     if event.kind not in ("percept", "command"):
         return await as_owner(conn, event)
     async with conn.transaction():
@@ -207,6 +212,13 @@ async def resolve_event(conn, event: Event, *, now: datetime) -> Event:
         if origin and is_account(origin):
             origin = await resolve_account(conn, origin, now=now, place=event.place, body=event.body)
         payload = dict(event.payload or {})
+        involved = payload.get("involves")
+        if isinstance(involved, (list, tuple)):
+            mapped = [(await resolve_account(conn, str(actor), now=now, place=event.place,
+                                             body=event.body) if is_account(actor) else actor)
+                      for actor in involved]
+            if list(involved) != mapped:
+                payload["involves"] = mapped
         data = payload.get("data")
         if isinstance(data, Mapping):
             updated_data = dict(data)
@@ -234,8 +246,30 @@ async def resolve_event(conn, event: Event, *, now: datetime) -> Event:
                     changed = True
             if changed:
                 payload["data"] = updated_data
+        answered = await answered_event(conn, event, payload)
+        if answered is not None:
+            payload["about"] = str(answered)
         resolved = replace(event, who=who, origin_actor=origin, payload=payload)
         return await as_owner(conn, resolved)
+
+
+async def answered_event(conn: Any, event: Event, payload: Mapping[str, Any]) -> int | None:
+    """Return the Log event a percept answers, from its `about` ref or a version 1 reply (D46)."""
+    ref = str(payload.get("about") or "")
+    if not ref:
+        data = payload.get("data")
+        reply = data.get("reply_to") if isinstance(data, Mapping) else None
+        if isinstance(reply, Mapping):
+            ref = str(reply.get("message_id") or "")
+        elif reply:
+            ref = str(reply)
+    if not ref or not event.place:
+        return None
+    row = await (await conn.execute(
+        "SELECT id FROM events WHERE place = %s AND (payload->>'ref' = %s "
+        "OR payload->'data'->>'message_id' = %s) ORDER BY id DESC LIMIT 1",
+        (str(event.place), ref, ref))).fetchone()
+    return int(row[0]) if row else None
 
 
 def intake(conn, *, clock: Clock | None = None):

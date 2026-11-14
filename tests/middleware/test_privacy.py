@@ -353,3 +353,27 @@ def test_a_capability_without_a_file_has_nothing_to_confirm():
     """No stored file in the arguments means nothing to confirm."""
     assert privacy.carries_file({"text": "hello"}, {"communicative": True}) is False
     assert privacy.carries_file({"text": "hello"}, {}) is False
+
+
+async def test_the_audience_size_feature_counts_the_known_people(aconn):
+    """The middleware's one label is a number the gate reads (contract.md §3)."""
+    from monoagens.contract.hooks import Replace
+
+    await _audience(aconn, GROUP, [OWNER, "person:budi", privacy.UNKNOWN])
+    event = Event(id=None, ts=START, kind="percept", who="person:budi", place=GROUP)
+
+    outcome = await privacy.audience_size(None)(event, {"conn": aconn, "now": START})
+
+    assert isinstance(outcome, Replace)
+    assert outcome.item.features["audience_size"] == 1
+
+
+async def test_the_audience_size_feature_is_absent_where_nobody_else_is(aconn):
+    """A place with only the owner present adds no feature; the gate falls back to its own count."""
+    from monoagens.contract.hooks import Continue
+
+    await _audience(aconn, OTHER, [OWNER])
+    event = Event(id=None, ts=START, kind="percept", who=OWNER, place=OTHER)
+
+    assert isinstance(await privacy.audience_size(None)(event, {"conn": aconn, "now": START}),
+                      Continue)

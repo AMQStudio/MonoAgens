@@ -70,7 +70,7 @@ asserts behavior the contract removes, e.g. `text_like`), `scenarios/`, `scripts
   `backfill`, `imported`, `labels` as envelope fields, `schema_version` 2; version 1 events and
   percepts upcast on read (`sent_at` → `occurred_at`, `addressed` → `features.addressed`,
   `place_kind` dropped).
-- [ ] 2.2 The core never reads `payload` or `labels`. Every steer the middleware gives today
+- [x] 2.2 The core never reads `payload` or `labels`. Every steer the middleware gives today
   through a label (`words_hidden`, `place_kind`, `audience`, `hold_for`, `delivers`, `hold`) reaches
   the core only as a hook outcome (`Replace`, `Stop`, `Stop(held=True)`). A steer that no outcome
   can express stops the work and is reported.
@@ -78,7 +78,7 @@ asserts behavior the contract removes, e.g. `text_like`), `scenarios/`, `scripts
   may read `audience_size`; the core searches no text for the soul's name.
 - [x] 2.4 `cue_event` keeps facts only (kind, who, place, not_who); `text_like` is refused with
   its reason; stored ones are upcast to a free-text condition.
-- [ ] 2.5 The context as items with sources ([spec.md](../spec.md) *Waist 1: core ↔ middleware*); the context hook receives items;
+- [x] 2.5 The context as items with sources ([spec.md](../spec.md) *Waist 1: core ↔ middleware*); the context hook receives items;
   the text is rendered after the last hook.
 - [x] 2.6 Actions and receipts: deterministic action ids; every `act.out` ends in exactly one
   `act.result` with a state; `refused` wakes reasoning (bounded by the brakes), `held` does not;
@@ -105,9 +105,9 @@ that asserts behavior the contract removes), `scenarios/`, `scripts/replay.py`
 - [x] 3.1 The contract types move out of `middleware/contract.py` into `monoagens/contract/`;
   the middleware imports them; what contract v2 removed is deleted (`SHOWS`, ladders, the neutral
   `say` fields).
-- [ ] 3.2 Identity on actors ([spec.md](../spec.md) *Identity*): the actor map over `actor` and `involves`;
+- [x] 3.2 Identity on actors ([spec.md](../spec.md) *Identity*): the actor map over `actor` and `involves`;
   `about` resolved to an event id from the Log; place info removed; the `self_actor` line.
-- [ ] 3.3 Privacy ([spec.md](../spec.md) *Policy*): labels from the latest `place.audience`; **one** check over
+- [x] 3.3 Privacy ([spec.md](../spec.md) *Policy*): labels from the latest `place.audience`; **one** check over
   context items in the last context slot, plus attachments on open and forward. Delete the regexes
   over rendered lines, the second filter, `kernel.visible`, `_delegated_share_source`, the
   stopword and topic-word code. `share` takes ids; asking on someone's behalf by `about` or the chain's `wait`.
@@ -660,3 +660,22 @@ Deviations: the plan put the tier map in a module constant and forwarded it thro
 `Kernel.register_adapter(permissions=…)`; the class attribute on the body is one home instead, and
 `registry.register`'s `permissions` stays what it already was — the permission of a middleware-owned
 tool whose descriptor states none (`SelfTool`).
+
+**2.2, 2.5, 3.2, 3.3 (this commit).** The label half of 2.2 is one inbound rule,
+`privacy.audience_size`, and it writes the contract's own feature (`audience_size`), which the
+talk rate in `core/gate/formula.py` already reads — the middleware has no other label, and
+`Event.labels` stays empty. 2.2's proof is the ratchet: `payload-read 1` (`store.merge_source`,
+the sanctioned call) and `labels-read 0`.
+
+3.2's missing piece was the actor map: `identity.resolve_event` now maps the envelope's
+`involves` beside `who`/`origin_actor`, resolves `about` to the id of the Log event it answers
+(`identity.answered_event`, by the place's `ref` or a version 1 `data.reply_to`), and the loader
+records each body's `self_actor()` as its self-account (`identity.record_self_account`), so the
+D66 shared-account line actually appears. 3.3's deletions were already gone: no `kernel.visible`,
+no `_delegated_share_source`, no stopword or topic-word code, and `privacy.py` has no
+`text-parse` finding; `admits` is the one predicate, called from `items_rule`, `visible`,
+`memory_visible` and the attachment door.
+
+One home per rule, named: the audience a place reports is `privacy.audience`; the one privacy
+predicate is `privacy.admits`; the count of known people is `privacy.audience_size`; the actor map
+is `identity.resolve_event`.

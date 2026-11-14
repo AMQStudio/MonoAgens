@@ -247,6 +247,27 @@ def withheld_line(counts: Mapping[str, int]) -> str:
     return f"{' and '.join(parts)} {verb} not shown here"
 
 
+def audience_size(kernel: Any) -> Middleware:  # noqa: ARG001 - one rule shape for every hook
+    """Inbound rule: the middleware's one label — how many known people can perceive the event.
+
+    The number is the contract's own feature `audience_size` (contract.md §3), so it reaches the
+    gate inside `Situation` and is never a label the core would have to read.
+    """
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        """Write the count of known people here, once, from the place's own audience."""
+        if not isinstance(item, Event) or item.kind != "percept" or item.imported:
+            return Continue()
+        found = await audience(ctx["conn"], item.place)
+        size = len([who for who in found or () if who not in (UNKNOWN, OWNER)])
+        if not size:
+            return Continue()
+        return Replace(replace(item, features={**dict(item.features or {}),
+                                               "audience_size": size}))
+
+    return rule
+
+
 def items_rule(kernel: Any = None) -> Middleware:
     """Absolute line 2 (D84, D85): one check over every context item, in the last slot."""
 
@@ -551,6 +572,7 @@ async def leaving(kernel: Any, ctx: Any, arguments: Any) -> str | None:
 
 
 __all__ = ["OWNER", "SHARE", "SHARE_CAPABILITY", "UNKNOWN", "admits", "aliases", "audience",
+           "audience_size",
            "bind_store", "carries_file", "consent", "delegation", "episode_error", "grant",
            "guard", "intent_words", "item_audience", "items_rule", "memory_visible",
            "direct_for", "owner_direct", "register", "source_audience", "visible", "withheld_line"]

@@ -29,7 +29,7 @@ from monoagens.core.hooks import Continue, Middleware
 from monoagens.infra import attachments as attachments_module
 from monoagens.infra import config as config_module
 from monoagens.infra.store import append_event
-from monoagens.middleware import contract, policy, privacy, registry, roles
+from monoagens.middleware import contract, identity, policy, privacy, registry, roles
 from monoagens.middleware.registry import CommandEntry, SkillEntry
 
 MANIFEST_VERSION = 1
@@ -547,6 +547,8 @@ class Loader:
             if hasattr(adapter, "get_cursor"):
                 adapter.get_cursor = _cursor_for(kernel, adapter.name)
             kernel.register_adapter(adapter)
+            await identity.record_self_account(kernel.conn, adapter.name,
+                                               adapter.self_actor(), now=kernel.clock.now())
         if loaded.roles is not None:
             kernel.roles = loaded.roles
         kernel.knob_bounds = loaded.knob_bounds
