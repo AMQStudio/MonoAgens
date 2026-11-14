@@ -51,10 +51,20 @@ May touch: `monoagens/contract/` (new), `contract.lock` (new), `tests/contract/`
   (`tests/contract/test_conformance.py`) over them: members of §4.1, percepts of §4.2, one receipt
   per action, deduplication by action id. They run through the kernel in Part 6.
 
+**Parts 2 and 3 interleave where one change spans both** (architect, 2026-11-14, from the
+worker's report): **2.5 and 3.3 are one item**, done together (the context hook's item type and
+the one privacy check over it), and **2.2's label half is done together with 3.2, 3.3 and 3.5**
+(a label can leave the core only when the middleware returns the hook outcome instead). Every
+commit still keeps `uv run pytest` and the fake replay green; tick both items when the combined
+change lands. Order: 2.2 (rendering half), 2.4, 2.6, 2.7, 2.8, 2.9, then 2.5 + 3.3 with 3.1 and
+3.2, then 2.2 (label half) with 3.5, then 3.4, 3.6–3.8.
+
 ## Part 2 — The core on waist 1
 Read first: contract.md §3, [core.md](../core.md) §3–§6, §8–§9
-May touch: `monoagens/core/` (all), `monoagens/infra/store.py`, `monoagens/versioning.py`,
-`sql/migrations/` (one new migration), `tests/core/`, `scripts/replay.py`
+May touch: `monoagens/core/` (all), `monoagens/infra/store.py`, `monoagens/infra/versioning.py`,
+`monoagens/versioning.py`, `sql/migrations/` (one new migration), `tests/` (any test that
+asserts behavior the contract removes, e.g. `text_like`), `scenarios/`, `scripts/replay.py`;
+`monoagens/contract/` and `contract.lock` only for 2.9
 
 - [x] 2.1 Event envelope v2 (core.md §3, §9.2): `occurred_at`, `description`, `features`,
   `backfill`, `imported`, `labels` as envelope fields, `schema_version` 2; version 1 events and
@@ -81,11 +91,16 @@ May touch: `monoagens/core/` (all), `monoagens/infra/store.py`, `monoagens/versi
   in the backlog flush and in `recover()`, and one failing fired Expectation loses no other.
 - [ ] 2.8 Speaking elsewhere: the intent's content is what the action hook returns; it never
   carries the goal's or the trigger's text; the core reads no label for it.
+- [ ] 2.9 The contract package holds types and validators only: `upcast_event` and its helpers
+  move from `monoagens/contract/envelope.py` to `monoagens/infra/versioning.py`, so a fix to
+  upcasting never needs the lock; regenerate `contract.lock` once in this item and say so in the
+  commit message.
 
 ## Part 3 — The middleware on waist 2
 Read first: contract.md §4–§6, [middleware.md](../middleware.md) (all)
-May touch: `monoagens/middleware/` (all), `monoagens/infra/` (attachment store, budget),
-`config.yaml`, `tests/middleware/`, `scripts/replay.py`
+May touch: `monoagens/middleware/` (all), `monoagens/core/` (only for the combined items 2.2
+and 2.5 above), `monoagens/infra/` (attachment store, budget), `config.yaml`, `tests/` (any test
+that asserts behavior the contract removes), `scenarios/`, `scripts/replay.py`
 
 - [ ] 3.1 The contract types move out of `middleware/contract.py` into `monoagens/contract/`;
   the middleware imports them; what contract v2 removed is deleted (`SHOWS`, ladders, the neutral
