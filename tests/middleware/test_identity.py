@@ -621,3 +621,27 @@ async def test_the_card_block_says_a_person_id_is_only_for_the_to_field(aconn):
     texts = [found.text for found in outcome.item.items if found.section == "cards"]
     assert any("internal handle" in text for text in texts)
     assert sum("internal handle" in text for text in texts) == 1
+
+
+
+async def test_a_claimed_owner_keeps_their_native_account_after_its_alias_is_lost(aconn):
+    """The claim records the owner's accounts, so losing an alias row cannot demote them."""
+    code = await identity.ensure(aconn, now=START)
+    person = "person:tg:42"
+    registered = await append_event(aconn, ts=START, kind=identity.REGISTERED, who=person,
+                                    payload={"account": "telegram:42", "person": person})
+    await write_state(aconn, "alias:telegram:42", {"who": person}, registered.id)
+    event = await _percept(aconn, text=code)
+
+    claimed = await identity.claim_owner(aconn, event, now=START)
+
+    assert claimed is not None
+    assert await read_state(aconn, identity.OWNER_KEY) == {
+        "who": person, "accounts": ["telegram:42"]}
+    await aconn.execute("DELETE FROM state WHERE key = 'alias:telegram:42'")
+    assert await identity.resolve_account(aconn, "telegram:42", now=START) == "person:owner"
+    assert await identity.as_owner(aconn, Event(
+        id=None, ts=START, kind="percept", who="telegram:42", place="space:tg:-1",
+        body="telegram")) == Event(
+        id=None, ts=START, kind="percept", who="person:owner", place="space:tg:-1",
+        body="telegram")

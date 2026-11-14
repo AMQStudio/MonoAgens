@@ -130,7 +130,10 @@ async def claim_owner(conn, event, *, now: datetime):
         claimed = await append_event(conn, ts=now, kind=CLAIMED, who=event.who,
                                      place=event.place, body=event.body,
                                      payload={"code_used": True}, caused_by=event.id)
-        await write_state(conn, OWNER_KEY, {"who": event.who}, claimed.id)
+        accounts = await accounts_of_person(conn, event.who)
+        await write_state(conn, OWNER_KEY,
+                          {"who": event.who, **({"accounts": accounts} if accounts else {})},
+                          claimed.id)
         await conn.execute(
             "UPDATE state SET value = %s, updated_by_event = %s "
             "WHERE key LIKE 'alias:%%' AND value->>'who' = %s",
@@ -139,6 +142,13 @@ async def claim_owner(conn, event, *, now: datetime):
         await conn.execute("DELETE FROM state WHERE key LIKE %s", (f"{PAIR_TRIES_PREFIX}%",))
     LOGGER.info("owner paired: %s", event.who)
     return claimed
+
+
+async def accounts_of_person(conn: Any, person: Any) -> list[str]:
+    """Return every native account the Log maps to one person id, as `<body>:<native id>`."""
+    cur = await conn.execute(
+        "SELECT key FROM state WHERE key LIKE 'alias:%%' AND value->>'who' = %s", (str(person),))
+    return sorted(str(key).removeprefix("alias:") for (key,) in await cur.fetchall())
 
 
 def is_account(value: Any) -> bool:
@@ -168,6 +178,8 @@ async def resolve_account(conn: Any, account: str, *, now: datetime,
         owner = await read_state(conn, OWNER_KEY) or {}
         if owner.get("who") == account:
             return OWNER
+        if account in (owner.get("accounts") or ()):
+            return OWNER
         existing = await read_state(conn, key)
         if existing is not None:
             person = str((existing or {}).get("who") or existing)
@@ -189,7 +201,9 @@ async def resolve_account(conn: Any, account: str, *, now: datetime,
 async def as_owner(conn, event: Event) -> Event:
     """Rewrite the paired owner's native id to `person:owner` at intake."""
     owner = await read_state(conn, OWNER_KEY) or {}
-    if event.who and event.who == owner.get("who"):
+    if not event.who:
+        return event
+    if event.who == owner.get("who") or event.who in (owner.get("accounts") or ()):
         return replace(event, who=OWNER)
     return event
 
