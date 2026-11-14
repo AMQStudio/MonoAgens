@@ -10,8 +10,8 @@ from the scripted fake model; real results come from the saved reports in
 `reports/`. A capability that fails with the real model is listed as FAIL, not
 hidden.
 
-Generated 2026-11-13 22:22 UTC from 31 capabilities across 8 brain functions.
-Pooled per capability: its latest runs among 6 saved fake and 5 saved real-model reports. The real column names the report behind its
+Generated 2026-11-13 23:46 UTC from 31 capabilities across 8 brain functions.
+Pooled per capability: its latest runs among 11 saved fake and 0 saved real-model reports. The real column names the report behind its
 verdict and reads `flaky` when the recorded runs both passed and failed; the
 `Real-model record` section at the end keeps those runs, so pruning the reports never
 erases evidence.
@@ -72,7 +72,7 @@ _No scenario yet._
 | Unaddressed lunch chatter in a group gets no reply. | 02_group_chitchat_lunch | PASS 3/3 · 2026-11-13 | PASS 1/1 · deepseek-v4.1-flash (effort high) · 2026-11-13 · 2026-11-13-1934-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
 | An unaddressed traffic complaint in a group gets no reply. | 03_group_chitchat_weather | PASS 3/3 · 2026-11-13 | PASS 1/1 · deepseek-v4.1-flash (effort high) · 2026-11-13 · 2026-11-13-1934-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
 | An unaddressed urgent line that is not the soul's business gets no reply. | 15_urgent_unaddressed_group | PASS 3/3 · 2026-11-13 | PASS 1/1 · deepseek-v4.1-flash (effort high) · 2026-11-13 · 2026-11-13-1934-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
-| The soul's name captures attention without allocating the turn, so no reply follows. | 21_own_name_capture | PASS 3/3 · 2026-11-13 | PASS 3/3 · deepseek-v4.1-flash (effort high) · 2026-11-13 · 2026-11-13-1934-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
+| The soul's name captures attention without allocating the turn, so no reply follows. | 21_own_name_capture | FAIL 2/3 · 2026-11-13 | PASS 3/3 · deepseek-v4.1-flash (effort high) · 2026-11-13 · 2026-11-13-1934-real-17-07-11-12-20-23-25-27-29-01-02-03-15-21-04-05-06-14-22-24-08-09-10-13-16-30.md |
 
 ## turn-taking
 
