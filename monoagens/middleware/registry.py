@@ -18,7 +18,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from monoagens import contract
-from monoagens.core.hooks import Continue, Middleware, Replace
+from monoagens.core.hooks import Continue, Middleware, Replace, Stop
 from monoagens.infra.store import payload_text
 from monoagens.contract import OUTPUT_MARKER
 from monoagens.middleware.contract import open_attachment
@@ -586,7 +586,10 @@ def commands(kernel: Any) -> Middleware:
                 text = f"/{name} failed: {type(exc).__name__}"
         if text:
             await _answer(kernel, item, text)
-        return Continue()
+        # A command is answered here, so its line never reaches the model: `Stop` ends the event
+        # instead of letting it through to the gate (a live run showed a `registry.describe` call
+        # billed for `/whoami` after the answer had already gone out).
+        return Stop()
 
     return rule
 

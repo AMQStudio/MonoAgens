@@ -1088,3 +1088,22 @@ Two failures, both visible only on a real account:
 
 Also repaired while reading that boot report: the loader printed each plugin's missing-library note
 twice (`_requirements` added it and the caller added it again).
+
+#### Live findings after the LID fix (same session, 20:42-20:44)
+
+With delivery working, three things the Log shows:
+
+1. **A command also woke the model.** `/whoami` was answered at 20:43:10 (act.out, no model call),
+   and then at 20:43:52 a `model.call` ran and invoked `registry.describe` — the same percept had
+   also gone through the gate. `registry.commands` now returns `Stop()` once it has answered, so a
+   command line never reaches reasoning (test: `test_a_command_is_answered_without_a_model_call`).
+2. **`/help` overran the inbound hook's 500 ms.** The answer is carried out *inside* the hook
+   (`_answer` → `act_via_hooks` → WhatsApp send), and the hook timed out at 0.5 s: `error
+   TimeoutError: inbound hook timed out after 0.5s`, `guard.stopped`. The message still went out.
+   Open: either command events get their own budget (a core constant) or a command's act leaves
+   the hook. Reported for the owner; both are a call on the core's prior, not an adapter's.
+3. **Continuity is by reconstruction, not by a chat session.** Each wake rebuilds the desk from
+   the Log (`recent`, `elsewhere`, `memories`, `doing`, `expectations`, `trigger`), and a
+   communicative act ends the step. That is why the mention *@Mono Test* got an answer at 20:40:11
+   and the follow-up *Cuman testt aja* 53 s later was `decision.silent` — correct per the rule, and
+   the reason it reads as "no continuity" on the phone.

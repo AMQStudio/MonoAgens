@@ -444,3 +444,51 @@ async def test_a_place_no_body_has_sensed_yet_is_carried_by_its_declaring_body(a
 
     assert receipt.state == "done"
     assert [action.arguments["text"] for action in body.actions] == ["hai"]
+
+
+async def test_a_command_is_answered_without_a_model_call(aconn):
+    """A command is the middleware's: after its answer the event stops, never reaching the gate."""
+    kernel = build(aconn, clock=FakeClock(START), settings=SETTINGS)
+    llm = _CountingLLM()
+
+    async def _noop(kernel, event, arguments):
+        return "pong"
+
+    kernel.roles = open_book("person:owner", "help")
+    kernel.tools.add_command(CommandEntry("ping", "Answer pong.", "help", _noop))
+    body = _Body("telegram", TELEGRAM_CAPABILITIES)
+    kernel.register_adapter(body)
+    kernel.pfc = llm
+    pending = asyncio.create_task(kernel.put(Event(
+        id=None, ts=START, kind="percept", who="person:owner", place=PLACE, body="telegram",
+        payload={"description": "/ping", "command": {"name": "ping", "args": []},
+                 "data": {}}), body="telegram"))
+    while not pending.done():
+        await kernel.run_until_idle()
+        await asyncio.sleep(0)
+    pending.result()
+    await kernel.run_until_idle()
+
+    assert llm.calls == 0
+    assert [action.capability for action in body.actions] == ["say"]
+    assert body.actions[0].arguments["text"] == "pong"
+
+
+class _CountingLLM:
+    """A pfc that only counts calls; a command must never reach it."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def decide(self, *args, **kwargs):
+        self.calls += 1
+        raise AssertionError("a command must not wake the model")
+
+
+async def _events(conn):
+    from monoagens.infra.store import event_from_row
+    from monoagens.infra.store import EVENT_COLUMNS
+
+    columns = ", ".join(EVENT_COLUMNS) if not isinstance(EVENT_COLUMNS, str) else EVENT_COLUMNS
+    cur = await conn.execute(f"SELECT {columns} FROM events ORDER BY id")
+    return [event_from_row(row) for row in await cur.fetchall()]
