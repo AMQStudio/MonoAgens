@@ -73,19 +73,6 @@ def _reply_info(message: Any) -> tuple[dict[str, Any] | None, str | None]:
     return info, None
 
 
-def _platform_roles_data(channel: Any, author: Any) -> dict[str, Any]:
-    guild = getattr(channel, "guild", None) or getattr(author, "guild", None)
-    gid = getattr(guild, "id", None) if guild is not None else None
-    if gid is None:
-        return {}
-    return {
-        "platform_roles": {
-            "space": f"space:dc:guild:{gid}",
-            "roles": member_roles(author) if author is not None else [],
-        }
-    }
-
-
 def format_message(message: Any, *, now: datetime, bot_id: str, bot_user: Any = None,
                    directory: DiscordDirectory,
                    attachments: Sequence[Mapping[str, Any]] = (),
@@ -121,8 +108,7 @@ def format_message(message: Any, *, now: datetime, bot_id: str, bot_user: Any = 
 
     data: dict[str, Any] = {
         "message_id": msg_id,
-        **_platform_roles_data(channel, author),
-    }
+        }
     reply_info, reply_author_id = _reply_info(message)
     reply_id = str((reply_info or {}).get("message_id") or "")
     if reply_info:
@@ -185,7 +171,6 @@ def format_message(message: Any, *, now: datetime, bot_id: str, bot_user: Any = 
         "source_name": sender_label,
         "account": str(getattr(author, "name", "") or sender_label),
         "place_kind": place_kind,
-        "place_info": p_info,
         "addressed": addressed,
         "description": desc,
         "data": data,
@@ -215,11 +200,10 @@ def format_edit(channel: Any, author: Any, msg_id: str, new_text: str, *,
         payload={
             "source_name": label,
             "place_kind": "direct" if dm else "shared",
-            "place_info": p_info,
             "addressed": dm,
             "description": f"{label} edited: {new_text}" if new_text else f"{label} edited {msg_id}",
             "data": {"message_id": msg_id, "edits": msg_id,
-                     **_platform_roles_data(channel, author)},
+                     },
         },
     )
 
@@ -242,11 +226,10 @@ def format_delete(channel: Any, msg_id: str, *, author: Any = None, now: datetim
         payload={
             "source_name": label,
             "place_kind": "direct" if dm else "shared",
-            "place_info": p_info,
             "addressed": False,
             "description": f"{label} deleted a message ({msg_id})",
             "data": {"message_id": msg_id, "deletes": msg_id,
-                     **_platform_roles_data(channel, author)},
+                     },
         },
     )
 
@@ -273,14 +256,13 @@ def format_reaction(channel: Any, user: Any, msg_id: str, emoji: Any, *,
         payload={
             "source_name": label,
             "place_kind": "direct" if dm else "shared",
-            "place_info": p_info,
             "addressed": on_own or dm,
             "description": f"{label} reacted {emoji_text} to {msg_id}",
             "data": {"message_id": str(msg_id),
                      "reaction": {"message_id": str(msg_id), "emoji": emoji_text},
                      "answer": emoji_text,
                      **({"reply_to": {"message_id": str(msg_id)}} if msg_id else {}),
-                     **_platform_roles_data(channel, user)},
+                     },
         },
     )
 
@@ -304,7 +286,6 @@ def format_interaction(interaction: Any, *, now: datetime, bot_id: str,
     custom_id = str(raw_data.get("custom_id") or "")
     msg = getattr(interaction, "message", None)
     msg_id = str(getattr(msg, "id", "") or "")
-    guild_data = _platform_roles_data(channel, user)
 
     parts = custom_id.split(":")
     values = list(raw_data.get("values") or ())
@@ -325,7 +306,7 @@ def format_interaction(interaction: Any, *, now: datetime, bot_id: str,
         selected = custom_id or str(raw_data.get("name") or "")
         answer_val = custom_id or str(selected)
 
-    data = {"custom_id": custom_id, "choice": selected, "answer": answer_val, **guild_data}
+    data = {"custom_id": custom_id, "choice": selected, "answer": answer_val}
     if msg_id:
         data["reply_to"] = {"message_id": msg_id}
     return Event(
@@ -334,7 +315,6 @@ def format_interaction(interaction: Any, *, now: datetime, bot_id: str,
         payload={
             "source_name": label,
             "place_kind": "direct" if dm else "shared",
-            "place_info": p_info,
             "addressed": True,
             "description": f"{label} chose {selected}",
             "data": data,

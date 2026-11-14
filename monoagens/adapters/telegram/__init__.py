@@ -378,7 +378,6 @@ class TelegramBody:
             who=f"telegram:{sender_id}", place=place, body=self.name,
             payload={"description": f"{label} chose {selected}",
                      "place_kind": place_kind,
-                     "place_info": place_meta(chat, form, parent),
                      "addressed": True, "data": data},
         )
 

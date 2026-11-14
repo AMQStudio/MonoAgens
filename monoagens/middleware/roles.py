@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
 
 from monoagens.core.hooks import Continue, Middleware
-from monoagens.infra.store import append_event, read_state, write_state
+from monoagens.infra.store import append_event
 from monoagens.middleware import identity, privacy
 from monoagens.middleware import registry as registry_module
 from monoagens.middleware.registry import CommandEntry
@@ -67,7 +67,6 @@ class Role:
     approval: str | None = None
     label: str | None = None
     context: str | None = None
-    platform_role: tuple[str, ...] = ()
 
     def base_tier(self) -> str:
         """Return this role's declared base tier (`guest` if omitted); `allow` never raises it."""
@@ -105,8 +104,6 @@ class RoleBook:
     role_settings: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     sources: Mapping[str, str] = field(default_factory=dict)
     merges: Mapping[str, str] = field(default_factory=dict)
-    place_parents: Mapping[str, str] = field(default_factory=dict)
-    platform_roles: Mapping[str, Mapping[str, frozenset[str]]] = field(default_factory=dict)
 
     @classmethod
     def empty(cls) -> "RoleBook":
@@ -139,8 +136,7 @@ class RoleBook:
                 deny=_expand(values.get("deny") or (), bases, report),
                 settings=dict(values.get("settings") or {}),
                 approval=values.get("approval"), label=values.get("label"),
-                context=values.get("context"),
-                platform_role=_parse_platform_roles(values.get("platform_role"), str(name), report))
+                context=values.get("context"))
         if fallback and fallback not in found:
             report.add(f"role {fallback} is not defined; ignored")
             fallback = ""
@@ -186,62 +182,6 @@ class RoleBook:
         younger = sorted(src for src, dst in self.merges.items() if dst == target and src != target)
         return (target, *younger) if target == str(who) else (str(who), target, *younger)
 
-    def with_place_parents(self, parents: Mapping[str, str]) -> "RoleBook":
-        """Return the book updated with opaque `place -> parent` links for ancestor walks."""
-        if not parents:
-            return self
-        return replace(self, place_parents={**self.place_parents,
-                                            **{str(k): str(v) for k, v in parents.items() if v}})
-
-    def with_platform_roles(self, who: str, space: str, role_ids: Sequence[str]) -> "RoleBook":
-        """Replace `who`'s active platform role ids inside organisation `space`."""
-        spc, person = str(space or ""), str(who or "")
-        if not spc or not person:
-            return self
-        by_space = dict(self.platform_roles.get(person) or {})
-        by_space[spc] = frozenset(str(rid) for rid in role_ids if str(rid))
-        return replace(self, platform_roles={**self.platform_roles, person: by_space})
-
-    def with_platform_context(self, who: str, space: str, role_ids: Sequence[str],
-                              parents: Mapping[str, str] | None = None) -> "RoleBook":
-        """Return the book updated with one percept's parent chain and held platform role ids."""
-        book = self.with_place_parents(parents or {})
-        return book.with_platform_roles(who, space, role_ids) if space else book
-
-    def _place_chain(self, place: str | None) -> tuple[str, ...]:
-        """Walk `place`'s opaque parent chain from innermost to outermost."""
-        chain: list[str] = []
-        seen: set[str] = set()
-        cur = str(place or "")
-        while cur and cur not in seen:
-            seen.add(cur)
-            chain.append(cur)
-            cur = str(self.place_parents.get(cur) or "")
-        return tuple(chain)
-
-    def _matching_platform_roles(self, who: str, place: str | None) -> tuple[str, ...]:
-        """Return mapped role names earned via platform roles in `place`'s parent chain."""
-        ancestors = self._place_chain(place)
-        if not ancestors:
-            return ()
-        matched: list[str] = []
-        for space in ancestors:
-            held_ids: set[str] = set()
-            for alias in self._aliases_for(str(who)):
-                by_space = self.platform_roles.get(alias)
-                if by_space and space in by_space:
-                    held_ids.update(by_space[space])
-            if not held_ids:
-                continue
-            prefix = f"{space}/"
-            for role in self.roles.values():
-                if role.name not in matched and any(
-                    entry.startswith(prefix) and entry.removeprefix(prefix) in held_ids
-                    for entry in role.platform_role
-                ):
-                    matched.append(role.name)
-        return tuple(matched)
-
     def held(self, who: str, place: str | None = None) -> tuple[Role, ...]:
         """Return the roles one person holds here, in configuration order."""
         names: list[str] = []
@@ -250,9 +190,6 @@ class RoleBook:
             for name in (person.roles if person is not None else ()):
                 if name not in names:
                     names.append(name)
-        for name in self._matching_platform_roles(who, place):
-            if name not in names:
-                names.append(name)
         if self.fallback and self.fallback not in names:
             names.append(self.fallback)
         return tuple(self.roles[name] for name in names if name in self.roles)
@@ -353,26 +290,6 @@ class RoleBook:
 # -------------------------------------------------------------- resolution
 
 
-def _parse_platform_roles(raw: Any, role_name: str, report: Any) -> tuple[str, ...]:
-    """Parse `platform_role:` entries (`<space>/<role id>`) and warn on malformed specs."""
-    if raw is None:
-        return ()
-    items = [raw] if isinstance(raw, str) else list(raw)
-    parsed: list[str] = []
-    for entry in items:
-        text = str(entry or "").strip()
-        space, sep, role_id = text.rpartition("/")
-        if not sep or not space.strip() or not role_id.strip():
-            if report is not None:
-                report.add(f"role {role_name}: invalid platform_role {text!r} "
-                           "(expected '<space>/<role id>'); ignored")
-            continue
-        norm = f"{space.strip()}/{role_id.strip()}"
-        if norm not in parsed:
-            parsed.append(norm)
-    return tuple(parsed)
-
-
 def validate_permission_name(owner: str, permission: str, source: str) -> None:
     """Refuse redefining a core permission or one outside `owner`'s namespace."""
     perm = str(permission)
@@ -465,9 +382,7 @@ def describe_role(book: RoleBook, role_name: str) -> str:
     lines = [f"{name}: {book.bases.get(name) or OWNER_TIER} "
              f"({book.sources.get(name, 'config.yaml')})" for name in sorted(held)]
     for key, value in (("label", role.label), ("approval", role.approval),
-                       ("context", role.context),
-                       ("platform_role",
-                        ", ".join(role.platform_role) if role.platform_role else None)):
+                       ("context", role.context)):
         if value:
             lines.append(f"{key}: {value} (config.yaml)")
     for key, value in sorted((book.role_settings.get(tier) or {}).items()):
@@ -480,81 +395,15 @@ def describe_role(book: RoleBook, role_name: str) -> str:
 # ---------------------------------------------------------------- commands
 
 
-async def reconcile_platform_roles(conn: Any, book: RoleBook) -> RoleBook:
-    """Load persisted `state: place:*` parent chains and `state: platform_roles:*` into `book`."""
-    cur_places = await conn.execute("SELECT key, value FROM state WHERE key LIKE 'place:%'")
-    parents: dict[str, str] = {}
-    for key, value in await cur_places.fetchall():
-        parent = str((value or {}).get("parent") or "")
-        if parent:
-            parents[str(key).removeprefix("place:")] = parent
-    book = book.with_place_parents(parents)
-    cur_roles = await conn.execute(
-        "SELECT value FROM state WHERE key LIKE 'platform_roles:%'")
-    for (value,) in await cur_roles.fetchall():
-        doc = value or {}
-        who = str(doc.get("who") or "")
-        space = str(doc.get("space") or "")
-        if who and space:
-            role_ids = [str(r) for r in (doc.get("roles") or ())]
-            book = book.with_platform_roles(who, space, role_ids)
-    return book
-
-
 async def reconcile_merges(conn: Any, book: RoleBook, report: Any = None) -> RoleBook:
-    """Load `state: merged:*`, place parent chains and platform role holdings into `book`."""
+    """Load `state: merged:*` into `book`: one person id after a link, never a platform role."""
     from monoagens.core.memory.cards import merge_map  # local: avoid top-level cycle
 
-    merges = await merge_map(conn)
-    return await reconcile_platform_roles(conn, book.with_merges(merges, report=report))
-
-
-def platform_roles(kernel: Any) -> Middleware:
-    """Inbound rule: keep `kernel.roles` synced with each percept's platform roles and parents."""
-
-    async def rule(item: Any, ctx: Any) -> Any:
-        del ctx
-        if getattr(item, "kind", "") != "percept":
-            return Continue()
-        payload = item.payload or {}
-        if payload.get("imported") is True:
-            return Continue()
-        place = str(getattr(item, "place", "") or "")
-        place_info = payload.get("place_info") or {}
-        data = payload.get("data") or {}
-        parents: dict[str, str] = {}
-        raw_parent = str(place_info.get("parent") or "")
-        if place and raw_parent:
-            parents[place] = raw_parent
-        extra_parents = place_info.get("parents")
-        if isinstance(extra_parents, Mapping):
-            for child, par in extra_parents.items():
-                if child and par:
-                    parents[str(child)] = str(par)
-        book = _book(kernel)
-        raw_pr = data.get("platform_roles")
-        space = str(raw_pr.get("space") or "") if isinstance(raw_pr, Mapping) else ""
-        if space:
-            who = str(getattr(item, "origin_actor", None) or getattr(item, "who", "") or "")
-            role_ids = [str(r) for r in (raw_pr.get("roles") or ())]
-            if who and getattr(item, "id", None):
-                key = f"platform_roles:{who}|{space}"
-                cur = await read_state(kernel.conn, key)
-                if list((cur or {}).get("roles") or ()) != role_ids:
-                    await write_state(kernel.conn, key,
-                                      {"who": who, "space": space, "roles": role_ids},
-                                      int(item.id))
-            book = book.with_platform_context(who, space, role_ids, parents)
-        elif parents:
-            book = book.with_place_parents(parents)
-        kernel.roles = book
-        return Continue()
-
-    return rule
+    return book.with_merges(await merge_map(conn), report=report)
 
 
 def install_commands(kernel: Any) -> None:
-    """Register role commands and keep platform role mappings updated on inbound percepts."""
+    """Register the role commands: whoami, whois, role and roles show."""
     tools = kernel.tools
     for name, description, permission, handler in (
             ("whoami", "Show who you are here, and what you may do.", "identity.whoami",
@@ -566,9 +415,6 @@ def install_commands(kernel: Any) -> None:
         if tools.command(name) is None:
             tools.add_command(CommandEntry(name, description, permission, handler,
                                            owner="roles"))
-    inbound = getattr(getattr(kernel, "hooks", None), "inbound", None)
-    if inbound is not None and "platform-roles" not in getattr(inbound, "_names", set()):
-        inbound.add("platform-roles", platform_roles(kernel), slot="first")
 
 
 def _held_line(book: RoleBook, who: str, place: str | None = None) -> str:

@@ -551,7 +551,6 @@ class WhatsAppBody:
         ev_out = clean_event(Event(
             id=None, ts=self._clock.now(), kind="percept", who=sender, place=place, body=self.name,
             payload={"description": "; ".join(changes), "addressed": False, "place_kind": "shared",
-                     "place_info": self.directory.place_meta(place),
                      **({"self_account": self.self_account} if self.self_account else {}),
                      "data": {"group_event": changes, "joined": joined, "left": left}},
         ))

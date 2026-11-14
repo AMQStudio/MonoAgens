@@ -222,7 +222,6 @@ def format_message(raw: Any, *, directory: WhatsAppDirectory, now: datetime,
     sent_at = iso_timestamp(raw_ts, fallback=now)
     base_payload: dict[str, Any] = {
         "place_kind": place_kind,
-        "place_info": place_meta,
         "sent_at": sent_at,
         **({"self_account": self_account} if self_account else {}),
         **({"imported": True} if imported else {}),
@@ -404,7 +403,6 @@ def format_call(status: str, meta: Any, *, reason: str = "", is_video: bool = Fa
             "description": desc,
             "addressed": status in ("incoming", "missed"),
             "place_kind": "direct",
-            "place_info": directory.place_meta(place),
             "sent_at": iso_timestamp(getattr(meta, "timestamp", 0), fallback=now),
             **({"self_account": self_account} if self_account else {}),
             "data": {"call": {"status": status, "call_id": call_id, "video": is_video,
@@ -463,7 +461,6 @@ def format_undecryptable(ev: Any, *, directory: WhatsAppDirectory, now: datetime
             "description": f"{sender_label}: a message could not be read",
             "addressed": place_kind == "direct",
             "place_kind": place_kind,
-            "place_info": directory.place_meta(place),
             "sent_at": sent_at,
             **({"self_account": self_account} if self_account else {}),
             **({"backfill": True} if backfill else {}),

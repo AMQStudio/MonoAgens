@@ -120,7 +120,7 @@ that asserts behavior the contract removes), `scenarios/`, `scripts/replay.py`
   `expired` events; the `answer` capability with its fact checks; an approved act runs as its
   requester and still runs after a restart (F.9). Delete `yes_words`, typed matching, `split`,
   the sticker fallback.
-- [ ] 3.6 Roles ([spec.md](../spec.md) *Roles and permissions*): person ids only; `platform_role` and platform role facts
+- [x] 3.6 Roles ([spec.md](../spec.md) *Roles and permissions*): person ids only; `platform_role` and platform role facts
   deleted; person cards read the roles at call time.
 - [ ] 3.7 Loader and config (O.1, O.2, O.4): `/reload` with adapters running, validation before
   any change, rules never duplicated and removed with their plugin; every config edit parsed back,
@@ -737,3 +737,14 @@ Deviation: the plan asked to delete the reply-by-message-id matching in this ite
 with the typed matcher; the `answer:{prompt, value}` path replaces both, which is what §2.4.6
 specifies. F.9's brake resume carries the held chain's `origin_actor` (`_brake_origin`), which
 `test_brake_continue_keeps_held_chain_origin_actor` holds.
+
+**3.6 (this commit).** Roles are a person id's and nothing else. Deleted from `roles.py`:
+`Role.platform_role`, `RoleBook.platform_roles`, `place_parents`, `with_place_parents`,
+`with_platform_roles`, `with_platform_context`, `_place_chain`, `_matching_platform_roles`,
+`_parse_platform_roles`, `reconcile_platform_roles`, the `platform_roles` inbound rule and its
+registration, and the platform line of `describe_role`; `reconcile_merges` now loads only
+`state: merged:*`, and `held()` returns the roles the person id holds. The adapters stop writing
+`data.platform_roles` (Discord) and the dead `data.place_info` (all three), since nothing reads a
+place fact from a payload any more: an audience comes from `place.audience`. `whoami` prints the
+person id, label, linked actors (in a direct chat only) and roles with tier and approval mode.
+`identity._card` keeps reading `roles.contexts(who)` at call time.
