@@ -7,15 +7,15 @@ when practical), verifies its own work, ends with the real-model test in the las
 reports to the owner. The next task starts after that report.
 
 Tasks are numbered in the order they are done. Finished tasks stay as history. Tasks written
-before Task 3 name files by their earlier names; the [glossary](../glossary.md) maps them.
+before Task 3 name files by their earlier names; the [spec.md §9](../spec.md) maps them.
 
 | Task | File | Status | Depends on |
 |---|---|---|---|
-| 1 | [Core: align with the frozen contract](1-core-align.md) | **done** — 181 tests; fake replay 17/25, fixed in Task 2 Part 2 | — |
-| 2 | [Core: launch](2-core-launch.md) | **done** — 321 tests, fake 133 checks, violations 0; 16 and 30 flaky; 20, 22 run in Task 3 | Task 1 |
-| 3 | [Core: clean refactor](3-core-refactor.md) | **done** — 336 tests, fake 133/133, violations 0; core imports no middleware; 22/26 real, 09 and 23 flaky, 24 open | Task 2 |
-| 4 | [Middleware and first plugins](4-middleware-plugins.md) | **done** — 539 tests, fake 133/133, launch set 24/26 (Task 3: 22/26), sandbox 53/53 real, honesty counts claims; 5.1–5.3 moved to Task 6; loop in 19 and leaks vs desk carried to Task 5 0.0 | Task 3 |
-| 5 | [Adapters: WhatsApp, Discord and more](5-adapters.md) | **stopped** at 1.12 P (2026-11-14) — providers, loop, brakes, full outputs, identity and linking, WhatsApp, Discord, Telegram and CLI native, the audit's S, A, F.1 and P; the rest (1.10 D83, 1.11, 1.12 F/E/O, 1.8) moved to Task 6 | Task 4 |
+| 1 | [Core: align with the frozen contract](done/1-core-align.md) | **done** — 181 tests; fake replay 17/25, fixed in Task 2 Part 2 | — |
+| 2 | [Core: launch](done/2-core-launch.md) | **done** — 321 tests, fake 133 checks, violations 0; 16 and 30 flaky; 20, 22 run in Task 3 | Task 1 |
+| 3 | [Core: clean refactor](done/3-core-refactor.md) | **done** — 336 tests, fake 133/133, violations 0; core imports no middleware; 22/26 real, 09 and 23 flaky, 24 open | Task 2 |
+| 4 | [Middleware and first plugins](done/4-middleware-plugins.md) | **done** — 539 tests, fake 133/133, launch set 24/26 (Task 3: 22/26), sandbox 53/53 real, honesty counts claims; 5.1–5.3 moved to Task 6; loop in 19 and leaks vs desk carried to Task 5 0.0 | Task 3 |
+| 5 | [Adapters: WhatsApp, Discord and more](done/5-adapters.md) | **stopped** at 1.12 P (2026-11-14) — providers, loop, brakes, full outputs, identity and linking, WhatsApp, Discord, Telegram and CLI native, the audit's S, A, F.1 and P; the rest (1.10 D83, 1.11, 1.12 F/E/O, 1.8) moved to Task 6 | Task 4 |
 | 6 | [The locked contract](6-contract.md) | **next** — contract v2 as code and its lock, the core and the middleware on the contract, adapters translating everything, tests through the contract only, five fake bodies, the remaining audit items, then daily use on WhatsApp (D86–D88) | Task 5 |
 | 7 | [Core: depth of mind](7-core-mind.md) | todo — after weeks of daily use | Task 6 and some weeks of daily use |
 | 8 | [First users and release](8-release.md) | todo | Task 7 |
@@ -33,27 +33,8 @@ moment is a failure.
 **Deferred until weeks of real logs** (the spec stays; only the work waits):
 - Extending upcasting: `monoagens/versioning.py` exists from Task 1; leave it as it is until a
   payload schema first changes.
-- The full prior loader with its loading rules (core.md §9.4); the code reads
+- The full prior loader with its loading rules ([spec.md §3.9.4](../spec.md)); the code reads
   `prior/dispositions.yaml` directly until then.
-- Snapshots of `state` (core.md §3).
+- Snapshots of `state` ([spec.md §3.3](../spec.md)).
 
-## Rules for every task
-1. Read [AGENTS.md](../../AGENTS.md), [constitution.md](../constitution.md) and the spec sections
-   each part links, before touching code.
-2. In each part, touch only the files listed under **May touch**. A needed change elsewhere
-   stops the work and goes to the architect.
-3. **Never change a specification** (`docs/*.md`). A design question stops the work; write it
-   under the task's **Notes** and report.
-4. An item is done only when `uv run pytest` and the fake replay pass. Tests always use the fake
-   LLM; the real model is used only in the last part, through the replay script and a live
-   session.
-5. Every behavior change ships with at least one replay scenario that shows it. The scenario
-   carries all its material as synthetic data (facts, people, artifacts, realistic results from
-   every test tool); a failure is the soul's only after a material check shows the material was
-   there ([project.md §4](../project.md), D54).
-6. Design by brain function, not by scenario: never add a rule for one case to the core or the
-   middleware. A new case is classified first ([contract.md §9](../contract.md)).
-6a. The contract ([contract.md](../contract.md)) is locked: no task changes it or
-   `contract.lock`; a need it cannot meet stops the work.
-7. Do only what the item asks; no machinery for later.
-8. Workers may tick boxes and write under **Notes**; nothing else in the task file.
+The rules every task follows are in [AGENTS.md](../../AGENTS.md).

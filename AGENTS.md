@@ -2,10 +2,10 @@
 
 This project is **MonoAgens**: an AI agent built as one persistent self that lives in many
 apps and devices, with a small core organised like an OS kernel (see README).
-Status: prototype. Before touching code read [docs/constitution.md](docs/constitution.md),
-[docs/contract.md](docs/contract.md), the task file you were given in
-[docs/tasks/](docs/tasks/README.md), and the spec sections its parts link (the core:
-[docs/core.md](docs/core.md)). Work ONLY on that task.
+Status: prototype. Before touching code read [`docs/spec.md`](docs/spec.md) §1 (principles) and
+§2 (the locked contract), the task file you were given in [docs/tasks/](docs/tasks/README.md),
+and the spec sections its parts name. Work ONLY on that task. Formulas and their sources are in
+[`docs/research.md`](docs/research.md).
 
 ## Who writes code
 - **One task = one worker**, one task after another. The owner gives the task prompt to the
@@ -15,13 +15,13 @@ Status: prototype. Before touching code read [docs/constitution.md](docs/constit
   psycopg, pgvector, fastembed, httpx, pytest-asyncio). Neither is a project dependency.
 - If the same step fails twice, stop and report to the owner what was tried; do not work around
   it.
-- Specifications (every `docs/*.md`) and this file are owned by the architect. Workers may tick
+- The specification (`docs/spec.md`), `docs/research.md` and this file are owned by the architect. Workers may tick
   boxes and write under **Notes** in their own task file in `docs/tasks/`; they never edit a
   specification or the status table.
-- **The contract is locked** ([docs/contract.md](docs/contract.md), D86–D88) and the core's
-  formulas change only with evidence (`docs/constitution.md` §1). No task, worker or plugin
+- **The contract is locked** (`docs/spec.md` §2, D86–D88) and the core's
+  formulas change only with evidence (`docs/spec.md` §1.1). No task, worker or plugin
   changes the contract or `contract.lock`; a need the contract cannot meet stops and goes to the
-  owner. A new case is classified first (contract.md §9): adapter fact, principles or
+  owner. A new case is classified first (`docs/spec.md` §2.9): adapter fact, principles or
   `prompt_section`, mechanism bug, or a question for the owner. It is never patched into the
   core or the middleware.
 
@@ -38,7 +38,12 @@ Status: prototype. Before touching code read [docs/constitution.md](docs/constit
   when practical. Do not start the next task. Do not add features that were not asked for.
 - An item is done only when all tests pass (`uv run pytest`) and the fake replay passes. Tick it
   in the task file.
-- If a design question comes up, STOP and write the question down. Do not guess.
+- If a design question comes up that the spec does not answer, STOP and write the question
+  under the task's **Notes**. Do not guess.
+- Every behavior change ships with at least one replay scenario that shows it (scenario rules
+  under Tests).
+- Tests always use the fake LLM; the real model is used only in a task's last part, through the
+  replay script and a live session.
 
 ## Language
 - Code, identifiers, comments, docstrings, logs, error messages, docs: English.
@@ -54,7 +59,7 @@ Status: prototype. Before touching code read [docs/constitution.md](docs/constit
    port, and provider drivers live in `monoagens/infra/providers/`. From Task 6 on (D86) it never
    reads an event's `payload` or `labels`: it reads ids, times, `description` and `features`.
 2. **The log is immutable.** The `events` table is INSERT-only, enforced by a trigger. The only
-   exception is hard forgetting (`docs/core.md` §7), through one dedicated function that the trigger
+   exception is hard forgetting (`docs/spec.md` §3.7), through one dedicated function that the trigger
    recognizes. `event_vectors` rows are deleted only by fading or hard forgetting, each
    through its own dedicated path that writes an event.
 3. **One queue, one consumer.** Every source (adapters, clock) only `put`s into the queue.
@@ -65,24 +70,24 @@ Status: prototype. Before touching code read [docs/constitution.md](docs/constit
    message or per tick by default; each call is a gate decision, is recorded as an event with
    its purpose and token usage, and counts toward the daily budget.
 6. **No scenario features.** No "reminder", "monitor", or "habit tracker" modules. All of them
-   are Expectations (see `docs/core.md` §5). If an idea cannot be an Expectation, a state key, or an adapter
+   are Expectations (see `docs/spec.md` §3.5). If an idea cannot be an Expectation, a state key, or an adapter
    adapter, it does not go in.
 7. **Pure async.** No blocking calls inside `async def`. CPU work (embedding) goes through
    `asyncio.to_thread`. Every hook call and background job runs under its watchdog timeout
-   (`docs/core.md` §3).
+   (`docs/spec.md` §3.3).
 8. **Configuration lives outside code.** The model provider and its fallbacks, models, keys, URLs and the optional reasoning effort come from `.env`; deployment settings
    from `config.yaml` and `config.d/`. Identity comes from the birth certificate (`soul.yaml`); weights and thresholds from the prior in `prior/` (D35).
    No magic numbers in code.
 9. **Signals are pure.** A cognition signal only reads its `Situation` and returns a number in
    [0, 1]. No writes, no LLM calls, no I/O beyond what `Situation` already holds.
 10. **Decisions are reproducible.** Random draws come only from the seeded generator described
-   in `docs/core.md`, and all time comes from the injected clock (replay uses event times); never from
+   in `docs/spec.md` §3.3, and all time comes from the injected clock (replay uses event times); never from
    `random`, `datetime.now()` or `time.time()` directly.
 11. **Complexity budget** (D26, D32). The core holds at most 4 books, 5 thought acts
    (think, act, expect, resolve, revise), 3 hooks (inbound, context, action), 10 signals,
    3 drives and one gate formula. A change that needs another core
    primitive stops and goes to the architect.
-12. **Generic only** (D86, D87; contract.md §5). The core and the middleware never name or branch
+12. **Generic only** (D86, D87; `docs/spec.md` §2.5). The core and the middleware never name or branch
    on a body, a platform or a device; they translate nothing (adapters and plugins do). No code
    in the core or the middleware tries to understand human language: no word lists, stopwords,
    keyword or substring matching on message text, regexes over rendered text. Decisions not left
@@ -95,7 +100,7 @@ Status: prototype. Before touching code read [docs/constitution.md](docs/constit
    fix seems to need one, stop and report.
 14. **The contract lock** (D88). `monoagens/contract/` is the contract as code and
    `contract.lock` its hash; a test fails when they differ. Never edit either; only the owner
-   does, with a decision in `docs/contract.md`.
+   does, with a decision in `docs/spec.md` §2.
 
 ## Stack and versions
 - Python 3.13+, managed with `uv` (commit `uv.lock`).
@@ -129,7 +134,7 @@ Status: prototype. Before touching code read [docs/constitution.md](docs/constit
 
 ## Size guide (excluding tests)
 Readability comes first. The real limit on the core is the complexity budget in
-`docs/constitution.md` §4 (books, thought acts, hooks, signals, drives, one gate formula), not a
+`docs/spec.md` §1.4 (books, thought acts, hooks, signals, drives, one gate formula), not a
 line count. Line numbers are only a signal for review:
 - A core module that passes about **300 lines** is a sign it may hold two jobs; split it by
   responsibility when that makes it clearer, not to hit a number.
@@ -149,13 +154,13 @@ line count. Line numbers are only a signal for review:
 - Always `git pull --rebase` before starting and before pushing.
 
 ## Tests
-- **Tests speak through the contract only** (D88, contract.md §7; from Task 6 Part 6 on). A test
+- **Tests speak through the contract only** (D88, `docs/spec.md` §2.7; from Task 6 Part 6 on). A test
   of the core or the middleware feeds percepts and checks actions, receipts and events. It never
   calls a private function (`_name`), never asserts on an internal payload, and never asserts on
   prompt wording; an architecture test refuses imports of private names in `tests/`. If you feel
   you must edit a contract test, you are changing the contract: stop and report.
 - **Invariants over cases**: the rules of the core and the middleware are held by Hypothesis
-  stateful tests (contract.md §7); scenarios are for the soul's behavior, not for one case of a
+  stateful tests (`docs/spec.md` §2.7); scenarios are for the soul's behavior, not for one case of a
   rule.
 - Tests use a real Postgres (the container from `compose.yaml`), never a mocked database.
 - The LLM and HTTP are always fake in tests (scripted FakeLLM, `httpx.MockTransport`). The real

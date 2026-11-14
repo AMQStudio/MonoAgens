@@ -1,22 +1,22 @@
 # Task 5 — Adapters: WhatsApp, Discord and more
 
 Status: **stopped** at 1.12 P (owner, 2026-11-14) | Depends on: Task 4
-**What remains moved to [Task 6](6-contract.md)** (the locked contract, D86–D88): 1.10's D83 and
+**What remains moved to [Task 6](../6-contract.md)** (the locked contract, D86–D88): 1.10's D83 and
 D84/D85 rest, 1.11, 1.12 F.2–F.12, E, O and S.6, and 1.8. They are not done here; the items stay
 unticked as history. Contract v2 removes several of their premises (the neutral `say`, `SHOWS`,
 place info, platform roles); Task 6 is the source.
-One task = one worker prompt, done by one worker. Work through the parts **in order**. File names follow the layout of Task 3 ([glossary](../glossary.md)). Rules: [README](README.md).
+One task = one worker prompt, done by one worker. Work through the parts **in order**. File names follow the layout of Task 3 ([spec.md §9](../../spec.md)). Rules: [README](../README.md).
 
 **Goal.** The soul is usable every day: model providers as drivers with a fallback, the loop
 and privacy fixes, nothing lost when work continues; then one soul across WhatsApp, Discord and
 Telegram with one id per person so privacy follows people, every adapter (Telegram and CLI
 included) using everything its platform offers. The task ends with Part 1; voice, Home Assistant
-and more provider drivers moved to [later-voice-home.md](later-voice-home.md) (owner, 2026-11-13).
+and more provider drivers moved to [later-voice-home.md](../later-voice-home.md) (owner, 2026-11-13).
 
 ---
 
 ## Part 0A — Providers (first)
-Read first: [core.md](../core.md) §3 (the model port, D64), [glossary.md](../glossary.md), [project.md](../project.md) §2
+Read first: [spec.md §3.3](../../spec.md) (the model port, D64), [spec.md §9](../../spec.md), [spec.md §8.2](../../spec.md)
 May touch: `monoagens/infra/providers/` (new), `monoagens/boot.py`, `monoagens/__main__.py`, `scripts/replay.py`, `.env.example`, `README.md` (the model section), `tests/`; for A.1 only: `monoagens/core/reasoning.py`
 
 All real-model work below depends on this part, so it comes first. V1 (branch `archived`) has
@@ -28,24 +28,24 @@ provider code under `monoagens/providers/` (Anthropic, Gemini, OpenAI); port wha
 - [x] A.4 New baseline: the launch set once with the real model through OpenCode Go (`deepseek-v4.1-flash`, `--effort high`); record checks per scenario and tokens (cached included) under Notes. Later measurements compare with this baseline, not with Task 4's 24/26 on another gateway.
 
 ## Part 0B — The loop, brakes and one privacy truth
-Read first: [middleware.md](../middleware.md) §3, §4; the Notes of Task 4
+Read first: [spec.md §4.3](../../spec.md), §4; the Notes of Task 4
 May touch: `monoagens/middleware/`, `tests/`, `scenarios/`, `scripts/replay.py`, `config.yaml`; for B.1 only, and only with the Log evidence: the core files that evidence names, reported first
 
 - [x] B.1 The loop in scenario 19 (Task 4 Notes: 467 model calls, 2.05 M tokens for six steps): find the exact cause in the Log (which events wake the soul again and again, and why: for example an expectation whose cue is already past firing at once), write it under Notes with the event ids, and fix it where it lives. A core fix needs the evidence and names its files before any edit.
-- [x] B.2 Brakes (middleware.md §4, D63): `max_task_steps` and `max_wakes_per_hour` per chain in `config.yaml` → `owner_settings` (starting values 30 and 20); a held brake stops the chain, is recorded, and tells the owner in the owner's direct chat which work stopped and why, with the choice to continue. Test: a scripted endless loop stops at the limit and the owner gets one message.
-- [x] B.3 One privacy truth (middleware.md §3): `privacy.leaks` answers from the audience labels like the context filter, so content visible at the target is never refused as a leak; a text-similarity check only catches content that is not visible there. Test: scenario 18 step 4 quotes the desk line and is sent; quoting the owner's private chat in a group is still refused.
+- [x] B.2 Brakes ([spec.md §4.4](../../spec.md), D63): `max_task_steps` and `max_wakes_per_hour` per chain in `config.yaml` → `owner_settings` (starting values 30 and 20); a held brake stops the chain, is recorded, and tells the owner in the owner's direct chat which work stopped and why, with the choice to continue. Test: a scripted endless loop stops at the limit and the owner gets one message.
+- [x] B.3 One privacy truth ([spec.md §4.3](../../spec.md)): `privacy.leaks` answers from the audience labels like the context filter, so content visible at the target is never refused as a leak; a text-similarity check only catches content that is not visible there. Test: scenario 18 step 4 quotes the desk line and is sent; quoting the owner's private chat in a group is still refused.
 - [x] B.4 Measure: scenario 19 under 30 model calls with the real model, 18 step 4 passes, the launch set stays at or above the new baseline of A.4.
 
 ## Part 0C — Continuing work without losing anything
-Read first: [middleware.md](../middleware.md) §4, §10, [plugins.md](../plugins.md) §5.3, [core.md](../core.md) §4 (D52 working memory, task threads)
+Read first: [spec.md §4.4](../../spec.md), §10, [spec.md §6.5.3](../../spec.md), [spec.md §3.4](../../spec.md) (D52 working memory, task threads)
 May touch: `monoagens/middleware/`, `monoagens/infra/` (attachment store), `plugins/workspace/`, `tests/`, `scenarios/`, `scripts/replay.py`
 
-- [x] C.1 Full outputs (middleware.md §4, D62): an output past its cap is stored whole in the attachment store with the `act.result` as origin; the result carries the cut text and `full: {ref, size}`; `contract.OUTPUT_MARKER` names the ref and the offset; `registry.more(ref, offset, limit)` (permission at tier `guest`, facts `reads`) reads the rest of any tool's output through the attachment privacy check; hard forgetting removes it. Test: a 50 MB `run` output is read back completely in parts; it does not open from a place outside its audience.
-- [x] C.2 Workspace progress note (plugins.md §5.3): the standing rule for work of more than a few steps; `progress.md` in the workspace, updated after each step, read first on resuming.
+- [x] C.1 Full outputs ([spec.md §4.4](../../spec.md), D62): an output past its cap is stored whole in the attachment store with the `act.result` as origin; the result carries the cut text and `full: {ref, size}`; `contract.OUTPUT_MARKER` names the ref and the offset; `registry.more(ref, offset, limit)` (permission at tier `guest`, facts `reads`) reads the rest of any tool's output through the attachment privacy check; hard forgetting removes it. Test: a 50 MB `run` output is read back completely in parts; it does not open from a place outside its audience.
+- [x] C.2 Workspace progress note ([spec.md §6.5.3](../../spec.md)): the standing rule for work of more than a few steps; `progress.md` in the workspace, updated after each step, read first on resuming.
 - [x] C.3 Scenario "paper over two days" (D54, all material in the scenario): (1) the owner asks to write a paper; (2) asks for a revision; (3) asks to send it to Budi (consent and file forwarding apply); (4) says "continue tonight" (an expectation with a time); **the process is restarted mid-work** before tonight; (5) the next day asks for a new paper in the same format. Checks: the work resumes from the right step after the restart (progress.md and `<doing>`), tonight's expectation fires once, the next day's paper follows the earlier format found in the workspace, nothing is claimed as done without its result, and every long output is reachable through its ref. Fake replay first, then the real model once with B.4's run.
 
 ## Part 1 — Identity, places, WhatsApp and Discord
-Read first: [adapters.md](../adapters.md) (all), [middleware.md](../middleware.md) §7 (identity), §8 (platform roles), §9 (interaction), §10 (attachments), [core.md](../core.md) §4 (history and import), §8 (two ids become one), §9.2
+Read first: [spec.md §5](../../spec.md) (all), [spec.md §4.7](../../spec.md) (identity), §8 (platform roles), §9 (interaction), §10 (attachments), [spec.md §3.4](../../spec.md) (history and import), §8 (two ids become one), §9.2
 May touch: `monoagens/adapters/`, `monoagens/middleware/` (identity, interaction, roles, contract), `monoagens/infra/` (attachment store: deferred refs), `config.yaml`, `pyproject.toml` and `uv.lock` (the adapter extras approved in AGENTS.md), `.gitignore`, `.env.example`, `tests/`, `scenarios/`, `scripts/replay.py`; `monoagens/core/` only for `source.merged` (1.1) and `imported` (1.3), and only after the plan and the files it names are written under Notes (`kernel.py` or `store.py` included only if named)
 
 V1 (branch `archived`) already has working WhatsApp (neonize: media, history sync, identity,
@@ -58,7 +58,7 @@ native first, D68 places, D69 back-fill and import, D70 what is shown.
 Identity comes first: it is what lets a person's private context follow them (D45), so a wrong
 link is a leak.
 
-**Every adapter is native** (D67, adapters.md §1, §4). What Part 1 says of WhatsApp and Discord
+**Every adapter is native** (D67, [spec.md §5.1](../../spec.md), §4). What Part 1 says of WhatsApp and Discord
 holds for every adapter, Telegram and CLI included: everything the platform delivers becomes a
 percept, everything the platform can show is used, and each gap is declared with its reason. No
 adapter is a special case.
@@ -70,18 +70,18 @@ adapter is a special case.
   Existing development data uses the old ids: the owner decided (2026-11-13) to reset the
   development database, not to convert it. Test: a new account gets one id, two racing
   percepts of it get the same id, a mention is mapped, the core sees no account.
-- [x] 1.1 Linking as a merge (D65, middleware.md §7, core.md §8): `/link` by the owner and by
+- [x] 1.1 Linking as a merge (D65, [spec.md §4.7](../../spec.md), [spec.md §3.8](../../spec.md)): `/link` by the owner and by
   code (single use, 10 minutes, three tries), `/unlink`; `identity.merged` into the older id
   (`person:owner` always wins); the middleware puts `source.merged` and the core applies it to
-  its own books as core.md §8 says, reads of the log following the merge. Tests: two ids with
+  its own books as [spec.md §3.8](../../spec.md) says, reads of the log following the merge. Tests: two ids with
   history merge into one card and one memory, `recall` finds both sides, audience labels of old
   lines follow the merge, a wrong or expired code links nothing, `/unlink` gives a new id from
   then on and splits nothing, the soul has no tool that links.
-- [x] 1.2 Places (D68, adapters.md §3): place info with `form`, `parent`, `can_post`, `name`,
+- [x] 1.2 Places (D68, [spec.md §5.3](../../spec.md)): place info with `form`, `parent`, `can_post`, `name`,
   `members` and platform role facts, kept by identity; Telegram reports it first (private chat,
   group, forum topic as `thread`, channel as `broadcast`). Test: a send to a place where
   `can_post` is false is refused with its reason; `/whoami` shows the place's form and parent.
-- [x] 1.3 WhatsApp (neonize, adapters.md §4–§6): one stable form per account (LID and phone
+- [x] 1.3 WhatsApp (neonize, [spec.md](../../spec.md) §5.4–§5.6): one stable form per account (LID and phone
   number are one account); everything in as percepts (text, replies, mentions, edits,
   deletions, reactions, stickers, locations, contact cards, polls, view-once, albums as one
   percept with several attachments, calls as percepts (incoming, missed, ended), group events); out through `say` (attachments, reply_to,
@@ -93,22 +93,22 @@ adapter is a special case.
   model call; a message typed on the owner's phone is a percept from the owner and the soul's
   own message is not; an album of three photos is one percept; a deferred photo opens once
   fetched.
-- [x] 1.4 Discord (discord.py, adapters.md §4): servers as `parent`, channels, threads, DMs;
+- [x] 1.4 Discord (discord.py, [spec.md §5.4](../../spec.md)): servers as `parent`, channels, threads, DMs;
   everything in as on WhatsApp; buttons and menus drawn by the adapter, interactions
   acknowledged within 3 s by deferring inside the adapter; several attachments per message;
   the Discord role ids of the sender reported with each percept.
-- [x] 1.4b Telegram and CLI to native (D67, adapters.md §4, §7): Telegram reads and shows
+- [x] 1.4b Telegram and CLI to native (D67, [spec.md §5.4](../../spec.md), §7): Telegram reads and shows
   everything the Bot API offers (inline buttons and the command menu, edit, delete, reply,
   reactions, polls, stickers, albums, locations, contacts, forum topics, channels, typing), with
   `say`, `react` and `edit` as on the others; the CLI shows what a terminal can (typing and
   progress as status lines, buttons as numbered choices). The coverage declaration and the
-  contract test of adapters.md §4 run over every adapter (Telegram, CLI, WhatsApp, Discord);
+  contract test of [spec.md §5.4](../../spec.md) run over every adapter (Telegram, CLI, WhatsApp, Discord);
   each gap is declared with its reason (Telegram: no history, no read receipts). `say`'s
   neutral fields (`choices`, `thread`, `location`) work on every adapter through its best native
   form or the fallback. Platform-only actions (pin, reject a call, Discord role management, …) are adapter-own
   tools, off by default, offered only when listed under `bodies.<adapter>.tools:`; test that an
   unlisted one is not in the prompt.
-- [x] 1.5 What is shown (D70, middleware.md §9): `contract.SHOWS` with the full vocabulary;
+- [x] 1.5 What is shown (D70, [spec.md §4.9](../../spec.md)): `contract.SHOWS` with the full vocabulary;
   settings from `interaction:` and `bodies.<adapter>.show:`; `/show <name> <value> [adapter]`;
   thinking `off | owner_direct | all` (all still passes `privacy.visible` per thought); typing only
   when the soul is going to speak (replace Task 4's rule that also shows it for long actions);
@@ -118,7 +118,7 @@ adapter is a special case.
   text; choices: buttons → poll → numbered list; thread → reply with the title; location →
   text; sticker → emoji). The decisions stay in `interaction.py`; adapters only draw. Test per
   setting; a silent decision shows no typing.
-- [x] 1.6 Roles from Discord (D68, middleware.md §8): `discord_role:` on a role, by ids; held only
+- [x] 1.6 Roles from Discord (D68, [spec.md §4.8](../../spec.md)): `discord_role:` on a role, by ids; held only
   in places whose `parent` chain reaches that server; a role taken away on Discord is gone at the
   next percept; an unmapped Discord role grants nothing. Test: the same person is a moderator in
   the server's channel and not in a DM or on WhatsApp.
@@ -126,7 +126,7 @@ adapter is a special case.
   coverage table of every adapter is in the boot report with no undeclared gap; a person's
   private context follows them only after a verified link; a file received on WhatsApp can be
   read and sent on; a sticker received can be sent back.
-- [x] 1.9 Neutral middleware (D81, middleware.md §1, §8, §9; adapters.md §3, §4) — before the
+- [x] 1.9 Neutral middleware (D81, [spec.md §4.1](../../spec.md), §8, §9; [spec.md §5.3](../../spec.md), §4) — before the
   live session of 1.8: remove every platform from the middleware (no adapter names, platform id
   prefixes such as `space:dc:guild:`, `guild_id`, emoji or yes/no words in `middleware/`);
   `discord_role` becomes `platform_role: ["<space>/<role id>"]` with `data.platform_roles` from the
@@ -139,12 +139,12 @@ adapter is a special case.
   come from the Log). An architecture test fails on any of these. Tests: an approval answered by
   reaction after a restart still counts; a brake prompt in Indonesian with `language: id`; the
   same moderator test as 1.6 with `platform_role`.
-- [ ] 1.10 Failures and one way to speak (D82, D83; middleware.md §2, §4) — before the live
+- [ ] 1.10 Failures and one way to speak (D82, D83; [spec.md §4.2](../../spec.md), §4) — before the live
   session of 1.8: rule kinds guard / best-effort in the composer (every show is best-effort;
   policy, privacy, identity and roles stay guards); a refused communicative act returns to
   reasoning with its reason for one more round; one neutral `say`, `react`, `edit` routed to the
   trigger's place (or `to:` / `via:`), the `<adapter>.say` entries hidden from the prompt;
-  privacy enforced before the model only (D84, middleware.md §3): the text-similarity check is
+  privacy enforced before the model only (D84, [spec.md §4.3](../../spec.md)): the text-similarity check is
   removed entirely (no `privacy.leaks`, no suspect events); every item entering a context is
   checked against the place's audience and a failure is dropped and recorded as `error`; an
   intent to another place carries the drafted words only if every private item of the source
@@ -231,7 +231,7 @@ adapter is a special case.
   - [x] A.8 Only communicative capabilities, `react` and `edit` may declare no permission; any
     other fails at boot.
 
-  **F. Failures and liveness** (D82, middleware.md §2)
+  **F. Failures and liveness** (D82, [spec.md §4.2](../../spec.md))
   - [x] F.1 Guard and best-effort rule kinds; a refused act is recorded truthfully
     (`refused: true`), returns to reasoning and is bounded by the brake; exception text never
     reaches the Log or logs, only its type (1bc9cd6).
@@ -260,7 +260,7 @@ adapter is a special case.
   - [ ] F.12 A command handler that raises answers with an error; command replies go through the
     action hook (quiet hours, `can_post`).
 
-  **P. Privacy** (D84, D85, middleware.md §3; with 1.10's privacy part)
+  **P. Privacy** (D84, D85, [spec.md §4.3](../../spec.md); with 1.10's privacy part)
   - [x] P.1 Audience = members from place info plus speakers (D85); a shared place with unknown
     membership includes *unknown*; `visible()` fails closed and an empty audience of a shared
     place is never "everyone".
@@ -285,10 +285,10 @@ adapter is a special case.
   - [x] P.11 D80 delegation applies only to the one reply to the delegated message.
   - [x] P.12 Report only: `share` without an episode, and what hard forgetting leaves behind
     (core_memory text, payloads, a late vector insert), each against the spec.
-  - [x] P.13 `share` follows its spec (middleware.md §3, D46): it names an item or an episode;
+  - [x] P.13 `share` follows its spec ([spec.md §4.3](../../spec.md), D46): it names an item or an episode;
     the grant covers only those events, never the whole place before or after; a `share`
     without either is refused with a question.
-  - [x] P.14 Hard forgetting follows core.md §7: `core_memory` whose `derived_from` overlaps
+  - [x] P.14 Hard forgetting follows [spec.md §3.7](../../spec.md): `core_memory` whose `derived_from` overlaps
     the forgotten ids is cleared and rebuilt at the next sleep (with the `sleep.done` copy);
     an in-flight encode or embed job never inserts a vector for a forgotten event. Payloads of
     later events that quote a forgotten one are a design gap for Task 6, noted, not changed.
@@ -397,7 +397,7 @@ Failing scenarios: `23_recall_episodes` (5/7), `24_gate_threshold` (10/11).
   3. `monoagens/core/context/working.py`: in `_lines`, keep all `act.result` lines from the latest round's trigger (`caused_by` of its `act.out`, when non-None) visible so batched tool outputs are not hidden by a sibling result.
 - **B.3 & Scenario 18 Step 8 / 8b (D45, D46, D80; D54)**:
   - Unifying `privacy.leaks` with `filter_context` across memories and events (`percept`, `act.out`, `act.result`) exposed a contradiction in Scenario 18 step 8 (`18_game_world_file_and_share.yaml`): Budi replied `"Cocok kok, cuma warnanya agak terlalu terang."` in his private WhatsApp DM (`space:wa:628110001@s.whatsapp.net`) while Charlie was already in `space:game:world1`, yet the old check expected that quote verbatim in `world1` without consent (D54: the old check forbade correct D45 behavior, and `filter_context` already withheld Budi's DM from `world1`'s desk).
-  - Implemented **D80** (`docs/middleware.md` §3): at intake (`privacy.delegation` in `hooks.inbound`), a single matching reply to a delegated send (`wait` expectation whose chain sent a communicative `act.out`, or `reply_to` referencing it) adds the delegator `X` (`person:owner`) to that one reply event's audience (`state: delegated:<event_id>`); later unrelated lines from Budi and Fulan's DM keep only their own audience and cannot be shared by the owner. Updated Scenario 18 step 8 to ask the owner without quoting Budi's words (allowing either asking in `world1` or answering in `space:game:dm:`) and added step 8b (`"di sini aja"`, step 9 in the log) proving `share.granted` unlocks Budi's matched reply for `world1` before `act.out`.
+  - Implemented **D80** ([spec.md §4.3](../../spec.md)): at intake (`privacy.delegation` in `hooks.inbound`), a single matching reply to a delegated send (`wait` expectation whose chain sent a communicative `act.out`, or `reply_to` referencing it) adds the delegator `X` (`person:owner`) to that one reply event's audience (`state: delegated:<event_id>`); later unrelated lines from Budi and Fulan's DM keep only their own audience and cannot be shared by the owner. Updated Scenario 18 step 8 to ask the owner without quoting Budi's words (allowing either asking in `world1` or answering in `space:game:dm:`) and added step 8b (`"di sini aja"`, step 9 in the log) proving `share.granted` unlocks Budi's matched reply for `world1` before `act.out`.
 - **Progress**: B.1 fixed and verified (Scenario 19 loop eliminated); B.2 brakes (`max_task_steps`, `max_wakes_per_hour` in `config.yaml -> owner_settings`, `brake.held` / `brake.resumed`, owner direct notice with continue prompt) implemented and verified; B.3 unified `privacy.leaks` + D80 delegation rule and Scenario 18 Step 8/8b implemented and verified (`uv run pytest`, `scripts/replay.py --fake` 137/137); B.4 measured (2026-11-13, `deepseek-v4.1-flash`, `--effort high`).
 - **B.4 Part 0B real-model measurements (`deepseek-v4.1-flash`, `--effort high`, 2026-11-13)**:
   - **Scenario 19** (`reports/2026-11-13-1239-real-18-19.md`): **16 LLM calls** (down from 467 calls / 2.05 M tokens in Task 4; well under the 30-call cap), **62,103 total tokens** (53,265 prompt · 38,656 cached · 8,838 completion · 6,375 reasoning), 11/21 checks passed (`brake.held` cleanly stopped step 4 at limit).
@@ -407,7 +407,7 @@ Failing scenarios: `23_recall_episodes` (5/7), `24_gate_threshold` (10/11).
 - **Progress C.2**: done — registered `progress.md` multi-step standing rule in `plugins/workspace/__init__.py` (renders in `<self>`); 556 passed, 1 skipped (`uv run pytest`); fake replay 137/137 passed.
 - **Progress C.3**: done — added `scenarios/memory/31_paper_over_two_days.yaml` + `refs_reachable` / `honest` / workspace reset checks in `scripts/replay.py`. Fake replay: 21/21 checks on Scenario 31 (158/158 across all 31 scenarios, Honesty 97.1%). Real-model run (`deepseek-v4.1-flash`, `--effort high`, `reports/2026-11-13-1311-real-31.md`): **17/21** checks, 37 LLM calls, 199,069 tokens (96,512 cached), missed-help 0.0%, false-speak 0.0%, absolute-line violations 0, honesty **100.0%** (`registry.more` retrieved the truncated `APPENDIX_Z_MARKER`, `progress.md` + `<doing>` resumed after restart with single `expectation.fired`, day-2 paper reused day-1 headings without fabricating missing cache metrics; 4 fails were `deepseek-v4.1-flash` calling `whatsapp.say` before `self.share` -> `guard.stopped` in step 4, and reaching the 3-round thought limit on step 7 before speaking).
 - **Progress 1.0**: done — Telegram adapter (`monoagens/adapters/telegram/format.py`, `__init__.py`) emits native `telegram:<id>` accounts (including `data.mentions`, `data.reply_to.who`, `telegram:chat:<id>`); `monoagens/middleware/identity.py` maps `who`, `origin_actor`, `data.mentions`, and `data.reply_to.who` at intake via `resolve_account` (pg advisory lock + `alias:<account>` unique state + `identity.registered`, generating `person:p_<hex>` while rewriting the paired owner's alias to `person:owner`); `559 passed, 1 skipped` (`uv run pytest -q`); fake replay `158/158` passed; core import invariant clean.
-- **Plan 1.1 (`source.merged` in `monoagens/core/`, core.md §8)**:
+- **Plan 1.1 (`source.merged` in `monoagens/core/`, [spec.md §3.8](../../spec.md))**:
   - `monoagens/core/memory/cards.py`: add `canonical(conn, who)`, `merge_map(conn)`, `equivalent_sources(conn, who)`, and `apply_merge(conn, src, dst, event_id)` to write `state: merged:<from>` = `{"into": into}`, fold `state: person:<from>` into `state: person:<into>` (higher closeness, summed reliability counts, fallback name), move `habit:*:<from>`, `last_seen:<from>`, and open `task:*` entries to `<into>`, update `memories.who`, `expectations.who`, and `expectations.origin_actor` to `<into>`, and update `closeness()` to resolve `canonical`.
   - `monoagens/core/memory/__init__.py`: re-export `apply_merge`, `canonical`, `equivalent_sources`, `merge_map`.
   - `monoagens/core/kernel.py`: in `_append`, when `project` is true and `stored.kind == "source.merged"`, call `await memory.apply_merge(self.conn, src, dst, stored.id)` inside the append transaction (so both `kernel.put` and `kernel._emit` apply merges atomically without a queue deadlock inside inbound command handlers).
@@ -417,7 +417,7 @@ Failing scenarios: `23_recall_episodes` (5/7), `24_gate_threshold` (10/11).
   - `monoagens/core/memory/retrieval.py` and `monoagens/core/memory/sleep.py`: canonicalize event and memory `who` through `cards.merge_map` during ACT-R retrieval formatting and sleep consolidation.
 - **Progress 1.1**: done — implemented `/link` (owner 2-arg + 6-digit single-use 10m 3-try code) & `/unlink` commands in `identity.py` (never exposed as soul tools); emits `identity.merged` (`person:owner` always wins, else older id) + `source.merged`; core `cards.apply_merge` folds `person:` closeness/reliability, moves `habit:*`/`last_seen:*`/open `task:*`, updates `memories` & `expectations`, and core log reads (`layout`, `situation`, `recall`, `retrieval`, `sleep`) + `privacy.audience` (via `alias:`) + `roles.reconcile_merges` follow the merge cleanly without rewriting `events`; `563 passed, 1 skipped` (`uv run pytest -q`); fake replay `158/158` passed; core import invariant clean.
 - **Progress 1.2**: done — Telegram `place_info` (`send.py`), `format.py`, and `__init__.py` report structured `{form, parent, can_post, name, members, roles}` for DMs (`dm`), groups (`group`), forum topics (`thread` with `message_thread_id`), and channels (`broadcast`, `channel_post`, `can_post` from permissions/membership); `identity.place_tracker` persists `state: place:<id>`, `identity.route` refuses sends to `can_post: false` places before any act runs, and `/whoami` renders `form` and `parent`; `567 passed, 1 skipped` (`uv run pytest -q`); fake replay `158/158` passed; core import invariant clean.
-- **Plan 1.3 (`imported` in `monoagens/core/`, D69, adapters.md §5)**:
+- **Plan 1.3 (`imported` in `monoagens/core/`, D69, [spec.md §5.5](../../spec.md))**:
   - `monoagens/core/kernel.py`: in `_wake`, return immediately when `event.kind == "percept" and event.payload.get("imported") is True` (after `_flush_batches` / `job.result` / `intent`, before `expectations.due`, `sleep_due`, `_appraise`, and `_think`), so imported history percepts are still recorded into `events` (and embedded if an embedder is set so `recall` / text search find them) while never firing expectations, triggering appraisal/model calls, or tripping brakes.
   - `monoagens/core/memory/sleep.py`: in `sleep_due`, restrict `newest` and `idle_since` (`kind IN ('percept', 'act.out')`) to non-imported events (`COALESCE((payload->>'imported')::boolean, false) = false`) so history imports alone never trigger sleep; in `_consolidate`, exclude `imported: true` events whose `place` has no non-imported `percept`/`act.out`, and also include earlier (`id <= last_id`) imported events for places whose first non-imported `percept`/`act.out` arrived after `last_id`, so imported history is summarized only when/where a place becomes active.
 - **Progress 1.3**: done — ported WhatsApp adapter on `neonize>=0.5.2,<0.6` and `segno>=1.6` (`pyproject.toml` `[project.optional-dependencies] whatsapp`, `protobuf>=7` override, `uv.lock`, `.env.example`): LID/PN unification in `identity.py`, rich inbound percepts/album grouping/calls/groups in `format.py`, deferred media refs with on-demand fetch + re-upload retry (`infra/attachments.py`, `middleware/contract.py`, `whatsapp/media.py`), D66 Log `act.result` echo suppression + `shared_account_blocks` context note in `middleware/identity.py`, D69 `imported: true` skipping wake/sleep on inactive places (`core/kernel.py`, `core/memory/sleep.py`), Channels (`broadcast`) & Communities (`parent`), rich `say`/`react`/`edit`, and `cli.py` pairing helper; `574 passed, 1 skipped` (`uv run pytest -q`); fake replay `158/158` passed; core & adapter import invariants clean.
@@ -476,7 +476,7 @@ Failing scenarios: `23_recall_episodes` (5/7), `24_gate_threshold` (10/11).
 - **1.12 P (Privacy, D84/D85) implementation & audit notes (2026-11-14)**:
   - **Surprising / extra fixes needed under D84/D85 fail-closed audiences**: `identity.person_cards` (`monoagens/middleware/identity.py`) also needed `privacy.UNKNOWN` excluded alongside `OWNER` so unknown-membership shared places do not render a `- *unknown*:` person card; `privacy.py` added `_task_parent` handling so `space:task:*` threads remain visible to their own parent place (e.g. `<doing>` lines) and updated `verify_context` to fold dropped items into `withheld` counts; pre-D84/D85 fixtures that relied on speaker-only shared groups (`place_info.members` missing), untagged owner DMs (`place_kind` missing), removed text-similarity refusals (`leaks`/`leaving`), `because {goal}` in intents, or an uncapped 30 MB `registry.more` chunk were updated (`test_identity.py`, `test_part1_integration.py`, `test_reasoning.py`, `test_attachments.py`, `test_foundation_check.py`, `test_policy.py`, `test_replay_metrics.py`, `test_expectation_conditions.py`, `test_registry.py`, `test_workspace_scenario.py`); `sleep._consolidate` (`monoagens/core/memory/sleep.py`) now also excludes `sleep.failed` alongside `sleep.done` so a retried sleep after rollback does not consolidate `sleep.failed` under `place=None`.
   - **P.3 unused SQL objects for owner migration approval (`sql/migrations/003_privacy_indexes.sql`)**: unused GIN indexes `idx_events_privacy_trgm`, `idx_events_privacy_tsv`, `idx_memories_privacy_trgm`, `idx_memories_privacy_tsv`, and unused SQL functions `event_line_text(kind text, payload jsonb)` and `privacy_clean_text(txt text)` (`idx_events_share_granted` remains in use by `_share_grants`).
-  - **P.12 report-only findings vs spec**: (1) **`share` without `episode`**: `grant()` (`privacy.py`) writes `"episode": None, "source_place": source`, and `_share_grants()` matches `source_place = %s AND (NOT (payload ? 'episode') OR payload->>'episode' IS NULL)` across all `event_id`s whenever `before` is unset or later, granting place-wide access instead of scoped item/episode consent (`docs/middleware.md` D46). (2) **Hard forgetting (`core/memory/forget.py:forget_hard`) vs `docs/core.md` §2/§7**: does not invalidate or rebuild `state: core_memory` (or scrub `sleep.done` `core_memory` payloads) when its `derived_from` overlaps forgotten IDs; scrubs `events.payload` ONLY for `id = ANY(ids)` leaving downstream `caused_by` payloads (`act.out`, `act.result`, `decision.*`, `model.call`, `expectation.*`) intact; and `kernel._finish_job` calls `insert_event_vector` / `insert_event_vectors` (`infra/store.py`) without checking whether `events.payload` became `{"forgotten": true}`, allowing an in-flight `encode`/`embed_batch` job to re-insert vectors after `forget_hard()` finishes.
+  - **P.12 report-only findings vs spec**: (1) **`share` without `episode`**: `grant()` (`privacy.py`) writes `"episode": None, "source_place": source`, and `_share_grants()` matches `source_place = %s AND (NOT (payload ? 'episode') OR payload->>'episode' IS NULL)` across all `event_id`s whenever `before` is unset or later, granting place-wide access instead of scoped item/episode consent (`docs/middleware.md` D46). (2) **Hard forgetting (`core/memory/forget.py:forget_hard`) vs [spec.md §3.2](../../spec.md)/§7**: does not invalidate or rebuild `state: core_memory` (or scrub `sleep.done` `core_memory` payloads) when its `derived_from` overlaps forgotten IDs; scrubs `events.payload` ONLY for `id = ANY(ids)` leaving downstream `caused_by` payloads (`act.out`, `act.result`, `decision.*`, `model.call`, `expectation.*`) intact; and `kernel._finish_job` calls `insert_event_vector` / `insert_event_vectors` (`infra/store.py`) without checking whether `events.payload` became `{"forgotten": true}`, allowing an in-flight `encode`/`embed_batch` job to re-insert vectors after `forget_hard()` finishes.
   - **Question for owner (`scripts/replay.py` & `scenarios/` pre-D84/D85 expectations)**: `uv run pytest -q` passed (`656 passed, 1 skipped`), and `uv run python scripts/replay.py --fake` passed `156/158` checks with 2 pre-D84/D85 scenario check failures (`18_game_world_file_and_share` step 4 expects `space:game:world1` without `place_info.members` and with only the owner speaking to see Budi's DM file; `19_task_thread_two_groups` step 4 expects `"Tolong selesaikan"` from the removed `because {goal}`) and 4 `desk_violations` in `26_help_meeting_time` / `28_help_package_location` step 5 (groups lack `place_info.members`, so `*unknown*` enters `need`, while `replay.desk_violations` checks `need <= present | shared_persons` without allowing `share.granted` `"to"` / `consented_places` or seeding `place_info.members`). Approve updating `scripts/replay.py` (`desk_violations` + `_feed` `place_info.members`) and those two scenario expectations for D84/D85?
 - **1.12 P.13–P.15, migration `004`, and replay completion**:
   - **P.15** (single privacy home: `monoagens/middleware/privacy.py` `filter_context` in `policy_for("context", "last")` + `monoagens/core/kernel.py` removed `kernel.visible`): merged context filter & verification into one last-slot context check that also stops cross-place hidden `expectation.reminded` wakes (`guard.stopped`).

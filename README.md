@@ -17,7 +17,7 @@ knows when to stay quiet in a group, and can replay every decision it made.
   search, files, modes. Each translates its own world into the contract's facts and talks only
   to the middleware.
 
-One locked contract ([`docs/contract.md`](docs/contract.md)) sits between the layers: six
+One locked contract ([`docs/spec.md`](docs/spec.md) §2) sits between the layers: six
 generic facts (actor, place, audience, event, capability, receipt) that fit a chat, a robot, a
 workspace app, a sensor and a game alike. The inside can improve without breaking what is built
 on top, and something new enters only as an adapter or a plugin.
@@ -28,15 +28,14 @@ on top, and something new enters only as an adapter or a plugin.
 > brain ("memory", "attention", "sleep", "soul") name engineering mechanisms; they are not claims
 > of consciousness or feelings. *Agens* is Latin for "the one who acts", the root of *agent*.
 
-- [`docs/constitution.md`](docs/constitution.md) — the rules that never change (read first).
-- [`docs/contract.md`](docs/contract.md) — the one locked contract between the layers.
-- [`docs/core.md`](docs/core.md) — the core specification (contract frozen); formulas and sources
-  in [`docs/core-math.md`](docs/core-math.md).
-- [`docs/`](docs/README.md) — one specification per layer: middleware, adapters, plugins, project;
-  standard names in [`docs/glossary.md`](docs/glossary.md).
+- [`docs/spec.md`](docs/spec.md) — the one specification: principles, the locked contract, core,
+  middleware, adapters, plugins, operator, project, terms. Every rule written once.
+- [`docs/research.md`](docs/research.md) — the formulas behind the core, why each was chosen, and
+  their sources.
+- [`AGENTS.md`](AGENTS.md) — how coding agents work on this repository: rules, invariants, tests.
+- [`docs/tasks/`](docs/tasks/README.md) — the work for coding workers, in order; finished tasks in
+  `docs/tasks/done/`.
 - [`prior/`](prior/) — the default instincts (knob values) a new soul is born with; tune with replay.
-- [`docs/tasks/`](docs/tasks/README.md) — work for coding workers, in order.
-- [`AGENTS.md`](AGENTS.md) — rules and invariants for coding agents.
 - `scripts/replay.py` — scenario replay: tests, metrics and tuning.
 
 ## Install

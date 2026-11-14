@@ -1,7 +1,7 @@
 # Task 7 — Core: depth of mind
 
 Status: todo | Depends on: Task 6, and the owner using the soul daily on WhatsApp for some weeks
-One task = one worker prompt, done by one worker. Work through the parts **in order**. File names follow the layout of Task 3 ([glossary](../glossary.md)). Rules: [README](README.md).
+One task = one worker prompt, done by one worker. Work through the parts **in order**. File names follow the layout of Task 3 ([spec.md §9](../spec.md)). Rules: [AGENTS.md](../../AGENTS.md).
 
 **Goal.** The soul thinks before it speaks, knows itself honestly, corrects itself, keeps beliefs
 up to date, learns lessons that carry across adapters, and lets go of what it should forget.
@@ -9,16 +9,16 @@ up to date, learns lessons that carry across adapters, and lets go of what it sh
 ---
 
 ## Part 1 — Inner thought and self-model
-Read first: [core.md](../core.md) §6, §8
+Read first: [spec.md §3.6](../spec.md), §8
 May touch: `monoagens/core/reasoning.py`, its tests, `scenarios/`
 
 - [ ] 1.1 `think(thought, motivation 1..5, confidence 0..1)` before any communicative `act` when self-selecting; gate on `speaking_bar` / `certainty_bar`.
-- [ ] 1.2 Stable prompt: principles, honesty principles (core.md §8), knowledge cutoff from per-model config.
+- [ ] 1.2 Stable prompt: principles, honesty principles ([spec.md §3.8](../spec.md)), knowledge cutoff from per-model config.
 - [ ] 1.3 `<self>` from the registries, closed-world, including the capabilities of every running tool; person cards of people present.
 - [ ] 1.4 Check: proactive replies always have a recorded thought; "what can you do?" matches `<self>`; a false claim about the past is not confirmed, and a missing record is not called proof.
 
 ## Part 2 — Revise, beliefs, lessons and procedures
-Read first: [core.md](../core.md) §6–7, [core-math.md](../core-math.md) §7, §14
+Read first: [spec.md](../spec.md) §3.6–§3.7, [research.md](../research.md) §7, §14
 May touch: `monoagens/core/memory/` (sleep part), its tests, `scenarios/`
 
 - [ ] 2.1 `revise` sets `valid_to` / `superseded_by`; nothing deleted.
@@ -30,7 +30,7 @@ May touch: `monoagens/core/memory/` (sleep part), its tests, `scenarios/`
 - [ ] 2.7 Check: a correction supersedes the old memory; a contradicted belief is revised at the next sleep; two similar episodes with different people stay apart; a lesson learned in one adapter is used in another.
 
 ## Part 3 — Trust, fading and forgetting
-Read first: [core.md](../core.md) §7–8
+Read first: [spec.md](../spec.md) §3.7–§3.8
 May touch: `monoagens/core/memory/`, `tests/`, `scenarios/`
 
 The fade and hard-forget paths exist since Task 1; this part adds the policy around them.
@@ -51,4 +51,4 @@ The fade and hard-forget paths exist since Task 1; this part adds the policy aro
 
 **Carried from Task 4 (knob offsets).** When the core starts learning knobs, it keeps the learned
 value separate from plugin offsets: effective knob = learned value + active plugin offsets
-([middleware.md §2](../middleware.md) lever 6); learning never reads or moves an offset.
+([spec.md §4.2](../spec.md) lever 6); learning never reads or moves an offset.

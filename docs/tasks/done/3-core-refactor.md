@@ -1,13 +1,13 @@
 # Task 3 — Core: clean refactor
 
 Status: todo | Depends on: Task 2
-One task = one worker prompt, done by one worker. Work through the parts **in order**. Rules: [README](README.md).
+One task = one worker prompt, done by one worker. Work through the parts **in order**. Rules: [README](../README.md).
 
 **Goal.** The same behavior, with everything in its right place. The core keeps only mechanisms;
 every decision moves to the middleware, and the core knows only opaque ids, labels and numbers
 (D57). **The middleware decides, the core records and carries out**
-([constitution.md](../constitution.md) §4). Names become standard engineering terms
-([glossary](../glossary.md)).
+([spec.md §1.4](../../spec.md)). Names become standard engineering terms
+([spec.md §9](../../spec.md)).
 
 **How.** Code is moved, not rewritten and not removed. Before moving or renaming anything, use
 graphify to find every caller and dependency; use Context7 for any library API in doubt. Each
@@ -21,7 +21,7 @@ its roles, approvals, flows and multi-runner leases.
 ---
 
 ## Part 1 — Layout and names
-Read first: [glossary](../glossary.md), [AGENTS.md](../../AGENTS.md) (size guide)
+Read first: [spec.md §9](../../spec.md), [AGENTS.md](../../../AGENTS.md) (size guide)
 May touch: `monoagens/` (all), `tests/`, `scripts/`, `pyproject.toml`, `AGENTS.md` (invariant 1's file list only)
 
 - [x] 1.1 Packages per layer as in the glossary: `core/`, `middleware/`, `adapters/` (from `bodies/`), `infra/`; `plugins/` stays at the top. Tests mirror the same layout.
@@ -29,7 +29,7 @@ May touch: `monoagens/` (all), `tests/`, `scripts/`, `pyproject.toml`, `AGENTS.m
 - [x] 1.3 Check: pytest and the fake replay pass unchanged. List every old → new path and every renamed public name under Notes (the specs already use the standard terms; the architect updates any file path they name).
 
 ## Part 2 — Decisions out of the core
-Read first: [constitution.md](../constitution.md) §4, [core.md](../core.md) §8 (D57), [middleware.md](../middleware.md) §3, §7
+Read first: [spec.md §1.4](../../spec.md), [spec.md §3.8](../../spec.md) (D57), [spec.md §4.3](../../spec.md), §7
 May touch: `monoagens/core/`, `monoagens/middleware/`, `monoagens/__main__.py`, `tests/`
 
 The core keeps only **opaque ids, labels and numbers** (D57): `who`, `place`, `origin_actor` as
@@ -52,7 +52,7 @@ the command registry come in Task 4.
 - [x] 2.8 Check: pytest and the fake replay pass unchanged, absolute-line violations 0. `grep` of `monoagens/core/` finds no "person", "owner", "alias" or platform name outside comments that point to the middleware. Tests that said "holds with an empty middleware pipeline" now say "holds with only the owner policy"; list them under Notes.
 
 ## Part 3 — Fail-closed and the mechanisms the middleware needs
-Read first: [middleware.md](../middleware.md), [core.md](../core.md) §3
+Read first: [spec.md §4](../../spec.md), [spec.md §3.3](../../spec.md)
 May touch: `monoagens/core/`, `monoagens/middleware/`, `monoagens/infra/`, `tests/`, `scenarios/`
 
 - [x] 3.1 Fail-closed: the kernel refuses to start without the owner policy in all three hooks. The owner policy runs first and last in every hook, no plugin can remove it, and a plugin can only narrow what it allows. Tests for each.

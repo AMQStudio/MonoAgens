@@ -2,14 +2,14 @@
 Status: **done** (2026-11-11) | Depends on: —
 Kept as history. Report: 181 tests passed on real Postgres; fake replay 17/25 (the 8 failing
 scenarios are fixed in Task 2 Part 2); package 2,897 / 3,500 lines. Follow-ups: Task 2 Part 1.
-Read first: [core.md](../core.md) §3–§9, [project.md](../project.md) §2
+Read first: [spec.md](../../spec.md) §3.3–§3.9, [spec.md §8.2](../../spec.md)
 May touch: `monoagens/` (all), `sql/`, `soul.yaml`, `config.yaml` (new), `scripts/replay.py`, `scenarios/`, `tests/`, `prior/`
 
 ## Goal
 Bring the merged Track A code in line with the frozen core spec. This is the only task allowed to change the shared files (`kernel.py`, `store.py`, `sql/schema.sql`, `soul.yaml`).
 
 ## Tasks
-- [x] T1 Thought acts `think, act, expect, resolve, revise`; `say`/`react` become Telegram and CLI capabilities (core.md §9.1); silence = a wake without `act`; `msg.in` becomes `percept` with a description and optional data (§9.2); `act.out`/`act.result` replace `msg.out`/`react.out` in code, tests and replay.
+- [x] T1 Thought acts `think, act, expect, resolve, revise`; `say`/`react` become Telegram and CLI capabilities ([spec.md §3.9.1](../../spec.md)); silence = a wake without `act`; `msg.in` becomes `percept` with a description and optional data (§9.2); `act.out`/`act.result` replace `msg.out`/`react.out` in code, tests and replay.
 - [x] T2 Three hooks (inbound, context, action) with owner-policy slots first and last, shared vs organ-own scope, collision check at boot.
 - [x] T3 Provenance and privacy: `origin_actor` on events (inherited along `caused_by`), `identity_changing` check in the action hook; `place` + `private` on memories and the context-hook filter.
 - [x] T4 Lineage: `derived_from` on memories, expectations and vectors; replace the `event_vectors` no-delete trigger with the two dedicated paths (fade, hard forget) — stubs that write their events are fine.
@@ -18,8 +18,8 @@ Bring the merged Track A code in line with the frozen core spec. This is the onl
 - [x] T7 Injected clock everywhere (no `datetime.now()` in the core); replay uses event times.
 - [x] T8 Slow work off the loop: PFC, classifier, embedding and sleep as background jobs whose results return as events; one PFC job per place; re-wake once if a new event arrived meanwhile.
 - [x] T9 Numbered SQL migrations with a version table and a backup before migrating; pairing code for the first owner.
-- [x] T10 Identity as birth content: `soul.yaml` becomes the birth certificate; cognition numbers move to the default prior in `prior/` as knobs / calibration / constants (core.md §9.4); the rest of today's `soul.yaml` splits by project.md §2: `timezone`, sleep, clock, budget and enabled bodies go to a new `config.yaml`; memory and expectation numbers go to the prior's constants; owner ids are replaced by pairing; secrets stay in `.env`; identity stored in `state: identity` after birth; an `identity_changing` capability for owner changes.
-- [x] T11 Stability contract: `schema_version` on every event with upcasting on read; plugin event kinds under `<plugin>.<kind>`; readers ignore unknown fields (core.md §3).
+- [x] T10 Identity as birth content: `soul.yaml` becomes the birth certificate; cognition numbers move to the default prior in `prior/` as knobs / calibration / constants ([spec.md §3.9.4](../../spec.md)); the rest of today's `soul.yaml` splits by [spec.md §8.2](../../spec.md): `timezone`, sleep, clock, budget and enabled bodies go to a new `config.yaml`; memory and expectation numbers go to the prior's constants; owner ids are replaced by pairing; secrets stay in `.env`; identity stored in `state: identity` after birth; an `identity_changing` capability for owner changes.
+- [x] T11 Stability contract: `schema_version` on every event with upcasting on read; plugin event kinds under `<plugin>.<kind>`; readers ignore unknown fields ([spec.md §3.3](../../spec.md)).
 - [x] T12 Watchdog: `hook_timeout_ms` on every hook call (timeout = Stop + `error`), `job_timeout_seconds` on background jobs; a test where a hanging hook does not stop the loop.
 
 ## Done when

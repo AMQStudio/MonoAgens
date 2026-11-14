@@ -1,13 +1,13 @@
-# Core math — formulas and their sources
+# Research — formulas and their sources
 
 Every formula the core uses, what each symbol means, why it was chosen, and where the idea
-comes from; §16 lists the systems principles behind the core's shape. [core.md](core.md) states *what* the core does; this file states *how* and *why*, so a
+comes from; §16 lists the systems principles behind the core's shape. [spec.md §3](spec.md) states *what* the core does; this file states *how* and *why*, so a
 scientist can check it and a new session does not have to rediscover it.
 
 Source tags: **[PR]** peer-reviewed · **[PP]** preprint · **[IND]** industry documentation or
 standard. Many 2025–2026 agent papers are preprints; treat their numbers as the authors' claims.
 Parameters named in `code font` are knobs, calibration values or constants of the prior
-([core.md](core.md) §9.4; default values in [`prior/`](../prior/dispositions.yaml)).
+([spec.md §3.9.4](spec.md); default values in [`prior/`](../prior/dispositions.yaml)).
 
 ---
 
@@ -24,7 +24,7 @@ the cheap machinery judges a moment worth it.
 Each signal is a pure function of the current situation with a value in [0, 1].
 
 - **own_name** ∈ {0, 1}: the `named` feature — the soul's name was said without the turn being
-  allocated to it (attention capture, §15). The adapter reports it (contract.md §3); the core
+  allocated to it (attention capture, §15). The adapter reports it ([spec.md §2.3](spec.md)); the core
   never searches text.
 - **info_gap** = max_r cos(v, r) over reference sentences r for the language
   (`references.yaml`), where v is the event's embedding. Rationale: curiosity and helping start
@@ -317,7 +317,7 @@ kernel.
 - **Ports and adapters.** The core is isolated from its devices behind ports [Cockburn 2005, IND]
   — percept and capability descriptor are the ports; adapters and plugin tools are the adapters.
 - **Stable user-space contract.** Internals change freely, the interface to the outside does not
-  break [Linux kernel ABI policy, IND] — the stability contract in core.md §3.
+  break [Linux kernel ABI policy, IND] — the stability contract in [spec.md §3.3](spec.md).
 - **Capability-based isolation** (not adopted in v1): every access through an unforgeable token
   [Klein et al. 2009 (seL4), PR]. Plugins are trusted in-process code for now; per-plugin lever
   declarations in the manifest are the path toward least privilege without changing the core.

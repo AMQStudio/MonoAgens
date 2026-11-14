@@ -2,7 +2,7 @@
 
 Status: in progress (Parts 1–11 worked; acceptance in 12.8) | Depends on: Task 1 (done)
 One task = one worker prompt, done by one worker. Work through the parts **in order**; one part may be split
-into several commits, one per item when practical. Rules: [README](README.md).
+into several commits, one per item when practical. Rules: [README](../README.md).
 
 **Goal.** Everything needed until the owner uses the soul every day in a direct chat and one
 group: privacy that follows people, sharing, acting in any body, task threads, ACT-R memory, the
@@ -16,14 +16,14 @@ enough, stop and report.
 ---
 
 ## Part 1 — Follow-ups from Task 1
-Read first: [core.md](../core.md) §3 (watchdog), [AGENTS.md](../../AGENTS.md) (secrets)
+Read first: [spec.md §3.3](../../spec.md) (watchdog), [AGENTS.md](../../../AGENTS.md) (secrets)
 May touch: `monoagens/jobs.py`, `monoagens/config.py`, `tests/`
 
 - [x] 1.1 The job timeout comes from `prior/dispositions.yaml` (`job_timeout_seconds`, 120); remove the hard-coded 60 s default.
 - [x] 1.2 Sleep's private connection rebuilds its DSN from `conn.info`: prove with a test that the DSN and password never reach a log, an event, an error message or a report.
 
 ## Part 2 — Replay baseline
-Read first: [core-math.md](../core-math.md) §13
+Read first: [research.md](../../research.md) §13
 May touch: `scenarios/`, `scripts/replay.py`, `tests/`
 
 - [x] 2.1 Bring the fake replay to 25/25: the 8 scenarios failing since before Task 1 (reminders and `recall` with the scripted FakeLLM) are fixed by recording the model answers they need, not by changing the core.
@@ -31,7 +31,7 @@ May touch: `scenarios/`, `scripts/replay.py`, `tests/`
 - [x] 2.3 From here on, every part below adds its scenarios here, written to fail before the part lands.
 
 ## Part 3 — Privacy follows people, sharing, reaching a person, task threads (D45–D47)
-Read first: [core.md](../core.md) §8 (absolute line 2), §4 (reaching a person, `self.share`, task threads), §7 (memories: who, place, private)
+Read first: [spec.md §3.8](../../spec.md) (absolute line 2), §4 (reaching a person, `self.share`, task threads), §7 (memories: who, place, private)
 May touch: `monoagens/hooks.py`, `monoagens/memory.py`, `monoagens/pfc.py`, `monoagens/organs.py`, `monoagens/store.py` (audience lookup only), new `monoagens/reach.py`, new `monoagens/threads.py`, `monoagens/kernel.py` (only calls into the new modules), `tests/`, `scenarios/`
 
 Replaces the per-place privacy filter from Task 1 with the audience rule.
@@ -48,7 +48,7 @@ Replaces the per-place privacy filter from Task 1 with the audience rule.
 - [x] 3.10 Scenario: "finish my code, then send it to Budi via WhatsApp and to the group" → a task thread, a promise Expectation fired by its completion, delivery to Budi on WhatsApp, a share to the group's audience; with two candidate groups the soul asks which one before sending; meanwhile the owner's chat in the game place is answered without waiting for the task's steps.
 
 ## Part 4 — ACT-R activation
-Read first: [core.md](../core.md) §7, [core-math.md](../core-math.md) §5
+Read first: [spec.md §3.7](../../spec.md), [research.md](../../research.md) §5
 May touch: `monoagens/memory.py`, `tests/test_memory.py`, `scenarios/`
 
 - [x] 4.1 Base-level activation B = ln(n/(1−d)) − d·ln(L) from the injected clock; d from `memory_persistence`.
@@ -57,7 +57,7 @@ May touch: `monoagens/memory.py`, `tests/test_memory.py`, `scenarios/`
 - [x] 4.4 Check: frequently used memories outrank newer unused ones; activation is reproducible under a fake clock.
 
 ## Part 5 — The five signals and habituation
-Read first: [core.md](../core.md) §6, [core-math.md](../core-math.md) §2–3, §15
+Read first: [spec.md §3.6](../../spec.md), [research.md](../../research.md) §2–3, §15
 May touch: `monoagens/cognition/signals.py`, `monoagens/cognition/situation.py`, `tests/test_cognition.py`, `scenarios/`
 
 - [x] 5.1 `own_name` (attention capture, not obligation).
@@ -69,7 +69,7 @@ May touch: `monoagens/cognition/signals.py`, `monoagens/cognition/situation.py`,
 - [x] 5.7 Check: "lupa nama tempatnya apa ya" scores high only when the answer is known; repeated stickers fade; signals are pure (no I/O).
 
 ## Part 6 — Turn-taking and patience
-Read first: [core.md](../core.md) §5–6, [core-math.md](../core-math.md) §4, §15
+Read first: [spec.md](../../spec.md) §3.5–§3.6, [research.md](../../research.md) §4, §15
 May touch: `monoagens/expect.py`, `tests/test_expect.py`, `scenarios/`
 
 - [x] 6.1 `wait` Expectation created on a go for a turn not allocated to the soul, window from `patience_seconds`.
@@ -78,7 +78,7 @@ May touch: `monoagens/expect.py`, `tests/test_expect.py`, `scenarios/`
 - [x] 6.4 Check: not addressed — someone else answers → silent, nobody → one reply; addressed → answers without waiting.
 
 ## Part 7 — The desk and recall
-Read first: [core.md](../core.md) §4, §8, §9.4 (desk constants)
+Read first: [spec.md §3.4](../../spec.md), §8, §9.4 (desk constants)
 May touch: `monoagens/pfc.py`, the `self` organ module, `tests/test_pfc.py`, `scenarios/`
 
 - [x] 7.1 Section token budgets from prior constants; trimming oldest-first per section.
@@ -89,7 +89,7 @@ May touch: `monoagens/pfc.py`, the `self` organ module, `tests/test_pfc.py`, `sc
 - [x] 7.6 Check: a 15-step task keeps a flat prompt size; "what did we do last month?" lists that month's episodes with details from the original events, also after the vector faded and when sleep failed; 40 unread messages are appraised once.
 
 ## Part 8 — Threshold, gate and circuit breaker
-Read first: [core.md](../core.md) §6, [core-math.md](../core-math.md) §3, §15
+Read first: [spec.md §3.6](../../spec.md), [research.md](../../research.md) §3, §15
 May touch: `monoagens/cognition/appraise.py`, `monoagens/cognition/appraisal.py`, `monoagens/cognition/rng.py`, `tests/test_cognition.py`, `scenarios/`
 
 - [x] 8.1 θ = base + a·talk_rate + b·budget_used − c·promise_debt + r·(1 − familiarity); familiarity from ACT-R activation of interactions with the place and people present.
@@ -107,7 +107,7 @@ May touch: `scripts/replay.py`, `scenarios/`, `tests/`
 - [x] 9.4 A short live session on the CLI body with the real model: a private fact said in one place is not used in another person's place; a promise is kept; the soul stays silent when not needed. Report what happened, not the secrets.
 
 ## Part 10 — Review follow-ups and the capability record (D48)
-Read first: [core.md](../core.md) §4 (speaking elsewhere), §8 (absolute line 2), §9.2 (`place_kind`), [project.md](../project.md) §4 (capability record), [AGENTS.md](../../AGENTS.md) (size guide)
+Read first: [spec.md §3.4](../../spec.md) (speaking elsewhere), §8 (absolute line 2), §9.2 (`place_kind`), [spec.md §8.4](../../spec.md) (capability record), [AGENTS.md](../../../AGENTS.md) (size guide)
 May touch: `monoagens/` (all), `scripts/replay.py`, `scenarios/`, `tests/`, `prior/dispositions.yaml` (values only)
 
 Found in the architect's review of Parts 1–9.
@@ -124,7 +124,7 @@ Found in the architect's review of Parts 1–9.
 - [x] 10.10 (superseded by 12.8) Final run: `uv run pytest` on the real Postgres; the fake replay in full; the real-model replay **three times**, with every scenario passing in all three runs and absolute-line violations 0 in every run; a live session with the real model that also covers "send this to Budi" (shared, written at Budi's desk, delivered). The capability record is regenerated from these runs and committed.
 
 ## Part 11 — Decisions from the Part 10 review (D50, D51, reasoning effort)
-Read first: [core.md](../core.md) §2 (loop step 6, D51), §8 (absolute line 2, D50), [AGENTS.md](../../AGENTS.md) invariant 8
+Read first: [spec.md §3.2](../../spec.md) (loop step 6, D51), §8 (absolute line 2, D50), [AGENTS.md](../../../AGENTS.md) invariant 8
 May touch: `monoagens/` (all), `scripts/replay.py`, `scenarios/`, `tests/`, `prior/dispositions.yaml` (values only), `.env.example`
 
 Item 10.10 is ticked only when 11.6 passes.
@@ -137,7 +137,7 @@ Item 10.10 is ticked only when 11.6 passes.
 - [x] 11.6 (moved to 12.8, closed with it) Final run with the model and effort configured in `.env`: `uv run pytest`, the fake replay in full, the real-model replay three times with every scenario passing in all three runs and absolute-line violations 0 in every run, and the live session of 10.10 including "send this to Budi". Regenerate and commit the capability record; tick 10.10 and 11.6.
 
 ## Part 12 — Harness fixes from the 11.5 report (D52), free-text conditions
-Read first: [core.md](../core.md) §4 (working memory D52, speaking elsewhere), §2 loop step 6 (D51 refusals), §5 (Expectations, free-text conditions), §8 (absolute line 2), [core-math.md](../core-math.md) §6, §15
+Read first: [spec.md §3.4](../../spec.md) (working memory D52, speaking elsewhere), §2 loop step 6 (D51 refusals), §5 (Expectations, free-text conditions), §8 (absolute line 2), [research.md](../../research.md) §6, §15
 May touch: `monoagens/` (all), `scripts/replay.py`, `scenarios/`, `tests/`, `prior/dispositions.yaml` (values only)
 
 Found by the architect in `reports/replay-20261112-024238.md`. No new mechanism for one case:
@@ -148,7 +148,7 @@ passes.
 - [x] 12.2 **Working memory (D52).** `<doing>` for every chain in progress, not only task threads: goal, every step (non-communicative acts included), the latest result verbatim, older results as pointers. Checks: scenario 23 answers after at most two capability calls; scenario 14's summary is answered; no chain repeats the same capability call with the same arguments.
 - [x] 12.3 **Intent on the target desk (D48).** The intent (what to say, to whom, why, where it came from) is the trigger of the wake in the target place. When several places fit, the soul asks before sending. Scenario 19: the code reaches Budi, the owner is asked which group, only that group receives it.
 - [x] 12.4 **Refusals return (D51).** A rejected thought act or capability argument comes back in the same turn as a result with its reason. Test: `expect` without a cue is corrected in the same wake. Scenario 09 passes.
-- [x] 12.5 **Free-text conditions (moved from Task 6, simplified by D53).** Wake gate: still relevant, stale (quiet hours stay in the owner policy). Free text: cosine below `lo` ignored; at or above `lo` the Expectation is reminded and the PFC wakes once with the line and the Expectation as trigger, and judges (act, resolve, or let it be). No classifier module, no `hi` band, no `lo` learning, no vector cache (deferred, core.md §5). Keep the draft's change to `appraise._engaged`. Must fit the remaining package budget; if it does not, stop and report — the budget is not raised. Checks: a fulfilled promise wakes no one; a question on the same topic never resolves a promise; scenarios 16 and 24 fire on "server down lagi nih guys" and "dokumennya sudah selesai kok".
+- [x] 12.5 **Free-text conditions (moved from Task 6, simplified by D53).** Wake gate: still relevant, stale (quiet hours stay in the owner policy). Free text: cosine below `lo` ignored; at or above `lo` the Expectation is reminded and the PFC wakes once with the line and the Expectation as trigger, and judges (act, resolve, or let it be). No classifier module, no `hi` band, no `lo` learning, no vector cache (deferred, [spec.md §3.5](../../spec.md)). Keep the draft's change to `appraise._engaged`. Must fit the remaining package budget; if it does not, stop and report — the budget is not raised. Checks: a fulfilled promise wakes no one; a question on the same topic never resolves a promise; scenarios 16 and 24 fire on "server down lagi nih guys" and "dokumennya sudah selesai kok".
 - [x] 12.5b **A memory's audience from its sources (D53, before any real-model run).** Sleep no longer takes `place`/`private` from the model: the core derives them from `derived_from` (private if any source is private; audience = the people every private source was said to; no known source → private to the owner). Core memory follows the same rule. Tests: a sleep answer that omits place for a summary of Fulan's direct chat never reaches a group; core memory built from a direct chat stays out of a group. If a file is at its budget, move code rather than compress; if the package cannot hold it, stop and report.
 - [x] 12.6 **Checks that forbid correct behavior.** 16: "model.call >= 2" forbids calling `expect` at once — the check is that the promise is held in the first wake. 24: the stored fact may be said in any format ("jam lima", "17:00"); its contradictory group lines are made consistent. List every changed check under Notes.
 - [x] 12.7 **Guidance stays small.** `guidance.py` ≤ 30 lines of general principles; any line added in this part has its evidence under Notes.
@@ -169,7 +169,7 @@ passes.
 - [x] 12.8 **Acceptance — the launch set** (closed by the architect, 2026-11-12: see the closing note under Notes) (after 12.12–12.20; rerun only 24, then the live session to confirm 12.16 and 12.17; owner's decision): one real-model run at `--effort high` of the launch scenarios that have not yet passed with the real model: memory and recall (07, 11, 12, 17, 20, 23), silence (01–03, 15, 21), turn-taking (04–06, 14, 22), promises (08–10, 13, 16, 24, 30), unaddressed help (25, 27, 29). Each failure gets a material check first. Then the live session (privacy across bodies, a promise kept, silence). Scenarios 18, 19, 26 and 28 move to Task 4 as capability targets; the capability record lists them as not yet held. Tick 10.10, 11.6 and 12.8.
 
 ## Part 13 — Readability pass (after 12.8)
-Read first: [AGENTS.md](../../AGENTS.md) (priorities for code, size guide)
+Read first: [AGENTS.md](../../../AGENTS.md) (priorities for code, size guide)
 May touch: `monoagens/` (all), `tests/`
 
 The old hard line budgets pushed code into odd places. Undo that, with no change in behavior.
@@ -1486,7 +1486,7 @@ Part 12 notes (worker, 12.8 brain fixes):
 - **Kept: `expect` description names its classes** — "Hold what must remind you later: a
   promise, a watch, or a wait; its cue wakes you." Evidence: 12.8 real-model 16 and 24, where
   the owner asked to be told when something happens and the first wake created no `expect`.
-  The classes are general Expectation kinds (`docs/core.md` §5), not a scenario rule.
+  The classes are general Expectation kinds ([spec.md §3.5](../../spec.md)), not a scenario rule.
 - **Kept: guidance bullet for a private question** — "If what you know may be private to
   someone, ask that person privately instead of saying you do not know." Evidence: 12.8
   real-model 26 and 28, where the soul answered "I do not know" in the group and never asked
@@ -1884,7 +1884,7 @@ Part 12 notes (worker, expect tool text condition):
 - **Verified, not inferred.** A throwaway probe (not committed) created that 30-shaped
   promise through `expect.create` and fed the watched line to `expect.due`: `fired: []`, and
   the row ended `satisfied` — with no `|` in the pattern the watched line itself satisfies
-  the condition, so the gate reads "condition already met" (`docs/core.md` §5) and resolves
+  the condition, so the gate reads "condition already met" ([spec.md §3.5](../../spec.md)) and resolves
   instead of firing. 24's `|` lists are read by `expect.matches_cue`/`expect.is_met` as
   literal characters (see the observation below), so there neither cue nor condition matched
   any line. In the report 30 kept the promise engaged without firing it and the owner never
@@ -2007,7 +2007,7 @@ Part 12 notes (worker, 12.12):
     resolves #1.
   - `promises/16_watch_for_phrase.yaml` needed no check or recorded-answer change: with the
     wake laid out in the promise's place its one-round answer still lands in the owner's DM.
-- **Spec ownership.** `docs/core.md` §5 already carries the reminder wording (architect's
+- **Spec ownership.** [spec.md §3.5](../../spec.md) already carries the reminder wording (architect's
   1cbd412); §3's event-kind list does not yet name `expectation.reminded`. Specs are the
   architect's, so this worker did not edit them; the list needs the architect's one-line
   addition.
