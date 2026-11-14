@@ -177,8 +177,8 @@ async def test_1_private_content_never_leaves_its_audience_even_when_talked_into
         "capability": "telegram.say",
         "arguments": {"text": "kunci cadanganku di laci", "to": GROUP}}))
     queued = kernel.queue.get_nowait().event
-    assert "kunci" not in str(queued.payload.get("description") or "")
-    assert "cannot appear here" in str(queued.payload.get("description") or "")
+    assert "kunci" not in queued.description
+    assert "cannot appear here" in queued.description
     assert voice.actions == []
 
 

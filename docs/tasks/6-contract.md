@@ -89,7 +89,7 @@ asserts behavior the contract removes, e.g. `text_like`), `scenarios/`, `scripts
   `failed` receipt; one failing call inside a round becomes its own receipt and the other calls
   still run; a tool result is kept when the same wake also spoke; the loop survives an exception
   in the backlog flush and in `recover()`, and one failing fired Expectation loses no other.
-- [ ] 2.8 Speaking elsewhere: the intent's content is what the action hook returns; it never
+- [x] 2.8 Speaking elsewhere: the intent's content is what the action hook returns; it never
   carries the goal's or the trigger's text; the core reads no label for it.
 - [ ] 2.9 The contract package holds types and validators only: `upcast_event` and its helpers
   move from `monoagens/contract/envelope.py` to `monoagens/infra/versioning.py`, so a fix to
@@ -453,6 +453,27 @@ One home per fix:
 
 New test: `test_f5_one_malformed_expectation_loses_no_other_fired_one` (a bad `within` is
 reported and the sound row still fires).
+
+#### 2.8 Speaking elsewhere
+
+Line counts after 2.8: core 4045 · middleware 6165 · adapters 5465 · plugins 2065 · tests 20055.
+
+One home per fix:
+
+- the intent's line: `core/dispatch._intend` quotes only what the action hook let through
+  (the returned item) and records the arguments reasoning asked for (`asked`), so the Log keeps
+  the drafted words while the other place's desk hides them (D45);
+- the decision to hide words: `middleware/privacy.guard`'s last pass returns `Replace` without
+  `text` when `_words_hidden` holds, in place of the deleted `words_hidden` label;
+- the intent's payload: no `place_kind`, and `Kernel._wake` reads `event.description`;
+- the goal is not read at all: `working.chain_root` is no longer called by the door, and the
+  `act.intent` event carries no `why`.
+
+Decisions, recorded: the core builds the neutral line when the hook's item carries no words, so
+"its words cannot appear here" is now the else branch of a fact (the returned item), not a label;
+`middleware/privacy.intent_words` (an inbound rule) is the safety net for an intent whose source
+was only known after the act — it replaces the line on the way in, and the immutable Log keeps
+the row the core wrote.
 
 ### Where the work stands (session of 2026-11-14)
 

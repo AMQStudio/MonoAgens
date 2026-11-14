@@ -93,6 +93,7 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any], *,
         return Dispatch(acted=True, receipt=receipt)
     routing = kernel.tools.routing_keys(cap)
     passed = {key: value for key, value in raw.items() if key not in routing}
+    asked = dict(passed)  # what reasoning asked for, before the hook had its say
     ctx = {"conn": kernel.conn, "event": event, "now": kernel.clock.now(),
            "capability": capability, "descriptor": cap, "origin_actor": event.origin_actor,
            "arguments": dict(raw), "to": raw.get("to"), "via": raw.get("via"),
@@ -120,7 +121,7 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any], *,
         await kernel._settle_action(event, act, receipt)
         return Dispatch(acted=True, receipt=receipt)
     if place != event.place:
-        await _intend(kernel, event, capability, passed, to, place, ctx["labels"])
+        await _intend(kernel, event, capability, dict(payload), asked, to, place)
         if said is not None:
             said.add(place)
         return Dispatch(acted=True, labels=ctx["labels"])
@@ -192,20 +193,21 @@ async def _project_identity(kernel: Any, event: Event, act: Act,
     kernel.settings = {**kernel.settings, "identity": new_identity}
 
 
-async def _intend(kernel: Any, event: Event, capability: str, passed: dict[str, Any],
-                  to: str | None, place: str, labels: dict[str, Any]) -> None:
-    """Record what to say elsewhere and wake the reasoning there with the intent itself (D48)."""
-    _, goal = await working.chain_root(kernel.conn, event.id)
-    said = str(passed.get("text") or passed.get("item") or "")
+async def _intend(kernel: Any, event: Event, capability: str, quoted: dict[str, Any],
+                  recorded: dict[str, Any], to: str | None, place: str) -> None:
+    """Record what to say elsewhere and wake the reasoning there with the intent itself (D48).
+
+    The line the other place's desk shows quotes only what the action hook let through
+    (`quoted`); the intent's own arguments are the ones reasoning asked for, so the Log keeps
+    the drafted words even when the desk hides them (D45, 2.8).
+    """
     intent = await kernel._emit(event, "act.intent", {
-        "capability": capability, "arguments": passed, "to": to, "target": place,
-        "why": goal})
-    reason = f"you set out to say {said!r} to {to or place}"
-    if labels.get("words_hidden"):
-        reason = f"you set out to send a message to {to or place}; its words cannot appear here"
+        "capability": capability, "arguments": dict(recorded), "to": to, "target": place})
+    words = str(quoted.get("text") or quoted.get("item") or "")
+    reason = (f"you set out to say {words!r} to {to or place}" if words else
+              f"you set out to send a message to {to or place}; its words cannot appear here")
     kernel.enqueue(Event(
         id=None, ts=kernel.clock.now(), kind="intent", who=None, place=place,
         caused_by=intent.id, origin_actor=event.origin_actor,
-        payload={"description": f"{reason} (from {event.place})",
-                 "capability": capability, "to": to, "intent": intent.id,
-                 "place_kind": labels.get("place_kind")}))
+        description=f"{reason} (from {event.place})",
+        payload={"capability": capability, "to": to, "intent": intent.id}))

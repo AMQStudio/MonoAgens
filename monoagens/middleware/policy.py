@@ -99,6 +99,7 @@ def modules_for(hook: str, kernel: Any) -> tuple[tuple[str, Middleware], ...]:
                         ("identity-place", identity.place_tracker(kernel.conn)),
                         ("approval-answer", interaction.answer(kernel)),
                         ("commands", registry.commands(kernel)),
+                        ("privacy-intent", privacy.intent_words(kernel)),
                         ("narrate", interaction.narrate(kernel)),
                         ("read-receipts", compose(interaction.read_receipts_inbound(kernel),
                                                   kernel=kernel)),

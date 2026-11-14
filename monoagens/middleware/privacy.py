@@ -971,6 +971,37 @@ async def _record_wake_sources(kernel: Any, conn: Any, item: Any, cache: dict) -
     _trim_wake_sources(store)
 
 
+def intent_words(kernel: Any) -> Middleware:
+    """Inbound rule: an intent quotes its words only where their source is visible (D45)."""
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        """Replace an intent's words with the neutral line when they may not be shown here."""
+        if getattr(item, "kind", "") != "intent" or not item.place:
+            return Continue()
+        source = await _intent_source(kernel.conn, item)
+        if source is None or not await _words_hidden(kernel, source, str(item.place)):
+            return Continue()
+        target = str((item.payload or {}).get("to") or item.place)
+        return Replace(replace(item, description=(
+            f"you set out to send a message to {target}; its words cannot appear here "
+            f"(from {source.place})")))
+
+    return rule
+
+
+async def _intent_source(conn, intent: Any) -> Event | None:
+    """Return the event whose wake set one intent out, from the intent's own chain."""
+    if intent.caused_by is None:
+        return None
+    row = await (await conn.execute(
+        "SELECT src.id, src.place FROM events asked "
+        "JOIN events src ON src.id = asked.caused_by WHERE asked.id = %s",
+        (int(intent.caused_by),))).fetchone()
+    if row is None:
+        return None
+    return Event(id=int(row[0]), ts=intent.ts, kind="act.out", place=row[1])
+
+
 async def _words_hidden(kernel: Any, event: Event, target_place: str) -> bool:
     """Return whether anything private in the source wake's view is hidden from `target_place`."""
     conn = kernel.conn
@@ -1055,10 +1086,11 @@ def guard(kernel: Any, when: str) -> Middleware:
         place = ctx.get("place") or ctx["event"].place
         if ctx.get("long_running"):
             ctx["labels"]["audience"] = sorted(await audience(ctx["conn"], ctx["event"].place))
-        ctx["labels"]["words_hidden"] = (
-            await _words_hidden(kernel, ctx["event"], str(place))
-            if place and place != ctx["event"].place else False
-        )
+        if place and place != ctx["event"].place and await _words_hidden(
+                kernel, ctx["event"], str(place)):
+            # D45: the intent's line never quotes words the other place may not see; the
+            # arguments reasoning asked for stay in the Log, so nothing is lost.
+            return Replace({key: value for key, value in item.items() if key != "text"})
         return Continue()
 
     return rule

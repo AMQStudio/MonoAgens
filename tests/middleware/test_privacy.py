@@ -381,7 +381,8 @@ async def test_a_message_to_another_place_becomes_an_intent_there(aconn):
     queued = kernel.queue.get_nowait()
     assert queued.event.kind == "intent"
     assert queued.event.place == BUDI
-    assert queued.event.payload["place_kind"] == "direct"
+    # The intent carries no place kind: the desk reads the place's audience, never a label.
+    assert "place_kind" not in queued.event.payload
 
 
 async def test_act_to_an_unreachable_person_fails_honestly(aconn):
@@ -989,9 +990,9 @@ async def test_speaking_elsewhere_intent_omits_because_goal_and_checks_context_s
                                                        "to": "person:budi", "via": "whatsapp"}}))
     await kernel.run_until_idle()
     clean_intent = await (await aconn.execute(
-        "SELECT payload FROM events WHERE kind = 'intent' ORDER BY id DESC LIMIT 1")).fetchone()
+        "SELECT description FROM events WHERE kind = 'intent' ORDER BY id DESC LIMIT 1")).fetchone()
     assert clean_intent is not None
-    desc1 = clean_intent[0]["description"]
+    desc1 = clean_intent[0]
     assert "Rapat besok jam 10 ya" in desc1
     assert "because " not in desc1
 
@@ -1011,9 +1012,9 @@ async def test_speaking_elsewhere_intent_omits_because_goal_and_checks_context_s
         "addressed", OWNER_DM)
     await kernel2.run_until_idle()
     intents = await (await aconn.execute(
-        "SELECT payload FROM events WHERE kind = 'intent' ORDER BY id DESC LIMIT 1")).fetchone()
+        "SELECT description FROM events WHERE kind = 'intent' ORDER BY id DESC LIMIT 1")).fetchone()
     assert intents is not None
-    desc2 = intents[0]["description"]
+    desc2 = intents[0]
     assert "Kabar baik Budi" not in desc2
     assert "its words cannot appear here" in desc2
     assert "because " not in desc2
