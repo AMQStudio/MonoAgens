@@ -1,7 +1,6 @@
 version: 1
 findings:
   - {file: monoagens/core/context/parts.py, line: 22, ban: text-parse}
-  - {file: monoagens/core/dispatch.py, line: 49, ban: payload-read}
   - {file: monoagens/core/expectations.py, line: 18, ban: text-parse}
   - {file: monoagens/core/expectations.py, line: 36, ban: text-parse}
   - {file: monoagens/core/identity.py, line: 14, ban: text-parse}

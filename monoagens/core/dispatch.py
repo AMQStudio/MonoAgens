@@ -38,15 +38,11 @@ class Dispatch:
 
 @dataclass(frozen=True, slots=True)
 class Act:
-    """One recorded act: the action its body carries and the `act.out` event that records it."""
+    """One recorded act: its action, its `act.out` event, and whether it is the act that speaks."""
 
     action: contract.Action
     out: Event
-
-    @property
-    def communicative(self) -> bool:
-        """Return whether this act is the one that speaks in its place."""
-        return bool(self.out.payload.get("communicative"))
+    communicative: bool = False
 
 
 def action_for(job: JobRef | None, event: Event, round_index: int, n: int,
@@ -151,9 +147,9 @@ async def record(kernel: Any, event: Event, job: JobRef | None, round_index: int
     record_payload = {"capability": capability, "arguments": dict(passed),
                       "communicative": bool(cap.get("communicative"))}
     out = await kernel._emit_act(event, {**record_payload, "to": to} if to else record_payload,
-                                 action=action, communicative=bool(cap.get("communicative")),
+                                 action=action, communicative=record_payload["communicative"],
                                  place=place, description=str(passed.get("text") or ""))
-    return Act(action=action, out=out)
+    return Act(action=action, out=out, communicative=record_payload["communicative"])
 
 
 async def carry(kernel: Any, act: Act) -> contract.Receipt:

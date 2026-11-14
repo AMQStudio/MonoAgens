@@ -637,7 +637,10 @@ class Kernel:
                                        place=placed,
                                        arguments=dict(row.get("arguments") or {}),
                                        caused_by=row.get("caused_by")),
-                out=Event(id=row.get("act_out"), ts=now, kind="act.out", place=placed))
+                out=Event(id=row.get("act_out"), ts=now, kind="act.out", place=placed),
+                communicative=bool(
+                    (self.tools.get(str(row.get("capability") or "")) or {})
+                    .get("communicative")))
             trigger = Event(id=row.get("caused_by"), ts=now, kind="act.out", place=placed)
             if act.out.id is None:
                 continue

@@ -502,6 +502,17 @@ From this commit on the contract does not move again (6.2's promise).
 `rule`, `HookPipeline.run` calls `on_stop(reason, held)`, and `guard.stopped` carries
 `{"hook", "reason", "held"}` — the one place a held action is visible in the Log.
 
+#### 2.6 (follow-up): `Act.communicative` comes from the descriptor
+
+`62e9369` had `Act.communicative` read `act.out.payload["communicative"]` — a payload read in the
+core. `monoagens/core/dispatch.Act` now carries it as a field, filled by `record()` from the
+value it already computes for the `act.out` payload, and by `Kernel._resume_actions` from the same
+capability descriptor, so a resumed act is settled by the same rule as a fresh one.
+
+Architecture counts (per file, per ban) after this commit: `text-parse: 68` · `payload-read: 2`
+(`jobs.py:108`, `threads.py:62`) · `labels-read: 1` · `removed-field: 25` · `tests-private: 5` —
+101 findings, down from 102; the `dispatch.py payload-read` row is gone and no other row grew.
+
 #### 3.1 (first half): the contract owns `describe_attachments`
 
 `middleware/contract.py`'s copy is deleted; the four adapters and `scripts/replay.py` import
