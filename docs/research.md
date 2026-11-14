@@ -1,13 +1,13 @@
 # Research — formulas and their sources
 
 Every formula the core uses, what each symbol means, why it was chosen, and where the idea
-comes from; §16 lists the systems principles behind the core's shape. [spec.md §3](spec.md) states *what* the core does; this file states *how* and *why*, so a
+comes from; *Engineering principles behind the core's shape* lists the systems principles behind the core's shape. [spec.md](spec.md) *Core* states *what* the core does; this file states *how* and *why*, so a
 scientist can check it and a new session does not have to rediscover it.
 
 Source tags: **[PR]** peer-reviewed · **[PP]** preprint · **[IND]** industry documentation or
 standard. Many 2025–2026 agent papers are preprints; treat their numbers as the authors' claims.
 Parameters named in `code font` are knobs, calibration values or constants of the prior
-([spec.md §3.9.4](spec.md); default values in [`prior/`](../prior/dispositions.yaml)).
+([spec.md](spec.md) *Prior (format version 1)*; default values in [`prior/`](../prior/dispositions.yaml)).
 
 ---
 
@@ -24,20 +24,20 @@ the cheap machinery judges a moment worth it.
 Each signal is a pure function of the current situation with a value in [0, 1].
 
 - **own_name** ∈ {0, 1}: the `named` feature — the soul's name was said without the turn being
-  allocated to it (attention capture, §15). The adapter reports it ([spec.md §2.3](spec.md)); the core
+  allocated to it (attention capture, *Generalization: one function instead of many rules*). The adapter reports it ([spec.md](spec.md) *Waist 1: core ↔ middleware*); the core
   never searches text.
 - **info_gap** = max_r cos(v, r) over reference sentences r for the language
   (`references.yaml`), where v is the event's embedding. Rationale: curiosity and helping start
   from a perceived information gap [Loewenstein 1994, PR]; embeddings instead of keywords keep it
   language- and style-independent.
 - **feeling_of_knowing** = σ((A* − `fok_threshold`) / `fok_scale`), where A* is the highest memory
-  activation (§5) among candidates, including recent messages in the place. Rationale:
+  activation among candidates, including recent messages in the place. Rationale:
   metamemory's feeling-of-knowing predicts whether recall will succeed [Nelson & Narens 1990, PR];
   LLMs show usable FOK/JOL signals when they are used for control [arXiv 2605.14186, PP].
 - **relevance** = max cos(v, u) over vectors u of active promises and core memory.
 - **social_cost** ∈ [0, 1]: the floor belongs to someone else — another person was selected, or
-  someone already answered — lowered by closeness to the speaker (§7). The soul's own share of
-  talk is only in θ (§15).
+  someone already answered — lowered by closeness to the speaker. The soul's own share of
+  talk is only in θ.
 
 σ(x) = 1 / (1 + e^(−x)) throughout.
 
@@ -62,9 +62,9 @@ learning in behavior.
   how a fair participant behaves in group chat [Eckhaus et al. 2025, "Time to Talk", PR].
 - budget_used = tokens spent today / daily budget (owner setting).
 - promise_debt = share of the soul's promises due within the next hour.
-- familiarity = σ(B_ctx), B_ctx the ACT-R base-level activation (§5) of the soul's interactions
+- familiarity = σ(B_ctx), B_ctx the ACT-R base-level activation of the soul's interactions
   with this place and the people present (familiarity = 0 when there are none);
-  r = `reserve_when_unfamiliar` (§15).
+  r = `reserve_when_unfamiliar`.
 - a from `restraint_after_speaking`; b = `budget_weight`; c = `promise_debt_weight`.
 Rationale: homeostatic drives shift the willingness to act without simulating feelings
 [Wang et al. 2023, "Humanoid Agents", PR — we keep their basic-needs idea and drop emotion].
@@ -77,7 +77,7 @@ go / no-go) gives natural variation without if-else rules, and the seed makes ev
 exactly reproducible in replay. A small non-LLM trigger deciding *when* to act outperforms an
 LLM deciding it on every event, at a fraction of the cost [arXiv 2605.30152, PP].
 
-**Circuit breaker** (§15) bypasses the draw: the event engages a commitment — the turn was
+**Circuit breaker** bypasses the draw: the event engages a commitment — the turn was
 allocated to the soul, it fires or answers an active Expectation, or it continues an active goal.
 
 ## 4. Patience and inner thought
@@ -115,7 +115,7 @@ after a month. The original recency × importance × relevance retrieval of Gene
 [Park et al. 2023, UIST, PR] is the precursor.
 
 **Fade.** During sleep, per-message vectors whose A falls below a fixed threshold are released;
-the gist remains in memories and the event remains in the log (D14, D32.5).
+the gist remains in memories and the event remains in the log.
 
 ## 6. Expectations and the wake gate
 
@@ -130,12 +130,12 @@ typed records whose lifecycle lives in code works better than leaving them to th
 - m < `wake_gate_lo` → ignore.
 - m ≥ `wake_gate_lo` → one classifier call; its verdict is recorded with m.
 - `wake_gate_hi` = 1 (no "clearly yes" band) until zero "no" verdicts are seen in n ≥ 3/ε
-  verdicts with m above a proposed hi (rule of three, §15; ε = 0.06 → n = 50).
+  verdicts with m above a proposed hi (rule of three, *Generalization: one function instead of many rules*; ε = 0.06 → n = 50).
 Rationale: similarity measures "about the same thing", not "answers it" — a question on the
-same topic is as similar as its answer (D21).
+same topic is as similar as its answer.
 
 **Band learning.** `wake_gate_lo` moves toward (lowest m with a "yes" verdict) − margin, within
-bounds, by the bounded-update rule of §8.
+bounds, by the bounded-update rule of *Learning with bounds*.
 
 ## 7. Trust, credence and reliability (beta reputation)
 
@@ -147,7 +147,7 @@ System, PR]. Rationale: humans keep "epistemic vigilance" towards both the sourc
 content of what they are told [Sperber et al. 2010, PR]. Counts update conservatively by nature
 (a single event moves E little once α + β is large) and are easy to recompute from the log.
 
-**Closeness** to a person is the ACT-R base-level activation (§5) of the interactions with them.
+**Closeness** to a person is the ACT-R base-level activation of the interactions with them.
 
 ## 8. Learning with bounds
 
@@ -155,8 +155,8 @@ content of what they are told [Sperber et al. 2010, PR]. Counts update conservat
 wₖ ← clamp(wₖ + α_learn · (r − P) · sₖ), r = 1 if the outcome was good, 0 otherwise
 [Rescorla & Wagner 1972, PR]. α_learn = `learning_rate`.
 
-**Bounded updates** (for knobs, when enabled, D29/D32.7):
-- move only when the 95% interval of the evidence excludes "no change" (§15);
+**Bounded updates** (for knobs, when enabled):
+- move only when the 95% interval of the evidence excludes "no change";
 - each step ≤ a small share of the knob's range; total daily change ≤ 5% of the range;
 - every knob has a floor and a ceiling; a knob that sits at a bound for several days freezes
   and is reported to the owner;
@@ -180,7 +180,7 @@ In replay with a real model, about 88% of prompt tokens were served from cache.
 - **Absolute line 2** (private content never reaches anyone who was not part of it: the
   audience of the context must be a subset of the audience of the content) is information-flow
   control in the context hook: what is not in the prompt cannot leak. The core carries the
-  labels; the owner policy in the middleware judges them (D57), like a reference monitor that
+  labels; the owner policy in the middleware judges them, like a reference monitor that
   sees every access [Anderson 1972, IND]. Sharing is declassification
   by owners in the decentralized label model [Myers & Liskov 1997]: each person in the audience
   may extend the audience of what they were part of, and only that.
@@ -211,7 +211,7 @@ and missed-help rates, promise keeping, recall after 1/7/30 days, and a blind "w
 bot" test with a target near 50%. Turing-style tests measure persona skill, not cognition: a
 persona-prompted GPT-4.5 was judged human 73% of the time [Jones & Bergen, arXiv 2503.23674, PP].
 
-## 14. Knowing, not knowing and misremembering (D38)
+## 14. Knowing, not knowing and misremembering
 Seven brain functions, each with a studied model; together they decide what the soul may
 assert about the past.
 
@@ -225,7 +225,7 @@ Johnson & Raye 1981, PR; Mitchell & Johnson 2009, PR]. The soul logs provenance,
 recollection R is threshold-like (all-or-none retrieval of details) and depends on the
 hippocampus; familiarity F is a continuous signal-detection process:
   P("seen before") = R + (1 − R) · P(F > c).
-Mapping: F = cosine and activation (§5); R = `recall` recovering original events whose people,
+Mapping: F = cosine and activation; R = `recall` recovering original events whose people,
 place and time match. Details are asserted only when R holds; F alone yields "sounds familiar".
 Déjà vu = F > c with R = 0.
 
@@ -262,9 +262,9 @@ High q (things here are said in chat) → absence is strong evidence; low q (thi
 said face to face) → absence says little. Gaps are filled by recombining nearby episodes into a
 hypothesis, as episodic memory does for simulation [Schacter & Addis 2007, PR]; the hypothesis
 is `inferred` and said as a guess. For now reasoning judges q from context; learning q per place
-and topic is deferred (D32.9).
+and topic is deferred.
 
-## 15. Generalization: one function instead of many rules (D40)
+## 15. Generalization: one function instead of many rules
 
 **Circuit breaker on commitments.** The ventral attention network interrupts ongoing processing
 for behaviorally relevant stimuli, acting as a "circuit breaker" for the goal-directed dorsal
@@ -281,23 +281,23 @@ someone else's.
 **Own name.** One's own name breaks through unattended input [Moray 1959, PR; replicated by
 Röer & Cowan 2021, PR]: salience, not obligation.
 
-**Context familiarity.** Caution under unfamiliar context follows from report control (§14): in a
+**Context familiarity.** Caution under unfamiliar context follows from report control: in a
 new place or company the soul's estimate that a contribution is welcome is uncertain, so the
-criterion rises. Familiarity reuses ACT-R base-level activation (§5), so a place left long ago
+criterion rises. Familiarity reuses ACT-R base-level activation, so a place left long ago
 becomes unfamiliar again without any new constant.
 
 **Chunking a backlog.** Working memory holds about four chunks [Cowan 2001, PR]; a backlog of
 missed messages in one place is appraised as one chunk, with each signal discounted by age as
-(1 + L_hours)^(−d), the same decay as §5.
+(1 + L_hours)^(−d), the same decay as *Memory activation (ACT-R)*.
 
 **Enough evidence.** With zero failures in n trials, the 95% upper bound of the failure rate is
 about 3/n [Hanley & Lippman-Hand 1983, PR]; in general the bound comes from the beta posterior
-already used for credence (§7). One rule replaces every hand-picked count.
+already used for credence. One rule replaces every hand-picked count.
 
 **Learning from outcomes.** Dopamine neurons signal reward prediction error, the quantity the
-delta rule uses [Schultz, Dayan & Montague 1997, PR]; it underlies §8.
+delta rule uses [Schultz, Dayan & Montague 1997, PR]; it underlies *Learning with bounds*.
 
-## 16. Engineering principles behind the core's shape (D42)
+## 16. Engineering principles behind the core's shape
 Not formulas, but the systems principles the architecture follows, so it can be checked like a
 kernel.
 - **Minimality.** A concept stays in the core only if moving it outside would prevent required
@@ -317,7 +317,7 @@ kernel.
 - **Ports and adapters.** The core is isolated from its devices behind ports [Cockburn 2005, IND]
   — percept and capability descriptor are the ports; adapters and plugin tools are the adapters.
 - **Stable user-space contract.** Internals change freely, the interface to the outside does not
-  break [Linux kernel ABI policy, IND] — the stability contract in [spec.md §3.3](spec.md).
+  break [Linux kernel ABI policy, IND] — the stability contract in [spec.md](spec.md) *Contract*.
 - **Capability-based isolation** (not adopted in v1): every access through an unforgeable token
   [Klein et al. 2009 (seL4), PR]. Plugins are trusted in-process code for now; per-plugin lever
   declarations in the manifest are the path toward least privilege without changing the core.

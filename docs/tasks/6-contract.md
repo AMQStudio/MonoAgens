@@ -4,7 +4,7 @@ Status: todo | Depends on: Task 5 (stopped at 1.12 P, 2026-11-14)
 One task = one worker prompt, done by one worker. Work through the parts **in order**. Rules: [AGENTS.md](../../AGENTS.md).
 [AGENTS.md](../../AGENTS.md).
 
-**Goal.** The code implements [spec.md §2](../spec.md) (v2, D86–D88) exactly, and then the
+**Goal.** The code implements [spec.md](../spec.md) *The contract* (v2) exactly, and then the
 contract is locked. Everything shaped by one platform leaves the core and the middleware; every
 adapter translates its own world into the six facts; tests speak only through the contract; five
 very different fake bodies run without a single change to it. After this task there is no "core
@@ -16,7 +16,7 @@ plugins.
   the adapters and the plugins, and rewrite or delete tests that touch internals. It happens once.
 - No behavior beyond the contract and the audit items named below. Anything the contract does not
   cover stops the work and goes to the owner; never extend the contract yourself.
-- Prefer deleting to adding: most of what goes is in [spec.md §2.10](../spec.md). Record
+- Prefer deleting to adding: most of what goes is in [spec.md](../spec.md) *What contract v2 removes*. Record
   the line counts of `monoagens/core/`, `monoagens/middleware/`, `monoagens/adapters/`,
   `plugins/` and `tests/` before you start and after each part, under Notes.
 - Every rule has one home (AGENTS.md invariant 13). Note each fix's home under Notes.
@@ -28,12 +28,12 @@ plugins.
 ---
 
 ## Part 1 — The contract as code, the lock and the ratchet (first)
-Read first: [spec.md §2](../spec.md) (all), V1's `engine/inbound.py` and `engine/registry.py`
+Read first: [spec.md](../spec.md) *The contract* (all), V1's `engine/inbound.py` and `engine/registry.py`
 (branch `archived`)
 May touch: `monoagens/contract/` (new), `contract.lock` (new), `tests/contract/` (new),
 `tests/architecture/` (new), `tests/bodies/` (new), `pyproject.toml` (test markers only)
 
-- [x] 1.1 `monoagens/contract/`: the types and validators of [spec.md §2.3](../spec.md) and §4 — event
+- [x] 1.1 `monoagens/contract/`: the types and validators of [spec.md](../spec.md) *Waist 1: core ↔ middleware* and *Middleware* — event
   envelope, feature names, capability descriptor (facts, permission, the closed schema subset with
   V1's keyword validator), hook outcomes (`Continue`, `Replace`, `Stop(reason, held)`), context
   item, action, receipt states, the adapter surface as Protocols (mandatory and optional), percept,
@@ -42,13 +42,13 @@ May touch: `monoagens/contract/` (new), `contract.lock` (new), `tests/contract/`
 - [x] 1.2 `contract.lock`: the hash of `monoagens/contract/`, and `tests/contract/test_lock.py`
   that fails when they differ. The worker writes the first hash here; from 7.3 on only the owner
   changes it.
-- [x] 1.3 Architecture tests as a **ratchet** (`tests/architecture/`): every ban of [spec.md §2.7](../spec.md)
+- [x] 1.3 Architecture tests as a **ratchet** (`tests/architecture/`): every ban of [spec.md](../spec.md) *Tests that hold the contract*
   as a test over the source tree; today's violations are listed in
   `tests/architecture/baseline.yaml` (file, line, ban). The test fails on a new violation **and**
   on a listed one that no longer exists, so the list can only shrink. It must be empty by 6.4.
 - [x] 1.4 The five fake bodies (`tests/bodies/`: chat, robot, workspace app, sensor, game,
-  [spec.md §2.8](../spec.md)) as adapters on the contract surface only, and the conformance suite
-  (`tests/contract/test_conformance.py`) over them: members of spec §2.4.1, percepts of §2.4.2, one receipt
+  [spec.md](../spec.md) *Five test bodies*) as adapters on the contract surface only, and the conformance suite
+  (`tests/contract/test_conformance.py`) over them: members of spec *What an adapter must provide (checked at boot)*, percepts of *Percepts*, one receipt
   per action, deduplication by action id. They run through the kernel in Part 6.
 
 **Parts 2 and 3 interleave where one change spans both** (architect, 2026-11-14, from the
@@ -60,13 +60,13 @@ change lands. Order: 2.2 (rendering half), 2.4, 2.6, 2.7, 2.8, 2.9, then 2.5 + 3
 3.2, then 2.2 (label half) with 3.5, then 3.4, 3.6–3.8.
 
 ## Part 2 — The core on waist 1
-Read first: [spec.md](../spec.md) §2.3, §3.3–§3.6, §3.8–§3.9
+Read first: [spec.md](../spec.md) *Waist 1: core ↔ middleware*, *Contract* to *Cognition*, *What the core knows, the absolute lines and the self-model* to *Formats the core reads*
 May touch: `monoagens/core/` (all), `monoagens/infra/store.py`, `monoagens/infra/versioning.py`,
 `monoagens/versioning.py`, `sql/migrations/` (one new migration), `tests/` (any test that
 asserts behavior the contract removes, e.g. `text_like`), `scenarios/`, `scripts/replay.py`;
 `monoagens/contract/` and `contract.lock` only for 2.9
 
-- [x] 2.1 Event envelope v2 ([spec.md §3.3](../spec.md), §9.2): `occurred_at`, `description`, `features`,
+- [x] 2.1 Event envelope v2 ([spec.md](../spec.md) *Contract*, *What never changes with a rename*): `occurred_at`, `description`, `features`,
   `backfill`, `imported`, `labels` as envelope fields, `schema_version` 2; version 1 events and
   percepts upcast on read (`sent_at` → `occurred_at`, `addressed` → `features.addressed`,
   `place_kind` dropped).
@@ -78,7 +78,7 @@ asserts behavior the contract removes, e.g. `text_like`), `scenarios/`, `scripts
   may read `audience_size`; the core searches no text for the soul's name.
 - [x] 2.4 `cue_event` keeps facts only (kind, who, place, not_who); `text_like` is refused with
   its reason; stored ones are upcast to a free-text condition.
-- [ ] 2.5 The context as items with sources ([spec.md §2.3](../spec.md)); the context hook receives items;
+- [ ] 2.5 The context as items with sources ([spec.md](../spec.md) *Waist 1: core ↔ middleware*); the context hook receives items;
   the text is rendered after the last hook.
 - [x] 2.6 Actions and receipts: deterministic action ids; every `act.out` ends in exactly one
   `act.result` with a state; `refused` wakes reasoning (bounded by the brakes), `held` does not;
@@ -97,7 +97,7 @@ asserts behavior the contract removes, e.g. `text_like`), `scenarios/`, `scripts
   commit message.
 
 ## Part 3 — The middleware on waist 2
-Read first: [spec.md](../spec.md) §2.4–§2.6, §4 (all)
+Read first: [spec.md](../spec.md) *Waist 2: middleware ↔ adapters and plugins* to *What the middleware does with the facts*, *Middleware* (all)
 May touch: `monoagens/middleware/` (all), `monoagens/core/` (only for the combined items 2.2
 and 2.5 above), `monoagens/infra/` (attachment store, budget), `config.yaml`, `tests/` (any test
 that asserts behavior the contract removes), `scenarios/`, `scripts/replay.py`
@@ -105,43 +105,43 @@ that asserts behavior the contract removes), `scenarios/`, `scripts/replay.py`
 - [ ] 3.1 The contract types move out of `middleware/contract.py` into `monoagens/contract/`;
   the middleware imports them; what contract v2 removed is deleted (`SHOWS`, ladders, the neutral
   `say` fields).
-- [ ] 3.2 Identity on actors ([spec.md §4.7](../spec.md)): the actor map over `actor` and `involves`;
+- [ ] 3.2 Identity on actors ([spec.md](../spec.md) *Identity*): the actor map over `actor` and `involves`;
   `about` resolved to an event id from the Log; place info removed; the `self_actor` line.
-- [ ] 3.3 Privacy ([spec.md §4.3](../spec.md)): labels from the latest `place.audience`; **one** check over
+- [ ] 3.3 Privacy ([spec.md](../spec.md) *Policy*): labels from the latest `place.audience`; **one** check over
   context items in the last context slot, plus attachments on open and forward. Delete the regexes
   over rendered lines, the second filter, `kernel.visible`, `_delegated_share_source`, the
-  stopword and topic-word code. `share` takes ids; D80 by `about` or the chain's `wait`.
-- [ ] 3.4 Registry ([spec.md §4.4](../spec.md)): each body's own capabilities, routed by place ownership,
+  stopword and topic-word code. `share` takes ids; asking on someone's behalf by `about` or the chain's `wait`.
+- [ ] 3.4 Registry ([spec.md](../spec.md) *Registry*): each body's own capabilities, routed by place ownership,
   an action for another body's place refused with its reason; no neutral `say`, nothing hidden, no
   permission exception; commands from `command`; a failing handler answers with an error; command
   answers through the action hook (F.12); `registry.more` without a place refused, capped.
-- [ ] 3.5 Interaction ([spec.md §4.9](../spec.md)): lifecycle events to each body's `render` as best-effort
+- [ ] 3.5 Interaction ([spec.md](../spec.md) *Interaction*): lifecycle events to each body's `render` as best-effort
   rules with their own timeout; questions through `ask` with `question.asked`, `answered`,
   `expired` events; the `answer` capability with its fact checks; an approved act runs as its
   requester and still runs after a restart (F.9). Delete `yes_words`, typed matching, `split`,
   the sticker fallback.
-- [ ] 3.6 Roles ([spec.md §4.8](../spec.md)): person ids only; `platform_role` and platform role facts
+- [ ] 3.6 Roles ([spec.md](../spec.md) *Roles and permissions*): person ids only; `platform_role` and platform role facts
   deleted; person cards read the roles at call time.
 - [ ] 3.7 Loader and config (O.1, O.2, O.4): `/reload` with adapters running, validation before
   any change, rules never duplicated and removed with their plugin; every config edit parsed back,
   atomic, comments kept; `/plugin update` reads the recorded defaults; a missing requirement or
-  dependency fails boot; the boot checks of [spec.md §2.3](../spec.md) and §4.1.
+  dependency fails boot; the boot checks of [spec.md](../spec.md) *Waist 1: core ↔ middleware* and *The foundation in the middle*.
 - [ ] 3.8 Budget (O.3): every round's usage recorded, failed ones included; the budget update
   atomic; cached tokens read; a fallback provider uses its own key only.
 
 ## Part 4 — Adapters on the contract
-Read first: [spec.md §2.4](../spec.md), [spec.md §5](../spec.md) (all), Task 5 1.11 (fakes from the
+Read first: [spec.md](../spec.md) *Waist 2: middleware ↔ adapters and plugins*, *Adapters* (all), Task 5 1.11 (fakes from the
 real thing, recording mode)
 May touch: `monoagens/adapters/` (all), `monoagens/__main__.py` (supervision only),
 `monoagens/infra/` (a recording helper), `.gitignore`, `scripts/recording.py` (new),
 `tests/adapters/`, `tests/fixtures/`
 
-- [ ] 4.1 CLI on the surface of [spec.md §2.4.1](../spec.md), as the reference adapter.
+- [ ] 4.1 CLI on the surface of [spec.md](../spec.md) *What an adapter must provide (checked at boot)*, as the reference adapter.
 - [ ] 4.2 Telegram, with E.2.
 - [ ] 4.3 WhatsApp, with E.1.
 - [ ] 4.4 Discord, with E.3.
 - [ ] 4.5 Every adapter (E.4): its own capabilities and `prompt_section`; features; `place.audience`
-  with its platform's rule folded in ([spec.md §5.3](../spec.md)); `render` from its own `render:` options;
+  with its platform's rule folded in ([spec.md](../spec.md) *Places and audiences*); `render` from its own `render:` options;
   `ask`; deduplication by action id; splitting and length limits by itself; a fresh client on
   restart; a backoff that does not reset after a short run; the CLI socket created with its mode.
 - [ ] 4.6 Fakes from the real thing: `create_autospec` of the neonize and discord.py clients,
@@ -153,7 +153,7 @@ May touch: `monoagens/adapters/` (all), `monoagens/__main__.py` (supervision onl
   `dry_run`).
 
 ## Part 5 — Plugins and the remaining audit items
-Read first: [spec.md §6](../spec.md), [spec.md §2.4.8](../spec.md)
+Read first: [spec.md](../spec.md) *Plugins*, *Plugins*
 May touch: `plugins/`, `monoagens/core/expectations.py`, `monoagens/core/memory/`,
 `monoagens/middleware/lang/`, `tests/plugins/`, `tests/core/`
 
@@ -170,7 +170,7 @@ May touch: `plugins/`, `monoagens/core/expectations.py`, `monoagens/core/memory/
   after the inbound hook; the remaining English strings move to the language catalog.
 
 ## Part 6 — Tests through the contract, five bodies, invariants
-Read first: [spec.md](../spec.md) §2.7–§2.8, [AGENTS.md](../../AGENTS.md) (Tests)
+Read first: [spec.md](../spec.md) *Tests that hold the contract* to *Five test bodies*, [AGENTS.md](../../AGENTS.md) (Tests)
 May touch: `tests/` (all), `scenarios/`, `scripts/replay.py`
 
 - [ ] 6.1 Every test that calls a private function, asserts on an internal payload or on prompt
@@ -180,23 +180,23 @@ May touch: `tests/` (all), `scenarios/`, `scripts/replay.py`
   model: percepts in, audiences, capabilities out, receipts, lifecycle events, questions and
   answers, back-fill — **with no change to `monoagens/contract/`**. A body that needs one stops the
   work and is reported.
-- [ ] 6.3 Hypothesis stateful invariants ([spec.md §2.7](../spec.md)): no context item outside its audience;
+- [ ] 6.3 Hypothesis stateful invariants ([spec.md](../spec.md) *Tests that hold the contract*): no context item outside its audience;
   exactly one receipt per action; nothing sent twice across restarts; every Stop recorded; a merge
   never splits; the owner's direct place sees everything.
 - [ ] 6.4 The architecture baseline of 1.3 is empty.
-- [ ] 6.5 The fault-injection test (D82): each adapter member, each best-effort rule and each tool
+- [ ] 6.5 The fault-injection test: each adapter member, each best-effort rule and each tool
   fails in turn; the soul keeps working and records the error.
 - [ ] 6.6 Scenarios on contract v2 facts (`place.audience`, features); scenarios 18 and 19 check
   behavior, not prompt text.
 
 ## Part 7 — Lock and real use
 - [ ] 7.1 Line counts before and after, per folder, under Notes. Doc references in code comments
-  and docstrings (`docs/core.md §N` and the like) point to `docs/spec.md` sections (the mapping
-  is in the header of spec.md).
+  and docstrings (`docs/core.md §N`, decision numbers `Dxx`) are removed or replaced by the plain
+  name of the spec section.
 - [ ] 7.2 The real-model replay launch set against Task 5's A.4 baseline (the model in `.env`;
   never read or print it).
 - [ ] 7.3 **Stop and report to the owner.** The owner reviews and commits `contract.lock`; from
-  then on only the owner changes it ([spec.md §2.9](../spec.md)).
+  then on only the owner changes it ([spec.md](../spec.md) *Changing the contract*).
 - [ ] 7.4 A live session on WhatsApp in the owner's direct chat and one group; the failures seen
   live since 2026-11-13 (Task 5 1.11 step 4) become adapter tests from recordings. From here the
   owner uses the soul daily.
@@ -265,7 +265,7 @@ One home per fix:
 
 Decisions taken while implementing (not questions, recorded so the reader sees them):
 
-- `Answer` and `Command` are defined in `contract/percept.py`: [spec.md §2.4.2](../spec.md) names them as
+- `Answer` and `Command` are defined in `contract/percept.py`: [spec.md](../spec.md) *Percepts* names them as
   percept fields, the plan's module list gave them no home, and they belong to the percept.
 - `descriptor_errors(..., require_facts=True)` requires the `facts` **key**, not a non-empty
   list: a talking capability states `facts: ()` honestly (every adapter descriptor does today),
@@ -356,7 +356,7 @@ Deviations, recorded:
   `own_name`/`social_cost`/back-fill tests, the `payload->>'description'` reads). The adapters
   report `named` and `addressed_other` from Part 4 on; until then those two features stay 0 for
   real traffic.
-- exactly one `act.result` per act ([spec.md §2.3](../spec.md)) is 2.6's other half and is **not** in this
+- exactly one `act.result` per act ([spec.md](../spec.md) *Waist 1: core ↔ middleware*) is 2.6's other half and is **not** in this
   commit: `dispatch` still records one only when the tool returns something. Making it universal
   reorders eight pinned event sequences in `tests/core/test_reasoning.py`, and that migration
   belongs with the deterministic action ids and the ledger.
@@ -464,7 +464,7 @@ One home per fix:
 
 - the intent's line: `core/dispatch._intend` quotes only what the action hook let through
   (the returned item) and records the arguments reasoning asked for (`asked`), so the Log keeps
-  the drafted words while the other place's desk hides them (D45);
+  the drafted words while the other place's desk hides them;
 - the decision to hide words: `middleware/privacy.guard`'s last pass returns `Replace` without
   `text` when `_words_hidden` holds, in place of the deleted `words_hidden` label;
 - the intent's payload: no `place_kind`, and `Kernel._wake` reads `event.description`;
@@ -548,16 +548,16 @@ What this commit implements, one home each:
   `.lower()`/`.split()`, `place_kind`, `place_info`, `_share_tokens`, `topic_rule`, `narrowing` and
   `filter_context` are gone.
 - **the two absolute-line violations are gone**: a memory is only as visible as its least known
-  source (D53), so one whose `derived_from` includes an event with no place enters the owner's own
+  source, so one whose `derived_from` includes an event with no place enters the owner's own
   place and nothing else; `Kernel._expect_wake` no longer quotes a fired expectation's
-  `about`/`intent` (D45) — the expectation's own line reaches the desk as a sourced item and the
+  `about`/`intent` — the expectation's own line reaches the desk as a sourced item and the
   one check decides.
 - **no labels in the core**: `Dispatch` carries `place`/`receipt`; a held act is `ctx["held"]`;
   `threads.after_step` reads the act's `to` and the receipt's state; `labels-read` is 0.
 - **identity on actors**: cards are items, `person_cards` reads the place's audience and the
   trigger's `involves`, `_direct_places` reads `place.audience`, `record_self_account` writes an
   adapter's own actor once at install; the place tracker and `read_place`/`can_post` are gone.
-- **registry**: `self_text` (D-I) and a body's `PermissionError` answers `refused` (§4.4).
+- **registry**: `self_text` (D-I) and a body's `PermissionError` answers `refused`.
 - **tests**: every suite that exercises the desk publishes `place.audience` for its places,
   unwraps the hook outcome rather than reading the old field names, and asserts receipts and items.
   Deleting a test is limited to subjects the contract removed (the read-only place fact, the
@@ -569,7 +569,7 @@ What this commit implements, one home each:
 |---|---|---|
 | `tests/adapters/test_part1_integration.py` | 2 | the cross-body link test reads a stale answer (a kernel task outliving its test); the deferred-file test needs its places' audiences published before it asserts a `PermissionError` |
 | `tests/middleware/test_policy.py` | 1 | `test_brake_continue_keeps_held_chain_origin_actor`: the resume after a brake must carry the *held chain's* `origin_actor` (alice), not the owner who said "continue" — the fix is in `policy.brake_line`'s resume path (3.5, F.9) |
-| `tests/plugins/test_workspace*.py` | 2 | the workspace plugin's tools declare `long_running: False`, so no task thread opens: either the plugin's `run` is long-running (a manifest fact) or the test no longer expects a thread. Decide from [spec.md §6.3](../spec.md) before changing either. |
+| `tests/plugins/test_workspace*.py` | 2 | the workspace plugin's tools declare `long_running: False`, so no task thread opens: either the plugin's `run` is long-running (a manifest fact) or the test no longer expects a thread. Decide from [spec.md](../spec.md) *Manifest* before changing either. |
 
 **The bug behind most of the churn this session**: several tests failed with `events_caused_by_fkey`
 on an id from an *earlier* test — a kernel task outliving its test and writing into the truncated

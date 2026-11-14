@@ -3,40 +3,26 @@
 The one specification of MonoAgens: every rule, format and design decision, each written once.
 People start with the [README](../README.md); coding agents with [AGENTS.md](../AGENTS.md), then
 the sections their task names. Formulas and their sources are in [research.md](research.md).
-Decision numbers (Dxx) trace to the history in git. Points marked **Draft** state the current
-intent and may change without a new decision; everything else is decided. Only the owner and the
-architect change this file; §2 is locked and changes only by §2.9.
+Points marked **Draft** state the current intent and may change; everything else is decided.
+Only the owner and the architect change this file; *The contract* is locked and changes only as
+*Changing the contract* says.
 
-| § | Section |
-|---|---|
-| 1 | Principles: the rules that never change |
-| 2 | The contract between the layers (locked) |
-| 3 | Core |
-| 4 | Middleware |
-| 5 | Adapters |
-| 6 | Plugins |
-| 7 | Operator: command line, installer, Console |
-| 8 | Project: deployment files, evaluation, later ideas |
-| 9 | Terms and folder layout |
-
-Earlier documents were one file per layer; a reference written before 2026-11-14 as
-`<file>.md §N` reads as: constitution → §1.N, contract → §2.N, core → §3.N, middleware → §4.N,
-adapters → §5.N, plugins → §6.N, operator → §7.N, project → §8.N, glossary → §9,
-core-math → research.md §N.
+Parts: 1 Principles · 2 The contract · 3 Core · 4 Middleware · 5 Adapters · 6 Plugins ·
+7 Operator · 8 Project · 9 Terms.
 
 ## 1. Principles
 
-### 1.1 The contract is locked; the internals answer to evidence (D44, D86–D88)
+### 1.1 The contract is locked; the internals answer to evidence
 Like a kernel: the interface to the outside never breaks, the inside may improve.
-- **Locked** — §2, the one contract between the layers (v2, opened and
+- **Locked** — *The contract*, the one contract between the layers (v2, opened and
   locked by the owner on 2026-11-14): the event envelope, features, the capability descriptor,
   hooks, context items, actions and receipts, actors, places, audiences, percepts, lifecycle
   events, answers and commands — plus the hook contract, the six levers, `recall`, the birth
   certificate and prior format, the two absolute lines, the complexity budget and the brain map.
-  A hash test holds it; only the owner changes it, additively, by the rules of §2.9.
+  A hash test holds it; only the owner changes it, additively, by the rules of *Changing the contract*.
 - **After the lock there is no "core change" or "middleware change"** of the contract kind.
   What is new — a platform, a device, a feature — enters through an adapter or a plugin.
-- **Every file format carries its version** (D58; events §2.3, files §8.2): older versions are
+- **Every file format carries its version** (events *Waist 1: core ↔ middleware*, files *Deployment files*): older versions are
   upcast when read, never rewritten; a newer one fails loudly. This is how a locked contract
   evolves without breaking.
 - **Provisional** — the internal formulas: how each signal is computed, the terms of θ, the
@@ -47,7 +33,7 @@ Like a kernel: the interface to the outside never breaks, the inside may improve
 - Always allowed: fixing a bug, a vulnerability, an inconsistency, a typo or a broken
   reference, and clarifications or refactors that change no behavior. Everything else belongs to another layer — middleware, adapters, plugins.
 
-### 1.2 Generic, simple, stable (D86, D87)
+### 1.2 Generic, simple, stable
 - **The core and the middleware are generic and know nothing above them.** They provide generic
   facts, events and entries that make sense for every body — a chat, a robot, a workspace app, a
   sensor, a game — and never specialize for one. Specializing them for anything above is
@@ -57,12 +43,12 @@ Like a kernel: the interface to the outside never breaks, the inside may improve
 - **One direction**: the middleware builds on the core's contract, adapters and plugins build on
   the middleware's; a lower layer never changes for a need of an upper one.
 - **Understanding belongs to reasoning**; what is not left to it is decided from facts, never
-  words. The rules are §2.5.
+  words (the contract's *Absolute rules*).
 - **Simple is king.** Covering scenarios one by one is not design. A case that does not fit is
-  classified (§2.9), never patched.
+  classified, never patched.
 
-### 1.3 Design by brain function, not by scenario (D39, D40)
-- The core is a closed list of brain functions: the brain map in §3.2. Each row
+### 1.3 Design by brain function, not by scenario
+- The core is a closed list of brain functions: the brain map in *Mental model*. Each row
   is a brain region, a studied model with its formula and sources ([research.md](research.md))
   and one core mechanism.
 - Human scenarios are tests, not design inputs: a new situation becomes a replay scenario
@@ -70,11 +56,11 @@ Like a kernel: the interface to the outside never breaks, the inside may improve
 - No rule is ever written to close a single case. A behavior that keeps failing means a weak
   function; role-, place- or preference-specific behavior belongs to middleware or a plugin.
 
-### 1.4 Complexity budget (D26, D32)
+### 1.4 Complexity budget
 The core holds at most 4 books, 5 thought acts, 3 hooks, 10 signals, 3 drives and one gate
 formula. A new primitive must replace one or be refused.
 
-### 1.5 Layers (D35, D41, D57)
+### 1.5 Layers
 - **Core** — neutral and primitive: only a brain. It knows no case; it provides mechanisms and
   assembles them. It knows only **opaque ids, labels and numbers**: who and where are strings,
   labels are attached by the middleware and carried without being read, numbers feed the gate.
@@ -91,24 +77,45 @@ formula. A new primitive must replace one or be refused.
   without it (fail-closed).
 - **Adapters and plugins** — talk only to the middleware, through the contract: they translate
   their platform or device into its facts, and the soul's actions back into native actions.
-  Standard names are in §9.
+  Standard names are in *Terms*.
 - Everything that reaches the brain is a `percept`; everything that persists is an event.
-- Middleware and plugins never learn; the soul does (D34). They may add any behavior, emotions
-  included, through the six levers (§4.2); the core itself has no
+- Middleware and plugins never learn; the soul does. They may add any behavior, emotions
+  included, through the six levers; the core itself has no
   emotions.
 
-### 1.6 Two absolute lines (D24, D32)
+### 1.6 Two absolute lines
 Enforced deterministically by the owner policy, never decided by the model, never removable by a
 plugin; another plugin can only narrow them:
 1. Only the owner changes who the soul is.
-2. Private content never reaches anyone who was not part of it (D45): it follows the people
+2. Private content never reaches anyone who was not part of it: it follows the people
    it belongs to, across adapters and places, and reaches someone new only when one of those
-   people shares it (D46).
+   people shares it.
 
 ### 1.7 Engineering invariants
-They live in one place, [AGENTS.md](../AGENTS.md) (invariants 1–14): the append-only log, record
-first, one queue and one consumer, watchdogs, the injected clock and seeded randomness, gated
-and counted model calls, configuration outside code, the generic-only rules and the lock.
+1. **The core is only a brain.** It knows percepts, capabilities, hooks and thought acts. It
+   imports nothing from the middleware, adapters, plugins or model providers, never names a
+   platform, and never hard-codes a world action (speaking included): those are capabilities. It
+   reads ids, times, `description` and `features`, never an event's `payload` or `labels`.
+2. **The log is immutable.** `events` is INSERT-only, enforced by a trigger; the one exception is
+   hard forgetting, through one function the trigger recognises. Event vectors leave only by
+   fading or hard forgetting, each through its own path that writes an event.
+3. **One queue, one consumer.** Every source only puts into the queue; only the kernel loop
+   processes events, one at a time, in order.
+4. **Record first, then act.** Incoming events are written before they are processed; decisions
+   to stay silent are written too.
+5. **Every model call is a gate decision**, recorded with its purpose and tokens and counted in
+   the daily budget; no model call per message or per tick by default.
+6. **No scenario features.** Reminders, monitors and habit trackers are Expectations; what cannot
+   be an Expectation, a state key, an adapter or a plugin does not go in.
+7. **Pure async.** No blocking call inside `async def`; CPU work goes through
+   `asyncio.to_thread`; every hook call and background job runs under its watchdog.
+8. **Configuration outside code.** The model provider, models, keys, URLs and reasoning effort
+   come from `.env`; deployment settings from `config.yaml` and `config.d/`; identity from the
+   birth certificate (`soul.yaml`); weights and thresholds from the prior (`prior/`). No magic
+   numbers in code.
+9. **Signals are pure**: a signal only reads its situation and returns a number in [0, 1].
+10. **Decisions are reproducible**: randomness only from the seeded generator, time only from
+    the injected clock (replay uses event times).
 
 ### 1.8 Honesty and claims
 The soul is honest about what it knows and does not know. MonoAgens is never described as
@@ -116,14 +123,14 @@ conscious or as "% human"; claims are per behavior against a human baseline.
 
 ### 1.9 Open source
 Apache 2.0. BYOK: the owner brings their own model key. One deployment is one soul with its own
-database. Public documents mention no hosted service (D7, D8).
+database. Public documents mention no hosted service.
 
-## 2. The contract (locked)
+## 2. The contract
 
-Decided and locked by the owner on 2026-11-14 (D86–D88). This section is the one contract between
-the layers; no other section may add a field, a fact or an event to it. It changes only by §2.9.
+Decided and locked by the owner on 2026-11-14. This section is the one contract between
+the layers; no other section may add a field, a fact or an event to it. It changes only by *Changing the contract*.
 
-### 2.1 Why one locked contract (D86)
+### 2.1 Why one locked contract
 Systems that last decades share one shape (the hourglass): a small, generic, stable layer in
 the middle, with many different things above and below it, and translation only at the edge.
 The Internet (IP), Unix (system calls), ROS 2 (rmw), Home Assistant (entities) and Matter
@@ -139,9 +146,9 @@ mandatory and optional surfaces, deterministic action ids, `participants()` or `
 command regex) are not.
 
 Two waists:
-- **Waist 1, core ↔ middleware**: events, capabilities, hooks, context items (§2.3).
+- **Waist 1, core ↔ middleware**: events, capabilities, hooks, context items.
 - **Waist 2, middleware ↔ adapters and plugins**: actors, places, audiences, percepts, actions
-  and receipts, lifecycle events, answers and commands (§2.4).
+  and receipts, lifecycle events, answers and commands.
 
 ### 2.2 The six facts
 Every body, present or future, is described with the same six facts. A fact that does not make
@@ -160,7 +167,7 @@ sense for every column does not belong in the contract.
 The core holds mechanisms only. It reads ids as opaque strings, numbers, times and the
 description; it never reads a payload or a label.
 
-**Event envelope** (every event, `schema_version` 2; version 1 is upcast on read, §2.9):
+**Event envelope** (every event, `schema_version` 2; version 1 is upcast on read, *Changing the contract*):
 
 | Field | Read by the core | Meaning |
 |---|---|---|
@@ -178,7 +185,7 @@ description; it never reads a payload or a label.
 | `labels` | **never** | opaque data attached by the middleware (audience, consent, …) |
 
 **Features** are the only way a fact reaches the gate. The core's signals read the names below;
-unknown names are stored and ignored. A new name is an additive change (§2.9).
+unknown names are stored and ignored. A new name is an additive change.
 
 | Feature | Value | Set by |
 |---|---|---|
@@ -201,7 +208,7 @@ schema: { type: object, properties: { text: { type: string } }, required: [text]
 communicative: true         # speaks to a place's audience: talk rate, one message per place per turn
 long_running: false         # true → progress and completion arrive as act.result events
 identity_changing: false    # read by the owner policy: passes only when origin_actor is the owner
-reads: false                # the generic facts (§2.3); the middleware reads them
+reads: false                # the generic facts; the middleware reads them
 changes: false
 runs_code: false
 network: false
@@ -232,7 +239,7 @@ expires) · `failed` (with a reason) · `unknown` (the body cannot tell whether 
 its body again **with the same id**; the body deduplicates by id and answers with the receipt it
 already has, or `unknown`. The core never sends anything twice on its own.
 
-Unchanged and described in §3: the four books, the five thought acts, the gate,
+Unchanged and described in *Core*: the four books, the five thought acts, the gate,
 the budget, the injected clock and the seeded generator.
 
 ### 2.4 Waist 2: middleware ↔ adapters and plugins
@@ -244,7 +251,7 @@ A module with one factory `create(options, env)` returning an object with:
 |---|---|
 | `name` | the adapter's name; its capabilities are `<name>.<capability>` |
 | `run(put)` / `stop()` | sense and put percepts; stop cleanly |
-| `capabilities()` | its own capabilities, with descriptor, facts and permission (§2.3) |
+| `capabilities()` | its own capabilities, with descriptor, facts and permission |
 | `act(action) -> receipt` | carry out one action; deduplicate by `action.id` |
 | `prompt_section()` | what reasoning should know about this body, as text, at most 1,200 characters ("messages can quote an earlier message", "you have two arms with a 60 cm reach") |
 | `self_actor()` | the body's own actor id, or *unknown* |
@@ -256,8 +263,8 @@ report:
 |---|---|
 | `history(place, before, limit)` | older events of a place, for back-fill and import |
 | `fetch(locator)` | the bytes of a deferred attachment |
-| `render(lifecycle)` | shows a lifecycle event (§2.4.5) its own way |
-| `ask(place, question, choices) -> ref` | asks a question with choices its own way (§2.4.6) |
+| `render(lifecycle)` | shows a lifecycle event its own way |
+| `ask(place, question, choices) -> ref` | asks a question with choices its own way |
 
 A body without `render` simply shows nothing besides its actions; one without `ask` gets the
 question as an ordinary action through its communicative capability.
@@ -275,10 +282,10 @@ What an adapter puts into the queue:
 | `ref` | the body's own id for this event, so later events can point at it |
 | `about` | the body's id of an earlier event this one refers to (a reply, an edit, a reaction, a deletion) |
 | `involves` | other actors the event concerns (mentioned, quoted, seen in the image) |
-| `features` | numbers (§2.3) |
-| `answer` | `{prompt: ref, value}` when the event answers a question (§2.4.6) |
-| `command` | `{name, args}` when a person typed or pressed an operator command (§2.4.7) |
-| `backfill`, `imported` | as in §2.3 |
+| `features` | numbers |
+| `answer` | `{prompt: ref, value}` when the event answers a question |
+| `command` | `{name, args}` when a person typed or pressed an operator command |
+| `backfill`, `imported` | as in *Waist 1: core ↔ middleware* |
 | `data` | anything else the adapter wants to keep; opaque to the core and the middleware |
 
 Facts are written only when they are certain (V1's rule). An adapter that is unsure who acted
@@ -287,7 +294,7 @@ reports *unknown*; it never guesses.
 ```yaml
 kind: percept
 body: telegram              # adapter name
-actor: telegram:123         # the native actor, or unknown; the inbound hook maps it to one id per person (D65)
+actor: telegram:123         # the native actor, or unknown; the inbound hook maps it to one id per person
 place: telegram:chat:-100   # native place id
 occurred_at: 2026-11-11T13:20:05+07:00   # the body's own clock
 description: "Budi: anyone know where the meeting is?"   # short, in language; what reasoning reads
@@ -354,11 +361,11 @@ An adapter translates its native command form (a slash command, a menu, a button
 into `command: {name, args}`. The middleware handles commands by name; it never parses syntax.
 
 #### 2.4.8 Plugins
-A plugin declares everything in its manifest (§6.3) and uses the six
-levers (§4.2). Its tools are capabilities as in §2.3. It sees the
+A plugin declares everything in its manifest and uses the six
+levers. Its tools are capabilities as in *Waist 1: core ↔ middleware*. It sees the
 same facts as the middleware and nothing more.
 
-### 2.5 Absolute rules (D87)
+### 2.5 Absolute rules
 1. **No code in the core or the middleware tries to understand human language.** No word lists,
    stopwords, keyword matching, substring matching on message text, or regexes over rendered
    text. Understanding is reasoning's job. Strings in code exist only for people to read, and
@@ -376,17 +383,17 @@ same facts as the middleware and nothing more.
    prompt it answers) is stated by reasoning as an argument and checked against facts.
 
 ### 2.6 What the middleware does with the facts
-Described in §4: identity maps actors to person ids (§4.7), privacy decides what a context may
-hold from audiences (§4.3), the policy holds the absolute lines and the limits (§4.3), roles give
-permissions to person ids (§4.8), the registry routes actions by place (§4.4), interaction emits
-lifecycle events and asks questions (§4.9).
+Described in *Middleware*: identity maps actors to person ids, privacy decides what a context may
+hold from audiences, the policy holds the absolute lines and the limits, roles give
+permissions to person ids, the registry routes actions by place, interaction emits
+lifecycle events and asks questions.
 
-### 2.7 Tests that hold the contract (D88)
+### 2.7 Tests that hold the contract
 - **The contract is code.** Its types live in one package, `monoagens/contract/`, imported by the
   core (waist 1), the middleware (both) and adapters and plugins (waist 2). The core imports
   nothing else from outside itself.
 - **The lock.** `contract.lock` holds a hash of `monoagens/contract/`. A test fails when they
-  differ. Only the owner commits a new hash, together with a decision in this file (§2.9).
+  differ. Only the owner commits a new hash, together with a decision in this file.
 - **Tests speak through the contract only.** A test of the core or the middleware feeds percepts
   and checks actions, receipts and events. It never calls a private function (`_name`), never
   asserts on an internal payload, and never asserts on prompt wording. An architecture test
@@ -400,8 +407,8 @@ lifecycle events and asks questions (§4.9).
   name; text processing of event text (`lower`, `casefold`, `split`, regexes, word lists); the
   core reading `payload` or `labels`; a capability without facts or permission; the middleware
   importing an adapter or a plugin.
-- **One conformance suite** runs over every adapter: every member of §2.4.1 exists, every
-  percept matches §2.4.2, every action gets exactly one receipt, a repeated action id is
+- **One conformance suite** runs over every adapter: every member of *What an adapter must provide (checked at boot)* exists, every
+  percept matches *Percepts*, every action gets exactly one receipt, a repeated action id is
   deduplicated, a lifecycle event never breaks the body.
 
 ### 2.8 Five test bodies
@@ -421,7 +428,7 @@ still shaped by another body, and it is fixed before it is locked.
 - **Meaning never changes.** A field that would need a new meaning is a new field; the old one
   stays, deprecated. A removed name is never reused.
 - **Formats carry their version**; older ones are upcast on read, stored events are never
-  rewritten (D58).
+  rewritten.
 - **Who**: only the owner, with a decision recorded here and a new `contract.lock`. A task, a
   worker or a plugin that needs a change stops and reports.
 - **A new case is classified before anything is written**: a wrong fact from an adapter → fix
@@ -436,7 +443,7 @@ For the migration (Task 6). Each item below existed before 2026-11-14 and is gon
 |---|---|
 | `place_kind`, place info (`form`, `parent`, `name`, `members`, `can_post`, `roles`) | `place.audience`; names and structure in `description` / `prompt_section`; `refused` receipts |
 | `addressed` as a percept field, `sent_at` | `features.addressed`; `occurred_at` |
-| one neutral `say` / `react` / `edit` in the middleware (D83), its fields and fallbacks | each body's own capabilities and schemas |
+| one neutral `say` / `react` / `edit` in the middleware, its fields and fallbacks | each body's own capabilities and schemas |
 | `contract.SHOWS`, per-adapter ladders, `show:` in the middleware | lifecycle events; each body's own rendering options |
 | splitting attachments and sticker fallback in the middleware | the body does it and answers with one receipt |
 | `platform_role`, platform role facts | roles on person ids only; a plugin may assign roles through the role commands |
@@ -444,7 +451,7 @@ For the migration (Task 6). Each item below existed before 2026-11-14 and is gon
 | the core reading `words_hidden`, `place_kind`, `audience`, `hold_for`, `delivers` | the middleware decides in its hooks; the core carries what the hooks return |
 | regexes over rendered context lines; a second privacy check (`kernel.visible`) | context items with sources; one check in the context hook |
 | `share` without an item and delegation guessing | `share` names item or episode ids, checked against the requester's audience |
-| re-sending unconfirmed actions after a restart | deterministic action ids and receipts (§2.3) |
+| re-sending unconfirmed actions after a restart | deterministic action ids and receipts |
 | the permission exception for talking capabilities | every capability names a permission; bodies declare theirs (base `guest` for talking) |
 
 ## 3. Core
@@ -459,29 +466,29 @@ tuning needed to begin.
 **LLMs are a prefrontal cortex without the rest of the brain. MonoAgens is the rest of the
 brain.**
 
-**Scope** (D1, D35, D57). The core knows three generic things: **percepts** (whatever `put`s
+**Scope**. The core knows three generic things: **percepts** (whatever `put`s
 events), **capabilities** (whatever receives `act` and may return results as events) and
 **hooks**. It has no notion of adapter, plugin, skill, command, platform, person or owner. It has a slot
 for identity, not an identity.
 
 **Non-goals.**
 - No emotions, moods or simulated feelings in the core. It imitates cognitive *functions*:
-  perception, attention, memory, expectation, judgment, learning, restraint (D20). A plugin may
-  add any behavior on top, emotions included (D41).
-- No roles or installed skills in the core; they come from plugins (D20, D34).
-- Brain names are engineering metaphors (§1.8).
+  perception, attention, memory, expectation, judgment, learning, restraint. A plugin may
+  add any behavior on top, emotions included.
+- No roles or installed skills in the core; they come from plugins.
+- Brain names are engineering metaphors.
 
 ### 3.2 Mental model
 
 - **Reasoning is the LLM**: it weighs, decides intentions and chooses words. It is woken only
-  when a moment deserves it (D20).
+  when a moment deserves it.
 - **The core is the rest of the brain**: it records, remembers, expects, pays attention, and
   decides cheaply whether reasoning should wake.
 - **Adapters and tools are the senses and hands**: they sense the world and carry out actions in their own way.
 - **Hooks are guards at three doors**: they do not think; they apply rules and cannot be talked
   out of them.
 
-The table below is the **brain map** (D39): the closed list of functions the core implements.
+The table below is the **brain map**: the closed list of functions the core implements.
 Every core rule is a row; formulas and sources are in [research.md](research.md). Scenarios are
 tests against the map, never new rows.
 
@@ -518,8 +525,8 @@ tests against the map, never new rows.
 6. If reasoning wakes: lay out the context, pass the **context hook**, and start the model call as a
    background job. Its result returns as an event and is handled in a later turn. At most one
    reasoning job per place (a task thread is its own place) is in flight; if a new event arrived there meanwhile, the result is applied
-   and reasoning is woken once more with the newest context (D33).
-   **A thought does not end the turn** (D51). Inside one job, the results of `think`, `expect`,
+   and reasoning is woken once more with the newest context.
+   **A thought does not end the turn**. Inside one job, the results of `think`, `expect`,
    `resolve` and `revise` go back to the model, which continues until it acts, ends without a
    tool call, or reaches `max_thought_rounds` (prior). A refusal (a thought act or an argument
    the core rejects) comes back as a result with its reason, so the model can correct it in the
@@ -532,33 +539,33 @@ tests against the map, never new rows.
 
 ### 3.3 Contract
 
-**Four books** (D26, D32).
-- `events` — the log, one envelope for every event (§2.3): id · ts ·
+**Four books**.
+- `events` — the log, one envelope for every event: id · ts ·
   occurred_at · kind · who · place · body · caused_by · origin_actor · description · features ·
   backfill · imported · payload · labels. INSERT-only by trigger; the single exception is hard
-  forgetting (§3.7). `who` is an opaque actor id (the inbound hook maps native actors to one id per
-  person, D57), `place` an opaque place id, `body` the adapter or plugin name; `origin_actor` is
+  forgetting. `who` is an opaque actor id (the inbound hook maps native actors to one id per
+  person), `place` an opaque place id, `body` the adapter or plugin name; `origin_actor` is
   inherited along `caused_by`. The core reads ids, times, `description` and `features`, and never
-  reads `payload` or `labels` (D86). `event_vectors` (event_id, embedding) is the log's index; rows
+  reads `payload` or `labels`. `event_vectors` (event_id, embedding) is the log's index; rows
   leave only by fading or hard forgetting, each through one dedicated path that writes an event.
 - `state` — a namespaced key/value projection that can be rebuilt from events: `identity`,
   `last_seen:*`, `last_spoke:*`, `core_memory`, `self_summary`, `habit:*`, `person:*`,
   `alias:*`, `merged:*`, `credence:*`, `cognition:weights`, `cognition:dispositions`,
   `budget:<date>`, and `<plugin>:*` namespaces.
-- `expectations` — §3.5. `memories` — §3.7.
+- `expectations` — *Expectations*. `memories` — *Memory, sleep and forgetting*.
 
-**One door, one language, one way to remember** (D41). Everything that reaches the brain is an
+**One door, one language, one way to remember**. Everything that reaches the brain is an
 event; everything sensed is a `percept` carrying a short natural-language description plus
-optional raw data, whatever the sense (§3.9.2); the core knows no modalities. Everything that
+optional raw data, whatever the sense; the core knows no modalities. Everything that
 persists, in the core or in a plugin, persists as events; state is their projection.
 
-**Five thought acts** (D2, D32): `think`, `act`, `expect`, `resolve`, `revise`. `act` uses any
+**Five thought acts**: `think`, `act`, `expect`, `resolve`, `revise`. `act` uses any
 tool capability, speaking included. A wake that ends without `act` is silent; its reason lives
 in `think` and the decision event.
 
-**Three hooks** (D9, D32): **inbound** (after recording), **context** (before any model call),
-**action** (before a tool acts); their contract is in §2.3 (fail closed).
-**Watchdog** (D42): every hook call has a time limit (`hook_timeout_ms`); a hook that exceeds it
+**Three hooks**: **inbound** (after recording), **context** (before any model call),
+**action** (before a tool acts); their contract is in *Waist 1: core ↔ middleware* (fail closed).
+**Watchdog**: every hook call has a time limit (`hook_timeout_ms`); a hook that exceeds it
 counts as Stop and writes `error`, and the loop goes on. Background jobs (reasoning, classifier,
 embedding, sleep) have their own limit (`job_timeout_seconds`); a job that exceeds it returns
 `job.result` with an error. Adapters and tools never block the loop: `act` is handed over and answered by
@@ -566,20 +573,20 @@ embedding, sleep) have their own limit (`job_timeout_seconds`); a job that excee
 One ordered list per hook: owner policy first and last, everything else in between, *shared*
 (every adapter that opts in) or *adapter-own*. Name collisions fail at boot.
 
-The middleware acts on the core only through the six levers (§4.2).
+The middleware acts on the core only through the six levers.
 
 **Schema changes** are numbered SQL migrations with a version table, applied at start after an
-automatic backup; no migration framework (D33).
+automatic backup; no migration framework.
 
-**Snapshots** (D42; built once real logs show rebuilds are slow). `state` is a projection of the
+**Snapshots** (built once real logs show rebuilds are slow). `state` is a projection of the
 log; rebuilding it from the first event gets slow over years. The core periodically writes a snapshot of `state` with the id of the last event
 it includes (every `snapshot_every_events`); a rebuild loads the latest snapshot and replays only
 later events. Snapshots are caches: deleting them loses nothing. Hard forgetting invalidates every
 snapshot that contains the forgotten data; a new one is written from the cleaned log.
 
-**Stability** (D42, D86–D88). What middleware, adapters and plugins may rely on is §2, plus the
-six levers (§4.2), the read-only view of the log and state (D43), `recall`, the birth
-certificate (§3.9.3) and the prior format (§3.9.4); it changes only by §2.9. Not part of it:
+**Stability**. What middleware, adapters and plugins may rely on is *The contract*, plus the
+six levers, the read-only view of the log and state, `recall`, the birth
+certificate and the prior format; it changes only by *Changing the contract*. Not part of it:
 code modules and functions, database tables and indexes, prompt wording, the values in a prior.
 Plugins put their own events under their own namespace (`<plugin>.<kind>`); only the core defines
 unprefixed kinds.
@@ -589,9 +596,9 @@ decision.wake · model.call · budget.exhausted · expectation.created · expect
 expectation.reminded · expectation.resolved · job.started · job.result · classifier.verdict · credence.updated ·
 disposition.updated · share.granted · source.merged · place.audience · task.opened · task.closed · guard.stopped · forget.soft · forget.hard · fade.done · sleep.done ·
 sleep.failed · error. Every `act.out` ends in exactly one `act.result` with a `state` (`done`,
-`refused`, `held`, `failed`, `unknown`; §2.3).
+`refused`, `held`, `failed`, `unknown`; *Waist 1: core ↔ middleware*).
 
-**The model port** (D64). Reasoning builds neutral messages and tools and calls one injected
+**The model port**. Reasoning builds neutral messages and tools and calls one injected
 model port, as the embedder and the store are injected; the core knows no provider, endpoint
 or header. Provider drivers live in `infra/providers/` and are chosen by `.env`
 (`LLM_PROVIDER`, `LLM_FALLBACKS`); every call still goes through the gate, is recorded and
@@ -601,75 +608,74 @@ that senses or acts.
 ### 3.4 Adapters, tools and capabilities
 
 Adapters and plugins bring what senses (`run(put)`) and what acts (`act(action)`). Each tool declares its
-capabilities (§3.9.1): name · JSON schema · description · facts · permission. Reasoning's tools are
+capabilities: name · JSON schema · description · facts · permission. Reasoning's tools are
 the five thought acts; `act` offers the capabilities of every running tool, not only the one of
-the adapter the current percept came from, listed in a fixed order so the prompt cache holds
-(D2, D32, D46). The soul can act in any adapter from any adapter. Each body offers its own
+the adapter the current percept came from, listed in a fixed order so the prompt cache holds. The soul can act in any adapter from any adapter. Each body offers its own
 capabilities with its own names and schemas; the middleware's registry routes an action to the
-body that owns its place (§2.4.4, D86); the core only sees the entries
+body that owns its place; the core only sees the entries
 the registry offers.
 
 - The brain decides intent and content; the adapter decides how (chat bubbles, TTS, gestures).
-  Fine control stays inside the adapter (D2).
-- Long actions report progress and completion as `act.result` events; the core never waits (D3).
+  Fine control stays inside the adapter.
+- Long actions report progress and completion as `act.result` events; the core never waits.
 - Multi-step work is a chain: result → circuit breaker (it continues an active goal) → next
   `act`, limited by steps per task (`max_task_steps`) and the budget. Every step is logged, so
-  tasks resume after a restart and can be interrupted (D3).
-- **Working memory of its own acts** (D52). Every chain in progress — in a task thread or in the
+  tasks resume after a restart and can be interrupted.
+- **Working memory of its own acts**. Every chain in progress — in a task thread or in the
   place where it started — is in the context in `<doing>`: the goal, one line per step (the soul's
   own acts included, also those that say nothing), the latest result verbatim, older results as
   pointers. The soul always knows what it has just done and what came back.
-- **Task threads** (D47). A chain that needs more than one step opens its own task thread: a
+- **Task threads**. A chain that needs more than one step opens its own task thread: a
   place of kind `task` with a parent place, the parent's labels (so absolute line 2 holds
   unchanged), and its own slot for one reasoning job. The conversation in the parent place never waits
   for the work. The thread reports to the parent when it finishes, fails, or needs to ask, and
   closes. Open threads are limited (`max_open_tasks`); one more waits as a promise. One soul,
   one log: threads are lines of work, not copies of the self.
-- `who`, `place` and `origin_actor` are opaque strings to the core (D57). The inbound hook
+- `who`, `place` and `origin_actor` are opaque strings to the core. The inbound hook
   (middleware) may rewrite them — for example one id per person across accounts — and attach
   labels; the core stores them as given and never reads their meaning. Commands are handled
-  in the middleware; one command registry makes `/help` identical everywhere (D9).
-- Adapters report `addressed`, `named` and `addressed_other` as features (D40, D86); the core
+  in the middleware; one command registry makes `/help` identical everywhere.
+- Adapters report `addressed`, `named` and `addressed_other` as features; the core
   reads them as numbers.
 - What an adapter senses enters as a `percept`: the adapter, like a sensory cortex, turns its signal
-  into a short description, with raw data attached (D41).
+  into a short description, with raw data attached.
 - On start an adapter asks for `cursor(organ)`, so input is never lost or duplicated.
 - `communicative` capabilities count as speaking for the talk-rate drive and the forward model.
 
-**Reaching a target** (D46, D57). A communicative act may name a target that is not a place
+**Reaching a target**. A communicative act may name a target that is not a place
 (`to:`, optionally `via:`). The middleware's action hook resolves it to a place or refuses with
-its reason (§4.3, Routes); the core only delivers to a place. When several places fit, the soul
+its reason (*Policy*, Routes); the core only delivers to a place. When several places fit, the soul
 asks which one instead of guessing: a message sent to the wrong place cannot be taken back.
 
-**Speaking elsewhere** (D48). A communicative act aimed at a place other than the current one is
+**Speaking elsewhere**. A communicative act aimed at a place other than the current one is
 never sent with text written in the current context. The core turns it into an intent — what to
 say, to whom, why — and wakes reasoning once more in the target place, with that place's context
-(§3.8, absolute line 2); the intent is that wake's trigger, so reasoning sees what it set out to
+(absolute line 2); the intent is that wake's trigger, so reasoning sees what it set out to
 say and why; the message is written there, as it would be written in Budi's chat.
 This costs one extra model call and only for messages to another place. What the intent carries
-is what the action hook returns (the rule is §4.3, Speaking elsewhere); the core reads no label
+is what the action hook returns (the rule is *Policy*, Speaking elsewhere); the core reads no label
 for it.
 
-**History and catching up** (D37, D40). An adapter may offer `history(place, before, limit)` for
+**History and catching up**. An adapter may offer `history(place, before, limit)` for
 messages the log lacks. On connect it back-fills what it missed as `percept` with
 `backfill: true` and `occurred_at`. A backlog of one place is appraised once, as one percept with
 every signal discounted by age (ACT-R decay); an addressed message still trips the circuit
-breaker. History from before an adapter was connected is an **import** (D69): percepts with
+breaker. History from before an adapter was connected is an **import**: percepts with
 `imported: true` are recorded, embedded and searchable through `recall`, but are never appraised
 as a wake, never trip the circuit breaker, and are summarized by sleep only for places the soul
 later becomes active in, so a long imported history costs no model calls until it matters.
 
-**The `self` tool** (D37, D38) is the only tool inside the core. It offers one
+**The `self` tool** is the only tool inside the core. It offers one
 non-communicative capability, `recall(query | event_id, place?, from?, to?)`: a deeper search of
 the soul's own log and memories — by time range (no query lists the episodes in that range),
 along `derived_from` to the original events, and by text search over event payloads, so faded or
 unsummarized messages are still found. Its results pass the context hook like everything else,
 and it reports what it searched and found, "nothing" included. Sharing private content with
-someone new (`share`, D46) is a middleware capability, not the core's (§3.8).
+someone new (`share`) is a middleware capability, not the core's.
 
 ### 3.5 Expectations
 
-One schema for every promise and prediction (D15, D32.8):
+One schema for every promise and prediction:
 id · kind · about · who · place · cue_time · cue_event · condition · condition_text ·
 condition_vector · intent · weight · policy · status · next_check_at · last_fired_at ·
 fire_count · origin_actor · derived_from · expires_at (required) · created_at
@@ -679,39 +685,38 @@ fire_count · origin_actor · derived_from · expires_at (required) · created_a
 | `promise` | promises, reminders, approvals awaiting the owner | yes, after the wake gate |
 | `wait` | patience: does someone else take the floor first? | yes, if nobody does |
 | `predict` | forward model after `act` ("a reply within 30 min", "arrived within 30 s") | only on a miss that matters |
-| `guard` | an important belief ("Budi lives in Bandung") | never by itself; see §3.7 |
+| `guard` | an important belief ("Budi lives in Bandung") | never by itself; see *Memory, sleep and forgetting* |
 
 - `cue_time`: at · every · daily. `cue_event`: kind, who, place, not_who — facts only; whether a
-  line says something is a free-text condition, judged by reasoning (D87).
+  line says something is a free-text condition, judged by reasoning.
 - `condition`: exact fast paths (`none`, `event_seen`, `state`) or a free-text
   `condition_text`.
 - `policy`: once, or cooldown + max_fires. A fifth kind needs a new decision.
 
 **Wake gate** (no reasoning call): *still relevant?* (condition already met → resolve) · *stale?*
 (past expiry → drop). Quiet hours are owner policy in the hooks; the budget acts through θ;
-repeats are limited by `policy` and habituation (D40).
+repeats are limited by `policy` and habituation.
 
-**Free-text conditions** (D21, D29, D40). m = cosine(event vector, condition vector). Cosine only
+**Free-text conditions**. m = cosine(event vector, condition vector). Cosine only
 filters: m < `lo` → ignore; m ≥ `lo` → the Expectation is *reminded*: reasoning wakes once with
-the line and the Expectation as its trigger, and judges — act on it, resolve it, or let it be
-(D53). A reminder is shown as a reminder, never as a fulfilment: the line with its own speaker,
+the line and the Expectation as its trigger, and judges — act on it, resolve it, or let it be. A reminder is shown as a reminder, never as a fulfilment: the line with its own speaker,
 the Expectation's condition, and the question whether this line fulfils it. A person hears something, is reminded of a promise and thinks for a moment; there is no
 separate judge. `lo` comes from the prior.
-**Deferred until real logs** (D53): a cheaper classifier call in place of the reasoning wake, when logs
+**Deferred until real logs**: a cheaper classifier call in place of the reasoning wake, when logs
 show the cost matters; the "clearly yes" band (hi, opened only by the rule of three); learning
 `lo`; caching condition vectors.
 Woken reasoning re-judges the situation; it never replays a promise blindly.
 
 ### 3.6 Cognition
 
-**Circuit breaker** (D40; wake without a draw): the event engages a commitment the soul holds —
+**Circuit breaker** (wake without a draw): the event engages a commitment the soul holds —
 the turn was allocated to it (`addressed`), it fires or answers an active Expectation, or it
 continues an active goal (a result of its own action).
 
 **Signals** — pure functions `(Situation) -> [0, 1]`, at most 10 (now 5). `Situation` holds the
 event, its vector, recent messages here, memory candidates with activation, and relevant state.
 - `own_name` — the `named` feature: its name was said (attention capture, not a turn
-  allocation); the adapter reports it, the core never searches text (D87)
+  allocation); the adapter reports it, the core never searches text
 - `info_gap` — cosine to reference sentences in the prior (not keywords)
 - `feeling_of_knowing` — σ((max activation − τ)/s), recent messages included
 - `relevance` — to active promises and core memory
@@ -722,11 +727,11 @@ event, its vector, recent messages here, memory candidates with activation, and 
 - S = clamp(Σ wₖ·sₖ); habituation per (place, who): h ← h·γ^Δminutes + 1; S_eff = S/(1+h).
 - θ = base + a·talk_rate + b·budget_used − c·promise_debt + r·(1 − familiarity). talk_rate is
   the soul's own share of talk against the fair share 1/n; familiarity is σ of the ACT-R
-  activation of its interactions with this place and the people present (D33, D40).
+  activation of its interactions with this place and the people present.
 - P = σ((S_eff − θ)/τ); draw u from the seeded generator; go if u < P.
 - Turn-taking: an addressed soul answers without waiting (possibly "I don't know"). A go on a
   turn not allocated to it first creates a `wait` Expectation: it self-selects only if nobody
-  else takes the floor (patience) (D40).
+  else takes the floor (patience).
 Every number is stored in the decision event.
 
 **Inner thought.** When the soul self-selects, reasoning calls `think(thought, motivation 1..5,
@@ -734,15 +739,14 @@ confidence 0..1)` before any communicative `act`; the act passes only at or abov
 `speaking_bar` and `certainty_bar`. Criteria offered (Inner Thoughts, CHI 2025): relevance,
 information gap, expected impact, urgency, coherence, originality, balance, dynamics.
 
-**Budget.** Not a mode (D32.6, D40): as the daily budget is spent θ rises, so only salient events
+**Budget.** Not a mode: as the daily budget is spent θ rises, so only salient events
 pass; the circuit breaker still fires; a free-text condition with no affordable wake
 stays unresolved; `budget.exhausted` is recorded.
 
 **Knobs.** All tunable behavior is about ten named knobs in the prior (talkativeness, patience,
-reserve when unfamiliar, …); one function maps them to θ, τ, γ and the weights (D36,
-§3.9.4).
+reserve when unfamiliar, …); one function maps them to θ, τ, γ and the weights.
 
-**Learning** (D16, D17, D24, D29, D32.7, D32.9, D33.3, D34, D40).
+**Learning**.
 - The soul learns; skills do not. Procedures and lessons are memories with credence (α/β): the
   start follows the source's trust (owner high, stranger low), outcomes move it; reasoning sees
   provenance and track record and decides to use, try carefully, or ask. No approval rule in the
@@ -753,7 +757,7 @@ reserve when unfamiliar, …); one function maps them to θ, τ, γ and the weig
   verdicts only. Other people's reactions tune layer 3 for their place and person. Each change
   is an event storing its own delta; rollback recomputes from the log.
 - **Active now**: the wake-gate edge `lo`; α/β credence and reliability. **Deferred until weeks
-  of real logs** (§3.10): learned knobs and signal weights, which come from the prior until then.
+  of real logs**: learned knobs and signal weights, which come from the prior until then.
   Because the log keeps everything, learning can later run over the whole history.
 
 ### 3.7 Memory, sleep and forgetting
@@ -762,7 +766,7 @@ reserve when unfamiliar, …); one function maps them to θ, τ, γ and the weig
 (observed | told | inferred) · text · embedding · tsv · importance · source_who · valid_from ·
 valid_to · superseded_by · derived_from · created_at · last_accessed_at · use_count
 
-- **A memory's audience comes from its sources** (D53). The core, not the model, sets `place`
+- **A memory's audience comes from its sources**. The core, not the model, sets `place`
   and `private` from `derived_from`: a memory is private when any of its source events is, and
   its audience is the people every private source was said to. A memory with no known source is
   private to the owner. The same holds for core memory. Absolute line 2 never depends on a model
@@ -771,9 +775,9 @@ valid_to · superseded_by · derived_from · created_at · last_accessed_at · u
 - **Activation (ACT-R).** B = ln(n/(1−d)) − d·ln(L); A = B + w_ctx·cos(context, memory) +
   w_imp·importance; L in hours from the injected clock. Candidates: top 40 by vector ∪ top 20 by
   text; ranked by A; use_count updated.
-- **Attribution** (D6, D31). Memories say who said it ("Budi said X"). A non-owner's claim never
+- **Attribution**. Memories say who said it ("Budi said X"). A non-owner's claim never
   supersedes the owner's fact; conflicts stay as conflicting claims.
-- **Knowing and misremembering** (D38, D40; research.md §14), modeled on brain functions:
+- **Knowing and misremembering** (see research.md), modeled on brain functions:
   - source monitoring: every memory carries its `basis`; the model's own knowledge counts as
     `told`, dated at the knowledge cutoff;
   - familiarity vs recollection: details are stated only on recollection (original events with
@@ -784,50 +788,50 @@ valid_to · superseded_by · derived_from · created_at · last_accessed_at · u
   - report control: a criterion that rises with the stakes; below it, a coarser answer or
     "I don't know";
   - absence is weighed by coverage; gaps are filled with `inferred` hypotheses said as guesses.
-- **Sleep** (D27, D31; a gated background job, only on new conversational events; failures back
-  off; imported percepts count only in places the soul has become active in, D69). Summarize new
+- **Sleep** (a gated background job, only on new conversational events, failures back
+  off, imported percepts count only in places the soul has become active in). Summarize new
   events per place into memories with `derived_from`; update person cards (closeness from
   interaction activation; reliability per domain as α/β), core memory and `self_summary`; distill lessons and procedures (generic → layer 2 with credence, person- or
   place-specific → layer 3); check `guard` beliefs; drop expired Expectations; fade vectors.
-- **Belief maintenance** (D40). A contradiction of a belief is a prediction error weighted by
+- **Belief maintenance**. A contradiction of a belief is a prediction error weighted by
   precision (the belief's credence × the new source's reliability): relevant now → reasoning sees
   it live; otherwise it is settled in sleep.
-- **Self-correction** (D27). `revise(old, new, reason)` sets `valid_to` and `superseded_by`;
+- **Self-correction**. `revise(old, new, reason)` sets `valid_to` and `superseded_by`;
   nothing is deleted. A stranger's correction of an owner fact becomes a conflicting claim. The
   soul never revises its own principles or persona.
-- **Fade** (D14, D32.5). During sleep, per-message vectors with low activation are released; the
+- **Fade**. During sleep, per-message vectors with low activation are released; the
   gist stays in memories, the event stays in the log. Deterministic, fixed threshold for now.
-- **Soft forgetting** (D4; "forget what I just said"). Related memories get `valid_to`; events are
+- **Soft forgetting** ("forget what I just said"). Related memories get `valid_to`; events are
   excluded from retrieval and `<recent>`; `forget.soft`.
-- **Hard forgetting** (D4, D32.5; "delete my data"). `forget_hard()` replaces payloads with
+- **Hard forgetting** ("delete my data"). `forget_hard()` replaces payloads with
   `{"forgotten": true}` and deletes everything in their `derived_from` lineage (vectors,
   memories, expectations). Metadata remains (kind, time, actor hash); `forget.hard`. Asked by the
   owner or the person concerned. Owner backups are allowed; old backups and the model provider's
   logs are outside the soul's reach, and the user documentation says so.
 
-**Learned state** (D17, D34) has three layers, all in the core: (1) dispositions (knobs),
+**Learned state** has three layers, all in the core: (1) dispositions (knobs),
 (2) generic procedures, lessons and social intuition, (3) episodic memory with per-place and
 per-person tuning. Test for 1–2: "would it make sense for a soul that does not know these
 people?" — otherwise it is layer 3. Installed skills are not learned state; they belong to
-plugins. A soul is born from a **prior** (layers 1–2, §3.9.4); this repository only
-loads a prior and never exports or shares learned state (D25).
+plugins. A soul is born from a **prior** (layers 1–2, *Prior (format version 1)*); this repository only
+loads a prior and never exports or shares learned state.
 
 ### 3.8 What the core knows, the absolute lines and the self-model
 
-**Only opaque ids, labels and numbers** (D57). The core does not know what a person, the owner, a
+**Only opaque ids, labels and numbers**. The core does not know what a person, the owner, a
 group or a role is. It carries:
 - **ids** — `who`, `place`, `origin_actor` (the source a chain started from), as strings;
 - **labels** — attached by the middleware in the inbound hook (for example the audience when a
-  line was said, D50) or by a hook outcome (for example `share.granted`, D46), stored with the
+  line was said) or by a hook outcome (for example `share.granted`), stored with the
   event and never read by the core. A memory carries the labels of every
-  event it was derived from (`derived_from`, D53); a thread carries its parent's labels;
-- **numbers** — what the gate needs, as `features` (§2.3): whether a line is
+  event it was derived from (`derived_from`); a thread carries its parent's labels;
+- **numbers** — what the gate needs, as `features`: whether a line is
   addressed or names the soul, how many people the audience holds, how many distinct sources
   are active in a place.
 What the soul learns about a source in sleep (closeness, reliability: theory of mind) is its own
 memory, kept under that opaque id.
 
-**Two ids become one** (D65). When the middleware finds that two source ids are one source, it
+**Two ids become one**. When the middleware finds that two source ids are one source, it
 puts `source.merged {from, into}` (as it puts `share.granted`); the core never knows why. The core
 applies it to its own books, generically: `state: merged:<from>` records `into`; the `person:`
 card of `from` folds into `into` (closeness the higher, reliability counts added); `habit:*`,
@@ -839,38 +843,37 @@ an event kind, not a primitive; the complexity budget is unchanged.
 
 Everything that gives ids and labels a meaning — people and the
 account map, the owner and pairing, audience, privacy, consent, routes, names and where someone can
-be reached — is middleware (§4.3, §4.7).
+be reached — is middleware.
 
-**The two absolute lines** (§1.6) are held deterministically by the owner policy, never by
+**The two absolute lines** are held deterministically by the owner policy, never by
 reasoning: line 1 in the action hook, on capabilities flagged `identity_changing`; line 2 by
 construction before the model — the one context check, speaking elsewhere through a wake in the
-target place, the attachment audience — with the rules in §4.3 (D45, D46, D50, D56, D84).
+target place, the attachment audience — with the rules in *Policy*.
 The owner policy is always installed, first and last in every hook; the core refuses to run
 without it (fail-closed), so both lines hold with no other middleware. Other middleware and
 plugins may only narrow them.
 
-**Everything else is weighed by the reasoning** (D24, D31). Anyone may ask; requests are judged
+**Everything else is weighed by the reasoning**. Anyone may ask; requests are judged
 against the owner's interests and the principles. Learned procedures and lessons carry credence
 that the reasoning sees. Claims are weighed by the speaker's reliability in that domain.
 Standing never buys dishonesty.
 
-**The soul's own identity** (D35). A soul is born from a birth certificate (§3.9.3; a neutral
-default if none) and a prior (§3.9.4). After birth, identity lives in `state: identity` and changes
+**The soul's own identity**. A soul is born from a birth certificate (*Birth certificate*; a neutral
+default if none) and a prior. After birth, identity lives in `state: identity` and changes
 only through an `identity_changing` capability, which the owner policy lets only the owner use;
 without a birth certificate the soul may ask what to be called. Role plugins may provide a birth
 certificate, used only at birth.
 
-**The context and the self-model** (D12, D37). The context is the prompt, not the memory: it is rebuilt
+**The context and the self-model**. The context is the prompt, not the memory: it is rebuilt
 from the books at every wake and never compacted. It is assembled as **items** — each with its
 section, text, place and source event ids — and passes the context hook as items; the text is
-rendered only after the last hook, so no hook ever parses rendered text (D86,
-§2.3). Three layers, ordered for caching:
+rendered only after the last hook, so no hook ever parses rendered text. Three layers, ordered for caching:
 - *Stable*: who I am, how I work (memories can be incomplete; I can be wrong; I act only through
   adapters and tools), honesty principles, knowledge cutoff (from per-model configuration, set slightly
-  earlier than claimed; D32.13), principles, thought acts and capability schemas.
+  earlier than claimed), principles, thought acts and capability schemas.
 - *Semi-stable*: `<self>` (capabilities, commands, installed skills, plugins' standing rules;
   assembled from the registries; closed-world — what is not listed cannot be done), core memory,
-  cards of the sources present or named in the trigger (D55): what the soul has learned of them,
+  cards of the sources present or named in the trigger: what the soul has learned of them,
   under their id, plus what the middleware adds through the context hook — name and where they
   can be reached. A card is never what someone said; knowing someone is not private content, so a
   card is never withheld by absolute line 2. This is how the soul can reach Budi from a place
@@ -878,12 +881,12 @@ rendered only after the last hook, so no hook ever parses rendered text (D86,
 - *Volatile, last*: `<now>` (local time, timezone, time since the last interaction), `<place>`,
   `<why_awake>`, `<doing>`, `<next>`, `<memories>` with basis, source and age, `<recent>`,
   `<event>` with any middleware notes attached to it. Messages from non-owners are delimited as
-  quoted data (spotlighting); the absolute lines never depend on it (D6, D32.12).
+  quoted data (spotlighting); the absolute lines never depend on it.
 Each volatile section has a token budget (prior constants). In a multi-step chain `<doing>`
 holds the goal, one line per step and the latest result verbatim; older results are pointers the
 soul can `recall`.
 
-**Honesty principles** (D38, D40), few, general, worded by reasoning and never scripted:
+**Honesty principles**, few, general, worded by reasoning and never scripted:
 - speak as a person about what you know — sure, unsure, don't know, don't remember — without
   describing your own machinery unless asked;
 - the more an answer matters, the surer you must be; otherwise be less specific or say you don't
@@ -894,23 +897,22 @@ soul can `recall`.
 
 ### 3.9 Formats the core reads
 Changes to a format bump its version; the formats are frozen with the core, the *values* in a
-prior are not. Other formats: installed skill (§4), plugin manifest
-(§6).
+prior are not. Other formats: installed skill, plugin manifest.
 
 #### 3.9.1 Capability descriptor
-In §2.3, with an example.
+In *Waist 1: core ↔ middleware*, with an example.
 
 #### 3.9.2 Percept
-In §2.4.2, with an example.
+In *Percepts*, with an example.
 
-#### 3.9.3 Birth certificate (`soul.yaml`, format version 1, D58)
-Who the soul is, read once at birth (D35). After birth, identity lives in `state: identity`; the
+#### 3.9.3 Birth certificate (`soul.yaml`, format version 1)
+Who the soul is, read once at birth. After birth, identity lives in `state: identity`; the
 file is not re-read, and only the owner changes identity, in conversation. Without a birth
 certificate the soul is born neutral and may ask the owner what to be called. Role plugins may
 ship one, used only at birth.
 
 ```yaml
-version: 1                  # format version (D58)
+version: 1                  # format version
 name: Mona
 language: id                # the language it speaks with the owner
 persona: |                  # any language
@@ -920,17 +922,15 @@ principles:
   - Keep the owner's private matters private; never bring them up in other places.
 ```
 
-Nothing else belongs in it (D35): the owner is found by pairing (§3.8); secrets live in `.env`;
-deployment settings — timezone, budget, quiet hours, adapters, plugins — live in `config.yaml`
-(§8.2); every behavioral number lives in the prior.
+Nothing else belongs in it: the owner is found by pairing; secrets live in `.env`;
+deployment settings — timezone, budget, quiet hours, adapters, plugins — live in `config.yaml`; every behavioral number lives in the prior.
 
 #### 3.9.4 Prior (format version 1)
-A soul's instincts: a plain folder with layers 1–2 of learned state, loaded at birth (D25, D30,
-D34, D36). It never contains layer 3 (episodic memory, people, places, personal details). End
+A soul's instincts: a plain folder with layers 1–2 of learned state, loaded at birth. It never contains layer 3 (episodic memory, people, places, personal details). End
 users never see it; developers tune it with replay reports, not by guessing numbers. The default
 prior is [`prior/`](../prior/) in the repository; its values are data, tuned with replay, and are
 not part of the frozen design. This repository only loads a prior; it never exports, uploads,
-shares or aggregates learned state (D18, D25).
+shares or aggregates learned state.
 
 ```
 prior/
@@ -967,7 +967,7 @@ directly. The daily model budget and quiet hours are owner settings (owner polic
 | `certainty_bar` | how sure it must be before stating something | minimum confidence; base of the report criterion | states shaky things → raise; hedges too much → lower |
 | `memory_persistence` | how long unused memories stay strong | ACT-R decay d (higher knob → slower decay) | forgets too fast → raise; drags up old trivia → lower |
 
-**Loading rules** (D30):
+**Loading rules**:
 - different embedder → `calibration` falls back to the default prior's;
 - different LLM family → load, but halve the α and β of procedures and lessons until proven
   again;
@@ -975,26 +975,26 @@ directly. The daily model budget and quiet hours are owner settings (owner polic
 - replay scenarios that prove a prior live in the repository's `scenarios/`, not inside it.
 
 ### 3.10 Deferred
-Until weeks of real logs exist (D32.9): learned signal weights and knobs, adaptive fade
+Until weeks of real logs exist: learned signal weights and knobs, adaptive fade
 threshold, social standing, learned coverage; research on consolidation and forgetting formulas.
 These are learning *inside* existing functions, so enabling them does not change this design.
 
 ## 4. Middleware
 
 ### 4.1 The foundation in the middle
-The regulator between the core and everything else (§1.5). It works on the six facts of the
-contract and nothing else, under the absolute rules of §2.5 (D81, D86, D87). In addition:
+The regulator between the core and everything else. It works on the six facts of the
+contract and nothing else, under the absolute rules of the contract. In addition:
 - **Its own words** for people (an approval question, a brake notice) come from the message
   catalog (`monoagens/middleware/lang/<code>.yaml`, English as the fallback) in the soul's
   language.
-- **Only hooks and levers.** It acts through the three hooks and the six levers (§4.2); it never
+- **Only hooks and levers.** It acts through the three hooks and the six levers; it never
   replaces or wraps a core function or attribute.
 - **State only through events** (lever 4): anything it must remember across a restart (a pending
   question, a mark of what was seen) is an event or its projection, never a variable in the
   running process.
-- Architecture tests hold these rules (§2.7).
+- Architecture tests hold these rules.
 
-The middleware runs in the core's three hooks and offers one API (§4.2). It is static and never learns — learning belongs to the soul (D34).
+The middleware runs in the core's three hooks and offers one API. It is static and never learns — learning belongs to the soul.
 
 ```
    Plugins (Soul Tuning, Web Search, Workspace…)  Adapters (CLI, WhatsApp, a robot, an app…)
@@ -1006,27 +1006,26 @@ The middleware runs in the core's three hooks and offers one API (§4.2). It is 
                        Core (ids, numbers — mechanisms only)
 ```
 
-Seven files, one concept each; the contract types themselves live in `monoagens/contract/`
-(§2.7). A file that grows becomes a folder of the same name; the concepts stay.
+Seven files, one concept each; the contract types themselves live in `monoagens/contract/`. A file that grows becomes a folder of the same name; the concepts stay.
 
 | Module | File | What it provides |
 |---|---|---|
-| Policy (§4.3) | `policy.py` | the owner policy, first and last in every hook: the identity line, budget, quiet hours, brakes; whether a call passes, asks or is refused (§4.8) |
-| Privacy (§4.3) | `privacy.py` | absolute line 2: audience labels, the one context check, `share`, attachments' audience |
-| Identity (§4.7) | `identity.py` | actor map (one person id per person), pairing, linking as a merge, person cards, routes (`to:`) |
-| Registry (§4.4) | `registry.py` | capabilities, commands, skills: one list, routing by place, what a requester may use, `/help` |
-| Loader (§4.5) | `loader.py` | reads `config.yaml`, `config.d/` and manifests; loads adapters and plugins; the boot checks |
-| Interaction (§4.9) | `interaction.py` | lifecycle events (composing, seen, progress, thought) and questions asked and answered |
-| Roles (§4.8) | `roles.py` | what each person may do: roles with a base tier, permissions, approval modes |
+| Policy | `policy.py` | the owner policy, first and last in every hook: the identity line, budget, quiet hours, brakes; whether a call passes, asks or is refused |
+| Privacy | `privacy.py` | absolute line 2: audience labels, the one context check, `share`, attachments' audience |
+| Identity | `identity.py` | actor map (one person id per person), pairing, linking as a merge, person cards, routes (`to:`) |
+| Registry | `registry.py` | capabilities, commands, skills: one list, routing by place, what a requester may use, `/help` |
+| Loader | `loader.py` | reads `config.yaml`, `config.d/` and manifests; loads adapters and plugins; the boot checks |
+| Interaction | `interaction.py` | lifecycle events (composing, seen, progress, thought) and questions asked and answered |
+| Roles | `roles.py` | what each person may do: roles with a base tier, permissions, approval modes |
 
 **What the middleware itself offers.** Only what regulates the middleware: `share` and `answer`
 (capabilities for reasoning), pairing, `/link` and `/unlink`, budget and quiet-hour settings,
 `/help`, `/plugin`, `/reload`, `/whoami`, `/whois`, `/show`, `/role` and `/roles show`. They are
-gated by permissions like any tool (§4.8). Anything that is a feature (search, files, `/mode`) is a
+gated by permissions like any tool. Anything that is a feature (search, files, `/mode`) is a
 plugin. Test: if removing it would leave a rule that can no longer be kept or changed, it belongs
 to the middleware; if the soul would only be less able, it is a plugin.
 
-### 4.2 The API: six levers (D41)
+### 4.2 The API: six levers
 Every plugin and adapter uses the same levers, so the core never knows the case — modes, a
 persona layer, simulated emotions, RBAC and moderation all fit:
 1. **Pass, replace or stop** an item at a door (percepts, context items, actions). Every Stop is
@@ -1036,7 +1035,7 @@ persona layer, simulated emotions, RBAC and moderation all fit:
 3. **Declare** standing rules, shown in `<self>` in a fixed order (cache-friendly).
 4. **Remember and observe**: write only by putting events (state is a projection under
    `<plugin>:*`, so replay and hard forgetting still work); read the log and state read-only
-   (D43). The view returns raw content: a tool that shows it to people passes it through
+  . The view returns raw content: a tool that shows it to people passes it through
    `privacy.visible` for the requester's place first.
 5. **Sense and act** through its own tools.
 6. **Steer knobs** by a bounded, temporary offset recorded as `disposition.updated` with the
@@ -1048,10 +1047,10 @@ persona layer, simulated emotions, RBAC and moderation all fit:
 Limits: nothing crosses the two absolute lines, adds a thought act, signal or book, adds to the
 contract, or writes the core books except through events.
 
-**Order in each hook** (D9): `[policy — first] → [middleware modules] → [plugin middleware, in
+**Order in each hook**: `[policy — first] → [middleware modules] → [plugin middleware, in
 install order] → [policy — last]`. Name collisions fail at boot.
 
-**What a failure does, by layer (D82).** Every failure is recorded and logged; none is silent,
+**What a failure does, by layer.** Every failure is recorded and logged; none is silent,
 none is swallowed by a blanket `except`. What happens next depends on what failed, decided in one
 place:
 
@@ -1068,24 +1067,23 @@ composer runs best-effort rules in their own wrapper and timeout, so the hook co
 closed) is unchanged. A fault-injection test makes each adapter member, each best-effort rule and
 each tool fail in turn and checks that the soul keeps working and records the error.
 
-**A refused act is not the end of the turn (D82).** A refusal returns to reasoning as that act's
+**A refused act is not the end of the turn.** A refusal returns to reasoning as that act's
 receipt (`refused`, with its reason), and reasoning may do something else within the thought-round
 limit, the budget and the brakes. Quiet hours and approvals hold the act instead and do not wake
 reasoning again.
 
 ### 4.3 Policy
 The one middleware that is always present.
-- Wraps every module and plugin, first and last, and cannot be removed (D9).
+- Wraps every module and plugin, first and last, and cannot be removed.
 - Enforces the two absolute lines deterministically: the `identity_changing` check on
-  `origin_actor` in the action hook, and the privacy rule below in the context hook (D24,
-  D32.3–4). The core refuses to run without this policy (fail-closed, D57).
+  `origin_actor` in the action hook, and the privacy rule below in the context hook. The core refuses to run without this policy (fail-closed).
 
-**Private content (absolute line 2, D45, D50, D85, D86).** Privacy follows people, not places,
-and needs one fact: the audience (§2.4.3).
+**Private content (absolute line 2).** Privacy follows people, not places,
+and needs one fact: the audience.
 - **Labels.** In the inbound hook every event is labelled with its place's audience at that
   moment, after the actor map: the people who could perceive it then. A newcomer never receives
   what was said before they could perceive it. A memory's audience comes from the events it was
-  derived from (D53); an attachment's from the events that carried it.
+  derived from; an attachment's from the events that carried it.
 - **The one check.** A context item may enter the context of a place only if every member of
   that place's audience now is in the item's audience. An audience that includes *unknown*
   lets no private item in. The owner's direct place — a place whose audience is only the owner —
@@ -1094,31 +1092,31 @@ and needs one fact: the audience (§2.4.3).
 - **Where it runs.** Once, in the context hook, over every context item (its sources give its
   audience), and when an attachment is opened or forwarded. An item that fails is dropped; when
   relevant items were withheld, one line without content says how many and from whose private
-  place (D56). Every lifecycle event that shows content passes the same `visible` call.
-- **Before the model, by construction (D84).** The model never sees private content it may not
+  place. Every lifecycle event that shows content passes the same `visible` call.
+- **Before the model, by construction.** The model never sees private content it may not
   use in the place it speaks to, so it has nothing to leak. There is no check after the model and
   no text similarity of any kind.
-- **Speaking elsewhere** (D48). An act aimed at another place becomes an intent that wakes
-  reasoning in the target place (§3.4). In the action hook the policy decides
+- **Speaking elsewhere**. An act aimed at another place becomes an intent that wakes
+  reasoning in the target place. In the action hook the policy decides
   what the intent carries: the drafted words only if every private item the source context held
   is visible at the target; otherwise only what to do and to whom. The intent never carries the
   goal's or the trigger's text.
-- **Sharing by consent (D46).** `share(items | episode, to)`: reasoning names the event ids (or
+- **Sharing by consent.** `share(items | episode, to)`: reasoning names the event ids (or
   an episode id) it means; the policy passes only when the chain's `origin_actor` is in the
   audience of every named item, records `share.granted` for exactly those items, and the new
   person joins their audience. A share that names nothing is refused with a question. Each
   person speaks only for what they were part of; the owner's view of everything is a view, not
   ownership.
-- **Asking on someone's behalf (D80).** When the soul sends a message on behalf of a person X,
+- **Asking on someone's behalf.** When the soul sends a message on behalf of a person X,
   the one event that answers it — the event whose `about` is that message, or the one that meets
   that chain's `wait` expectation — is labelled with X in its audience too. Never the person's
   later events. X may then share it.
-- **Data leaving the machine** (D43): by default nothing does; only a plugin the owner installed
+- **Data leaving the machine**: by default nothing does; only a plugin the owner installed
   for it, sending numbers, not content.
 - **Privacy rules narrow, never widen.** Other middleware and plugins may add stricter rules; they
   can never let private content reach someone the owner policy would refuse. They may ask for
   more than consent before sharing (confirm before forwarding any file).
-- **Routes** (D46, D57): the action hook resolves a target that is not a place (`to:` a person,
+- **Routes**: the action hook resolves a target that is not a place (`to:` a person,
   optionally `via:` a body) to a place: a place of that body whose audience is that person and
   the soul, else the place where the person was last active. Several fitting places → the soul
   asks which; none → a `refused` receipt ("no way to reach Budi yet"). A route rule may change the
@@ -1126,20 +1124,20 @@ and needs one fact: the audience (§2.4.3).
 
 **Default owner policy**, active out of the box: the two absolute lines, the daily model budget,
 quiet hours, brakes. Budget and quiet hours are owner settings in `config.yaml`, changed by hand or
-with `/budget` and `/quiet`, which write their own line (§4.5).
+with `/budget` and `/quiet`, which write their own line.
 
-**Brakes on runaway work** (D63), deterministic, no model call: at most `max_task_steps` steps per
+**Brakes on runaway work**, deterministic, no model call: at most `max_task_steps` steps per
 chain and `max_wakes_per_hour` wakes per chain (`config.yaml` → `owner_settings`). When a brake
 holds, the chain stops, it is recorded, and the owner is asked in the owner's direct place whether
-to continue (§4.9); nothing stops silently.
+to continue; nothing stops silently.
 
 ### 4.4 Registry
 Capabilities, commands and installed skills follow one pattern, as MCP's tools, prompts and
 resources do: a list of names with short descriptions, the full entry on request, one namespace,
 collisions failing at boot.
 
-- **Capabilities belong to their body or plugin** (D86). Each adapter and plugin registers its own
-  capabilities, with descriptor, facts and permission (§2.3). The
+- **Capabilities belong to their body or plugin**. Each adapter and plugin registers its own
+  capabilities, with descriptor, facts and permission. The
   registry lists every capability in a fixed order and routes each action: a body's capability to
   that body, for a place it owns; an action for a place another body owns is refused with the
   reason. There is no neutral `say` and no hidden capability.
@@ -1147,37 +1145,37 @@ collisions failing at boot.
   capability usually at base `guest`); a capability without facts or without a permission fails
   at boot, naming it. A permission without a `base` is the owner's only.
 - **Commands are structured.** An adapter turns its native form into `command: {name, args}`
-  (§2.4.7); the registry handles it by name in the inbound hook, without
+ ; the registry handles it by name in the inbound hook, without
   a model call. `/help` is the same everywhere. A handler that fails answers with an error. A
   command's answer goes through the action hook like any act.
 - **Offered per requester.** In the context hook the registry offers a turn only the capabilities
   the requester may use (`roles.py`); in the action hook `policy.py` decides pass, ask or refuse
-  from the requester's permissions, the capability's facts and the requester's approval mode (§4.8).
+  from the requester's permissions, the capability's facts and the requester's approval mode.
   The requester is the chain's `origin_actor`.
 - **One output marker** (`contract.OUTPUT_MARKER`) for every cut output; **nothing is lost when
-  an output is cut** (D62): the full output goes to the attachment store with its `act.result` as
+  an output is cut**: the full output goes to the attachment store with its `act.result` as
   origin; the result carries the cut text plus `full: {ref, size}`. `registry.more(ref, offset,
   limit)` reads the rest, capped, through the attachment privacy check; without a place it is
   refused.
 - **Draft**: per-person rate limits live here.
 
 ### 4.5 Install
-- The loader reads each plugin's manifest (§6.3) and each enabled
+- The loader reads each plugin's manifest and each enabled
   adapter's factory, assembles capabilities, middleware, commands, skills, rules, knob-offset
   bounds and state namespaces, and refuses to start without the owner policy first and last in
-  every hook (D9, D41, D57).
-- **Boot checks**: an adapter missing a member of §2.4.1, a capability
+  every hook.
+- **Boot checks**: an adapter missing a member of *What an adapter must provide (checked at boot)*, a capability
   without facts or permission, a schema outside the closed subset, a permission declared outside
   its owner's namespace or redefining a middleware permission, a missing dependency, a name
   collision — each fails boot, naming it. The boot report lists every adapter's optional surfaces.
 - Plugins are trusted code installed by the owner and run in-process (the Home Assistant model);
   the owner policy holds against plugins that follow the contract, not against malicious code
-  (D32.11).
+ .
 - The installed plugins are listed in `config.yaml`; each plugin's own settings live in
   `config.d/<plugin>.yaml`, holding only what the owner changed; defaults live in the manifest
-  (§6.3–6.4, §8.2).
-- **Format versions** (D58): §8.2.
-- **The files are the source of truth** (D59). The program writes them only on the owner's
+ .
+- **Format versions**: *Deployment files*.
+- **The files are the source of truth**. The program writes them only on the owner's
   command, after a backup, atomically, and each edit is parsed back and checked or refused:
   `/plugin enable|disable|update <name>`, `/role add|remove <person> <role>`, `/budget`, `/quiet`,
   `/show`. Every other line, comments included, stays as it is. Every change, by command or by
@@ -1188,16 +1186,16 @@ collisions failing at boot.
 - **Plugin updates, the dpkg way**: a default the owner never touched is offered for
   `/plugin update`; one the owner changed is only reported.
 - Adapters are loaded from `bodies:` in `config.yaml` (the key keeps its name) through each
-  adapter's `create(options, env)` (§5.2, D49).
+  adapter's `create(options, env)`.
 - Uninstalling removes a plugin's capabilities, middleware, rules and knob offsets; its events stay
   as history.
 
 ### 4.6 Skills
-Part of the registry (§4.4).
+Part of the registry.
 - **Installed skills** are static SKILL.md files shipped by plugins. Only the names and
   descriptions of relevant skills enter the prompt; the body is loaded on request; versioned; use
-  counts feed the same ACT-R activation as memories (D11, D34).
-- Skills do not learn; what the soul learns is a core `procedure` or `lesson` memory (D34).
+  counts feed the same ACT-R activation as memories.
+- Skills do not learn; what the soul learns is a core `procedure` or `lesson` memory.
 
 ```markdown
 ---
@@ -1209,7 +1207,7 @@ Steps …
 ```
 
 ### 4.7 Identity
-**One person, one id** (D65). The core never sees a native actor, only a person id (D10, D57).
+**One person, one id**. The core never sees a native actor, only a person id.
 - **The actor map** (`state: alias:<actor>` → person id): the inbound hook maps every native
   actor an adapter reports — the event's `actor` and its `involves` — to a person id. *unknown*
   stays *unknown*.
@@ -1218,23 +1216,23 @@ Steps …
   unique constraint). The owner's id is always `person:owner`.
 - **Linking is a merge.** Linking two actors of one person merges their person ids into the
   **older** one (`person:owner` always wins), recorded as `identity.merged {from, into}`; the
-  middleware puts the core's `source.merged {from, into}` (§3.8). The log is
+  middleware puts the core's `source.merged {from, into}`. The log is
   never rewritten; reads follow the merge.
 - **Who may link.** The owner (`/link <actor|person|name> <actor|person|name>`), or the person:
   `/link` from actor A gives a six-digit code (single use, 10 minutes); `/link <code>` from actor B
   merges B into A's person. Wrong guesses are counted per guessing actor (three in the code's
   lifetime) and never touch other people's codes; the owner cannot redeem a code someone else
   issued. The soul may suspect and ask the owner; it has no tool that links. A wrong link is a
-  privacy leak (D45).
+  privacy leak.
 - **Unlinking** (`/unlink <actor>`) gives that actor a new person id from now on
   (`identity.unlinked`). What was merged stays merged.
-- **A body's own actor** (D66): when an adapter's `self_actor()` maps to the owner (the soul runs
+- **A body's own actor**: when an adapter's `self_actor()` maps to the owner (the soul runs
   on the owner's own account), identity adds one context line for that body: acting there acts as
   the owner. Reasoning weighs it; no rule branches on it.
-- **Becoming the owner** (D33): on first start the soul shows a short pairing code; the first
+- **Becoming the owner**: on first start the soul shows a short pairing code; the first
   person who sends it from any body becomes the owner (three wrong tries per actor). Changing the
   owner later needs the current owner.
-- **Person cards** (D55): through the context hook, for the people present or involved in the
+- **Person cards**: through the context hook, for the people present or involved in the
   trigger, their name and where they can be reached, next to what the soul has learned of them;
   `roles.py` adds each role's and the person's `context`, read at call time.
 - **`/whoami`**: the asker's person id, label, linked actors, roles with tier and approval mode,
@@ -1244,7 +1242,7 @@ Steps …
 
 ### 4.8 Roles and permissions
 `roles.py` answers **what this person may do**; `policy.py` turns that into pass, ask or refuse.
-Always present; empty by default: the owner may do everything, everyone else only talks (D59).
+Always present; empty by default: the owner may do everything, everyone else only talks.
 Modelled on Discord roles (several per person, permissions add up, `@everyone` as the floor) and
 on the base roles of GitHub and Google Cloud.
 
@@ -1266,24 +1264,24 @@ on the base roles of GitHub and Google Cloud.
   tiers in `config.d/`, then the manifest's. A place may override with the same `allow` and `deny`.
 - **Approval modes**, per role: `yolo` passes everything except calls marked `sensitive`;
   `default` asks before `runs_code` or `changes` outside the person's own workspace; `strict` asks
-  before every step. The owner answers (§4.9), and so may anyone with `approval.answer`. An approval
+  before every step. The owner answers, and so may anyone with `approval.answer`. An approval
   is consumed by the act it approved; the approved act runs as the requester, never as the owner.
 - **The middleware's own permissions**: `config.reload`, `plugin.manage`, `roles.manage`,
   `identity.whois`, `approval.answer` at tier `admin`; `identity.whoami` at `guest`.
 - **No one grows their own power**: `/role add` gives only roles below the giver's highest tier.
   Owner only, never movable: anything `identity_changing`, a new owner, editing admin-tier roles.
-- No permission overrides the two absolute lines or buys dishonesty (D24, D31).
+- No permission overrides the two absolute lines or buys dishonesty.
 
 ### 4.9 Interaction
 What the soul shows besides its actions, and questions asked and answered.
 - **The core records and changes nothing.** Everything needed is already an event.
-- **`interaction.py` decides what and to whom** and emits the lifecycle events of §2.4.5 to the
+- **`interaction.py` decides what and to whom** and emits the lifecycle events of *Lifecycle events* to the
   body of a place: silence shows nothing, `seen` is never sent twice after a restart, and content
   (thoughts, steps) passes `privacy.visible` for that place first.
 - **The body renders**, its own way or not at all, from its own options in `config.yaml`
-  (§5.4). The middleware never knows how.
+ . The middleware never knows how.
 
-**Settings** in `config.yaml` → `interaction:` (§8.2; `/show <name> <value>` writes the line):
+**Settings** in `config.yaml` → `interaction:` (*Deployment files*; `/show <name> <value>` writes the line):
 `thinking` is `off`, `owner_direct` (only in a place whose audience is only the owner) or `all`;
 `steps` is `off`, `long` (work that takes long) or `all`.
 
@@ -1302,42 +1300,40 @@ approval whose act has not run yet runs after the restart. A body without `ask` 
 as an ordinary message through its communicative capability.
 
 ### 4.10 Attachments
-Files that arrive with an event or leave with an action, any number. The core never reads them
-(D61).
+Files that arrive with an event or leave with an action, any number. The core never reads them.
 - **Vocabulary** (contract): an attachment is `{ref, name, mime, size}`. A percept lists them in
   `attachments`; its `description` sums them up for reasoning.
 - **Store** (`infra/`): an adapter calls `put(file) → ref`; anyone who opens one calls
   `open(ref)`, which `privacy.py` checks. An attachment carries the audience labels of the events
   it came with; a file from a private place goes to someone else only after `share`. One file sent
   in several places is one stored file, deleted when no non-forgotten event carries it.
-- **Deferred refs** (D69): an adapter may put a file without its bytes (`put_deferred(name, mime,
+- **Deferred refs**: an adapter may put a file without its bytes (`put_deferred(name, mime,
   size, locator) → ref`); the first `open` that passes the privacy check calls the body's
   `fetch(locator)`. A fetch that fails is an honest error.
 - **Sending**: a body's capability takes attachment refs in its own arguments; the policy checks
   each ref's audience against the target place (the same one check), and "confirm before
   forwarding a file" applies per attachment. How many files fit in one native message is the
   body's business: it splits by itself and answers with one receipt.
-- **Reading**: Workspace's `read` takes a `ref` (§6.5.3). Images are opened
+- **Reading**: Workspace's `read` takes a `ref`. Images are opened
   only when reasoning chooses to; vision is a separate, later decision.
 
 ## 5. Adapters
 
 ### 5.1 What an adapter is
 An adapter connects the soul to one platform, device or app: a chat app, the CLI, a robot, a
-speaker, a workspace app, a sensor, a game. It is where translation happens — the only place
-(D86). Like a sensory cortex it turns native signals into the contract's facts (actors, places,
+speaker, a workspace app, a sensor, a game. It is where translation happens — the only place. Like a sensory cortex it turns native signals into the contract's facts (actors, places,
 audiences, events); like a motor cortex it turns the soul's actions into native actions and
 answers with an honest receipt. The core and the middleware never know which adapter something
-came from; `body` is only a name they carry (§2).
+came from; `body` is only a name they carry.
 
-**Native first** (D67). Every adapter uses everything its platform offers: it reads every kind of
+**Native first**. Every adapter uses everything its platform offers: it reads every kind of
 event the platform delivers and acts the best way the platform allows. Rich features are the
 adapter's own capabilities and arguments, explained to reasoning in its `prompt_section`; what a
 platform lacks is simply not offered. No adapter is a special case: the same contract, the same
-conformance suite (§2.7) and the same rules apply to all of them.
+conformance suite and the same rules apply to all of them.
 
 ### 5.2 Rules for every adapter
-The surface, percepts, audiences, capabilities, receipts and commands are defined in §2.4; this
+The surface, percepts, audiences, capabilities, receipts and commands are defined in *Waist 2: middleware ↔ adapters and plugins*; this
 is what an adapter adds to them:
 - **One stable form per actor.** When a platform gives one account two forms (WhatsApp's LID and
   phone-number JID), the adapter reports one, so one person never looks like two.
@@ -1348,20 +1344,20 @@ is what an adapter adds to them:
   permission at base `guest`; native features are explained in `prompt_section`.
 - **Acting**: it splits, retries, rate-limits and falls back by itself; `held` is the policy's,
   never a body's; a place where the soul may not post answers `refused` with the reason.
-- **Rendering and asking** its own way (§5.4), from its own options; it never decides what is
+- **Rendering and asking** its own way, from its own options; it never decides what is
   shown or to whom.
-- **History**: back-fill and import (§5.5).
-- **Files**: received files go to the attachment store (§4.10); capabilities that send files take
+- **History**: back-fill and import.
+- **Files**: received files go to the attachment store; capabilities that send files take
   refs.
 - Own reconnects and platform quirks; errors become events, never crashes of the loop. Tokens and
   URLs come from `.env`; non-secret options from its section under `bodies:` in `config.yaml`.
 
-**Loading an adapter** (D49). An adapter is a module with one factory, `create(options, env)`:
+**Loading an adapter**. An adapter is a module with one factory, `create(options, env)`:
 `options` is its own section of `config.yaml`, `env` gives the variables it declares (it reads
 only those). `config.yaml` lists the enabled adapters under `bodies:`; an adapter outside this
 repository also names its module. The entry point never imports an adapter; it asks the loader.
 Adding an adapter means installing its module and adding a few lines under `bodies:` in
-`config.yaml` (example in §8.2).
+`config.yaml` (example in *Deployment files*).
 
 ### 5.3 Places and audiences
 A place is wherever an event happens and an action lands: a private chat, a group, a channel, a
@@ -1382,7 +1378,7 @@ How adapters fold their platform into the audience:
 | a shared document | its collaborators |
 | a sensor | nobody |
 
-### 5.4 Native: what goes in and what comes out (D67)
+### 5.4 Native: what goes in and what comes out
 **In: everything the platform delivers becomes a percept.** Text, replies and quotes (`about`),
 mentions (`involves`), edits and deletions (`about` the earlier event), reactions by others,
 stickers, locations, contact cards, polls and votes, view-once media, any number of files, calls
@@ -1390,7 +1386,7 @@ stickers, locations, contact cards, polls and votes, view-once media, any number
 `place.audience`). Each becomes a short `description` plus the contract's fields:
 - a reaction by someone else on the soul's own message is `addressed`;
 - a deletion stays in the log as a person remembers what was said; forgetting stays an explicit
-  request (§3.7);
+  request;
 - a sticker or image is an attachment with a description; it is opened only when reasoning
   chooses to.
 
@@ -1402,7 +1398,7 @@ text)`. Its `prompt_section` tells reasoning what the arguments mean on this pla
 platform-only action (pin a message, manage a channel) is **off by default** and offered only
 when the owner lists it under `bodies.<adapter>.tools:`.
 
-**Lifecycle rendering** (§2.4.5) is the adapter's own choice, set in its
+**Lifecycle rendering** is the adapter's own choice, set in its
 `render:` options:
 
 | Event | Chat | Robot | Workspace app | Game |
@@ -1412,48 +1408,48 @@ when the owner lists it under `bodies.<adapter>.tools:`.
 | `progress` | one message edited per step, or a new message | a spoken "still working" | a status line | — |
 | `thought` | a quoted line | — | a side note | — |
 
-An adapter that shares an account with a person (§5.6) marks events seen only when the soul speaks
+An adapter that shares an account with a person marks events seen only when the soul speaks
 there, so the person keeps their unread marks.
 
-**Questions** (`ask`, §2.4.6): buttons or a menu where the platform has
+**Questions** (`ask`, *Questions and answers*): buttons or a menu where the platform has
 them, else a poll, else a reaction per choice, else a numbered message; a robot says the question
 and listens; an app opens a dialog. The adapter records how each choice will come back and returns
 `answer: {prompt, value}` when it does. A reply in words is a normal percept; reasoning
 understands it.
 
-### 5.5 History: back-fill and import (D69)
+### 5.5 History: back-fill and import
 - **Back-fill** is what the adapter missed while offline: `backfill: true`, from its optional
   `history(place, before, limit)`.
 - **Import** is the history an account already had before the soul was connected (WhatsApp's
   history sync on pairing): all of it, as percepts with `imported: true` and their
-  `occurred_at`. What the core does with both is §3.4 (History and catching up).
-- **Media are fetched when opened**: an imported or back-filled file is a deferred ref (§4.10);
+  `occurred_at`. What the core does with both is *Adapters, tools and capabilities* (History and catching up).
+- **Media are fetched when opened**: an imported or back-filled file is a deferred ref;
   when a platform link has expired, the adapter asks the platform again.
 
-### 5.6 An account shared with a person (D66)
+### 5.6 An account shared with a person
 Some accounts can be used by a person at the same time (WhatsApp as a linked device on the
 owner's own number). The adapter tells the two apart itself: every action's receipt carries the
 native id of what it sent, so it is in the Log; an event from the account whose id is in the Log
 is the soul's own and not a percept; one whose id is not in the Log was made by the person and is
 a percept from that actor. `self_actor()` reports the account; when identity maps it to the owner,
-the middleware adds one context line (§4.7).
+the middleware adds one context line.
 
 ### 5.7 Present and planned adapters
 | Adapter | Status | Notes |
 |---|---|---|
 | CLI | present | Unix socket inside the main process, thin client; text, files by path, reply; `composing` and `progress` as status lines; questions as numbered choices |
 | Telegram | present | long polling with `allowed_updates` for every kind it reads; inline buttons and the command menu, edit, delete, reply, reactions, polls, stickers, media groups (one percept per group), locations, forum topics; a failed download is an error percept, never a crash loop; no history and no read marks on the Bot API |
-| WhatsApp | present | neonize (a linked device); own or owner's number (§5.6); full history import (§5.5); files, stickers, polls (votes decrypted), reactions, edits; no buttons, so questions by poll; handles logout and disconnect |
+| WhatsApp | present | neonize (a linked device); own or owner's number; full history import; files, stickers, polls (votes decrypted), reactions, edits; no buttons, so questions by poll; handles logout and disconnect |
 | Discord | present | discord.py (message content intent); servers, channels, threads, DMs; buttons and menus (acknowledged within Discord's 3 s inside the adapter); reactions and edits on uncached messages; `allowed_mentions` set |
-| Home Assistant | **Draft**, [later task](tasks/later-voice-home.md) | the first non-chat adapter (§5.8) |
+| Home Assistant | **Draft**, [later task](tasks/later-voice-home.md) | the first non-chat adapter |
 | Voice notes | [later task](tasks/later-voice-home.md) | STT in, TTS out; description = transcript |
-| Voice calls | later | waits for a mature calling library (§8.5) |
+| Voice calls | later | waits for a mature calling library |
 | Robot (own adapter) | later | microphone and speaker straight to the adapter, with its own reflexes (wake word, voice activity, barge-in, turning to the speaker) |
 
-Tools (search, files, email) are in the plugin catalog (§6.2). Model providers are not
+Tools (search, files, email) are in the plugin catalog. Model providers are not
 adapters: they are drivers behind the core's model port, in `infra/providers/`.
 
-### 5.8 Home Assistant as a body (**Draft**, D71)
+### 5.8 Home Assistant as a body (**Draft**)
 Home Assistant (HA) already runs a whole voice pipeline — wake word, speech to text and text to
 speech over its Wyoming protocol, ESP32 voice satellites — and already controls the home's
 devices. HA is one adapter, and the soul is HA's conversation agent.
@@ -1471,7 +1467,7 @@ devices. HA is one adapter, and the soul is HA's conversation agent.
   holding line and speaks the real answer later. The gate and reasoning are never skipped.
 - `.env`: `HA_URL`, `HA_TOKEN`.
 
-### 5.9 Speech: hearing and speaking (**Draft**, D72)
+### 5.9 Speech: hearing and speaking (**Draft**)
 **One soul, one mind.** Every speech engine is only ears and a mouth. Every utterance is a percept
 that passes the gate, and every spoken word comes from an action the soul chose.
 
@@ -1492,7 +1488,7 @@ driver reports its languages at boot; the boot report warns when the soul's lang
   gives an honest description ("a voice note (0:12), not transcribed").
 - **Speaking.** A body's speaking capability may take `voice: true` (a voice note on chat) or
   always speak (a device); the words stay in the Log as the action's text.
-- **Listening while speaking** (a reflex of the adapter, D2): barge-in stops speech at once, the
+- **Listening while speaking** (a reflex of the adapter): barge-in stops speech at once, the
   receipt reports what was actually said (`spoken_until`), and the interrupting speech is a
   percept. Echo cancellation belongs to the device.
 - **Realtime engines** may be a faster ear and a more expressive mouth, never the one who answers.
@@ -1501,45 +1497,44 @@ driver reports its languages at boot; the boot report warns when the soul's lang
 ## 6. Plugins
 
 ### 6.1 What a plugin is
-A feature built on the middleware (a *package* in §3). A plugin is a folder that bundles any
+A feature built on the middleware (a *package*). A plugin is a folder that bundles any
 of: tools, middleware, commands, installed skills, standing rules, knob-offset bounds,
-permissions, a state namespace and dependencies, declared in one manifest (§6.3). It reaches the core only through
-the middleware's six levers (§4.2) (D9, D41), and sees only the
-contract's facts (§2); like the middleware it never parses message text to
+permissions, a state namespace and dependencies, declared in one manifest. It reaches the core only through
+the middleware's six levers, and sees only the
+contract's facts; like the middleware it never parses message text to
 understand it. Every tool names facts and a permission; a plugin's permissions live in its own
-namespace and never redefine a middleware permission (D86, D87).
-- Tools (search, files, email) are shipped by plugins (D35).
+namespace and never redefine a middleware permission.
+- Tools (search, files, email) are shipped by plugins.
 - Role plugins (assistant, customer service, sysadmin) may ship a birth certificate, used only at
-  birth; they can never overwrite identity afterwards (D20, D35).
-- Installed, run and uninstalled by the install module (§4.5).
+  birth; they can never overwrite identity afterwards.
+- Installed, run and uninstalled by the install module.
   Uninstalling removes the plugin's tools, middleware, rules and knob offsets; its events stay
   in the log as history.
 
 ### 6.2 Catalog
 | Plugin | Kind | Status | What it brings |
 |---|---|---|---|
-| **Soul Tuning** | behavior | Task 4 | modes and example conversations (§6.5.1) |
-| **Web Search** | tool | Task 4 | `web_search`, `web_fetch` over many providers (§6.5.2) |
-| **Workspace** | tool | Task 4, on by default | `read`, `write`, `edit`, `grep`, `glob`, `run` in a sandbox (§6.5.3) |
-| **PDF Reader** | extension of Workspace | Task 4 | a native reader for `.pdf` (§6.5.4) |
+| **Soul Tuning** | behavior | Task 4 | modes and example conversations |
+| **Web Search** | tool | Task 4 | `web_search`, `web_fetch` over many providers |
+| **Workspace** | tool | Task 4, on by default | `read`, `write`, `edit`, `grep`, `glob`, `run` in a sandbox |
+| **PDF Reader** | extension of Workspace | Task 4 | a native reader for `.pdf` |
 | Word / Spreadsheet readers | extensions of Workspace | planned | the same pattern as PDF Reader |
 | simulated emotions | behavior | idea | own state via events, notes, rules, knob offsets |
 | plugin suggestions | feature | **Draft** | a note to the owner from the local catalog |
 | moderation, content filters | feature | idea | pass/replace/stop |
 
 - Removed: memory-view (2026-11-12). Roles and permissions are not a plugin: they are the
-  middleware's `roles.py` (§4.8), because every plugin brings tools
+  middleware's `roles.py`, because every plugin brings tools
   and commands that need limits.
-- **Plugin suggestions** (Draft, D28): only to the owner, only from the local catalog, at most
+- **Plugin suggestions** (Draft): only to the owner, only from the local catalog, at most
   once per missing capability per habituation window, never installs anything.
 
 ### 6.3 Manifest
-One file at the root of a plugin, `plugin.yaml`, declares everything it brings and every default
-(D41). The install module reads it; the core never does. The owner never edits it: it is
+One file at the root of a plugin, `plugin.yaml`, declares everything it brings and every default. The install module reads it; the core never does. The owner never edits it: it is
 replaced on update and removed on uninstall.
 
 ```yaml
-manifest_version: 1                  # format of this file (D58)
+manifest_version: 1                  # format of this file
 name: workspace
 version: 0.1.0                       # the plugin's release
 description: Read, write and run code in a sandboxed folder per person.
@@ -1551,7 +1546,7 @@ features:                            # each can be switched off in config.d/
   tools: [read, write, edit, grep, glob, run]
   commands: [workspace]
   middleware: []
-tools:                               # facts per tool (§4.4)
+tools:                               # facts per tool
   read:  { facts: [reads] }
   write: { facts: [changes] }
   run:   { facts: [runs_code, network] }
@@ -1576,7 +1571,7 @@ knob_offsets: {}                     # bounded, temporary; recorded as dispositi
 | File | Owner | Holds |
 |---|---|---|
 | `plugins/<name>/plugin.yaml` | the plugin | every default; never edited by the owner |
-| `config.yaml` | the owner | which plugins are on (`plugins:`), `roles:`, `people:` (§8.2) |
+| `config.yaml` | the owner | which plugins are on (`plugins:`), `roles:`, `people:` |
 | `config.d/<plugin>.yaml` | the owner | one plugin: `features`, `options`, and `permissions` / `role_settings` (written by `/plugin enable`) |
 
 ```yaml
@@ -1598,9 +1593,9 @@ role_settings:
   plugin that is not installed is reported and ignored; it stays, so the settings return if the
   plugin does.
 - A feature switched off is removed from the registry, not hidden.
-- The files are the source of truth, written only by the owner's commands (§4.5).
+- The files are the source of truth, written only by the owner's commands.
   `/plugin show <name>` prints a plugin's defaults; `/roles show <role>` prints the merged
-  permissions per role. Format versions: §8.2.
+  permissions per role. Format versions: *Deployment files*.
 - Which tier gets a permission is in `config.d/`; which roles exist and who holds them is in
   `config.yaml` (`roles:`, `people:`).
 
@@ -1612,7 +1607,7 @@ Tunes expression, never identity; only the owner changes it (absolute line 1).
   the `/mode` command.
 - **Example conversations**: short exchanges in the stable prompt, in a fixed order.
 - Who a person is to the soul ("a customer; help with orders") is not here: it is each role's
-  and person's `context` in `roles.py` (§4.8).
+  and person's `context` in `roles.py`.
 
 #### 6.5.2 Web Search
 - Tools `web_search` and `web_fetch`; permissions `web-search.search` and `web-search.fetch`,
@@ -1622,14 +1617,14 @@ Tunes expression, never identity; only the owner changes it (absolute line 1).
   with a structured reason, never a crash. Port V1's `engine/tools/web_search.py` (ADR
   `engine/0026-search`).
 - `web_fetch` runs in the MonoAgens process, so it refuses internal addresses (SSRF): resolve
-  the host, check every address against the same blocked set as the sandbox (§6.5.3), connect to
+  the host, check every address against the same blocked set as the sandbox, connect to
   the checked address only. Port V1's `fetch.py`.
 
 #### 6.5.3 Workspace
 On by default through the shipped `config.yaml`; off with one line.
 - Tools: `read` (line ranges; also attachments received by adapters, through their
   reference), `write`, `edit` (exact text replacement), `grep`, `glob`, `run`. Output is capped
-  with a "continue from here" marker (§4.4).
+  with a "continue from here" marker.
 - **Progress note for long work** (a standing rule, lever 3): work of more than a few steps
   keeps `progress.md` in the workspace it works in — the goal, what is done, the next step,
   the files involved — updated after each step and read first whenever the work resumes. The
@@ -1639,7 +1634,7 @@ On by default through the shipped `config.yaml`; off with one line.
 - Folders: each person's own workspace; **shared folders** named by the setting
   `workspace.shared` on the person's roles (a person in two group roles sees two).
 
-**Sandbox for `run`** (D60). Python drives two native tools, bubblewrap (files) and pasta from
+**Sandbox for `run`**. Python drives two native tools, bubblewrap (files) and pasta from
 `passt` (network); no Node, no container runtime.
 - **Base**: one shared, read-only Debian slim tree (Python, pip/uv, bash, coreutils, git, curl,
   CA certificates), prepared once when the plugin is first enabled and used by everyone.
@@ -1669,13 +1664,13 @@ Fills Workspace's `reader` point for `.pdf`; native (pypdf), no cloud; `dependen
 
 ## 7. Operator
 
-### 7.1 What the operator layer is (D73)
+### 7.1 What the operator layer is
 The tools the owner uses to install, run and look after one soul: the `monoagens` command line,
 the installer, and **MonoAgens Console**, a web app. They live outside the soul.
 
 - **Not a fourth layer of the soul.** The operator tools are not core, middleware, adapter or
   plugin. The core does not know they exist; every change they make passes through the
-  middleware like any owner command (§4.1).
+  middleware like any owner command.
 - **The command line first; Console is a face on it.** Every Console action calls the same code
   as its command. One implementation, two ways to use it.
 - **Clean by default.** A fresh install holds the soul, the CLI adapter and the default plugins
@@ -1685,29 +1680,29 @@ the installer, and **MonoAgens Console**, a web app. They live outside the soul.
   configuration is broken, so the owner can see why and fix it.
 - **One owner.** Console serves the owner of this deployment only; there are no other accounts.
 
-### 7.2 The command line (D74)
-One global command, `monoagens`, installed in `~/.local/bin`. With the compose stack (§7.3) it
+### 7.2 The command line
+One global command, `monoagens`, installed in `~/.local/bin`. With the compose stack it
 forwards the commands that need the runtime into the container, so every command works the same
 on both stacks.
 
 | Command | Does |
 |---|---|
-| `install`, `init` | install; the setup wizard (§7.3) |
+| `install`, `init` | install; the setup wizard |
 | `update` | backup → pinned, verified release → `uv sync` → migration check → restart; back to the previous version when boot fails; never runs `main` |
-| `plugin install\|enable\|disable\|remove [name]` | a plugin's life cycle (§7.4) |
-| `adapter install\|enable\|disable\|remove [name]` | an adapter's life cycle (§7.4) |
-| `start`, `stop`, `restart`, `status` | the service, through the commands the owner sets (§7.2.1) |
-| `logs [-f]` | the process log (§7.2.2) |
+| `plugin install\|enable\|disable\|remove [name]` | a plugin's life cycle |
+| `adapter install\|enable\|disable\|remove [name]` | an adapter's life cycle |
+| `start`, `stop`, `restart`, `status` | the service, through the commands the owner sets |
+| `logs [-f]` | the process log |
 | `chat` | talk to the soul through the CLI adapter |
 | `backup`, `restore <archive>` | one archive: database dump, `config.yaml`, `config.d/`, `soul.yaml` |
 | `doctor [--fix]` | health check: database and extensions, migrations, file permissions, provider reachable, adapters, sandbox |
-| `config schema` | the schema of `config.yaml` and `config.d/` for Console's form mode (§7.7) |
+| `config schema` | the schema of `config.yaml` and `config.d/` for Console's form mode |
 | `console` | run Console |
 | `uninstall [--purge]` | remove the program; data stays unless `--purge` is confirmed |
 
 - **One function, two doors.** `/plugin enable` typed in chat and `monoagens plugin enable` in a
   terminal call the same loader function, which writes only its own line after a backup
-  (§4.5). When the soul runs, the command line asks it to
+ . When the soul runs, the command line asks it to
   `/reload`; when it does not, the change applies at the next start.
 - **Look and feel.** Arrow-key choices, a spinner while the soul thinks, status lines for steps,
   colors per speaker, input history, completion of `/commands`, progress bars, a logo. Built on
@@ -1735,11 +1730,11 @@ operator:
 #### 7.2.2 The process log
 The soul's own output (boot report, pairing code, adapter status, errors). It never holds
 conversation content: only ids, numbers and states. A line that names an event carries its id,
-so Console links it to the Timeline, where the privacy chip shows who may see it (§7.6.3).
+so Console links it to the Timeline, where the privacy chip shows who may see it.
 `monoagens logs` and Console's Logs page show the same lines.
 
-### 7.3 Installer (D74)
-Modelled on V1 (branch `archived`, ADR-0007, ADR-0018 §4.3, ADR-0039), with its lesson: V1's
+### 7.3 Installer
+Modelled on V1 (branch `archived`, ADR-0007, ADR-0018, ADR-0039), with its lesson: V1's
 `install.sh` grew to over 2,000 lines because shell and Python held the same logic twice.
 
 - **`install.sh` is a thin bootstrap.** It installs a pinned `uv` checked against its sha256,
@@ -1755,20 +1750,20 @@ Modelled on V1 (branch `archived`, ADR-0007, ADR-0018 §4.3, ADR-0039), with its
   choices comes from the registries and manifests, never from a list in the installer.
 - **What a fresh install holds**: the soul, the CLI adapter (built in: it is the owner's door,
   the pairing code and Console's Chat use it) and the default plugins
-  (§6.2). No other adapter.
-- **The read-only database role** for Console (§7.6.1) is created here, once, with the admin
+ . No other adapter.
+- **The read-only database role** for Console is created here, once, with the admin
   credentials the owner gives for the duration of the install. Neither the soul nor Console keeps
   those credentials.
 - **Tested, not hoped**: the container image carries the migrations, and the compose stack
   installs the extras of the enabled adapters (both broke in V1).
 
-### 7.4 Plugins and adapters: life cycle and catalog (D75)
+### 7.4 Plugins and adapters: life cycle and catalog
 - **One life cycle for both**: available → installed → enabled ⇄ disabled → removed. Every step
   is an owner action and is recorded as an event.
 - **Install** downloads the archive, checks its digest, unpacks it into `plugins/<name>/` or
   `adapters/<name>/` and installs its dependencies there. A digest that does not match writes no
   file and changes no configuration. No automatic updates, no background fetch.
-- **Enable** writes the configuration lines (§4.5); a new plugin's
+- **Enable** writes the configuration lines; a new plugin's
   or adapter's code needs a restart, and the command says so.
 - **Remove** deletes the code and its dependencies; the events stay in the log as history and
   the owner's files are not touched.
@@ -1780,10 +1775,10 @@ Modelled on V1 (branch `archived`, ADR-0007, ADR-0018 §4.3, ADR-0039), with its
 - **Adapters move to their own folders** with a manifest, as plugins have, once Task 5 is done
   (its work happens in `monoagens/adapters/`). The CLI adapter stays inside the package.
 - Plugins and adapters are trusted code that runs in the soul's process
-  (§4.5, D32.11): a digest proves the archive is the published one,
+ : a digest proves the archive is the published one,
   not that the code is safe.
 
-### 7.5 Console: what it shows (D76)
+### 7.5 Console: what it shows
 A sidebar of pages, grouped:
 
 | Group | Page | Holds |
@@ -1792,16 +1787,16 @@ A sidebar of pages, grouped:
 | | **Timeline** | each percept and what followed: the gate's decision with its numbers (`s`, `theta`, `p`, `u`, reason), thoughts, acts, model calls and tokens; filter by place, person, decision |
 | | **Memory** | what the soul remembers, with forget |
 | | **Promises** | active expectations: promises, waits, reminders (read only) |
-| Bodies and capabilities | **Adapters** | each adapter: on or off, pairing (the WhatsApp QR), its surfaces from the boot report (§2.4.1), its `render:` options (§5.4) |
+| Bodies and capabilities | **Adapters** | each adapter: on or off, pairing (the WhatsApp QR), its surfaces from the boot report, its `render:` options |
 | | **Plugins** | installed and available plugins, on or off, version, "restart needed" |
 | | **Skills**, **Tools** | what the registry holds, with facts and permissions |
-| | **MCP** | locked until the MCP Connect plugin exists (§8.5) |
+| | **MCP** | locked until the MCP Connect plugin exists |
 | People and rules | **People** | persons, linked accounts, `/link`, the owner pairing code |
 | | **Roles** | roles, who holds which, approvals waiting |
 | Settings | **Model** | provider, model, fallbacks; tokens and the daily budget |
 | | **Keys** | `.env`: write only, never shown |
-| | **Config** | `config.yaml` and `config.d/` (§7.7) |
-| | **Soul** | the living identity (name, language, persona, principles), editable (§7.7.1); `soul.yaml` shown as the birth certificate (§3.9.3) |
+| | **Config** | `config.yaml` and `config.d/` |
+| | **Soul** | the living identity (name, language, persona, principles), editable; `soul.yaml` shown as the birth certificate |
 | Footer | — | the soul running or not, adapters up, tokens today; Restart, Update; Logs |
 
 - **Locked pages.** A page that belongs to a plugin or an adapter has its on/off switch at the
@@ -1809,18 +1804,18 @@ A sidebar of pages, grouped:
   not running, everything that needs a command is locked; reading, Config, Logs and Start stay
   open. Pages of the middleware (People, Roles, Config) are never locked by a plugin.
 - **Not included**: sessions (the soul has none; it lives on), profiles (one deployment is one
-  soul), webhooks, a hosted portal (BYOK, §8.1).
+  soul), webhooks, a hosted portal (BYOK, *Rulings*).
 
-### 7.6 Console: how it works (D76, D77)
+### 7.6 Console: how it works
 
 #### 7.6.1 Paths
 | Need | Path |
 |---|---|
 | Timeline, status, tokens, memory | the database, through a **read-only role** (`SELECT` only) |
 | Every change the soul applies | a `/command` line to the CLI adapter's socket; the reply is read from the Log (the `act.out` whose `caused_by` is the command) |
-| Editing files | §7.7: validate in a short-lived process, back up, write, `/reload` |
-| Start, stop, restart | the service commands (§7.2.1) |
-| Logs | the process log (§7.2.2) |
+| Editing files | *Config editor*: validate in a short-lived process, back up, write, `/reload` |
+| Start, stop, restart | the service commands |
+| Logs | the process log |
 
 - Console never writes the database. It sends only lines that start with `/`: any other line is
   a message to the soul and would be appraised as one (Chat sends those on purpose).
@@ -1842,12 +1837,12 @@ A sidebar of pages, grouped:
   every change; repeated wrong passwords slow down.
 
 #### 7.6.3 Privacy
-The owner may see everything (D46: the owner's view is a view, not ownership). So that he knows
+The owner may see everything (the owner's view is a view, not ownership). So that he knows
 what belongs to others, every line in Timeline and Memory carries a **privacy chip**: its
-audience labels (§4.3), a private place marked as such. Hard
+audience labels, a private place marked as such. Hard
 forgotten content shows as forgotten, never reconstructed.
 
-### 7.7 Config editor (D78)
+### 7.7 Config editor
 - **Two modes**: a **form** generated from `monoagens config schema` (the loader's own knowledge
   of `config.yaml` and the plugin manifests' `settings`): a switch for a boolean, a menu for a
   choice, a bounded number, text, chips for a list; anything a form cannot hold says "edit in
@@ -1866,7 +1861,7 @@ forgotten content shows as forgotten, never reconstructed.
 
 #### 7.7.1 The soul's identity
 - **After birth** `soul.yaml` is never read again; identity lives in `state: identity`
-  (§3.9.3). Editing the file would change nothing, so Console never writes it
+ . Editing the file would change nothing, so Console never writes it
   after birth and shows it as the birth certificate.
 - **The Soul page edits the living identity** with the same two modes: a form (name, language,
   persona, and principles as a list to add, remove and reorder) and raw (the current identity
@@ -1878,7 +1873,7 @@ forgotten content shows as forgotten, never reconstructed.
 - **Before birth** (a fresh install), `soul.yaml` is edited directly, in the wizard or in
   Console.
 
-### 7.8 Technology and weight (D79)
+### 7.8 Technology and weight
 - **Server**: Python, Starlette, uvicorn, Jinja2 (autoescaping on), as the `console` extra.
 - **Browser**: HTML rendered on the server, one CSS file, small plain JavaScript, htmx for partial
   updates, Server-Sent Events for live lines. Libraries only on the page that needs them: uPlot
@@ -1895,45 +1890,45 @@ forgotten content shows as forgotten, never reconstructed.
 
 ### 7.9 Changes this needs elsewhere
 Written into the operator task, applied when that task runs:
-- §4.5: one enable function for chat and the command line; `config schema`; the
+- *Install*: one enable function for chat and the command line; `config schema`; the
   loader accepts the `operator:` section of `config.yaml` and leaves it to the operator tools.
-- §8.2: the `operator:` section in the `config.yaml` example.
-- §4: an owner command `/forget` (the core has `forget_hard`; no command reaches it).
-- §4: an owner command `/identity show|set` that calls the core's `set_identity`
-  through the action hook (§7.7.1).
-- §5.2: adapters in their own folders with a manifest; the CLI adapter built in.
-- §9: operator, Console, catalog; the layout row for `monoagens/console/`.
+- *Deployment files*: the `operator:` section in the `config.yaml` example.
+- *Middleware*: an owner command `/forget` (the core has `forget_hard`; no command reaches it).
+- *Middleware*: an owner command `/identity show|set` that calls the core's `set_identity`
+  through the action hook.
+- *Rules for every adapter*: adapters in their own folders with a manifest; the CLI adapter built in.
+- *Terms*: operator, Console, catalog; the layout row for `monoagens/console/`.
 - `AGENTS.md`: the `console` and `cli` extras approved by the owner (2026-11-13).
 
 ## 8. Project
 
 ### 8.1 Rulings
-- Keys only from the environment; the embedder is a replaceable port (D7). License, BYOK and one
-  soul per deployment: §1.9.
+- Keys only from the environment; the embedder is a replaceable port. License, BYOK and one
+  soul per deployment: *Open source*.
 - **Who this repository is for**: people who can run their own server. Self-hosted on a VPS or
   a home machine, configured by hand (`.env`, `config.yaml`, `soul.yaml`), BYOK. It ships a
   basic hand-tuned default prior and no role templates; it never ships priors learned from
   other people's souls. A soul still needs no tuning to start: it is born from the default prior
-  and adapts (D20).
+  and adapts.
 - Order of users: the owner alone, then one real group the owner knows well (also the honest
-  human-likeness evaluation), then developers once contracts are stable (D13).
+  human-likeness evaluation), then developers once contracts are stable.
 - **Release gate**: end-to-end tests with a real model, a real database, long multi-day
   conversations and real people; a per-model replay report and a list of recommended models
-  (D33.6).
+ .
 - **Draft**: README with the brain table, manual install on a server (Docker for Postgres,
   `.env`, `config.yaml`, `soul.yaml`), talk, tune with replay; compressed daily backups with an
-  owner-set retention (D14).
+  owner-set retention.
 
 ### 8.2 Deployment files
-Five files and folders, each with one job; none holds what belongs to another (D7, D35, D36).
+Five files and folders, each with one job; none holds what belongs to another.
 
 | File | Holds | Read | Changed by |
 |---|---|---|---|
 | `.env` | secrets and endpoints: the model provider and its fallbacks (`LLM_PROVIDER`, `LLM_FALLBACKS`, keys, model), bot tokens, database URL | every start | owner or technician |
 | `config.yaml` | this deployment's non-secret settings: timezone, owner settings, runtime, adapters, plugins on, roles | every start | owner; owner settings in chat; `/plugin` and `/role` write their own lines |
 | `config.d/` | one file per plugin: its features and options | every start | owner |
-| `soul.yaml` | the birth certificate: name, language, persona, principles (§3.9.3) | once, at birth | nobody afterwards; identity changes in chat |
-| `prior/` | instincts: knobs, calibration, constants (§3.9.4) | once, at birth | developers, with replay |
+| `soul.yaml` | the birth certificate: name, language, persona, principles | once, at birth | nobody afterwards; identity changes in chat |
+| `prior/` | instincts: knobs, calibration, constants | once, at birth | developers, with replay |
 
 **`config.yaml`** (format version 2, **Draft**; version 1 had `plugins:` as a list and is upcast
 in memory):
@@ -1944,7 +1939,7 @@ timezone: Asia/Jakarta              # where the soul lives; used for <now>
 owner_settings:                     # changed by hand or with /budget and /quiet, which write these lines
   daily_token_budget: 300000
   quiet_hours: { from: "22:00", to: "06:00" }
-  question_ttl_minutes: 30          # an unanswered approval or brake question expires (§4.9)
+  question_ttl_minutes: 30          # an unanswered approval or brake question expires
 runtime:
   tick_seconds: 30
   sleep: { idle_minutes: 30, retry_minutes: 30, hour: 2 }
@@ -1953,7 +1948,7 @@ bodies:                             # adapters (the key keeps its name); non-sec
   cli: { enabled: true }
   whatsapp:
     enabled: true
-    render: { composing: on, seen: on, progress: edit }   # this body's own rendering (§5.4)
+    render: { composing: on, seen: on, progress: edit }   # this body's own rendering
     tools: [pin]                    # optional platform-only capabilities; none by default
   minecraft: { enabled: true, module: mono_minecraft, server: localhost:25565 }   # an outside adapter
 interaction:                        # what the soul shows, for every body; /show writes these lines
@@ -1963,7 +1958,7 @@ plugins:                            # which plugins are on; their settings live 
   workspace:   { enabled: true }
   web-search:  { enabled: true }
   soul-tuning: { enabled: true }
-roles:                              # §4.8; empty = owner free, everyone else only talks
+roles:                              # *Roles and permissions*; empty = owner free, everyone else only talks
   fallback: unverified
   unverified: { base: guest,  label: "Unverified", context: "Not known yet; be kind, share nothing about the owner." }
   customer:   { base: guest,  label: "Customer",   context: "A shop customer; help with products and orders." }
@@ -1974,10 +1969,10 @@ people:                             # optional; keyed by person id; the only rec
   p_7f3a:     { label: "Budi", roles: [member, toko-a, runner], context: "The owner's brother." }
 ```
 
-**`config.d/<plugin>.yaml`**: one per plugin, only what the owner changed (§6.4).
+**`config.d/<plugin>.yaml`**: one per plugin, only what the owner changed.
 If `config.yaml` grows too long, `roles:` may move to its own file later; the format stays.
 
-**Format versions** (D58): every YAML file the owner or a developer edits carries its format
+**Format versions**: every YAML file the owner or a developer edits carries its format
 version (`config.yaml`, `config.d/*.yaml`, `soul.yaml`; the prior folder through
 `format_version` in `prior/manifest.yaml`, since some prior files are plain lists; plugin
 manifests through `manifest_version`). Older versions are upcast in memory and named in the
@@ -1989,7 +1984,20 @@ truth for the deployment and are changed by hand or by the few commands that wri
 lines; what the soul learns (knobs, memories, identity) lives in its books, and there the
 books win over the starting values in `soul.yaml` and `prior/`.
 
-### 8.3 Documents (D32.14)
+### 8.3 Stack
+- Python 3.13 or newer, managed with `uv` (`uv.lock` is committed).
+- PostgreSQL 17 with pgvector 0.8.1 or newer (iterative index scans) and `pg_trgm`, from the
+  official `pgvector/pgvector` image.
+- Runtime dependencies, the only ones allowed: `psycopg[binary,pool]` 3.3, the `pgvector`
+  client, `fastembed`, `httpx` 0.28, `pyyaml`. Development: `pytest`, `pytest-asyncio` 1.x,
+  `hypothesis`.
+- No ORM, agent framework or platform SDK in the core. A plugin's or an adapter's own dependencies
+  live with it — declared in its manifest or as its optional extra in `pyproject.toml`, installed
+  only when it is enabled — and each one needs the owner's approval: today `ddgs` (web search),
+  `pypdf` (PDF reader), the system tools `bubblewrap` and `passt` (workspace), `neonize` with
+  `segno` and its `protobuf` override (WhatsApp), `discord.py` (Discord).
+
+### 8.4 Documents
 | File | For | Holds |
 |---|---|---|
 | `README.md` | people | what it is, install, run, tune with replay |
@@ -1998,41 +2006,42 @@ books win over the starting values in `soul.yaml` and `prior/`.
 | `docs/research.md` | people | every formula, why it was chosen, and its sources |
 | `docs/tasks/` | workers | the active task files; finished ones in `docs/tasks/done/` |
 | `prior/` | developers | default prior values: data, tuned with replay |
-| `config.yaml`, `soul.yaml`, `.env.example` | owners | deployment files (§8.2) |
+| `config.yaml`, `soul.yaml`, `.env.example` | owners | deployment files |
 
 **Rules for documents.** One fact, one home: nothing is written twice; a section that needs a
-fact refers to the section that holds it. No new document is created unless another is merged
-or removed. Each rule carries its Dxx; formats live in the section of the layer that owns them;
-history lives in git, not in the documents.
+fact names the section that holds it, in words, only when the reader would otherwise miss it. No
+section numbers in running text and no decision numbers: why something was decided lives in git
+history. No new document is created unless another is merged or removed. Formats live in the
+section of the layer that owns them.
 
-### 8.4 Evaluation (later)
+### 8.5 Evaluation (later)
 Per-behavior parity against a human baseline in the same group: reply timing, messages per hour
 vs 1/n, when-to-speak precision/recall against human annotation, silence where it should speak,
 interruptions where it should be quiet, promise keeping, recall after 1/7/30 days, blind "which
 one is the bot" (target ≈ 50%). Pre-registered metrics. Public claims phrased as "≥ X% of human
 baseline on these N behaviors".
 
-**Every scenario carries its own material** (D54). A scenario holds, as synthetic data the worker writes, everything the behavior needs: the facts, the people and their accounts, the artifacts (a file, a piece of work, code and its test output), realistic results from every test tool it uses, and the capabilities the behavior needs (mentioning a file is not enough: reading it and sending it must be capabilities a test tool offers). A failure is called the soul's failure only after a material check shows that what the soul needed was in the Log and reachable in its context; otherwise the scenario is fixed, never the soul. The material check is written under the task's Notes.
+**Every scenario carries its own material**. A scenario holds, as synthetic data the worker writes, everything the behavior needs: the facts, the people and their accounts, the artifacts (a file, a piece of work, code and its test output), realistic results from every test tool it uses, and the capabilities the behavior needs (mentioning a file is not enough: reading it and sending it must be capabilities a test tool offers). A failure is called the soul's failure only after a material check shows that what the soul needed was in the Log and reachable in its context; otherwise the scenario is fixed, never the soul. The material check is written under the task's Notes.
 
-**Scenarios are the capability record** (D48). Each scenario states one capability in one
+**Scenarios are the capability record**. Each scenario states one capability in one
 line and the brain function it belongs to. The replay script writes `scenarios/README.md` from
 the latest runs: per capability, whether it holds with the fake model and with the real model
 (passes over repeated runs, model name, date). Nothing is claimed in the README or anywhere else
 that this record does not show. A capability that fails with the real model is listed as such,
 not hidden.
 
-### 8.5 Later ideas (not scheduled)
+### 8.6 Later ideas (not scheduled)
 - A small learned classifier for the gate from recorded decisions (> 10k labeled).
 - Multi-process deployment (inbox table with `FOR UPDATE SKIP LOCKED`).
 - **MCP Connect** as a plugin: each MCP server the owner installs (`config.d/mcp.yaml`, `/plugin`)
   becomes a source of tools in the registry, which already follows MCP's pattern of tools,
-  prompts and resources (§4.4). Every MCP tool declares facts and a
+  prompts and resources. Every MCP tool declares facts and a
   permission like any tool and passes the same policy and approval modes; an outside server never
   bypasses them.
 - **Voice calls** on chat adapters, once a mature library for the platform is widely released
   (for WhatsApp, a linked-device calling stack such as meowcaller on top of whatsmeow, which would
   run as a Go sidecar and needs the owner's approval as a dependency): call audio → STT → the soul
-  → TTS → call audio, as a `long_running` act (§5.7).
+  → TTS → call audio, as a `long_running` act.
 
 ## 9. Terms
 
@@ -2055,21 +2064,21 @@ not hidden.
 | — | **tier role / group role** | A role with a `base` (how much) / without one (where a person belongs). |
 | — | **base** (Workspace) | The one shared, read-only system tree of the sandbox. |
 | — | **shared folder** (Workspace) | A work folder several people may use, named by a role setting. |
-| account | **actor** / **person id** | Who caused an event as a body reports it (`whatsapp:628…`, `face:3`, or *unknown*) / the one opaque id of a person across actors (`person:p_7f3a`), registered automatically; linking merges two person ids into the older (D65, D86). |
-| space | **place** | Where an event happens and an action lands: a chat, a room, a document, a device, a game region (§2.2). |
-| members | **audience** | Who can perceive what happens in a place, reported by the adapter with `place.audience`; may include *unknown*. The one fact privacy needs (D85, D86). |
-| place info, `place_kind` | — | Removed in contract v2 (D86): the audience replaces them; names and structure are part of `description` or `prompt_section`. |
-| — | **feature** | A number on an event that the gate reads: `addressed`, `named`, `addressed_other`, `audience_size` (§2.3). |
-| — | **receipt** | The one `act.result` that ends every action: `done`, `refused`, `held`, `failed` or `unknown` (§2.3). |
-| — | **lifecycle event** | What the middleware tells a body the soul is doing (`composing`, `seen`, `progress`, `thought`); the body renders it its own way (§2.4.5). |
-| — | **prompt section** | What a body tells reasoning about itself, as text (§2.4.1). |
-| — | **contract** | The one locked contract between the layers, §2 of this file, as code in `monoagens/contract/`, held by `contract.lock` (D86–D88). |
-| — | **back-fill / import** | Events an adapter missed while offline (`backfill`) / history from before it was connected (`imported`, never a wake) (D69). |
-| — | **format version** | `version:` in an owner's YAML file, `manifest_version:` in a plugin manifest (D58). |
+| account | **actor** / **person id** | Who caused an event as a body reports it (`whatsapp:628…`, `face:3`, or *unknown*) / the one opaque id of a person across actors (`person:p_7f3a`), registered automatically; linking merges two person ids into the older. |
+| space | **place** | Where an event happens and an action lands: a chat, a room, a document, a device, a game region. |
+| members | **audience** | Who can perceive what happens in a place, reported by the adapter with `place.audience`; may include *unknown*. The one fact privacy needs. |
+| place info, `place_kind` | — | Removed in contract v2: the audience replaces them; names and structure are part of `description` or `prompt_section`. |
+| — | **feature** | A number on an event that the gate reads: `addressed`, `named`, `addressed_other`, `audience_size`. |
+| — | **receipt** | The one `act.result` that ends every action: `done`, `refused`, `held`, `failed` or `unknown`. |
+| — | **lifecycle event** | What the middleware tells a body the soul is doing (`composing`, `seen`, `progress`, `thought`); the body renders it its own way. |
+| — | **prompt section** | What a body tells reasoning about itself, as text. |
+| — | **contract** | The one locked contract between the layers, *The contract* of this file, as code in `monoagens/contract/`, held by `contract.lock`. |
+| — | **back-fill / import** | Events an adapter missed while offline (`backfill`) / history from before it was connected (`imported`, never a wake). |
+| — | **format version** | `version:` in an owner's YAML file, `manifest_version:` in a plugin manifest. |
 
 ### 9.2 What never changes with a rename
 
-Names stored in data are part of the frozen contract (§1.1):
+Names stored in data are part of the frozen contract:
 event kinds (`percept`, `decision.wake`, `expectation.reminded`, …), payload fields, `soul.yaml`
 keys, the `prior/` format and `config.yaml` keys. A rename touches code only.
 
@@ -2077,9 +2086,9 @@ keys, the `prior/` format and `config.yaml` keys. A rename touches code only.
 
 | Folder | Holds | Changes |
 |---|---|---|
-| `monoagens/contract/` | The contract as code (D88): event envelope, features, capability descriptor, hooks, context items, actions, receipts, the adapter surface, percepts, lifecycle events. Held by `contract.lock`. | Only by the owner (§2.9). |
+| `monoagens/contract/` | The contract as code: event envelope, features, capability descriptor, hooks, context items, actions, receipts, the adapter surface, percepts, lifecycle events. Held by `contract.lock`. | Only by the owner. |
 | `monoagens/core/` | Mechanisms only: kernel loop, gate, reasoning, context, memory, expectations, threads, the tool door (`dispatch`), the three hooks. | Rarely: evidence, bugs, vulnerabilities. |
-| `monoagens/middleware/` | Every decision, generic, in seven files (§4.1): `policy.py`, `privacy.py`, `identity.py`, `registry.py`, `loader.py`, `interaction.py`, `roles.py`. | Bugs inside; never for one platform or case. |
+| `monoagens/middleware/` | Every decision, generic, in seven files: `policy.py`, `privacy.py`, `identity.py`, `registry.py`, `loader.py`, `interaction.py`, `roles.py`. | Bugs inside; never for one platform or case. |
 | `monoagens/adapters/` | One folder per adapter: all translation lives here. | Per app or device. |
 | `monoagens/infra/` | Store, migrations, config, clock, budget counting, embedding, versioning, attachments, model providers (`infra/providers/`). | With the stack. |
 | `plugins/` | Installable features on the middleware. | Per feature. |

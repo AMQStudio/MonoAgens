@@ -17,7 +17,7 @@ knows when to stay quiet in a group, and can replay every decision it made.
   search, files, modes. Each translates its own world into the contract's facts and talks only
   to the middleware.
 
-One locked contract ([`docs/spec.md`](docs/spec.md) §2) sits between the layers: six
+One locked contract ([`docs/spec.md`](docs/spec.md) *The contract*) sits between the layers: six
 generic facts (actor, place, audience, event, capability, receipt) that fit a chat, a robot, a
 workspace app, a sensor and a game alike. The inside can improve without breaking what is built
 on top, and something new enters only as an adapter or a plugin.
