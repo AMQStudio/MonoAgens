@@ -10,6 +10,8 @@ developers. The theory is in the spec (*Rulings*, *Evaluation (later)*, *Plugins
 
 ## Part 1 — First users and the release gate
 
+*Theory:* spec *Rulings*, *Evaluation (later)*, *Layers*.
+
 - [ ] **1.1 The owner alone for a few days.**
   - *Must hold:* every change in this period is followed by a replay check.
 - [ ] **1.2 One real group the owner knows well, with the valve on.**
@@ -25,6 +27,9 @@ developers. The theory is in the spec (*Rulings*, *Evaluation (later)*, *Plugins
 
 ## Part 2 — Honest human-likeness evaluation
 
+*Theory:* spec *Evaluation (later)*; research *Measuring human-likeness honestly*, *Proving a
+mechanism: ablation and sealed sets*.
+
 - [ ] **2.1 The metrics are registered before measuring.**
 - [ ] **2.2 Measure against a human baseline in the same group**: reply timing, messages per hour
   against 1/n, when-to-speak precision and recall, wrong silences, promise keeping, recall after
@@ -33,6 +38,8 @@ developers. The theory is in the spec (*Rulings*, *Evaluation (later)*, *Plugins
   valve's state for each result.
 
 ## Part 3 — Stable contracts for developers
+
+*Theory:* spec *The contract*, *Changing the contract*, *Middleware*, *Adapters*, *Plugins*.
 
 Only after the contracts have not changed for a while.
 

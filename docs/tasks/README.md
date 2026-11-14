@@ -14,6 +14,8 @@ Status: todo | doing | stopped | done | Depends on: …
 **Goal.** What the soul can do when the task is done, and which spec sections hold the theory.
 
 ## Part 1 — Name
+*Theory:* the spec and research sections that hold this part's theory, by name.
+
 - [ ] **1.1 What must be true, in one line.**
   - *Function:* what it is for.
   - *Must hold:* the behavior anyone can observe.

@@ -137,8 +137,8 @@ off.
 7. **Pure async.** No blocking call inside `async def`; CPU work goes through
    `asyncio.to_thread`; every hook call and background job runs under its watchdog.
 8. **Configuration outside code.** The model provider, models, keys, URLs and reasoning effort
-   come from `.env`; deployment settings from `config.yaml` and `config.d/`; identity from
-   `soul.yaml`; weights and thresholds from the prior (`prior/`). No magic
+   come from `.env`; deployment settings from `config.yaml` and `config.d/`; the soul's identity from its own
+   `soul.yaml`, which belongs to the core; weights and thresholds from the prior (`prior/`). No magic
    numbers in code.
 9. **Signals are pure**: a signal only reads its situation and returns a number in [0, 1].
 10. **Decisions are reproducible**: randomness only from the seeded generator, time only from
@@ -906,14 +906,17 @@ against the owner's interests and the principles. Learned procedures and lessons
 that the reasoning sees. Claims are weighed by the speaker's reliability in that domain.
 Standing never buys dishonesty.
 
-**The soul's own identity**. Identity — name, language, persona, principles — has **one
-source**: `soul.yaml` (*Identity*), tuned like any configuration. It is read at start and on
+**The soul's own identity**. Identity — name, language, persona, principles — belongs to the
+core: it is part of the soul, not a deployment setting, and the core never runs without it, so
+the soul always knows who it is. It has **one source**: `soul.yaml` (*Identity*), kept with the
+core's own files and tuned like any configuration. It is read at start and on
 reload; every route that changes identity — the file, the panel, or the owner in conversation
 through an `identity_changing` capability — changes that one source, so no route overwrites
 another. Every change is recorded as an identity change in the log, so the soul knows its own
 history ("I was called Mona until today") and old memories that use a former name do not
-confuse it. With the valve on, only the owner may change it. Without the file the soul starts
-neutral and may ask what to be called. Role plugins may provide a first `soul.yaml`.
+confuse it. With the valve on, only the owner may change it. The core ships a default
+identity; on a first start without the file, the file is written from that default, and the
+owner then tunes it. Role plugins may provide a first `soul.yaml`.
 
 **The context and the self-model**. The context is the prompt, not the memory: it is rebuilt
 from the books at every wake and never compacted. It is assembled as **items** — each with its
@@ -957,11 +960,13 @@ In *Waist 1: core ↔ middleware*, with an example.
 In *Percepts*, with an example.
 
 #### 3.9.3 Identity (`soul.yaml`, format version 1)
-Who the soul is: the one source of its identity, tuned like `config.yaml`. Read at start and on
-reload; a difference from the identity in use is applied and recorded as an identity change.
-Changes made in conversation or in the panel are written back to it (*What the core knows, the
-absolute lines and the self-model*). Without it the soul starts neutral and may ask the owner
-what to be called. Role plugins may ship a first one.
+Who the soul is: the one source of its identity. It belongs to the core, like the prior, and is
+kept with the core's own files, apart from the deployment settings; it is tuned like
+`config.yaml`. Read at start and on reload; a difference from the identity in use is applied and
+recorded as an identity change. Changes made in conversation or in the panel are written back to
+it (*What the core knows, the absolute lines and the self-model*). The core never runs without
+one: on a first start without the file, it is written from the core's default identity. Role
+plugins may ship a first one.
 
 ```yaml
 version: 1                  # format version
@@ -1033,9 +1038,17 @@ These are learning *inside* existing functions, so enabling them does not change
 
 The wave 2 and wave 3 extensions of the brain map wait the same way. They are designed in
 [research.md](research.md) and extend existing rows, so building them does not change the
-contract. Two points are open until wave 2 is designed: the drive count in the complexity budget
-(the initiative budget, curiosity and switching would exceed three drives unless merged), and how
-an initiative is timed — at an event boundary, never because the world has been quiet for a
+contract, and they keep the complexity budget: the core still has three drives.
+
+| Wave 2 addition | What it really is | Where it goes |
+|---|---|---|
+| Initiative budget | an initiative is the soul's own talk | merged into the talk-rate drive: every initiative raises θ like any message |
+| Curiosity | a gap that changes a pending decision | a signal, not a drive |
+| Switching after effort without progress (boredom) | a long effort in a thread that is not moving | a signal, not a drive |
+| Sleep pressure (fatigue) | when to sleep, not whether to speak | the hippocampus row: it triggers sleep and never touches θ |
+| Depth of thought | an output of the gate, not an input | the basal ganglia row |
+
+An initiative is timed at an event boundary, never because the world has been quiet for a
 while.
 
 ## 4. Middleware
@@ -1983,7 +1996,7 @@ Five files and folders, each with one job; none holds what belongs to another.
 | `.env` | secrets and endpoints: the model provider and its fallbacks (`LLM_PROVIDER`, `LLM_FALLBACKS`, keys, model), bot tokens, database URL | every start | owner or technician |
 | `config.yaml` | this deployment's non-secret settings: timezone, owner settings, runtime, adapters, plugins on, roles | every start | owner; owner settings in chat; `/plugin` and `/role` write their own lines |
 | `config.d/` | one file per plugin: its features and options | every start | owner |
-| `soul.yaml` | identity: name, language, persona, principles | every start and reload | owner: the file, the panel, or in chat (all write this one source) |
+| `soul.yaml` | the soul's identity: name, language, persona, principles; belongs to the core and never missing (written from the core's default on a first start) | every start and reload | owner: the file, the panel, or in chat (all write this one source) |
 | `prior/` | instincts: knobs, calibration, constants | once, at birth | developers, with replay |
 
 **`config.yaml`** (format version 2, **Draft**; version 1 had `plugins:` as a list and is upcast
@@ -2037,8 +2050,8 @@ without `version:` is read as version 1 with a warning.
 
 The rule for every setting: the deployment files (`config.yaml`, `config.d/`) are the source of
 truth for the deployment and are changed by hand or by the few commands that write their own
-lines; what the soul learns (knobs, memories, identity) lives in its books, and there the
-books win over the starting values in `soul.yaml` and `prior/`.
+lines; what the soul learns (knobs, memories) lives in its books, and there the books win over
+the starting values in `prior/`. Identity is not learned: `soul.yaml` is its one source.
 
 ### 8.3 Stack
 - Python 3.13 or newer, managed with `uv` (`uv.lock` is committed).
@@ -2062,7 +2075,8 @@ books win over the starting values in `soul.yaml` and `prior/`.
 | `docs/research.md` | people | every formula, why it was chosen, and its sources |
 | `docs/tasks/` | the code architect | the active task files, written as behavior to achieve and how to prove it; the code architect ticks items and writes notes; finished ones in `docs/tasks/done/` |
 | `prior/` | developers | default prior values: data, tuned with replay |
-| `config.yaml`, `soul.yaml`, `.env.example` | owners | deployment files |
+| `config.yaml`, `.env.example` | owners | deployment files |
+| `soul.yaml` | the core and the owner | the soul's identity: part of the core, tuned by the owner |
 
 **Rules for documents.** One fact, one home: nothing is written twice; a section that needs a
 fact names the section that holds it, in words, only when the reader would otherwise miss it. No

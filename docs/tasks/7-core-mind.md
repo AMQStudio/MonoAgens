@@ -13,6 +13,10 @@ lets go of what it should forget. The theory is in the spec (*Layers*, *Mental m
 
 ## Part 1 — Settle what Task 6 left (now)
 
+*Theory:* spec *Expectations*, *Cognition*, *What the core knows, the absolute lines and the
+self-model*, *Identity*; research *Grounding: every act waits for evidence it landed*,
+*Expectations and the wake gate*.
+
 - [ ] **1.1 Every act opens a prediction; a conversation continues through it.**
   - *Function:* a forward model after acting. Continuation of a conversation comes from the open
     prediction, never from a time window.
@@ -28,15 +32,22 @@ lets go of what it should forget. The theory is in the spec (*Layers*, *Mental m
 
 - [ ] **1.2 Identity has one tunable source.**
   - *Function:* who the soul is lives in one place that the owner can tune like any configuration.
-  - *Must hold:* a change to that source is applied at start and on reload. A change made in
+  - *Must hold:* identity belongs to the core and is never missing: on a first start without
+    it, it is written from the core's default, so the soul always knows who it is. A change to
+    that source is applied at start and on reload. A change made in
     conversation or in the panel is written to the same source, so no route overwrites another.
     Every change is recorded as an identity change, and the soul can say what it was called
     before. With the valve on, only the owner can change it.
-  - *Proof:* rename the soul in the source and reload → the next reply uses the new name and,
+  - *Proof:* a first start with no identity file → the file exists afterwards and the soul
+    answers "who are you?" from it; rename the soul in the source and reload → the next reply uses the new name and,
     asked, the soul says its former name; rename it in conversation → the source shows the new
     name after a restart; a non-owner asks for a new name → refused.
 
 ## Part 2 — The valve and neutral values (now)
+
+*Theory:* spec *Layers*, *Two absolute lines*, *Design by brain function, not by scenario*, *Mental
+model*, *Policy*, *The API: six levers*; research *Proving a mechanism: ablation and sealed
+sets*, *Engineering principles behind the core's shape*.
 
 - [ ] **2.1 The core runs without middleware.**
   - *Function:* the core is the whole soul, fully autonomous.
@@ -74,6 +85,10 @@ lets go of what it should forget. The theory is in the spec (*Layers*, *Mental m
     reported as a question for the design, not removed by the task.
 
 ## Part 3 — Inner thought, theory of mind and the self
+
+*Theory:* spec *Mental model*, *Cognition*, *What the core knows, the absolute lines and the
+self-model*; research *Patience and inner thought*, *Theory of mind as a perception ledger*,
+*Grounding in time*.
 
 - [ ] **3.1 Think before speaking unasked.**
   - *Function:* inner thought (Inner Thoughts criteria).
@@ -119,6 +134,9 @@ lets go of what it should forget. The theory is in the spec (*Layers*, *Mental m
 
 ## Part 4 — Grounding, agency and silence
 
+*Theory:* spec *Mental model*, *Expectations*, *Cognition*; research *Grounding: every act waits
+for evidence it landed*, *Sense of agency*, *Judging silence*, *Learning with bounds*.
+
 - [ ] **4.1 A reply that misses what was expected is noticed.**
   - *Function:* grounding by content.
   - *Must hold:* each prediction holds what content it expects; a reply that arrives but misses it
@@ -147,6 +165,10 @@ lets go of what it should forget. The theory is in the spec (*Layers*, *Mental m
 
 ## Part 5 — Revision, beliefs, lessons and procedures
 
+*Theory:* spec *Memory, sleep and forgetting*; research *Knowing, not knowing and misremembering*,
+*Trust, credence and reliability (beta reputation)*, *Sleep and consolidation*, *Event
+boundaries*.
+
 - [ ] **5.1 Corrections supersede; nothing is deleted.**
   - *Proof:* a correction makes the old memory superseded, with its time; both remain in history.
 - [ ] **5.2 Every memory knows how it was known** (observed, told, inferred, self-caused); sleep
@@ -170,6 +192,10 @@ lets go of what it should forget. The theory is in the spec (*Layers*, *Mental m
 
 ## Part 6 — Trust, fading and forgetting
 
+*Theory:* spec *Memory, sleep and forgetting*, *What the core knows, the absolute lines and the
+self-model*; research *Trust, credence and reliability (beta reputation)*, *Memory activation
+(ACT-R)*, *Safety mechanics*.
+
 The fade and hard-forget paths exist since Task 1; this part adds the policy around them.
 
 - [ ] **6.1 Attribution and reliability per domain.**
@@ -184,6 +210,9 @@ The fade and hard-forget paths exist since Task 1; this part adds the policy aro
   - *Proof:* after hard forgetting and a rebuild, nothing of the content can be recalled or shared.
 
 ## Part 7 — Sealed sets and the real model
+
+*Theory:* spec *Evaluation (later)*; research *Proving a mechanism: ablation and sealed sets*,
+*Measuring human-likeness honestly*.
 
 - [ ] **7.1 A sealed set is written before Part 3 starts** and is not read while Parts 3–6 are
   built: small alterations of passing scenarios, kinds of surprise never seen, the same structure

@@ -11,6 +11,9 @@ unchanged in substance (owner, 2026-11-13); the theory is in the spec (*Home Ass
 
 ## Part 1 — Speech, Home Assistant and more model providers
 
+*Theory:* spec *Adapters*, *Speech: hearing and speaking*, *Home Assistant as a body*; research
+*Prompt layering for caching*.
+
 - [ ] **1.1 Speech for every adapter.**
   - *Function:* hearing and speaking as drivers by protocol, shared by every adapter and chosen by
     configuration: an OpenAI-shaped HTTP driver, Wyoming, ElevenLabs and Deepgram. Each reports
