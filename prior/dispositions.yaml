@@ -54,6 +54,7 @@ constants:        # engineering values; change only with replay evidence
   # robustness
   hook_timeout_ms: 500
   presentation_timeout_ms: 500  # one body's render(); a slow redraw never holds the turn
+  question_ttl_seconds: 900     # a question nobody answers expires and is recorded
   job_timeout_seconds: 120
   snapshot_every_events: 10000
   # work

@@ -2,8 +2,6 @@ approval:
   prompt: "Perlu izin: {capability} {arguments}\nPemohon: {requester}\nAlasan: {reason}."
   yes_label: "Ya"
   no_label: "Tidak"
-  yes_words: ["ya"]
-  no_words: ["tidak"]
 brake:
   prompt: "Pekerjaan dihentikan ({work}): {reason}. Lanjutkan atau biarkan berhenti?"
   continue_label: "Lanjutkan"

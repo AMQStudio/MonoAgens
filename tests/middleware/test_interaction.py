@@ -392,16 +392,20 @@ async def test_reaction_approval_answered_after_restart_still_counts(aconn):
     assert any(k == "reactions" and d["emoji"] == "👎" for _, k, d in screen.shown)
     msg_id = screen.shown[-1][2]["message_id"]
 
-    # Simulate a full process restart: a fresh kernel with zero in-memory prompt state.
+    # Simulate a full process restart: a fresh kernel with zero in-memory prompt state, and an
+    # answer that names the question's ref (§2.4.6), not a platform message id.
     restarted = await _kernel(aconn, body=_RichScreen(shows=("typing", "reactions")))
+    question = await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = %s ORDER BY id DESC LIMIT 1",
+        (interaction.QUESTION_ASKED,))).fetchone()
+    ref = str(question[0]["ref"])
+    yes_label = str(question[0]["choices"][0]["label"])
     reaction_event = Event(
         id=None, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
         body="telegram",
-        payload={"description": "", "data": {
-            "reply_to": {"message_id": msg_id},
-            "reaction": {"emoji": "👍", "message_id": msg_id},
-            "answer": "👍",
-        }}, description="",
+        payload={"description": "", "data": {"reaction": {"emoji": "👍"}},
+                 "answer": {"prompt": ref, "value": yes_label}},
+        description="",
     )
     await interaction.answer(restarted)(reaction_event, {"conn": aconn, "now": START})
     cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'approval.answered'")
@@ -438,3 +442,49 @@ async def test_progress_step_from_invisible_source_place_is_not_shown(aconn):
     assert len(screen.rendered) == 1
     assert "public progress" in str(screen.rendered[0].data.get("text"))
 
+
+
+async def test_a_question_is_asked_drawn_and_answered_from_the_log(aconn):
+    """§2.4.6: `ask` records the question, and the answer names its ref, across a restart."""
+    kernel = await _kernel(aconn, body=_RichScreen(shows=("buttons",)))
+    trigger = await _percept(aconn)
+
+    ref = await interaction.ask(kernel, trigger, OWNER_DM, "lanjut?", ["ya", "tidak"],
+                                kind="approval", request=7)
+
+    asked = await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = %s", (interaction.QUESTION_ASKED,))).fetchone()
+    assert asked[0]["ref"] == ref and asked[0]["request"] == 7
+    assert [choice["label"] for choice in asked[0]["choices"]] == ["ya", "tidak"]
+
+    restarted = await _kernel(aconn, body=_RichScreen(shows=("buttons",)))
+    answer = Event(id=None, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
+                   body="telegram",
+                   payload={"description": "", "answer": {"prompt": ref, "value": "tidak"}},
+                   description="")
+    await interaction.answer(restarted)(answer, {"conn": aconn, "now": START})
+
+    answered = await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = %s",
+        (interaction.QUESTION_ANSWERED,))).fetchone()
+    assert answered[0]["ref"] == ref and answered[0]["allowed"] is False
+
+
+async def test_an_answered_question_is_never_answered_twice(aconn):
+    """§2.4.6: one question, one answer; a repeated ref is ignored."""
+    kernel = await _kernel(aconn, body=_RichScreen(shows=("buttons",)))
+    trigger = await _percept(aconn)
+    ref = await interaction.ask(kernel, trigger, OWNER_DM, "lanjut?", ["ya", "tidak"],
+                                kind="approval", request=9)
+    answer = Event(id=None, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
+                   body="telegram",
+                   payload={"description": "", "answer": {"prompt": ref, "value": "ya"}},
+                   description="")
+
+    await interaction.answer(kernel)(answer, {"conn": aconn, "now": START})
+    await interaction.answer(kernel)(answer, {"conn": aconn, "now": START})
+
+    rows = await (await aconn.execute(
+        "SELECT count(*) FROM events WHERE kind = %s",
+        (interaction.QUESTION_ANSWERED,))).fetchone()
+    assert rows[0] == 1

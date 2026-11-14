@@ -47,6 +47,9 @@ EXPIRED = "approval.expired"
 APPROVAL_TTL = timedelta(minutes=30)
 BRAKE_HELD = "brake.held"
 BRAKE_RESUMED = "brake.resumed"
+QUESTION_ASKED = "question.asked"
+QUESTION_ANSWERED = "question.answered"
+QUESTION_EXPIRED = "question.expired"
 SHOWN = "interaction.shown"
 SPLIT = "interaction.split"
 STEP_CHARS = 200
@@ -88,16 +91,34 @@ def _normalize_choices(raw: Any, labels: list[str]) -> list[dict[str, str]]:
     return [{"label": label, "answer": str(index + 1)} for index, label in enumerate(labels)]
 
 
-async def _send_prompt(kernel: Any, trigger: Event, place: str, text: str, *,
-                       prompt_kind: str, prompt_id: int,
-                       choices: list[str]) -> None:
-    """Deliver a neutral `choices` prompt via `say` and record its returned tokens in the Log."""
+async def question_ttl(kernel: Any) -> timedelta:
+    """Return how long a question stays open before it expires (§2.4.6)."""
+    values = constants(getattr(kernel, "settings", None) or {})
+    return timedelta(seconds=float(values.get("question_ttl_seconds", 900)))
+
+
+async def ask(kernel: Any, trigger: Event, place: str, question: str, choices: list[str], *,
+              kind: str, request: int) -> str:
+    """Ask one place its own way and record the question (§2.4.6).
+
+    The body's own `ask(place, question, choices)` draws it when the body has one (buttons, a
+    poll, a menu); numbered lines are the one fallback, so a question is never lost. The ref it
+    answers is what an answer comes back with.
+    """
     body = await _body_of(kernel.conn, place)
     adapter = kernel.tools.adapters.get(body)
-    args: dict[str, Any] = {"text": text, "choices": list(choices)}
+    drawn = getattr(adapter, "ask", None)
+    ref = ""
+    if callable(drawn):
+        try:
+            ref = str(await drawn(place, question, list(choices)) or "")
+        except Exception as exc:  # best-effort: recorded, then the text fallback (§2.4.5)
+            await kernel._record_error(trigger, exc)
+    lines = "\n".join(f"{number}. {choice}" for number, choice in enumerate(choices, 1))
+    args: dict[str, Any] = {"text": f"{question}\n{lines}" if not ref else question,
+                            "choices": list(choices)}
     act_out = await kernel._emit(trigger, "act.out", {
-        "capability": f"{body}.say" if adapter is not None else "",
-        "arguments": args, "communicative": True}, place=place)
+        "capability": f"{body}.say", "arguments": args, "communicative": True}, place=place)
     result: Any = None
     if adapter is not None:
         out_event = Event(id=None, ts=kernel.clock.now(), kind="act.out", who=OWNER,
@@ -107,12 +128,25 @@ async def _send_prompt(kernel: Any, trigger: Event, place: str, text: str, *,
         if result is not None:
             await kernel._emit(act_out, "act.result", {
                 "capability": f"{body}.say", "result": result}, place=place)
-    msg_id = str(result.get("message_id") or "") if isinstance(result, Mapping) else ""
+    message_id = str(result.get("message_id") or "") if isinstance(result, Mapping) else ""
     recorded = _normalize_choices(result.get("choices") if isinstance(result, Mapping) else None,
-                                  choices)
-    await kernel._emit(act_out, SHOWN, {
+                                  list(choices))
+    await kernel._emit(act_out, QUESTION_ASKED, {
+        "ref": ref or message_id, "request": int(request), "kind": kind, "place": place,
+        "question": question, "choices": recorded,
+    }, place=place, description=question)
+    return ref or message_id
+
+
+async def _send_prompt(kernel: Any, trigger: Event, place: str, text: str, *,
+                       prompt_kind: str, prompt_id: int,
+                       choices: list[str]) -> None:
+    """Ask one question and record how its prompt is read back (`interaction.shown`)."""
+    ref = await ask(kernel, trigger, place, text, list(choices), kind=prompt_kind,
+                    request=prompt_id)
+    await kernel._emit(trigger, SHOWN, {
         "kind": "prompt", "prompt_kind": prompt_kind, "prompt_id": prompt_id,
-        "message_id": msg_id, "choices": recorded,
+        "message_id": ref, "choices": _normalize_choices(None, list(choices)),
         "positive": choices[0], "negative": choices[1],
     }, place=place)
 
@@ -168,9 +202,10 @@ async def _is_closed(conn: Any, request_id: int) -> bool:
     return row is not None
 
 
-async def expire_stale(conn: Any, *, now: datetime, trigger: Event | None = None) -> int:
-    """Mark unanswered approval requests older than `APPROVAL_TTL` as `approval.expired`."""
-    cutoff = now - APPROVAL_TTL
+async def expire_stale(conn: Any, *, now: datetime, trigger: Event | None = None,
+                       ttl: timedelta | None = None) -> int:
+    """Mark unanswered questions older than their TTL as expired (§2.4.6)."""
+    cutoff = now - (ttl or APPROVAL_TTL)
     cur = await conn.execute(
         "SELECT id, ts, who, place, body, origin_actor, payload FROM events "
         "WHERE kind = %s AND ts < %s AND id NOT IN ("
@@ -178,6 +213,7 @@ async def expire_stale(conn: Any, *, now: datetime, trigger: Event | None = None
         "  AND payload ? 'request') ORDER BY id ASC",
         (REQUEST, cutoff, ANSWERED, EXPIRED))
     rows = await cur.fetchall()
+    expired = 0
     for req_id, _ts, who, place, body, origin_actor, payload in rows:
         data = dict(payload or {})
         await append_event(
@@ -188,6 +224,28 @@ async def expire_stale(conn: Any, *, now: datetime, trigger: Event | None = None
                      "who": data.get("who") or origin_actor or who,
                      "capability": data.get("capability"),
                      "reason": "expired"})
+        expired += 1
+    expired += await _expire_questions(conn, now=now, cutoff=cutoff, trigger=trigger)
+    return expired
+
+
+async def _expire_questions(conn, *, now: datetime, cutoff: datetime,
+                            trigger: Event | None) -> int:
+    """Record `question.expired` for every question past its TTL that nobody answered."""
+    cur = await conn.execute(
+        "SELECT id, ts, payload FROM events WHERE kind = %s AND ts < %s AND id NOT IN ("
+        "  SELECT (payload->>'question')::bigint FROM events WHERE kind IN (%s, %s)"
+        "  AND payload ? 'question') ORDER BY id ASC",
+        (QUESTION_ASKED, cutoff, QUESTION_ANSWERED, QUESTION_EXPIRED))
+    rows = await cur.fetchall()
+    for question_id, _ts, payload in rows:
+        data = dict(payload or {})
+        await append_event(
+            conn, ts=now, kind=QUESTION_EXPIRED,
+            place=str(data.get("place") or "") or None,
+            caused_by=trigger.id if trigger is not None else int(question_id),
+            payload={"question": int(question_id), "ref": data.get("ref"),
+                     "request": data.get("request"), "reason": "expired"})
     return len(rows)
 
 
@@ -266,125 +324,31 @@ async def _brake_origin(conn: Any, held: Mapping[str, Any]) -> str | None:
     return None
 
 
-async def _prompt_by_reply(conn: Any, place: str, message_id: str,
-                           *, now: datetime | None = None) -> dict[str, Any] | None:
-    """Find the newest open approval or brake prompt rendered with `message_id` in `place`."""
-    cur = await conn.execute(
-        "SELECT payload FROM events WHERE kind = %s AND place = %s "
-        "AND payload->>'kind' = 'prompt' AND payload->>'message_id' = %s "
-        "ORDER BY id DESC LIMIT 5",
-        (SHOWN, place, message_id))
-    for row in await cur.fetchall():
-        info = dict(row[0] or {})
-        kind = str(info.get("prompt_kind") or "")
-        prompt_id = int(info.get("prompt_id") or 0)
-        if not prompt_id:
-            continue
-        if kind == "approval":
-            asked = await by_id(conn, prompt_id)
-            if asked is not None and not await _is_closed(conn, prompt_id):
-                if now is None or now - asked["ts"] <= APPROVAL_TTL:
-                    return info
-        elif kind == "brake":
-            row_ans = await (await conn.execute(
-                "SELECT 1 FROM events WHERE kind = %s AND payload->>'brake' = %s LIMIT 1",
-                (BRAKE_RESUMED, str(prompt_id)))).fetchone()
-            if row_ans is None and await brake_by_id(conn, prompt_id) is not None:
-                return info
+async def question_by_ref(conn: Any, ref: str) -> dict[str, Any] | None:
+    """Return the open question one answer's `prompt` ref names, or None (§2.4.6)."""
+    if not ref:
+        return None
+    row = await (await conn.execute(
+        "SELECT id, ts, payload FROM events WHERE kind = %s AND payload->>'ref' = %s "
+        "ORDER BY id DESC LIMIT 1", (QUESTION_ASKED, ref))).fetchone()
+    if row is None:
+        return None
+    answered = await (await conn.execute(
+        "SELECT 1 FROM events WHERE kind IN (%s, %s) AND payload->>'question' = %s LIMIT 1",
+        (QUESTION_ANSWERED, QUESTION_EXPIRED, str(int(row[0]))))).fetchone()
+    if answered is not None:
+        return None
+    return {"id": int(row[0]), "ts": row[1], **dict(row[2] or {})}
+
+
+async def _choice_index(choices: list[str], value: str) -> int | None:
+    """Return which choice one answer's value names: its label, its 1-based position, or None."""
+    if not value:
+        return None
+    for index, choice in enumerate(choices):
+        if value == choice or value == str(index + 1):
+            return index
     return None
-
-
-def _match_choice_token(prompt: Mapping[str, Any], token: Any,
-                        text: str, settings: Mapping[str, Any] | None) -> bool | None:
-    """Match an opaque `answer` token or typed label against recorded choices (`[pos, neg]`)."""
-    choices = [item for item in (prompt.get("choices") or ()) if isinstance(item, Mapping)]
-    if token is not None and str(token):
-        tok = str(token)
-        for index, choice in enumerate(choices):
-            if tok == str(choice.get("answer") or ""):
-                return index == 0
-        low = tok.strip().lower()
-        for index, choice in enumerate(choices):
-            if low == str(choice.get("label") or "").strip().lower() or low == str(index + 1):
-                return index == 0
-    if text:
-        low = text.strip().lower()
-        for index, choice in enumerate(choices):
-            if low == str(choice.get("label") or "").strip().lower() or low == str(index + 1):
-                return index == 0
-        cat = catalog(settings)
-        app_cat, brake_cat = cat["approval"], cat["brake"]
-        pos = {str(w).lower() for w in (app_cat.get("yes_words") or ())} | {
-            str(app_cat.get("yes_label") or "").lower(),
-            str(brake_cat.get("continue_label") or "").lower(),
-            str(prompt.get("positive") or "").lower(),
-        }
-        neg = {str(w).lower() for w in (app_cat.get("no_words") or ())} | {
-            str(app_cat.get("no_label") or "").lower(),
-            str(brake_cat.get("stop_label") or "").lower(),
-            str(prompt.get("negative") or "").lower(),
-        }
-        if low in pos:
-            return True
-        if low in neg:
-            return False
-    return None
-
-
-async def notify_brake(kernel: Any, trigger: Event, *, root_id: int, place: str, work: str,
-                       reason: str, limit: str, value: int, cap: int) -> Event:
-    """Record a held brake and ask the owner once via neutral `choices`."""
-    brake = await kernel._emit(trigger, BRAKE_HELD, {
-        "root": root_id, "place": place, "work": work, "reason": reason,
-        "limit": limit, "value": value, "cap": cap,
-        "origin_actor": trigger.origin_actor or trigger.who,
-        "place_kind": (trigger.payload or {}).get("place_kind"),
-    }, place=place)
-    direct = await identity.direct_place(kernel.conn, OWNER)
-    if direct is None:
-        return brake
-    cat = catalog(getattr(kernel, "settings", None))["brake"]
-    text = str(cat["prompt"]).format(work=work, reason=reason, limit=limit, value=value, cap=cap)
-    choices = [str(cat["continue_label"]), str(cat["stop_label"])]
-    assert brake.id is not None
-    await _send_prompt(kernel, brake, direct, text, prompt_kind="brake",
-                       prompt_id=int(brake.id), choices=choices)
-    return brake
-
-
-async def _answer_brake(kernel: Any, item: Event, brake_id: int, held: dict[str, Any],
-                        allowed: bool, answerer: str) -> None:
-    """Record a brake decision and enqueue a continuation intent with the held chain's origin."""
-    work = str(held.get("work") or held.get("place") or "stopped work")
-    target = str(held.get("place") or item.place or "")
-    origin = await _brake_origin(kernel.conn, held)
-    await append_event(kernel.conn, ts=kernel.clock.now(), kind=BRAKE_RESUMED,
-                       who=origin, origin_actor=origin, place=target, body=item.body,
-                       caused_by=item.id,
-                       payload={"brake": brake_id, "root": held.get("root"),
-                                "allowed": allowed, "by": answerer})
-    if allowed:
-        kernel.enqueue(Event(
-            id=None, ts=kernel.clock.now(), kind="intent", who=origin,
-            origin_actor=origin, place=target, body=item.body,
-            payload={"description": f"the owner chose to continue the stopped work: {work}",
-                     "root": held.get("root"), "brake": brake_id,
-                     "place_kind": held.get("place_kind")}))
-
-
-def _reply_message_id(data: Mapping[str, Any]) -> str:
-    """Extract `data.reply_to`'s message id (falling back to reaction target id)."""
-    reply_to = data.get("reply_to")
-    if isinstance(reply_to, Mapping):
-        mid = str(reply_to.get("message_id") or reply_to.get("id") or "")
-        if mid:
-            return mid
-    elif isinstance(reply_to, str) and reply_to:
-        return reply_to
-    react = data.get("reaction")
-    if isinstance(react, Mapping):
-        return str(react.get("message_id") or "")
-    return ""
 
 
 def answer(kernel: Any) -> Middleware:
@@ -397,7 +361,8 @@ def answer(kernel: Any) -> Middleware:
         now = kernel.clock.now()
         if kind in ("percept", "tick"):
             await expire_stale(kernel.conn, now=now,
-                               trigger=item if getattr(item, "id", None) else None)
+                               trigger=item if getattr(item, "id", None) else None,
+                               ttl=await question_ttl(kernel))
         if kind != "percept":
             return Continue()
         payload = item.payload or {}
@@ -405,67 +370,48 @@ def answer(kernel: Any) -> Middleware:
         owner = answerer == OWNER
         request_id, allowed = None, False
         data = payload.get("data") or {}
-        reply_mid = _reply_message_id(data) if isinstance(data, Mapping) else ""
-        if payload.get("approval") is not None:
+        answer = payload.get("answer")
+        if isinstance(answer, Mapping) and answer.get("prompt"):
+            question = await question_by_ref(kernel.conn, str(answer["prompt"]))
+            if question is not None:
+                choices = [str(item.get("label") or "")
+                           for item in (question.get("choices") or ())]
+                value = str(answer.get("value") or "")
+                matched = _choice_index(choices, value)
+                if matched is not None:
+                    await kernel._emit(item, QUESTION_ANSWERED, {
+                        "question": int(question["id"]), "ref": str(answer["prompt"]),
+                        "request": question.get("request"), "value": value,
+                        "allowed": matched == 0, "by": answerer,
+                    }, place=item.place)
+                    kind = str(question.get("kind") or "")
+                    target = int(question.get("request") or 0)
+                    if kind == "brake":
+                        if not owner:
+                            return Continue()
+                        held = await brake_by_id(kernel.conn, target)
+                        if held is not None:
+                            await _answer_brake(kernel, item, target, held, matched == 0, answerer)
+                        return Continue()
+                    if kind == "approval":
+                        if not (owner or kernel.roles.can(answerer, "approval.answer",
+                                                          item.place)):
+                            return Continue()
+                        request_id, allowed = target, matched == 0
+        if isinstance(payload.get("answer"), Mapping):
+            pass  # already handled above, from the question's own ref
+        elif payload.get("approval") is not None:
             if not (owner or kernel.roles.can(answerer, "approval.answer", item.place)):
                 return Continue()
-            request_id, allowed = int(payload["approval"]), bool(payload.get("answer"))
+            request_id, allowed = int(payload["approval"]), bool(payload["answer"])
         elif payload.get("brake") is not None:
             if not owner:
                 return Continue()
             held = await brake_by_id(kernel.conn, int(payload["brake"]))
             if held is not None:
                 await _answer_brake(kernel, item, int(payload["brake"]), held,
-                                    bool(payload.get("answer")), answerer)
+                                    bool(payload["answer"]), answerer)
             return Continue()
-        elif reply_mid:
-            prompt = await _prompt_by_reply(kernel.conn, str(item.place or ""), reply_mid, now=now)
-            if prompt is not None:
-                token = data.get("answer")
-                if token is None:
-                    token = data.get("choice")
-                if token is None and isinstance(data.get("reaction"), Mapping):
-                    token = data["reaction"].get("emoji")
-                matched = _match_choice_token(
-                    prompt, token, str(payload.get("description") or ""),
-                    getattr(kernel, "settings", None))
-                if matched is not None:
-                    pkind = str(prompt.get("prompt_kind") or "")
-                    pid = int(prompt.get("prompt_id") or 0)
-                    if pkind == "brake":
-                        if not owner:
-                            return Continue()
-                        held = await brake_by_id(kernel.conn, pid)
-                        if held is not None:
-                            await _answer_brake(kernel, item, pid, held, matched, answerer)
-                        return Continue()
-                    if pkind == "approval":
-                        if not (owner or kernel.roles.can(
-                                answerer, "approval.answer", item.place)):
-                            return Continue()
-                        request_id, allowed = pid, matched
-        else:
-            text = str(payload.get("description") or "").strip().lower()
-            direct = await identity.direct_place(kernel.conn, OWNER) if owner and text else None
-            if owner and text and direct is not None and item.place == direct:
-                cat = catalog(getattr(kernel, "settings", None))
-                app_cat, brake_cat = cat["approval"], cat["brake"]
-                pos_app = {str(w).lower() for w in (app_cat.get("yes_words") or ())} | {
-                    str(app_cat.get("yes_label") or "").lower()}
-                neg_app = {str(w).lower() for w in (app_cat.get("no_words") or ())} | {
-                    str(app_cat.get("no_label") or "").lower()}
-                pos_brk = pos_app | {str(brake_cat.get("continue_label") or "").lower()}
-                neg_brk = neg_app | {str(brake_cat.get("stop_label") or "").lower()}
-                found_approval = await pending(kernel.conn, now=now)
-                found_brake = await pending_brake(kernel.conn)
-                if found_brake is not None and (
-                        found_approval is None or found_brake["id"] > found_approval["id"]):
-                    if text in pos_brk or text in neg_brk:
-                        await _answer_brake(kernel, item, int(found_brake["id"]), found_brake,
-                                            text in pos_brk, answerer)
-                    return Continue()
-                if found_approval is not None and (text in pos_app or text in neg_app):
-                    request_id, allowed = int(found_approval["id"]), text in pos_app
         if request_id is None:
             return Continue()
         asked = await by_id(kernel.conn, request_id)

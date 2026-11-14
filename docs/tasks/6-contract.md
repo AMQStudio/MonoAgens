@@ -115,7 +115,7 @@ that asserts behavior the contract removes), `scenarios/`, `scripts/replay.py`
   an action for another body's place refused with its reason; no neutral `say`, nothing hidden, no
   permission exception; commands from `command`; a failing handler answers with an error; command
   answers through the action hook (F.12); `registry.more` without a place refused, capped.
-- [ ] 3.5 Interaction ([spec.md](../spec.md) *Interaction*): lifecycle events to each body's `render` as best-effort
+- [x] 3.5 Interaction ([spec.md](../spec.md) *Interaction*): lifecycle events to each body's `render` as best-effort
   rules with their own timeout; questions through `ask` with `question.asked`, `answered`,
   `expired` events; the `answer` capability with its fact checks; an approved act runs as its
   requester and still runs after a restart (F.9). Delete `yes_words`, typed matching, `split`,
@@ -710,3 +710,30 @@ percept yet must still be delivered, so an unreported place is carried by the de
 fake replay proved it: `31_paper_over_two_days` sent to Budi before any percept arrived there.
 Its recorded answers also had to model the intent hand-off (the summary is said where it lands),
 which is scenario material, not a code change.
+
+**3.5 (two commits).** `interaction.present` resolves the body and hands it one contract
+`Lifecycle` event (`composing`, `progress`, `thought`, `seen`) under `presentation_timeout_ms`;
+a body with no `render` renders nothing, and a failing one is recorded by the calling best-effort
+rule (`composing`, `narrate`, `seen`) and never stops the turn. `/show` keeps `interaction:` only
+(`thinking`, `steps`, `approvals`); what a body draws with them is that body's own `render:`
+option, read by the body. Deleted: `shows()`, the body half of `switches()`/`/show`,
+`ALLOWED_SHOW`'s body keys, `CAPABILITY_REQUIRED`, `_set_body_show_entry`, the two read-receipt
+rules with `_is_read_marked`/`_unread_messages`/`_is_shared_with_owner`, the split rule with
+`split_attachments`, the sticker fallback, `yes_words`/`no_words` and `_match_choice_token`.
+`seen` is one `state: seen:<event_id>` per live percept, never for imported or backfilled ones.
+
+Questions go through one door: `ask` draws with the body's own `ask` when it has one and numbers
+the choices otherwise, records `question.asked {ref, request, kind, question, choices}`, and an
+answer is a percept with `answer: {prompt: ref, value}` → `question.answered`, resolved for the
+approval or brake book from the Log alone (so a restart answers). `question_ttl_seconds` (900) is
+a new prior constant; `expire_stale` records `question.expired` beside `approval.expired`.
+`monoagens/adapters/support.py` holds the one `split`/`cut` every body shares.
+
+Homes: the presentation rule is `interaction.present` + `_lifecycle`; the question book is
+`monoagens/action/ask` + `question_by_ref`; "one per event" is `interaction.seen`; splitting and
+cutting are `adapters/support.py`.
+
+Deviation: the plan asked to delete the reply-by-message-id matching in this item. It is deleted
+with the typed matcher; the `answer:{prompt, value}` path replaces both, which is what §2.4.6
+specifies. F.9's brake resume carries the held chain's `origin_actor` (`_brake_origin`), which
+`test_brake_continue_keeps_held_chain_origin_actor` holds.
