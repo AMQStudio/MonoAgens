@@ -85,7 +85,7 @@ asserts behavior the contract removes, e.g. `text_like`), `scenarios/`, `scripts
   after a restart an action without a receipt goes back to its body with the same id; nothing is
   re-sent by the core on its own. `act.out` records the arguments as the action hook returned
   them (F.10).
-- [ ] 2.7 Liveness (F.2–F.5): a tool call runs under the job watchdog and a timeout is a
+- [x] 2.7 Liveness (F.2–F.5): a tool call runs under the job watchdog and a timeout is a
   `failed` receipt; one failing call inside a round becomes its own receipt and the other calls
   still run; a tool result is kept when the same wake also spoke; the loop survives an exception
   in the backlog flush and in `recover()`, and one failing fired Expectation loses no other.
@@ -432,6 +432,27 @@ One home per fix:
 Decisions, recorded: the refusal is an allowlist (any key outside the four facts), not a check
 for one name: a cue that carries a second word key would otherwise pass silently. The message
 names the offending keys from the call, so no removed field name is written in the core.
+
+#### 2.7 Liveness (F.2-F.5)
+
+Line counts after 2.7: core 4043 · middleware 6136 · adapters 5465 · plugins 2065 · tests 20060.
+
+One home per fix:
+
+- **F.2** the job watchdog: `core/dispatch.carry` runs the body under `asyncio.wait_for(...,
+  jobs.timeout)` and answers `Receipt("failed", reason="<capability> timed out after Ns")`;
+  `middleware/registry.act` no longer keeps a second timeout (one home for the watchdog);
+- **F.3** one call's failure: `core/jobs.apply_calls` tries every call of every round and
+  records `error` for one that raises; the act's own receipt is the `failed` one `carry` returns;
+- **F.4** a result is kept when the wake also spoke: `working.step_spoke` (per act) and
+  `Kernel._settle_action`'s silent decision;
+- **F.5** the loop survives: `Kernel.run` guards `recover()` and the idle-poll backlog flush,
+  `run_until_idle` guards its flush, `_flush_backlogs` drops a place's backlog only when there is
+  a reasoning to wake, and `expectations.due(on_error=...)` isolates one malformed row:
+  `Kernel._wake` passes `partial(self._record_error, event)`.
+
+New test: `test_f5_one_malformed_expectation_loses_no_other_fired_one` (a bad `within` is
+reported and the sound row still fires).
 
 ### Where the work stands (session of 2026-11-14)
 

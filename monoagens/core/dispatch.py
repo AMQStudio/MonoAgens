@@ -8,6 +8,7 @@ reads only opaque ids, times and the outcome the hook returned.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -155,12 +156,20 @@ async def record(kernel: Any, event: Event, job: JobRef | None, round_index: int
 
 
 async def carry(kernel: Any, act: Act) -> contract.Receipt:
-    """Hand one recorded action to its body and answer with the receipt it earned."""
+    """Hand one recorded action to its body under the job watchdog (F.2).
+
+    A tool that overruns is a `failed` receipt with its timeout named, never a hung turn.
+    """
     trigger = replace(act.out, place=act.action.place)
+    timeout = getattr(getattr(kernel, "jobs", None), "timeout", None)
     try:
-        raw = await kernel.tools.act(trigger, act.action.capability,
-                                     dict(act.action.arguments), event_id=act.out.id,
-                                     action_id=act.action.id)
+        coro = kernel.tools.act(trigger, act.action.capability,
+                                dict(act.action.arguments), event_id=act.out.id,
+                                action_id=act.action.id)
+        raw = await (asyncio.wait_for(coro, timeout) if timeout else coro)
+    except asyncio.TimeoutError:
+        return contract.Receipt(
+            "failed", reason=f"{act.action.capability} timed out after {timeout:g}s")
     except Exception as exc:
         return contract.Receipt(
             "failed", reason=f"{act.action.capability} failed ({type(exc).__name__}): {exc}")

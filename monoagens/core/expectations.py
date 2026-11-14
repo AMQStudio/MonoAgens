@@ -166,8 +166,12 @@ async def is_met(conn, condition, now):
         return False
 
 
-async def due(conn, event, *, now, settings, pfc=None, embedder=None):
-    """Fire, remind or resolve the expectations that are due for this event."""
+async def due(conn, event, *, now, settings, pfc=None, embedder=None, on_error=None):
+    """Fire, remind or resolve the expectations that are due for this event.
+
+    `on_error` receives one row's failure so a malformed expectation loses no other fired
+    item (F.5); without it the failure propagates.
+    """
     if event.kind == "tick":
         where = "ex.status = 'active' AND (ex.next_check_at <= %s OR ex.expires_at <= %s)"
         params = (now, now)
@@ -175,29 +179,40 @@ async def due(conn, event, *, now, settings, pfc=None, embedder=None):
         where, params = "ex.status = 'active' AND ex.cue_event IS NOT NULL", ()
     wakes = []
     for row in await read_expectations(conn, where, params):
-        if row["expires_at"] is not None and row["expires_at"] <= now:
-            await resolve_expectation(conn, row, now, "dropped")  # stale
-            continue
-        if row["kind"] == "guard":
-            continue
-        if event.kind != "tick" and not matches_cue(row["cue_event"], event):
-            continue
-        if event.kind != "tick" and row["kind"] == "wait" and row["cue_event"].get("not_who"):
-            await resolve_expectation(conn, row, now, "satisfied")  # patience held
-            continue
-        if text(row["condition"]):
-            if await reminded(conn, row, event, pfc=pfc, embedder=embedder,
-                                        settings=settings):
-                wakes.append(await reminder(conn, row, event, now))
-            continue
-        if not await is_met(conn, row["condition"], now):
-            wakes.append(await fire_expectation(conn, row, now))
-        elif (row["policy"] or {}).get("once") is True:
-            await resolve_expectation(conn, row, now, "satisfied")
-        else:
-            query = "UPDATE expectations SET next_check_at = %s WHERE id = %s"
-            await conn.execute(query, (next_check(row["cue_time"], now, tz(settings)), row["id"]))
+        try:
+            wakes.extend(await _due_one(conn, row, event, now=now, settings=settings,
+                                        pfc=pfc, embedder=embedder))
+        except Exception as exc:  # one malformed row never aborts the others (F.5)
+            if on_error is None:
+                raise
+            await on_error(exc)
     return wakes
+
+
+async def _due_one(conn, row, event, *, now, settings, pfc=None, embedder=None):
+    """Return the wakes one expectation earns for this event, and record what it settles."""
+    if row["expires_at"] is not None and row["expires_at"] <= now:
+        await resolve_expectation(conn, row, now, "dropped")  # stale
+        return ()
+    if row["kind"] == "guard":
+        return ()
+    if event.kind != "tick" and not matches_cue(row["cue_event"], event):
+        return ()
+    if event.kind != "tick" and row["kind"] == "wait" and row["cue_event"].get("not_who"):
+        await resolve_expectation(conn, row, now, "satisfied")  # patience held
+        return ()
+    if text(row["condition"]):
+        if await reminded(conn, row, event, pfc=pfc, embedder=embedder, settings=settings):
+            return (await reminder(conn, row, event, now),)
+        return ()
+    if not await is_met(conn, row["condition"], now):
+        return (await fire_expectation(conn, row, now),)
+    if (row["policy"] or {}).get("once") is True:
+        await resolve_expectation(conn, row, now, "satisfied")
+        return ()
+    await conn.execute("UPDATE expectations SET next_check_at = %s WHERE id = %s",
+                       (next_check(row["cue_time"], now, tz(settings)), row["id"]))
+    return ()
 
 
 async def settle(conn, exp_id, *, now, settings):

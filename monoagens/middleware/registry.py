@@ -252,13 +252,8 @@ class ToolRegistry:
             raise RuntimeError(f"No adapter registered for {declared_by!r}")
         action = Action(id=action_id, kind=name, place=event.place or "", arguments=payload,
                         adapter=declared_by, event_id=event_id)
-        timeout = getattr(getattr(self.kernel, "jobs", None), "timeout", None)
         try:
-            coro = adapter.act(action)
-            result = await (asyncio.wait_for(coro, timeout) if timeout is not None else coro)
-        except asyncio.TimeoutError:
-            LOGGER.error("tool %s timed out after %ss", capability, timeout)
-            return {"error": f"{capability} timed out"}
+            result = await adapter.act(action)
         except Exception as exc:
             kind = type(exc).__name__
             LOGGER.error("tool %s failed (%s)", capability, kind)

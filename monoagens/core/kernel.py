@@ -323,7 +323,8 @@ class Kernel:
             return
         fired = await expectations.due(self.conn, event, now=self.clock.now(),
                                   settings=self.settings, pfc=self.pfc,
-                                  embedder=self.embedder)
+                                  embedder=self.embedder,
+                                  on_error=partial(self._record_error, event))
         for item in fired:
             try:
                 await self._expect_wake(item)
@@ -400,11 +401,13 @@ class Kernel:
             if (place is None or key == place)
             and (not due_only or now >= entry["deadline"] or poll_due)
         ]
+        if self.pfc is None:
+            for key in keys:
+                self._backlogs.pop(key, None)
+            return
         for key in keys:
             entry = self._backlogs.pop(key, None)
             if not entry or not entry["events"]:
-                continue
-            if self.pfc is None:
                 continue
             collapsed = self._collapse_backlog(entry["events"])
             try:
@@ -751,7 +754,11 @@ class Kernel:
                 await self.step()
                 count += 1
             if self._backlogs:
-                await self._flush_backlogs()
+                try:
+                    await self._flush_backlogs()
+                except Exception as exc:  # one place's backlog never stops the loop (F.5)
+                    await self._record_error(
+                        Event(id=None, ts=self.clock.now(), kind="tick"), exc)
                 continue
             if not self.jobs.in_flight:
                 return count
@@ -762,7 +769,10 @@ class Kernel:
         """Run the consumer loop until the stop event is set."""
         self.require_installed()
         self._loop = asyncio.get_running_loop()
-        await self.recover()
+        try:
+            await self.recover()
+        except Exception as exc:  # a broken recovery never stops the loop (F.5)
+            await self._record_error(Event(id=None, ts=self.clock.now(), kind="tick"), exc)
         idle_polls = 0
         while not stop_event.is_set():
             try:
@@ -770,7 +780,11 @@ class Kernel:
             except TimeoutError:
                 idle_polls += 1
                 if self._backlogs:
-                    await self._flush_backlogs(due_only=True, idle_polls=idle_polls)
+                    try:
+                        await self._flush_backlogs(due_only=True, idle_polls=idle_polls)
+                    except Exception as exc:  # one place's backlog never stops the loop (F.5)
+                        await self._record_error(
+                            Event(id=None, ts=self.clock.now(), kind="tick"), exc)
                 continue
             idle_polls = 0
             try:

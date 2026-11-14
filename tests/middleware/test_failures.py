@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -26,6 +26,8 @@ from tests.support import settings
 
 START = datetime(2026, 11, 14, 2, 0, tzinfo=timezone.utc)
 SETTINGS = settings()
+
+PLACE = "space:tg:10"
 
 
 class _FakeLLM:
@@ -587,3 +589,43 @@ async def test_f5_kernel_survives_backlog_flush_recover_and_expect_wake_errors(
     assert any("backlog a boom" in e for e in errs)
     assert any("expect 1 boom" in e for e in errs)
     assert any("resume boom" in e for e in errs)
+
+
+async def test_f5_one_malformed_expectation_loses_no_other_fired_one(aconn) -> None:
+    """F.5: `expectations.due` reports one row's failure and still fires the others."""
+    from monoagens.core import expectations
+
+    source = await append_event(aconn, ts=START, kind="percept", who="person:owner",
+                                place=PLACE, body="telegram",
+                                payload={"description": "source"}, description="source")
+    async with aconn.transaction():
+        await aconn.execute(
+            "INSERT INTO expectations (kind, who, place, about, cue_event, condition, "
+            "condition_text, intent, weight, policy, status, next_check_at, source_event, "
+            "derived_from, origin_actor, expires_at) VALUES "
+            "('promise', %s, %s, 'broken row', %s, %s, NULL, NULL, 1.0, %s, 'active', NULL, "
+            "%s, '{}'::bigint[], %s, %s), "
+            "('promise', %s, %s, 'sound row', %s, %s, NULL, NULL, 1.0, %s, 'active', NULL, "
+            "%s, '{}'::bigint[], %s, %s)",
+            ("person:owner", PLACE, '{"kind": "percept"}',
+             '{"event_seen": {"kind": "percept"}, "within": "not a duration"}',
+             '{"once": true}', source.id, "person:owner", START + timedelta(days=1),
+             "person:owner", PLACE, '{"kind": "percept"}', '{"none": true}',
+             '{"once": true}', source.id, "person:owner", START + timedelta(days=1)))
+    seen = await append_event(aconn, ts=START, kind="percept", who="person:owner", place=PLACE,
+                              body="telegram", payload={"description": "halo"},
+                              description="halo")
+
+    failures: list[BaseException] = []
+
+    async def collect(exc: BaseException) -> None:
+        failures.append(exc)
+
+    wakes = await expectations.due(aconn, seen, now=START, settings=SETTINGS,
+                                   on_error=collect)
+
+    assert [type(exc) for exc in failures] == [ValueError]
+    assert [item["about"] for item in wakes] == ["sound row"]
+    fired = await (await aconn.execute(
+        "SELECT count(*) FROM events WHERE kind = 'expectation.fired'")).fetchone()
+    assert fired == (1,)
