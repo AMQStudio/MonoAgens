@@ -31,6 +31,7 @@ import json
 import mimetypes
 import os
 import pathlib
+import pickle
 import re
 import shutil
 import sys
@@ -139,14 +140,27 @@ def load_environment() -> None:
 
 
 def replay_url() -> str:
-    """Return REPLAY_DATABASE_URL, refusing anything outside a *_replay database."""
+    """Return REPLAY_DATABASE_URL, refusing anything outside a *_replay database.
+
+    A parallel run gives each worker its own database, named `<base>_replay_w<k>`, so the shared
+    Log of one run can never be read by another.
+    """
     url = os.environ.get("REPLAY_DATABASE_URL")
     if not url:
         raise RuntimeError("REPLAY_DATABASE_URL is required (see .env.example)")
     dbname = psycopg.conninfo.conninfo_to_dict(url).get("dbname") or ""
-    if not dbname.endswith("_replay"):
-        raise RuntimeError(f"Refusing to replay: database name {dbname!r} must end with '_replay'")
+    if not WORKER_DB_RE.match(dbname):
+        raise RuntimeError(
+            f"Refusing to replay: database name {dbname!r} must end with '_replay'")
     return url
+
+
+def worker_url(url: str, index: int) -> str:
+    """Return one worker's own database URL, next to the run's own."""
+    params = psycopg.conninfo.conninfo_to_dict(url)
+    dbname = str(params["dbname"])
+    base = dbname[:-len("_replay")] if dbname.endswith("_replay") else dbname
+    return psycopg.conninfo.make_conninfo(**dict(params, dbname=f"{base}_replay_w{index}"))
 
 
 def reset_schema(url: str) -> None:
@@ -155,6 +169,9 @@ def reset_schema(url: str) -> None:
         conn.execute("DROP SCHEMA IF EXISTS public CASCADE")
         conn.execute("CREATE SCHEMA public")
     asyncio.run(migrate_url(url, backup_dir=REPORT_DIR / "backups"))
+
+
+WORKER_DB_RE = re.compile(r".*_replay(?:_w\d+)?$")
 
 
 def ensure_database(url: str) -> None:
@@ -2333,6 +2350,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--model", help="override LLM_MODEL for this run")
     parser.add_argument("--effort", choices=EFFORTS,
                         help="override LLM_REASONING_EFFORT for this run")
+    parser.add_argument("--jobs", type=int, default=1,
+                        help="replay this many scenarios at once, each on its own database")
+    parser.add_argument("--shard", help=argparse.SUPPRESS)
+    parser.add_argument("--pickle-out", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     load_environment()
     url = replay_url()
@@ -2345,9 +2366,76 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.effort:
         llm["effort"] = args.effort
     paths = scenario_paths(args.scenarios)
+    if args.shard:
+        index, count = (int(part) for part in args.shard.split("/"))
+        shard = paths[index - 1::count]
+        reset_schema(url)
+        results, usage = asyncio.run(run_all(shard, args.fake, url, settings, llm))
+        pathlib.Path(args.pickle_out).write_bytes(pickle.dumps((results, usage)))
+        return 0
+    if args.jobs > 1:
+        results, usage = _run_workers(args, url, paths, settings, llm)
+        return _finish(results, usage, args, settings, llm, paths)
     ensure_database(url)
     reset_schema(url)
     results, usage = asyncio.run(run_all(paths, args.fake, url, settings, llm))
+    return _finish(results, usage, args, settings, llm, paths)
+
+
+def _run_workers(args: Any, url: str, paths: Sequence[pathlib.Path],
+                 settings: dict[str, Any],
+                 llm: dict[str, str]) -> tuple[list[ScenarioResult], Usage]:
+    """Replay the scenarios in `--jobs` workers, each on its own database, then merge.
+
+    Every worker is a subprocess of this same script with `--shard k/n`; its database is
+    `<base>_replay_w<k>`, so no two runs ever share a Log. Pickled results come back in the
+    order the scenarios were given, and the report is then written exactly as a serial run does.
+    """
+    import subprocess
+    import tempfile
+
+    ensure_database(url)
+    with tempfile.TemporaryDirectory(prefix="monoagens-replay-") as folder:
+        workers = []
+        for index in range(1, args.jobs + 1):
+            out = pathlib.Path(folder) / f"shard-{index}.pickle"
+            argv = [sys.executable, str(pathlib.Path(__file__)), *[str(p) for p in paths],
+                    "--shard", f"{index}/{args.jobs}", "--pickle-out", str(out)]
+            argv += ["--fake"] if args.fake else []
+            argv += ["--model", args.model] if args.model else []
+            argv += ["--effort", args.effort] if args.effort else []
+            ensure_database(worker_url(url, index))
+            env = dict(os.environ, REPLAY_DATABASE_URL=worker_url(url, index))
+            print(f"worker {index}/{args.jobs}: {url.split('/')[-1]} -> {out.name}", flush=True)
+            workers.append((subprocess.Popen(argv, env=env), out))
+        for process, _ in workers:
+            if process.wait() != 0:
+                raise RuntimeError(f"a replay worker failed (exit {process.returncode})")
+
+        by_name: dict[str, ScenarioResult] = {}
+        usage = Usage()
+        for _, out in workers:
+            results, shard_usage = pickle.loads(out.read_bytes())
+            for result in results:
+                by_name[result.scenario.name] = result
+            # One shard's tracker counts that shard once, not once per scenario it replayed.
+            usage.calls += shard_usage.calls
+            usage.prompt += shard_usage.prompt
+            usage.cached += shard_usage.cached
+            usage.completion += shard_usage.completion
+            usage.reasoning += shard_usage.reasoning
+            usage.total += shard_usage.total
+        ordered = []
+        for path in paths:
+            name = load_scenario(path, ZoneInfo(str(settings.get("timezone") or "UTC"))).name
+            ordered.append(by_name[name])
+    return ordered, usage
+
+
+def _finish(results: Sequence[ScenarioResult], usage: Usage, args: Any,
+            settings: dict[str, Any], llm: dict[str, str],
+            paths: Sequence[pathlib.Path]) -> int:
+    """Write the report and the capability record for one finished run."""
     when = datetime.now(timezone.utc)
     zone = ZoneInfo(str(settings.get("timezone") or "UTC"))
     mode = "fake LLM (free)" if args.fake else "real LLM"
