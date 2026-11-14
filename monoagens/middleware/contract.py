@@ -28,11 +28,10 @@ from typing import Any
 from monoagens.infra.store import EVENT_COLUMNS as _EVENT_COLUMNS
 from monoagens.types import Event
 
-from monoagens.core.hooks import (OWNER_POLICY, SLOTS, Continue, HookOutcome, Middleware,
-                                  Registration, Replace, Stop)
+from monoagens.contract.hooks import (OWNER_POLICY, RULE_KINDS, SLOTS, Continue, HookOutcome,
+                                      Middleware, Registration, Replace, Stop)
 
 LOGGER = logging.getLogger(__name__)
-RULE_KINDS = ("guard", "best-effort")
 
 # What a tool states about itself (middleware.md §4). A tool without facts fails at boot.
 FACTS = ("reads", "changes", "runs_code", "network")

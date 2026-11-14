@@ -4,7 +4,6 @@ findings:
   - {file: monoagens/core/dispatch.py, line: 49, ban: payload-read}
   - {file: monoagens/core/expectations.py, line: 18, ban: text-parse}
   - {file: monoagens/core/expectations.py, line: 36, ban: text-parse}
-  - {file: monoagens/core/hooks.py, line: 17, ban: text-parse}
   - {file: monoagens/core/identity.py, line: 14, ban: text-parse}
   - {file: monoagens/core/jobs.py, line: 108, ban: payload-read}
   - {file: monoagens/core/jobs.py, line: 172, ban: labels-read}
@@ -12,11 +11,11 @@ findings:
   - {file: monoagens/core/threads.py, line: 62, ban: payload-read}
   - {file: monoagens/core/threads.py, line: 128, ban: removed-field}
   - {file: monoagens/core/threads.py, line: 132, ban: removed-field}
-  - {file: monoagens/middleware/contract.py, line: 38, ban: text-parse}
-  - {file: monoagens/middleware/contract.py, line: 42, ban: text-parse}
-  - {file: monoagens/middleware/contract.py, line: 48, ban: text-parse}
+  - {file: monoagens/middleware/contract.py, line: 37, ban: text-parse}
+  - {file: monoagens/middleware/contract.py, line: 41, ban: text-parse}
+  - {file: monoagens/middleware/contract.py, line: 47, ban: text-parse}
+  - {file: monoagens/middleware/contract.py, line: 139, ban: removed-field}
   - {file: monoagens/middleware/contract.py, line: 140, ban: removed-field}
-  - {file: monoagens/middleware/contract.py, line: 141, ban: removed-field}
   - {file: monoagens/middleware/identity.py, line: 8, ban: text-parse}
   - {file: monoagens/middleware/identity.py, line: 323, ban: removed-field}
   - {file: monoagens/middleware/identity.py, line: 333, ban: removed-field}

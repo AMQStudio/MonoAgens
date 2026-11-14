@@ -293,8 +293,9 @@ class Kernel:
 
     async def _run_hooks(self, name: str, item: Any, ctx: Any, trigger: Event, *,
                          tool: str | None = None) -> Any | None:
-        async def stopped(reason: str) -> None:
-            await self._emit(trigger, "guard.stopped", {"hook": name, "reason": reason})
+        async def stopped(reason: str, held: bool = False) -> None:
+            await self._emit(trigger, "guard.stopped",
+                             {"hook": name, "reason": reason, "held": held})
 
         async def failed(exc: Exception) -> None:
             await self._record_error(trigger, exc)

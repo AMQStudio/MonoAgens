@@ -144,5 +144,5 @@ async def test_a_plugin_cannot_undo_the_absolute_lines(aconn):
 
     row = await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'guard.stopped'")).fetchone()
-    assert row[0] == {"hook": "action",
+    assert row[0] == {"hook": "action", "held": False,
                       "reason": "only the owner may invoke identity_changing capabilities"}

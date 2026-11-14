@@ -493,6 +493,15 @@ One home per fix:
 `sha256:cadfbadac4a03cda5e0ab0d8c25d95b3167c8304fcf9383a1539f2d5dcdcb72f`.
 From this commit on the contract does not move again (6.2's promise).
 
+#### DEC-2: one hook vocabulary
+
+`monoagens/core/hooks.py` now re-exports `Continue`, `Replace`, `Stop`, `HookOutcome`,
+`Middleware`, `Registration`, `SLOTS`, `OWNER_POLICY` and `RULE_KINDS` from
+`monoagens.contract.hooks`, so the core and the middleware speak one set of names
+(`middleware/contract.py` imports the same ones). `Registration.middleware` is the contract's
+`rule`, `HookPipeline.run` calls `on_stop(reason, held)`, and `guard.stopped` carries
+`{"hook", "reason", "held"}` — the one place a held action is visible in the Log.
+
 ### Where the work stands (session of 2026-11-14)
 
 Green and pushed: Part 1 (1.1-1.4), Part 2 items 2.1 and 2.3. `uv run pytest -q` is **687 passed,

@@ -697,7 +697,7 @@ async def test_inbound_stop_records_guard_stopped_and_skips_cognition(aconn):
 
     assert fake.requests == []
     assert await _kinds(aconn) == ["percept", "guard.stopped"]
-    assert await _payload(aconn, "guard.stopped") == {"hook": "inbound", "reason": "not now"}
+    assert await _payload(aconn, "guard.stopped") == {"hook": "inbound", "held": False, "reason": "not now"}
 
 
 async def test_inbound_exception_fails_closed_with_an_error_and_a_stop(aconn):
@@ -709,7 +709,7 @@ async def test_inbound_exception_fails_closed_with_an_error_and_a_stop(aconn):
     await _feed(kernel, _msg("halo"))
 
     assert await _kinds(aconn) == ["percept", "error", "guard.stopped"]
-    assert await _payload(aconn, "guard.stopped") == {"hook": "inbound", "reason": "nope"}
+    assert await _payload(aconn, "guard.stopped") == {"hook": "inbound", "held": False, "reason": "nope"}
 
 
 async def test_inbound_replace_swaps_the_event_before_appraisal(aconn):
@@ -777,7 +777,7 @@ async def test_action_hook_stop_records_the_stop_and_neither_records_nor_acts(ac
 
     assert body.actions == []
     assert "act.out" not in await _kinds(aconn)
-    assert await _payload(aconn, "guard.stopped") == {"hook": "action", "reason": "privacy"}
+    assert await _payload(aconn, "guard.stopped") == {"hook": "action", "held": False, "reason": "privacy"}
 
 
 async def test_tool_own_action_hook_runs_only_for_its_tool(aconn):
@@ -823,7 +823,7 @@ async def test_hanging_hook_times_out_as_a_stop_and_the_loop_goes_on(aconn):
     timed_out = "inbound hook timed out after 0.01s"
     # 12.17: the error event names the exception, so it is never an empty string.
     assert (await _payload(aconn, "error"))["error"] == f"TimeoutError: {timed_out}"
-    assert await _payload(aconn, "guard.stopped") == {"hook": "inbound", "reason": timed_out}
+    assert await _payload(aconn, "guard.stopped") == {"hook": "inbound", "held": False, "reason": timed_out}
     assert second.id is not None  # the next event was recorded and processed
     cur = await aconn.execute("SELECT description FROM events "
                              "WHERE kind = 'percept' ORDER BY id")
@@ -923,7 +923,7 @@ async def test_identity_changing_capability_is_refused_for_a_non_owner(aconn):
 
     assert body.actions == []
     assert await _payload(aconn, "guard.stopped") == {
-        "hook": "action",
+        "hook": "action", "held": False,
         "reason": "only the owner may invoke identity_changing capabilities"}
 
 

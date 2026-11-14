@@ -1,63 +1,26 @@
-"""The three hooks: the outcome vocabulary, the owner policy first and last, and the watchdog.
+"""The three hooks: the pipeline, the owner policy first and last, and the watchdog.
 
-The core defines the vocabulary; the middleware speaks it. The owner policy is installed
-from outside and runs first and last in every hook, so no scoped rule can widen it.
-Every middleware call runs under `hook_timeout_ms` (docs/core.md §3, D42): a hook
-that exceeds it counts as Stop and writes `error`; the loop goes on.
+The vocabulary is the contract's (`monoagens.contract.hooks`), so the core and the
+middleware speak one set of names. The owner policy is installed from outside and runs
+first and last in every hook, so no scoped rule can widen it. Every middleware call runs
+under `hook_timeout_ms` (docs/core.md §3, D42): a hook that exceeds it counts as Stop and
+writes `error`; the loop goes on.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Iterator
-from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
+
+from monoagens.contract.hooks import (OWNER_POLICY, RULE_KINDS, SLOTS, Continue,
+                                      HookOutcome, Middleware, Registration, Replace, Stop)
 
 DEFAULT_HOOK_TIMEOUT_MS = 500
-SLOTS = ("first", "middle", "last")
-OWNER_POLICY = "policy"
 
-
-@dataclass(frozen=True, slots=True)
-class Continue:
-    """Let the item through unchanged."""
-
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class Replace:
-    """Let a different item through."""
-
-    item: Any
-
-
-@dataclass(frozen=True, slots=True)
-class Stop:
-    """Stop the item here and record why."""
-
-    reason: str
-
-
-HookOutcome = Continue | Replace | Stop
-
-
-class Middleware(Protocol):
-    """One middleware: inspect an item in a context and return an outcome."""
-
-    async def __call__(self, item: Any, ctx: Any) -> HookOutcome:
-        """Return what should happen to this item."""
-        ...
-
-
-@dataclass(frozen=True, slots=True)
-class Registration:
-    """One middleware with its name, slot and scope (`tool=None` means shared)."""
-
-    name: str
-    middleware: Middleware
-    slot: str = "middle"
-    tool: str | None = None
+__all__ = ["DEFAULT_HOOK_TIMEOUT_MS", "OWNER_POLICY", "RULE_KINDS", "SLOTS", "Continue",
+           "HookOutcome", "HookPipeline", "HookRegistry", "Middleware", "Registration",
+           "Replace", "Stop"]
 
 
 class HookPipeline:
@@ -95,10 +58,10 @@ class HookPipeline:
     def middlewares(self, tool: str | None = None) -> tuple[Middleware, ...]:
         """Return the shared and the matching tool-own middleware in slot order."""
         ordered = sorted(self._registrations, key=lambda item: SLOTS.index(item.slot))
-        return tuple(reg.middleware for reg in ordered if reg.tool in (None, tool))
+        return tuple(reg.rule for reg in ordered if reg.tool in (None, tool))
 
     async def run(self, item: Any, ctx: Any, *, tool: str | None = None,
-                  on_stop: Callable[[str], Awaitable[None]],
+                  on_stop: Callable[..., Awaitable[None]],
                   on_error: Callable[[Exception], Awaitable[None]]) -> Any | None:
         """Run the chain in order under the watchdog; None means the item stopped."""
         scoped = list(self.middlewares(tool))
@@ -115,7 +78,7 @@ class HookPipeline:
                 await on_error(exc)
                 return None
             if isinstance(outcome, Stop):
-                await on_stop(outcome.reason)
+                await on_stop(outcome.reason, outcome.held)
                 return None
             if isinstance(outcome, Replace):
                 item = outcome.item
