@@ -113,9 +113,16 @@ async def ask(kernel: Any, trigger: Event, place: str, question: str, choices: l
             ref = str(await drawn(place, question, list(choices)) or "")
         except Exception as exc:  # best-effort: recorded, then the text fallback (§2.4.5)
             await kernel._record_error(trigger, exc)
+    if ref:
+        # The body drew the question itself; sending it again through `say` would ask twice.
+        await kernel._emit(trigger, QUESTION_ASKED, {
+            "ref": ref, "request": int(request), "kind": kind, "place": place,
+            "question": question,
+            "choices": [{"label": str(choice), "answer": str(choice)} for choice in choices],
+        }, place=place, description=question)
+        return ref
     lines = "\n".join(f"{number}. {choice}" for number, choice in enumerate(choices, 1))
-    args: dict[str, Any] = {"text": f"{question}\n{lines}" if not ref else question,
-                            "choices": list(choices)}
+    args: dict[str, Any] = {"text": f"{question}\n{lines}", "choices": list(choices)}
     act_out = await kernel._emit(trigger, "act.out", {
         "capability": f"{body}.say", "arguments": args, "communicative": True}, place=place)
     result: Any = None
