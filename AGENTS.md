@@ -26,6 +26,8 @@ locked contract. This file is how you work here; the design is in `docs/spec.md`
 - Write all of the task's code first; the tests come at the end. Then run `uv run pytest` and
   `uv run python scripts/replay.py --fake`, collect every failure, and fix them together until
   both pass. The task is done only then.
+- Group the failures by root cause and fix each cause once, in its one home; when one failure
+  repeats across many tests, fix the rule that produced it, never each test.
 - A behavior change ships with a replay scenario that carries all its material as synthetic data
   (facts, people, files, realistic tool results). A failure is the soul's only after you checked
   that what it needed was in the Log and in its context.
