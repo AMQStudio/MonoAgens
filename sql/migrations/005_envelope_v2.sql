@@ -1,6 +1,7 @@
--- Contract v2 envelope (contract.md §3): the fields the core reads, plus the two opaque
+-- Contract v2 envelope (spec.md *The contract*): the fields the core reads, plus the two opaque
 -- mappings the middleware and the adapters own. Stored events are never rewritten: older rows
--- keep schema_version 1 and are upcast on read.
+-- keep schema_version 1 and are upcast on read. The one exception is the new time column below,
+-- which a row's own `ts` fills; the immutability trigger allows exactly that and nothing else.
 
 ALTER TABLE events ADD COLUMN IF NOT EXISTS occurred_at timestamptz;
 ALTER TABLE events ADD COLUMN IF NOT EXISTS description text NOT NULL DEFAULT '';
@@ -9,10 +10,7 @@ ALTER TABLE events ADD COLUMN IF NOT EXISTS backfill boolean NOT NULL DEFAULT fa
 ALTER TABLE events ADD COLUMN IF NOT EXISTS imported boolean NOT NULL DEFAULT false;
 ALTER TABLE events ADD COLUMN IF NOT EXISTS labels jsonb NOT NULL DEFAULT '{}'::jsonb;
 
-UPDATE events SET occurred_at = ts WHERE occurred_at IS NULL;
-ALTER TABLE events ALTER COLUMN occurred_at SET NOT NULL;
-
--- A row written without a time of its own happened when it was recorded (contract.md §3).
+-- A row written without a time of its own happened when it was recorded.
 CREATE OR REPLACE FUNCTION events_default_occurred_at() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -33,11 +31,23 @@ CREATE TRIGGER events_set_occurred_at
 CREATE INDEX IF NOT EXISTS idx_events_description_trgm
     ON events USING gin (description gin_trgm_ops);
 
--- The Log stays immutable. Hard forgetting may scrub the three content fields (the payload,
--- the description and the numbers computed from it) and nothing else.
+-- The Log stays immutable. Two narrow UPDATE exceptions exist, each behind its own session flag:
+--   monoagens.migrating  — a migration fills the new time column from the row's own `ts`;
+--   monoagens.forgetting — hard forgetting scrubs the payload, the description and the features.
+-- Both compare every other column, so a bug cannot rewrite a fact the Log already stated.
 CREATE OR REPLACE FUNCTION events_immutable() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
+    IF TG_OP = 'UPDATE'
+       AND current_setting('monoagens.migrating', true) = 'on'
+       AND NEW.occurred_at IS NOT DISTINCT FROM OLD.ts
+       AND (NEW.id, NEW.ts, NEW.kind, NEW.who, NEW.place, NEW.body, NEW.caused_by,
+            NEW.origin_actor, NEW.schema_version, NEW.backfill, NEW.imported, NEW.labels)
+           IS NOT DISTINCT FROM
+           (OLD.id, OLD.ts, OLD.kind, OLD.who, OLD.place, OLD.body, OLD.caused_by,
+            OLD.origin_actor, OLD.schema_version, OLD.backfill, OLD.imported, OLD.labels) THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE'
        AND current_setting('monoagens.forgetting', true) = 'on'
        AND NEW.payload = '{"forgotten": true}'::jsonb
@@ -55,3 +65,9 @@ BEGIN
     RAISE EXCEPTION 'events table is append-only';
 END;
 $$;
+
+-- Now that the trigger allows it, fill the new column from each row's own time.
+SELECT set_config('monoagens.migrating', 'on', true);
+UPDATE events SET occurred_at = ts WHERE occurred_at IS NULL;
+SELECT set_config('monoagens.migrating', 'off', true);
+ALTER TABLE events ALTER COLUMN occurred_at SET NOT NULL;
