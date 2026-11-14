@@ -571,7 +571,7 @@ What this commit implements, one home each:
 
 Red, and the exact resumption point:
 
-1. **`tests/` migration (77 failures)**. Most are mechanical: a test still calls `open_for` with an
+1. **`tests/` migration (56 failures, 612 passing)**. Most are mechanical: a test still calls `open_for` with an
    audience, builds a desk with the old field names, or asserts the old wording. The rest are real
    and must be answered before the next commit:
    - `test_failure*`, `test_foundation_check`, `test_identity`, `test_roles`, `test_interaction`,
