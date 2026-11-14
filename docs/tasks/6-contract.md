@@ -1107,3 +1107,18 @@ With delivery working, three things the Log shows:
    communicative act ends the step. That is why the mention *@Mono Test* got an answer at 20:40:11
    and the follow-up *Cuman testt aja* 53 s later was `decision.silent` — correct per the rule, and
    the reason it reads as "no continuity" on the phone.
+
+#### Where the "conversation" rule belongs (answered for 7.x)
+
+The turn-taking fix of this session is **not** Task 7's subject. Task 7 (*Core: depth of mind*)
+is about thinking before speaking, the self-model, beliefs and memory; its 1.1 gates a
+*proactive* act on `speaking_bar`/`certainty_bar` with a recorded `think`. What was wrong here was
+the other direction: a *reactive* line that clearly continued an exchange was scored as chatter.
+That belongs to the gate (spec *Cognition*, the threshold and its reflexes) and it is measured by
+Task 5's scenarios 22 (`patience_turn_taking`) and 24 (`gate_threshold`).
+
+So the rule lives where the gate already keeps its four reflexes: a fourth one, `in a conversation`,
+fires when the soul's last communicative act in this place was addressed to this same person within
+`talk_window_seconds` (now a visible constant in `prior/dispositions.yaml`, 120 s). A stranger's
+line or the same person ten minutes later still has to clear the threshold. When Task 7 lands, 1.1
+still applies to the *proactive* acts this reflex opens — a wake is not a permission to speak.
