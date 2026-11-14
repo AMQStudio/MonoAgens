@@ -18,7 +18,7 @@ from monoagens.core.context import parts
 from monoagens.core.reasoning import Reasoning, ToolCall
 from monoagens.infra.attachments import AttachmentStore
 from monoagens.infra.clock import FakeClock
-from monoagens.infra.store import read_state
+from monoagens.infra.store import append_event, read_state
 from monoagens.middleware import identity, privacy
 from monoagens.middleware.contract import AttachmentDoor
 from monoagens.middleware.loader import BootReport, Loader
@@ -140,6 +140,13 @@ class _FakeDiscordClient:
         return self._channels.get(cid)
 
 
+async def _audiences(conn, places: dict[str, list[str]]) -> None:
+    """Publish the one fact a body writes when it first sees a place (contract.md §4.3)."""
+    for place, actors in places.items():
+        await append_event(conn, ts=START, kind="place.audience", place=place,
+                           payload={"actors": list(actors), "unknown": False})
+
+
 async def _put_idle(kernel, *events):
     tasks = [asyncio.create_task(kernel.put(ev)) for ev in events]
     while not all(t.done() for t in tasks):
@@ -207,6 +214,9 @@ async def test_conversation_and_private_context_continue_across_wa_dc_tg_after_v
     wa_place = "space:wa:62811000@s.whatsapp.net"
     dc_place = "space:dc:3301"
     tg_place = "space:tg:7701"
+    await _audiences(aconn, {wa_place: ["whatsapp:62811000"],
+                             dc_place: ["discord:alice99"],
+                             tg_place: ["telegram:7701"]})
 
     # 1. Alice shares a private secret in her WhatsApp DM.
     [wa_ev] = await _put_idle(kernel, Event(
@@ -283,6 +293,9 @@ async def test_whatsapp_deferred_file_opens_and_forwards_and_sticker_sends_back(
     wa_place = "space:wa:62811000@s.whatsapp.net"
     tg_place = "space:tg:7701"
     stranger_place = "space:tg:9999"
+    await _audiences(aconn, {wa_place: ["whatsapp:62811000"],
+                             tg_place: ["telegram:7701"],
+                             stranger_place: ["telegram:9999"]})
 
     captured_refs: dict[str, str] = {}
 

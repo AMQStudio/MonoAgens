@@ -12,10 +12,13 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
-from monoagens.contract import SCHEMA_VERSION, Event
+from monoagens.contract import SCHEMA_VERSION, Event, from_legacy_event
 from monoagens.types import CURRENT_SCHEMA_VERSION
 
 UPCASTERS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {}
+
+# The payload keys only a version 1 percept writes; a version 2 payload never carries them.
+V1_ONLY_KEYS = frozenset({"text", "addressed", "sent_at", "place_kind"})
 
 _KIND = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")
 
@@ -52,6 +55,29 @@ def plugin_kind(plugin: str, kind: str) -> str:
     if not is_valid_event_kind(kind) or kind.startswith(f"{plugin}."):
         raise ValueError(f"plugin kind must be a bare lower-case name: {kind!r}")
     return f"{plugin}.{kind}"
+
+
+def upcast_incoming(event: Event) -> Event:
+    """Return one event an adapter put into the queue at the current version (contract.md §9).
+
+    A version 1 producer writes `text`, `addressed`, `sent_at` or `place_kind` into the payload
+    while the dataclass carries version 2's default, so the version number alone cannot say
+    which shape it is: those keys are recognised here, outside the core and outside the lock
+    (contract.md §7). The translation is the contract's one door; two things it cannot see are
+    restored around it — the actor, which a version 1 event keeps in the envelope's `who` and
+    the door reads from the payload, and the payload keys that door does not name, which the
+    middleware still reads until every steer is a hook outcome (2.2).
+    """
+    payload = dict(event.payload or {})
+    if not V1_ONLY_KEYS.intersection(payload):
+        return from_legacy_event(event)
+    # The door reads the actor and the description from the payload; a version 1 event keeps
+    # them in the envelope, and a payload of its own wins when it has them.
+    beyond = replace(event, schema_version=1,
+                     payload={"who": event.who, "description": event.description, **payload})
+    upcast = from_legacy_event(beyond)
+    kept = {key: value for key, value in payload.items() if key not in V1_ONLY_KEYS}
+    return replace(upcast, payload={**dict(upcast.payload or {}), **kept})
 
 
 def upcast_event(row: Mapping[str, Any]) -> Event:

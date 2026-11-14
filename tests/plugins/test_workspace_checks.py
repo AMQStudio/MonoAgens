@@ -80,6 +80,13 @@ def _deployment(tmp_path: pathlib.Path) -> pathlib.Path:
     return root
 
 
+async def _audiences(conn) -> None:
+    """Report who can perceive this file's places, the one privacy fact."""
+    for place, actors in ((PLACE, ["person:owner"]), (BUDI, ["person:budi"])):
+        await append_event(conn, ts=START, kind="place.audience", place=place,
+                           payload={"place": place, "actors": actors})
+
+
 async def _kernel(aconn, tmp_path, *, mode: str, pfc=None):
     root = _deployment(tmp_path)
     values = settings(plugins={"workspace": {"enabled": True}})
@@ -89,6 +96,7 @@ async def _kernel(aconn, tmp_path, *, mode: str, pfc=None):
                         "person:budi": {"roles": ["runner"]}}
     loader = Loader(root, env={})
     loaded = loader.load(values)
+    await _audiences(aconn)
     kernel = build(aconn, clock=FakeClock(START), pfc=pfc, settings=values)
     adapter = FileTest()
     kernel.register_adapter(adapter)

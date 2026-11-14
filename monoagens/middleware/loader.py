@@ -28,7 +28,7 @@ from monoagens.core.hooks import Continue, Middleware
 from monoagens.infra import attachments as attachments_module
 from monoagens.infra import config as config_module
 from monoagens.infra.store import append_event
-from monoagens.middleware import contract, policy, registry, roles
+from monoagens.middleware import contract, policy, privacy, registry, roles
 from monoagens.middleware.registry import CommandEntry, SkillEntry
 
 MANIFEST_VERSION = 1
@@ -518,6 +518,7 @@ class Loader:
         door = contract.AttachmentDoor(
             attachments_module.AttachmentStore(self.root / "var" / "attachments"), kernel.conn)
         kernel.attachments = door.store
+        privacy.bind_store(door.store)  # the forwarding check asks about stored files
         for api in loaded.apis:
             if isinstance(api.log, contract.LogView):
                 api.log._bind(kernel.conn)

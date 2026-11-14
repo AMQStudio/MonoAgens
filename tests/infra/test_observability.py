@@ -88,7 +88,7 @@ async def test_observability_logs_key_events_without_private_text(aconn, caplog)
 
     try:
         async def _stop_secret_word(event, ctx):
-            if "BLOCK_ME" in str((event.payload or {}).get("text") or ""):
+            if "BLOCK_ME" in str(event.description or ""):
                 return Stop("blocked by test guard")
             return Continue()
 

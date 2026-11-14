@@ -19,6 +19,10 @@ def _one_line(value: Any, *, fallback: str = "-") -> str:
 
 def _text_length(event: Event) -> int:
     payload = event.payload or {}
+    if event.kind == "percept":
+        # The envelope's field, never the payload (2.2); the fallback reads the one raw shape
+        # an adapter may still hand in before the door upcasts it.
+        return len(event.description or str(payload.get("description") or payload.get("text") or ""))
     if event.kind == "act.out":
         args = payload.get("arguments") or {}
         if isinstance(args, dict) and args.get("text"):

@@ -16,11 +16,11 @@ from monoagens.core import dispatch, expectations, hooks, jobs, memory, threads
 from monoagens.core.context import layout, working
 from monoagens.core.gate import Appraisal, appraise, validate_signals
 from monoagens.core.reasoning import Reasoning, ToolCall
-from monoagens.infra import budget, config, observability
+from monoagens.infra import budget, config, observability, versioning
 from monoagens.infra.clock import Clock
 from monoagens.infra.prior import load_settings, signal_weights
 from monoagens import contract
-from monoagens.contract import Percept, from_legacy_event, to_event
+from monoagens.contract import Percept, to_event
 from monoagens.infra.store import (append_envelope, append_event, close_action,
                                    cursor as store_cursor, insert_event_vector,
                                    insert_event_vectors, merge_source, project_event,
@@ -31,7 +31,6 @@ from monoagens.types import Event
 NOT_INSTALLED = ("the middleware is not installed: build the kernel with "
                  "monoagens.boot.build()")
 LOGGER = logging.getLogger("kernel")
-
 
 def _receipt_line(receipt: Any) -> str:
     """Return the one short human line a receipt is recorded with (DEC-4)."""
@@ -119,10 +118,10 @@ class Kernel:
         return await ack if ack is not None else None
 
     def _incoming(self, item: Percept | Event, body: str | None) -> Event:
-        """Return the version 2 event one incoming percept or event becomes."""
+        """Return the version 2 event one incoming percept or event becomes (contract.md §9)."""
         if isinstance(item, Percept):
             return to_event(item, body=body or "unknown", ts=self.clock.now())
-        return from_legacy_event(item)
+        return versioning.upcast_incoming(item)
 
     async def act_via_hooks(self, trigger: Event, capability: str,
                             arguments: Mapping[str, Any]) -> dispatch.Dispatch:

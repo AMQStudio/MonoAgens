@@ -80,7 +80,7 @@ async def test_the_work_is_read_shared_approved_and_sent(aconn, tmp_path):
     rounds: list[list[tuple[str, dict]]] = [
         [("act", {"capability": "workspace.read", "arguments": {"path": "laporan.md"}}),
          ("act", {"capability": "self.share",
-                  "arguments": {"item": "laporan.md", "to": "person:budi"}}),
+                  "arguments": {"items": ["EV-FILE"], "to": "person:budi"}}),
          ("act", {"capability": "filetest.send_file",
                   "arguments": {"text": "ini laporannya",
                                 "attachments": ["att-PLACEHOLDER"],
@@ -100,11 +100,14 @@ async def test_the_work_is_read_shared_approved_and_sent(aconn, tmp_path):
             inner = dict(arguments.get("arguments") or {})
             if "attachments" in inner:
                 inner["attachments"] = [REFS.get(ref, ref) for ref in inner["attachments"]]
-                arguments = {**arguments, "arguments": inner}
+            if "items" in inner:
+                inner["items"] = [IDENTS.get(item, item) for item in inner["items"]]
+            arguments = {**arguments, "arguments": inner}
             found.append((name, arguments))
         return found
 
     REFS: dict[str, str] = {}
+    IDENTS: dict[str, int] = {}
     pfc = Scripted(rounds, resolve)
     root = tmp_path / "deployment"
     (root / "plugins").mkdir(parents=True)
@@ -114,6 +117,9 @@ async def test_the_work_is_read_shared_approved_and_sent(aconn, tmp_path):
                        "runner": {"base": "member", "approval": "yolo"}}
     values["people"] = {"person:owner": {"roles": ["runner"]},
                         "person:budi": {"roles": ["runner"]}}
+    for place, actors in ((OWNER_DM, ["person:owner"]), (BUDI, ["person:budi"])):
+        await append_event(aconn, ts=START, kind="place.audience", place=place,
+                           payload={"place": place, "actors": actors})
     loader = Loader(root, env={})
     loaded = loader.load(values)
     kernel = build(aconn, clock=FakeClock(START), pfc=pfc, settings=values)
@@ -123,10 +129,11 @@ async def test_the_work_is_read_shared_approved_and_sent(aconn, tmp_path):
     store = kernel.attachments
     attachment = await store.put(b"# laporan\nisi pekerjaan kita", name="laporan.md")
     REFS["att-PLACEHOLDER"] = attachment["ref"]
-    await append_event(aconn, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
-                       body="telegram",
-                       payload={"description": "ini laporannya", "place_kind": "direct",
-                                "data": {"attachments": [attachment]}})
+    shared = await append_event(aconn, ts=START, kind="percept", who="person:owner",
+                                place=OWNER_DM, body="telegram",
+                                payload={"description": "ini laporannya", "place_kind": "direct",
+                                         "data": {"attachments": [attachment]}})
+    IDENTS["EV-FILE"] = int(shared.id)
     folder = root / "var" / "workspaces" / "person_owner"
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "laporan.md").write_text("# laporan\nisi pekerjaan kita", encoding="utf-8")

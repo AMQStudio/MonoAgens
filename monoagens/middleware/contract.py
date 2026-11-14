@@ -270,11 +270,10 @@ class LogView:
 
     async def search(self, text: str, *, limit: int = 20) -> list[Event]:
         """Return the newest events whose readable text contains this text (case-blind)."""
-        pattern = f"%{text}%"
         return await self._rows(
             f"SELECT {EVENT_COLUMNS} FROM events "
-            "WHERE payload->>'description' ILIKE %s OR payload->>'text' ILIKE %s "
-            "ORDER BY id DESC LIMIT %s", (pattern, pattern, int(limit)), newest_first=True)
+            "WHERE description ILIKE %s ORDER BY id DESC LIMIT %s",
+            (f"%{text}%", int(limit)), newest_first=True)
 
     async def _rows(self, query: str, params: Any, *, newest_first: bool = False
                     ) -> list[Event]:

@@ -413,6 +413,7 @@ async def test_brake_continue_keeps_held_chain_origin_actor(aconn):
     kernel.tools.add_tool(Tool(facts=("reads",)), {"run": {"facts": ["reads"],
                                                           "permission": "dev.run"}})
     kernel.roles = open_book("person:alice", "dev.run")
+    await _audiences(aconn)
     await append_event(aconn, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
                        body="telegram", payload={"description": "halo", "place_kind": "direct"})
     msg = Event(id=None, ts=START, kind="percept", who="person:alice", place=GROUP,
