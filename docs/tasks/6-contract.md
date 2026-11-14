@@ -192,7 +192,7 @@ May touch: `tests/` (all), `scenarios/`, `scripts/replay.py`
 - [x] 7.1 Line counts before and after, per folder, under Notes. Doc references in code comments
   and docstrings (`docs/core.md §N`, decision numbers `Dxx`) are removed or replaced by the plain
   name of the spec section.
-- [ ] 7.2 The real-model replay launch set against Task 5's A.4 baseline (the model in `.env`;
+- [x] 7.2 The real-model replay launch set against Task 5's A.4 baseline (the model in `.env`;
   never read or print it).
 - [ ] 7.3 **Stop and report to the owner.** The owner reviews and commits `contract.lock`; from
   then on only the owner changes it ([spec.md](../spec.md) *Changing the contract*).
@@ -915,3 +915,79 @@ ids or on `config.yaml` lines is not a finding; the unused `re` imports in `iden
 `interaction.py` are gone. `test_the_text_parse_ban_catches_a_planted_violation` plants
 `"ya" in percept.description` and proves the ban still fails, with a control line
 (`action.capability.split(".")`) that must stay clean. The baseline is now **0 findings**.
+
+### Notes — 7.2 (real-model launch set, 2026-11-14)
+
+Command: `uv run python scripts/replay.py --effort high` (serial; `--jobs N` landed in the same
+session, see below). Model from `.env`; database `*_replay`; the model's name and effort are in the
+report header, the tokens in its footer.
+
+**Speed.** A replay is model-latency bound, so `scripts/replay.py` gained `--jobs N`: each worker
+is the same script with `--shard k/N` and its own database (`<base>_replay_w<k>`), and the pickled
+results are merged in scenario order. The full fake set stays at 158/158 checks and 142 calls,
+in 13.9 s instead of ~27 s. The real launch set of this session was started before the option
+existed, so it ran serially.
+
+#### The run itself
+
+Report: `reports/2026-11-14-1146-real-all.md`. 31 scenarios, **113/158 checks**, **247 LLM calls**,
+**875,050 tokens** (753,389 prompt · 523,264 cached · 121,661 completion of which 78,452
+reasoning), missed-help 8.3%, false-speak 43.7%, absolute-line 0, honesty 98.9%. Both headline
+rates and the token total are not comparable with A.4: the launch set grew from 26 to 31 scenarios,
+and three of the new ones (`18`, `19`, `31`) are the long cross-body and two-day scenarios.
+
+Against the 26 scenarios A.4 measured (same model, same `--effort high`):
+
+| Scenario | A.4 | now | verdict |
+|---|---|---|---|
+| 17_cross_body_continuity | 1/1, 2 calls | 1/1, 2 | same |
+| 07_dm_restart_continuity | 2/2, 3 | 2/2, 7 | same checks, more rounds |
+| 11_sleep_memory_consolidation | 2/2, 3 | 2/2, 5 | same checks |
+| 12_topic_recall_after_sleep | 2/2, 3 | 2/2, 4 | same |
+| 20_act_r_activation | 3/3, 18 | **2/3**, 21 | **regression** |
+| 23_recall_episodes | 5/7, 5 | **7/7**, 5 | improved |
+| 25_help_place_name | 4/4, 2 | 4/4, 3 | same |
+| 27_help_wifi_password | 4/4, 2 | 4/4, 4 | same |
+| 29_help_clinic_hours | 4/4, 2 | **3/4**, 4 | **regression** |
+| 16_watch_for_phrase | 4/4, 2 | **3/4**, 6 | **regression** |
+| 05_group_reply_to_bot | 1/1, 2 | 1/1, **9** | same check, 4.5× the rounds |
+| 22_patience_turn_taking | 7/7, 2 | 7/7, **8** | same checks, 4× the rounds |
+| 24_gate_threshold | 10/11, 4 | 10/11, 9 | same check, more rounds |
+| 14_busy_group_repeated_mention | 3/3, 15 | 3/3, **5** | cheaper |
+| 01-04, 06, 08-10, 13, 15, 21 | all pass | all pass | same |
+| 18, 19, 26, 28, 30, 31 | not measured | 9/23, 11/21, 4/9, 3/9, 4/5, 16/21 | new, unproven |
+
+#### What the failures say
+
+Two defects are visible in the report and both are **the soul's words, not a mechanism**:
+
+1. **An internal handle reaches a person.** Step 12 of `24_gate_threshold` speaks
+   `"person:p_db6896e8 Kabar yang kamu tunggu: …"` and step 16 speaks
+   `"Katanya jam lima sore, person:p_58eedf10 …"`; `15_watch_for_phrase` repeats the same shape.
+   The soul stored the owner's promise as `about=Kabari person:p_db6896e8 …` and later repeated
+   that text. The fix belongs in the speaking guidance the reasoning reads
+   (`core/principles.py`: an id is for `to:`, a name is for people), a file Task 6's May-touch lines
+   do not include, so it is reported here rather than patched.
+2. **One reminder wake speaks more than once.** `24_gate_threshold` check *the reminder wakes the
+   PFC* expects one message and sees three (`3 == 1`); `22_patience_turn_taking`,
+   `10_reminder_recurring_nudge` and `31_paper_over_two_days` show the same shape (`2 == 1`). Each
+   is a separate model round that spoke after the previous one already had, so the cause is the
+   guidance above ("say what you promised before you resolve") being applied several times, not a
+   duplicate `act.out` for one action id — the ledger shows one entry per act.
+
+**The handle leak is fixed and verified.** `identity.cards` now adds one line beside the cards
+("A person id (person:p_…) is an internal handle: use it only in act's `to:`, and call the person
+by name when you speak."), with `tests/middleware/test_identity.py` proving it appears once. Re-run
+of `16_watch_for_phrase` + `24_gate_threshold` with the real model: the messages now read
+"Kabar yang aku janjikan: …" and no `person:p_…` appears again.
+
+**Still open after that re-run (3 of 15 checks).** One reminder wake still speaks twice
+(`the reminder wakes the PFC: 2 == 1`; the two texts differ by a trailing clause, so this is two
+rounds of one wake, not one action carried twice) and `the statement fulfils the promise once`
+sees no `expectation.resolved` — the soul says what it promised but never closes the Expectation
+in the same turn. Both are guidance-level (the "say what you promised before you resolve" rule in
+`core/principles.py`, a file outside this task's May-touch lines) and are reported here.
+
+Everything else keeps the checks it had; `20`, `29` and `16` each lose one and need the same kind
+of prompt-level work. `18`, `19`, `26`, `28`, `30`, `31` were never measured with the real model
+before this run; they are the ones that now need it.

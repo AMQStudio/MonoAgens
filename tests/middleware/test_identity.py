@@ -595,3 +595,29 @@ async def test_an_answer_names_the_log_event_it_is_for(aconn):
     row = await (await aconn.execute(
         "SELECT payload FROM events WHERE id = %s", (stored.id,))).fetchone()
     assert row[0]["about"] == str(asked.id)
+
+
+async def test_the_card_block_says_a_person_id_is_only_for_the_to_field(aconn):
+    """A handle is not a name: the cards block tells the soul so, once, beside the cards (7.2)."""
+    from monoagens.contract import Context, ContextItem
+
+    native = "telegram:777"
+    registered = await append_event(
+        aconn, ts=START, kind="identity.registered",
+        payload={"person": "person:p_a1", "account": native})
+    await write_state(aconn, "person:person:p_a1", {"name": "Budi", "closeness": 0.5,
+                                                    "natives": [native]}, registered.id)
+    await append_event(aconn, ts=START, kind="place.audience", place="space:tg:-100",
+                       payload={"actors": ["person:p_a1", "person:owner"], "unknown": False})
+    item = ContextItem(section="recent", text="a line")
+    context = Context(now=START, place="space:tg:-100", reason="test",
+                      items=(item,), trigger=Event(
+                          id=None, ts=START, kind="percept", who="person:p_a1",
+                          place="space:tg:-100", body="telegram"))
+    state = {"conn": aconn, "now": START}
+
+    outcome = await identity.cards(aconn)(context, state)
+
+    texts = [found.text for found in outcome.item.items if found.section == "cards"]
+    assert any("internal handle" in text for text in texts)
+    assert sum("internal handle" in text for text in texts) == 1

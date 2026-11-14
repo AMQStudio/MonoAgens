@@ -340,6 +340,13 @@ def cards(conn, *, roles: Any = None) -> Middleware:
         cards = await person_cards(conn, item.place, item.trigger, roles=roles)
         items = tuple(ContextItem(section="cards", text=text, kind="person")
                       for text in cards)
+        if items:
+            # A handle is for `to:`, never for a person's ears: the real run showed the soul
+            # repeating `person:p_…` inside a message (7.2), so the card block says it once.
+            items += (ContextItem(section="cards", kind="note",
+                                  text="A person id (person:p_…) is an internal handle: use it "
+                                       "only in act's to:, and call the person by name when you "
+                                       "speak."),)
         items += await shared_account_items(conn)
         if not items:
             return Continue()
