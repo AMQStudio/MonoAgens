@@ -1,4 +1,4 @@
-"""Durations: the small grammar shared by cue times and conditions (docs/core.md §5)."""
+"""Durations: the small grammar shared by cue times and conditions (docs/)."""
 
 from __future__ import annotations
 

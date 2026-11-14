@@ -47,7 +47,7 @@ def note(notes: list[str] | None, line: str) -> None:
 def read_versioned(path: pathlib.Path, *, key: str, supported: int, label: str,
                    upcasters: Mapping[int, Callable[[dict[str, Any]], dict[str, Any]]],
                    notes: list[str] | None = None) -> dict[str, Any]:
-    """Read one versioned YAML file, upcasting an older format in memory (D58).
+    """Read one versioned YAML file, upcasting an older format in memory.
 
     The file is never rewritten. A newer version than supported fails at boot; a file
     without the key is read as version 1 with a note.
@@ -224,7 +224,7 @@ def load_llm_config(env_path: pathlib.Path = DEFAULT_ENV_PATH) -> dict[str, str]
 
 
 def load_provider_config(env_path: pathlib.Path = DEFAULT_ENV_PATH) -> dict[str, Any]:
-    """Resolve provider selection and fallback list on top of load_llm_config()."""
+    """Resolve provider selection and fallback list on top of load_llm_config."""
     file_values = load_env_file(env_path)
     config: dict[str, Any] = dict(load_llm_config(env_path))
     provider = (os.environ.get("LLM_PROVIDER") or file_values.get("LLM_PROVIDER") or "").strip()

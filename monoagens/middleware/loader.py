@@ -2,8 +2,8 @@
 
 A loader outside the core reads each plugin's manifest and assembles its tools, middleware,
 commands, skills, rules, knob-offset bounds and extension points; the core sees only
-percepts, actions and the three hooks (middleware.md §5). Nothing here is stored in the
-database: the configuration files are the source of truth (D59), and the program writes
+percepts, actions and the three hooks. Nothing here is stored in the
+database: the configuration files are the source of truth, and the program writes
 them only on the owner's command, narrowly and after a backup.
 """
 
@@ -147,7 +147,7 @@ class PluginAPI:
         return bool(self.roles is not None and self.roles.can(who, permission, place))
 
     async def open_file(self, ref: str, *, context: str | None) -> tuple[bytes, dict[str, Any]]:
-        """Open one attachment the requester's context may see (middleware.md §10)."""
+        """Open one attachment the requester's context may see ."""
         if self.files is None:
             raise RuntimeError("the attachment door is not bound yet")
         return await self.files.open(ref, context=context)
@@ -791,7 +791,7 @@ def set_block_entry(text: str, block: str, name: str, value: Any) -> str:
 
 async def record_config_change(kernel: Any, event: Any, *, plugin: str, key: str,
                                before: Any, after: Any) -> None:
-    """Record one configuration change as history: who, from what, to what (D59)."""
+    """Record one configuration change as history: who, from what, to what."""
     await append_event(kernel.conn, ts=kernel.clock.now(), kind="plugin.config_changed",
                        who=event.origin_actor or event.who, place=event.place,
                        body=event.body, caused_by=event.id,
@@ -806,7 +806,7 @@ DEPLOYMENT_KEYS = ("plugins", "bodies", "roles", "people", "places", "interactio
 
 
 def install_commands(loader: "Loader", kernel: Any) -> None:
-    """Register the loader's own commands: `/plugin` and `/reload` (middleware.md §5)."""
+    """Register the loader's own commands: `/plugin` and `/reload` ."""
 
     async def plugin(kernel: Any, event: Any, arguments: list[str]) -> str:
         """Show, enable, disable or update one plugin; the files are the source of truth."""

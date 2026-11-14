@@ -11,7 +11,7 @@ import secrets
 import time
 from typing import Any
 
-from . import guard, paths, sandbox
+from. import guard, paths, sandbox
 
 MAX_LIMIT = 2000
 # Bound what one run may hold in memory; the registry's output cap and marker then apply.

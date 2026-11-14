@@ -135,7 +135,7 @@ class JobRunner:
 
 async def decide(pfc: Any, context: Any, rounds: int, clock: Any,
                   settings: dict[str, Any]) -> dict[str, Any]:
-    """Run one wake's reasoning rounds in the background, each keeping its usage (D51, O.3).
+    """Run one wake's reasoning rounds in the background, each keeping its usage.
 
     The rounds made before a failure come back with the error, so the kernel counts every one of
     them; the failure itself is re-raised for the job to record.

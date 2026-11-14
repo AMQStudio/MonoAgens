@@ -2,7 +2,7 @@
 
 The stable prefix is who the soul is and how it works; the semi-stable one is core memory, the
 person cards and what is installed; the volatile one is what is true now. No hook ever sees this
-text: it renders whatever items survived the context hook (contract.md §3).
+text: it renders whatever items survived the context hook.
 """
 
 from __future__ import annotations

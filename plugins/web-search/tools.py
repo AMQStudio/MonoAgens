@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from . import fetch, providers
+from. import fetch, providers
 
 MAX_RESULTS = 10
 SEARCH = {

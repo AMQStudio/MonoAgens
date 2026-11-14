@@ -1,4 +1,4 @@
-"""Working memory: the desk's `<doing>` for every chain in progress (D52)."""
+"""Working memory: the desk's `<doing>` for every chain in progress."""
 
 from __future__ import annotations
 
@@ -121,7 +121,7 @@ def _line_entries(events: Sequence[Event], goal: str, ledger: Mapping[int, dict[
                   values: Mapping[str, Any], *,
                   goal_source: tuple[str | None, int | None] = (None, None),
                   ) -> tuple[tuple[str, str | None, int | None], ...]:
-    """Render one chain with source `(place, event_id)` attached to every line (D52, D84)."""
+    """Render one chain with source `(place, event_id)` attached to every line."""
     events = sorted(events, key=lambda seen: seen.id or 0)
     trigger_of = {seen.id: seen.caused_by for seen in events
                   if seen.kind == "act.out" and seen.id is not None}

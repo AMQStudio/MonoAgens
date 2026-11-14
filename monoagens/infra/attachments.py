@@ -1,4 +1,4 @@
-"""Attachments: the files that arrive with a message or leave with one (middleware.md §10).
+"""Attachments: the files that arrive with a message or leave with one.
 
 Files live on disk under `var/attachments`, content-addressed: the same bytes always get one
 ref, so a file sent in several places costs one copy. Nothing about an attachment is stored
@@ -64,7 +64,7 @@ class AttachmentStore:
     async def put_deferred(self, *, key: str, name: str, mime: str = DEFAULT_MIME,
                            size: int = 0, body: str = "",
                            locator: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        """Record metadata and a platform locator without downloading bytes yet (D69)."""
+        """Record metadata and a platform locator without downloading bytes yet."""
         digest = hashlib.sha256(f"{body}:{key}".encode("utf-8")).hexdigest()[:REF_DIGITS]
         ref = f"{REF_PREFIX}{digest}"
         safe = safe_filename(name)

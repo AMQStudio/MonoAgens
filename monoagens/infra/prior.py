@@ -1,4 +1,4 @@
-"""The prior: the instincts a soul is born with (docs/core.md §9.4)."""
+"""The prior: the instincts a soul is born with (docs/)."""
 
 from __future__ import annotations
 

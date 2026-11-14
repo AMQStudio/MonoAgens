@@ -14,7 +14,7 @@ from monoagens.contract import ContextItem
 from monoagens.core.hooks import Continue, Replace
 from monoagens.infra.store import append_event
 
-from . import modes
+from. import modes
 
 # An event kind holds only lower-case words and dots, so the hyphen becomes an underscore;
 # the payload still names the plugin as `soul-tuning` (that is the source, not a kind).

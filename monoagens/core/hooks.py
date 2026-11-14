@@ -3,7 +3,7 @@
 The vocabulary is the contract's (`monoagens.contract.hooks`), so the core and the
 middleware speak one set of names. The owner policy is installed from outside and runs
 first and last in every hook, so no scoped rule can widen it. Every middleware call runs
-under `hook_timeout_ms` (docs/core.md §3, D42): a hook that exceeds it counts as Stop and
+under `hook_timeout_ms`: a hook that exceeds it counts as Stop and
 writes `error`; the loop goes on.
 """
 

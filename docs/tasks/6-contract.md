@@ -159,7 +159,7 @@ May touch: `plugins/`, `monoagens/core/expectations.py`, `monoagens/core/memory/
 - [x] 5.1 S.6: a cancelled run kills its sandbox; a ceiling on the run timeout; a plugin gets only
   the environment variables its manifest declares; `web-fetch` total timeout and size cap;
   `pdf-reader` page and size caps; blocking calls through `asyncio.to_thread`.
-- [ ] 5.2 Every plugin on the contract: facts, permissions in its own namespace, no text parsing
+- [x] 5.2 Every plugin on the contract: facts, permissions in its own namespace, no text parsing
   in regulating middleware (a narrowing rule works on facts: place, person, kind).
 - [x] 5.3 O.5: an Expectation's default expiry is never before its next cue; `cooldown`, `once`
   and `max_fires` hold on the event path and for reminders; an Expectation that can never fire is
@@ -884,3 +884,17 @@ the library lacks), and proves shadow mode: a `dry_run` body answers `done {dry_
 line is in `var/recordings/<body>.jsonl`. The supervisor's backoff no longer resets after a short
 run (`runtime.adapter_retry.stable_seconds`, default 60 s), so a body that dies right after it
 connects is retried with a growing delay instead of once a second.
+
+**5.2 (this commit).** Every plugin declares its facts and its own permissions in its manifest
+(`web-search` → `web-search.search`/`.fetch`, `workspace` → `workspace.read`/`.write`/`.run`,
+`soul-tuning` → `soul-tuning.mode`; `pdf-reader` declares none because it only fills a reader
+point), and the loader refuses a tool without facts or a command without a permission at boot.
+Nothing in the middleware narrows by matching words any more. One advisory substring check
+remains in a *plugin*, not the middleware: `web-search` marks a fetched page whose text looks like
+prompt injection, and the mark is data handed to reasoning, never a decision the code makes.
+
+**7.1 (this commit).** The line-count table is in the Notes above. The stale references to the
+retired documents (`middleware.md §N`, `contract.md §N`, `core.md §N`, `docs/core.md §N`) and the
+decision numbers (`D45`, `D49`, …) are gone from every module outside the locked contract package,
+in comments and in docstrings alike; 48 files changed with no behaviour, so the suite and the replay
+were re-run after it.

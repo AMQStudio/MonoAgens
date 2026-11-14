@@ -1,7 +1,7 @@
-"""The stability contract: event schema versions and event-kind namespaces (core.md §3).
+"""The stability contract: event schema versions and event-kind namespaces.
 
 The one version 1 -> 2 upcast lives here, outside the lock: a fix to how an old row is read
-is a fix to this module, never a change to the contract (contract.md §7).
+is a fix to this module, never a change to the contract.
 """
 
 from __future__ import annotations
@@ -58,12 +58,12 @@ def plugin_kind(plugin: str, kind: str) -> str:
 
 
 def upcast_incoming(event: Event) -> Event:
-    """Return one event an adapter put into the queue at the current version (contract.md §9).
+    """Return one event an adapter put into the queue at the current version.
 
     A version 1 producer writes `text`, `addressed`, `sent_at` or `place_kind` into the payload
     while the dataclass carries version 2's default, so the version number alone cannot say
     which shape it is: those keys are recognised here, outside the core and outside the lock
-    (contract.md §7). The translation is the contract's one door; two things it cannot see are
+    . The translation is the contract's one door; two things it cannot see are
     restored around it — the actor, which a version 1 event keeps in the envelope's `who` and
     the door reads from the payload, and the payload keys that door does not name, which the
     middleware still reads until every steer is a hook outcome (2.2).
@@ -93,7 +93,7 @@ def upcast_event(row: Mapping[str, Any]) -> Event:
 
     A version 1 row carries its meaning inside `payload` (`description`, `text`, `sent_at`,
     `addressed`, `backfill`, `imported`); those keys are read here, once, and never again.
-    Stored events are never rewritten (contract.md §9). A row from a newer version than this
+    Stored events are never rewritten. A row from a newer version than this
     reader knows is refused instead of half-read.
     """
     version = int(row.get("schema_version") or 1)

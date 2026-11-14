@@ -1,4 +1,4 @@
-"""WhatsApp history sync and offline backfill ingest (D66, D69)."""
+"""WhatsApp history sync and offline backfill ingest."""
 
 from __future__ import annotations
 

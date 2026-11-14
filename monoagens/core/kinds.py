@@ -1,3 +1,3 @@
-"""The event kinds a desk shows as the recent past (core.md §3)."""
+"""The event kinds a desk shows as the recent past ."""
 
 RECENT_KINDS = ("percept", "act.out", "expectation.fired")

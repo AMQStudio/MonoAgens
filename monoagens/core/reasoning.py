@@ -168,7 +168,7 @@ class Reasoning:
 async def turns(pfc: Any, context: PFCContext, limit: int,
                 check: Callable[[ToolCall], Awaitable[str | None]] | None = None,
                 ) -> list[dict[str, Any]]:
-    """Run one wake's rounds: a thought act's result returns to the model (D51)."""
+    """Run one wake's rounds: a thought act's result returns to the model."""
     taken, made = [], []
     while len(made) < max(1, int(limit)):
         try:
@@ -199,7 +199,7 @@ async def turns(pfc: Any, context: PFCContext, limit: int,
 
 
 def turn_check(context: PFCContext, now: Any, settings: dict[str, Any]) -> Callable[..., Any]:
-    """Return the check that refuses a bad thought act with its reason (D51)."""
+    """Return the check that refuses a bad thought act with its reason."""
 
     async def check(call: ToolCall) -> str | None:
         if call.name == "act":

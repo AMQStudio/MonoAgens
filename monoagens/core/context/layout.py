@@ -1,7 +1,7 @@
-"""The desk: what the reasoning sees in one wake, rebuilt for every wake (core.md §7).
+"""The desk: what the reasoning sees in one wake, rebuilt for every wake.
 
 The desk is a tuple of items with their sources, never text: the context hook may drop or
-annotate one, and the parts render whatever is left (contract.md §3).
+annotate one, and the parts render whatever is left.
 """
 
 from __future__ import annotations

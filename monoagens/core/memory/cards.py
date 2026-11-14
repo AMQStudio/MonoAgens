@@ -143,7 +143,7 @@ async def apply_merge(conn: Any, src: str, dst: str, event_id: int) -> str:
 async def closeness(conn, who: str | None) -> float:
     """Return the closeness the soul learned towards one person, clamped to [0, 1].
 
-    The key `state: person:<id>` is frozen data (docs/core.md §3): the name belongs to the
+    The key `state: person:<id>` is frozen data (docs/): the name belongs to the
     Log, not to any layer, and the value is the soul's own memory of a source, so it stays in
     the core while the middleware only adds the card that shows it.
     """

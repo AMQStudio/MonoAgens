@@ -1,8 +1,8 @@
 """Privacy: who can perceive a place, the one context check, and consent to share.
 
 The core knows only opaque ids; this module reads the one fact that gives them meaning, the
-audience a body reported for a place ([contract.md §4.3]), and applies the second absolute line
-in exactly one place: the context hook, over the context's items (middleware.md §3).
+audience a body reported for a place ([]), and applies the second absolute line
+in exactly one place: the context hook, over the context's items.
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ async def _reported(conn, place: str, cache: dict | None = None
                     ) -> tuple[tuple[int, frozenset[str] | None], ...]:
     """Return every audience one place ever reported, oldest first, as `(event id, audience)`.
 
-    A `place.audience` event is the one fact (middleware.md §3): it is never copied into place
+    A `place.audience` event is the one fact: it is never copied into place
     state, so the newest row at or before a moment is that place's audience then. An event that
     says `unknown` or names nobody gives None, which lets no private item in.
     """
@@ -111,7 +111,7 @@ async def audience(conn, place: str | None, before: int | None = None,
 
 
 async def owner_direct(conn, place: str | None, cache: dict | None = None) -> bool:
-    """Return whether a place's audience is only the owner, its direct place (D45)."""
+    """Return whether a place's audience is only the owner, its direct place."""
     return await audience(conn, place, None, cache) == frozenset({OWNER})
 
 
@@ -127,7 +127,7 @@ async def direct_for(conn, place: str | None, who: Any, cache: dict | None = Non
 
 
 def admits(target: frozenset[str] | None, item: frozenset[str] | None) -> bool:
-    """Return whether content one audience saw may enter a place with the other (D85).
+    """Return whether content one audience saw may enter a place with the other.
 
     An unknown audience on either side means nobody may assume: content said where the audience
     was unknown is not private to anyone and enters; content said before a known audience enters
@@ -143,7 +143,7 @@ def admits(target: frozenset[str] | None, item: frozenset[str] | None) -> bool:
 
 
 async def granted_people(conn, event_id: int, cache: dict | None = None) -> frozenset[str]:
-    """Return the people a `share.granted` added to one event's audience (D46)."""
+    """Return the people a `share.granted` added to one event's audience."""
     key = ("granted", int(event_id))
     if cache is not None and key in cache:
         return cache[key]
@@ -184,7 +184,7 @@ async def item_audience(conn, item: ContextItem, place: str, cache: dict | None 
                         ) -> frozenset[str] | None:
     """Return the audience one context item was said to: the union over its sources.
 
-    A memory is judged by the events it was derived from (D53); one with no sources has no
+    A memory is judged by the events it was derived from; one with no sources has no
     known audience at all, so it enters the owner's own place and nothing else.
     """
     memory = item.section in MEMORY_SECTIONS
@@ -195,7 +195,7 @@ async def item_audience(conn, item: ContextItem, place: str, cache: dict | None 
         if memory:
             row = await read_event_row(conn, int(source))
             if row is not None and not row.get("place"):
-                return frozenset()  # a memory with a source from nowhere is unknown (D53)
+                return frozenset()  # a memory with a source from nowhere is unknown
         found = await source_audience(conn, source, cache)
         if found is None:
             return None
@@ -205,7 +205,7 @@ async def item_audience(conn, item: ContextItem, place: str, cache: dict | None 
 
 async def visible(conn, *, context: str | None, source: str | None,
                   before: int | None = None, cache: dict | None = None) -> bool:
-    """Return whether content from `source` may be shown in `context` (D45, D50, D85)."""
+    """Return whether content from `source` may be shown in `context`."""
     if not context or not source:
         return False
     target = await audience(conn, context, None, cache)
@@ -216,7 +216,7 @@ async def visible(conn, *, context: str | None, source: str | None,
 
 async def memory_visible(conn, *, context: str | None, sources: Any = (),
                          cache: dict | None = None) -> bool:
-    """Return whether every source of a memory was said to the people here (D53, D50, D85)."""
+    """Return whether every source of a memory was said to the people here."""
     if not context:
         return False
     target = await audience(conn, context, None, cache)
@@ -250,7 +250,7 @@ def withheld_line(counts: Mapping[str, int]) -> str:
 def audience_size(kernel: Any) -> Middleware:  # noqa: ARG001 - one rule shape for every hook
     """Inbound rule: the middleware's one label — how many known people can perceive the event.
 
-    The number is the contract's own feature `audience_size` (contract.md §3), so it reaches the
+    The number is the contract's own feature `audience_size`, so it reaches the
     gate inside `Situation` and is never a label the core would have to read.
     """
 
@@ -269,7 +269,7 @@ def audience_size(kernel: Any) -> Middleware:  # noqa: ARG001 - one rule shape f
 
 
 def items_rule(kernel: Any = None) -> Middleware:
-    """Absolute line 2 (D84, D85): one check over every context item, in the last slot."""
+    """Absolute line 2: one check over every context item, in the last slot."""
 
     async def rule(item: Any, ctx: Any) -> Any:
         """Keep what the place's audience may see, and say how many items were withheld."""
@@ -350,7 +350,7 @@ async def consent(conn, event: Event, arguments: Mapping[str, Any],
 
 async def grant(kernel, event: Event, arguments: Mapping[str, Any], to: str | None,
                 source: str | None, episode: int | Sequence[int] | None = None) -> None:
-    """Record consent for the specific events and people a `self.share` names (D46)."""
+    """Record consent for the specific events and people a `self.share` names."""
     people = ({str(to)} if str(to).startswith("person:")
               else (await audience(kernel.conn, str(to)) or frozenset()))
     raw = arguments.get("items") if arguments.get("episode") is None else episode
@@ -362,7 +362,7 @@ async def grant(kernel, event: Event, arguments: Mapping[str, Any], to: str | No
         "persons": sorted(person for person in people if person != UNKNOWN)})
 
 
-# ------------------------------------------------ asking on someone's behalf (D80)
+# ------------------------------------------------ asking on someone's behalf
 
 
 async def _send_answered(conn, event: Event) -> tuple[int, str] | None:
@@ -380,7 +380,7 @@ async def _send_answered(conn, event: Event) -> tuple[int, str] | None:
 
 
 def delegation(kernel: Any) -> Middleware:
-    """Inbound rule (D80): the one answer to the soul's send carries its requester's audience."""
+    """Inbound rule: the one answer to the soul's send carries its requester's audience."""
 
     async def rule(item: Any, ctx: Any) -> Any:
         """Record `delegated:<id>` for the send this percept answers, once."""
@@ -402,11 +402,11 @@ def delegation(kernel: Any) -> Middleware:
     return rule
 
 
-# --------------------------------------------------- speaking elsewhere (D45)
+# --------------------------------------------------- speaking elsewhere
 
 
 def intent_words(kernel: Any) -> Middleware:
-    """Inbound rule: an intent quotes its words only where their source may be shown (D45)."""
+    """Inbound rule: an intent quotes its words only where their source may be shown."""
 
     async def rule(item: Any, ctx: Any) -> Any:
         """Replace an intent's words with the neutral line when they may not be shown here."""
@@ -469,7 +469,7 @@ def episode_error(arguments: dict[str, Any]) -> str:
 
 
 def guard(kernel: Any, when: str) -> Middleware:
-    """Absolute line 3 (D45, D46, D84): consent to share and the drafted words of an intent."""
+    """Absolute line 3: consent to share and the drafted words of an intent."""
 
     async def rule(item: Any, ctx: Any) -> Any:
         """Apply sharing consent, and hide an intent's words where they may not appear."""
@@ -566,7 +566,7 @@ async def forward_needs_confirmation(conn: Any, ctx: Any, arguments: Any) -> boo
 
 
 async def leaving(kernel: Any, ctx: Any, arguments: Any) -> str | None:
-    """Return None (D84 removed text-similarity checking; plugins narrow deterministically)."""
+    """Return None."""
     del kernel, ctx, arguments
     return None
 

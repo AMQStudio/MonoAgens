@@ -7,7 +7,7 @@ from typing import Any
 
 from monoagens.core.hooks import Continue, Replace, Stop
 
-from . import base, guard, quota, sandbox, tools
+from. import base, guard, quota, sandbox, tools
 
 
 def register(api: Any) -> None:

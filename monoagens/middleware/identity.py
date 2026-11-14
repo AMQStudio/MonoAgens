@@ -24,7 +24,7 @@ from monoagens.types import Event
 
 LOGGER = logging.getLogger(__name__)
 OWNER = "person:owner"
-CONTEXT_CAP = 200  # one role's or person's context line on a card (middleware.md §8)
+CONTEXT_CAP = 200  # one role's or person's context line on a card
 CODE_KEY = "pairing_code"
 OWNER_KEY = "owner"
 CREATED = "pair.created"
@@ -196,7 +196,7 @@ async def as_owner(conn, event: Event) -> Event:
 
 
 async def resolve_event(conn, event: Event, *, now: datetime) -> Event:
-    """Map native accounts, and resolve the event this one answers, atomically (contract.md §4.2).
+    """Map native accounts, and resolve the event this one answers, atomically.
 
     The actors are the percept's `actor` and `involves`; a version 1 body still names them inside
     `data` (`mentions`, `reply_to`), and both shapes are mapped here, once. `about` becomes the id
@@ -254,7 +254,7 @@ async def resolve_event(conn, event: Event, *, now: datetime) -> Event:
 
 
 async def answered_event(conn: Any, event: Event, payload: Mapping[str, Any]) -> int | None:
-    """Return the Log event a percept answers, from its `about` ref or a version 1 reply (D46)."""
+    """Return the Log event a percept answers, from its `about` ref or a version 1 reply."""
     ref = str(payload.get("about") or "")
     if not ref:
         data = payload.get("data")
@@ -296,7 +296,7 @@ def claim(conn) -> Middleware:
 
 
 async def shared_account_items(conn: Any) -> tuple[ContextItem, ...]:
-    """Return one card per adapter whose own actor belongs to the owner (D66)."""
+    """Return one card per adapter whose own actor belongs to the owner."""
     cur = await conn.execute(
         "SELECT key, value FROM state WHERE key LIKE 'self_account:%' ORDER BY key")
     rows = await cur.fetchall()
@@ -335,7 +335,7 @@ async def record_self_account(conn: Any, body: str, native: str, *, now: datetim
 
 
 def cards(conn, *, roles: Any = None) -> Middleware:
-    """Context rule: add one card per person here, and the shared-account notes (D55, D66)."""
+    """Context rule: add one card per person here, and the shared-account notes."""
 
     async def rule(item: Any, ctx: Any) -> Any:
         cards = await person_cards(conn, item.place, item.trigger, roles=roles)
@@ -361,7 +361,7 @@ def identity_line() -> Middleware:
 
 
 def route(conn) -> Middleware:
-    """Action rule: resolve `to:`/`via:` to the place an act lands in (D46, D57)."""
+    """Action rule: resolve `to:`/`via:` to the place an act lands in."""
 
     async def rule(item: Any, ctx: Any) -> Any:
         """Resolve a target that is not a place; no target means the current place."""
@@ -388,7 +388,7 @@ def route(conn) -> Middleware:
 
 async def person_cards(conn, place: str | None, event: Event | None,
                        roles: Any = None) -> tuple[str, ...]:
-    """Return one card per person here or involved in the trigger (D55)."""
+    """Return one card per person here or involved in the trigger."""
     present = set(await privacy.audience(conn, place) or frozenset()) if place else set()
     involved = {str(actor) for actor in ((event.payload or {}).get("involves") or ())} \
         if event is not None else set()
@@ -494,7 +494,7 @@ async def _direct_places(conn, natives: set[str]) -> dict[str, tuple[str, dateti
     """Return the direct place, and when it was last active, per adapter for one person.
 
     A place is direct for a person when the audience it reported is that person alone, or that
-    person and the owner (middleware.md §3): the one fact, never a platform's own field.
+    person and the owner: the one fact, never a platform's own field.
     """
     if not natives:
         return {}
@@ -582,7 +582,7 @@ async def merge_people(kernel: Any, first: str, second: str, *, by: str, now: da
                        place: str | None = None, body: str | None = None,
                        caused_by: int | None = None,
                        trigger: Event | None = None) -> tuple[str, str]:
-    """Merge two person ids into the older surviving one, emitting `source.merged` (D65)."""
+    """Merge two person ids into the older surviving one, emitting `source.merged`."""
     conn = kernel.conn
     src, dst = await _older_person(conn, first, second)
     if src == dst:
@@ -606,7 +606,7 @@ async def merge_people(kernel: Any, first: str, second: str, *, by: str, now: da
 async def unlink_account(conn: Any, account: str, *, actor: str, now: datetime,
                          place: str | None = None, body: str | None = None,
                          caused_by: int | None = None) -> tuple[str, str]:
-    """Give `account` a new person id from now on without splitting merged history (D65)."""
+    """Give `account` a new person id from now on without splitting merged history."""
     mapping = await privacy.aliases(conn)
     if not is_account(account) or account not in mapping:
         raise ValueError(f"unknown account: {account}")

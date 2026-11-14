@@ -221,7 +221,7 @@ class WhatsAppBody:
             await self.aclose()
 
     def _wrap_put(self, put: Put) -> Put:
-        """Marshal puts onto the adapter's event loop and tag errors already handled by put()."""
+        """Marshal puts onto the adapter's event loop and tag errors already handled by put."""
         async def safe_put(ev: Any) -> Any:
             await self._announce(ev, put)
             target_loop = self._loop

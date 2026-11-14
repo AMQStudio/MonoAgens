@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 
-from . import normalize
+from. import normalize
 
 USER_AGENT = "monoagens"
 DEFAULT_PROVIDERS = ("searxng", "tavily", "brave", "exa", "serper", "google", "ddgs")

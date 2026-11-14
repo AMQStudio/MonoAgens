@@ -1,7 +1,7 @@
 """The context as items: one builder per section, each carrying the events it quotes.
 
 The context reaches the reasoning as items, never as text, until the last hook has run
-(contract.md §3). A middleware rule drops or annotates an item; the core renders the text of
+. A middleware rule drops or annotates an item; the core renders the text of
 what is left. Every builder here reads the envelope and the ledger only.
 """
 

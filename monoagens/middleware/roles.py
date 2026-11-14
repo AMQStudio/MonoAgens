@@ -1,6 +1,6 @@
 """Roles: what each person may do — tiers, permissions, role settings and approval modes.
 
-Always present, so no module or plugin needs a branch for "no roles" (middleware.md §8).
+Always present, so no module or plugin needs a branch for "no roles".
 The default book is empty: the owner may do everything, everyone else only talks. A
 permission without a `base` is the owner's alone; plugins declare their permissions with a
 label and the lowest tier that gets them, and `config.d/<plugin>.yaml` may move a tier.

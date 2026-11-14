@@ -1,4 +1,4 @@
-"""Task threads: one chain of work in its own place, with its own PFC slot (D47)."""
+"""Task threads: one chain of work in its own place, with its own PFC slot."""
 
 from __future__ import annotations
 

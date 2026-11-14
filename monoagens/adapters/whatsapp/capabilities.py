@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-# An adapter's talking capabilities declare no permission (middleware.md §4, D59).
+# An adapter's talking capabilities declare no permission.
 CAPABILITIES: tuple[dict[str, Any], ...] = (
     {
         "name": "say",

@@ -34,7 +34,7 @@ def socket_path() -> str:
 
 
 def create(options: dict[str, Any], env: dict[str, str]) -> "CLIBody":
-    """Build the adapter from config.yaml's options and the environment (D49)."""
+    """Build the adapter from config.yaml's options and the environment."""
     del env
     tools = [str(t) for t in (options.get("tools") or ()) if t]
     unknown = [t for t in tools if t not in OPTIONAL_CAPABILITIES]

@@ -1,11 +1,11 @@
 """The registry: the tools, commands and skills present now, and the routing of one act.
 
 One list of names with short descriptions, the full entry on request, one namespace with
-collisions failing at boot (middleware.md §4). Every entry names **who uses it**: a tool or
+collisions failing at boot. Every entry names **who uses it**: a tool or
 a skill is for the soul, a command is for a person, and every entry declares a permission.
 
 A capability descriptor keeps its frozen key `organ`; the value is the name of the adapter
-or plugin that declares the capability (docs/core.md §8). The core sees only the descriptor;
+or plugin that declares the capability (docs/). The core sees only the descriptor;
 the facts, the permission and the output cap live here, next to it.
 """
 
@@ -176,7 +176,7 @@ class ToolRegistry:
 
     @staticmethod
     def _permission(full: str, capability: Mapping[str, Any]) -> str:
-        """Return an entry's permission: every entry declares one (contract.md §3)."""
+        """Return an entry's permission: every entry declares one ."""
         permission = str(capability.get("permission") or "")
         if not permission:
             raise ValueError(f"{full}: an entry without a permission")
@@ -395,7 +395,7 @@ class ToolRegistry:
 
 
 class RegistryTool:
-    """The middleware's own `registry` tool: `describe` and `more` (middleware.md §4)."""
+    """The middleware's own `registry` tool: `describe` and `more` ."""
 
     name = "registry"
 

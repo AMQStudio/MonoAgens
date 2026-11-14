@@ -29,7 +29,7 @@ _INSERT_EXPECTATION = (
     "origin_actor, expires_at) VALUES "
     "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s, %s) RETURNING id"
 )
-# The whole envelope of contract.md §3, in the order every read uses.
+# The whole envelope, in the order every read uses.
 EVENT_COLUMNS = ("id", "ts", "occurred_at", "kind", "description", "who", "place", "body",
                  "caused_by", "origin_actor", "features", "backfill", "imported", "payload",
                  "labels", "schema_version")
@@ -67,7 +67,7 @@ def payload_text(payload: dict[str, Any]) -> str:
     """Return the human-readable text of one event payload.
 
     The middleware and the adapters read their own payload this way; the core reads
-    `Event.description` instead (contract.md §3).
+    `Event.description` instead.
     """
     text = next((payload[key] for key in ("description", "text", "reason", "about")
                  if payload.get(key)), "")

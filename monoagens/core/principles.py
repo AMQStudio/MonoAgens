@@ -1,4 +1,4 @@
-"""The stable 'how you work' block the reasoning reads with every prompt (D48)."""
+"""The stable 'how you work' block the reasoning reads with every prompt."""
 
 from __future__ import annotations
 

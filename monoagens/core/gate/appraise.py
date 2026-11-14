@@ -76,7 +76,7 @@ async def _engaged(event: Event, conn: Any) -> bool:
 
 
 async def reflex(event: Event, conn: Any = None) -> tuple[str, str] | None:
-    """Return (reason, reflex) when a commitment bypasses the draw (docs/core.md §6)."""
+    """Return (reason, reflex) when a commitment bypasses the draw (docs/)."""
     if event.kind == "expectation.fired":
         return "fired expectation", "pfc_expectation"
     if event.kind == "expectation.reminded":

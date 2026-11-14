@@ -120,7 +120,7 @@ class Kernel:
         return await ack if ack is not None else None
 
     def _incoming(self, item: Percept | Event, body: str | None) -> Event:
-        """Return the version 2 event one incoming percept or event becomes (contract.md §9)."""
+        """Return the version 2 event one incoming percept or event becomes ."""
         if isinstance(item, Percept):
             return to_event(item, body=body or "unknown", ts=self.clock.now())
         return versioning.upcast_incoming(item)
@@ -397,7 +397,7 @@ class Kernel:
 
     @staticmethod
     def _collapse_backlog(events: list[Event]) -> Event:
-        """Collapse one place's back-fill into the one event the gate appraises (D37)."""
+        """Collapse one place's back-fill into the one event the gate appraises."""
         addressed = [seen for seen in events if seen.features.get("addressed")]
         rep = addressed[-1] if addressed else events[-1]
         lines = [f"{seen.who or '?'}: {seen.description}" for seen in events]
@@ -605,12 +605,12 @@ class Kernel:
             if reminded:
                 condition = str(item.get("condition_text") or "")
                 # The line names neither the expectation's words nor its source: this place's
-                # audience decides, through the desk, what it may be told (D45).
+                # audience decides, through the desk, what it may be told.
                 reason = (f"this line may relate to an expectation of yours; "
                           f"condition: {condition}; does this line fulfil it?")
             else:
                 # The reason names the expectation, never its words: this place's audience may
-                # not be allowed to see them, so the desk decides, not this line (D45).
+                # not be allowed to see them, so the desk decides, not this line.
                 reason = (f"expectation #{item['id']} is due here; what it was about is on the "
                           f"desk only if this place may see it; {appraisal.reason}")
             await self._think(woken, reason, place)

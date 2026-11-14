@@ -532,7 +532,7 @@ async def present(kernel: Any, event: Event, kind: str, text: str) -> bool:
     lifecycle = _lifecycle(kind, event, text)
     if lifecycle is None:
         return False
-    # A slow or failing render is the calling best-effort rule's error to record (§2.4.5, D82):
+    # A slow or failing render is the calling best-effort rule's error to record:
     # it never breaks the turn, but it is never silent either.
     await asyncio.wait_for(render(lifecycle), presentation_timeout(kernel))
     return True

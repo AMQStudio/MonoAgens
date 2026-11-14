@@ -59,10 +59,10 @@ def action_for(job: JobRef | None, event: Event, round_index: int, n: int,
 async def dispatch(kernel: Any, event: Event, args: dict[str, Any], *,
                    said: set[str] | None = None, job: JobRef | None = None,
                    round_index: int = 0, n: int = 0) -> Dispatch:
-    """Resolve, guard and hand one `act` call to the tool that declares it (D2, D46).
+    """Resolve, guard and hand one `act` call to the tool that declares it.
 
     `said` holds the places this turn already spoke to: a turn says at most one
-    message per place, so a second communicative act there is refused (D51).
+    message per place, so a second communicative act there is refused.
     """
     capability = str(args.get("capability") or "")
     cap = kernel.tools.get(capability)
@@ -179,11 +179,11 @@ async def _project_identity(kernel: Any, event: Event, act: Act,
 
 async def _intend(kernel: Any, event: Event, capability: str, quoted: dict[str, Any],
                   recorded: dict[str, Any], to: str | None, place: str) -> None:
-    """Record what to say elsewhere and wake the reasoning there with the intent itself (D48).
+    """Record what to say elsewhere and wake the reasoning there with the intent itself.
 
     The line the other place's desk shows quotes only what the action hook let through
     (`quoted`); the intent's own arguments are the ones reasoning asked for, so the Log keeps
-    the drafted words even when the desk hides them (D45, 2.8).
+    the drafted words even when the desk hides them.
     """
     intent = await kernel._emit(event, "act.intent", {
         "capability": capability, "arguments": dict(recorded), "to": to, "target": place})

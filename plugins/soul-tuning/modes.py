@@ -2,7 +2,7 @@
 
 A mode is data, never a second persona: the rule sits in the volatile `<soul_tuning>` block
 and the offsets are recorded as `disposition.updated`, so the middleware (not this plugin)
-computes the effective knobs (middleware.md §2, lever 6).
+computes the effective knobs (, lever 6).
 """
 
 from __future__ import annotations

@@ -202,7 +202,7 @@ def _quote(part: str) -> str:
 
 def _folder(who: str) -> str:
     """Return the layer folder of one person."""
-    from . import paths
+    from. import paths
 
     return paths.person_folder(who)
 
@@ -234,7 +234,7 @@ def _limits(memory_mb: int, cpus: int, pids: int, *, fsize_mb: int = DEFAULT_FSI
 def _die_with_parent() -> None:
     """Ask the kernel to SIGKILL this process when the one that started it dies.
 
-    The sandbox dies with MonoAgens (docs/plugins.md §5.3): MonoAgens dies → pasta (this
+    The sandbox dies with MonoAgens: MonoAgens dies → pasta (this
     process) is killed → bubblewrap, whose parent is pasta, is killed by its own
     `--die-with-parent` → its PID namespace takes every process inside with it.
     """

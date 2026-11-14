@@ -7,7 +7,7 @@ import pathlib
 import shutil
 from typing import Any
 
-from . import paths, sandbox
+from. import paths, sandbox
 
 
 def layer(api: Any, who: str) -> pathlib.Path:

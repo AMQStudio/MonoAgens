@@ -34,7 +34,7 @@ from monoagens.contract import (OWNER_POLICY, RULE_KINDS, SLOTS, Continue, HookO
 
 LOGGER = logging.getLogger(__name__)
 
-# What a tool states about itself (middleware.md §4). A tool without facts fails at boot.
+# What a tool states about itself. A tool without facts fails at boot.
 FACTS = ("reads", "changes", "runs_code", "network")
 CALL_FACTS = FACTS + ("sensitive",)  # `sensitive` is added to one call, never declared
 
@@ -102,7 +102,7 @@ EVENT_COLUMNS = ", ".join(_EVENT_COLUMNS)
 
 
 class LogView:
-    """A read-only view of the Log and the state board for plugins (D43).
+    """A read-only view of the Log and the state board for plugins.
 
     It has no write method and never hands out the connection, so a plugin can read but
     never change the Log. The view returns raw content: **any plugin tool that shows a

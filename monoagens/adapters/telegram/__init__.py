@@ -39,7 +39,7 @@ GROUP_COLLECT_SECONDS = 1.0
 
 
 def create(options: dict[str, Any], env: dict[str, str]) -> "TelegramBody":
-    """Build the adapter from config.yaml's options and the environment (D49)."""
+    """Build the adapter from config.yaml's options and the environment."""
     token = str(env.get("TELEGRAM_BOT_TOKEN") or "")
     if not token:
         raise RuntimeError("telegram: TELEGRAM_BOT_TOKEN is not set")

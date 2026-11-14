@@ -38,8 +38,7 @@ async def forget_hard(conn: psycopg.AsyncConnection, event_ids: Sequence[int], *
     """Scrub an event's content and delete the lineage derived from it.
 
     The payload becomes ``{"forgotten": true}``, the description and the features
-    are wiped: those are the three fields that hold what was forgotten
-    (contract.md §3).
+    are wiped: those are the three fields that hold what was forgotten.
     """
     ids = sorted({int(event_id) for event_id in event_ids})
     if not ids:

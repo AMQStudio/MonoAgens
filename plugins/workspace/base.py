@@ -26,14 +26,14 @@ PACKAGES = ("python3", "python3-pip", "python3-venv", "git", "curl", "ca-certifi
 
 def marker(api: Any) -> pathlib.Path:
     """Return where the base's own record sits."""
-    from . import sandbox
+    from. import sandbox
 
     return sandbox.sandbox_root(api) / "base.json"
 
 
 def ready(api: Any) -> bool:
     """Return whether the prepared base exists."""
-    from . import sandbox
+    from. import sandbox
 
     base = sandbox.base_rootfs(api)
     return base.is_dir() and marker(api).is_file()
@@ -139,7 +139,7 @@ def digest(path: pathlib.Path) -> str:
 
 def prepare(api: Any) -> dict[str, Any]:
     """Build the base once: export (or download), extract, install, write the marker."""
-    from . import sandbox
+    from. import sandbox
 
     base = sandbox.base_rootfs(api)
     if ready(api):
@@ -180,7 +180,7 @@ def _download(url: str) -> bytes:
 
 def _install(api: Any, base: pathlib.Path) -> None:
     """Install the base packages once, inside the sandbox with the base writable."""
-    from . import sandbox
+    from. import sandbox
 
     # Rootless bwrap cannot switch the apt sandbox user (setgroups is denied in the user
     # namespace), so apt runs its methods as root: the process is uid 0 in the sandbox.
