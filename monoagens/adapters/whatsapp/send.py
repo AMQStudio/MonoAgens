@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from monoagens.adapters.whatsapp.identity import (
@@ -18,6 +19,17 @@ def jid_of(chat_jid: str) -> Any:
 
     user, _, server = str(chat_jid or "").partition("@")
     return build_jid(user, server or "s.whatsapp.net")
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _mask(jid: Any) -> str:
+    """Return a JID with the middle of its user part hidden, for logs."""
+    text = str(jid or "")
+    user, _, server = text.partition("@")
+    shown = user[:4] + "…" + user[-3:] if len(user) > 8 else user[:2] + "…"
+    return f"{shown}@{server}" if server else text
 
 
 def _msg_id(resp: Any, fallback: str = "") -> str:
@@ -104,6 +116,10 @@ async def send_say(client: Any, directory: WhatsAppDirectory, files: Any, place:
     if text:
         msg_payload = _with_context(text, mentions=mentions, reply_to=reply_to, directory=directory)
         resp = await client.send_message(jid, msg_payload)
+        # A send WhatsApp accepts but never delivers is invisible without this line: it names the
+        # exact target, the id it answered, and whether the server echoed the message back.
+        LOGGER.info("whatsapp sent to %s id=%s echoed=%s", _mask(jid), _msg_id(resp),
+                    bool(getattr(resp, "Message", None)))
         if mid := _msg_id(resp):
             sent_ids.append(mid)
 
