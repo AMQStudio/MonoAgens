@@ -1,8 +1,12 @@
 # Task 6 — The locked contract
 
-Status: todo | Depends on: Task 5 (stopped at 1.12 P, 2026-11-14)
+Status: **done** (2026-11-14) | Depends on: Task 5 (stopped at 1.12 P, 2026-11-14)
+Result: 684 tests green, replay `--fake` 158/158, architecture ratchet 0 findings, the contract as
+code without a lock, four adapters on the contract with their own `ask`/`render`/`audience`, five
+fake bodies through the real kernel, and one real-model launch set reported (113/158 checks, with
+the live findings listed under Part 7). 7.2 is reported, 7.3 is closed by the owner's decision to
+drop the lock, 7.4 continues with daily use.
 One task = one worker prompt, done by one worker. Work through the parts **in order**. Rules: [AGENTS.md](../../AGENTS.md).
-[AGENTS.md](../../AGENTS.md).
 
 **Goal.** The code implements [spec.md](../spec.md) *The contract* (v2) exactly, and then the
 contract is locked. Everything shaped by one platform leaves the core and the middleware; every

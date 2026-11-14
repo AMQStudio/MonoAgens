@@ -17,10 +17,13 @@ knows when to stay quiet in a group, and can replay every decision it made.
   search, files, modes. Each translates its own world into the contract's facts and talks only
   to the middleware.
 
-One locked contract ([`docs/spec.md`](docs/spec.md) *The contract*) sits between the layers: six
-generic facts (actor, place, audience, event, capability, receipt) that fit a chat, a robot, a
-workspace app, a sensor and a game alike. The inside can improve without breaking what is built
-on top, and something new enters only as an adapter or a plugin.
+One contract ([`docs/spec.md`](docs/spec.md) *The contract*) sits between the layers: six generic
+facts (actor, place, audience, event, capability, receipt) that fit a chat, a robot, a workspace
+app, a sensor and a game alike. The inside can improve without breaking what is built on top, and
+something new enters only as an adapter or a plugin. What holds the contract is not a hash file
+but the tests around it: `tests/contract/` (its own behaviour and the conformance suite every body
+passes) and the architecture ratchet (`tests/architecture/`), which fails on a body name, a word
+list, a payload read, a removed field or an upward import.
 
 > **Note, to avoid confusion.** "Kernel" here is an analogy for how the code is organised, not a
 > literal one: MonoAgens is not an operating system, not a scheduler that serves many agents, and
@@ -37,6 +40,9 @@ on top, and something new enters only as an adapter or a plugin.
   `docs/tasks/done/`.
 - [`prior/`](prior/) — the default instincts (knob values) a new soul is born with; tune with replay.
 - `scripts/replay.py` — scenario replay: tests, metrics and tuning.
+- `scripts/recording.py` — turn one body's recording into a committed fixture (`anonymize`).
+- `scripts/whatsapp_send_test.py` — send one line through the soul's own WhatsApp session and
+  print what WhatsApp answers; the isolation step when a message does not arrive.
 
 ## Install
 
@@ -86,6 +92,10 @@ uv run python scripts/replay.py --fake
 
 # One scenario only.
 uv run python scripts/replay.py scenarios/silence/01_group_chitchat_greeting.yaml
+
+# Scenarios in parallel: each worker gets its own database (`<base>_replay_w<k>`), and the
+# results are merged into one report. Same checks and the same token totals as a serial run.
+uv run python scripts/replay.py --fake --jobs 4
 ```
 
 The replay database comes from `REPLAY_DATABASE_URL` and its name must end with `_replay`;
