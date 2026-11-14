@@ -79,7 +79,7 @@ async def _kernel(conn, *, settings_value=None, pfc=None, embedder=None) -> Kern
 def _trigger(event_id: int, place: str, who: str = OWNER,
              text: str = "kerjakan") -> Event:
     return Event(id=event_id, ts=START, kind="percept", who=who, place=place,
-                 payload={"description": text}, origin_actor=who)
+                 payload={"description": text}, description=text, origin_actor=who)
 
 
 async def test_a_private_chat_follows_the_person_across_bodies_once_linked(aconn):
@@ -206,14 +206,14 @@ async def test_a_digit_string_episode_is_accepted_and_other_values_name_the_fiel
     cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.result' "
                               "ORDER BY id DESC LIMIT 1")
     result = (await cur.fetchone())[0]
-    assert "episode: expected an event id made of digits" in result["result"]["error"]
+    assert "episode: expected an event id made of digits" in result["reason"]
 
     await kernel._apply(_trigger(asked, GROUP), ToolCall("act", {
         "capability": "self.share",
         "arguments": {"item": "rapat jam sembilan", "episode": 1.5, "to": GROUP}}))
     cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.result' "
                               "ORDER BY id DESC LIMIT 1")
-    error = (await cur.fetchone())[0]["result"]["error"]
+    error = (await cur.fetchone())[0]["reason"]
     assert "arguments.episode: expected string, got number" in error
     count = await (await aconn.execute(
         "SELECT count(*) FROM events WHERE kind = 'share.granted'")).fetchone()
@@ -392,7 +392,7 @@ async def test_act_to_an_unreachable_person_fails_honestly(aconn):
     await kernel.run_until_idle()
     row = await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'act.result'")).fetchone()
-    assert "no way to reach budi yet" in row[0]["result"]["error"]
+    assert "no way to reach budi yet" in row[0]["reason"]
 
 
 async def test_a_message_to_an_unknown_place_fails_honestly(aconn):
@@ -403,10 +403,10 @@ async def test_a_message_to_an_unknown_place_fails_honestly(aconn):
     await kernel.run_until_idle()
     row = await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'act.result'")).fetchone()
-    assert "no such place: budi_dm" in row[0]["result"]["error"]
+    assert "no such place: budi_dm" in row[0]["reason"]
     out = await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'act.out'")).fetchone()
-    assert out is not None and out[0]["refused"] is True and out[0]["communicative"] is True
+    assert out is not None and out[0]["communicative"] is True
 
 
 async def test_act_offers_the_capabilities_of_every_running_tool(aconn):
@@ -886,9 +886,9 @@ async def test_verify_context_last_checks_all_eight_sections_and_records_error(a
     kernel = await _kernel(aconn)
     rule = policy.policy_for("context", "last", kernel)
     dm_event = Event(id=dm, ts=START, kind="percept", who=OWNER, place=OWNER_DM,
-                     payload={"description": "rahasia owner"})
+                     payload={"description": "rahasia owner"}, description="rahasia owner")
     fulan_event = Event(id=fulan_ev, ts=START, kind="percept", who="person:fulan", place=FULAN_A,
-                        payload={"description": "rahasia fulan"})
+                        payload={"description": "rahasia fulan"}, description="rahasia fulan")
     bad = layout.PFCContext(
         now=START, place=GROUP, reason="test",
         recent=(dm_event,),
@@ -912,7 +912,7 @@ async def test_verify_context_last_checks_all_eight_sections_and_records_error(a
     assert cleaned.people == ()
 
     good = layout.PFCContext(
-        now=START, place=GROUP, place_kind="shared", reason="test",
+        now=START, place=GROUP, reason="test",
         recent=(budi_ev,),
         expectations=(f"#{pub_exp.payload['expectation_id']} grup exp (no intent stated)",),
         trigger=budi_ev,
@@ -971,7 +971,7 @@ async def test_text_similarity_leaks_removed_and_safe_phrase_not_refused(aconn):
     await kernel.run_until_idle()
     outs = await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'act.out' ORDER BY id DESC")).fetchall()
-    assert outs and outs[0][0].get("refused") is not True
+    assert outs and outs[0][0].get("communicative") is True
     assert await privacy.leaving(kernel, {"capability": "web.search", "event": group},
                                  {"query": "aku di-PHK kemarin"}) is None
 
@@ -1007,7 +1007,7 @@ async def test_speaking_elsewhere_intent_omits_because_goal_and_checks_context_s
     trigger2 = await _said(aconn, OWNER, OWNER_DM, "direct", "Tanyakan kabar Budi")
     await kernel2._think(
         Event(id=trigger2, ts=START, kind="percept", who=OWNER, place=OWNER_DM,
-              payload={"description": "Tanyakan kabar Budi"}),
+              payload={"description": "Tanyakan kabar Budi"}, description="Tanyakan kabar Budi"),
         "addressed", OWNER_DM)
     await kernel2.run_until_idle()
     intents = await (await aconn.execute(
@@ -1085,7 +1085,7 @@ async def test_dm_line_matching_group_promise_never_wakes_group(aconn):
     kernel = await _kernel(aconn, pfc=pfc, embedder=FakeEmbedder())
     dm_ev = Event(id=None, ts=START, kind="percept", who="person:fulan", place=FULAN_A,
                   body="whatsapp",
-                  payload={"description": "server down rahasia fulan", "place_kind": "direct"})
+                  payload={"description": "server down rahasia fulan", "place_kind": "direct"}, description="server down rahasia fulan")
     kernel.enqueue(dm_ev)
     await kernel.run_until_idle()
 
@@ -1098,7 +1098,7 @@ async def test_dm_line_matching_group_promise_never_wakes_group(aconn):
     group_ev = Event(id=None, ts=START, kind="percept", who="person:budi", place=GROUP,
                      body="telegram",
                      payload={"description": "server down di grup", "place_kind": "shared",
-                              "place_info": {"members": ["person:budi"]}})
+                              "place_info": {"members": ["person:budi"]}}, description="server down di grup")
     kernel.enqueue(group_ev)
     await kernel.run_until_idle()
     assert any(ctx.place == GROUP for ctx in pfc.contexts)
@@ -1126,7 +1126,7 @@ async def test_p15_privacy_lives_only_in_last_context_slot_and_stops_hidden_remi
 
     # First context slot no longer runs privacy filtering; last slot does.
     fulan_obj = Event(id=fulan_ev, ts=START, kind="percept", who="person:fulan", place=FULAN_A,
-                      payload={"description": "rahasia fulan"})
+                      payload={"description": "rahasia fulan"}, description="rahasia fulan")
     raw = layout.PFCContext(now=START, place=GROUP, reason="test",
                             recent_elsewhere=(fulan_obj,), trigger=budi_ev)
     first_res = await policy.policy_for("context", "first", kernel)(raw, {"conn": aconn, "now": START})
@@ -1134,7 +1134,7 @@ async def test_p15_privacy_lives_only_in_last_context_slot_and_stops_hidden_remi
 
     dm_ev = Event(id=None, ts=START, kind="percept", who="person:fulan", place=FULAN_A,
                   body="whatsapp",
-                  payload={"description": "server down rahasia fulan", "place_kind": "direct"})
+                  payload={"description": "server down rahasia fulan", "place_kind": "direct"}, description="server down rahasia fulan")
     kernel.enqueue(dm_ev)
     await kernel.run_until_idle()
     assert all(ctx.place != GROUP for ctx in pfc.contexts)
@@ -1160,7 +1160,7 @@ async def test_p13_share_requires_item_or_episode_and_never_grants_whole_place(a
     await kernel.run_until_idle()
     res = await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'act.result' ORDER BY id DESC LIMIT 1")).fetchone()
-    assert res is not None and "?" in str((res[0].get("result") or {}).get("error") or "")
+    assert res is not None and "?" in str(res[0].get("reason") or "")
     assert await (await aconn.execute(
         "SELECT count(*) FROM events WHERE kind = 'share.granted'")).fetchone() == (0,)
 

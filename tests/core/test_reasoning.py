@@ -18,9 +18,11 @@ from monoagens.core.context import layout
 from monoagens.core.context.layout import PFCContext
 from monoagens.core.reasoning import TOOLS, TOOL_NAMES, Reasoning, ToolCall, turn_check
 from monoagens.infra.providers import OpenAICompatibleProvider
-from monoagens.infra.store import (active_expectation_lines, append_event, read_state,
-                                  write_state)
+from monoagens.infra.store import (active_expectation_lines, append_event, close_action,
+                                  read_state, write_action, write_state)
 from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
+from monoagens import contract
+from monoagens.contract import Receipt
 from monoagens.types import Action, Event
 from monoagens.core.context.working import doing_lines
 from monoagens.boot import build
@@ -125,7 +127,7 @@ def _msg(text: str, *, message_id: int = 1, addressed: bool = True, who: str = "
             "data": {"message_id": message_id},
             "addressed": addressed,
             "place_kind": "direct",
-        },
+        }, description=text,
     )
 
 
@@ -203,7 +205,7 @@ async def test_layered_prompt_structure(aconn):
     positions = [volatile.index(tag) for tag in tags]
     assert positions == sorted(positions)
     assert "Asia/Jakarta" in volatile
-    assert f"<place>{PLACE} (direct)</place>" in volatile
+    assert f"<place>{PLACE}</place>" in volatile
     assert "<recent>\n" in volatile
     assert "15:00 person:owner: halo" in volatile
     assert "15:00 Mona: hai" in volatile
@@ -226,7 +228,8 @@ async def test_recent_shows_only_conversational_events(aconn):
     await append_event(aconn, ts=START, kind="expectation.created", place=PLACE,
                        payload={"about": "internal-expectation"})
     await append_event(aconn, ts=START, kind="expectation.fired", who="person:owner",
-                       place=PLACE, body="telegram", payload={"about": "minum air"})
+                       place=PLACE, body="telegram", payload={"about": "minum air"},
+                       description="minum air")
     await append_event(aconn, ts=START, kind="act.out", who="person:owner", place=PLACE,
                        body="telegram",
                        payload={"capability": "telegram.say", "arguments": {"text": "pagi juga"}})
@@ -252,7 +255,8 @@ async def test_say_is_recorded_before_the_body_acts(aconn):
 
     trigger = await _feed(kernel, _msg("halo"))
 
-    assert await _kinds(aconn) == ["percept", "model.call", "act.out", "act.confirmed"]
+    assert await _kinds(aconn) == ["percept", "model.call", "act.out", "act.result",
+                                "decision.silent"]
     cur = await aconn.execute("SELECT who, place, body, payload, caused_by FROM events WHERE kind='act.out'")
     who, place, body_name, payload, caused_by = await cur.fetchone()
     assert (who, place, body_name) == ("person:owner", PLACE, "telegram")
@@ -262,9 +266,8 @@ async def test_say_is_recorded_before_the_body_acts(aconn):
 
     # act.out is already in the Log when act() is called.
     assert body.log_at_act == [["percept", "model.call", "act.out"]]
-    assert body.actions == [
-        Action(kind="say", place=PLACE, payload={"text": "halo juga"}, adapter="telegram")
-    ]
+    assert [(a.kind, a.place, dict(a.arguments), a.adapter) for a in body.actions] == [
+        ("say", PLACE, {"text": "halo juga"}, "telegram")]
     last_spoke = await read_state(aconn, f"last_spoke:{PLACE}")
     assert datetime.fromisoformat(last_spoke["ts"]) == START
 
@@ -277,15 +280,14 @@ async def test_react_is_recorded_before_the_body_acts(aconn):
 
     await _feed(kernel, _msg("mantap", message_id=42))
 
-    assert await _kinds(aconn) == ["percept", "model.call", "act.out"]
+    assert await _kinds(aconn) == ["percept", "model.call", "act.out", "act.result"]
     cur = await aconn.execute("SELECT payload FROM events WHERE kind='act.out'")
     assert (await cur.fetchone())[0] == {
         "capability": "telegram.react", "arguments": {"emoji": "👍"},
         "communicative": False}
     assert body.log_at_act == [["percept", "model.call", "act.out"]]
-    assert body.actions == [
-        Action(kind="react", place=PLACE, payload={"emoji": "👍"}, adapter="telegram")
-    ]
+    assert [(a.kind, a.place, dict(a.arguments), a.adapter) for a in body.actions] == [
+        ("react", PLACE, {"emoji": "👍"}, "telegram")]
 
 
 async def test_a_tool_result_is_recorded_as_act_result(aconn):
@@ -297,11 +299,11 @@ async def test_a_tool_result_is_recorded_as_act_result(aconn):
     await _feed(kernel, _msg("halo"))
 
     # 12.16: the message ended the step, so its result is recorded but wakes nothing.
-    assert await _kinds(aconn) == ["percept", "model.call", "act.out", "act.confirmed",
-                                   "act.result", "decision.silent"]
+    assert await _kinds(aconn) == ["percept", "model.call", "act.out", "act.result",
+                                   "decision.silent"]
     cur = await aconn.execute("SELECT payload FROM events WHERE kind='act.result'")
-    assert (await cur.fetchone())[0] == {"capability": "telegram.say",
-                                         "result": {"message_id": 7}}
+    assert (await cur.fetchone())[0] == {"capability": "telegram.say", "state": "done",
+                                         "reason": "", "result": {"message_id": 7}}
 
 
 async def test_an_act_result_wakes_the_pfc_as_a_continued_goal(aconn):
@@ -317,7 +319,7 @@ async def test_an_act_result_wakes_the_pfc_as_a_continued_goal(aconn):
     assert len(fake.requests) == 3  # the act, the thought, then the turn ends
     volatile = fake.requests[1]["messages"][-1]["content"]
     assert "<why_awake>goal continued</why_awake>" in volatile
-    assert "<event>[act.result]</event>" in volatile
+    assert "<event>person:owner: done</event>" in volatile
 
 
 async def test_an_act_result_is_routed_to_its_task_thread(aconn):
@@ -336,7 +338,7 @@ async def test_an_act_result_is_routed_to_its_task_thread(aconn):
 
     await _feed(kernel, _msg("halo"))
 
-    assert "<place>space:task:5 (" in fake.requests[1]["messages"][-1]["content"]
+    assert "<place>space:task:5</place>" in fake.requests[1]["messages"][-1]["content"]
 
 
 async def test_a_wake_without_act_is_recorded_as_silent(aconn):
@@ -403,10 +405,10 @@ async def test_a_thought_then_an_act_is_one_wake(aconn):
 
     await _feed(kernel, _msg("Budi kirim file apa?"))
 
-    assert [action.payload for action in body.actions] == [
+    assert [action.arguments for action in body.actions] == [
         {"text": "Budi mengirim sketsa_logo.png"}]
     assert await _kinds(aconn) == ["percept", "model.call", "model.call",
-                                   "decision.note", "act.out", "act.confirmed"]
+                                   "decision.note", "act.out", "act.result", "decision.silent"]
     assert [request["tool_choice"] for request in fake.requests] == ["required", "auto"]
     assert "<results>\nthink: " in fake.requests[1]["messages"][-1]["content"]
 
@@ -449,12 +451,12 @@ async def test_a_second_message_to_the_same_place_in_one_turn_is_refused(aconn):
 
     assert "expect refused: expect needs cue_time or cue_event" in \
         fake.requests[1]["messages"][-1]["content"]
-    assert [action.payload for action in body.actions] == [{"text": "halo"}]
+    assert [action.arguments for action in body.actions] == [{"text": "halo"}]
     assert await (await aconn.execute(
-        "SELECT count(*) FROM events WHERE kind = 'act.out'")).fetchone() == (1,)
+        "SELECT count(*) FROM events WHERE kind = 'act.out'")).fetchone() == (2,)
     cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.result'")
-    assert [row[0]["result"]["error"] for row in await cur.fetchall()] == [
-        f"already said something to {PLACE} this turn"]
+    assert [(row[0]["state"], row[0]["reason"]) for row in await cur.fetchall()] == [
+        ("done", ""), ("refused", f"already said something to {PLACE} this turn")]
 
 
 async def test_a_refusal_returns_even_when_the_same_round_acted(aconn):
@@ -474,9 +476,10 @@ async def test_a_refusal_returns_even_when_the_same_round_acted(aconn):
 
     assert "expect refused: expect needs cue_time or cue_event" in \
         fake.requests[1]["messages"][-1]["content"]
-    assert [action.payload for action in body.actions] == [{"text": "siap"}]
+    assert [action.arguments for action in body.actions] == [{"text": "siap"}]
     assert await _kinds(aconn) == ["percept", "model.call", "model.call", "model.call",
-                                   "act.out", "act.confirmed", "expectation.created"]
+                                   "act.out", "act.result", "decision.silent",
+                                   "expectation.created"]
     cur = await aconn.execute("SELECT about, cue_event FROM expectations")
     assert await cur.fetchall() == [("kabari kalau server down",
                                      {"kind": "percept", "text_like": "server down"})]
@@ -496,19 +499,32 @@ async def test_a_refused_round_never_runs_past_max_thought_rounds(aconn):
     assert await _kinds(aconn) == ["percept", "model.call", "model.call", "decision.silent"]
 
 
+async def _record_act(conn, action_id: str, capability: str, place: str,
+                      arguments: dict, event, *, communicative: bool = False) -> int:
+    """Record one act's ledger row the way the kernel does, and return its event id."""
+    await write_action(conn, contract.Action(id=action_id, capability=capability, place=place,
+                                             arguments=arguments, caused_by=event.caused_by),
+                       event.id, communicative=communicative)
+    await write_state(conn, f"act:{event.id}", {"id": action_id}, event.id)
+    return event.id
+
+
 async def test_a_chain_in_a_place_shows_every_step_and_its_latest_result(aconn):
     """D52: <doing> follows the chain where it started, not only inside task threads."""
     root = await append_event(aconn, ts=START, kind="percept", who="person:owner", place=PLACE,
                               payload={"description": "apa yang kita lakukan bulan lalu?"})
     recall = await append_event(aconn, ts=START, kind="act.out", place=PLACE,
                                 caused_by=root.id,
-                                payload={"capability": "self.recall", "communicative": False,
+                                payload={"capability": "self.recall",
                                          "arguments": {"from": "2026-10-01",
                                                        "to": "2026-11-01"}})
+    await _record_act(aconn, "job:1:0:0", "self.recall", PLACE,
+                      {"from": "2026-10-01", "to": "2026-11-01"}, recall)
+    found = {"count": 1, "found": [{"text": "Kopi"}]}
     result = await append_event(aconn, ts=START, kind="act.result", place=PLACE,
                                 caused_by=recall.id,
-                                payload={"capability": "self.recall",
-                                         "result": {"count": 1, "found": [{"text": "Kopi"}]}})
+                                payload={"capability": "self.recall", "result": found})
+    await close_action(aconn, "job:1:0:0", Receipt("done", result=found), result.id)
     trigger = Event(id=result.id, ts=START, kind="act.result", place=PLACE,
                     payload=result.payload)
 
@@ -520,11 +536,13 @@ async def test_a_chain_in_a_place_shows_every_step_and_its_latest_result(aconn):
     said = await append_event(aconn, ts=START, kind="act.out", place=PLACE,
                               caused_by=root.id,
                               payload={"capability": "telegram.say",
-                                       "communicative": True,
                                        "arguments": {"text": "Kita buka Kopi Senja."}})
+    await _record_act(aconn, "job:1:0:1", "telegram.say", PLACE,
+                      {"text": "Kita buka Kopi Senja."}, said, communicative=True)
     later = await append_event(aconn, ts=START, kind="act.result", place=PLACE,
                                caused_by=said.id,
                                payload={"capability": "telegram.say", "result": {"ok": True}})
+    await close_action(aconn, "job:1:0:1", Receipt("done", result={"ok": True}), later.id)
     done = Event(id=later.id, ts=START, kind="act.result", place=PLACE, payload=later.payload)
     assert await doing_lines(aconn, PLACE, None, SETTINGS["constants"], trigger=done) == ()
 
@@ -550,8 +568,9 @@ async def test_an_unknown_tool_is_refused_and_the_loop_lives(aconn):
 
     assert "shout refused: unknown tool: shout" in fake.requests[1]["messages"][-1]["content"]
     kinds = await _kinds(aconn)
-    assert kinds == ["percept", "model.call", "model.call", "act.out", "act.confirmed",
-                     "percept", "model.call", "act.out", "act.confirmed"]
+    assert kinds == ["percept", "model.call", "model.call", "act.out", "act.result",
+                     "decision.silent", "percept", "model.call", "act.out", "act.result",
+                     "decision.silent"]
 
 
 async def test_llm_failure_becomes_an_error_event_and_the_loop_lives(aconn):
@@ -593,7 +612,7 @@ async def test_mvp_a_restart_keeps_the_conversation_context(aconn):
     assert "besok kita bahas apa?" in recent
     assert "Mona: kita bahas kopi ya" in recent
     assert "<event>person:owner: lanjut</event>" in volatile
-    assert body.actions[0].payload == {"text": "lanjut soal kopi"}
+    assert body.actions[0].arguments == {"text": "lanjut soal kopi"}
 
 
 async def test_dm_gets_a_reply_through_the_telegram_body(aconn):
@@ -649,7 +668,8 @@ async def test_dm_gets_a_reply_through_the_telegram_body(aconn):
 
     assert sent == [{"chat_id": "111", "text": "halo!"}]
     assert await _kinds(aconn) == [
-        "identity.registered", "percept", "model.call", "act.out", "act.confirmed"]
+        "identity.registered", "percept", "model.call", "act.out", "act.result",
+        "decision.silent"]
 
 
 async def test_recent_includes_other_places_prefixed(aconn):
@@ -666,7 +686,8 @@ async def test_recent_includes_other_places_prefixed(aconn):
     await append_event(aconn, ts=START, kind="percept", who="person:alice", place="space:cli",
                        body="cli", payload={"description": "bukan owner"})
     await append_event(aconn, ts=START, kind="expectation.fired", who="person:owner",
-                       place="space:cli", body="cli", payload={"about": "minum air"})
+                       place="space:cli", body="cli", payload={"about": "minum air"},
+                       description="minum air")
 
     await _feed(kernel, _msg("lanjut"))
 
@@ -733,7 +754,7 @@ def _doing(steps: int) -> tuple[str, ...]:
 
 
 def _desk(**changes) -> PFCContext:
-    return PFCContext(now=START, place="space:task:1", place_kind="task", reason="work",
+    return PFCContext(now=START, place="space:task:1", reason="work",
                       **changes)
 
 
@@ -747,25 +768,30 @@ def test_a_fifteen_step_task_keeps_the_prompt_flat():
     assert fifteen.index("goal:") < fifteen.index("result:")
 
 
-def test_middleware_notes_are_rendered_with_their_event():
-    event = Event(id=1, ts=START, kind="percept", who="person:owner", place=PLACE,
-                  payload={"description": "halo", "notes": ["alias: Fulan = person:fulan"]})
-    pfc = Reasoning(settings=SETTINGS)
-    volatile = pfc.build_messages(_desk(trigger=event))[2]["content"]
-    assert "<event>person:owner: halo\nnote: alias: Fulan = person:fulan</event>" in volatile
-
-
 async def test_a_task_desk_shows_goal_steps_and_the_latest_result(aconn):
     task = {"goal": "selesaikan kode", "parent": PLACE, "since": 0}
     first = await append_event(aconn, ts=START, kind="act.out", place="space:task:1",
                                payload={"capability": "dev.run",
                                         "arguments": {"text": "langkah satu"}})
-    await append_event(aconn, ts=START, kind="act.result", place="space:task:1",
-                       payload={"capability": "dev.run", "result": {"text": "hasil satu"}})
-    await append_event(aconn, ts=START, kind="act.out", place="space:task:1",
-                       payload={"capability": "dev.run", "arguments": {"text": "langkah dua"}})
-    await append_event(aconn, ts=START, kind="act.result", place="space:task:1",
-                       payload={"capability": "dev.run", "result": {"text": "hasil dua"}})
+    await _record_act(aconn, "job:2:0:0", "dev.run", "space:task:1",
+                      {"text": "langkah satu"}, first)
+    first_done = await append_event(aconn, ts=START, kind="act.result", place="space:task:1",
+                                    caused_by=first.id,
+                                    payload={"capability": "dev.run",
+                                             "result": {"text": "hasil satu"}})
+    await close_action(aconn, "job:2:0:0", Receipt("done", result={"text": "hasil satu"}),
+                       first_done.id)
+    second = await append_event(aconn, ts=START, kind="act.out", place="space:task:1",
+                                payload={"capability": "dev.run",
+                                         "arguments": {"text": "langkah dua"}})
+    await _record_act(aconn, "job:2:0:1", "dev.run", "space:task:1",
+                      {"text": "langkah dua"}, second)
+    latest = await append_event(aconn, ts=START, kind="act.result", place="space:task:1",
+                                caused_by=second.id,
+                                payload={"capability": "dev.run",
+                                         "result": {"text": "hasil dua"}})
+    await close_action(aconn, "job:2:0:1", Receipt("done", result={"text": "hasil dua"}),
+                       latest.id)
 
     lines = await doing_lines(aconn, "space:task:1", task, SETTINGS["constants"])
     assert "goal: selesaikan kode" in lines
@@ -788,7 +814,7 @@ async def test_recall_lists_the_month_after_vectors_faded_and_sleep_failed(aconn
                                memory_visible=privacy.memory_visible)
     args = {"from": "2026-10-01T00:00:00+00:00", "to": "2026-11-01T00:00:00+00:00"}
 
-    result = await tool.act(Action(kind="recall", place=PLACE, payload=dict(args)))
+    result = await tool.act(Action(kind="recall", place=PLACE, arguments=dict(args)))
 
     assert result["searched"]["from"] == args["from"]
     assert result["count"] == 2
@@ -799,7 +825,7 @@ async def test_recall_lists_the_month_after_vectors_faded_and_sleep_failed(aconn
         "INSERT INTO memories (text, place, derived_from, created_at, embedding) "
         "VALUES (%s, %s, %s, %s, NULL)",
         ("Episod Oktober: kafe dan harga kopi.", PLACE, [first.id, second.id], START))
-    result = await tool.act(Action(kind="recall", place=PLACE, payload=dict(args)))
+    result = await tool.act(Action(kind="recall", place=PLACE, arguments=dict(args)))
 
     memory = next(item for item in result["found"] if item["kind"] == "memory")
     assert "Episod Oktober" in memory["text"]
@@ -818,14 +844,14 @@ async def test_recall_obeys_absolute_line_two(aconn):
                                memory_visible=privacy.memory_visible)
 
     hidden = await tool.act(Action(kind="recall", place=group,
-                                    payload={"query": "rahasia fulan"}))
+                                    arguments={"query": "rahasia fulan"}))
     assert hidden["found"] == []
 
     owner = "space:tg:1001"
     await append_event(aconn, ts=START, kind="percept", who="person:owner", place=owner,
                        payload={"description": "halo", "place_kind": "direct"})
     allowed = await tool.act(Action(kind="recall", place=owner,
-                                     payload={"query": "rahasia fulan"}))
+                                     arguments={"query": "rahasia fulan"}))
     assert "rahasia fulan" in json.dumps(allowed["found"])
 
 
@@ -836,7 +862,7 @@ async def test_forty_unread_messages_are_appraised_once(aconn):
                   body="telegram", payload={
                       "description": "40 pesan belum dibaca", "backfill": True,
                       "sent_at": (START - timedelta(hours=8)).isoformat(),
-                      "place_kind": "direct", "messages": messages})
+                      "place_kind": "direct", "messages": messages}, description="40 pesan belum dibaca")
 
     await _feed(kernel, event)
 
@@ -928,9 +954,10 @@ async def test_dispatch_refuses_a_mistyped_argument_without_raising(aconn):
     assert "error" not in kinds
     cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.result'")
     payloads = [row[0] for row in await cur.fetchall()]
-    assert payloads == [{"capability": "self.recall", "result": {
-        "error": "invalid arguments for self.recall: arguments.event_id: "
-                 "expected integer, got string"}}]
+    assert payloads == [{"capability": "self.recall", "state": "refused",
+                         "reason": "invalid arguments for self.recall: "
+                                   "arguments.event_id: expected integer, got string",
+                         "result": None}]
 
 
 async def test_the_desk_shows_the_id_that_resolve_takes(aconn):

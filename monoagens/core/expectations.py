@@ -10,9 +10,9 @@ from psycopg.types.json import Jsonb
 from monoagens.infra.duration import parse_duration
 from monoagens.infra.embedding import cosine
 from monoagens.infra.prior import constants
-from monoagens.infra.store import (append_event, fire_expectation, insert_expectation,
-                                   payload_text, read_event_vector, read_expectations, read_state,
-                                   resolve_expectation)
+from monoagens.infra.store import (append_event, fire_expectation, fired_for,
+                                   insert_expectation, read_event_vector, read_expectations,
+                                   read_state, resolve_expectation)
 
 KINDS = ("promise", "wait", "predict", "guard")
 
@@ -39,17 +39,13 @@ def next_check(cue, now, zone):
 
 
 def matches_cue(pattern, event):
-    """Return whether an event matches a cue_event pattern."""
+    """Return whether an event matches a cue_event pattern: facts only, never words."""
     if not pattern:
         return False
     fields = ("kind", "who", "place")
     if any(pattern.get(f) is not None and pattern[f] != getattr(event, f) for f in fields):
         return False
-    if pattern.get("not_who") is not None and pattern["not_who"] == event.who:
-        return False
-    needle = pattern.get("text_like")
-    haystack = str(event.payload.get("description") or event.payload.get("text") or "").lower()
-    return needle is None or str(needle).lower() in haystack
+    return pattern.get("not_who") is None or pattern["not_who"] != event.who
 
 
 def validate(data, *, now, settings):
@@ -111,7 +107,7 @@ async def create(conn, data, *, now, settings, source):
 
 async def create_wait(conn, event, *, now, settings, source=None):
     """Create the patience Expectation for a go on a turn not allocated to the soul."""
-    if event.payload.get("addressed") is True or not event.place:
+    if event.features.get("addressed") or not event.place:
         return None
     seconds = float(settings.get("knobs", {})["patience_seconds"])
     data = {"kind": "wait", "about": "waiting for someone else to take the floor",
@@ -216,10 +212,7 @@ async def recovery(conn, *, now):
     """Find fired expectations left unanswered, resolving answered ones."""
     wakes = []
     for row in await read_expectations(conn, "ex.status = 'fired'"):
-        hit = await (await conn.execute(
-            "SELECT id FROM events WHERE kind = 'expectation.fired' "
-            "AND payload->>'expectation_id' = %s ORDER BY id DESC LIMIT 1",
-            (str(row["id"]),))).fetchone()
+        hit = await fired_for(conn, int(row["id"]))
         fired_id = hit[0] if hit else None
         answered = False
         if fired_id is not None:
@@ -266,7 +259,7 @@ def text(condition):
 
 async def reminded(conn, row, event, *, pfc, embedder, settings):
     """Return whether the line reminds the condition: cosine reaches `lo` from the prior."""
-    query = payload_text(event.payload)
+    query = event.description
     if pfc is None or embedder is None or not query:
         return False
     left = await read_event_vector(conn, event.id) if event.id is not None else None
@@ -285,10 +278,11 @@ async def reminder(conn, row, event, now):
     """
     payload = {"expectation_id": row["id"], "about": row["about"],
                "condition": row["condition_text"] or text(row["condition"]) or "",
-               "text": payload_text(event.payload), "line_place": event.place,
+               "text": event.description, "line_place": event.place,
                "reminder": True}
     reminded_event = await append_event(conn, ts=now, kind="expectation.reminded",
                                         who=event.who, place=event.place, body=event.body,
                                         origin_actor=row["origin_actor"],
-                                        caused_by=event.id, payload=payload)
+                                        caused_by=event.id, description=event.description,
+                                        payload=payload)
     return {**row, "trigger": reminded_event}

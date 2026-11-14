@@ -221,7 +221,7 @@ async def test_fallback_moves_land_as_additive_fields_on_model_call_event(aconn)
     kernel = build(aconn, clock=FakeClock(start), pfc=pfc, settings=cfg)
     put_task = asyncio.create_task(kernel.put(Event(
         id=None, ts=start, kind="percept", who="person:owner", place="space:tg:1",
-        body="telegram", payload={"description": "halo", "addressed": True, "place_kind": "direct"},
+        body="telegram", payload={"description": "halo", "addressed": True, "place_kind": "direct"}, description="halo",
     )))
     await asyncio.sleep(0)
     await kernel.step()

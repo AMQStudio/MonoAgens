@@ -43,7 +43,7 @@ class SlowModelEmbedder(FakeEmbedder):
 def _percept(text: str) -> Event:
     return Event(id=None, ts=START, kind="percept", who="person:tg:7001",
                  place="space:tg:7001", body="telegram",
-                 payload={"description": text, "place_kind": "direct", "addressed": True})
+                 payload={"description": text, "place_kind": "direct", "addressed": True}, description=text)
 
 
 async def _kinds(conn) -> list[str]:

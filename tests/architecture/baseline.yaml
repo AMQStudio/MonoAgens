@@ -1,46 +1,18 @@
 version: 1
 findings:
   - {file: monoagens/core/context/parts.py, line: 22, ban: text-parse}
-  - {file: monoagens/core/context/parts.py, line: 244, ban: payload-read}
-  - {file: monoagens/core/context/parts.py, line: 246, ban: payload-read}
-  - {file: monoagens/core/context/parts.py, line: 248, ban: payload-read}
-  - {file: monoagens/core/context/parts.py, line: 249, ban: payload-read}
-  - {file: monoagens/core/context/parts.py, line: 257, ban: payload-read}
-  - {file: monoagens/core/context/parts.py, line: 260, ban: payload-read}
-  - {file: monoagens/core/context/parts.py, line: 269, ban: payload-read}
-  - {file: monoagens/core/context/working.py, line: 23, ban: payload-read}
-  - {file: monoagens/core/context/working.py, line: 137, ban: payload-read}
-  - {file: monoagens/core/context/working.py, line: 138, ban: payload-read}
-  - {file: monoagens/core/context/working.py, line: 144, ban: payload-read}
-  - {file: monoagens/core/dispatch.py, line: 129, ban: removed-field}
-  - {file: monoagens/core/dispatch.py, line: 136, ban: removed-field}
+  - {file: monoagens/core/dispatch.py, line: 48, ban: payload-read}
+  - {file: monoagens/core/dispatch.py, line: 195, ban: removed-field}
+  - {file: monoagens/core/dispatch.py, line: 202, ban: removed-field}
   - {file: monoagens/core/expectations.py, line: 17, ban: text-parse}
   - {file: monoagens/core/expectations.py, line: 35, ban: text-parse}
-  - {file: monoagens/core/expectations.py, line: 50, ban: removed-field}
-  - {file: monoagens/core/expectations.py, line: 51, ban: payload-read}
-  - {file: monoagens/core/expectations.py, line: 51, ban: text-parse}
-  - {file: monoagens/core/expectations.py, line: 52, ban: text-parse}
-  - {file: monoagens/core/expectations.py, line: 114, ban: payload-read}
-  - {file: monoagens/core/expectations.py, line: 140, ban: removed-field}
-  - {file: monoagens/core/expectations.py, line: 143, ban: removed-field}
-  - {file: monoagens/core/expectations.py, line: 269, ban: payload-read}
-  - {file: monoagens/core/expectations.py, line: 288, ban: payload-read}
+  - {file: monoagens/core/expectations.py, line: 136, ban: removed-field}
+  - {file: monoagens/core/expectations.py, line: 139, ban: removed-field}
   - {file: monoagens/core/hooks.py, line: 17, ban: text-parse}
   - {file: monoagens/core/identity.py, line: 14, ban: text-parse}
-  - {file: monoagens/core/identity.py, line: 97, ban: payload-read}
-  - {file: monoagens/core/jobs.py, line: 105, ban: payload-read}
-  - {file: monoagens/core/jobs.py, line: 187, ban: labels-read}
-  - {file: monoagens/core/kernel.py, line: 194, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 283, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 328, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 331, ban: payload-read}
-  - {file: monoagens/core/kernel.py, line: 546, ban: payload-read}
-  - {file: monoagens/core/memory/recall.py, line: 31, ban: payload-read}
-  - {file: monoagens/core/memory/sleep.py, line: 113, ban: removed-field}
+  - {file: monoagens/core/jobs.py, line: 108, ban: payload-read}
+  - {file: monoagens/core/jobs.py, line: 172, ban: labels-read}
   - {file: monoagens/core/reasoning.py, line: 243, ban: text-parse}
-  - {file: monoagens/core/sends.py, line: 43, ban: payload-read}
-  - {file: monoagens/core/sends.py, line: 44, ban: payload-read}
-  - {file: monoagens/core/sends.py, line: 50, ban: payload-read}
   - {file: monoagens/core/threads.py, line: 62, ban: payload-read}
   - {file: monoagens/core/threads.py, line: 128, ban: removed-field}
   - {file: monoagens/core/threads.py, line: 132, ban: removed-field}
@@ -89,9 +61,9 @@ findings:
   - {file: monoagens/middleware/interaction.py, line: 463, ban: text-parse}
   - {file: monoagens/middleware/interaction.py, line: 502, ban: removed-field}
   - {file: monoagens/middleware/interaction.py, line: 525, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 860, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 872, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 878, ban: text-parse}
+  - {file: monoagens/middleware/interaction.py, line: 861, ban: text-parse}
+  - {file: monoagens/middleware/interaction.py, line: 873, ban: text-parse}
+  - {file: monoagens/middleware/interaction.py, line: 879, ban: text-parse}
   - {file: monoagens/middleware/loader.py, line: 16, ban: text-parse}
   - {file: monoagens/middleware/loader.py, line: 36, ban: text-parse}
   - {file: monoagens/middleware/loader.py, line: 37, ban: text-parse}
@@ -115,9 +87,9 @@ findings:
   - {file: monoagens/middleware/privacy.py, line: 625, ban: text-parse}
   - {file: monoagens/middleware/privacy.py, line: 634, ban: text-parse}
   - {file: monoagens/middleware/privacy.py, line: 808, ban: text-parse}
-  - {file: monoagens/middleware/privacy.py, line: 1057, ban: removed-field}
-  - {file: monoagens/middleware/privacy.py, line: 1090, ban: text-parse}
-  - {file: monoagens/middleware/privacy.py, line: 1121, ban: text-parse}
+  - {file: monoagens/middleware/privacy.py, line: 1056, ban: removed-field}
+  - {file: monoagens/middleware/privacy.py, line: 1089, ban: text-parse}
+  - {file: monoagens/middleware/privacy.py, line: 1120, ban: text-parse}
   - {file: monoagens/middleware/registry.py, line: 515, ban: text-parse}
   - {file: monoagens/middleware/registry.py, line: 599, ban: text-parse}
   - {file: monoagens/middleware/roles.py, line: 22, ban: text-parse}
@@ -132,7 +104,7 @@ findings:
   - {file: monoagens/middleware/roles.py, line: 673, ban: text-parse}
   - {file: monoagens/middleware/roles.py, line: 687, ban: removed-field}
   - {file: tests/adapters/test_loader.py, line: 86, ban: tests-private}
-  - {file: tests/core/test_gate.py, line: 985, ban: tests-private}
+  - {file: tests/core/test_gate.py, line: 986, ban: tests-private}
   - {file: tests/middleware/test_privacy.py, line: 755, ban: tests-private}
   - {file: tests/middleware/test_registry.py, line: 171, ban: tests-private}
   - {file: tests/middleware/test_registry.py, line: 183, ban: tests-private}

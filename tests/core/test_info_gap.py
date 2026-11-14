@@ -39,7 +39,7 @@ async def _gap(text: str, language: str, embedder=None) -> float:
     vector = (await embedder.embed([text]))[0]
     situation = Situation(event=Event(id=None, ts=START, kind="percept", who="person:tg:1",
                                        place="space:tg:1", body="telegram",
-                                       payload={"description": text}),
+                                       payload={"description": text}, description=text),
                           vector=vector, references=tuple(vectors))
     return signals.SIGNALS["info_gap"](situation)
 

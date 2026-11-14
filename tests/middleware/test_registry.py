@@ -59,7 +59,7 @@ class _Tool:
 
     async def act(self, action: Action) -> Any:
         self.actions.append(action)
-        return action.payload.get("_result")
+        return action.arguments.get("_result")
 
 
 def _event(kind: str = "command", *, body: str = "telegram", **payload) -> Event:

@@ -55,7 +55,7 @@ async def test_imported_percepts_embed_in_batches_and_stay_searchable(aconn) -> 
             asyncio.create_task(kernel.put(Event(
                 id=None, ts=START, kind="percept", who="person:alice",
                 place="space:wa:100", body="whatsapp",
-                payload={"text": f"hist topicalpha #{i}", "imported": True},
+                payload={"text": f"hist topicalpha #{i}", "imported": True}, description=f"hist topicalpha #{i}",
             )))
             for i in range(5)
         ]
@@ -66,7 +66,7 @@ async def test_imported_percepts_embed_in_batches_and_stay_searchable(aconn) -> 
         live = await kernel.put(Event(
             id=None, ts=START, kind="percept", who="person:alice",
             place="space:wa:100", body="whatsapp",
-            payload={"text": "live message", "imported": False},
+            payload={"text": "live message", "imported": False}, description="live message",
         ))
         await _wait_jobs_and_queue(kernel)
     finally:
@@ -92,7 +92,7 @@ async def test_imported_percepts_embed_in_batches_and_stay_searchable(aconn) -> 
 
     found = await recall.search(
         aconn,
-        Action(kind="self.recall", place="space:wa:100", payload={"query": "topicalpha"}),
+        Action(kind="self.recall", place="space:wa:100", arguments={"query": "topicalpha"}),
         visible=_allow,
         memory_visible=_allow,
     )

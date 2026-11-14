@@ -252,7 +252,7 @@ async def test_act_say_sends_message():
     fake = FakeTelegram()
     body = _body(fake)
 
-    await body.act(Action(kind="say", place="space:tg:-100123", payload={"text": "halo"}))
+    await body.act(Action(kind="say", place="space:tg:-100123", arguments={"text": "halo"}))
 
     assert fake.calls == [("sendMessage", {"chat_id": "-100123", "text": "halo"})]
 
@@ -262,7 +262,7 @@ async def test_act_react_sets_reaction():
     body = _body(fake)
 
     await body.act(
-        Action(kind="react", place="space:tg:-100123", payload={"message_id": 7, "emoji": "👍"})
+        Action(kind="react", place="space:tg:-100123", arguments={"message_id": 7, "emoji": "👍"})
     )
 
     assert fake.calls == [
@@ -342,6 +342,6 @@ async def test_forum_topic_percept_and_say_carry_thread():
     assert events[0].payload["place_info"]["parent"] == f"space:tg:{CHAT_GROUP}"
 
     await body.act(Action(kind="say", place=f"space:tg:{CHAT_GROUP}:44",
-                          payload={"text": "siap"}))
+                          arguments={"text": "siap"}))
     assert ("sendMessage", {"chat_id": str(CHAT_GROUP), "text": "siap",
                             "message_thread_id": 44}) in fake.calls

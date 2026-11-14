@@ -66,7 +66,7 @@ class SleepPFC:
 def _msg(text: str, *, message_id: int = 1) -> Event:
     return Event(id=None, ts=START, kind="percept", who=WHO, place=PLACE, body="telegram",
                  payload={"description": text, "addressed": True, "place_kind": "direct",
-                          "data": {"message_id": message_id}})
+                          "data": {"message_id": message_id}}, description=text)
 
 
 async def _put(kernel: Kernel, event: Event) -> Event:

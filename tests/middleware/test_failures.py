@@ -14,7 +14,7 @@ import pytest
 from monoagens.__main__ import supervise_adapter
 from monoagens.adapters import telegram as telegram_adapter
 from monoagens.boot import build
-from monoagens.core import sends
+from monoagens.infra.store import unresolved_actions
 from monoagens.core.hooks import Continue
 from monoagens.core.reasoning import Reasoning
 from monoagens.infra.clock import FakeClock
@@ -132,7 +132,7 @@ async def test_compose_distinguishes_guard_from_best_effort() -> None:
 
     kernel = _FakeKernel()
     ev = Event(id=1, ts=START, kind="percept", who="person:budi", place="space:tg:1",
-               body="telegram", payload={"description": "halo"})
+               body="telegram", payload={"description": "halo"}, description="halo")
 
     show_mw = contract.compose(
         contract.mark_rule(broken_show, name="typing", kind="best-effort", show="typing"),
@@ -176,10 +176,10 @@ async def test_show_failure_records_error_and_turn_continues(aconn, failing_show
         id=None, ts=START, kind="percept", who="person:owner",
         place="space:tg:10", body="telegram", origin_actor="person:owner",
         payload={"description": "halo", "place_kind": "direct",
-                 "addressed": True, "data": {"message_id": "m1"}},
+                 "addressed": True, "data": {"message_id": "m1"}}, description="halo",
     ))
 
-    assert [a.payload["text"] for a in body.actions] == ["halo juga"]
+    assert [a.arguments["text"] for a in body.actions] == ["halo juga"]
     errs = [row[0]["error"] for row in await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'error'")).fetchall()]
     assert errs, f"expected error event when {failing_show} failed"
@@ -235,13 +235,13 @@ async def test_fault_injection_across_best_effort_progress_and_adapter_and_tool(
     await _feed(kernel, Event(
         id=None, ts=START, kind="percept", who="person:owner",
         place="space:tg:owner", body="telegram", origin_actor="person:owner",
-        payload={"description": "cari cuaca", "place_kind": "direct", "addressed": True},
+        payload={"description": "cari cuaca", "place_kind": "direct", "addressed": True}, description="cari cuaca",
     ))
 
-    assert [a.payload["text"] for a in body.actions] == ["pencarian gagal"]
+    assert [a.arguments["text"] for a in body.actions] == ["pencarian gagal"]
     results = [row[0] for row in await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'act.result' ORDER BY id")).fetchall()]
-    assert any("search.query failed (ConnectionError)" in str(r.get("result")) for r in results)
+    assert any("search.query failed (ConnectionError)" in r.get("reason", "") for r in results)
     errs = [row[0]["error"] for row in await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'error'")).fetchall()]
     assert any("narrate.progress" in e and "telegram" in e and "show=progress" in e for e in errs)
@@ -254,11 +254,11 @@ async def test_fault_injection_across_best_effort_progress_and_adapter_and_tool(
     await _feed(kernel2, Event(
         id=None, ts=START, kind="percept", who="person:owner",
         place="space:tg:owner2", body="telegram", origin_actor="person:owner",
-        payload={"description": "tes", "place_kind": "direct", "addressed": True},
+        payload={"description": "tes", "place_kind": "direct", "addressed": True}, description="tes",
     ))
     res2 = [row[0] for row in await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'act.result' ORDER BY id")).fetchall()]
-    assert any("telegram.say failed (RuntimeError)" in str(r.get("result")) for r in res2)
+    assert any("telegram.say failed (RuntimeError)" in r.get("reason", "") for r in res2)
 
 
 async def test_tool_failure_never_leaks_exception_message_secrets_to_log(aconn, caplog) -> None:
@@ -278,7 +278,7 @@ async def test_tool_failure_never_leaks_exception_message_secrets_to_log(aconn, 
         await _feed(kernel, Event(
             id=None, ts=START, kind="percept", who="person:owner",
             place="space:tg:owner_secret", body="telegram", origin_actor="person:owner",
-            payload={"description": "tes", "place_kind": "direct", "addressed": True},
+            payload={"description": "tes", "place_kind": "direct", "addressed": True}, description="tes",
         ))
 
     res = await (await aconn.execute(
@@ -347,28 +347,26 @@ async def test_refusal_to_readonly_place_returns_to_reasoning_and_answers_elsewh
         id=None, ts=START, kind="percept", who="person:owner", place="space:tg:ro",
         body="telegram", origin_actor="person:owner",
         payload={"description": "broadcast", "place_kind": "shared", "addressed": False,
-                 "place_info": {"form": "broadcast", "can_post": False, "name": "News"}},
+                 "place_info": {"form": "broadcast", "can_post": False, "name": "News"}}, description="broadcast",
     ))
     await _feed(kernel, Event(
         id=None, ts=START, kind="percept", who="person:owner", place="space:tg:dm",
         body="telegram", origin_actor="person:owner",
         payload={"description": "kirim ke channel News dong", "place_kind": "direct",
-                 "addressed": True},
+                 "addressed": True}, description="kirim ke channel News dong",
     ))
 
     # First call was refused; second call answered in the writable trigger place.
-    assert [(a.place, a.payload["text"]) for a in body.actions] == [
+    assert [(a.place, a.arguments["text"]) for a in body.actions] == [
         ("space:tg:dm", "Channel itu read-only; kubalas di sini ya."),
     ]
     assert len(fake.requests) == 2
     second_user_msg = fake.requests[1]["messages"][-1]["content"]
     assert "<doing>" in second_user_msg and "read-only place" in second_user_msg
-    outs = [row[0] for row in await (await aconn.execute(
-        "SELECT payload FROM events WHERE kind = 'act.out' ORDER BY id")).fetchall()]
-    assert len(outs) == 2
-    assert outs[0]["refused"] is True and outs[0]["communicative"] is True
-    assert outs[1].get("refused") is not True and outs[1]["communicative"] is True
-    assert await sends.pending(aconn) == []
+    receipts = [row[0] for row in await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'act.result' ORDER BY id")).fetchall()]
+    assert [row["state"] for row in receipts] == ["refused", "done"]
+    assert await unresolved_actions(aconn) == []
 
 
 async def test_repeated_refusal_is_bounded_by_brake_and_notifies_requester(aconn) -> None:
@@ -386,25 +384,25 @@ async def test_repeated_refusal_is_bounded_by_brake_and_notifies_requester(aconn
         id=None, ts=START, kind="percept", who="person:owner", place="space:tg:ro",
         body="telegram", origin_actor="person:owner",
         payload={"description": "broadcast", "place_kind": "shared", "addressed": False,
-                 "place_info": {"form": "broadcast", "can_post": False, "name": "News"}},
+                 "place_info": {"form": "broadcast", "can_post": False, "name": "News"}}, description="broadcast",
     ))
     await _feed(kernel, Event(
         id=None, ts=START, kind="percept", who="person:owner", place="space:tg:dm",
         body="telegram", origin_actor="person:owner",
         payload={"description": "kirim ke channel News terus", "place_kind": "direct",
-                 "addressed": True},
+                 "addressed": True}, description="kirim ke channel News terus",
     ))
 
     # Stops cleanly at max_task_steps=2 (2 LLM attempts + 1 brake stop), not an endless loop.
     assert len(fake.requests) == 2
-    assert not any(ev.payload.get("refused") for ev in await sends.pending(aconn))
+    assert await unresolved_actions(aconn) == []
     stopped = [row[0] for row in await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'guard.stopped' ORDER BY id")).fetchall()]
     assert any("max_task_steps" in str(s.get("reason") or "") for s in stopped)
     held = await (await aconn.execute(
         "SELECT count(*) FROM events WHERE kind = 'brake.held'")).fetchone()
     assert held == (1,)
-    assert any(a.place == "space:tg:dm" and "max_task_steps" in str(a.payload.get("text") or "")
+    assert any(a.place == "space:tg:dm" and "max_task_steps" in str(a.arguments.get("text") or "")
                for a in body.actions)
 
 
@@ -440,18 +438,16 @@ async def test_f2_hung_tool_times_out_under_watchdog_and_records_honest_act_resu
         _feed(kernel, Event(
             id=None, ts=START, kind="percept", who="person:owner",
             place="space:tg:10", body="telegram", origin_actor="person:owner",
-            payload={"description": "coba", "place_kind": "direct", "addressed": True},
+            payload={"description": "coba", "place_kind": "direct", "addressed": True}, description="coba",
         )),
         timeout=2.0,
     )
 
-    assert [a.payload["text"] for a in body.actions] == ["alatnya timeout"]
+    assert [a.arguments["text"] for a in body.actions] == ["alatnya timeout"]
     results = [row[0] for row in await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'act.result' ORDER BY id")).fetchall()]
-    assert any(
-        r.get("capability") == "slow.hang" and "timed out" in str((r.get("result") or {}).get("error") or "")
-        for r in results
-    ), results
+    assert any(r.get("capability") == "slow.hang" and "timed out" in r.get("reason", "")
+               for r in results), results
 
 
 async def test_f3_failing_call_in_apply_calls_lets_siblings_run_and_counts_task_step(
@@ -502,10 +498,10 @@ async def test_f3_failing_call_in_apply_calls_lets_siblings_run_and_counts_task_
         return await real_tools_act(event, capability, payload, **kw)
 
     monkeypatch.setattr(kernel.tools, "act", boom_tools_act)
-    acts = await jobs.apply_calls(kernel, root, [
+    acts = await jobs.apply_calls(kernel, root, [{"calls": [
         {"name": "act", "arguments": {"capability": "work.first", "arguments": {}}},
         {"name": "act", "arguments": {"capability": "work.second", "arguments": {}}},
-    ])
+    ]}], jobs.JobRef(f"pfc:{task['place']}", int(root.id)))
     fake_job = jobs.Job("pfc", f"pfc:{task['place']}", root, task["place"])
     await threads.after_step(kernel, fake_job, root, acts)
     await kernel.run_until_idle()
@@ -515,11 +511,12 @@ async def test_f3_failing_call_in_apply_calls_lets_siblings_run_and_counts_task_
         "SELECT id, caused_by, payload FROM events WHERE kind IN ('act.out', 'act.result') "
         "ORDER BY id"
     )).fetchall()
-    first_out = next(eid for eid, _, p in rows if p.get("capability") == "work.first" and "arguments" in p)
-    first_res = next(p for _, cb, p in rows if p.get("capability") == "work.first" and "result" in p)
-    first_cb = next(cb for _, cb, p in rows if p.get("capability") == "work.first" and "result" in p)
+    first_out = next(eid for eid, _, p in rows
+                     if p.get("capability") == "work.first" and "arguments" in p)
+    first_res, first_cb = next((p, cb) for _, cb, p in rows
+                               if p.get("capability") == "work.first" and "state" in p)
     assert first_cb == first_out
-    assert "RuntimeError" in str((first_res.get("result") or {}).get("error") or "")
+    assert first_res["state"] == "failed" and "RuntimeError" in first_res["reason"]
     saved_task = await read_state(aconn, f"task:{task['place']}")
     assert saved_task is not None and saved_task["steps"] == 2
 
@@ -578,8 +575,10 @@ async def test_f5_kernel_survives_backlog_flush_recover_and_expect_wake_errors(
         return [fired_a, fired_b]
 
     monkeypatch.setattr(expectations, "recovery", fake_recovery)
-    monkeypatch.setattr(sends, "resume",
-                        lambda _k: (_ for _ in ()).throw(RuntimeError("resume boom")))
+    async def boom(_now):
+        raise RuntimeError("resume boom")
+
+    monkeypatch.setattr(kernel, "_resume_actions", boom)
     await kernel.recover()
     assert woken_ids == [1, 2]
 

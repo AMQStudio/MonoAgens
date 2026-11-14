@@ -11,6 +11,7 @@ import pytest
 
 from monoagens.boot import build
 from monoagens.core.reasoning import ToolCall
+from tests.support import last_receipt as _last_receipt, receipt_result as _receipt
 from monoagens.infra.clock import FakeClock
 from monoagens.infra.store import append_event
 from monoagens.middleware.loader import Loader
@@ -73,9 +74,7 @@ async def _call(kernel, aconn, capability: str, arguments: dict, *,
     await kernel._apply(trigger, ToolCall("act", {"capability": capability,
                                                   "arguments": arguments}))
     await kernel.run_until_idle()
-    cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.result' "
-                              "ORDER BY id DESC LIMIT 1")
-    return (await cur.fetchone())[0]["result"]
+    return _receipt(await _last_receipt(aconn))
 
 
 async def test_write_then_read_inside_the_owners_workspace(aconn, tmp_path):
@@ -171,7 +170,8 @@ async def test_a_blocked_command_is_denied_by_the_guard(aconn, tmp_path):
     assert result["error"].startswith("sandbox command blocked: ")
     cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.out'")
     row = await cur.fetchone()
-    assert row is not None and row[0]["refused"] is True and row[0]["communicative"] is False
+    assert row is not None and row[0]["communicative"] is False
+    assert (await _last_receipt(aconn))["state"] == "refused"
     # `workspace.run` has `communicative: False` in its descriptor.
 
 

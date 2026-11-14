@@ -87,7 +87,7 @@ async def _run(aconn, tmp_path, *, with_plugin: bool, calls) -> tuple[list[str],
     put = asyncio.create_task(kernel.put(Event(
         id=None, ts=START, kind="percept", who="person:owner", place=PLACE, body="telegram",
         payload={"description": "siapa presiden sekarang?", "place_kind": "direct",
-                 "addressed": True})))
+                 "addressed": True}, description="siapa presiden sekarang?")))
     await asyncio.sleep(0)
     await kernel.step()
     await put

@@ -244,13 +244,13 @@ class ToolRegistry:
                                         and roles.can(who, entry.permission)))
 
     async def act(self, event: Event, capability: str, payload: dict[str, Any], *,
-                  event_id: int | None = None) -> Any:
+                  event_id: int | None = None, action_id: str = "") -> Any:
         """Hand one action to the adapter or plugin that declared the capability."""
         declared_by, _, name = capability.partition(".")
         adapter = self.adapters.get(declared_by)
         if adapter is None:
             raise RuntimeError(f"No adapter registered for {declared_by!r}")
-        action = Action(kind=name, place=event.place or "", payload=payload,
+        action = Action(id=action_id, kind=name, place=event.place or "", arguments=payload,
                         adapter=declared_by, event_id=event_id)
         timeout = getattr(getattr(self.kernel, "jobs", None), "timeout", None)
         try:
@@ -379,7 +379,7 @@ class RegistryTool:
 
     async def act(self, action: Action) -> dict[str, Any]:
         """Return a tool/skill entry (`describe`) or a slice of archived output (`more`)."""
-        payload = action.payload or {}
+        payload = action.arguments or {}
         if action.kind == "more":
             limit = payload.get("limit")
             return await self.registry.more(

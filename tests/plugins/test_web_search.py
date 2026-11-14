@@ -61,7 +61,7 @@ async def test_the_chain_skips_a_missing_key_and_reports_an_http_failure():
                  env={"TAVILY_API_KEY": "k", "BRAVE_API_KEY": "b"}, handler=handler)
 
     found = await tool.act(types.SimpleNamespace(kind="web_search",
-                                                 payload={"query": "kopi"}))
+                                                 arguments={"query": "kopi"}))
 
     assert found["provider"] == "brave"
     assert found["results"][0]["url"] == "https://a.test"
@@ -75,7 +75,7 @@ async def test_every_failure_carries_its_reason():
                  env={"TAVILY_API_KEY": "k", "BRAVE_API_KEY": "b"}, handler=handler)
 
     found = await tool.act(types.SimpleNamespace(kind="web_search",
-                                                 payload={"query": "kopi"}))
+                                                 arguments={"query": "kopi"}))
 
     assert found["error"] == "no provider answered"
     assert [item["provider"] for item in found["tried"]] == ["searxng", "tavily", "brave"]
@@ -87,7 +87,7 @@ async def test_an_empty_query_is_refused_and_results_are_clamped():
     tool = _tool()
 
     assert await tool.act(types.SimpleNamespace(kind="web_search",
-                                                payload={"query": "  "})) == {
+                                                arguments={"query": "  "})) == {
         "error": "empty query"}
     assert tools.MAX_RESULTS == 10
 

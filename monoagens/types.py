@@ -22,7 +22,8 @@ class Action:
 
     kind: str
     place: str
-    payload: dict[str, Any] = field(default_factory=dict)
+    arguments: dict[str, Any] = field(default_factory=dict)
+    id: str = ""
     adapter: str | None = None
     event_id: int | None = field(default=None, compare=False)
 

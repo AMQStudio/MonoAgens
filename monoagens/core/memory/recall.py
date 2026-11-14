@@ -28,7 +28,7 @@ async def search(conn, action, *, visible, memory_visible) -> dict[str, Any]:
     """Search events and memories; `visible` and `memory_visible` are the audience rule."""
     from monoagens.infra import prior  # local: identity imports recall at module level
 
-    args, context = dict(action.payload), action.place or None
+    args, context = dict(action.arguments), action.place or None
     query = str(args.get("query") or "").strip()
     start, end = _stamp(args.get("from")), _stamp(args.get("to"))
     limit = int(prior.constants(prior.load_settings())["recall_results"])

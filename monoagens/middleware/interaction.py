@@ -670,7 +670,8 @@ def progress_show(kernel: Any) -> Middleware:
         ):
             cat = catalog(getattr(kernel, "settings", None))
             step_prefix = str((cat.get("step") or {}).get("prefix") or "")
-            short = _short(interaction_text((item.payload or {}).get("result")))
+            receipt = item.payload or {}
+            short = _short(interaction_text(receipt.get("result") or receipt.get("reason")))
             line = f"{step_prefix} {capability}: {short}".strip()
             chain = int(item.caused_by or item.id or 0)
             await _present_step(kernel, item, line, chain=chain, place=place)

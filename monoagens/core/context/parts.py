@@ -75,8 +75,8 @@ def _now(soul: Any, context: PFCContext) -> str:
 
 
 def _place(soul: Any, context: PFCContext) -> str:
-    """Return the place this wake belongs to and the kind the middleware attached."""
-    return f"<place>{context.place} ({context.place_kind})</place>"
+    """Return the place this wake belongs to."""
+    return f"<place>{context.place}</place>"
 
 
 def _why_awake(soul: Any, context: PFCContext) -> str:
@@ -240,40 +240,35 @@ SHOWN_KINDS = (*RECENT_KINDS, "intent")  # an intent stays pending on that place
 
 
 def _recent_parts(soul: Any, event: Event) -> tuple[str, Any]:
+    """Return one recent line's speaker and words from the envelope alone."""
     if event.kind == "act.out":
-        return soul.name, (event.payload.get("arguments") or {}).get("text")
+        return soul.name, event.description
     if event.kind == "expectation.fired":
-        return "expectation", (event.payload.get("text") or event.payload.get("about"))
+        return "expectation", event.description
     if event.kind == "intent":
-        return "intent", event.payload.get("description")
-    return str(event.who or "?"), event.payload.get("description")
+        return "intent", event.description
+    return str(event.who or "?"), event.description
 
 
 def _event_text(event: Event | None) -> str:
+    """Return the line that woke the soul, read from the envelope."""
     if event is None:
         return "(no trigger event)"
     if event.kind == "expectation.reminded":
         return _reminder_text(event)
-    text = event.payload.get("description") or event.payload.get("text")
+    text = event.description
     who = str(event.who or "?")
-    line = f"{who}: {text}" if text else f"[{event.kind}]"
-    notes = event.payload.get("notes")
-    if notes:
-        each = [notes] if isinstance(notes, str) else notes
-        line += "\n" + "\n".join(f"note: {note}" for note in each)
-    return line
+    return f"{who}: {text}" if text else f"[{event.kind}]"
 
 
 def _reminder_text(event: Event) -> str:
-    """Render a reminder as the line with its speaker and place, then its question."""
-    payload = event.payload
-    place = payload.get("line_place") or event.place
-    where = f"[{place}] " if place else ""
-    said = f"{where}{event.who or '?'}: {payload.get('text')}" if payload.get("text") else ""
-    question = (f"this line may relate to your expectation: {payload.get('about') or '?'}; "
-                f"condition: {payload.get('condition') or '?'}; "
-                "does this line fulfil it?")
-    return f"{said}\n{question}" if said else question
+    """Render a reminder as the line with its place and speaker, from the envelope.
+
+    The question it asks is `why_awake`'s: the wake records the expectation, its condition
+    and the question in the reason, so the line is not repeated here.
+    """
+    where = f"[{event.place}] " if event.place else ""
+    return f"{where}{event.who or '?'}: {event.description}" if event.description else ""
 
 
 def _listed(items: Sequence[str]) -> str:

@@ -162,7 +162,7 @@ async def test_approval_and_brake_send_neutral_choices_in_configured_language(ac
                                       "perlu konfirmasi")
 
     assert place == OWNER_DM
-    sent = kernel.tools.adapters["telegram"].actions[-1].payload
+    sent = kernel.tools.adapters["telegram"].actions[-1].arguments
     assert sent["text"].startswith("Perlu izin: workspace.run")
     assert "person:owner" in sent["text"]
     assert sent["choices"] == ["Ya", "Tidak"]
@@ -173,7 +173,7 @@ async def test_approval_and_brake_send_neutral_choices_in_configured_language(ac
     await interaction.notify_brake(
         kernel, trigger, root_id=int(trigger.id), place=OWNER_DM, work="task-1",
         reason="max_wakes_per_hour", limit="max_wakes_per_hour", value=3, cap=3)
-    brake_sent = kernel.tools.adapters["telegram"].actions[-1].payload
+    brake_sent = kernel.tools.adapters["telegram"].actions[-1].arguments
     assert "Stopped work (task-1)" in brake_sent["text"]
     assert brake_sent["choices"] == ["Continue", "Stop"]
 
@@ -188,7 +188,7 @@ async def test_a_button_callback_answers_the_approval(aconn):
     rule = interaction.answer(kernel)
     callback = Event(id=None, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
                      body="telegram",
-                     payload={"approval": asked.id, "answer": True, "description": "yes"})
+                     payload={"approval": asked.id, "answer": True, "description": "yes"}, description="yes")
     await rule(callback, {"conn": aconn, "now": START})
 
     cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'approval.answered'")
@@ -232,7 +232,7 @@ async def test_show_switches_write_one_line_and_apply(aconn, tmp_path):
 
 def _percept_event() -> Event:
     return Event(id=None, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
-                 body="telegram", payload={"description": "halo"})
+                 body="telegram", payload={"description": "halo"}, description="halo")
 
 
 def test_the_boot_report_names_each_adapters_missing_optional_parts():
@@ -267,7 +267,7 @@ class _RichScreen(Screen):
         if action.kind == "say":
             self._msg_seq += 1
             mid = f"m{self._msg_seq}"
-            choices = list((action.payload or {}).get("choices") or ())
+            choices = list((action.arguments or {}).get("choices") or ())
             if choices and "reactions" in self.shows and "buttons" not in self.shows:
                 for emoji in ("👍", "👎"):
                     self.shown.append((action.place, "reactions",
@@ -485,7 +485,7 @@ async def test_reaction_approval_answered_after_restart_still_counts(aconn):
             "reply_to": {"message_id": msg_id},
             "reaction": {"emoji": "👍", "message_id": msg_id},
             "answer": "👍",
-        }},
+        }}, description="",
     )
     await interaction.answer(restarted)(reaction_event, {"conn": aconn, "now": START})
     cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'approval.answered'")

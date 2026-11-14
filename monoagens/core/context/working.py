@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from monoagens.infra.store import payload_text, read_last_events
+from monoagens.infra.store import actions_of, read_last_events
 from monoagens.types import Event
 
 
@@ -19,11 +19,12 @@ async def doing_entries(conn, place: str, task: Mapping[str, Any] | None,
     root, root_place, goal = await chain_root_info(
         conn, trigger.id if trigger is not None else None)
     events = await _chain_events(conn, root, place) if root is not None else []
-    acts = [seen for seen in events if seen.kind == "act.out"]
-    if not acts or any(seen.payload.get("communicative") and not seen.payload.get("refused")
-                       for seen in acts):
+    if not any(seen.kind == "act.out" for seen in events):
         return ()
-    return _line_entries(events, goal, values, goal_source=(root_place or place, root))
+    ledger = await _ledger(conn, events)
+    if _spoke(ledger):
+        return ()
+    return _line_entries(events, goal, ledger, values, goal_source=(root_place or place, root))
 
 
 async def doing_lines(conn, place: str, task: Mapping[str, Any] | None,
@@ -39,13 +40,13 @@ async def chain_root_info(conn, event_id: int | None) -> tuple[int | None, str |
         return None, None, ""
     cur = await conn.execute(
         "WITH RECURSIVE up AS ("
-        "SELECT id, caused_by, place, payload FROM events WHERE id = %s "
-        "UNION ALL SELECT e.id, e.caused_by, e.place, e.payload FROM events e JOIN up "
+        "SELECT id, caused_by, place, description FROM events WHERE id = %s "
+        "UNION ALL SELECT e.id, e.caused_by, e.place, e.description FROM events e JOIN up "
         "ON e.id = up.caused_by) "
-        "SELECT id, place, payload FROM up WHERE caused_by IS NULL ORDER BY id LIMIT 1",
+        "SELECT id, place, description FROM up WHERE caused_by IS NULL ORDER BY id LIMIT 1",
         (event_id,))
     row = await cur.fetchone()
-    return (int(row[0]), row[1], payload_text(row[2] or {})) if row else (None, None, "")
+    return (int(row[0]), row[1], str(row[2] or "")) if row else (None, None, "")
 
 
 async def chain_root(conn, event_id: int | None) -> tuple[int | None, str]:
@@ -84,24 +85,39 @@ async def _task_entries(conn, place: str, task: Mapping[str, Any],
     events = [seen for seen in events if (seen.id or 0) >= since]
     goal_src = (str(task.get("source_place") or parent or place),
                 int(since) if parent and since else None)
-    return _line_entries(events, str(task.get("goal") or "(unknown)"), values,
+    ledger = await _ledger(conn, events)
+    return _line_entries(events, str(task.get("goal") or "(unknown)"), ledger, values,
                          goal_source=goal_src)
+
+
+async def _ledger(conn, events: Sequence[Event]) -> dict[int, dict[str, Any]]:
+    """Return the action ledger row of every `act.out` event in one chain."""
+    return await actions_of(conn, [seen.id for seen in events if seen.kind == "act.out"])
+
+
+def _spoke(ledger: Mapping[int, dict[str, Any]]) -> bool:
+    """Return whether an act of this chain already spoke: its receipt is not a refusal."""
+    for row in ledger.values():
+        receipt = row.get("receipt") or {}
+        if row.get("communicative") and receipt.get("state") not in ("refused", "failed"):
+            return True
+    return False
 
 
 async def _chain_events(conn, root: int, place: str) -> list[Event]:
     """Return every event of one chain that happened in this place, in order."""
     cur = await conn.execute(
         "WITH RECURSIVE chain AS ("
-        "SELECT id, ts, kind, who, place, payload, caused_by FROM events WHERE id = %s "
-        "UNION ALL SELECT e.id, e.ts, e.kind, e.who, e.place, e.payload, e.caused_by "
+        "SELECT id, ts, kind, who, place, description, caused_by FROM events WHERE id = %s "
+        "UNION ALL SELECT e.id, e.ts, e.kind, e.who, e.place, e.description, e.caused_by "
         "FROM events e JOIN chain c ON e.caused_by = c.id) "
-        "SELECT id, ts, kind, who, place, payload, caused_by FROM chain "
+        "SELECT id, ts, kind, who, place, description, caused_by FROM chain "
         "WHERE place = %s ORDER BY id", (root, place))
     return [Event(id=row[0], ts=row[1], kind=row[2], who=row[3], place=row[4],
-                  payload=row[5] or {}, caused_by=row[6]) for row in await cur.fetchall()]
+                  description=row[5] or "", caused_by=row[6]) for row in await cur.fetchall()]
 
 
-def _line_entries(events: Sequence[Event], goal: str,
+def _line_entries(events: Sequence[Event], goal: str, ledger: Mapping[int, dict[str, Any]],
                   values: Mapping[str, Any], *,
                   goal_source: tuple[str | None, int | None] = (None, None),
                   ) -> tuple[tuple[str, str | None, int | None], ...]:
@@ -112,9 +128,9 @@ def _line_entries(events: Sequence[Event], goal: str,
     lines: list[tuple[str, str | None, int | None]] = [
         (f"goal: {goal or '(unknown)'}", goal_source[0], goal_source[1]),
     ]
-    lines += [(f"step: {_step_text(seen)}", seen.place, seen.id)
+    lines += [(f"step: {_step_text(seen, ledger.get(seen.id))}", seen.place, seen.id)
               for seen in events if seen.kind == "act.out"]
-    results = [(seen.id, seen.caused_by, seen.place, _result_text(seen))
+    results = [(seen.id, seen.caused_by, seen.place, _result_text(seen, ledger))
                for seen in events if seen.kind == "act.result"]
     if not results:
         return tuple(lines)
@@ -132,16 +148,20 @@ def _line_entries(events: Sequence[Event], goal: str,
     return tuple(lines)
 
 
-def _step_text(event: Event) -> str:
-    """Render one of the soul's acts, its arguments included, communicative or not."""
-    arguments = dict(event.payload.get("arguments") or {})
-    capability = event.payload.get("capability") or "?"
-    return f"{capability} {json.dumps(arguments, ensure_ascii=False)}"
+def _step_text(event: Event, row: Mapping[str, Any] | None) -> str:
+    """Render one of the soul's acts from its ledger row, else from its own description."""
+    if not row:
+        return event.description
+    arguments = dict(row.get("arguments") or {})
+    return f"{row.get('capability') or '?'} {json.dumps(arguments, ensure_ascii=False)}"
 
 
-def _result_text(event: Event) -> str:
-    """Render one act's result: its text, or the whole result when it has none."""
-    result = event.payload.get("result")
+def _result_text(event: Event, ledger: Mapping[int, dict[str, Any]]) -> str:
+    """Render one act's result from its action's receipt, else from its own description."""
+    receipt = (ledger.get(event.caused_by) or {}).get("receipt") or {}
+    result = receipt.get("result")
     if isinstance(result, dict):
-        return str(result.get("text") or json.dumps(result, ensure_ascii=False, default=str))
-    return str(result or "")
+        found = str(result.get("text") or json.dumps(result, ensure_ascii=False, default=str))
+    else:
+        found = str(result or "")
+    return found or str(receipt.get("reason") or receipt.get("state") or event.description or "")

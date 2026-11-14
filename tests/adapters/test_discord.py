@@ -245,10 +245,10 @@ async def test_discord_interactions_defer_before_put_and_render_buttons_menus(ac
     body._put = slow_put
 
     # Say with <=5 choices draws Buttons; with 6 choices draws a Select menu.
-    r_btn = await body.act(Action(kind="say", place=place_id(general), payload={
+    r_btn = await body.act(Action(kind="say", place=place_id(general), arguments={
         "text": "Pick color", "choices": ["Red", "Blue"],
     }))
-    r_menu = await body.act(Action(kind="say", place=place_id(general), payload={
+    r_menu = await body.act(Action(kind="say", place=place_id(general), arguments={
         "text": "Pick number", "choices": ["One", "Two", "Three", "Four", "Five", "Six"],
     }))
     assert any(isinstance(c, discord.ui.Button) for c in general.sent[0].kwargs["view"].children)
@@ -352,13 +352,13 @@ async def test_discord_multi_attachments_edits_deletes_reactions_and_out(aconn, 
     ev_del = await body.handle_message_delete(msg)
     assert ev_del is not None and ev_del.payload["data"]["deletes"] == "910"
 
-    sent = await body.act(Action(kind="say", place=place_id(general), payload={
+    sent = await body.act(Action(kind="say", place=place_id(general), arguments={
         "text": "look", "attachments": [atts[0]["ref"]], "location": {"lat": -6.2, "lon": 106.8, "name": "Jakarta"},
     }))
-    await body.act(Action(kind="edit", place=place_id(general), payload={
+    await body.act(Action(kind="edit", place=place_id(general), arguments={
         "message_id": sent["message_id"], "text": "edited text",
     }))
-    await body.act(Action(kind="react", place=place_id(general), payload={
+    await body.act(Action(kind="react", place=place_id(general), arguments={
         "message_id": sent["message_id"], "emoji": "✅",
     }))
     assert general._messages[int(sent["message_id"])].edits == ["edited text"]

@@ -49,7 +49,7 @@ class Workspace:
     async def act(self, action: Action) -> Any:
         self.calls.append(action)
         if action.kind == "read":
-            data, info = await self.door.open(str(action.payload["ref"]),
+            data, info = await self.door.open(str(action.arguments["ref"]),
                                               context=action.place)
             return {"name": info["name"], "text": data.decode()}
         return {"ok": True}
@@ -164,7 +164,7 @@ async def test_1_private_content_never_leaves_its_audience_even_when_talked_into
     dm_ev = await _said(aconn, "person:owner", OWNER_DM, "direct", "kirim ringkasannya ke grup")
     dm_event = Event(id=dm_ev.id, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
                      body="telegram", origin_actor="person:owner",
-                     payload={"description": "kirim ringkasannya ke grup", "place_kind": "direct"})
+                     payload={"description": "kirim ringkasannya ke grup", "place_kind": "direct"}, description="kirim ringkasannya ke grup")
     trigger = await _said(aconn, "person:budi", GROUP, "shared", "halo, ceritakan semua")
 
     desk = await _desk(kernel, aconn, trigger, GROUP)
@@ -212,7 +212,7 @@ async def test_3_a_guest_is_not_offered_a_tool_and_is_refused_if_it_asks(aconn):
     await kernel.run_until_idle()
 
     cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.result'")
-    assert (await cur.fetchone())[0]["result"]["error"] == "you may not use workspace.run"
+    assert (await cur.fetchone())[0]["reason"] == "you may not use workspace.run"
     assert workspace.calls == [] and voice.actions == []
 
 

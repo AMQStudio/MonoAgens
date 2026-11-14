@@ -80,7 +80,7 @@ asserts behavior the contract removes, e.g. `text_like`), `scenarios/`, `scripts
   its reason; stored ones are upcast to a free-text condition.
 - [ ] 2.5 The context as items with sources (contract.md §3); the context hook receives items;
   the text is rendered after the last hook.
-- [ ] 2.6 Actions and receipts: deterministic action ids; every `act.out` ends in exactly one
+- [x] 2.6 Actions and receipts: deterministic action ids; every `act.out` ends in exactly one
   `act.result` with a state; `refused` wakes reasoning (bounded by the brakes), `held` does not;
   after a restart an action without a receipt goes back to its body with the same id; nothing is
   re-sent by the core on its own. `act.out` records the arguments as the action hook returned
@@ -358,6 +358,57 @@ Deviations, recorded:
   commit: `dispatch` still records one only when the tool returns something. Making it universal
   reorders eight pinned event sequences in `tests/core/test_reasoning.py`, and that migration
   belongs with the deterministic action ids and the ledger.
+
+#### 2.2 (rendering half) and 2.6 Actions and receipts
+
+Line counts after this commit: core 3984 (+104) · middleware 6144 · adapters 5465 ·
+plugins 2065 · tests 19960 (baseline 18577). Contract 807, `contract.lock` untouched.
+
+The rendering half of 2.2 and 2.6 landed together: the core's run-time reads of `payload` for
+the desk's lines and the ledger that replaces them are one change, because a reader without a
+writer leaves `<doing>` blank and a writer without ids leaves nothing to resume.
+
+One home per fix:
+
+- the core's desk lines read the envelope: `core/context/parts.py` (`_recent_parts`,
+  `_event_text`, `_reminder_text`) and `core/context/working.py` (`chain_root_info`,
+  `_chain_events`);
+- a chain's step and result lines read the ledger: `core/context/working.py`
+  (`_ledger`, `_step_text`, `_result_text`) through `store.actions_of`;
+- the action ledger: `monoagens/infra/store.py` (`write_action` writes `action:<id>` and the
+  `act:<event id>` pointer in one call, `close_action`, `action_of`/`actions_of`,
+  `unresolved_actions`);
+- the deterministic action id: `contract.action_id` called once, in `core/dispatch.action_for`
+  (`JobRef` from `core/jobs.Job.started_event_id`, round index, index of the act in its round);
+- exactly one receipt per act, and the wake rule: `Kernel._settle_action` (held is recorded and
+  never wakes; a message that already ended the step records `decision.silent`; the result is
+  settled so its best-effort shows still run) with `Kernel._decided` as the idempotence check;
+- resume after a restart: `Kernel._resume_actions` over `store.unresolved_actions` (same id,
+  `sends.py` deleted with `act.confirmed`);
+- a stored `text_like` cue becomes a free-text condition on read: `store._upcast_cue` (D-K),
+  needed here because `expectations.matches_cue` stopped reading words;
+- the empty answer costs no model call: `Kernel._settle_action`.
+
+Deviations and decisions, recorded:
+
+- `step_spoke` survives in `core/context/working.py` until 2.7 (F.4): it answers the same
+  question the ledger will, and 2.6's wake rule is what replaces it.
+- An act whose body answers `None` records its `done` receipt but does not wake reasoning: an
+  empty answer carries no news, and waking on it spends one model call per react. The receipt is
+  still the contract's one answer per act.
+- A refusal this door makes itself (invalid arguments, unknown capability, a second message to
+  the same place) records its `act.out` and its `act.result` like any other act.
+- `Appraisal.payload()` is now `Appraisal.record()`: it builds a decision's payload, it never
+  reads one, and the ratchet's ban 3 read the name.
+- `types.Action` gains `id` and renames `payload` to `arguments`, so the id reaches the body now;
+  the switch to `contract.Action` stays with 3.4.
+- `Kernel.enqueue` marks an event that already has an id as recorded, so the consumer wakes on it
+  without writing it a second time (the first version inserted the receipt twice).
+- tests: the pinned event sequences gained the universal `act.result` (and lost `act.confirmed`);
+  `tests/core/test_sends.py` became `tests/core/test_action_ledger.py`; the two chain tests now
+  write their ledger rows and read `<doing>` through them; `_rich()` and every hand-built `Event`
+  carry their `description`; the `notes` payload branch's test is deleted (the contract removed
+  that field).
 
 ### Where the work stands (session of 2026-11-14)
 

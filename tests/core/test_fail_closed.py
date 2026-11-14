@@ -46,7 +46,7 @@ class RecordingAdapter:
 
 def _event(place: str = "space:tg:1", who: str = "person:budi") -> Event:
     return Event(id=None, ts=START, kind="percept", who=who, place=place, body="telegram",
-                 payload={"description": "halo", "place_kind": "shared"})
+                 payload={"description": "halo", "place_kind": "shared"}, description="halo")
 
 
 async def test_the_boot_helper_installs_the_policy_and_the_four_values(aconn):
@@ -109,7 +109,7 @@ async def test_a_plugin_that_widens_the_desk_is_narrowed_again(aconn):
     fact = memory.MemoryHit("- aku di-PHK (person:fulan at space:wa:fulan)",
                             place=PRIVATE, sources=(private.id,))
     line = Event(id=private.id, ts=START, kind="percept", who="person:fulan", place=PRIVATE,
-                 body="whatsapp", payload={"description": "aku di-PHK"})
+                 body="whatsapp", payload={"description": "aku di-PHK"}, description="aku di-PHK")
     kernel = build(aconn, clock=FakeClock(START), settings=SETTINGS)
 
     async def widen(item, ctx):

@@ -100,17 +100,17 @@ async def test_observability_logs_key_events_without_private_text(aconn, caplog)
             await kernel.put(Event(
                 id=None, ts=START, kind="percept", who="person:owner",
                 place="space:tg:999", body="telegram",
-                payload={"text": secret_dm, "dm": True, "addressed": True},
+                payload={"text": secret_dm, "dm": True, "addressed": True}, description=secret_dm,
             ))
             await kernel.put(Event(
                 id=None, ts=START, kind="percept", who="person:owner",
                 place="space:tg:-100123", body="telegram",
-                payload={"text": "BLOCK_ME private text"},
+                payload={"text": "BLOCK_ME private text"}, description="BLOCK_ME private text",
             ))
             await kernel.put(Event(
                 id=None, ts=START, kind="percept", who="person:alice",
                 place="space:tg:-100123", body="telegram",
-                payload={"text": "selamat pagi semua!"},
+                payload={"text": "selamat pagi semua!"}, description="selamat pagi semua!",
             ))
             await kernel.put(Event(
                 id=None, ts=START, kind="error", who="telegram", place="", body="telegram",
@@ -154,7 +154,7 @@ async def test_imported_percepts_emit_summary_every_n_from_config(aconn, caplog)
             await kernel.put(Event(
                 id=None, ts=START, kind="percept", who="person:bob",
                 place="space:tg:123", body="telegram",
-                payload={"text": f"IMPORTED_TEXT_{i}", "imported": True},
+                payload={"text": f"IMPORTED_TEXT_{i}", "imported": True}, description=f"IMPORTED_TEXT_{i}",
             ))
         await kernel.queue.join()
     finally:
@@ -204,7 +204,7 @@ def test_observability_measures_description_payload_len(caplog) -> None:
     event = Event(
         id=1, ts=START, kind="percept", who="whatsapp:6281100001@s.whatsapp.net",
         place="space:wa:6281100001@s.whatsapp.net", body="whatsapp",
-        payload={"description": "halo selamat malam"},
+        payload={"description": "halo selamat malam"}, description="halo selamat malam",
     )
     observer.observe(event)
     lines = _info_lines(caplog)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timedelta, timezone
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -71,12 +72,12 @@ class RecordingBody:
 def _msg(text: str = "halo", *, message_id: int = 1, addressed: bool = True) -> Event:
     return Event(id=None, ts=START, kind="percept", who=WHO, place=PLACE, body="telegram",
                  payload={"description": text, "addressed": addressed, "place_kind": "direct",
-                          "data": {"message_id": message_id}})
+                          "data": {"message_id": message_id}}, description=text)
 
 
 def _source() -> Event:
     return Event(id=None, ts=START, kind="percept", who=WHO, place=PLACE, body="telegram",
-                 payload={"text": "source"})
+                 payload={"text": "source"}, description="source")
 
 
 async def _feed(kernel: Kernel, event: Event) -> Event:
@@ -246,18 +247,18 @@ async def test_time_path_ignores_future_expectations(aconn):
 
 async def test_event_path_fires_on_a_matching_event(aconn):
     exp_id, _ = await _create(aconn, cue_time=None,
-                              cue_event={"kind": "percept", "who": WHO, "text_like": "workout"})
+                              cue_event={"kind": "percept", "place": "space:tg:2"})
     kernel = build(aconn, clock=FakeClock(START), pfc=None, settings=SETTINGS)
 
     await _feed(kernel, _msg("halo", message_id=1))
     assert await _status(aconn, exp_id) == "active"
 
-    await _feed(kernel, _msg("saya sudah WORKOUT", message_id=2))
+    await _feed(kernel, replace(_msg("saya sudah WORKOUT", message_id=2), place="space:tg:2"))
     assert await _status(aconn, exp_id) == "fired"
 
 
 async def test_event_seen_expectation_that_is_met_never_fires(aconn):
-    pattern = {"kind": "percept", "who": WHO, "text_like": "workout"}
+    pattern = {"kind": "percept", "who": WHO}
     exp_id, _ = await _create(aconn, cue_time=None, cue_event=pattern,
                               expect={"event_seen": pattern, "within": "2d"})
     kernel = build(aconn, clock=FakeClock(START), pfc=None, settings=SETTINGS)
@@ -272,7 +273,7 @@ async def test_event_seen_expectation_that_is_met_never_fires(aconn):
 
 
 async def test_time_path_met_event_seen_resolves_without_firing(aconn):
-    pattern = {"kind": "percept", "who": WHO, "text_like": "workout"}
+    pattern = {"kind": "percept", "who": WHO}
     await append_event(aconn, ts=START - timedelta(hours=1), kind="percept", who=WHO, place=PLACE,
                        body="telegram", payload={"text": "workout done"})
     exp_id, _ = await _create(aconn, expect={"event_seen": pattern, "within": "2d"})
@@ -304,8 +305,8 @@ async def test_low_weight_fired_expectation_still_wakes_the_pfc_once(aconn):
     assert await _status(aconn, exp_id) == "satisfied"
 
 
-async def test_an_expectation_wake_takes_the_place_kind_from_the_place(aconn):
-    """A promise in the owner's direct chat renders `(direct)`, not a payload default."""
+async def test_an_expectation_wake_renders_the_place_it_happened_in(aconn):
+    """A promise in the owner's chat renders that place, and never a payload default."""
     exp_id, _ = await _create(aconn, weight=0.3)
     clock = FakeClock(START)
     fake = FakeLLM()
@@ -316,7 +317,7 @@ async def test_an_expectation_wake_takes_the_place_kind_from_the_place(aconn):
     await _tick(kernel, clock)
 
     assert await _status(aconn, exp_id) == "satisfied"
-    assert f"<place>{PLACE} (direct)</place>" in fake.last_prompt
+    assert f"<place>{PLACE}</place>" in fake.last_prompt
 
 
 async def test_policy_once_is_satisfied_after_the_turn(aconn):
@@ -431,7 +432,8 @@ async def test_mvp_c_remind_me_at_seven_exactly_once_across_a_restart(aconn):
     kinds = await _kinds(aconn)
     assert kinds.count("expectation.fired") == 1
     assert kinds.count("act.out") == 1
-    assert body.actions == [Action(kind="say", place=PLACE, payload={"text": "sudah jam 7"}, adapter="telegram")]
+    assert [(a.kind, a.place, dict(a.arguments)) for a in body.actions] == [
+        ("say", PLACE, {"text": "sudah jam 7"})]
     assert "expectation missed: remind the owner at 7" in fake.last_prompt.split("<why_awake>")[1]
 
     cur = await aconn.execute("SELECT status, fire_count FROM expectations")
@@ -580,7 +582,7 @@ OTHER = "person:tg:4002"
 def _group_msg(text: str, *, who: str = OTHER, addressed: bool = False) -> Event:
     return Event(id=None, ts=START, kind="percept", who=who, place=GROUP, body="telegram",
                  payload={"description": text, "addressed": addressed,
-                          "place_kind": "shared"})
+                          "place_kind": "shared"}, description=text)
 
 
 def _say(text: str) -> list[tuple[str, dict]]:

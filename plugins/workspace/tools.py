@@ -77,7 +77,7 @@ class WorkspaceTool:
 
     async def act(self, action: Any) -> dict[str, Any]:
         """Run one tool for the person the act started with."""
-        who = str(action.payload.get("_who") or "")
+        who = str(action.arguments.get("_who") or "")
         handlers = {"read": self.read, "write": self.write, "edit": self.edit,
                     "grep": self.grep, "glob": self.glob, "run": self.run}
         handler = handlers.get(action.kind)
@@ -98,9 +98,9 @@ class WorkspaceTool:
 
     async def read(self, who: str, action: Any) -> dict[str, Any]:
         """Read lines of a file, or one attachment by its reference."""
-        if action.payload.get("ref"):
+        if action.arguments.get("ref"):
             return await self._read_attachment(who, action)
-        raw_path = str(action.payload.get("path") or "")
+        raw_path = str(action.arguments.get("path") or "")
         target = paths.resolve(self.api, who, raw_path)
         ws_root = paths.root_for(self.api, who, raw_path)
         if not paths.inside(ws_root, target):
@@ -108,8 +108,8 @@ class WorkspaceTool:
         data = await asyncio.to_thread(target.read_bytes)
         if BINARY.search(data[:4096]):
             return {"error": "that file is not text"}
-        offset = max(0, int(action.payload.get("offset") or 0))
-        limit = max(1, min(MAX_LIMIT, int(action.payload.get("limit") or DEFAULT_LINES)))
+        offset = max(0, int(action.arguments.get("offset") or 0))
+        limit = max(1, min(MAX_LIMIT, int(action.arguments.get("limit") or DEFAULT_LINES)))
         lines = data.decode("utf-8", "replace").splitlines()
         window = lines[offset:offset + limit]
         return {"path": paths.display(self.api, who, target), "offset": offset,
@@ -117,7 +117,7 @@ class WorkspaceTool:
 
     async def _read_attachment(self, who: str, action: Any) -> dict[str, Any]:
         """Read one attachment through the door, then through a reader by its suffix."""
-        data, info = await self.api.open_file(str(action.payload["ref"]),
+        data, info = await self.api.open_file(str(action.arguments["ref"]),
                                               context=action.place)
         name = str(info.get("name") or "attachment")
         suffix = pathlib.PurePath(name).suffix.lower()
@@ -135,15 +135,15 @@ class WorkspaceTool:
 
     async def write(self, who: str, action: Any) -> dict[str, Any]:
         """Write one whole file inside the person's folders."""
-        target = paths.resolve(self.api, who, str(action.payload.get("path") or ""))
-        text = str(action.payload.get("text") or "")
+        target = paths.resolve(self.api, who, str(action.arguments.get("path") or ""))
+        text = str(action.arguments.get("text") or "")
         await asyncio.to_thread(_write, target, text)
         return {"path": paths.display(self.api, who, target), "bytes": len(text.encode())}
 
     async def edit(self, who: str, action: Any) -> dict[str, Any]:
         """Replace exactly one occurrence of the old text."""
-        target = paths.resolve(self.api, who, str(action.payload.get("path") or ""))
-        old, new = str(action.payload.get("old") or ""), str(action.payload.get("new") or "")
+        target = paths.resolve(self.api, who, str(action.arguments.get("path") or ""))
+        old, new = str(action.arguments.get("old") or ""), str(action.arguments.get("new") or "")
         text = await asyncio.to_thread(target.read_text, "utf-8")
         found = text.count(old)
         if found != 1:
@@ -155,19 +155,19 @@ class WorkspaceTool:
 
     async def grep(self, who: str, action: Any) -> dict[str, Any]:
         """Search the person's files; deterministic order, binary and big files skipped."""
-        pattern = str(action.payload.get("pattern") or "")
+        pattern = str(action.arguments.get("pattern") or "")
         if not pattern:
             return {"error": "empty pattern"}
         try:
             compiled = re.compile(pattern)
         except re.error as exc:
             return {"error": f"invalid regex: {exc}"}
-        raw_path = str(action.payload.get("path") or "")
+        raw_path = str(action.arguments.get("path") or "")
         base = paths.resolve(self.api, who, raw_path)
         ws_root = paths.root_for(self.api, who, raw_path)
-        mask = str(action.payload.get("glob") or "*")
-        mode = str(action.payload.get("mode") or "matches")
-        limit = max(1, min(500, int(action.payload.get("limit") or 50)))
+        mask = str(action.arguments.get("glob") or "*")
+        mode = str(action.arguments.get("mode") or "matches")
+        limit = max(1, min(500, int(action.arguments.get("limit") or 50)))
         cap = int(self.api.options.get("max_file_bytes") or 2_000_000)
         timeout = float(self.api.options.get("grep_timeout_seconds") or GREP_TIMEOUT_SECONDS)
         try:
@@ -183,8 +183,8 @@ class WorkspaceTool:
 
     async def glob(self, who: str, action: Any) -> dict[str, Any]:
         """List the paths matching one pattern, sorted and capped."""
-        pattern = str(action.payload.get("pattern") or "*")
-        limit = max(1, min(500, int(action.payload.get("limit") or 200)))
+        pattern = str(action.arguments.get("pattern") or "*")
+        limit = max(1, min(500, int(action.arguments.get("limit") or 200)))
         found = await asyncio.to_thread(_glob, self.api, who, pattern, limit)
         return {"paths": found, "count": len(found)}
 
@@ -192,7 +192,7 @@ class WorkspaceTool:
 
     async def run(self, who: str, action: Any) -> dict[str, Any]:
         """Screen, then run one command in the sandbox."""
-        command = str(action.payload.get("command") or "")
+        command = str(action.arguments.get("command") or "")
         verdict, reason = guard.screen(command)
         if verdict == guard.DENY:
             return {"error": f"sandbox command blocked: {reason}"}
@@ -202,11 +202,11 @@ class WorkspaceTool:
             return {"error": f"workspace quota exceeded: {used} of {quota}; /workspace reset"}
         writable = self.api.roles_can(who, "workspace.write")
         folders = paths.roots(self.api, who)
-        cwd = str(action.payload.get("cwd") or "")
+        cwd = str(action.arguments.get("cwd") or "")
         shared = {name: folder for name, folder in folders.items() if name}
         result = await sandbox.run(self.api, who, command, workspace=folders[""],
                                    shared=shared, writable=writable, cwd=cwd,
-                                   timeout=action.payload.get("timeout"))
+                                   timeout=action.arguments.get("timeout"))
         if isinstance(result.get("output"), str) and len(result["output"]) > RUN_OUTPUT_BYTES:
             result["output"] = result["output"][-RUN_OUTPUT_BYTES:]
         return result

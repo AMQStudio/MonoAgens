@@ -13,6 +13,7 @@ import pytest
 
 from monoagens.boot import build
 from monoagens.core.reasoning import ToolCall
+from tests.support import last_receipt as _last_receipt, receipt_result as _receipt
 from monoagens.infra.clock import FakeClock
 from monoagens.infra.store import append_event, read_state
 from monoagens.middleware.loader import Loader
@@ -103,9 +104,7 @@ async def _say(kernel, aconn, command: str, *, who="person:owner"):
     await kernel._apply(trigger, ToolCall("act", {"capability": "workspace.run",
                                                   "arguments": {"command": command}}))
     await kernel.run_until_idle()
-    cur = await aconn.execute("SELECT payload FROM events WHERE kind = 'act.result' "
-                              "ORDER BY id DESC LIMIT 1")
-    return (await cur.fetchone())[0]["result"]
+    return _receipt(await _last_receipt(aconn))
 
 
 @pytest.mark.parametrize("mode, asked", [("default", True), ("yolo", False),
@@ -146,7 +145,7 @@ async def test_finish_my_code_then_send_it_opens_a_task_thread(aconn, tmp_path):
     put = asyncio.create_task(kernel.put(Event(
         id=None, ts=START, kind="percept", who="person:owner", place=PLACE, body="filetest",
         payload={"description": "selesaikan kodenya lalu kirim ke Budi",
-                 "place_kind": "direct", "addressed": True})))
+                 "place_kind": "direct", "addressed": True}, description="selesaikan kodenya lalu kirim ke Budi")))
     await asyncio.sleep(0)
     await kernel.step()
     await put

@@ -1,9 +1,9 @@
 """Action dispatch: the door between one `act` call and the tool that carries it out.
 
 The door checks the arguments against the descriptor, asks the action hook (which resolves
-the route and applies the absolute lines), records the act before it happens, hands it to
-the adapter or plugin, and records the result. It reads only opaque ids and the labels the
-middleware attached.
+the route and applies the absolute lines), records the act and its action in the ledger
+before it happens, hands it to the adapter or plugin, and records exactly one receipt. It
+reads only opaque ids, times and the outcome the hook returned.
 """
 
 from __future__ import annotations
@@ -11,22 +11,66 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from monoagens.core import arguments, sends, threads
+from monoagens import contract
+from monoagens.core import arguments, threads
 from monoagens.core.context import working
 from monoagens.infra.store import project_event
 from monoagens.types import Event
 
 
 @dataclass(frozen=True, slots=True)
+class JobRef:
+    """Which reasoning step is acting: the job it belongs to and its round."""
+
+    key: str
+    started_event_id: int
+
+
+@dataclass(frozen=True, slots=True)
 class Dispatch:
-    """What one `act` did, with the labels the middleware attached to it."""
+    """What one `act` did: whether it acted, the labels it carried and its receipt."""
 
     acted: bool
     labels: dict[str, Any] = field(default_factory=dict)
+    receipt: contract.Receipt | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Act:
+    """One recorded act: the action its body carries and the `act.out` event that records it."""
+
+    action: contract.Action
+    out: Event
+
+    @property
+    def communicative(self) -> bool:
+        """Return whether this act is the one that speaks in its place."""
+        return bool(self.out.payload.get("communicative"))
+
+
+def action_for(job: JobRef | None, event: Event, round_index: int, n: int,
+               capability: str, place: str, passed: dict[str, Any],
+               caused_by: int | None) -> contract.Action:
+    """Return the action one call becomes, with the id its body deduplicates on."""
+    ref = job if job is not None else JobRef("hook", int(event.id or 0))
+    return contract.Action(id=contract.action_id(ref.key, ref.started_event_id,
+                                                 round_index, n),
+                           capability=capability, place=place, arguments=dict(passed),
+                           caused_by=caused_by)
+
+
+def as_receipt(capability: str, raw: Any) -> contract.Receipt:
+    """Answer with the receipt one tool result means (contract.md §3)."""
+    if isinstance(raw, contract.Receipt):
+        return raw
+    if isinstance(raw, dict) and raw.get("error"):
+        return contract.Receipt("failed", reason=str(raw["error"]))
+    return contract.Receipt("done", result=raw)
 
 
 async def dispatch(kernel: Any, event: Event, args: dict[str, Any], *,
-                   said: set[str] | None = None) -> Dispatch:
+                   said: set[str] | None = None, job: JobRef | None = None,
+                   round_index: int = 0, n: int = 0) -> Dispatch:
     """Resolve, guard and hand one `act` call to the tool that declares it (D2, D46).
 
     `said` holds the places this turn already spoke to: a turn says at most one
@@ -40,11 +84,12 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any], *,
     raw = dict(args.get("arguments") or {})
     broken = arguments.capability_errors(cap, raw)
     if broken:
-        await kernel._emit(event, "act.result", {
-            "capability": capability,
-            "result": {"error": f"invalid arguments for {capability}: "
-                                f"{arguments.refusal(broken)}"}})
-        return Dispatch(acted=True)
+        receipt = contract.Receipt("refused", reason=f"invalid arguments for {capability}: "
+                                                     f"{arguments.refusal(broken)}")
+        act = await record(kernel, event, job, round_index, n, capability,
+                           event.place or "", raw, cap)
+        await kernel._settle_action(event, act, receipt)
+        return Dispatch(acted=True, receipt=receipt)
     routing = kernel.tools.routing_keys(cap)
     passed = {key: value for key, value in raw.items() if key not in routing}
     ctx = {"conn": kernel.conn, "event": event, "now": kernel.clock.now(),
@@ -56,65 +101,86 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any], *,
     payload = await kernel._run_hooks("action", passed, ctx, event,
                                       tool=capability.partition(".")[0])
     if ctx.get("refusal"):
-        refusal = {"capability": capability, "result": {"error": str(ctx["refusal"])}}
-        if ctx["to"] is not None:
-            refusal["to"] = ctx["to"]
-        record = {"capability": capability, "arguments": passed,
-                  "communicative": bool(cap.get("communicative")), "refused": True}
-        stored = await kernel._emit(
-            event, "act.out", {**record, "to": ctx["to"]} if ctx["to"] is not None else record)
-        if ctx["labels"].get("hold"):
-            await kernel._emit(event, "act.result", refusal)
-        else:
-            kernel.enqueue(Event(id=None, ts=kernel.clock.now(), kind="act.result", who=event.who,
-                                 place=event.place, body=event.body, caused_by=stored.id,
-                                 origin_actor=event.origin_actor, payload=refusal))
-        return Dispatch(acted=True)
+        receipt = contract.Receipt("held" if ctx["labels"].get("hold") else "refused",
+                                   reason=str(ctx["refusal"]))
+        act = await record(kernel, event, job, round_index, n, capability,
+                           event.place or "", dict(payload if payload else passed), cap,
+                           to=ctx["to"])
+        await kernel._settle_action(event, act, receipt)
+        return Dispatch(acted=True, receipt=receipt)
     if payload is None or ctx.get("handled"):
         return Dispatch(acted=True, labels=ctx["labels"])
     place, to = ctx.get("place") or event.place, ctx.get("to")
     if cap.get("communicative") and said is not None and place in said:
-        await kernel._emit(event, "act.result", {"capability": capability, "to": to, "result": {
-            "error": f"already said something to {to or place} this turn"}})
-        return Dispatch(acted=True)
+        receipt = contract.Receipt(
+            "refused", reason=f"already said something to {to or place} this turn")
+        act = await record(kernel, event, job, round_index, n, capability, place, passed,
+                           cap, to=to)
+        await kernel._settle_action(event, act, receipt)
+        return Dispatch(acted=True, receipt=receipt)
     if place != event.place:
         await _intend(kernel, event, capability, passed, to, place, ctx["labels"])
         if said is not None:
             said.add(place)
         return Dispatch(acted=True, labels=ctx["labels"])
-    record = {"capability": capability, "arguments": passed,
-              "communicative": bool(cap.get("communicative"))}
-    stored = await kernel._emit(event, "act.out", {**record, "to": to} if to else record,
-                                place=place)
+    act = await record(kernel, event, job, round_index, n, capability, place,
+                       dict(payload), cap, to=to)
     if cap.get("communicative") and said is not None:
         said.add(place)
-    await kernel._encode(stored, str(passed.get("text") or "") or None)
+    await kernel._encode(act.out, str(passed.get("text") or "") or None)
     if cap.get("long_running"):
         await threads.open_for(kernel, event, ctx["labels"].get("audience") or ())
-    result = await kernel.tools.act(replace(event, place=place), capability, payload,
-                                    event_id=stored.id)
-    if cap.get("communicative"):
-        await sends.confirm(kernel, stored, capability, to)
-    if result is not None:
-        kernel.enqueue(Event(id=None, ts=kernel.clock.now(), kind="act.result", who=event.who,
-                             place=place, body=event.body, caused_by=stored.id,
-                             origin_actor=event.origin_actor,
-                             payload={"capability": capability, "result": result}))
-    if (cap.get("identity_changing") and isinstance(result, dict)
-            and isinstance(result.get("identity"), dict)):
-        new_identity = result["identity"]
-        row = await (await kernel.conn.execute(
-            "SELECT 1 FROM events WHERE kind = 'identity.updated' AND caused_by = %s LIMIT 1",
-            (stored.id,))).fetchone()
-        if row is None:
-            updated = await kernel._emit(stored, "identity.updated",
-                                         {"identity": new_identity}, place=place)
-            await project_event(kernel.conn, updated)
-        if kernel.pfc:
-            kernel.pfc.identity = new_identity
-            kernel.pfc.name = str(new_identity.get("name") or "")
-        kernel.settings = {**kernel.settings, "identity": new_identity}
-    return Dispatch(acted=True, labels=ctx["labels"])
+    receipt = await carry(kernel, act)
+    await kernel._settle_action(event, act, receipt)
+    if (cap.get("identity_changing") and receipt.state == "done"
+            and isinstance(receipt.result, dict)
+            and isinstance(receipt.result.get("identity"), dict)):
+        await _project_identity(kernel, event, act, receipt.result["identity"])
+    return Dispatch(acted=True, labels=ctx["labels"], receipt=receipt)
+
+
+async def record(kernel: Any, event: Event, job: JobRef | None, round_index: int, n: int,
+                 capability: str, place: str, passed: dict[str, Any], cap: Any, *,
+                 to: str | None = None) -> Act:
+    """Record one act and its ledger row before its body sees it (D-F)."""
+    index = n if job is not None else kernel.next_hook_act(event.id)
+    action = action_for(job, event, round_index, index, capability, place, passed,
+                        caused_by=event.id)
+    record_payload = {"capability": capability, "arguments": dict(passed),
+                      "communicative": bool(cap.get("communicative"))}
+    out = await kernel._emit_act(event, {**record_payload, "to": to} if to else record_payload,
+                                 action=action, communicative=bool(cap.get("communicative")),
+                                 place=place, description=str(passed.get("text") or ""))
+    return Act(action=action, out=out)
+
+
+async def carry(kernel: Any, act: Act) -> contract.Receipt:
+    """Hand one recorded action to its body and answer with the receipt it earned."""
+    trigger = replace(act.out, place=act.action.place)
+    try:
+        raw = await kernel.tools.act(trigger, act.action.capability,
+                                     dict(act.action.arguments), event_id=act.out.id,
+                                     action_id=act.action.id)
+    except Exception as exc:
+        return contract.Receipt(
+            "failed", reason=f"{act.action.capability} failed ({type(exc).__name__}): {exc}")
+    return as_receipt(act.action.capability, raw)
+
+
+async def _project_identity(kernel: Any, event: Event, act: Act,
+                            new_identity: dict[str, Any]) -> None:
+    """Project an identity change one act carries, once per act."""
+    row = await (await kernel.conn.execute(
+        "SELECT 1 FROM events WHERE kind = 'identity.updated' AND caused_by = %s LIMIT 1",
+        (act.out.id,))).fetchone()
+    if row is None:
+        updated = await kernel._emit(act.out, "identity.updated",
+                                     {"identity": new_identity}, place=act.action.place)
+        await project_event(kernel.conn, updated)
+    if kernel.pfc:
+        kernel.pfc.identity = new_identity
+        kernel.pfc.name = str(new_identity.get("name") or "")
+    kernel.settings = {**kernel.settings, "identity": new_identity}
 
 
 async def _intend(kernel: Any, event: Event, capability: str, passed: dict[str, Any],

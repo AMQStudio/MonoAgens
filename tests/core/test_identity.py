@@ -54,7 +54,7 @@ def _pfc(fake: FakeLLM) -> Reasoning:
 def _percept(who: str) -> Event:
     return Event(id=None, ts=START, kind="percept", who=who, place=PLACE, body="telegram",
                  payload={"description": "ubah dirimu", "addressed": True,
-                          "place_kind": "direct"})
+                          "place_kind": "direct"}, description="ubah dirimu")
 
 
 async def _feed(kernel: Kernel, event: Event) -> None:
@@ -139,7 +139,7 @@ async def test_set_identity_rejects_unknown_fields(aconn):
     tool = identity.SelfTool(aconn, FakeClock(START), visible=privacy.visible,
                                memory_visible=privacy.memory_visible)
     action = Action(kind="set_identity", place=PLACE,
-                    payload={"name": "Mona", "owner": "x"}, event_id=1)
+                    arguments={"name": "Mona", "owner": "x"}, event_id=1)
     with pytest.raises(ValueError, match="unknown fields"):
         await tool.act(action)
 

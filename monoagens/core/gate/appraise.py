@@ -39,7 +39,7 @@ class Appraisal:
     promise_debt: float = 0.0
     familiarity: float = 0.0
 
-    def payload(self) -> dict[str, Any]:
+    def record(self) -> dict[str, Any]:
         """Return the decision payload that is stored in the Log."""
         return {
             "decision": self.decision,

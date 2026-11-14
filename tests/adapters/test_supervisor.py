@@ -47,7 +47,7 @@ class _HealthyAdapter:
         self.starts += 1
         await put(Event(id=None, ts=START, kind="percept", who="person:owner",
                         place="space:cli", body=self.name,
-                        payload={"description": "masih hidup", "place_kind": "direct"}))
+                        payload={"description": "masih hidup", "place_kind": "direct"}, description="masih hidup"))
         self.emitted.set()
         await asyncio.Future()
 
@@ -82,7 +82,7 @@ class _CrashingAdapter:
             raise RuntimeError(f"boom attempt {self.attempts}")
         await put(Event(id=None, ts=START, kind="percept", who="discord:1",
                         place="space:dc:1", body=self.name,
-                        payload={"description": "pulih", "place_kind": "shared"}))
+                        payload={"description": "pulih", "place_kind": "shared"}, description="pulih"))
         self.recovered.set()
         await asyncio.Future()
 

@@ -33,7 +33,7 @@ class EchoAdapter:
 
     async def act(self, action) -> dict[str, Any]:
         """Record one line and report it."""
-        self.said.append(str(action.payload.get("text") or ""))
+        self.said.append(str(action.arguments.get("text") or ""))
         return {"echo": self.said[-1], "greeting": self.greeting}
 
 

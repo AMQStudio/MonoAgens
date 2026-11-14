@@ -221,13 +221,13 @@ async def test_the_desk_scan_counts_core_memory_by_its_sources(aconn):
                                payload={"description": "rapat jam berapa?", "place_kind": "shared",
                                         "place_info": {"members": ["person:budi"]}})
     tracker = replay.Tracker(conn=aconn)
-    await tracker.record_desk(PFCContext(now=NOW, place=group, place_kind="shared",
+    await tracker.record_desk(PFCContext(now=NOW, place=group, 
                                          reason="test", core_memory="rapat jam sembilan",
                                          trigger=asked))
     assert tracker.desks[0].items == (replay.DeskItem(None, None, (said.id,)),)
     assert await replay.desk_violations(aconn, tracker.desks) != []
     owner_tracker = replay.Tracker(conn=aconn)
-    await owner_tracker.record_desk(PFCContext(now=NOW, place=dm, place_kind="direct",
+    await owner_tracker.record_desk(PFCContext(now=NOW, place=dm, 
                                                reason="test", core_memory="rapat jam sembilan",
                                                trigger=said))
     assert await replay.desk_violations(aconn, owner_tracker.desks) == []

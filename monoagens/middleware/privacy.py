@@ -898,9 +898,8 @@ def filter_context(conn, *, kernel: Any = None, settings: Any = None) -> Middlew
             label = await withheld_source(conn, context=place, sources=core_sources, cache=cache)
             counts[label] = counts.get(label, 0) + 1
             core_text = ""
-        kind = await _kind(conn, place, cache)
         filtered = replace(
-            item, place_kind=kind, memories=tuple(memories),
+            item, memories=tuple(memories),
             recent_elsewhere=elsewhere, recent=recent,
             doing=doing_kept, expectations=exps_kept, core_memory=core_text,
             trigger=trigger_kept, people=people_kept,

@@ -236,7 +236,7 @@ class TelegramBody:
 
     async def act(self, action: Action) -> Any:
         """Perform `say`, `react`, `edit`, or enabled optional Telegram actions."""
-        p = action.payload or {}
+        p = action.arguments or {}
         if action.kind == "say":
             return await self._say(action)
         if action.kind == "react":
@@ -254,7 +254,7 @@ class TelegramBody:
 
     async def _say(self, action: Action) -> Any:
         """Send text/choices/thread/location and attachments in a Telegram chat."""
-        p = action.payload or {}
+        p = action.arguments or {}
         text = str(p.get("text") or "")
         opened = []
         for ref in p.get("attachments") or ():

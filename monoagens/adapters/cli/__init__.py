@@ -80,7 +80,7 @@ class CLIBody:
 
     async def act(self, action: Action) -> Any:
         """Write one rendered line or optional platform action to connected clients."""
-        p = action.payload or {}
+        p = action.arguments or {}
         if action.kind == "say":
             self._seq += 1
             msg_id = f"cli:{self._seq}"

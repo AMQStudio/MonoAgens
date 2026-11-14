@@ -85,3 +85,18 @@ def open_book(who: str, *permissions: str):
         roles={"open": roles.Role("open", base="guest", allow=frozenset(permissions))},
         people={who: roles.Person(who, roles=("open",))},
         bases={**roles.CORE_PERMISSIONS, **{name: None for name in permissions}})
+
+
+async def last_receipt(conn) -> dict:
+    """Return the newest `act.result` payload, which is the one receipt a test reads."""
+    cur = await conn.execute("SELECT payload FROM events WHERE kind = 'act.result' "
+                             "ORDER BY id DESC LIMIT 1")
+    row = await cur.fetchone()
+    return dict(row[0]) if row else {}
+
+
+def receipt_result(payload: dict) -> dict:
+    """Return one receipt's answer, with a failure's reason under `error` for a test to read."""
+    if payload.get("state") in (None, "done"):
+        return payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    return {"error": str(payload.get("reason") or "")}

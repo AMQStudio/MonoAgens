@@ -114,7 +114,7 @@ async def _kinds(conn) -> list[str]:
 def _percept(place: str = PLACE, text: str = "kerjakan") -> Event:
     return Event(id=None, ts=START, kind="percept", who="person:owner", place=place,
                  body="telegram",
-                 payload={"description": text, "place_kind": "direct", "addressed": True},
+                 payload={"description": text, "place_kind": "direct", "addressed": True}, description=text,
                  origin_actor="person:owner")
 
 

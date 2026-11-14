@@ -27,7 +27,6 @@ class PFCContext:
     now: datetime
     place: str
     reason: str
-    place_kind: str = ""
     core_memory: str = ""
     people: Sequence[str] = ()
     expectations: Sequence[str] = ()

@@ -94,7 +94,7 @@ class SelfTool:
         if action.event_id is None:
             raise ValueError("set_identity needs the act.out event it belongs to")
         current = await read_state(self.conn, KEY) or {}
-        identity = _update(current, action.payload)
+        identity = _update(current, action.arguments)
         async with self.conn.transaction():
             event = await append_event(self.conn, ts=self.clock.now(), kind=UPDATED,
                                        caused_by=action.event_id,

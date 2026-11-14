@@ -12,7 +12,7 @@ from monoagens.infra.clock import FakeClock
 from monoagens.middleware import identity
 from monoagens.core.hooks import Continue
 from monoagens.infra.store import append_event, read_state, write_state
-from monoagens.types import Event
+from monoagens.types import Action, Event
 from tests.support import settings
 
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -140,7 +140,7 @@ async def test_a_person_present_here_is_answered_here(aconn):
     kernel = build(aconn, clock=FakeClock(START), settings=settings())
     kernel.register_adapter(body)
     trigger = Event(id=None, ts=START, kind="percept", who="person:owner", place=GROUP,
-                    body="telegram", payload={"description": "jawab", "place_kind": "shared"},
+                    body="telegram", payload={"description": "jawab", "place_kind": "shared"}, description="jawab",
                     origin_actor="person:owner")
 
     await kernel._apply(trigger, ToolCall("act", {
@@ -185,7 +185,7 @@ async def test_unknown_account_registers_one_person_id_and_owner_stays_owner(aco
     [guest] = await _put_idle(kernel, Event(
         id=None, ts=START, kind="percept", who="telegram:123",
         place="space:tg:-500", body="telegram",
-        payload={"description": "halo", "place_kind": "shared", "addressed": False}))
+        payload={"description": "halo", "place_kind": "shared", "addressed": False}, description="halo"))
 
     assert re.fullmatch(r"person:p_[0-9a-f]+", guest.who)
     assert await read_state(aconn, "alias:telegram:123") == {"who": guest.who}
@@ -195,12 +195,12 @@ async def test_unknown_account_registers_one_person_id_and_owner_stays_owner(aco
     [owner_msg] = await _put_idle(kernel, Event(
         id=None, ts=START, kind="percept", who="telegram:999",
         place="space:tg:999", body="telegram",
-        payload={"description": code, "place_kind": "direct", "addressed": True}))
+        payload={"description": code, "place_kind": "direct", "addressed": True}, description=code))
     assert owner_msg.who != "person:owner"
     [next_owner_msg] = await _put_idle(kernel, Event(
         id=None, ts=START, kind="percept", who="telegram:999",
         place="space:tg:999", body="telegram",
-        payload={"description": "halo lagi", "place_kind": "direct", "addressed": True}))
+        payload={"description": "halo lagi", "place_kind": "direct", "addressed": True}, description="halo lagi"))
     assert next_owner_msg.who == "person:owner"
 
 
@@ -211,10 +211,10 @@ async def test_two_racing_percepts_of_one_account_get_one_person_id(aconn):
         kernel,
         Event(id=None, ts=START, kind="percept", who="whatsapp:628110099",
               place="space:wa:g1", body="telegram",
-              payload={"description": "satu", "place_kind": "shared", "addressed": False}),
+              payload={"description": "satu", "place_kind": "shared", "addressed": False}, description="satu"),
         Event(id=None, ts=START, kind="percept", who="whatsapp:628110099",
               place="space:wa:g1", body="telegram",
-              payload={"description": "dua", "place_kind": "shared", "addressed": False}),
+              payload={"description": "dua", "place_kind": "shared", "addressed": False}, description="dua"),
     )
 
     assert first.who == second.who
@@ -232,7 +232,7 @@ async def test_mentions_and_reply_to_are_mapped_before_core_sees_them(aconn):
         place="space:tg:-500", body="telegram",
         payload={"description": "tolong cek", "place_kind": "shared", "addressed": True,
                  "data": {"message_id": 10, "mentions": ["telegram:202", "telegram:303"],
-                          "reply_to": {"message_id": 5, "who": "telegram:202"}}}))
+                          "reply_to": {"message_id": 5, "who": "telegram:202"}}}, description="tolong cek"))
 
     assert stored.who.startswith("person:p_")
     mentions = stored.payload["data"]["mentions"]
@@ -265,12 +265,12 @@ async def test_link_merges_two_ids_into_one_card_memory_and_recall(aconn):
     [first_ev] = await _put_idle(kernel, Event(
         id=None, ts=clock.now(), kind="percept", who="telegram:111",
         place="space:tg:-10", body="telegram",
-        payload={"description": "suka kopi hitam", "place_kind": "shared", "addressed": False}))
+        payload={"description": "suka kopi hitam", "place_kind": "shared", "addressed": False}, description="suka kopi hitam"))
     clock.advance(timedelta(minutes=5))
     [second_ev] = await _put_idle(kernel, Event(
         id=None, ts=clock.now(), kind="percept", who="discord:222",
         place="space:dc:99", body="discord",
-        payload={"description": "alergi kacang", "place_kind": "shared", "addressed": False}))
+        payload={"description": "alergi kacang", "place_kind": "shared", "addressed": False}, description="alergi kacang"))
     older_id, younger_id = first_ev.who, second_ev.who
     assert older_id != younger_id
 
@@ -320,8 +320,7 @@ async def test_link_merges_two_ids_into_one_card_memory_and_recall(aconn):
     assert f"<event>{older_id}: alergi kacang</event>" in rendered
     assert f"{younger_id}:" not in rendered
     res = await recall.search(
-        aconn, Event(id=None, ts=clock.now(), kind="act.out", place="space:dc:99",
-                     payload={"query": older_id}),
+        aconn, Action(kind="recall", place="space:dc:99", arguments={"query": older_id}),
         visible=privacy.visible, memory_visible=privacy.memory_visible)
     found_texts = [item["text"] for item in res["found"]]
     assert "Budi alergi kacang" in found_texts
@@ -336,12 +335,12 @@ async def test_link_owner_always_wins_and_soul_has_no_link_tool(aconn):
     [early] = await _put_idle(kernel, Event(
         id=None, ts=START, kind="percept", who="discord:700",
         place="space:dc:700", body="discord",
-        payload={"description": "halo", "place_kind": "direct", "addressed": True}))
+        payload={"description": "halo", "place_kind": "direct", "addressed": True}, description="halo"))
     early_id = early.who
     await _put_idle(kernel, Event(
         id=None, ts=START, kind="percept", who="telegram:1",
         place="space:tg:1", body="telegram",
-        payload={"description": code, "place_kind": "direct", "addressed": True}))
+        payload={"description": code, "place_kind": "direct", "addressed": True}, description=code))
 
     await _put_idle(kernel, Event(
         id=None, ts=START, kind="command", who="telegram:1",
@@ -364,11 +363,11 @@ async def test_wrong_and_expired_link_codes_and_unlink(aconn):
     [a_ev] = await _put_idle(kernel, Event(
         id=None, ts=clock.now(), kind="percept", who="telegram:501",
         place="space:tg:501", body="telegram",
-        payload={"description": "hi", "place_kind": "direct", "addressed": True}))
+        payload={"description": "hi", "place_kind": "direct", "addressed": True}, description="hi"))
     [b_ev] = await _put_idle(kernel, Event(
         id=None, ts=clock.now(), kind="percept", who="discord:502",
         place="space:dc:502", body="discord",
-        payload={"description": "yo", "place_kind": "direct", "addressed": True}))
+        payload={"description": "yo", "place_kind": "direct", "addressed": True}, description="yo"))
 
     # Wrong code 3 times locks out and links nothing even on try 4 with the real code
     await _put_idle(kernel, Event(
@@ -412,7 +411,7 @@ async def test_wrong_and_expired_link_codes_and_unlink(aconn):
     [after_unlink] = await _put_idle(kernel, Event(
         id=None, ts=clock.now(), kind="percept", who="discord:502",
         place="space:dc:502", body="discord",
-        payload={"description": "baru", "place_kind": "direct", "addressed": True}))
+        payload={"description": "baru", "place_kind": "direct", "addressed": True}, description="baru"))
     assert after_unlink.who not in (a_ev.who, b_ev.who)
     assert after_unlink.who.startswith("person:p_")
     assert await read_state(aconn, f"merged:{b_ev.who}") == {"into": a_ev.who}
@@ -429,7 +428,7 @@ async def test_place_persisted_and_readonly_place_refuses_before_act(aconn):
         place="space:tg:-100555:9", body="telegram",
         payload={"description": "pengumuman", "place_kind": "shared", "addressed": False,
                  "place_info": {"form": "thread", "parent": "space:tg:-100555",
-                                "can_post": False, "name": "Topik"}}))
+                                "can_post": False, "name": "Topik"}}, description="pengumuman"))
     saved = await read_state(aconn, "place:space:tg:-100555:9")
     assert saved["form"] == "thread"
     assert saved["parent"] == "space:tg:-100555"
@@ -448,7 +447,7 @@ async def test_place_persisted_and_readonly_place_refuses_before_act(aconn):
     results = await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'act.result' ORDER BY id")).fetchall()
     assert len(results) == 2
-    assert all("read-only" in str(r[0]["result"]["error"]) for r in results)
+    assert all("read-only" in str(r[0]["reason"]) for r in results)
 
 
 async def test_link_tries_are_counted_per_guesser_and_never_burn_other_codes(aconn):
@@ -459,15 +458,15 @@ async def test_link_tries_are_counted_per_guesser_and_never_burn_other_codes(aco
     [alice] = await _put_idle(kernel, Event(
         id=None, ts=clock.now(), kind="percept", who="telegram:601",
         place="space:tg:601", body="telegram",
-        payload={"description": "alice", "place_kind": "direct", "addressed": True}))
+        payload={"description": "alice", "place_kind": "direct", "addressed": True}, description="alice"))
     [bob] = await _put_idle(kernel, Event(
         id=None, ts=clock.now(), kind="percept", who="telegram:602",
         place="space:tg:602", body="telegram",
-        payload={"description": "bob", "place_kind": "direct", "addressed": True}))
+        payload={"description": "bob", "place_kind": "direct", "addressed": True}, description="bob"))
     [eve] = await _put_idle(kernel, Event(
         id=None, ts=clock.now(), kind="percept", who="discord:603",
         place="space:dc:603", body="discord",
-        payload={"description": "eve", "place_kind": "direct", "addressed": True}))
+        payload={"description": "eve", "place_kind": "direct", "addressed": True}, description="eve"))
 
     await _put_idle(kernel, Event(
         id=None, ts=clock.now(), kind="command", who="telegram:601",
@@ -522,13 +521,13 @@ async def test_owner_cannot_absorb_non_owner_via_link_code(aconn):
     await _put_idle(kernel, Event(
         id=None, ts=clock.now(), kind="percept", who="telegram:700",
         place="space:tg:700", body="telegram",
-        payload={"description": code, "place_kind": "direct", "addressed": True}))
+        payload={"description": code, "place_kind": "direct", "addressed": True}, description=code))
     assert await identity.find_person(aconn, "telegram:700") == identity.OWNER
 
     [stranger] = await _put_idle(kernel, Event(
         id=None, ts=clock.now(), kind="percept", who="discord:701",
         place="space:dc:701", body="discord",
-        payload={"description": "hi", "place_kind": "direct", "addressed": True}))
+        payload={"description": "hi", "place_kind": "direct", "addressed": True}, description="hi"))
     await _put_idle(kernel, Event(
         id=None, ts=clock.now(), kind="command", who="discord:701",
         place="space:dc:701", body="discord", payload={"command": "link", "arguments": []}))

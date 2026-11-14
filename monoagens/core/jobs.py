@@ -17,6 +17,7 @@ import psycopg
 from pgvector.psycopg import register_vector_async
 
 from monoagens.core import memory
+from monoagens.core.dispatch import JobRef
 from monoagens.core.reasoning import ToolCall, turn_check, turns
 from monoagens.infra import config
 from monoagens.types import Event
@@ -42,6 +43,7 @@ class Job:
     trigger: Event
     place: str
     re_wake: tuple[Event, str, str] | None = None
+    started_event_id: int = 0
     outcome: dict[str, Any] = field(default_factory=dict)
 
 
@@ -85,6 +87,7 @@ class JobRunner:
         return True
 
     async def _run(self, job: Job, started: Event, work: JobWork) -> None:
+        job.started_event_id = int(started.id or 0)
         try:
             job.outcome = {"result": await asyncio.wait_for(work(), self.timeout)}
         except asyncio.TimeoutError:
@@ -140,53 +143,36 @@ async def embed_batch(embedder: Any, items: Sequence[tuple[int, str]]) -> dict[s
     return {"items": [(eid, vec) for (eid, _), vec in zip(items, vectors)]}
 
 
-async def apply_calls(kernel: Any, trigger: Event, calls: list[dict[str, Any]],
-                      ) -> list[tuple[dict[str, Any], Mapping[str, Any]]]:
-    """Apply the tool calls of a finished reasoning job; one (call, labels) per act."""
+async def apply_calls(kernel: Any, trigger: Event, rounds: list[dict[str, Any]],
+                      job: JobRef) -> list[tuple[dict[str, Any], Mapping[str, Any]]]:
+    """Apply one finished job's rounds; one (call, labels) per act.
+
+    Every round is applied and every call in it is tried: one call that raises records its
+    own error and leaves its siblings alone (F.3). An act's action id is derived from the
+    job, the round and its index in that round, so a resumed act keeps its id (DEC-3).
+    """
     acted, thought = False, ""
     acts: list[tuple[dict[str, Any], Mapping[str, Any]]] = []
     said: set[str] = set()
-    for raw in calls:
-        if raw.get("refused"):
-            continue
-        call = ToolCall(str(raw.get("name")), dict(raw.get("arguments") or {}))
-        prev_row = await (await kernel.conn.execute("SELECT COALESCE(MAX(id), 0) FROM events")).fetchone()
-        prev_id = int(prev_row[0]) if prev_row else 0
-        try:
-            outcome = await kernel._apply(trigger, call, said)
-        except Exception as exc:
-            await kernel._record_error(trigger, exc)
+    for round_index, item in enumerate(rounds):
+        calls = [raw for raw in item.get("calls") or [] if not raw.get("refused")]
+        n = 0
+        for raw in calls:
+            call = ToolCall(str(raw.get("name")), dict(raw.get("arguments") or {}))
+            try:
+                outcome = await kernel._apply(trigger, call, said, job=job,
+                                              round_index=round_index, n=n)
+            except Exception as exc:
+                await kernel._record_error(trigger, exc)
+                if call.name == "act":
+                    n += 1
+                continue
+            acted = outcome.acted or acted
             if call.name == "act":
-                cap = str(call.arguments.get("capability") or "")
-                out_row = await (await kernel.conn.execute(
-                    "SELECT id, place FROM events WHERE kind = 'act.out' AND caused_by = %s "
-                    "AND id > %s AND payload->>'capability' = %s ORDER BY id DESC LIMIT 1",
-                    (trigger.id, prev_id, cap),
-                )).fetchone()
-                if out_row is not None:
-                    cause_id, act_place = int(out_row[0]), out_row[1] or trigger.place
-                else:
-                    stored = await kernel._emit(trigger, "act.out", {
-                        "capability": cap,
-                        "arguments": dict(call.arguments.get("arguments") or {}),
-                        "communicative": False, "refused": True,
-                    })
-                    cause_id, act_place = stored.id, stored.place or trigger.place
-                kernel.enqueue(Event(
-                    id=None, ts=kernel.clock.now(), kind="act.result", who=trigger.who,
-                    place=act_place, body=trigger.body, caused_by=cause_id,
-                    origin_actor=trigger.origin_actor,
-                    payload={"capability": cap,
-                             "result": {"error": f"{cap or 'act'} failed ({type(exc).__name__})"}},
-                ))
-                acted = True
-                acts.append((raw, {}))
-            continue
-        acted = outcome.acted or acted
-        if call.name == "act":
-            acts.append((raw, outcome.labels))
-        if call.name == "think":
-            thought = str(call.arguments.get("thought") or "")
+                acts.append((raw, outcome.labels))
+                n += 1
+            if call.name == "think":
+                thought = str(call.arguments.get("thought") or "")
     if not acted:
         await kernel._emit(trigger, "decision.silent", {"reason": thought or "no act"})
     return acts

@@ -213,7 +213,7 @@ async def test_conversation_and_private_context_continue_across_wa_dc_tg_after_v
         id=None, ts=clock.now(), kind="percept", who="whatsapp:62811000",
         place=wa_place, body="whatsapp",
         payload={"description": "My launch secret is ALPHA-742", "place_kind": "direct",
-                 "addressed": True, "data": {"message_id": "m_wa_1"}}))
+                 "addressed": True, "data": {"message_id": "m_wa_1"}}, description="My launch secret is ALPHA-742"))
     assert len(wa_client.sent_messages) == 1
 
     # 2. Before linking: Alice on Discord DM is a different person and CANNOT see WhatsApp DM.
@@ -222,7 +222,7 @@ async def test_conversation_and_private_context_continue_across_wa_dc_tg_after_v
         id=None, ts=clock.now(), kind="percept", who="discord:alice99",
         place=dc_place, body="discord",
         payload={"description": "What was my launch secret?", "place_kind": "direct",
-                 "addressed": True, "data": {"message_id": "m_dc_1"}}))
+                 "addressed": True, "data": {"message_id": "m_dc_1"}}, description="What was my launch secret?"))
     assert not await privacy.visible(aconn, context=dc_place, source=wa_place, before=wa_ev.id + 1)
     assert "ALPHA-742" not in pfc.rendered_prompts[-1]
 
@@ -254,7 +254,7 @@ async def test_conversation_and_private_context_continue_across_wa_dc_tg_after_v
         id=None, ts=clock.now(), kind="percept", who="discord:alice99",
         place=dc_place, body="discord",
         payload={"description": "Continue launch plan from WA", "place_kind": "direct",
-                 "addressed": True, "data": {"message_id": "m_dc_2"}}))
+                 "addressed": True, "data": {"message_id": "m_dc_2"}}, description="Continue launch plan from WA"))
     assert "ALPHA-742" in pfc.rendered_prompts[-1]
     assert any("noted on discord:" in m["content"] for m in dc_channel.sent)
 
@@ -263,7 +263,7 @@ async def test_conversation_and_private_context_continue_across_wa_dc_tg_after_v
         id=None, ts=clock.now(), kind="percept", who="telegram:7701",
         place=tg_place, body="telegram",
         payload={"description": "Final step here on Telegram", "place_kind": "direct",
-                 "addressed": True, "data": {"message_id": "m_tg_1"}}))
+                 "addressed": True, "data": {"message_id": "m_tg_1"}}, description="Final step here on Telegram"))
     assert "ALPHA-742" in pfc.rendered_prompts[-1]
     assert "Continue launch plan from WA" in pfc.rendered_prompts[-1]
     assert any(m == "sendMessage" for m, _ in tg_http.calls)
@@ -342,7 +342,7 @@ async def test_whatsapp_deferred_file_opens_and_forwards_and_sticker_sends_back(
     await _put_idle(kernel, Event(
         id=None, ts=clock.now(), kind="percept", who="telegram:9999",
         place=stranger_place, body="telegram",
-        payload={"description": "hello", "place_kind": "direct", "addressed": False}))
+        payload={"description": "hello", "place_kind": "direct", "addressed": False}, description="hello"))
     with pytest.raises(PermissionError):
         await door.open(wa_ref, context=stranger_place)
     assert wa_client.download_calls == 0
@@ -370,7 +370,7 @@ async def test_whatsapp_deferred_file_opens_and_forwards_and_sticker_sends_back(
         id=None, ts=clock.now(), kind="percept", who="telegram:7701",
         place=tg_place, body="telegram",
         payload={"description": "forward please", "place_kind": "direct",
-                 "addressed": True, "data": {"message_id": "tg_req_doc"}}))
+                 "addressed": True, "data": {"message_id": "tg_req_doc"}}, description="forward please"))
     assert any(method == "sendDocument" and b"WA-REPORT-BYTES" in body
                for method, body in tg_http.uploads)
 

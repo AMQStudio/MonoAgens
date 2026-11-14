@@ -159,7 +159,7 @@ async def test_the_work_is_read_shared_approved_and_sent(aconn, tmp_path):
 
     answer = asyncio.create_task(kernel.put(Event(
         id=None, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
-        body="telegram", payload={"description": "ya", "place_kind": "direct"})))
+        body="telegram", payload={"description": "ya", "place_kind": "direct"}, description="ya")))
     await asyncio.sleep(0)
     await kernel.step()
     await answer
@@ -171,5 +171,5 @@ async def test_the_work_is_read_shared_approved_and_sent(aconn, tmp_path):
     sent = [action for action in adapter.actions if action.kind == "send_file"]
     assert intents and intents[0][2]["target"] == BUDI
     assert sent and sent[-1].place == BUDI
-    assert attachment["ref"] in sent[-1].payload["attachments"]
+    assert attachment["ref"] in sent[-1].arguments["attachments"]
     assert await read_state(aconn, "alias:filetest") is None

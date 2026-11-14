@@ -292,10 +292,10 @@ async def test_shared_account_d66_distinguishes_soul_vs_phone_and_adds_context_n
     await identity.claim_owner(aconn, Event(
         id=None, ts=START, kind="percept", who=f"whatsapp:{OWN_PN}",
         place=f"space:wa:{OWN_PN}@s.whatsapp.net", body="whatsapp",
-        payload={"description": code, "self_account": f"whatsapp:{OWN_PN}"}), now=START)
+        payload={"description": code, "self_account": f"whatsapp:{OWN_PN}"}, description=code), now=START)
     # Record a message sent by the soul via act()
     res = await body.act(Action(kind="say", place=f"space:wa:{BUDI_PN}@s.whatsapp.net",
-                                payload={"text": "dari soul"}))
+                                arguments={"text": "dari soul"}))
     soul_msg_id = res["message_id"]
     # Simulate Log act.result persisting across a restart (new WhatsAppBody with empty _sent)
     await kernel.conn.execute(
@@ -454,15 +454,15 @@ async def test_channels_broadcast_and_communities_parent_and_say_outputs(aconn, 
         (START, f"space:wa:{BUDI_PN}@s.whatsapp.net",
          __import__("json").dumps({"data": {"attachments": [voice_att]}})),
     )
-    await body.act(Action(kind="say", place=f"space:wa:{BUDI_PN}@s.whatsapp.net", payload={
+    await body.act(Action(kind="say", place=f"space:wa:{BUDI_PN}@s.whatsapp.net", arguments={
         "text": "halo", "reply_to": "Q9", "mentions": [f"whatsapp:{BUDI_PN}"],
         "thread": "Topic", "location": {"lat": -6.2, "lon": 106.8, "name": "Office"},
         "choices": ["A", "B"], "attachments": [voice_att["ref"]], "voice": True,
     }))
     await body.act(Action(kind="react", place=f"space:wa:{BUDI_PN}@s.whatsapp.net",
-                          payload={"emoji": "👍", "message_id": "M9"}))
+                          arguments={"emoji": "👍", "message_id": "M9"}))
     await body.act(Action(kind="edit", place=f"space:wa:{BUDI_PN}@s.whatsapp.net",
-                          payload={"message_id": "M9", "text": "fixed"}))
+                          arguments={"message_id": "M9", "text": "fixed"}))
     kinds = [kind for kind, _ in client.sent]
     assert "send_message" in kinds and "send_audio" in kinds and "edit_message" in kinds
     audio_call = next(args for kind, args in client.sent if kind == "send_audio")
@@ -552,7 +552,7 @@ async def test_threaded_neonize_events_and_nul_payloads_become_percepts_or_error
             fut = kernel.put_threadsafe(Event(
                 id=None, ts=START, kind="percept", who="whatsapp:6289990001",
                 place="space:wa:6289990001@s.whatsapp.net", body="whatsapp",
-                payload={"description": "raw\x00nul", "addressed": True},
+                payload={"description": "raw\x00nul", "addressed": True}, description="raw\x00nul",
             ))
             try:
                 fut.result(timeout=5)
@@ -589,7 +589,7 @@ async def test_threaded_neonize_events_and_nul_payloads_become_percepts_or_error
         await kernel.put(Event(
             id=None, ts=START, kind="percept", who="whatsapp:6287770001",
             place="space:wa:group1@g.us", body="whatsapp",
-            payload={"description": "hi", "data": {"mentions": ["whatsapp:6287770002"]}},
+            payload={"description": "hi", "data": {"mentions": ["whatsapp:6287770002"]}}, description="hi",
         ))
 
     stop.set()
@@ -648,7 +648,7 @@ async def test_whatsapp_concurrent_history_sync_serializes_and_yields(tmp_path) 
         await fake_put(Event(
             id=None, ts=START, kind="percept", who="whatsapp:628119999@s.whatsapp.net",
             place="space:wa:628119999@s.whatsapp.net", body="whatsapp",
-            payload={"text": "live ping", "dm": True},
+            payload={"text": "live ping", "dm": True}, description="live ping",
         ))
 
     t1 = asyncio.create_task(wa.handle_history_sync(_sync_chunk("A", 4), fake_put))

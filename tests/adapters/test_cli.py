@@ -56,10 +56,10 @@ async def test_socket_round_trip_with_cli_body(tmp_path):
         assert event.payload == {"description": "halo", "addressed": True,
                                  "place_kind": "direct"}
 
-        await body.act(Action(kind="say", place="space:cli", payload={"text": "hai"}))
+        await body.act(Action(kind="say", place="space:cli", arguments={"text": "hai"}))
         assert await asyncio.wait_for(reader.readline(), timeout=5.0) == b"hai\n"
 
-        await body.act(Action(kind="react", place="space:cli", payload={"emoji": "👍"}))
+        await body.act(Action(kind="react", place="space:cli", arguments={"emoji": "👍"}))
         assert await asyncio.wait_for(reader.readline(), timeout=5.0) == "[👍]\n".encode()
         writer.close()
     finally:

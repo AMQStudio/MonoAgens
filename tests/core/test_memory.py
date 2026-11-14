@@ -217,7 +217,7 @@ async def test_best_activation_covers_candidates_and_recent_messages(aconn):
                              body="telegram", payload={"description": "kunci cadangan"})
     await insert_event_vector(aconn, cue.id, query)
     event = Event(id=cue.id, ts=START, kind="percept", who="person:owner", place=PLACE,
-                  payload={"description": "kunci cadangan"})
+                  payload={"description": "kunci cadangan"}, description="kunci cadangan")
 
     peak = await memory.best_activation(aconn, FixedEmbedder({"kunci cadangan": query}), event,
                                         now=START, settings=SETTINGS)
@@ -238,7 +238,7 @@ async def test_best_activation_ignores_the_cue_vector_so_fok_cannot_saturate(aco
                                  payload={"description": "barang di meja"})
     await insert_event_vector(aconn, message.id, [0.5, math.sqrt(1 - 0.5**2)] + [0.0] * 382)
     event = Event(id=cue.id, ts=START, kind="percept", who="person:owner", place=PLACE,
-                  payload={"description": "kunci cadangan"})
+                  payload={"description": "kunci cadangan"}, description="kunci cadangan")
 
     peak = await memory.best_activation(aconn, FixedEmbedder({"kunci cadangan": query}), event,
                                         now=START, settings=SETTINGS)
@@ -292,7 +292,7 @@ async def test_sleep_writes_memories_core_memory_and_never_touches_raw_events(ac
 async def test_sleep_drops_expired_expectations(aconn):
     source_id = await _seed_events(aconn)
     source = Event(id=source_id, ts=START, kind="percept", who="person:owner",
-                   place=PLACE, body="telegram", payload={"text": "remind me"})
+                   place=PLACE, body="telegram", payload={"text": "remind me"}, description="remind me")
     await expectations.create(aconn, {"about": "rapat pagi", "cue_time": {"every": "1d"},
                                 "expect": {"none": True},
                                 "expires_at": (START - timedelta(days=1)).isoformat()},
@@ -343,7 +343,7 @@ async def test_mvp_d_sleep_then_a_differently_worded_question_finds_the_memory(a
     clock.set_time(START + timedelta(hours=2))
     await _feed(kernel, Event(id=None, ts=clock.now(), kind="percept", who="person:owner", place=PLACE,
                               body="telegram", payload={"text": "Apa kopi favorit saya?", "addressed": True,
-                                                        "place_kind": "direct"}))
+                                                        "place_kind": "direct"}, description="Apa kopi favorit saya?"))
     assert len(fake.requests) == 2  # sleep, then the reply turn
     volatile = fake.requests[-1]["messages"][2]["content"]
     section = volatile.split("<memories>", 1)[1].split("</memories>", 1)[0]
@@ -446,7 +446,7 @@ async def test_private_memories_follow_people_not_places(aconn):
                            body="telegram", payload={"place_kind": kind})
         return Event(id=None, ts=START, kind="percept", who=who, place=place, body="telegram",
                      payload={"description": "tato rahasia", "addressed": True,
-                              "place_kind": kind})
+                              "place_kind": kind}, description="tato rahasia")
 
     def memories() -> str:
         prompt = fake.requests[-1]["messages"][2]["content"]

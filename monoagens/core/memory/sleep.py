@@ -10,9 +10,8 @@ import psycopg
 from pgvector import Vector
 
 from monoagens.core.memory.cards import merge_map
-from monoagens.core.memory.retrieval import _effective_ts
 from monoagens.infra import budget
-from monoagens.infra.store import (append_event, payload_text, read_expectations, read_state,
+from monoagens.infra.store import (append_event, read_expectations, read_state,
                                    resolve_expectation, write_state)
 from monoagens.types import Event
 
@@ -40,11 +39,9 @@ async def sleep_due(conn: psycopg.AsyncConnection[Any], now: datetime,
     zone = ZoneInfo(str(settings.get("timezone") or "UTC"))
     last_id = int((await read_state(conn, "sleep:last_event") or {}).get("id") or 0)
     cur = await conn.execute(
-        "SELECT max(id) FILTER (WHERE kind IN ('percept', 'act.out') "
-        "AND COALESCE((payload->>'imported')::boolean, false) = false), "
+        "SELECT max(id) FILTER (WHERE kind IN ('percept', 'act.out') AND imported = false), "
         "max(ts) FILTER (WHERE kind = 'sleep.failed'), "
-        "max(ts) FILTER (WHERE kind IN ('percept', 'act.out') "
-        "AND COALESCE((payload->>'imported')::boolean, false) = false), "
+        "max(ts) FILTER (WHERE kind IN ('percept', 'act.out') AND imported = false), "
         "max(ts) FILTER (WHERE kind = 'sleep.done') FROM events")
     newest, last_failed, idle_since, slept = await cur.fetchone()
     if newest is None or int(newest) <= last_id:
@@ -77,19 +74,19 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
         "WITH active_places AS ("
         "  SELECT place, min(id) AS first_live_id FROM events "
         "  WHERE place IS NOT NULL AND kind IN ('percept', 'act.out') "
-        "  AND COALESCE((payload->>'imported')::boolean, false) = false "
+        "  AND imported = false "
         "  GROUP BY place"
         ") "
-        "SELECT e.id, e.ts, e.kind, e.who, e.place, e.payload FROM events e "
+        "SELECT e.id, e.occurred_at, e.kind, e.who, e.place, e.description FROM events e "
         "LEFT JOIN active_places ap ON ap.place = e.place "
         "WHERE e.kind NOT IN ('sleep.done', 'sleep.failed', 'tick', 'model.call', "
         "'budget.exhausted', 'job.started', 'job.result') "
         "AND e.payload <> '{\"forgotten\": true}'::jsonb "
         "AND ("
-        "  (e.id > %s AND COALESCE((e.payload->>'imported')::boolean, false) = false "
+        "  (e.id > %s AND e.imported = false "
         "   AND NOT (e.kind = 'identity.registered' AND e.place IS NOT NULL "
         "            AND ap.first_live_id IS NULL)) "
-        "  OR (COALESCE((e.payload->>'imported')::boolean, false) = true "
+        "  OR (e.imported = true "
         "      AND ap.first_live_id IS NOT NULL "
         "      AND (e.id > %s OR ap.first_live_id > %s))"
         ") ORDER BY e.id", (last_id, last_id, last_id))
@@ -110,8 +107,8 @@ async def _consolidate(conn: psycopg.AsyncConnection[Any], *, pfc: Any, embedder
     for place, place_rows in buckets.items():
         place_sources = [row[0] for row in place_rows]
         lines = [
-            f"#{r[0]} {_effective_ts(r[1], (r[5] or {}).get('sent_at')).astimezone(zone):%Y-%m-%d %H:%M} "
-            f"[{r[2]}] {merges.get(r[3], r[3]) or '?'} @ {r[4] or '?'}: {payload_text(r[5])}"
+            f"#{r[0]} {r[1].astimezone(zone):%Y-%m-%d %H:%M} "
+            f"[{r[2]}] {merges.get(r[3], r[3]) or '?'} @ {r[4] or '?'}: {r[5] or ''}"
             for r in place_rows
         ]
         messages = [

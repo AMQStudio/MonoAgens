@@ -48,11 +48,11 @@ class WebSearchTool:
     async def act(self, action: Any) -> dict[str, Any]:
         """Run one of the two tools."""
         if action.kind == "web_search":
-            return await self.search(str(action.payload.get("query") or ""),
-                                     int(action.payload.get("max_results") or 5))
+            return await self.search(str(action.arguments.get("query") or ""),
+                                     int(action.arguments.get("max_results") or 5))
         if action.kind == "web_fetch":
-            return await self.fetch(str(action.payload.get("url") or ""),
-                                    int(action.payload.get("max_chars") or 12000))
+            return await self.fetch(str(action.arguments.get("url") or ""),
+                                    int(action.arguments.get("max_chars") or 12000))
         return {"error": f"unknown tool: {action.kind}"}
 
     async def search(self, query: str, max_results: int = 5) -> dict[str, Any]:

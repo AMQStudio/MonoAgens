@@ -12,23 +12,37 @@ from datetime import datetime, timedelta
 from functools import partial
 from typing import Any
 
-from monoagens.core import dispatch, expectations, hooks, jobs, memory, sends, threads
+from monoagens.core import dispatch, expectations, hooks, jobs, memory, threads
 from monoagens.core.context import layout, working
 from monoagens.core.gate import Appraisal, appraise, validate_signals
 from monoagens.core.reasoning import Reasoning, ToolCall
 from monoagens.infra import budget, config, observability
 from monoagens.infra.clock import Clock
 from monoagens.infra.prior import load_settings, signal_weights
+from monoagens import contract
 from monoagens.contract import Percept, from_legacy_event, to_event
-from monoagens.infra.store import (append_envelope, append_event, cursor as store_cursor,
-                                   insert_event_vector, insert_event_vectors, merge_source,
-                                   payload_text, project_event,
-                                   unembedded_imported_percepts)
+from monoagens.infra.store import (append_envelope, append_event, close_action,
+                                   cursor as store_cursor, insert_event_vector,
+                                   insert_event_vectors, merge_source, project_event,
+                                   unembedded_imported_percepts, unresolved_actions,
+                                   write_action)
 from monoagens.types import Event
 
 NOT_INSTALLED = ("the middleware is not installed: build the kernel with "
                  "monoagens.boot.build()")
 LOGGER = logging.getLogger("kernel")
+
+
+def _receipt_line(receipt: Any) -> str:
+    """Return the one short human line a receipt is recorded with (DEC-4)."""
+    return str(receipt.reason or _result_text(receipt.result) or receipt.state)
+
+
+def _result_text(result: Any) -> str:
+    """Return the words of one tool result, when it has any."""
+    if isinstance(result, dict):
+        return str(result.get("text") or "")
+    return str(result or "")
 
 
 def _clean_text(value: str | None) -> str | None:
@@ -42,6 +56,7 @@ def _clean_text(value: str | None) -> str | None:
 class _Queued:
     event: Event
     ack: asyncio.Future[Event] | None
+    recorded: bool = False
 
 
 class Kernel:
@@ -70,6 +85,7 @@ class Kernel:
         self._batches: dict[tuple[int, str], dict[str, Any]] = {}
         self._backlogs: dict[str, dict[str, Any]] = {}
         self._results_this_round = 0
+        self._hook_acts: dict[int, int] = {}
         self._pending_embeds: deque[tuple[int, str]] = deque()
         self._embed_trigger: Event | None = None
         self._embed_batch_size: int = config.embed_batch_size(self.settings)
@@ -124,8 +140,12 @@ class Kernel:
         return await store_cursor(self.conn, body)
 
     def enqueue(self, event: Event) -> None:
-        """Queue an internal event safely from any thread without waiting for an intake ack."""
-        item = _Queued(event, None)
+        """Queue an internal event safely from any thread without waiting for an intake ack.
+
+        An event that already carries an id is already in the Log, so the consumer wakes on
+        it without recording it a second time.
+        """
+        item = _Queued(event, None, recorded=event.id is not None)
         loop = self._loop
         if loop is not None and not loop.is_closed():
             try:
@@ -156,7 +176,9 @@ class Kernel:
                       features: Mapping[str, float] | None = None,
                       backfill: bool = False, imported: bool = False,
                       labels: Mapping[str, Any] | None = None,
-                      occurred_at: datetime | None = None) -> Event:
+                      occurred_at: datetime | None = None,
+                      action: Any = None, close: tuple[Any, Any] | None = None,
+                      communicative: bool = False) -> Event:
         async with self.conn.transaction():
             stored = await append_event(self.conn, ts=self.clock.now(), kind=kind, who=event.who,
                                         place=place or event.place, body=event.body,
@@ -165,6 +187,10 @@ class Kernel:
                                         occurred_at=occurred_at, description=description,
                                         features=features, backfill=backfill, imported=imported,
                                         labels=labels)
+            if action is not None:
+                await write_action(self.conn, action, int(stored.id), communicative=communicative)
+            if close is not None:
+                await close_action(self.conn, close[0].id, close[1], int(stored.id))
             await self._project(stored, project=project)
         self._observer.observe(stored)
         return stored
@@ -191,7 +217,7 @@ class Kernel:
         text = text or event.description
         if self.embedder is None or event.id is None or not text.strip():
             return
-        if event.kind == "percept" and (event.payload or {}).get("imported") is True:
+        if event.kind == "percept" and event.imported:
             self._pending_embeds.append((event.id, text))
             self._embed_trigger = event
             if len(self._pending_embeds) >= self._embed_batch_size:
@@ -220,6 +246,17 @@ class Kernel:
         )
 
     async def _settle(self, item: _Queued) -> Event:
+        if item.recorded:
+            try:
+                ctx = {"conn": self.conn, "now": self.clock.now()}
+                await self._run_hooks("inbound", item.event, ctx, item.event,
+                                      tool=item.event.body)
+                await self._wake(item.event)
+            except Exception as exc:
+                await self._record_error(item.event, exc)
+            finally:
+                self.queue.task_done()
+            return item.event
         resolved = item.event
         try:
             if item.event.kind == "tick":
@@ -280,8 +317,7 @@ class Kernel:
             return
         if event.kind == "intent":
             if self.pfc is not None:
-                await self._think(event, str(event.payload.get("description") or ""),
-                                  event.place or "")
+                await self._think(event, event.description, event.place or "")
             return
         if event.kind == "percept" and event.imported:
             return
@@ -308,9 +344,7 @@ class Kernel:
         if event.kind == "percept":
             await self._flush_backlogs(place=event.place or "")
         if event.kind == "act.result":
-            if await working.step_spoke(self.conn, event):
-                await self._emit(event, "decision.silent",
-                                 {"reason": "a message already ended this step"})
+            if await self._decided(event):
                 return
             if await threads.closed_reason(self.conn, event) in ("max_task_steps", "stopped"):
                 await self._emit(event, "decision.silent",
@@ -325,10 +359,10 @@ class Kernel:
                 await self._think(event, appraisal.reason, event.place or "")
             return
         if appraisal.decision != "wake":
-            await self._emit(event, f"decision.{appraisal.decision}", appraisal.payload())
+            await self._emit(event, f"decision.{appraisal.decision}", appraisal.record())
             return
         if appraisal.reflex is None:
-            await self._emit(event, "decision.wake", appraisal.payload())
+            await self._emit(event, "decision.wake", appraisal.record())
             if await expectations.create_wait(self.conn, event, now=self.clock.now(),
                                         settings=self.settings):
                 return
@@ -496,8 +530,8 @@ class Kernel:
                     now=self.clock.now(), settings=self.settings, usage=item.get("usage"))
                 if call is not None and self.after_model_call is not None:
                     await self.after_model_call(call.id, totals)
-            calls = [call for item in rounds for call in item.get("calls") or []]
-            acts = await jobs.apply_calls(self, job.trigger, calls)
+            acts = await jobs.apply_calls(self, job.trigger, rounds,
+                                          dispatch.JobRef(job.key, job.started_event_id))
             self._track_batch(job, acts)
             await threads.after_step(self, job, event, acts)
         elif job.name == "encode" and isinstance(result.get("vector"), list):
@@ -543,12 +577,12 @@ class Kernel:
         woken = replace(trigger, place=place) if reminded else trigger
         appraisal = await self._appraise(trigger)
         if appraisal.decision != "wake":
-            await self._emit(trigger, f"decision.{appraisal.decision}", appraisal.payload())
+            await self._emit(trigger, f"decision.{appraisal.decision}", appraisal.record())
         else:
             if reminded:
                 condition = str(item.get("condition_text") or "")
-                reason = (f"{appraisal.reason}: {item['about']} (condition: {condition}); "
-                          "does this line fulfil it?")
+                reason = (f"this line may relate to your expectation: {item['about']}; "
+                          f"condition: {condition}; does this line fulfil it?")
             else:
                 reason = (f"expectation missed: {item['about']} "
                           f"(intent: {item['intent'] or 'none'}); {appraisal.reason}")
@@ -560,7 +594,7 @@ class Kernel:
         """Resend what was recorded but never confirmed, then wake for fired expectations."""
         now = self.clock.now()
         try:
-            await sends.resume(self)
+            await self._resume_actions(now)
         except Exception as exc:
             await self._record_error(Event(id=None, ts=now, kind="tick"), exc)
         try:
@@ -588,13 +622,35 @@ class Kernel:
             except Exception as exc:
                 await self._record_error(Event(id=None, ts=now, kind="tick"), exc)
 
-    async def _apply(self, event: Event, call: ToolCall,
-                     said: set[str] | None = None) -> dispatch.Dispatch:
+    async def _resume_actions(self, now: datetime) -> int:
+        """Hand every action without a receipt back to its body with the same id (DEC-6)."""
+        count = 0
+        for row in await unresolved_actions(self.conn):
+            placed = str(row.get("place") or "")
+            act = dispatch.Act(
+                action=contract.Action(id=str(row["id"]),
+                                       capability=str(row.get("capability") or ""),
+                                       place=placed,
+                                       arguments=dict(row.get("arguments") or {}),
+                                       caused_by=row.get("caused_by")),
+                out=Event(id=row.get("act_out"), ts=now, kind="act.out", place=placed))
+            trigger = Event(id=row.get("caused_by"), ts=now, kind="act.out", place=placed)
+            if act.out.id is None:
+                continue
+            receipt = await dispatch.carry(self, act)
+            await self._settle_action(trigger, act, receipt)
+            count += 1
+        return count
+
+    async def _apply(self, event: Event, call: ToolCall, said: set[str] | None = None, *,
+                     job: dispatch.JobRef | None = None, round_index: int = 0,
+                     n: int = 0) -> dispatch.Dispatch:
         args = call.arguments
         if call.name == "think":
             await self._emit(event, "decision.note", {"act": "think", **args})
         elif call.name == "act":
-            return await dispatch.dispatch(self, event, args, said=said)
+            return await dispatch.dispatch(self, event, args, said=said, job=job,
+                                           round_index=round_index, n=n)
         elif call.name == "expect":
             await expectations.create(self.conn, args, now=self.clock.now(),
                                 settings=self.settings, source=event)
@@ -608,8 +664,57 @@ class Kernel:
         return dispatch.Dispatch(acted=False)
 
     async def _emit(self, trigger: Event, kind: str, payload: dict[str, Any], *,
-                    place: str | None = None) -> Event:
-        return await self._append(trigger, kind, payload, caused_by=trigger.id, place=place)
+                    place: str | None = None, description: str | None = None) -> Event:
+        return await self._append(trigger, kind, payload, caused_by=trigger.id, place=place,
+                                  description=description)
+
+    def next_hook_act(self, event_id: int | None) -> int:
+        """Return how many acts this event already made through the hook door (D-H)."""
+        key = int(event_id or 0)
+        self._hook_acts[key] = self._hook_acts.get(key, 0) + 1
+        return self._hook_acts[key] - 1
+
+    async def _emit_act(self, trigger: Event, payload: dict[str, Any], *,
+                        action: Any, place: str | None = None, description: str | None = None,
+                        communicative: bool = False) -> Event:
+        """Record one `act.out` and its action in the ledger, in one transaction (D-F)."""
+        return await self._append(trigger, "act.out", payload, caused_by=trigger.id,
+                                  place=place, description=description, action=action,
+                                  communicative=communicative)
+
+    async def _settle_action(self, trigger: Event, act: Any,
+                             receipt: Any) -> Event:
+        """Record one action's one receipt, close its ledger row, and wake or stay silent.
+
+        A held action is recorded and never wakes reasoning; a message that already ended
+        the step records the silence instead of waking (DEC-4, DEC-5).
+        """
+        silent = (receipt.state == "done" and act.communicative
+                  and str(act.action.place) == str(trigger.place))
+        payload = {"capability": act.action.capability, "state": receipt.state,
+                   "reason": receipt.reason, "result": receipt.result}
+        stored = await self._append(act.out, "act.result", payload,
+                                    caused_by=act.out.id, place=act.action.place,
+                                    description=_receipt_line(receipt),
+                                    close=(act.action, receipt))
+        if receipt.state == "held":
+            return stored
+        if silent:
+            await self._emit(stored, "decision.silent",
+                             {"reason": "a message already ended this step"})
+        elif receipt.state == "done" and not receipt.reason and receipt.result is None:
+            return stored  # an empty answer carries no news, so it costs no model call
+        self.enqueue(stored)
+        return stored
+
+    async def _decided(self, event: Event) -> bool:
+        """Return whether a decision was already recorded for this event (DEC-5)."""
+        if event.id is None:
+            return False
+        row = await (await self.conn.execute(
+            "SELECT 1 FROM events WHERE caused_by = %s AND kind LIKE 'decision.%%' LIMIT 1",
+            (event.id,))).fetchone()
+        return row is not None
 
     async def _record_error(self, event: Event, exc: BaseException | str) -> None:
         raw = jobs.describe_failure(exc) if isinstance(exc, BaseException) else str(exc)

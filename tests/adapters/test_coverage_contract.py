@@ -177,7 +177,7 @@ async def test_all_adapters_declare_valid_coverage_and_draw_shows_and_say_fields
                 await adapter.show(place, absent, text="x")
 
     # Neutral `say` fields work across every adapter via native or fallback.
-    res = await adapter.act(Action(kind="say", place=place, payload={
+    res = await adapter.act(Action(kind="say", place=place, arguments={
         "text": "Choose one:",
         "choices": ["A", "B"],
         "thread": "Design thread",
@@ -233,7 +233,7 @@ async def test_telegram_native_bot_api_features_and_cli_numbered_choices(aconn, 
 
     # CLI numbered choices answer carries data.choice and data.reply_to
     cli_body = cli.CLIBody("/tmp/unused.sock", clock=clock)
-    sent_cli = await cli_body.act(Action(kind="say", place="space:cli", payload={
+    sent_cli = await cli_body.act(Action(kind="say", place="space:cli", arguments={
         "text": "Pick mode:", "choices": ["Fast", "Careful"],
     }))
     ev_cli = await cli_body._event("2")
@@ -248,10 +248,10 @@ async def test_telegram_native_bot_api_features_and_cli_numbered_choices(aconn, 
     await tg_body.sync_commands([{"command": "help", "description": "Show help"}])
     assert any(m == "setMyCommands" for m, _ in tg_http.calls)
 
-    await tg_body.act(Action(kind="say", place="space:tg:-1001", payload={
+    await tg_body.act(Action(kind="say", place="space:tg:-1001", arguments={
         "text": "Pick:", "choices": ["Red", "Blue"],
     }))
-    await tg_body.act(Action(kind="edit", place="space:tg:-1001", payload={
+    await tg_body.act(Action(kind="edit", place="space:tg:-1001", arguments={
         "message_id": 102, "text": "Updated pick:",
     }))
     assert any(m == "editMessageText" for m, _ in tg_http.calls)

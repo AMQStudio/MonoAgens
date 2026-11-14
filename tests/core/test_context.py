@@ -30,18 +30,19 @@ def _soul() -> Reasoning:
 
 
 def _plain() -> PFCContext:
-    return PFCContext(now=START, place=PLACE, place_kind="direct", reason="x",
+    return PFCContext(now=START, place=PLACE, reason="x",
                       core_memory="m",
                       people=("- Budi (person:budi): no direct place known yet; closeness 0.00",))
 
 
 def _rich() -> PFCContext:
     event = Event(id=7, ts=START, kind="percept", who="person:budi", place=PLACE,
-                  body="telegram", payload={"description": "halo, apa kabar?"})
+                  body="telegram", payload={"description": "halo, apa kabar?"}, description="halo, apa kabar?")
     elsewhere = Event(id=8, ts=START, kind="act.out", who="person:owner", place="space:tg:9",
-                      body="telegram", payload={"arguments": {"text": "sampai jumpa"}})
+                      body="telegram", description="sampai jumpa",
+                      payload={"arguments": {"text": "sampai jumpa"}})
     return PFCContext(
-        now=START, place=PLACE, place_kind="direct", reason="addressed message",
+        now=START, place=PLACE, reason="addressed message",
         core_memory="Fulan sedang di-PHK.", last_interaction=START,
         doing=('goal: kirim laporan', 'step: dev.run {"command": "pytest"}'),
         expectations=("#3 kirim laporan (no intent stated)",),
@@ -100,4 +101,4 @@ def test_a_block_may_not_touch_the_prefix_or_take_a_name():
 
 EXPECTED_STABLE = "You are Mona.\n\nCalm and honest.\n\nPrinciples:\n- Never lie.\n\nLanguage: id.\n\nHow you work:\n- Thinking is not acting: in the same answer, call the tool that carries the thought out.\n- What you promise for later, a reminder, or a watch ('tell me if ...') is an expectation: hold it with expect and a cue (cue_time or cue_event) that wakes you; without a cue nothing wakes you.\n- Reach someone or another place with act's to: (an id the desk shows, or an existing place id) and via: (a tool); content that came from another place must be shared first and is never repeated where its audience may not see it: say it in a private place instead.\n- If what you know may be private to someone, or the desk says things are withheld, ask the person they belong to in a private place; never guess or answer for them where they are withheld.\n- Say something is done only after its result came back; until then say it is under way.\n- A line that may relate to an expectation is a question you answer yourself: when it fulfils one, keep it by doing it in this same turn: say what you promised before you resolve, because a resolve without the act is a broken promise; when it does not, let it be: think, or stay silent where the line was said.\n- Long work goes through a long-running capability; the task thread opens for you.\n- When a capability returns an answer, tell them that answer.\n- You act only through the tools. Staying silent is a valid choice."
 EXPECTED_SEMI = '<core_memory>Fulan sedang di-PHK.</core_memory>'
-EXPECTED_VOLATILE = '<now>2026-11-10 15:00, Tuesday, Asia/Jakarta, time since last interaction: 0m</now>\n<place>space:tg:1 (direct)</place>\n<why_awake>addressed message</why_awake>\n<results>\nthink: {"thought": "kirim hasil"}\n</results>\n<doing>\ngoal: kirim laporan\nstep: dev.run {"command": "pytest"}\n</doing>\n<expectations>#3 kirim laporan (no intent stated)</expectations>\n<memories>\n- rapat jam sembilan (person:owner at space:tg:owner; importance 0.90)\n</memories>\n<withheld>1 thing you know from person:owner private chat is not shown here</withheld>\n<recent>\n15:00 person:budi: halo, apa kabar?\n[space:tg:9] 15:00 Mona: sampai jumpa\n</recent>\n<event>person:budi: halo, apa kabar?</event>'
+EXPECTED_VOLATILE = '<now>2026-11-10 15:00, Tuesday, Asia/Jakarta, time since last interaction: 0m</now>\n<place>space:tg:1</place>\n<why_awake>addressed message</why_awake>\n<results>\nthink: {"thought": "kirim hasil"}\n</results>\n<doing>\ngoal: kirim laporan\nstep: dev.run {"command": "pytest"}\n</doing>\n<expectations>#3 kirim laporan (no intent stated)</expectations>\n<memories>\n- rapat jam sembilan (person:owner at space:tg:owner; importance 0.90)\n</memories>\n<withheld>1 thing you know from person:owner private chat is not shown here</withheld>\n<recent>\n15:00 person:budi: halo, apa kabar?\n[space:tg:9] 15:00 Mona: sampai jumpa\n</recent>\n<event>person:budi: halo, apa kabar?</event>'

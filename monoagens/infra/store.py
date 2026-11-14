@@ -207,15 +207,23 @@ async def merge_source(event: Event) -> tuple[str, str] | None:
     return (src, dst) if src and dst else None
 
 
-async def write_action(conn, action: Action, event_id: int) -> None:
-    """Record one action in the ledger, before it is handed to its body (D-F)."""
+async def write_action(conn, action: Action, event_id: int, *,
+                       communicative: bool = False) -> None:
+    """Record one action in the ledger before its body sees it, and point at it by event.
+
+    The row is the fact (D-F); the `act:<event id>` pointer lets a later `act.result`
+    find its action without reading a payload.
+    """
     await write_state(conn, f"action:{action.id}", {
         "capability": action.capability,
         "place": action.place,
         "arguments": dict(action.arguments),
         "caused_by": action.caused_by,
+        "communicative": bool(communicative),
+        "event": int(event_id),
         "receipt": None,
     }, event_id)
+    await write_state(conn, f"act:{int(event_id)}", {"id": action.id}, event_id)
 
 
 async def close_action(conn, action_id: str, receipt: Receipt, event_id: int) -> None:
@@ -229,6 +237,24 @@ async def close_action(conn, action_id: str, receipt: Receipt, event_id: int) ->
         "reason": receipt.reason,
         "result": receipt.result,
     }}, event_id)
+
+
+async def action_of(conn, act_out_id: int) -> dict[str, Any] | None:
+    """Return the action ledger row one `act.out` event records, if it has one."""
+    return (await actions_of(conn, [act_out_id])).get(int(act_out_id))
+
+
+async def actions_of(conn, act_out_ids: Sequence[int]) -> dict[int, dict[str, Any]]:
+    """Return the action ledger row of many `act.out` events, keyed by the event id."""
+    ids = [int(item) for item in act_out_ids if item is not None]
+    if not ids:
+        return {}
+    cur = await conn.execute(
+        "SELECT p.key, a.value FROM state p JOIN state a "
+        "ON a.key = 'action:' || (p.value->>'id') WHERE p.key = ANY(%s)",
+        ([f"act:{item}" for item in ids],))
+    return {int(str(key).split(":", 1)[1]): dict(value or {})
+            for key, value in await cur.fetchall()}
 
 
 async def unresolved_actions(conn) -> list[dict[str, Any]]:
@@ -245,6 +271,7 @@ async def unresolved_actions(conn) -> list[dict[str, Any]]:
             "place": str(ledger.get("place") or ""),
             "arguments": dict(ledger.get("arguments") or {}),
             "caused_by": ledger.get("caused_by"),
+            "act_out": ledger.get("event"),
         })
     return found
 
@@ -291,9 +318,36 @@ async def rebuild_state(conn) -> None:
 
 
 async def read_expectations(conn, where="TRUE", params=()) -> list[dict[str, Any]]:
-    """Read expectation rows joined with their source body, filtered by where."""
+    """Read expectation rows joined with their source body, filtered by where.
+
+    A stored `text_like` cue is upcast here, in memory, into a free-text condition: the
+    words it matched are what the condition compares, and the cue keeps facts only (D-K).
+    The stored row is never rewritten.
+    """
     cur = await conn.execute(f"{_EXPECTATIONS} WHERE {where} ORDER BY ex.id", params)
-    return [dict(zip(EXPECTATION_COLUMNS, row)) for row in await cur.fetchall()]
+    return [_upcast_cue(dict(zip(EXPECTATION_COLUMNS, row))) for row in await cur.fetchall()]
+
+
+def _upcast_cue(row: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite one stored `text_like` cue as a free-text condition, or return it unchanged."""
+    cue = row.get("cue_event")
+    if not isinstance(cue, dict):
+        return row
+    phrase = cue.get("text_like")
+    cleaned = {key: value for key, value in cue.items() if key != "text_like"}
+    if phrase is None:
+        seen = cue.get("event_seen")
+        if not isinstance(seen, dict) or seen.get("text_like") is None:
+            return row
+        phrase = seen["text_like"]
+        cleaned = {**cleaned, "event_seen": {key: value for key, value in seen.items()
+                                             if key != "text_like"}}
+    condition = dict(row.get("condition") or {})
+    if not condition.get("text"):
+        condition = {"text": str(phrase)}
+    return {**row, "cue_event": cleaned, "condition": condition,
+            "condition_text": str(condition.get("text") or row.get("condition_text") or "")}
+
 
 
 async def insert_expectation(conn, values) -> int:
@@ -313,6 +367,18 @@ async def resolve_expectation(conn, row, now: datetime, status: str) -> Event:
         return await append_event(conn, ts=now, kind="expectation.resolved", who=row["who"],
                                   place=row["place"], body=row.get("source_body"),
                                   caused_by=row.get("fired_event"), payload=payload)
+
+
+async def fired_for(conn, expectation_id: int) -> tuple[int, ...] | None:
+    """Return the newest `expectation.fired` event of one expectation, as a row tuple.
+
+    The store wrote that payload's `expectation_id`, so the store is the one place that
+    reads it back; the core asks this question in ids only.
+    """
+    return await (await conn.execute(
+        "SELECT id FROM events WHERE kind = 'expectation.fired' "
+        "AND payload->>'expectation_id' = %s ORDER BY id DESC LIMIT 1",
+        (str(int(expectation_id)),))).fetchone()
 
 
 async def fire_expectation(conn, row, now: datetime) -> dict[str, Any]:

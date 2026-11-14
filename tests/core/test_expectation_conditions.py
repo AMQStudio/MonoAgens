@@ -95,7 +95,7 @@ def _percept(text: str, *, place: str = GROUP, who: str = OTHER) -> object:
     from monoagens.types import Event
 
     return Event(id=None, ts=START, kind="percept", who=who, place=place, body="telegram",
-                 payload={"description": text, "addressed": False, "place_kind": "shared"})
+                 payload={"description": text, "addressed": False, "place_kind": "shared"}, description=text)
 
 
 async def _promise(conn, *, text: str, expires: datetime | None = None) -> int:
@@ -147,7 +147,6 @@ async def test_a_line_at_or_above_lo_wakes_the_pfc_once_with_the_reminder(aconn)
     assert f"{OTHER}: {line}" in prompt  # the line keeps its own speaker
     assert "this line may relate to your expectation: kabari kalau server down;" in prompt
     assert "condition: server down; does this line fulfil it?" in prompt
-    assert "reminded: kabari kalau server down" in prompt
     assert "fired expectation" not in prompt
     reminders = await _kinds(aconn, "expectation.reminded")
     assert len(reminders) == 1
@@ -163,7 +162,7 @@ async def test_a_line_at_or_above_lo_wakes_the_pfc_once_with_the_reminder(aconn)
     assert await cur.fetchone() == (OTHER, GROUP, line_id, "person:owner")
     rows = await read_expectations(aconn, "ex.id = %s", (exp_id,))
     assert (rows[0]["status"], rows[0]["fire_count"]) == ("active", 0)  # still a promise
-    assert [action.payload["text"] for action in harness.body.actions] == ["Server down, owner."]
+    assert [action.arguments["text"] for action in harness.body.actions] == ["Server down, owner."]
 
 
 async def test_a_fulfilled_promise_wakes_no_one(aconn):

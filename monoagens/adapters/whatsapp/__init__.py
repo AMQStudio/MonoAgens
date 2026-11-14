@@ -569,26 +569,26 @@ class WhatsAppBody:
         """Perform `say`, `react`, or `edit` in a WhatsApp chat and record sent message ids."""
         if action.kind == "say":
             res = await send.send_say(self._client, self.directory, self._files,
-                                      action.place, dict(action.payload or {}))
+                                      action.place, dict(action.arguments or {}))
         elif action.kind == "react":
             res = await send.send_react(
-                self._client, action.place, str(action.payload.get("emoji") or ""),
-                str(action.payload.get("message_id") or ""))
+                self._client, action.place, str(action.arguments.get("emoji") or ""),
+                str(action.arguments.get("message_id") or ""))
         elif action.kind == "edit":
             res = await send.send_edit(
-                self._client, action.place, str(action.payload.get("message_id") or ""),
-                str(action.payload.get("text") or ""))
+                self._client, action.place, str(action.arguments.get("message_id") or ""),
+                str(action.arguments.get("text") or ""))
         elif action.kind == "pin" and "pin" in self.enabled_tools:
             getter = getattr(self._client, "pin_message", None)
             if callable(getter):
                 await getter(send.jid_of(send.chat_jid_from_place(action.place)),
-                             str(action.payload.get("message_id") or ""))
+                             str(action.arguments.get("message_id") or ""))
             res = {"pinned": True}
         elif action.kind == "reject_call" and "reject_call" in self.enabled_tools:
             rejector = getattr(self._client, "reject_call", None)
             if callable(rejector):
-                await rejector(str(action.payload.get("caller") or ""),
-                               str(action.payload.get("call_id") or ""))
+                await rejector(str(action.arguments.get("caller") or ""),
+                               str(action.arguments.get("call_id") or ""))
             res = {"rejected": True}
         else:
             raise ValueError(f"Unsupported action kind: {action.kind!r}")

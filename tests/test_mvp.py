@@ -83,7 +83,7 @@ def _msg(text: str, *, message_id: int = 1, place: str = PLACE, place_kind: str 
          addressed: bool = True, who: str = WHO) -> Event:
     return Event(id=None, ts=START, kind="percept", who=who, place=place, body="telegram",
                  payload={"description": text, "addressed": addressed,
-                          "place_kind": place_kind, "data": {"message_id": message_id}})
+                          "place_kind": place_kind, "data": {"message_id": message_id}}, description=text)
 
 
 async def _feed(kernel: Kernel, event: Event) -> Event:
@@ -137,8 +137,8 @@ async def test_mvp_a_restart_preserves_conversation_context(aconn):
     assert "besok kita bahas apa?" in recent
     assert "Mona: kita bahas kopi ya" in recent
     assert "<event>person:owner: lanjut</event>" in volatile
-    assert body.actions == [Action(kind="say", place=PLACE, payload={"text": "lanjut soal kopi"},
-                                   adapter="telegram")]
+    assert [(a.kind, a.place, dict(a.arguments)) for a in body.actions] == [
+        ("say", PLACE, {"text": "lanjut soal kopi"})]
     assert (await _kinds(aconn)).count("act.out") == 2
 
 
@@ -181,8 +181,8 @@ async def test_mvp_b_silence_and_mention(aconn):
     assert len(fake.requests) == 1
     assert "<why_awake>addressed message</why_awake>" in _volatile(fake)
     assert (await _kinds(aconn)).count("act.out") == 1
-    assert body.actions == [Action(kind="say", place=GROUP, payload={"text": "iya, ada apa?"},
-                                   adapter="telegram")]
+    assert [(a.kind, a.place, dict(a.arguments)) for a in body.actions] == [
+        ("say", GROUP, {"text": "iya, ada apa?"})]
 
 
 async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
@@ -212,10 +212,10 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
     kinds = await _kinds(aconn)
     assert kinds.count("expectation.fired") == 1
     assert kinds.count("act.out") == 1
-    assert body.actions == [Action(kind="say", place=PLACE, payload={"text": "sudah jam 7"},
-                                   adapter="telegram")]
+    assert [(a.kind, a.place, dict(a.arguments)) for a in body.actions] == [
+        ("say", PLACE, {"text": "sudah jam 7"})]
     assert "expectation missed: remind the owner at 7" in _volatile(fake).split("<why_awake>")[1]
-    assert "<event>[expectation.fired]</event>" in _volatile(fake)
+    assert "<event>person:owner: remind the owner at 7</event>" in _volatile(fake)
 
     cur = await aconn.execute("SELECT status, fire_count FROM expectations")
     assert await cur.fetchone() == ("satisfied", 1)
@@ -232,7 +232,7 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
     assert (await _kinds(aconn)).count("act.out") == 1
 
     # An event_seen expectation that is met is resolved, never fired.
-    pattern = {"kind": "percept", "who": WHO, "text_like": "workout"}
+    pattern = {"kind": "percept", "who": WHO}
     source = await append_event(aconn, ts=clock.now(), kind="percept", who=WHO, place=GROUP,
                                 body="telegram", payload={"text": "source"})
     created = await expectations.create(

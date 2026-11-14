@@ -233,7 +233,7 @@ def test_seeded_rng_is_reproducible_and_depends_on_the_event():
 def test_appraisal_payload_carries_every_number_and_the_signals():
     appraisal = Appraisal("note", "why", "reflex", {"a": 0.5}, 0.4, 0.3, 0.6, 0.9,
                           0.35, 0.056, 2.0, 0.25, 0.5, 0.125, 0.75)
-    assert appraisal.payload() == {
+    assert appraisal.record() == {
         "decision": "note", "reason": "why", "reflex": "reflex", "signals": {"a": 0.5},
         "s": 0.4, "s_eff": 0.35, "theta": 0.3, "tau": 0.056, "p": 0.6, "u": 0.9,
         "habituation": 2.0, "talk_rate": 0.25, "budget_used": 0.5, "promise_debt": 0.125,
@@ -269,7 +269,7 @@ async def test_reminded_expectation_is_a_wake_reflex_that_says_reminded():
 
 
 async def test_an_ordinary_message_is_silent_and_reproducible():
-    event = Event(42, START, "percept", who=WHO, place=PLACE, payload={"text": "obrolan"})
+    event = Event(42, START, "percept", who=WHO, place=PLACE, payload={"text": "obrolan"}, description="obrolan")
     first = await appraise(event, settings=SETTINGS)
     second = await appraise(event, settings=SETTINGS)
     assert (first.decision, first.reflex, first.reason) == (
@@ -323,12 +323,12 @@ def test_probability_is_a_sigmoid_around_theta_and_the_bands_are_explicit():
 
 async def test_same_event_and_seed_give_the_same_decision():
     event = Event(7, START, "percept", who=WHO, place=GROUP, body="telegram",
-                  payload={"description": "obrolan grup"})
+                  payload={"description": "obrolan grup"}, description="obrolan grup")
     situation = _situation(event=event, vector=[1.0, 0.0], best_activation=1.0,
                            familiarity=0.5)
     first = await appraise(event, situation=situation, settings=SETTINGS)
     second = await appraise(event, situation=situation, settings=SETTINGS)
-    assert first.payload() == second.payload()
+    assert first.record() == second.record()
     assert first.u == seeded_rng(1, 7).random()
     reseeded = settings()
     reseeded["constants"] = {**reseeded["constants"], "seed": 2}
@@ -457,11 +457,11 @@ async def test_the_circuit_breaker_wakes_on_a_fired_expectation_and_a_goal_resul
                                 body="telegram", payload={"text": "halo"})
     await expectations.create(aconn, {
         "about": "balasan Budi", "kind": "promise",
-        "cue_event": {"kind": "percept", "place": PLACE, "text_like": "budi"},
+        "cue_event": {"kind": "percept", "place": PLACE},
         "expect": {"none": True}, "policy": {"once": True}},
         now=START, settings=SETTINGS, source=source)
     answer = Event(None, START, "percept", who="person:budi", place=PLACE, body="telegram",
-                   payload={"description": "budi menjawab"})
+                   payload={"description": "budi menjawab"}, description="budi menjawab")
     engaged = await appraise(answer, conn=aconn, now=START, settings=SETTINGS)
     assert (engaged.decision, engaged.reflex, engaged.reason) == (
         "wake", "expectation", "expectation engaged")
@@ -757,9 +757,10 @@ async def test_action_hook_replaces_the_payload_and_continue_passes(aconn):
     kernel.hooks.action.add("rewrite", rewrite)
     await _feed(kernel, _msg("halo"))
 
-    assert body.actions == [Action(kind="say", place=PLACE,
-                                   payload={"text": "hai (checked)"}, adapter="telegram")]
-    assert (await _payload(aconn, "act.out"))["arguments"]["text"] == "hai"
+    assert [(a.kind, a.place, dict(a.arguments)) for a in body.actions] == [
+        ("say", PLACE, {"text": "hai (checked)"})]
+    # F.10: the act records the arguments the action hook returned, not the ones asked for.
+    assert (await _payload(aconn, "act.out"))["arguments"]["text"] == "hai (checked)"
 
 
 async def test_action_hook_stop_records_the_stop_and_neither_records_nor_acts(aconn):
@@ -936,7 +937,7 @@ async def test_identity_changing_capability_passes_for_the_owner(aconn):
 
     assert len(body.actions) == 1
     # set_identity is not communicative, so no act.confirmed closes it.
-    assert await _kinds(aconn) == ["percept", "model.call", "act.out"]
+    assert await _kinds(aconn) == ["percept", "model.call", "act.out", "act.result"]
 
 
 async def test_forty_offline_messages_across_three_groups_appraised_once_per_group(aconn):
@@ -964,7 +965,7 @@ async def test_forty_offline_messages_across_three_groups_appraised_once_per_gro
                 "description": text, "place_kind": "shared",
                 "addressed": addressed, "backfill": True,
                 "sent_at": (START - timedelta(minutes=30 + idx)).isoformat(),
-            },
+            }, description=text,
         )))
 
     await kernel.run_until_idle()
@@ -1006,7 +1007,7 @@ async def test_kernel_run_flushes_backfill_batch_once_after_settle(aconn):
                     "description": f"pesan lama {idx}", "place_kind": "shared",
                     "addressed": False, "backfill": True,
                     "sent_at": (START - timedelta(hours=2)).isoformat(),
-                },
+                }, description=f"pesan lama {idx}",
             ))
         await asyncio.sleep(0.35)
     finally:

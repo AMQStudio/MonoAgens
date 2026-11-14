@@ -57,7 +57,7 @@ async def test_filter_context_fits_the_hook_watchdog(aconn):
     elapsed = time.perf_counter() - started
 
     filtered = outcome.item if isinstance(outcome, Replace) else context
-    assert filtered.place_kind == "shared"
+    assert filtered.place == DESK
     assert filtered.withheld  # the owner-only memories came from a private chat
     print(f"\nfilter_context on {EVENTS} events, {MEMORIES} memories, {PLACES} places: "
           f"{elapsed * 1000:.1f} ms")

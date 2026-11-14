@@ -435,7 +435,7 @@ class FakeBody:
     @staticmethod
     def _output(action: Action) -> str:
         """Render a command's observable result: what changed and what the tests said."""
-        command = str(action.payload.get("command") or "")
+        command = str(action.arguments.get("command") or "")
         return (f"$ {command}\n"
                 "src/parser.py | 9 ++++----- (the failing branch now returns the parsed node)\n"
                 "tests/test_parser.py | 2 +-\n"

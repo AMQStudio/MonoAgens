@@ -279,7 +279,7 @@ class DiscordBody:
 
     async def act(self, action: Action) -> Any:
         """Perform `say`, `react`, or `edit` on Discord."""
-        p = action.payload or {}
+        p = action.arguments or {}
         if action.kind == "say":
             return await send.say(
                 self._resolve_channel, self._files, action.place,
