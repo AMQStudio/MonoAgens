@@ -176,8 +176,8 @@ async def test_layered_prompt_structure(aconn):
     act_tool = next(tool for tool in request["tools"]
                     if tool["function"]["name"] == "act")
     capability = act_tool["function"]["parameters"]["properties"]["capability"]
-    assert capability["enum"] == ["registry.describe", "registry.more", "self.recall",
-                                 "self.set_identity", "self.share",
+    assert capability["enum"] == ["registry.describe", "registry.more", "self.answer",
+                                 "self.recall", "self.set_identity", "self.share",
                                  "telegram.edit", "telegram.react", "telegram.say"]
     description = act_tool["function"]["description"]
     assert "telegram.say(" in description
@@ -655,7 +655,11 @@ async def test_dm_gets_a_reply_through_the_telegram_body(aconn):
 
     stop = asyncio.Event()
     consumer = asyncio.create_task(kernel.run(stop))
-    listener = asyncio.create_task(body.run(kernel.put))
+    async def put(item):
+        """Hand one percept in under this body's own name, as the supervisor does."""
+        return await kernel.put(item, body="telegram")
+
+    listener = asyncio.create_task(body.run(put))
     try:
         for _ in range(2000):
             if sent:
@@ -672,8 +676,8 @@ async def test_dm_gets_a_reply_through_the_telegram_body(aconn):
 
     assert sent == [{"chat_id": "111", "text": "halo!"}]
     assert await _kinds(aconn) == [
-        "identity.registered", "percept", "interaction.shown", "model.call", "act.out",
-        "act.result", "decision.silent"]
+        "place.audience", "identity.registered", "percept", "interaction.shown",
+        "model.call", "act.out", "act.result", "decision.silent"]
 
 
 async def test_recent_includes_other_places_prefixed(aconn):

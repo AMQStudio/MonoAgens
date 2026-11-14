@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -34,6 +34,28 @@ EVENT_COLUMNS = ("id", "ts", "occurred_at", "kind", "description", "who", "place
                  "caused_by", "origin_actor", "features", "backfill", "imported", "payload",
                  "labels", "schema_version")
 _EVENT_COLS = ", ".join(EVENT_COLUMNS)
+
+
+def no_nul(value: Any) -> Any:
+    """Return a value Postgres accepts as text or jsonb: every NUL byte removed.
+
+    A platform may hand the soul a string a database cannot store; the Log keeps its words and
+    drops only the byte, so one bad payload never loses an event.
+    """
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, Mapping):
+        return {no_nul(key): no_nul(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [no_nul(item) for item in value]
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).decode("utf-8", "replace").replace("\x00", "")
+    return value
+
+
+def escape_like(text: str) -> str:
+    """Escape `%`, `_` and the escape character itself, so a search term stays data."""
+    return str(text).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def event_from_row(row) -> Event:
@@ -69,7 +91,7 @@ async def append_event(conn, *, ts, kind, who=None, place=None, body=None, paylo
     if schema_version < 1:
         raise ValueError(f"schema_version must be positive: {schema_version!r}")
     translated = upcast_event({"ts": ts, "kind": kind, "payload": dict(payload or {})})
-    written = description or translated.description
+    written = no_nul(description or translated.description)
     occurred_at = occurred_at or translated.occurred_at
     features = {**translated.features, **dict(features or {})}
     backfill = backfill or translated.backfill
@@ -79,10 +101,12 @@ async def append_event(conn, *, ts, kind, who=None, place=None, body=None, paylo
              "schema_version) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, "
              "(SELECT origin_actor FROM events WHERE id = %s), %s), %s, %s, %s, %s, %s, %s) "
              f"RETURNING {_EVENT_COLS}")
-    cur = await conn.execute(query, (ts, occurred_at, kind, written, who, place, body,
-                                    caused_by, origin_actor, caused_by, who,
-                                    Jsonb(dict(features or {})), backfill, imported,
-                                    Jsonb(dict(payload or {})), Jsonb(dict(labels or {})),
+    cur = await conn.execute(query, (ts, occurred_at, kind, written, no_nul(who),
+                                    no_nul(place), no_nul(body),
+                                    caused_by, origin_actor, caused_by, no_nul(who),
+                                    Jsonb(no_nul(dict(features or {}))), backfill, imported,
+                                    Jsonb(no_nul(dict(payload or {}))),
+                                    Jsonb(no_nul(dict(labels or {}))),
                                     schema_version))
     return event_from_row(await cur.fetchone())
 

@@ -12,7 +12,8 @@ import sys
 import pytest
 
 from monoagens.adapters.cli import CLIBody
-from monoagens.contract import Action
+from monoagens.contract import Action, Event, Percept
+from typing import Any
 from monoagens.types import Event
 
 
@@ -32,9 +33,10 @@ async def test_socket_round_trip_with_cli_body(tmp_path):
     posted: list[Event] = []
     posted_event = asyncio.Event()
 
-    async def put(event: Event) -> None:
+    async def put(event: Any) -> None:
         posted.append(event)
-        posted_event.set()
+        if isinstance(event, Percept):  # the audience comes first, the line after it
+            posted_event.set()
 
     task = asyncio.create_task(body.run(put))
     try:
@@ -49,13 +51,14 @@ async def test_socket_round_trip_with_cli_body(tmp_path):
         await writer.drain()
         await asyncio.wait_for(posted_event.wait(), timeout=5.0)
 
-        event = posted[0]
-        assert event.kind == "percept"
-        assert event.body == "cli"
-        assert event.who == "person:owner"
+        # the body publishes the place's audience first, then one percept per typed line
+        assert isinstance(posted[0], Event) and posted[0].kind == "place.audience"
+        event = [item for item in posted if isinstance(item, Percept)][0]
+        assert isinstance(event, Percept)
+        assert event.actor == "person:owner"
         assert event.place == "space:cli"
-        assert event.payload == {"description": "halo", "addressed": True,
-                                 "place_kind": "direct"}
+        assert event.description == "halo"
+        assert event.features["addressed"] == 1
 
         await body.act(Action(id="test:1", capability="say", place="space:cli", arguments={"text": "hai"}))
         assert await asyncio.wait_for(reader.readline(), timeout=5.0) == b"hai\n"
@@ -103,9 +106,9 @@ def test_a_typed_command_becomes_a_command_event():
     slash = command_event("/mode professional", clock=clock)
     colon = command_event(":help", clock=clock)
 
-    assert slash.kind == "command" and slash.payload["command"] == "mode"
-    assert slash.payload["arguments"] == ["professional"]
-    assert colon.payload["command"] == "help"
+    assert slash.command is not None and slash.command.name == "mode"
+    assert slash.command.args == ("professional",)
+    assert colon.command is not None and colon.command.name == "help"
     assert command_event("halo", clock=clock) is None
 
 
@@ -115,4 +118,4 @@ async def test_the_cli_body_sends_a_command_as_a_command():
     body = CLIBody("/tmp/monoagens-cli-test.sock")
     event = await body._event("/whoami")
 
-    assert event.kind == "command" and event.payload["command"] == "whoami"
+    assert event.command is not None and event.command.name == "whoami"

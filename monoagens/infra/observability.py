@@ -17,23 +17,26 @@ def _one_line(value: Any, *, fallback: str = "-") -> str:
     return text or fallback
 
 
-def _text_length(event: Event) -> int:
-    payload = event.payload or {}
-    if event.kind == "percept":
+def _text_length(event: Any) -> int:
+    payload = getattr(event, "payload", None) or {}
+    kind = str(getattr(event, "kind", None) or ("percept" if hasattr(event, "actor") else ""))
+    if kind == "percept":
         # The envelope's field, never the payload (2.2); the fallback reads the one raw shape
         # an adapter may still hand in before the door upcasts it.
-        return len(event.description or str(payload.get("description") or payload.get("text") or ""))
-    if event.kind == "act.out":
+        return len(getattr(event, "description", "") or str(
+            payload.get("description") or payload.get("text") or ""))
+    if kind == "act.out":
         args = payload.get("arguments") or {}
         if isinstance(args, dict) and args.get("text"):
             return len(str(args["text"]))
     return len(payload_text(payload))
 
 
-def _is_gate_decision(event: Event) -> bool:
-    if event.kind in ("decision.silent", "decision.wake"):
+def _is_gate_decision(event: Any) -> bool:
+    if getattr(event, "kind", None) in ("decision.silent", "decision.wake"):
         return True
-    return event.kind.startswith("decision.") and "reason" in (event.payload or {})
+    kind = str(getattr(event, "kind", None) or "")
+    return kind.startswith("decision.") and "reason" in (getattr(event, "payload", None) or {})
 
 
 class EventObserver:
@@ -44,13 +47,16 @@ class EventObserver:
         self.conn = conn
         self.imported_count = 0
 
-    def observe(self, event: Event) -> None:
-        """Log an INFO line if `event` belongs to the live observability set."""
-        payload = event.payload or {}
-        adapter = _one_line(event.body or payload.get("adapter"))
-        place = _one_line(event.place)
-        who = _one_line(event.who)
-        if event.kind == "percept" and payload.get("imported") is True:
+    def observe(self, event: Any) -> None:
+        """Log one INFO line for a key event, whether it arrives as a percept or an event."""
+        payload = getattr(event, "payload", None) or {}
+        kind = str(getattr(event, "kind", None) or
+                   ("percept" if hasattr(event, "actor") else "unknown"))
+        adapter = _one_line(getattr(event, "body", None) or payload.get("adapter"))
+        place = _one_line(getattr(event, "place", ""))
+        who = _one_line(getattr(event, "who", None) or getattr(event, "actor", ""))
+        imported = getattr(event, "imported", None)
+        if kind == "percept" and (imported is True or payload.get("imported") is True):
             self.imported_count += 1
             if self.imported_count % self.summary_every == 0:
                 LOGGER.info(
@@ -58,23 +64,23 @@ class EventObserver:
                     self.imported_count, adapter, place,
                 )
             return
-        if event.kind in ("percept", "act.out"):
+        if kind in ("percept", "act.out"):
             LOGGER.info(
                 "kind=%s adapter=%s place=%s who=%s len=%d",
-                event.kind, adapter, place, who, _text_length(event),
+                kind, adapter, place, who, _text_length(event),
             )
             return
         if _is_gate_decision(event):
-            self.observe_decision(event, event.kind, payload.get("reason"))
+            self.observe_decision(event, kind, payload.get("reason"))
             return
-        if event.kind == "guard.stopped":
+        if kind == "guard.stopped":
             reason = _one_line(payload.get("reason"))
             LOGGER.info(
                 "kind=guard.stopped adapter=%s place=%s who=%s len=%d reason=%s",
                 adapter, place, who, 0, reason,
             )
             return
-        if event.kind == "error":
+        if kind == "error":
             raw = _one_line(payload.get("error"))
             if self.conn is not None and hasattr(self.conn, "info"):
                 raw = config.redact_connection_secrets(raw, self.conn)

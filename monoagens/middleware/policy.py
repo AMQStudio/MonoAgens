@@ -51,7 +51,7 @@ def is_blocked_address(address: str) -> bool:
 def install(kernel: Any) -> None:
     """Give the kernel its registry, its intake, and the owner policy in all three hooks."""
     kernel.tools = registry.ToolRegistry(kernel=kernel)
-    kernel.tools.register(SelfTool(kernel.conn, kernel.clock,
+    kernel.tools.register(SelfTool(kernel.conn, kernel.clock, settings=kernel.settings,
                                    visible=privacy.visible,
                                    memory_visible=privacy.memory_visible),
                           permissions={"recall": "self.recall",

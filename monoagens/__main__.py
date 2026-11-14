@@ -55,11 +55,16 @@ async def supervise_adapter(
     maximum = float(cfg["max_seconds"])
     factor = float(cfg["factor"])
     name = str(getattr(adapter, "name", "") or type(adapter).__name__)
+
+    async def put(item: Any) -> Any:
+        """Hand one percept in under this adapter's own name (§2.4.2)."""
+        return await kernel.put(item, body=name)
+
     backoff = initial
     while not stop.is_set():
         started = asyncio.get_running_loop().time()
         try:
-            await adapter.run(kernel.put)
+            await adapter.run(put)
             backoff = initial
             if stop.is_set():
                 return

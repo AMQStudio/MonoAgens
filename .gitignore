@@ -19,3 +19,4 @@ var/
 
 # Graphify knowledge graph (rebuildable)
 graphify-out/
+var/recordings/

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 import discord
@@ -19,6 +19,7 @@ from monoagens.adapters.discord.capabilities import (
     SHOWS,
 )
 from monoagens.adapters.discord.format import (
+    audience_of,
     format_delete,
     format_edit,
     format_interaction,
@@ -39,10 +40,10 @@ from monoagens.adapters.discord.media import (
     fetch_deferred,
 )
 from monoagens.infra.clock import Clock
-from monoagens.contract import Action
-from monoagens.types import Event
+from monoagens import contract
+from monoagens.contract import Action, Percept
 
-Put = Callable[[Event], Awaitable[None]]
+Put = Callable[[Any], Awaitable[None]]
 REQUIRES: tuple[str, ...] = ("DISCORD_BOT_TOKEN",)
 
 
@@ -55,7 +56,9 @@ def create(options: dict[str, Any], env: dict[str, str]) -> "DiscordBody":
     unknown = [t for t in tools if t not in OPTIONAL_CAPABILITIES]
     if unknown:
         raise ValueError(f"discord: unknown optional tool {unknown[0]!r}")
-    return DiscordBody(token=token, defer_media=defer_media, enabled_tools=tools)
+    body = DiscordBody(token=token, defer_media=defer_media, enabled_tools=tools)
+    support.options(body, options)
+    return body
 
 
 class DiscordBody:
@@ -87,6 +90,8 @@ class DiscordBody:
         self.enabled_tools = tuple(t for t in enabled_tools if t in OPTIONAL_CAPABILITIES)
         self._sent: set[str] = set()
         self._choices_prompts: dict[str, list[str]] = {}
+        self._announced: set[str] = set()
+        self._receipts: dict[str, Any] = {}
         self._stop_event = asyncio.Event()
 
     @property
@@ -202,7 +207,19 @@ class DiscordBody:
         if user is not None:
             self.bot_id = str(user.id)
 
-    async def handle_message(self, message: Any, *, backfill: bool = False) -> Event | None:
+    async def _put_event(self, event: Percept | None, channel: Any) -> None:
+        """Announce a place's audience the first time it is seen, then put the percept (§2.4.3)."""
+        if event is None or self._put is None:
+            return
+        place = str(event.place)
+        if place not in self._announced:
+            self._announced.add(place)
+            await self._put(contract.audience_event(
+                place, audience_of(channel, actor=event.actor), ts=self._clock.now(),
+                body=self.name))
+        await self._put(event)
+
+    async def handle_message(self, message: Any, *, backfill: bool = False) -> Percept | None:
         """Convert one `discord.Message` into a percept and enqueue it if configured."""
         channel = getattr(message, "channel", None)
         place = place_id(channel) if channel is not None else "space:dc:unknown"
@@ -215,14 +232,12 @@ class DiscordBody:
             message, now=self._clock.now(), bot_id=self.bot_id,
             bot_user=getattr(self._client, "user", None),
             directory=self.directory, attachments=atts, sticker_info=sticker,
-            choices_prompts=self._choices_prompts, own_sent=self._sent,
-            backfill=backfill, name=self.name,
+            own_sent=self._sent, backfill=backfill, name=self.name,
         )
-        if ev is not None and self._put is not None:
-            await self._put(ev)
+        await self._put_event(ev, channel)
         return ev
 
-    async def handle_interaction(self, interaction: Any) -> Event | None:
+    async def handle_interaction(self, interaction: Any) -> Percept | None:
         """Defer an interaction immediately (<3 s) inside the adapter, then emit its percept."""
         response = getattr(interaction, "response", None)
         if response is not None and not bool(getattr(response, "is_done", lambda: False)()):
@@ -239,11 +254,10 @@ class DiscordBody:
             interaction, now=self._clock.now(), bot_id=self.bot_id,
             directory=self.directory, choices_prompts=self._choices_prompts, name=self.name,
         )
-        if ev is not None and self._put is not None:
-            await self._put(ev)
+        await self._put_event(ev, getattr(interaction, "channel", None))
         return ev
 
-    async def handle_message_edit(self, before: Any, after: Any) -> Event | None:
+    async def handle_message_edit(self, before: Any, after: Any) -> Percept | None:
         """Emit an edit percept unless the content did not change."""
         if getattr(before, "content", None) == getattr(after, "content", None):
             return None
@@ -253,11 +267,10 @@ class DiscordBody:
             now=self._clock.now(), bot_id=self.bot_id, directory=self.directory,
             name=self.name,
         )
-        if ev is not None and self._put is not None:
-            await self._put(ev)
+        await self._put_event(ev, getattr(after, "channel", None))
         return ev
 
-    async def handle_message_delete(self, message: Any) -> Event | None:
+    async def handle_message_delete(self, message: Any) -> Percept | None:
         """Emit a delete percept for a removed message."""
         ev = format_delete(
             getattr(message, "channel", None), str(getattr(message, "id", "")),
@@ -265,11 +278,10 @@ class DiscordBody:
             now=self._clock.now(), bot_id=self.bot_id, directory=self.directory,
             name=self.name,
         )
-        if ev is not None and self._put is not None:
-            await self._put(ev)
+        await self._put_event(ev, getattr(message, "channel", None))
         return ev
 
-    async def handle_reaction_add(self, reaction: Any, user: Any) -> Event | None:
+    async def handle_reaction_add(self, reaction: Any, user: Any) -> Percept | None:
         """Emit a reaction percept, addressed if the reaction lands on the soul's own message."""
         msg = getattr(reaction, "message", None)
         target_author = str(getattr(getattr(msg, "author", None), "id", "") or "")
@@ -279,11 +291,10 @@ class DiscordBody:
             now=self._clock.now(), bot_id=self.bot_id, directory=self.directory,
             own_sent=self._sent, target_author_id=target_author, name=self.name,
         )
-        if ev is not None and self._put is not None:
-            await self._put(ev)
+        await self._put_event(ev, getattr(msg, "channel", None))
         return ev
 
-    async def handle_raw_reaction_add(self, payload: Any) -> Event | None:
+    async def handle_raw_reaction_add(self, payload: Any) -> Percept | None:
         """Emit a reaction percept from a raw gateway reaction payload when uncached."""
         ch = await self._resolve_channel(f"space:dc:{getattr(payload, 'channel_id', '')}")
         user = getattr(payload, "member", None)
@@ -298,8 +309,7 @@ class DiscordBody:
             now=self._clock.now(), bot_id=self.bot_id, directory=self.directory,
             own_sent=self._sent, name=self.name,
         )
-        if ev is not None and self._put is not None:
-            await self._put(ev)
+        await self._put_event(ev, ch)
         return ev
 
     async def act(self, action: Action) -> Any:
@@ -361,6 +371,13 @@ class DiscordBody:
             return {"ok": True, "action": p.get("action"), "role_id": str(role.id)}
         raise ValueError(f"Unsupported action kind: {action.capability!r}")
 
+    async def ask(self, place: str, question: str, choices: Sequence[str]) -> str:
+        """Ask with Discord's own buttons and return the prompt's message id (§2.4.6)."""
+        result = await self._carry(Action(
+            id=f"{self.name}:ask", capability="say", place=place,
+            arguments={"text": question, "choices": list(choices)}))
+        return str((result or {}).get("message_id") or "") if isinstance(result, dict) else ""
+
     async def show(self, place: str, kind: str, **data: Any) -> Any:
         """Show typing, edit, buttons/menus or reactions via the adapter."""
         return await send.show(self._resolve_channel, place, kind, **data)
@@ -375,7 +392,7 @@ class DiscordBody:
             return self.directory.remember_channel(ch, bot_user=getattr(self._client, "user", None))
         return cached
 
-    async def history(self, place: str, since: Any = None, *, limit: int = 50) -> list[Event]:
+    async def history(self, place: str, since: Any = None, *, limit: int = 50) -> list[Any]:
         """Back-fill recent messages in `place` missed while offline (`backfill: true`)."""
         ch = await self._resolve_channel(place)
         if ch is None or not hasattr(ch, "history"):

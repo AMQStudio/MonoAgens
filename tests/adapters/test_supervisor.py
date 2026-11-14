@@ -192,11 +192,13 @@ async def test_telegram_getme_timeout_retries_via_supervisor_until_connected(aco
             await body.aclose()
 
     assert calls.count("getMe") == 3
-    cur = await aconn.execute("SELECT kind, body, payload FROM events ORDER BY id")
+    cur = await aconn.execute(
+        "SELECT kind, body, payload, description FROM events ORDER BY id")
     rows = await cur.fetchall()
-    errors = [payload for kind, body, payload in rows if kind == "error" and body == "telegram"]
+    errors = [payload for kind, body, payload, _ in rows
+              if kind == "error" and body == "telegram"]
     assert len(errors) == 2
     assert any("ConnectTimeout" in err["error"] for err in errors)
-    percepts = [payload["description"] for kind, body, payload in rows
+    percepts = [line for kind, body, _, line in rows
                 if kind == "percept" and body == "telegram"]
-    assert "halo sesudah timeout" in percepts
+    assert any("halo sesudah timeout" in str(line) for line in percepts), rows

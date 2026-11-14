@@ -9,8 +9,7 @@ import httpx
 import pytest
 
 from monoagens.adapters.telegram import TelegramBody
-from monoagens.contract import Action
-from monoagens.types import Event
+from monoagens.contract import Action, Percept
 
 OWNER_ID = 777
 CHAT_PRIVATE = 777
@@ -85,12 +84,13 @@ def _body(fake: FakeTelegram, **kwargs) -> TelegramBody:
     )
 
 
-async def _drive(body: TelegramBody, fake: FakeTelegram, expected: int, polls: int) -> list[Event]:
-    """Run the long-poll loop until `expected` events or `polls` getUpdates calls."""
-    events: list[Event] = []
+async def _drive(body: TelegramBody, fake: FakeTelegram, expected: int, polls: int) -> list[Percept]:
+    """Run the long-poll loop until `expected` percepts or `polls` getUpdates calls."""
+    events: list[Percept] = []
 
-    async def put(event: Event) -> None:
-        events.append(event)
+    async def put(event: Any) -> None:
+        if isinstance(event, Percept):  # a place's audience is not one of the percepts
+            events.append(event)
 
     task = asyncio.create_task(body.run(put))
     try:
@@ -126,15 +126,13 @@ async def test_private_message_from_owner():
 
     assert len(events) == 1
     event = events[0]
-    assert event.kind == "percept"
-    assert event.body == "telegram"
-    assert event.who == f"telegram:{OWNER_ID}"
+    assert event.actor == f"telegram:{OWNER_ID}"
     assert event.place == f"space:tg:{CHAT_PRIVATE}"
-    assert event.payload["cursor"] == 500
-    assert event.payload["data"]["message_id"] == 11
-    assert event.payload["description"] == "halo"
-    assert event.payload["addressed"] is True
-    assert event.payload["place_kind"] == "direct"
+    assert event.data["cursor"] == 500
+    assert event.data["message_id"] == "11"
+    assert event.description.endswith("halo")
+    assert event.features["addressed"] == 1
+    assert event.ref == "11"
 
 
 async def test_group_chat_mention_and_non_mention():
@@ -165,11 +163,12 @@ async def test_group_chat_mention_and_non_mention():
     events = await _drive(body, fake, expected=2, polls=1)
 
     plain, mentioned = events
-    assert plain.payload["addressed"] is False
-    assert plain.payload["place_kind"] == "shared"
-    assert plain.who == "telegram:999"
-    assert mentioned.payload["addressed"] is True
-    assert mentioned.payload["cursor"] == 601
+    assert plain.features["addressed"] == 0
+    assert plain.features["named"] == 0
+    assert plain.actor == "telegram:999"
+    assert mentioned.features["addressed"] == 1
+    assert mentioned.features["named"] == 1
+    assert mentioned.data["cursor"] == 601
     assert mentioned.place == f"space:tg:{CHAT_GROUP}"
 
 
@@ -191,7 +190,7 @@ async def test_reply_to_bot_is_addressed():
 
     events = await _drive(body, fake, expected=1, polls=1)
 
-    assert events[0].payload["addressed"] is True
+    assert events[0].features["addressed"] == 1
 
 
 async def test_restart_from_cursor_does_not_duplicate():
@@ -209,7 +208,7 @@ async def test_restart_from_cursor_does_not_duplicate():
 
     # Offset = cursor + 1: update 100 is never re-requested.
     assert fake.calls_of("getUpdates")[0]["offset"] == 101
-    assert [e.payload["cursor"] for e in events] == [101]
+    assert [e.data["cursor"] for e in events] == [101]
 
 
 async def test_non_text_update_is_skipped_but_advances_offset():
@@ -245,7 +244,7 @@ async def test_get_updates_retries_with_backoff():
     )
     events = await _drive(body, fake, expected=1, polls=1)
 
-    assert [e.payload["description"] for e in events] == ["retry"]
+    assert [e.description.split(": ")[-1] for e in events] == ["retry"]
     assert failures["left"] == 0
 
 

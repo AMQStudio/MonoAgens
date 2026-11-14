@@ -165,12 +165,16 @@ async def test_the_work_is_read_shared_approved_and_sent(aconn, tmp_path):
     assert len(asked) == 1 and asked[0][2]["reason"] == "forwarding a file"
     assert not intents, "nothing leaves before the owner says yes"
 
-    answer = asyncio.create_task(kernel.put(Event(
-        id=None, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
-        body="telegram", payload={"description": "ya", "place_kind": "direct"}, description="ya")))
-    await asyncio.sleep(0)
-    await kernel.step()
-    await answer
+    # The owner says yes; the soul records it as `self.answer` (§2.4.6), never by matching words.
+    question = await (await aconn.execute(
+        "SELECT payload FROM events WHERE kind = 'question.asked' ORDER BY id DESC LIMIT 1"
+    )).fetchone()
+    await kernel.act_via_hooks(
+        Event(id=None, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
+              body="filetest", origin_actor="person:owner", payload={}),
+        "self.answer",
+        {"request": int(question[0]["request"]),
+         "value": str(question[0]["choices"][0]["label"])})
     await kernel.run_until_idle()
 
     cur = await aconn.execute("SELECT kind, place, payload FROM events ORDER BY id")

@@ -11,6 +11,7 @@ is not offered.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ipaddress
 import os
 import pathlib
@@ -30,6 +31,7 @@ IP = "ip"
 BLOCKED_ROUTES = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10",
                   "169.254.0.0/16", "127.0.0.0/8", "fc00::/7", "fe80::/10", "::1/128")
 DEFAULT_TIMEOUT = 120
+MAX_TIMEOUT_SECONDS = 1800
 MAX_OUTPUT = 50 * 1024 * 1024
 DEFAULT_TMPFS_MB = 64
 DEFAULT_FSIZE_MB = 128
@@ -290,7 +292,8 @@ async def run(api: Any, who: str, command: str, *, workspace: pathlib.Path,
         ("memory_mb", 1024), ("cpus", 1), ("pids", 64))}
     fsize_mb = max(1, int(api.options.get("fsize_mb") or DEFAULT_FSIZE_MB))
     cap = min(MAX_OUTPUT, max(1, int(api.options.get("max_output_bytes") or MAX_OUTPUT)))
-    seconds = float(timeout or api.options.get("timeout_seconds") or DEFAULT_TIMEOUT)
+    seconds = min(MAX_TIMEOUT_SECONDS,
+                  float(timeout or api.options.get("timeout_seconds") or DEFAULT_TIMEOUT))
     process = await asyncio.create_subprocess_exec(
         *argv(api, who, command, workspace=workspace, shared=shared, writable=writable,
               cwd=cwd, network=network, parent=os.getpid()),
@@ -303,6 +306,16 @@ async def run(api: Any, who: str, command: str, *, workspace: pathlib.Path,
     timed_out = False
     try:
         output, _ = await asyncio.wait_for(asyncio.gather(reader, process.wait()), seconds)
+    except asyncio.CancelledError:
+        # A cancelled run leaves nothing behind: the whole group dies with the task.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        with contextlib.suppress(Exception):
+            await asyncio.shield(process.wait())
+        reader.cancel()
+        raise
     except asyncio.TimeoutError:
         timed_out = True
         try:

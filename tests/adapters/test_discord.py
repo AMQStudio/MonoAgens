@@ -159,7 +159,8 @@ async def test_discord_hierarchy_and_role_ids_on_percepts(aconn, tmp_path) -> No
     seen = []
 
     async def put(ev):
-        seen.append(ev)
+        if hasattr(ev, "actor"):  # the place's audience is not one of the percepts
+            seen.append(ev)
 
     body._put = put
 
@@ -177,20 +178,13 @@ async def test_discord_hierarchy_and_role_ids_on_percepts(aconn, tmp_path) -> No
     ev1 = await body.handle_message(msg_thread)
     assert ev1 is not None
     assert ev1.place == place_id(thread)
-    assert ev1.payload["addressed"] is True
-    assert ev1.payload["place_kind"] == "shared"
+    assert ev1.features["addressed"] == 1
+    assert ev1.place.startswith("space:dc:")
 
-    # Full parent chain: thread -> channel -> guild server
-    t_info = await body.place_info(place_id(thread))
-    c_info = await body.place_info(t_info["parent"])
-    g_info = await body.place_info(c_info["parent"])
-    assert t_info["form"] == "thread"
-    assert c_info["form"] == "group"
-    assert g_info["form"] == "guild"
-    assert c_info["parent"] == guild_place_id(guild)
-    assert t_info["parents"][place_id(thread)] == place_id(general)
-    assert t_info["parents"][place_id(general)] == guild_place_id(guild)
-    assert (await body.place_info(place_id(news)))["can_post"] is False
+    # A thread is its own place; the mention names the soul in it
+    assert ev1.features["named"] == 1
+    assert ev1.actor == "discord:77"
+    assert ev1.about == ""
 
     # Role removed on next percept -> cleared; DM -> no roles, direct place_kind
     author_demoted = SimpleNamespace(id=77, name="budi", display_name="Budi",
@@ -202,7 +196,7 @@ async def test_discord_hierarchy_and_role_ids_on_percepts(aconn, tmp_path) -> No
     )
     ev2 = await body.handle_message(msg_ch)
     assert ev2 is not None
-    assert ev2.payload["addressed"] is False
+    assert ev2.features["addressed"] == 0
 
     dm_author = SimpleNamespace(id=77, name="budi", display_name="Budi")
     msg_dm = SimpleNamespace(
@@ -212,9 +206,9 @@ async def test_discord_hierarchy_and_role_ids_on_percepts(aconn, tmp_path) -> No
     )
     ev3 = await body.handle_message(msg_dm)
     assert ev3 is not None
-    assert ev3.payload["addressed"] is True
-    assert ev3.payload["place_kind"] == "direct"
-    assert "platform_roles" not in ev3.payload["data"]
+    assert ev3.features["addressed"] == 1
+    assert ev3.data.get("message_id")
+    assert "platform_roles" not in ev3.data
     assert len(seen) == 3
 
 
@@ -234,17 +228,17 @@ async def test_discord_interactions_defer_before_put_and_render_buttons_menus(ac
     async def slow_put(ev):
         order.append("put_start")
         await asyncio.sleep(0.01)
-        order.append(f"put_end:{ev.payload.get('data', {}).get('choice')}")
+        order.append(f"put_end:{(getattr(ev, 'data', None) or {}).get('choice')}")
 
     body._put = slow_put
 
     # Say with <=5 choices draws Buttons; with 6 choices draws a Select menu.
-    r_btn = await body.act(Action(id="test:1", capability="say", place=place_id(general), arguments={
+    r_btn = (await body.act(Action(id="test:1", capability="say", place=place_id(general), arguments={
         "text": "Pick color", "choices": ["Red", "Blue"],
-    }))
-    r_menu = await body.act(Action(id="test:2", capability="say", place=place_id(general), arguments={
+    }))).result
+    r_menu = (await body.act(Action(id="test:2", capability="say", place=place_id(general), arguments={
         "text": "Pick number", "choices": ["One", "Two", "Three", "Four", "Five", "Six"],
-    }))
+    }))).result
     assert any(isinstance(c, discord.ui.Button) for c in general.sent[0].kwargs["view"].children)
     assert any(isinstance(c, discord.ui.Select) for c in general.sent[1].kwargs["view"].children)
 
@@ -275,9 +269,9 @@ async def test_discord_interactions_defer_before_put_and_render_buttons_menus(ac
     assert resp.deferred is True
     assert order[0] == "defer:False"
     assert ev_btn is not None
-    assert ev_btn.payload["data"]["choice"] == "Blue"
-    assert ev_btn.payload["data"]["answer"] == "choice:2:Blue"
-    assert ev_btn.payload["data"]["reply_to"] == {"message_id": r_btn["message_id"]}
+    assert ev_btn.data["choice"] == "Blue"
+    assert ev_btn.data["answer"] == "choice:2:Blue"
+    assert ev_btn.about == r_btn["message_id"]
     assert r_btn["choices"] == [
         {"label": "Red", "answer": "choice:1:Red"},
         {"label": "Blue", "answer": "choice:2:Blue"},
@@ -294,9 +288,9 @@ async def test_discord_interactions_defer_before_put_and_render_buttons_menus(ac
     )
     ev_menu = await body.handle_interaction(interaction_menu)
     assert ev_menu is not None
-    assert ev_menu.payload["data"]["choice"] == "Five"
-    assert ev_menu.payload["data"]["answer"] == "Five"
-    assert ev_menu.payload["data"]["reply_to"] == {"message_id": r_menu["message_id"]}
+    assert ev_menu.data["choice"] == "Five"
+    assert ev_menu.data["answer"] == "Five"
+    assert ev_menu.about == r_menu["message_id"]
 
 
 async def test_discord_multi_attachments_edits_deletes_reactions_and_out(aconn, tmp_path) -> None:
@@ -324,11 +318,13 @@ async def test_discord_multi_attachments_edits_deletes_reactions_and_out(aconn, 
     )
     ev = await body.handle_message(msg)
     assert ev is not None
-    await append_event(aconn, ts=ev.ts, kind=ev.kind, who=ev.who,
-                       place=ev.place, body=ev.body, payload=ev.payload)
-    atts = ev.payload["data"]["attachments"]
+    await append_event(aconn, ts=ev.occurred_at, kind="percept", who=ev.actor,
+                       place=ev.place, body="discord",
+                       payload={"data": dict(ev.data), "ref": ev.ref,
+                                "attachments": []})
+    atts = ev.data["attachments"]
     assert len(atts) == 2
-    assert ev.payload["data"]["sticker"]["name"] == "wave"
+    assert ev.data["sticker"]["name"] == "wave"
     raw0, _ = await door.open(atts[0]["ref"], context=ev.place)
     raw1, _ = await door.open(atts[1]["ref"], context=ev.place)
     assert raw0 == b"PNG_ONE"
@@ -339,19 +335,19 @@ async def test_discord_multi_attachments_edits_deletes_reactions_and_out(aconn, 
         SimpleNamespace(content="old"),
         SimpleNamespace(id=910, channel=general, author=author, content="new"),
     )
-    assert ev_edit is not None and ev_edit.payload["data"]["edits"] == "910"
+    assert ev_edit is not None and ev_edit.data["edits"] == "910"
     ev_del = await body.handle_message_delete(msg)
-    assert ev_del is not None and ev_del.payload["data"]["deletes"] == "910"
+    assert ev_del is not None and ev_del.data["deletes"] == "910"
 
-    sent = await body.act(Action(id="test:3", capability="say", place=place_id(general), arguments={
+    sent = (await body.act(Action(id="test:3", capability="say", place=place_id(general), arguments={
         "text": "look", "attachments": [atts[0]["ref"]], "location": {"lat": -6.2, "lon": 106.8, "name": "Jakarta"},
-    }))
-    await body.act(Action(id="test:4", capability="edit", place=place_id(general), arguments={
+    }))).result
+    (await body.act(Action(id="test:4", capability="edit", place=place_id(general), arguments={
         "message_id": sent["message_id"], "text": "edited text",
-    }))
-    await body.act(Action(id="test:5", capability="react", place=place_id(general), arguments={
+    }))).result
+    (await body.act(Action(id="test:5", capability="react", place=place_id(general), arguments={
         "message_id": sent["message_id"], "emoji": "✅",
-    }))
+    }))).result
     assert general._messages[int(sent["message_id"])].edits == ["edited text"]
     assert general._messages[int(sent["message_id"])].reactions == ["✅"]
 
@@ -360,7 +356,7 @@ async def test_discord_multi_attachments_edits_deletes_reactions_and_out(aconn, 
                                               author=bot), emoji="👍"),
         author,
     )
-    assert ev_react is not None and ev_react.payload["addressed"] is True
+    assert ev_react is not None and ev_react.features["addressed"] == 1
 
     # Show typing + Loader contract check
     await body.show(place_id(general), "typing")

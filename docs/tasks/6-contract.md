@@ -135,10 +135,10 @@ May touch: `monoagens/adapters/` (all), `monoagens/__main__.py` (supervision onl
 `monoagens/infra/` (a recording helper), `.gitignore`, `scripts/recording.py` (new),
 `tests/adapters/`, `tests/fixtures/`
 
-- [ ] 4.1 CLI on the surface of [spec.md](../spec.md) *What an adapter must provide (checked at boot)*, as the reference adapter.
-- [ ] 4.2 Telegram, with E.2.
-- [ ] 4.3 WhatsApp, with E.1.
-- [ ] 4.4 Discord, with E.3.
+- [x] 4.1 CLI on the surface of [spec.md](../spec.md) *What an adapter must provide (checked at boot)*, as the reference adapter.
+- [x] 4.2 Telegram, with E.2.
+- [x] 4.3 WhatsApp, with E.1.
+- [x] 4.4 Discord, with E.3.
 - [ ] 4.5 Every adapter (E.4): its own capabilities and `prompt_section`; features; `place.audience`
   with its platform's rule folded in ([spec.md](../spec.md) *Places and audiences*); `render` from its own `render:` options;
   `ask`; deduplication by action id; splitting and length limits by itself; a fresh client on
@@ -773,3 +773,56 @@ every round **before** it judges the failure (and a pfc failure is recorded once
 and this call's own, so two callers cannot read-modify-write over each other; `budget.record_call`
 counts a trigger-less call (the sleep path) against the newest event instead of dropping it; and a
 fallback provider reads only its own `LLM_FALLBACK_<n>_*` variables, never the primary's key.
+
+### Notes — Part 4 (session of 2026-11-14, late)
+
+**4.1-4.4 (adapters on the contract).** The three gateway formatters now build the contract's
+`Percept` instead of a version 1 payload: `telegram/format.py`, `discord/format.py` and
+`whatsapp/format.py` write `actor/place/occurred_at/description/ref/about/involves/attachments/
+features/answer/data`, and `place_kind`, `place_info`, `sent_at` and the numbered-answer matcher
+are gone from all four bodies (a typed number is text; reasoning records any answer through
+`self.answer`, §2.4.6). `CLIBody.ask` and the three natives answer the optional surface: Telegram
+by inline buttons, Discord by its buttons, WhatsApp by poll, the terminal by numbered lines; each
+returns its own message id, which is the ref an answer comes back with. Every body announces
+`place.audience` the first time it sees a place, folding its platform's rule into the one fact
+(private chat → its person; Telegram group/channel → *unknown*, the Bot API cannot list members;
+WhatsApp group → its members now, channel → *unknown*; Discord channel → members, *unknown* when
+`@everyone` can read history, DM → the person). A membership or name change re-publishes it.
+Rate limits and refusals are receipts: `support.RateLimited` → `failed` "rate limited … retry
+after n s" (Telegram 429), a 403 or a place that refuses messages → `refused`. Each body cuts at
+its own length (Telegram 4096) and `support.attachments_of` turns the store's dicts into the
+contract's `Attachment`s, so no layer has to guess which shape it got.
+
+**4.7 (recording and shadow).** `infra/recording.py` writes one JSON object per line to
+`var/recordings/<body>.jsonl` when `bodies.<adapter>.record: true`; `support.recording` wraps a
+body's `put` so what it senses is recorded beside what it would send, and `dry_run: true` answers
+`done {dry_run: true}` after recording the action, never touching the platform.
+
+**A body's name comes from the supervisor.** `supervise_adapter` now hands each adapter a `put`
+bound to its own name (`kernel.put(item, body=name)`); without it every percept entered the Log as
+`body: unknown`, which broke capability routing and the place owner.
+
+**5.1 (S.6).** A cancelled sandbox run kills its process group before the task ends; the run
+timeout has a ceiling (`MAX_TIMEOUT_SECONDS = 1800`); `web_fetch` carries one deadline for the
+whole redirect chain and a 2 MB per-page cap; `pdf-reader` caps a file at 20 MB and reads at most
+200 pages, saying what it left out; both already run off the loop through `asyncio.to_thread`.
+
+**5.3 (O.5).** A policy may be `{once}`, `{cooldown}` or `{max_fires: n}`; the default expiry is
+raised to the next cue so it can never fall before the fire it waits for, and a `cue_time` that
+names no reachable time is refused when the expectation is made. An explicit `expires_at` stays
+exactly what the soul asked for.
+
+**5.4 (O.6).** `LogView.search` and `recall` escape `%`, `_` and the escape character itself
+(`infra/store.escape_like`), so a search for them finds them; recall reads `recall_results` from
+the settings the kernel injected instead of re-reading the prior from disk.
+
+**6.4 (in progress, reported).** The architecture ratchet still reports `text-parse` and
+`tests-private` findings. Most `text-parse` sites are string work on *ids and config* (splitting a
+capability name, editing `config.yaml` lines, parsing a language tag), which the spec's ban (no
+word lists, keyword or substring matching over message text, no regexes over rendered text) does
+not name; the scanner's rule currently flags any `re` import or `.split()/.lower()` call in the
+core and the middleware. Two sites **are** real violations and are reported, not fixed by
+weakening the rule: `policy.py`'s `off_words` check and `roles.py`'s `add|remove` word matching,
+both of which read a person's words. Emptying the baseline therefore needs the owner's decision:
+either those two paths are rewritten to take a structured argument, or the ban's rule is narrowed
+to text fields — a change to the rule the owner wrote.

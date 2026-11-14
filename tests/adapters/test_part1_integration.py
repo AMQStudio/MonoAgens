@@ -147,8 +147,8 @@ async def _audiences(conn, places: dict[str, list[str]]) -> None:
                            payload={"actors": list(actors), "unknown": False})
 
 
-async def _put_idle(kernel, *events):
-    tasks = [asyncio.create_task(kernel.put(ev)) for ev in events]
+async def _put_idle(kernel, *events, body=None):
+    tasks = [asyncio.create_task(kernel.put(ev, body=body)) for ev in events]
     while not all(t.done() for t in tasks):
         await kernel.run_until_idle()
         await asyncio.sleep(0)
@@ -347,7 +347,7 @@ async def test_whatsapp_deferred_file_opens_and_forwards_and_sticker_sends_back(
     assert wa_raw_ev is not None
     assert wa_client.download_calls == 0  # still deferred!
 
-    [wa_stored] = await _put_idle(kernel, wa_raw_ev)
+    [wa_stored] = await _put_idle(kernel, wa_raw_ev, body="whatsapp")
     wa_ref = captured_refs["wa_file"]
 
     # Stranger on Telegram cannot open WhatsApp DM file.
@@ -394,7 +394,7 @@ async def test_whatsapp_deferred_file_opens_and_forwards_and_sticker_sends_back(
         "from": {"id": 7701, "first_name": "Alice"},
         "sticker": {"file_id": "stk_in_1", "emoji": "😄", "file_size": 19},
     })
-    await _put_idle(kernel, tg_stk_ev)
+    await _put_idle(kernel, tg_stk_ev, body="telegram")
     assert captured_refs.get("tg_sticker")
     assert any(method == "sendSticker" and b"WEBP-STICKER-BYTES" in body
                for method, body in tg_http.uploads)

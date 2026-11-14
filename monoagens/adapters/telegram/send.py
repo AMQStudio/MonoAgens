@@ -107,7 +107,9 @@ async def say(call: Call, place: str, text: str = "", *,
         with contextlib.suppress(Exception):
             await call("sendSticker", chat_id=cid, sticker=sticker, **extra)
 
-    return await call("sendMessage", chat_id=cid, text=rendered, **extra)
+    from monoagens.adapters import support
+
+    return await call("sendMessage", chat_id=cid, text=support.cut(rendered, 4096), **extra)
 
 
 async def react(call: Call, place: str, emoji: str, message_id: int) -> Any:

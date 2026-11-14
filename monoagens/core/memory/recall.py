@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
 from monoagens.core.memory.cards import equivalent_sources, merge_map
 from monoagens.core.kinds import RECENT_KINDS
+from monoagens.infra.store import escape_like
 
 RECALL = {
     "name": "recall",
@@ -23,14 +24,17 @@ RECALL = {
 }
 
 
-async def search(conn, action, *, visible, memory_visible) -> dict[str, Any]:
+async def search(conn, action, *, visible, memory_visible,
+                 settings: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Search events and memories; `visible` and `memory_visible` are the audience rule."""
     from monoagens.infra import prior  # local: identity imports recall at module level
 
+    values = prior.constants(settings or prior.load_settings())
     args, context = dict(action.arguments), action.place or None
     query = str(args.get("query") or "").strip()
+    pattern = escape_like(query)
     start, end = _stamp(args.get("from")), _stamp(args.get("to"))
-    limit = int(prior.constants(prior.load_settings())["recall_results"])
+    limit = int(values["recall_results"])
     merges = await merge_map(conn)
     family = list(await equivalent_sources(conn, query)) if query else []
     clause, params = ["kind = ANY(%s)"], [list(RECENT_KINDS)]
@@ -40,7 +44,7 @@ async def search(conn, action, *, visible, memory_visible) -> dict[str, Any]:
             clause, params = [*clause, condition], [*params, value]
     if query:
         clause, params = [*clause, "(description ILIKE %s OR who = ANY(%s))"], [
-            *params, f"%{query}%", family]
+            *params, f"%{pattern}%", family]
     sql = ("SELECT id, ts, kind, who, place, description FROM events WHERE "
            + " AND ".join(clause) + " ORDER BY id DESC LIMIT %s")
     if args.get("event_id") is not None:
@@ -57,7 +61,7 @@ async def search(conn, action, *, visible, memory_visible) -> dict[str, Any]:
              if await visible(conn, context=context, source=row[4], before=row[0])]
     mem_where = "WHERE valid_to IS NULL" + (
         " AND (text ILIKE %s OR who = ANY(%s))" if query else "")
-    mem_params: tuple[Any, ...] = ((f"%{query}%", family) if query else ()) + (limit * 4,)
+    mem_params: tuple[Any, ...] = ((f"%{pattern}%", family) if query else ()) + (limit * 4,)
     memory_sql = f"SELECT id, text, who, place, derived_from FROM memories {mem_where} ORDER BY id DESC LIMIT %s"
     for memory_id, text, who, place, derived in await _rows(conn, memory_sql, mem_params):
         details = [{"event_id": row[0], "ts": row[1].isoformat(),

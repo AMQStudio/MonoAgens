@@ -22,13 +22,14 @@ from monoagens.adapters.whatsapp.capabilities import (
 from monoagens.adapters.whatsapp.format import (
     album_expected_count,
     album_parent_id,
-    clean_event,
+    audience_of,
     clean_text,
     format_album,
     format_call,
     format_message,
     format_undecryptable,
     parse_timestamp,
+    percept_of,
 )
 from monoagens.adapters.whatsapp.history_sync import (
     extract_sync_events,
@@ -45,6 +46,7 @@ from monoagens.adapters.whatsapp.identity import (
 from monoagens.adapters.whatsapp.media import fetch_media, store_deferred
 from monoagens.infra import config
 from monoagens.infra.clock import Clock
+from monoagens import contract
 from monoagens.contract import Action
 from monoagens.types import Event
 
@@ -73,8 +75,10 @@ def create(options: dict[str, Any], env: dict[str, str]) -> "WhatsAppBody":
         raise ValueError(f"whatsapp: unknown optional tool {unknown[0]!r}")
     chunk_size = config.whatsapp_history_chunk_size(options)
     grace = config.whatsapp_undecryptable_grace_seconds(options)
-    return WhatsAppBody(session_db=session, full_sync=full_sync, enabled_tools=tools,
+    body = WhatsAppBody(session_db=session, full_sync=full_sync, enabled_tools=tools,
                         history_chunk_size=chunk_size, undecryptable_grace=grace)
+    support.options(body, options)
+    return body
 
 
 class WhatsAppBody:
@@ -119,6 +123,8 @@ class WhatsAppBody:
             else config.whatsapp_undecryptable_grace_seconds()
         )
         self._sent: set[str] = set()
+        self._announced: set[str] = set()
+        self._receipts: dict[str, Any] = {}
         self._sent_loaded = False
         self._choices_prompts: dict[str, list[str]] = {}
         self._albums: dict[str, dict[str, Any]] = {}
@@ -216,7 +222,8 @@ class WhatsAppBody:
 
     def _wrap_put(self, put: Put) -> Put:
         """Marshal puts onto the adapter's event loop and tag errors already handled by put()."""
-        async def safe_put(ev: Event) -> Any:
+        async def safe_put(ev: Any) -> Any:
+            await self._announce(ev, put)
             target_loop = self._loop
             try:
                 running = asyncio.get_running_loop()
@@ -232,6 +239,17 @@ class WhatsAppBody:
                 raise _PutFailed(exc) from exc
 
         return safe_put
+
+    async def _announce(self, event: Any, put: Put) -> None:
+        """Publish a place's audience the first time this body sees it (§2.4.3)."""
+        place = str(getattr(event, "place", "") or "")
+        if not place or place in self._announced:
+            return
+        self._announced.add(place)
+        actor = str(getattr(event, "actor", "") or "") or str(getattr(event, "who", "") or "")
+        await put(contract.audience_event(
+            place, audience_of(place, self.directory, actor=actor),
+            ts=self._clock.now(), body=self.name))
 
     async def _emit_adapter_error(self, put: Put, exc: BaseException, *, label: str) -> None:
         """Record one adapter-layer failure as an `error` event and log it."""
@@ -485,7 +503,7 @@ class WhatsAppBody:
 
             entry["task"] = asyncio.create_task(_timer())
 
-    async def flush_album(self, album_id: str) -> Event | None:
+    async def flush_album(self, album_id: str) -> Any:
         """Emit one combined percept for all collected items in `album_id`."""
         entry = self._albums.pop(album_id, None)
         if not entry or not entry.get("events"):
@@ -499,7 +517,7 @@ class WhatsAppBody:
         return merged
 
     async def handle_history_sync(self, sync: Any, put: Put, *,
-                                  backfill: bool = False) -> list[Event]:
+                                  backfill: bool = False) -> list[Any]:
         """Ingest one `HistorySync` payload serially, yielding between configured chunks."""
         async with self._history_lock:
             if not self._sent_loaded:
@@ -522,7 +540,7 @@ class WhatsAppBody:
                     await asyncio.sleep(0)
             return events
 
-    async def handle_group_info(self, ev: Any, put: Put) -> Event | None:
+    async def handle_group_info(self, ev: Any, put: Put) -> Any:
         """Update cached place metadata and emit a percept describing the group change."""
         jid = jid_text(getattr(ev, "JID", None))
         if not jid:
@@ -549,17 +567,18 @@ class WhatsAppBody:
         if not changes:
             return None
         sender = self.directory.canonical_account(getattr(ev, "Sender", None)) or f"whatsapp:{jid}"
-        ev_out = clean_event(Event(
-            id=None, ts=self._clock.now(), kind="percept", who=sender, place=place, body=self.name,
-            payload={"description": "; ".join(changes), "addressed": False, "place_kind": "shared",
-                     **({"self_account": self.self_account} if self.self_account else {}),
-                     "data": {"group_event": changes, "joined": joined, "left": left}},
-        ))
-        await put(ev_out)
+        ev_out = percept_of(
+            actor=sender, place=place, occurred_at=self._clock.now(),
+            description="; ".join(changes),
+            features={"addressed": 0, "named": 0, "addressed_other": 0},
+            data={"group_event": changes, "joined": joined, "left": left,
+                  "self_account": self.self_account})
+        self._announced.discard(place)  # the members changed, so the audience is new
+        await self._wrap_put(put)(ev_out)
         return ev_out
 
     async def handle_call(self, status: str, meta: Any, put: Put, *, reason: str = "",
-                          is_video: bool = False) -> Event | None:
+                          is_video: bool = False) -> Any:
         """Emit an incoming, missed, or ended call percept."""
         ev = format_call(status, meta, reason=reason, is_video=is_video,
                          directory=self.directory, now=self._clock.now(), name=self.name,
@@ -611,6 +630,13 @@ class WhatsAppBody:
             if isinstance(cp, dict) and cp.get("message_id"):
                 self._choices_prompts[str(cp["message_id"])] = list(cp.get("options") or ())
         return res
+
+    async def ask(self, place: str, question: str, choices: Sequence[str]) -> str:
+        """Ask by poll (WhatsApp has no buttons) and return the poll's message id (§2.4.6)."""
+        result = await self._carry(Action(
+            id=f"{self.name}:ask", capability="say", place=place,
+            arguments={"text": question, "choices": list(choices)}))
+        return str((result or {}).get("message_id") or "") if isinstance(result, dict) else ""
 
     async def show(self, place: str, kind: str, **data: Any) -> Any:
         """Show typing, message edit, read receipts, or reaction feedback on WhatsApp."""

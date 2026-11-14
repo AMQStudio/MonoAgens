@@ -14,6 +14,7 @@ import ipaddress
 import re
 import socket
 import ssl
+import time
 import urllib.parse
 from html.parser import HTMLParser
 from typing import Any
@@ -26,6 +27,7 @@ BLOCKED = tuple(ipaddress.ip_network(value) for value in (
 REDIRECTS = (301, 302, 303, 307, 308)
 TEXT_TYPES = ("text/", "application/xhtml+xml", "application/json", "application/xml")
 MAX_REDIRECTS = 3
+MAX_BYTES = 2_000_000
 DEFAULT_PORTS = (80, 443)
 INJECTION = ("ignore previous", "system prompt", "jailbreak", "developer mode",
              "from now on you")
@@ -99,7 +101,7 @@ def _get(url: str, ports: tuple[int, ...], timeout: float,
             connection.request("GET", path,
                                headers={"User-Agent": "monoagens", "Host": host})
             response = connection.getresponse()
-            body = response.read(min(1_000_000, max(250_000, limit * 8)))
+            body = response.read(min(MAX_BYTES, max(250_000, limit * 8)))
             return (response.status, str(response.getheader("Content-Type") or ""),
                     str(response.getheader("Location") or ""),
                     body.decode("utf-8", "replace"))
@@ -116,8 +118,12 @@ def fetch(url: str, *, ports: tuple[int, ...] = DEFAULT_PORTS,
     """Fetch one page as text; every refusal is a structured result, never a crash."""
     try:
         current = str(url)
+        deadline = time.monotonic() + float(timeout)
         for _hop in range(max_redirects + 1):
-            status, kind, location, body = _get(current, ports, timeout, limit)
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return {"error": f"timeout after {int(timeout)} seconds"}
+            status, kind, location, body = _get(current, ports, left, limit)
             if status in REDIRECTS:
                 if not location:
                     return {"error": f"the server answered {status} without a location"}

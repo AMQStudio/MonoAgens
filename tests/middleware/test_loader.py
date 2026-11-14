@@ -281,12 +281,13 @@ def test_a_tool_without_a_declared_permission_fails_at_boot(tmp_path):
         Loader(tmp_path).load(settings(plugins={"demo": {"enabled": True}}))
 
 
-def test_a_missing_required_module_marks_the_plugin_unavailable(tmp_path):
+def test_a_missing_lazily_imported_module_is_a_note_not_a_refusal(tmp_path):
+    """A plugin whose library it imports lazily still loads; the boot report names the gap."""
     make_plugin(tmp_path, spec=manifest(requires=["no_such_module_xyz"]))
 
     loaded = Loader(tmp_path).load(settings(plugins={"demo": {"enabled": True}}))
 
-    assert loaded.plugins == ()
+    assert loaded.plugins == ("demo",)
     assert any("plugin demo: needs no_such_module_xyz" in line for line in loaded.report.lines)
 
 

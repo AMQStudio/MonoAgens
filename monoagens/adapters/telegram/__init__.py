@@ -20,18 +20,19 @@ from monoagens.adapters.telegram.capabilities import (
 )
 from monoagens.adapters.telegram.format import (
     addressed,
-    chat_place,
+    audience_of,
+    command_event,
     event as format_event,
     has_content,
-    place_meta,
+    place_id,
     poll_answer_event,
     reaction_event,
 )
 from monoagens.infra.clock import Clock
-from monoagens.contract import Action
-from monoagens.types import Event
+from monoagens import contract
+from monoagens.contract import Action, Answer, Audience, Percept
 
-Put = Callable[[Event], Awaitable[None]]
+Put = Callable[[Any], Awaitable[None]]
 GetCursor = Callable[[], Awaitable[Any | None]]
 REQUIRES = ("TELEGRAM_BOT_TOKEN",)
 GROUP_COLLECT_SECONDS = 1.0
@@ -46,12 +47,14 @@ def create(options: dict[str, Any], env: dict[str, str]) -> "TelegramBody":
     unknown = [t for t in tools if t not in OPTIONAL_CAPABILITIES]
     if unknown:
         raise ValueError(f"telegram: unknown optional tool {unknown[0]!r}")
-    return TelegramBody(
+    body = TelegramBody(
         token,
         api_base=str(options.get("api_base") or "https://api.telegram.org"),
         poll_timeout=float(options.get("poll_timeout") or 30.0),
         enabled_tools=tools,
     )
+    support.options(body, options)
+    return body
 
 
 class TelegramBody:
@@ -87,6 +90,8 @@ class TelegramBody:
         self._commands = list(commands)
         self._sent: set[str] = set()
         self._choices_prompts: dict[str, list[str]] = {}
+        self._announced: set[str] = set()
+        self._receipts: dict[str, Any] = {}
         self._poll_prompts: dict[str, tuple[str, str, list[str]]] = {}
 
     def capabilities(self) -> tuple[dict[str, Any], ...]:
@@ -132,6 +137,14 @@ class TelegramBody:
         response = await self._http().post(
             f"{self._api_base}/bot{self._token}/{method}", json=params
         )
+        if response.status_code == 429:
+            with contextlib.suppress(Exception):
+                retry = (response.json().get("parameters") or {}).get("retry_after")
+                raise support.RateLimited(
+                    f"rate limited by Telegram, retry after {int(retry or 0)} s")
+            raise support.RateLimited("rate limited by Telegram")
+        if response.status_code == 403:
+            raise PermissionError("Telegram refuses messages in this place")
         response.raise_for_status()
         data = response.json()
         if not data.get("ok"):
@@ -190,19 +203,24 @@ class TelegramBody:
                         continue
                     edited = update.get("edited_message") or update.get("edited_channel_post")
                     if edited and edited.get("chat") and has_content(edited):
-                        await put(await self._message_event(uid, edited, edited=True))
+                        found_event = await self._message_event(uid, edited, edited=True)
+                        await self._publish(put, found_event, chat=edited["chat"])
                         offset = uid + 1
                         continue
                     message = update.get("message") or update.get("channel_post")
                     if not message or not has_content(message):
                         offset = uid + 1
                         continue
+                    typed = command_event(uid, message, clock=self._clock)
+                    if typed is not None:
+                        await self._publish(put, typed, chat=message["chat"])
                     group = receive.group(message)
                     if group:
                         groups.setdefault(group, []).append(update)
                         opened.setdefault(group, asyncio.get_running_loop().time())
                         continue
-                    await put(await self._message_event(uid, message))
+                    found_event = await self._message_event(uid, message)
+                    await self._publish(put, found_event, chat=message["chat"])
                     offset = uid + 1
                 now = asyncio.get_running_loop().time()
                 for group in [name for name, at in opened.items()
@@ -210,13 +228,36 @@ class TelegramBody:
                     batch = groups.pop(group, [])
                     opened.pop(group, None)
                     if batch:
-                        await put(await self._batch_event(batch))
+                        found_event = await self._batch_event(batch)
+                        await self._publish(put, found_event, chat=batch[0]["message"]["chat"])
                         offset = max(offset or 0, max(item["update_id"] for item in batch) + 1)
                 await asyncio.sleep(0.05 if groups else 0)
         finally:
             await self.aclose()
 
-    async def _handle_callback(self, query: dict[str, Any]) -> Event:
+    async def _announce(self, put: Put, event: Percept, chat: dict[str, Any]) -> None:
+        """Publish a place's audience the first time this body sees it (§2.4.3)."""
+        place = str(event.place)
+        if place in self._announced:
+            return
+        self._announced.add(place)
+        audience: Audience = audience_of(chat, place, actor=event.actor)
+        await put(contract.audience_event(place, audience, ts=self._clock.now(),
+                                          body=self.name))
+
+    async def _publish(self, put: Put, event: Percept, *, chat: dict[str, Any] | None = None) -> None:
+        """Announce the place's audience when it is new, then put the percept itself."""
+        if chat is not None:
+            await self._announce(put, event, chat)
+        elif "place_event" in (event.data or {}) and str(event.place) in self._announced:
+            self._announced.discard(str(event.place))  # the membership or the name changed
+            await put(contract.audience_event(
+                str(event.place), Audience(frozenset(), unknown=True),
+                ts=self._clock.now(), body=self.name))
+            self._announced.add(str(event.place))
+        await put(event)
+
+    async def _handle_callback(self, query: dict[str, Any]) -> Percept:
         qid = query.get("id")
         if qid:
             with contextlib.suppress(Exception):
@@ -224,17 +265,16 @@ class TelegramBody:
         return self._callback(query)
 
     async def _message_event(self, update_id: int, message: dict[str, Any], *,
-                             edited: bool = False) -> Event:
+                             edited: bool = False) -> Percept:
         """Turn one message or edit into a percept, storing every file/voice/sticker it carries."""
         text = str(message.get("text") or message.get("caption") or "")
         specs = receive.specs(message)
         attachments = await self._store(specs)
         return format_event(update_id, message, text, clock=self._clock, name=self.name,
                             bot_id=self.bot_id, bot_username=self.bot_username,
-                            attachments=attachments, choices_prompts=self._choices_prompts,
-                            edited=edited)
+                            attachments=attachments, edited=edited)
 
-    async def _batch_event(self, batch: list[dict[str, Any]]) -> Event:
+    async def _batch_event(self, batch: list[dict[str, Any]]) -> Percept:
         """Turn a media group into one percept carrying every file it holds."""
         message = batch[0]["message"]
         text = next((str(item["message"].get("text") or item["message"].get("caption") or "")
@@ -244,8 +284,7 @@ class TelegramBody:
         attachments = await self._store(specs)
         return format_event(batch[-1]["update_id"], message, text, clock=self._clock,
                             name=self.name, bot_id=self.bot_id,
-                            bot_username=self.bot_username, attachments=attachments,
-                            choices_prompts=self._choices_prompts)
+                            bot_username=self.bot_username, attachments=attachments)
 
     async def _store(self, specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Store every received file through the door and return its attachments."""
@@ -352,6 +391,13 @@ class TelegramBody:
                                      for i, opt in enumerate(choices, 1)]
         return result or None
 
+    async def ask(self, place: str, question: str, choices: Sequence[str]) -> str:
+        """Ask with Telegram's inline buttons and return the prompt's message id (§2.4.6)."""
+        result = await self._say(Action(
+            id=f"{self.name}:ask", capability="say", place=place,
+            arguments={"text": question, "choices": list(choices)}))
+        return str((result or {}).get("message_id") or "") if isinstance(result, dict) else ""
+
     async def show(self, place: str, kind: str, **data: Any) -> Any:
         """Show one non-message thing natively; unknown kinds are refused."""
         return await send.show(self._call, place, kind, **data)
@@ -360,14 +406,14 @@ class TelegramBody:
         """Return what Telegram reports about one chat or forum topic."""
         return await send.place_info(self._call, place, bot_id=self.bot_id)
 
-    def _callback(self, query: dict[str, Any]) -> Event:
-        """Turn one button callback into a `data.choice` + `data.answer` percept."""
+    def _callback(self, query: dict[str, Any]) -> Percept:
+        """Turn one button press into the structured answer it was drawn for (§2.4.6)."""
         raw = str(query.get("data") or "")
         parts = raw.split(":")
         msg = query.get("message") or {}
         chat = msg.get("chat") or {}
         msg_id = str(msg.get("message_id") or "")
-        place, form, parent, place_kind = chat_place(chat, msg)
+        place = place_id(chat, msg)
         sender_id = (query.get("from") or {}).get("id")
         selected = raw
         if len(parts) >= 3 and parts[0] == "choice":
@@ -378,21 +424,22 @@ class TelegramBody:
             except ValueError:
                 selected = ":".join(parts[2:])
         label = str((query.get("from") or {}).get("first_name") or "someone")
-        data: dict[str, Any] = {"choice": selected, "answer": raw, "custom_id": raw}
-        if msg_id:
-            data["reply_to"] = {"message_id": msg_id}
-        return Event(
-            id=None, ts=self._clock.now(), kind="percept",
-            who=f"telegram:{sender_id}", place=place, body=self.name,
-            payload={"description": f"{label} chose {selected}",
-                     "place_kind": place_kind,
-                     "addressed": True, "data": data},
+        return Percept(
+            actor=f"telegram:{sender_id}" if sender_id is not None else "unknown",
+            place=place,
+            occurred_at=self._clock.now(),
+            description=f"{label} chose {selected}",
+            ref=msg_id,
+            about=msg_id,
+            features={"addressed": 1, "named": 0, "addressed_other": 0},
+            answer=Answer(prompt=msg_id, value=selected) if msg_id else None,
+            data={"choice": selected, "custom_id": raw, "chat_id": chat.get("id"),
+                  "chat": dict(chat), "message_id": msg_id},
         )
 
-    def _event(self, update_id: int, message: dict[str, Any], text: str) -> Event:
+    def _event(self, update_id: int, message: dict[str, Any], text: str) -> Percept:
         return format_event(update_id, message, text, clock=self._clock, name=self.name,
-                            bot_id=self.bot_id, bot_username=self.bot_username,
-                            choices_prompts=self._choices_prompts)
+                            bot_id=self.bot_id, bot_username=self.bot_username)
 
     def _addressed(self, chat: dict[str, Any], message: dict[str, Any], text: str) -> bool:
         return addressed(chat, message, text, bot_id=self.bot_id,

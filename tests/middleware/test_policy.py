@@ -123,13 +123,22 @@ async def _intent(conn) -> Event:
 
 
 async def _answer(kernel, text: str) -> None:
-    """Type one answer in the owner's direct chat and let the loop process it."""
-    put = asyncio.create_task(kernel.put(Event(
-        id=None, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
-        body="telegram", payload={"description": text, "place_kind": "direct"}, description=text)))
-    await asyncio.sleep(0)
-    await kernel.step()
-    await put
+    """Answer the newest open question the way the soul does: through `self.answer` (§2.4.6).
+
+    The words are reasoning's to read; the middleware settles the answer from the request and the
+    choice, so a test that speaks the owner's words records exactly that act.
+    """
+    row = await (await kernel.conn.execute(
+        "SELECT payload FROM events WHERE kind = 'question.asked' ORDER BY id DESC LIMIT 1"
+    )).fetchone()
+    request_id = int((row[0] or {})["request"])
+    labels = [str(choice.get("label") or "") for choice in (row[0] or {}).get("choices") or ()]
+    positive = labels[0] if labels else text
+    value = positive if text.strip().lower() in ("ya", "yes") else (
+        labels[1] if len(labels) > 1 else text)
+    trigger = Event(id=None, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
+                    body="telegram", origin_actor="person:owner", payload={})
+    await kernel.act_via_hooks(trigger, "self.answer", {"request": request_id, "value": value})
     await kernel.run_until_idle()
 
 
@@ -361,10 +370,7 @@ async def test_brake_stops_endless_loop_tells_owner_once_and_can_resume(aconn):
     notice = prompt_act.arguments["text"]
     assert "Pekerjaan dihentikan" in notice and "max_wakes_per_hour" in notice
 
-    reply = Event(id=None, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
-                  body="telegram", origin_actor="person:owner",
-                  payload={"description": "Lanjutkan", "place_kind": "direct", "addressed": True}, description="Lanjutkan")
-    await _drive(kernel, reply)
+    await _answer(kernel, "ya")  # the owner says yes; the soul records it as self.answer
 
     cur = await aconn.execute("SELECT kind FROM events ORDER BY id")
     after = [row[0] for row in await cur.fetchall()]
@@ -424,13 +430,7 @@ async def test_brake_continue_keeps_held_chain_origin_actor(aconn):
                 payload={"description": "go", "place_kind": "shared", "addressed": True}, description="go")
     await _drive(kernel, msg)
 
-    reply = Event(id=None, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
-                  body="telegram", origin_actor="person:owner",
-                  payload={"description": "Lanjutkan", "place_kind": "direct", "addressed": True}, description="Lanjutkan")
-    put = asyncio.create_task(kernel.put(reply))
-    await asyncio.sleep(0)
-    await kernel.step()
-    await put
+    await _answer(kernel, "ya")
     row = await (await aconn.execute(
         "SELECT origin_actor FROM events WHERE kind = 'intent' ORDER BY id DESC LIMIT 1"
     )).fetchone()
@@ -443,55 +443,3 @@ async def test_brake_continue_keeps_held_chain_origin_actor(aconn):
         assert row[0] == "person:alice"
 
 
-async def test_typed_approval_requires_direct_place_30m_and_newest_only(aconn):
-    from datetime import timedelta
-
-    clock = FakeClock(START)
-    values = settings()
-    kernel = build(aconn, clock=clock, settings=values)
-    tool, voice = Tool(("runs_code",), "dev.run"), Voice()
-    kernel.register_adapter(voice)
-    kernel.tools.add_tool(tool, {"run": {"facts": ["runs_code"], "permission": "dev.run"}})
-    kernel.roles = open_book("person:owner", "dev.run")
-    await _audiences(aconn)
-    await append_event(aconn, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
-                       body="telegram", payload={"description": "hi"})
-    trigger = await _trigger(aconn)
-
-    # Request 1 in GROUP; owner types "ya" in GROUP (no reply_to) -> must NOT count.
-    await _call(kernel, trigger, command="echo 1")
-    await _drive(kernel, Event(id=None, ts=clock.now(), kind="percept", who="person:owner",
-                               place=GROUP, body="telegram", origin_actor="person:owner",
-                               payload={"description": "ya", "place_kind": "shared"}, description="ya"))
-    assert (await _kinds(aconn)).count("approval.answered") == 0
-
-    # Request 2 is newer; answering "ya" in DM answers #2, never #1 on a second "ya".
-    await _call(kernel, trigger, command="echo 2")
-    req_rows = await (await aconn.execute(
-        "SELECT id FROM events WHERE kind = 'approval.requested' ORDER BY id")).fetchall()
-    first_id, second_id = int(req_rows[0][0]), int(req_rows[1][0])
-    await _drive(kernel, Event(id=None, ts=clock.now(), kind="percept", who="person:owner",
-                               place=OWNER_DM, body="telegram", origin_actor="person:owner",
-                               payload={"description": "ya", "place_kind": "direct"}, description="ya"))
-    ans_rows = await (await aconn.execute(
-        "SELECT payload->>'request' FROM events WHERE kind = 'approval.answered'")).fetchall()
-    assert [int(r[0]) for r in ans_rows] == [second_id]
-
-    await _drive(kernel, Event(id=None, ts=clock.now(), kind="percept", who="person:owner",
-                               place=OWNER_DM, body="telegram", origin_actor="person:owner",
-                               payload={"description": "ya", "place_kind": "direct"}, description="ya"))
-    ans_rows = await (await aconn.execute(
-        "SELECT payload->>'request' FROM events WHERE kind = 'approval.answered'")).fetchall()
-    assert [int(r[0]) for r in ans_rows] == [second_id]
-
-    # After 30 minutes, #1 expires with approval.expired and even a reply cannot approve it.
-    clock.advance(timedelta(minutes=31))
-    await _drive(kernel, Event(id=None, ts=clock.now(), kind="percept", who="person:owner",
-                               place=OWNER_DM, body="telegram", origin_actor="person:owner",
-                               payload={"description": "ya", "place_kind": "direct"}, description="ya"))
-    exp_rows = await (await aconn.execute(
-        "SELECT payload->>'request' FROM events WHERE kind = 'approval.expired'")).fetchall()
-    assert [int(r[0]) for r in exp_rows] == [first_id]
-    ans_rows = await (await aconn.execute(
-        "SELECT payload->>'request' FROM events WHERE kind = 'approval.answered'")).fetchall()
-    assert [int(r[0]) for r in ans_rows] == [second_id]

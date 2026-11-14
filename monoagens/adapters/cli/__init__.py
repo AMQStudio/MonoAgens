@@ -40,7 +40,9 @@ def create(options: dict[str, Any], env: dict[str, str]) -> "CLIBody":
     unknown = [t for t in tools if t not in OPTIONAL_CAPABILITIES]
     if unknown:
         raise ValueError(f"cli: unknown optional tool {unknown[0]!r}")
-    return CLIBody(str(options.get("socket") or "") or None, enabled_tools=tools)
+    body = CLIBody(str(options.get("socket") or "") or None, enabled_tools=tools)
+    support.options(body, options)
+    return body
 
 
 class CLIBody:
@@ -62,7 +64,6 @@ class CLIBody:
         self.files: Any = None
         self.enabled_tools = tuple(t for t in enabled_tools if t in OPTIONAL_CAPABILITIES)
         self._seq = 0
-        self._last_prompt: tuple[str, list[str]] | None = None
 
     def capabilities(self) -> tuple[dict[str, Any], ...]:
         """Return declared capabilities plus any platform tools enabled in `bodies.cli.tools`."""
@@ -74,6 +75,13 @@ class CLIBody:
         for writer in list(self._writers):
             writer.close()
         self._writers.clear()
+
+    async def ask(self, place: str, question: str, choices: Sequence[str]) -> str:
+        """Ask as numbered lines on the terminal and return that line's id (§2.4.6)."""
+        result = await self._carry(Action(
+            id=f"{self.name}:ask", capability="say", place=place,
+            arguments={"text": question, "choices": list(choices)}))
+        return str((result or {}).get("message_id") or "") if isinstance(result, dict) else ""
 
     async def render(self, event: Any) -> None:
         """Render one lifecycle event as a terminal line (§2.4.5)."""
@@ -113,8 +121,6 @@ class CLIBody:
             self._seq += 1
             msg_id = f"cli:{self._seq}"
             choices = [str(c) for c in (p.get("choices") or ()) if str(c)]
-            if choices:
-                self._last_prompt = (msg_id, choices)
             lines = send.format_say_lines(
                 text=str(p.get("text") or ""),
                 reply_to=str(p["reply_to"]) if p.get("reply_to") else None,
@@ -148,10 +154,6 @@ class CLIBody:
     async def show(self, place: str, kind: str, **data: Any) -> None:
         """Show one non-message thing as a status/fallback line; unknown kinds are refused."""
         del place
-        if kind in ("buttons", "menus") and data.get("buttons"):
-            self._seq += 1
-            msg_id = f"cli:{self._seq}"
-            self._last_prompt = (msg_id, [str(lbl) for lbl, _ in data["buttons"]])
         await send.show(self._writers, kind, **data)
 
     async def _where(self, ref: str, data: bytes) -> str:
@@ -174,5 +176,4 @@ class CLIBody:
                 text = f"{text} [cannot read {path}: {exc}]".strip()
                 continue
             attachments.append(await self.files.put(data, name=pathlib.Path(path).name))
-        return event(text, clock=self._clock, name=self.name,
-                     attachments=attachments, last_prompt=self._last_prompt)
+        return event(text, clock=self._clock, name=self.name, attachments=attachments)

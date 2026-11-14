@@ -26,6 +26,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from monoagens.infra.store import EVENT_COLUMNS as _EVENT_COLUMNS
+from monoagens.infra.store import escape_like
 from monoagens.types import Event
 
 from monoagens.contract import (OWNER_POLICY, RULE_KINDS, SLOTS, Continue, HookOutcome,
@@ -160,11 +161,14 @@ class LogView:
         return {str(key): dict(value or {}) for key, value in await cur.fetchall()}
 
     async def search(self, text: str, *, limit: int = 20) -> list[Event]:
-        """Return the newest events whose readable text contains this text (case-blind)."""
+        """Return the newest events whose readable text contains this text (case-blind).
+
+        The term is data: `%` and `_` are escaped, so a person searching for them finds them.
+        """
         return await self._rows(
             f"SELECT {EVENT_COLUMNS} FROM events "
             "WHERE description ILIKE %s ORDER BY id DESC LIMIT %s",
-            (f"%{text}%", int(limit)), newest_first=True)
+            (f"%{escape_like(text)}%", int(limit)), newest_first=True)
 
     async def _rows(self, query: str, params: Any, *, newest_first: bool = False
                     ) -> list[Event]:

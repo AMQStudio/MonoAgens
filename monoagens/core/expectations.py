@@ -73,10 +73,15 @@ def validate(data, *, now, settings):
     policy = data.get("policy") or {"once": True}
     if not 0.0 <= weight <= 1.0:
         raise ValueError(f"weight out of range: {weight}")
-    if not isinstance(policy, dict) or not (policy.get("once") is True or policy.get("cooldown")):
-        raise ValueError("policy must be {once: true} or {cooldown: duration}")
+    if not isinstance(policy, dict) or not (
+            policy.get("once") is True or policy.get("cooldown") or policy.get("max_fires")):
+        raise ValueError("policy must be {once: true}, {cooldown: duration} or {max_fires: n}")
     if policy.get("cooldown"):
         parse_duration(policy["cooldown"])
+    if policy.get("max_fires") is not None:
+        fires = int(policy["max_fires"])
+        if fires < 1:
+            raise ValueError("max_fires must be at least 1")
     cue_time, cue_event = data.get("cue_time"), data.get("cue_event")
     _refuse_words(cue_event)
     expires = data.get("expires_at")
@@ -84,15 +89,22 @@ def validate(data, *, now, settings):
         raise ValueError("expect needs cue_time or cue_event")
     values, zone = constants(settings), tz(settings)
     days = float(values["default_expires_days"])
+    next_at = next_check(cue_time, now, zone)
+    default_expiry = now + timedelta(days=days)
+    chosen = next_check({"at": str(expires)}, now, zone) if expires else default_expiry
+    if not expires and next_at is not None and chosen <= next_at:
+        # The default may never fall before the cue it waits for (§5.3), or it could never fire.
+        chosen = next_at
+    if cue_time and next_at is None:
+        raise ValueError("cue_time names no time this expectation could ever fire at")
     condition_value = operator(raw)
     return {
         "kind": kind, "who": data.get("who"), "place": data.get("place"), "about": about,
         "cue_time": cue_time, "cue_event": cue_event, "condition": condition_value,
         "condition_text": text(condition_value),
         "intent": data.get("intent"), "weight": weight, "policy": dict(policy),
-        "next_check_at": next_check(cue_time, now, zone),
-        "expires_at": next_check({"at": str(expires)}, now, zone) if expires
-        else now + timedelta(days=days),
+        "next_check_at": next_at,
+        "expires_at": chosen,
     }
 
 

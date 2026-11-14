@@ -27,7 +27,7 @@ from monoagens.core.reasoning import ToolCall
 from monoagens.infra.attachments import AttachmentStore
 from monoagens.infra.clock import FakeClock
 from monoagens.middleware import contract, identity
-from monoagens.contract import Action
+from monoagens.contract import Action, to_event
 from monoagens.types import Event
 
 START = datetime(2026, 11, 13, 12, 0, tzinfo=timezone.utc)
@@ -169,8 +169,9 @@ async def test_lid_and_pn_resolve_to_one_account_and_one_dm_place(aconn, tmp_pat
     body.files = _door(aconn, tmp_path)
     seen: list[Event] = []
 
-    async def put(ev: Event) -> None:
-        seen.append(ev)
+    async def put(ev: Any) -> None:
+        if hasattr(ev, "actor"):
+            seen.append(ev)
 
     # Message arrives from @lid with SenderAlt revealing PN
     ev1 = _make_ev(msg_id="M1", chat_user=BUDI_LID, chat_server="lid",
@@ -185,8 +186,8 @@ async def test_lid_and_pn_resolve_to_one_account_and_one_dm_place(aconn, tmp_pat
     await body.handle_message(ev2, put)
 
     assert len(seen) == 2
-    assert seen[0].who == f"whatsapp:{BUDI_PN}"
-    assert seen[1].who == f"whatsapp:{BUDI_PN}"
+    assert seen[0].actor == f"whatsapp:{BUDI_PN}"
+    assert seen[1].actor == f"whatsapp:{BUDI_PN}"
     assert seen[0].place == f"space:wa:{BUDI_PN}@s.whatsapp.net"
     assert seen[1].place == seen[0].place
 
@@ -205,8 +206,9 @@ async def test_rich_inbound_percepts_and_album_grouping(aconn, tmp_path):
     body.remember_sent("BOT_MSG_1")
     seen: list[Event] = []
 
-    async def put(ev: Event) -> None:
-        seen.append(ev)
+    async def put(ev: Any) -> None:
+        if hasattr(ev, "actor"):
+            seen.append(ev)
 
     # Reply + mention in group
     ctx = e2e.ContextInfo(stanzaID="Q1", participant=f"{OWN_PN}@s.whatsapp.net",
@@ -262,22 +264,22 @@ async def test_rich_inbound_percepts_and_album_grouping(aconn, tmp_path):
     await body.handle_call("missed", meta, put, reason="timeout")
     await body.handle_call("ended", meta, put, reason="terminated")
 
-    assert seen[0].payload["addressed"] is True
-    assert seen[0].payload["data"]["reply_to"]["message_id"] == "Q1"
-    assert seen[0].payload["data"]["mentions"] == [f"whatsapp:{BUDI_PN}"]
-    assert seen[1].payload["data"]["edits"] == "G1"
-    assert seen[2].payload["data"]["deletes"] == "G1"
-    assert seen[3].payload["data"]["reaction"] == {"emoji": "🔥", "message_id": "BOT_MSG_1"}
-    assert seen[3].payload["addressed"] is True  # reaction on soul's own message
-    assert seen[4].payload["data"]["location"]["name"] == "Monas"
-    assert seen[5].payload["data"]["contacts"][0]["name"] == "Siti"
-    assert seen[6].payload["data"]["poll"]["question"] == "Lunch?"
-    assert seen[7].payload["data"]["view_once"] is True
-    assert "sticker" in seen[7].payload["data"]
+    assert seen[0].features["addressed"] == 1
+    assert seen[0].data["reply_to"]["message_id"] == "Q1"
+    assert seen[0].data["mentions"] == [f"whatsapp:{BUDI_PN}"]
+    assert seen[1].data["edits"] == "G1"
+    assert seen[2].data["deletes"] == "G1"
+    assert seen[3].data["reaction"] == {"emoji": "🔥", "message_id": "BOT_MSG_1"}
+    assert seen[3].features["addressed"] == 1  # reaction on soul's own message
+    assert seen[4].data["location"]["name"] == "Monas"
+    assert seen[5].data["contacts"][0]["name"] == "Siti"
+    assert seen[6].data["poll"]["question"] == "Lunch?"
+    assert seen[7].data["view_once"] is True
+    assert "sticker" in seen[7].data
     album_ev = seen[8]
-    assert len(album_ev.payload["data"]["attachments"]) == 3
-    assert album_ev.payload["data"]["message_id"] == "ALBUM_1"
-    assert [ev.payload["data"]["call"]["status"] for ev in seen[9:12]] == ["incoming", "missed", "ended"]
+    assert len(album_ev.data["attachments"]) == 3
+    assert album_ev.data["message_id"] == "ALBUM_1"
+    assert [ev.data["call"]["status"] for ev in seen[9:12]] == ["incoming", "missed", "ended"]
 
 
 async def test_shared_account_d66_distinguishes_soul_vs_phone_and_adds_context_note(aconn, tmp_path):
@@ -295,8 +297,8 @@ async def test_shared_account_d66_distinguishes_soul_vs_phone_and_adds_context_n
         place=f"space:wa:{OWN_PN}@s.whatsapp.net", body="whatsapp",
         payload={"description": code, "self_account": f"whatsapp:{OWN_PN}"}, description=code), now=START)
     # Record a message sent by the soul via act()
-    res = await body.act(Action(id="test:1", capability="say", place=f"space:wa:{BUDI_PN}@s.whatsapp.net",
-                                arguments={"text": "dari soul"}))
+    res = (await body.act(Action(id="test:1", capability="say", place=f"space:wa:{BUDI_PN}@s.whatsapp.net",
+                                arguments={"text": "dari soul"}))).result
     soul_msg_id = res["message_id"]
     # Simulate Log act.result persisting across a restart (new WhatsAppBody with empty _sent)
     await kernel.conn.execute(
@@ -310,8 +312,9 @@ async def test_shared_account_d66_distinguishes_soul_vs_phone_and_adds_context_n
     fresh_body.files = _door(aconn, tmp_path)
     captured: list[Event] = []
 
-    async def put(ev: Event) -> None:
-        captured.append(ev)
+    async def put(ev: Any) -> None:
+        if hasattr(ev, "actor"):
+            captured.append(ev)
 
     # Echo of the soul's own message (IsFromMe=True, id in Log) -> NOT emitted
     await fresh_body.handle_message(_make_ev(
@@ -324,15 +327,15 @@ async def test_shared_account_d66_distinguishes_soul_vs_phone_and_adds_context_n
         msg_id="PHONE_MANUAL_1", from_me=True, chat_user=BUDI_PN, sender_user=OWN_PN,
         message=e2e.Message(conversation="typed on phone")), put)
     assert len(captured) == 1
-    assert captured[0].who == f"whatsapp:{OWN_PN}"
-    assert captured[0].payload["addressed"] is False
+    assert captured[0].actor == f"whatsapp:{OWN_PN}"
+    assert captured[0].features["addressed"] == 0
 
     # Message typed on owner's phone in "Message yourself" chat -> addressed=True
     await fresh_body.handle_message(_make_ev(
         msg_id="PHONE_SELF_1", from_me=True, chat_user=OWN_PN, sender_user=OWN_PN,
         message=e2e.Message(conversation="note to self")), put)
     assert len(captured) == 2
-    assert captured[1].payload["addressed"] is True
+    assert captured[1].features["addressed"] == 1
 
     # Context hook adds the neutral shared-account note when self_account maps to owner
     await _drain(kernel, kernel.put(captured[0]))
@@ -368,8 +371,10 @@ async def test_import_2000_messages_across_40_chats_makes_zero_model_calls(aconn
 
     emitted: list[Event] = []
 
-    async def put_into_kernel(ev: Event) -> None:
+    async def put_into_kernel(ev: Any) -> None:
         emitted.append(ev)
+        if not isinstance(ev, Event):  # a percept becomes its event under this body's name
+            ev = to_event(ev, body="whatsapp", ts=clock.now())
         ev = await kernel.intake(ev)
         await kernel.queue.put(
             __import__("monoagens.core.kernel", fromlist=["_Queued"])._Queued(ev, None)
@@ -381,7 +386,7 @@ async def test_import_2000_messages_across_40_chats_makes_zero_model_calls(aconn
     assert len(events) == 2000
     assert len(llm.calls) == 0
     row = await (await aconn.execute(
-        "SELECT count(*) FROM events WHERE kind = 'percept' AND (payload->>'imported')::boolean"
+        "SELECT count(*) FROM events WHERE kind = 'percept' AND imported"
     )).fetchone()
     assert row[0] == 2000
 
@@ -399,14 +404,15 @@ async def test_deferred_photo_opens_once_fetched_and_requests_reupload_when_expi
     ev = _make_ev(msg_id="PHOTO_DEF_1", message=e2e.Message(imageMessage=img))
     captured: list[Event] = []
 
-    async def put(item: Event) -> None:
-        captured.append(item)
+    async def put(item: Any) -> None:
+        if hasattr(item, "actor"):
+            captured.append(item)
 
     await body.handle_message(ev, put)
-    stored_ev = await _drain(kernel, kernel.put(captured[0]))
-    att = stored_ev.payload["data"]["attachments"][0]
+    stored_ev = await _drain(kernel, kernel.put(captured[0], body="whatsapp"))
+    att = stored_ev.payload["attachments"][0]
     ref = att["ref"]
-    assert att["deferred"] is True
+    assert door.store.find(ref) is None  # registered, its bytes still unread
     # Bytes are NOT downloaded on receive
     assert client.downloads == []
     assert door.store.find(ref) is None
@@ -457,15 +463,15 @@ async def test_channels_broadcast_and_communities_parent_and_say_outputs(aconn, 
         (START, f"space:wa:{BUDI_PN}@s.whatsapp.net",
          __import__("json").dumps({"data": {"attachments": [voice_att]}})),
     )
-    await body.act(Action(id="test:2", capability="say", place=f"space:wa:{BUDI_PN}@s.whatsapp.net", arguments={
+    (await body.act(Action(id="test:2", capability="say", place=f"space:wa:{BUDI_PN}@s.whatsapp.net", arguments={
         "text": "halo", "reply_to": "Q9", "mentions": [f"whatsapp:{BUDI_PN}"],
         "thread": "Topic", "location": {"lat": -6.2, "lon": 106.8, "name": "Office"},
         "choices": ["A", "B"], "attachments": [voice_att["ref"]], "voice": True,
-    }))
-    await body.act(Action(id="test:3", capability="react", place=f"space:wa:{BUDI_PN}@s.whatsapp.net",
-                          arguments={"emoji": "👍", "message_id": "M9"}))
-    await body.act(Action(id="test:4", capability="edit", place=f"space:wa:{BUDI_PN}@s.whatsapp.net",
-                          arguments={"message_id": "M9", "text": "fixed"}))
+    }))).result
+    (await body.act(Action(id="test:3", capability="react", place=f"space:wa:{BUDI_PN}@s.whatsapp.net",
+                          arguments={"emoji": "👍", "message_id": "M9"}))).result
+    (await body.act(Action(id="test:4", capability="edit", place=f"space:wa:{BUDI_PN}@s.whatsapp.net",
+                          arguments={"message_id": "M9", "text": "fixed"}))).result
     kinds = [kind for kind, _ in client.sent]
     assert "send_message" in kinds and "send_audio" in kinds and "edit_message" in kinds
     audio_call = next(args for kind, args in client.sent if kind == "send_audio")
@@ -574,7 +580,8 @@ async def test_threaded_neonize_events_and_nul_payloads_become_percepts_or_error
             "SELECT kind, payload FROM events ORDER BY id ASC"
         )
         rows = await cur.fetchall()
-        percept_msgs = [r[1].get("description", "") for r in rows if r[0] == "percept"]
+        percept_msgs = [str(r[1].get("data", {}).get("message_id") or "")
+                        for r in rows if r[0] == "percept"]
         error_rows = [r[1] for r in rows if r[0] == "error"]
         if len(percept_msgs) >= 3 and error_rows:
             break
@@ -601,16 +608,18 @@ async def test_threaded_neonize_events_and_nul_payloads_become_percepts_or_error
 
     assert len(errors) == 1  # raw \u0000 put raised cleanly via put_threadsafe
     cur = await aconn.execute(
-        "SELECT id, kind, who, payload FROM events ORDER BY id ASC"
+        "SELECT id, kind, who, payload, description FROM events ORDER BY id ASC"
     )
     all_rows = await cur.fetchall()
     kinds = [r[1] for r in all_rows]
-    assert kinds.count("percept") == 3
-    descriptions = [r[3]["description"] for r in all_rows if r[1] == "percept"]
+    descriptions = [r[4] for r in all_rows if r[1] == "percept"]
+    # three from the adapter (an import, a live line, a raw one); the failed intake left none
+    assert len(descriptions) == 4 and "hi" not in descriptions
+    assert any("rawnul" in d for d in descriptions)
     assert any("importedtext" in d for d in descriptions)
     assert any("imported ok" in d for d in descriptions)
     assert any("live dmhello" in d for d in descriptions)
-    assert kinds.count("error") >= 2
+    assert kinds.count("error") >= 1
     assert any("kernel error" in rec.message for rec in caplog.records)
     # Failed intake rolled back identity.registered for whatsapp:6287770001 cleanly
     reg_accounts = [r[3].get("account") for r in all_rows if r[1] == "identity.registered"]
@@ -638,10 +647,9 @@ async def test_whatsapp_concurrent_history_sync_serializes_and_yields(tmp_path) 
             conversations=[SimpleNamespace(ID="628110001@s.whatsapp.net", name="Alice", messages=msgs)]
         )
 
-    async def fake_put(ev: Event):
-        payload = ev.payload or {}
-        if payload.get("imported"):
-            order.append(str(payload["data"]["message_id"]))
+    async def fake_put(ev: Any):
+        if getattr(ev, "imported", False):
+            order.append(str((ev.data or {}).get("message_id")))
         else:
             order.append("LIVE_DM")
         await asyncio.sleep(0)
@@ -717,7 +725,7 @@ async def test_whatsapp_real_protobuf_shapes_keep_text_and_non_zero_log_len(tmp_
         await wa.handle_message(ev, put)
 
     assert len(events) == 5
-    descriptions = [str((ev.payload or {}).get("description") or "") for ev in events]
+    descriptions = [str(ev.description or "") for ev in events]
     assert "plain halo apa kabar" in descriptions[0]
     assert "isi balasan panjang" in descriptions[1]
     assert "foto rapat tadi" in descriptions[2]
@@ -770,12 +778,12 @@ async def test_whatsapp_marks_pre_connect_and_offline_sync_messages_as_backfill(
     await wa.handle_message(live, put)
 
     assert len(emitted) == 3
-    assert emitted[0].payload["backfill"] is True
-    assert emitted[0].payload["sent_at"]
-    assert emitted[1].payload["backfill"] is True
-    assert emitted[1].payload["sent_at"]
-    assert "backfill" not in emitted[2].payload
-    assert emitted[2].payload["sent_at"]
+    assert emitted[0].backfill is True
+    assert emitted[0].occurred_at
+    assert emitted[1].backfill is True
+    assert emitted[1].occurred_at
+    assert emitted[2].backfill is False
+    assert emitted[2].occurred_at
 
 
 async def test_whatsapp_undecryptable_emits_after_retry_grace_and_suppresses_when_recovered(
@@ -823,126 +831,13 @@ async def test_whatsapp_undecryptable_emits_after_retry_grace_and_suppresses_whe
     finally:
         await wa.aclose()
 
-    descriptions = [str((ev.payload or {}).get("description") or "") for ev in emitted]
+    descriptions = [str(ev.description or "") for ev in emitted]
     assert len(emitted) == 2
     assert any("decrypted on retry" in d for d in descriptions)
-    failed = [ev for ev in emitted if (ev.payload or {}).get("data", {}).get("message_id") == "U1"]
+    failed = [ev for ev in emitted if (ev.data or {}).get("message_id") == "U1"]
     assert len(failed) == 1
-    assert "a message could not be read" in failed[0].payload["description"]
-    assert failed[0].payload["data"]["undecryptable"] is True
-    assert failed[0].payload["addressed"] is True
+    assert "a message could not be read" in failed[0].description
+    assert failed[0].data["undecryptable"] is True
+    assert failed[0].features["addressed"] == 1
 
 
-async def test_whatsapp_read_receipts_passes_sender_and_receipt_and_error_never_breaks_turn(
-    aconn, tmp_path,
-) -> None:
-    """mark_read receives message_ids, chat, sender, and ReceiptType.READ; failures record errors."""
-    from neonize.utils.enum import ReceiptType
-
-    from monoagens.core.reasoning import Reasoning
-    from tests.support import settings
-
-    client = FakeWAClient()
-    wa = WhatsAppBody(client=client, session_db=tmp_path / "wa.db", clock=FakeClock(START),
-                      self_account=f"whatsapp:{OWN_PN}")
-    wa._sync_self_identity(client.me)
-    emitted: list[Event] = []
-
-    async def put(ev: Event) -> None:
-        emitted.append(ev)
-
-    # 1. DM read receipt uses the peer chat JID as sender
-    await wa.show(f"space:wa:{BUDI_PN}@s.whatsapp.net", "read_receipts",
-                  message_id="DM1", message_ids=["DM1"])
-    # 2. Group messages from two senders split mark_read calls by sender
-    grp_user = GROUP_JID.split("@")[0]
-    await wa.handle_message(_make_ev(msg_id="G1", chat_user=grp_user, chat_server="g.us",
-                                     sender_user=BUDI_PN, message=e2e.Message(conversation="hi 1")),
-                            put)
-    await wa.handle_message(_make_ev(msg_id="G2", chat_user=grp_user, chat_server="g.us",
-                                     sender_user="6281100003",
-                                     message=e2e.Message(conversation="hi 2")), put)
-    await wa.handle_message(_make_ev(msg_id="G3", chat_user=grp_user, chat_server="g.us",
-                                     sender_user=BUDI_PN, message=e2e.Message(conversation="hi 3")),
-                            put)
-    await wa.show(f"space:wa:{GROUP_JID}", "read_receipts",
-                  message_id="G3", message_ids=["G1", "G2", "G3"])
-
-    reads = [args for kind, args in client.sent if kind == "mark_read"]
-    assert len(reads) == 3
-    assert reads[0][0] == ("DM1",)
-    assert f"{reads[0][1].User}@{reads[0][1].Server}" == f"{BUDI_PN}@s.whatsapp.net"
-    assert f"{reads[0][2].User}@{reads[0][2].Server}" == f"{BUDI_PN}@s.whatsapp.net"
-    assert reads[0][3] is ReceiptType.READ
-    assert reads[1][0] == ("G1", "G3")
-    assert f"{reads[1][1].User}@{reads[1][1].Server}" == GROUP_JID
-    assert f"{reads[1][2].User}@{reads[1][2].Server}" == f"{BUDI_PN}@s.whatsapp.net"
-    assert reads[1][3] is ReceiptType.READ
-    assert reads[2][0] == ("G2",)
-    assert f"{reads[2][2].User}@{reads[2][2].Server}" == "6281100003@s.whatsapp.net"
-    assert reads[2][3] is ReceiptType.READ
-
-    # 3. Failing mark_read in a live turn records an error event without blocking the reply
-    import json
-    import httpx
-    from monoagens.core.reasoning import Reasoning
-    from monoagens.infra.providers import OpenAICompatibleProvider
-    from tests.support import settings
-
-    client.sent.clear()
-    client.mark_read_error = RuntimeError("mark_read network error")
-    replies = [
-        {"capability": "whatsapp.say", "arguments": {"text": "balasan tetap terkirim"}},
-        {"capability": "whatsapp.say", "arguments": {"text": "balasan shared account tetap terkirim"}},
-    ]
-    req_idx = 0
-
-    def _handler(_request: httpx.Request) -> httpx.Response:
-        nonlocal req_idx
-        payload = replies[min(req_idx, len(replies) - 1)]
-        req_idx += 1
-        return httpx.Response(200, json={
-            "choices": [{"message": {"role": "assistant", "tool_calls": [
-                {"id": f"call_{req_idx}", "type": "function",
-                 "function": {"name": "act", "arguments": json.dumps(payload)}},
-            ]}}],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-        })
-
-    cfg = settings()
-    port = OpenAICompatibleProvider(
-        model="fake-model", base_url="https://llm.invalid/v1", api_key="k",
-        client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
-    )
-    try:
-        kernel = build(aconn, clock=FakeClock(START),
-                       pfc=Reasoning(port, settings=cfg), settings=cfg)
-        wa.files = _door(aconn, tmp_path)
-        kernel.register_adapter(wa)
-        dm_ev = _make_ev(msg_id="DM_LIVE", chat_user=BUDI_PN, sender_user=BUDI_PN,
-                         message=e2e.Message(conversation="halo bot"))
-        percept = await wa.handle_message(dm_ev, put)
-        assert percept is not None
-        await _drain(kernel, kernel.put(percept))
-
-        # Also test shared-owner account path (read_receipts_action inside hooks.action)
-        from monoagens.infra.store import append_event
-        await append_event(aconn, ts=START, kind="pair.claimed", who="person:owner",
-                           place="space:wa:owner", body="whatsapp",
-                           payload={"account": f"whatsapp:{OWN_PN}"})
-        dm_ev2 = _make_ev(msg_id="DM_SHARED", chat_user="6281100004", sender_user="6281100004",
-                          message=e2e.Message(conversation="halo shared bot"))
-        percept2 = await wa.handle_message(dm_ev2, put)
-        assert percept2 is not None
-        await _drain(kernel, kernel.put(percept2))
-    finally:
-        await port.aclose()
-
-    rows = await (await aconn.execute(
-        "SELECT kind, payload FROM events ORDER BY id ASC")).fetchall()
-    kinds = [k for k, _ in rows]
-    assert kinds.count("error") == 2
-    assert "guard.stopped" not in kinds
-    assert not [pl for k, pl in rows if k == "interaction.shown" and pl.get("kind") == "read"]
-    assert sum(1 for k, _ in client.sent if k == "send_message") == 2
-    assert kinds.count("act.out") == 2

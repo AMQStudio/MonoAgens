@@ -12,32 +12,14 @@ PLACE = "space:cli"
 OWNER = "person:owner"
 
 
-def match_choice(text: str, last_prompt: tuple[str, list[str]] | None) -> tuple[str, str] | None:
-    """Match a numbered answer or option label against the latest terminal choices prompt."""
-    if not last_prompt:
-        return None
-    prompt_id, options = last_prompt
-    raw = text.strip()
-    if raw.isdigit():
-        idx = int(raw)
-        if 1 <= idx <= len(options):
-            return options[idx - 1], prompt_id
-    low = raw.lower()
-    for opt in options:
-        if opt.strip().lower() == low:
-            return opt, prompt_id
-    return None
-
-
 def event(text: str, *, clock: Clock, name: str = "cli",
-          attachments: Sequence[Mapping[str, Any]] = (),
-          last_prompt: tuple[str, list[str]] | None = None) -> Percept:
-    """Build the percept of one typed line (the owner typing in their own terminal) (§2.4.2)."""
+          attachments: Sequence[Mapping[str, Any]] = ()) -> Percept:
+    """Build the percept of one typed line (the owner typing in their own terminal) (§2.4.2).
+
+    A typed number is text: reasoning reads it and records any answer through `self.answer`.
+    """
+    del name
     answer = None
-    choice_matched = match_choice(text, last_prompt)
-    if choice_matched is not None:
-        choice_value, question_ref = choice_matched
-        answer = Answer(prompt=str(question_ref), value=choice_value)
     summary = ""
     if attachments:
         summary = describe_attachments(attachments, sent_by=OWNER)

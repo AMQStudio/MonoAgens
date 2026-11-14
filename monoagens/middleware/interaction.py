@@ -344,6 +344,25 @@ async def _brake_origin(conn: Any, held: Mapping[str, Any]) -> str | None:
     return None
 
 
+async def _answer_brake(kernel: Any, item: Event, brake_id: int, held: dict[str, Any],
+                        allowed: bool, answerer: str) -> None:
+    """Record a brake decision and enqueue a continuation as the chain that was held (F.9)."""
+    work = str(held.get("work") or held.get("place") or "stopped work")
+    target = str(held.get("place") or item.place or "")
+    origin = await _brake_origin(kernel.conn, held)
+    await append_event(kernel.conn, ts=kernel.clock.now(), kind=BRAKE_RESUMED,
+                       who=origin, origin_actor=origin, place=target, body=item.body,
+                       caused_by=item.id,
+                       payload={"brake": brake_id, "root": held.get("root"),
+                                "allowed": allowed, "by": answerer})
+    if allowed:
+        kernel.enqueue(Event(
+            id=None, ts=kernel.clock.now(), kind="intent", who=origin,
+            origin_actor=origin, place=target, body=item.body,
+            payload={"description": f"the owner chose to continue the stopped work: {work}",
+                     "root": held.get("root"), "brake": brake_id}))
+
+
 async def settle_answer(kernel: Any, item: Event, request_id: int, allowed: bool,
                         answerer: str, *, owner: bool) -> None:
     """Record one answer and carry out what it allows (§2.4.6, F.9).
@@ -402,7 +421,7 @@ async def question_by_ref(conn: Any, ref: str) -> dict[str, Any] | None:
     return {"id": int(row[0]), "ts": row[1], **dict(row[2] or {})}
 
 
-async def _choice_index(choices: list[str], value: str) -> int | None:
+def _choice_index(choices: list[str], value: str) -> int | None:
     """Return which choice one answer's value names: its label, its 1-based position, or None."""
     if not value:
         return None

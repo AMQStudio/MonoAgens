@@ -23,8 +23,48 @@ from monoagens.adapters.whatsapp.media import (
     unwrap_message,
     views_once,
 )
-from monoagens.contract import describe_attachments
+from monoagens.adapters import support
+from monoagens.contract import Answer, Audience, Percept, describe_attachments
 from monoagens.types import Event
+
+
+def percept_of(*, actor: str, place: str, occurred_at: datetime, description: str,
+               features: Mapping[str, float], data: Mapping[str, Any],
+               ref: str = "", about: str = "", involves: Sequence[str] = (),
+               attachments: Sequence[Mapping[str, Any]] = (), answer: Answer | None = None,
+               imported: bool = False, backfill: bool = False) -> Percept:
+    """Return one percept with its `data` scrubbed to plain JSON (§2.4.2)."""
+    return Percept(actor=actor, place=place, occurred_at=occurred_at,
+                   description=clean_text(description), ref=clean_text(ref),
+                   about=clean_text(about), involves=tuple(clean_text(item)
+                                                          for item in involves),
+                   attachments=_clean_attachments(attachments),
+                   features=dict(features), answer=answer, backfill=backfill,
+                   imported=imported, data=clean_json(dict(data)))
+
+
+def _clean_attachments(items: Sequence[Any]) -> tuple[Any, ...]:
+    """Return the contract's attachment objects with Postgres-safe text fields."""
+    return tuple(
+        replace(item, name=clean_text(item.name), mime=clean_text(item.mime))
+        for item in support.attachments_of(items))
+
+
+def audience_of(place: str, directory: WhatsAppDirectory, *, actor: str) -> Audience:
+    """Return who can perceive one WhatsApp place, with its own rule folded in (§2.4.3).
+
+    A private chat is the other person; a group is its members now (newcomers do not see the
+    past); a channel only broadcasts, so anyone may read it later: *unknown*.
+    """
+    meta = directory.place_meta(place)
+    form = str(meta.get("form") or "")
+    if form == "broadcast":
+        return Audience(actors=frozenset(), unknown=True)
+    if form == "group":
+        members = frozenset(str(member) for member in meta.get("members") or ())
+        return Audience(actors=members, unknown=not members)
+    found = frozenset({actor}) if actor and actor != "unknown" else frozenset()
+    return Audience(actors=found, unknown=not found)
 
 
 def clean_text(value: Any) -> str:
@@ -234,24 +274,26 @@ def format_message(raw: Any, *, directory: WhatsAppDirectory, now: datetime,
         ptype = int(getattr(proto, "type", 0) or 0)
         target_id = str(getattr(getattr(proto, "key", None), "ID", "") or "")
         if ptype == 0 and target_id:  # REVOKE
-            return clean_event(Event(id=None, ts=now, kind="percept", who=who, place=place,
-                                     body=name,
-                                     payload={**base_payload, "addressed": False,
-                                              "description": f"{sender_label} deleted a message",
-                                              "data": {"message_id": msg_id,
-                                                       "deletes": target_id}}))
+            return percept_of(
+                actor=who, place=place, occurred_at=now,
+                description=f"{sender_label} deleted a message",
+                features={"addressed": 0, "named": 0, "addressed_other": 0},
+                data={"message_id": msg_id, "deletes": target_id,
+                      "self_account": self_account},
+                ref=msg_id, about=target_id, imported=imported, backfill=backfill)
         if ptype == 14 and target_id:  # MESSAGE_EDIT
             edited = getattr(proto, "editedMessage", None)
             new_text = message_text(edited) if edited is not None else ""
             addr = _is_self_addressed(edited or message, chat_jid, from_me=from_me,
                                       directory=directory, own_digits=own_digits,
                                       own_sent=own_sent)
-            return clean_event(Event(id=None, ts=now, kind="percept", who=who, place=place,
-                                     body=name,
-                                     payload={**base_payload, "addressed": addr,
-                                              "description": f"{sender_label} edited: {new_text}".strip(),
-                                              "data": {"message_id": msg_id, "edits": target_id,
-                                                       "text": new_text}}))
+            return percept_of(
+                actor=who, place=place, occurred_at=now,
+                description=f"{sender_label} edited: {new_text}".strip(),
+                features={"addressed": 1 if addr else 0, "named": 0, "addressed_other": 0},
+                data={"message_id": msg_id, "edits": target_id, "text": new_text,
+                      "self_account": self_account},
+                ref=msg_id, about=target_id, imported=imported, backfill=backfill)
 
     # 2. Reactions
     reaction = getattr(message, "reactionMessage", None)
@@ -263,28 +305,31 @@ def format_message(raw: Any, *, directory: WhatsAppDirectory, now: datetime,
         else:
             desc = f"{sender_label} reacted {emoji}"
         addr = bool(target_id and target_id in own_sent) and not from_me
-        return clean_event(Event(id=None, ts=now, kind="percept", who=who, place=place,
-                                 body=name,
-                                 payload={**base_payload, "addressed": addr, "description": desc,
-                                          "data": {"message_id": msg_id,
-                                                   "reaction": {"emoji": emoji, "message_id": target_id},
-                                                   **({"answer": emoji} if emoji else {}),
-                                                   **({"reply_to": {"message_id": target_id}}
-                                                      if target_id else {})}}))
+        return percept_of(
+            actor=who, place=place, occurred_at=now, description=desc,
+            features={"addressed": 1 if addr else 0, "named": 0,
+                      "addressed_other": 0 if addr else 1},
+            data={"message_id": msg_id,
+                  "reaction": {"emoji": emoji, "message_id": target_id},
+                  "self_account": self_account},
+            ref=msg_id, about=target_id, imported=imported, backfill=backfill)
 
     # 3. Poll vote update
     poll_upd = getattr(message, "pollUpdateMessage", None)
     if poll_upd is not None and _has_fields(poll_upd):
         poll_id = str(getattr(getattr(poll_upd, "pollCreationMessageKey", None), "ID", "") or "")
         addr = bool(poll_id and poll_id in own_sent) and not from_me
-        return clean_event(Event(id=None, ts=now, kind="percept", who=who, place=place,
-                                 body=name,
-                                 payload={**base_payload, "addressed": addr,
-                                          "description": f"{sender_label} voted on poll",
-                                          "data": {"message_id": msg_id,
-                                                   "poll_vote": {"poll_id": poll_id},
-                                                   **({"reply_to": {"message_id": poll_id}}
-                                                      if poll_id else {})}}))
+        option = poll_vote_option(poll_upd)
+        return percept_of(
+            actor=who, place=place, occurred_at=now,
+            description=(f"{sender_label} chose {option}" if option
+                         else f"{sender_label} voted on poll"),
+            features={"addressed": 1, "named": 0, "addressed_other": 0},
+            data={"message_id": msg_id, "poll_vote": {"poll_id": poll_id},
+                  "self_account": self_account},
+            ref=msg_id, about=poll_id,
+            answer=Answer(prompt=poll_id, value=option) if (poll_id and option) else None,
+            imported=imported, backfill=backfill)
 
     # 4. Content message (text, attachments, sticker, location, contact, poll)
     text = message_text(message)
@@ -324,27 +369,22 @@ def format_message(raw: Any, *, directory: WhatsAppDirectory, now: datetime,
     else:
         desc = f"{sender_label}: {text}".strip()
 
-    # Check if text answers a previous numbered `choices` prompt
-    choice_matched = _match_choice(text, reply_id, choices_prompts or {})
-    if choice_matched is not None:
-        choice_val, q_id = choice_matched
-        clean = text.strip()
-        data["choice"] = choice_val
-        data["answer"] = clean if clean.isdigit() else choice_val
-        data.setdefault("reply_to", {"message_id": q_id})
-        if "message_id" not in data["reply_to"]:
-            data["reply_to"]["message_id"] = q_id
-
-    addressed = choice_matched is not None or _is_self_addressed(
+    del choices_prompts  # free words are reasoning's; a poll or a button is the answer
+    addressed = _is_self_addressed(
         message, chat_jid, from_me=from_me, directory=directory, own_digits=own_digits,
         own_sent=own_sent, reply_msg_id=reply_id)
-    return clean_event(Event(id=None, ts=now, kind="percept", who=who, place=place, body=name,
-                             payload={**base_payload, "addressed": addressed, "description": desc,
-                                      "data": data}))
+    if self_account:
+        data["self_account"] = self_account
+    return percept_of(
+        actor=who, place=place, occurred_at=parse_timestamp(raw_ts) or now, description=desc,
+        features={"addressed": 1 if addressed else 0, "named": 0,
+                  "addressed_other": 0 if addressed else 1},
+        data=data, ref=msg_id, about=reply_id, involves=mentions,
+        attachments=attachments, imported=imported, backfill=backfill)
 
 
-def format_album(events: Sequence[Event], *, album_id: str,
-                 directory: WhatsAppDirectory) -> Event | None:
+def format_album(events: Sequence[Percept], *, album_id: str,
+                 directory: WhatsAppDirectory) -> Percept | None:
     """Collapse a batch of album child percepts into ONE percept carrying all attachments."""
     if not events:
         return None
@@ -354,27 +394,33 @@ def format_album(events: Sequence[Event], *, album_id: str,
     all_atts: list[dict[str, Any]] = []
     captions: list[str] = []
     msg_ids: list[str] = []
-    addressed = any(bool(ev.payload.get("addressed")) for ev in events)
-    sender_label = directory.label(first.who or "")
+    addressed = any(float(ev.features.get("addressed") or 0) for ev in events)
+    sender_label = directory.label(first.actor or "")
     for ev in events:
-        d = ev.payload.get("data") or {}
+        d = ev.data or {}
         if d.get("message_id"):
             msg_ids.append(str(d["message_id"]))
         for att in d.get("attachments") or ():
             all_atts.append(dict(att))
-        raw_desc = str(ev.payload.get("description") or "")
-        # Keep non-boilerplate caption prefix if any
+        raw_desc = str(ev.description or "")
+        # Keep a real caption, not the boilerplate the album items share
         if raw_desc and not raw_desc.startswith(f"{sender_label} sent "):
             captions.append(raw_desc)
     summary = describe_attachments(all_atts, sent_by=sender_label)
     desc = f"{captions[0]} {summary}".strip() if captions else summary
-    data = dict(first.payload.get("data") or {})
+    data = dict(first.data or {})
     data["message_id"] = album_id
     data["message_ids"] = msg_ids
     data["attachments"] = all_atts
-    payload = {**first.payload, "addressed": addressed, "description": desc, "data": data}
-    return clean_event(Event(id=None, ts=first.ts, kind="percept", who=first.who,
-                             place=first.place, body=first.body, payload=payload))
+    joined = tuple(dict.fromkeys(
+        actor for ev in events for actor in (ev.involves or ())))
+    return percept_of(
+        actor=first.actor, place=first.place, occurred_at=first.occurred_at,
+        description=desc,
+        features={"addressed": 1 if addressed else 0, "named": 0,
+                  "addressed_other": 0 if addressed else 1},
+        data=data, ref=album_id, involves=joined, attachments=all_atts,
+        imported=first.imported, backfill=first.backfill)
 
 
 def format_call(status: str, meta: Any, *, reason: str = "", is_video: bool = False,
@@ -397,37 +443,24 @@ def format_call(status: str, meta: Any, *, reason: str = "", is_video: bool = Fa
         desc = f"{label} called, not answered ({kind_word})"
     else:
         desc = f"Call with {label} ended" + (f" ({reason})" if reason else "")
-    return clean_event(Event(
-        id=None, ts=now, kind="percept", who=who, place=place, body=name,
-        payload={
-            "description": desc,
-            "addressed": status in ("incoming", "missed"),
-            "place_kind": "direct",
-            "sent_at": iso_timestamp(getattr(meta, "timestamp", 0), fallback=now),
-            **({"self_account": self_account} if self_account else {}),
-            "data": {"call": {"status": status, "call_id": call_id, "video": is_video,
-                              **({"reason": reason} if reason else {})}},
-        },
-    ))
+    del name
+    spoken = status in ("incoming", "missed")
+    return percept_of(
+        actor=who, place=place,
+        occurred_at=parse_timestamp(getattr(meta, "timestamp", 0)) or now,
+        description=desc,
+        features={"addressed": 1 if spoken else 0, "named": 0,
+                  "addressed_other": 0 if spoken else 1},
+        data={"call": {"status": status, "call_id": call_id, "video": is_video,
+                       **({"reason": reason} if reason else {})},
+              "self_account": self_account})
 
 
-def _match_choice(text: str, reply_id: str,
-                  prompts: dict[str, Sequence[str]]) -> tuple[str, str] | None:
-    clean = str(text or "").strip()
-    if not clean or not prompts:
-        return None
-    target_id = reply_id if reply_id in prompts else (next(reversed(prompts)) if clean.isdigit() else "")
-    if not target_id or target_id not in prompts:
-        return None
-    options = list(prompts[target_id])
-    if clean.isdigit():
-        idx = int(clean) - 1
-        if 0 <= idx < len(options):
-            return options[idx], target_id
-    for opt in options:
-        if clean.casefold() == str(opt).strip().casefold():
-            return str(opt), target_id
-    return None
+def poll_vote_option(vote: Any) -> str:
+    """Return the option one decrypted poll vote names, or an empty string (§5.4)."""
+    selected = getattr(vote, "selectedOptions", None) or ()
+    names = [str(getattr(option, "name", "") or "") for option in selected]
+    return next((name for name in names if name), "")
 
 
 def _has_fields(proto: Any) -> bool:
@@ -453,21 +486,13 @@ def format_undecryptable(ev: Any, *, directory: WhatsAppDirectory, now: datetime
         who = self_account or f"whatsapp:{digits_of(chat_jid)}"
     sender_label = directory.label(who, pushname=pushname)
     place = place_id(chat_jid)
-    place_kind = "shared" if chat_jid.endswith(("@g.us", "@newsletter")) else "direct"
-    sent_at = iso_timestamp(raw_ts, fallback=now)
-    return clean_event(Event(
-        id=None, ts=now, kind="percept", who=who, place=place, body=name,
-        payload={
-            "description": f"{sender_label}: a message could not be read",
-            "addressed": place_kind == "direct",
-            "place_kind": place_kind,
-            "sent_at": sent_at,
-            **({"self_account": self_account} if self_account else {}),
-            **({"backfill": True} if backfill else {}),
-            "data": {
-                "message_id": msg_id,
-                "undecryptable": True,
-                "unavailable": bool(getattr(ev, "IsUnavailable", False)),
-            },
-        },
-    ))
+    direct = not chat_jid.endswith(("@g.us", "@newsletter"))
+    del name
+    return percept_of(
+        actor=who, place=place, occurred_at=parse_timestamp(raw_ts) or now,
+        description=f"{sender_label}: a message could not be read",
+        features={"addressed": 1 if direct else 0, "named": 0, "addressed_other": 0},
+        data={"message_id": msg_id, "undecryptable": True,
+              "unavailable": bool(getattr(ev, "IsUnavailable", False)),
+              "self_account": self_account},
+        ref=msg_id, backfill=backfill)

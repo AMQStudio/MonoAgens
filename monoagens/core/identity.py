@@ -75,10 +75,12 @@ class SelfTool:
 
     name = "self"
 
-    def __init__(self, conn, clock, *, visible, memory_visible) -> None:
-        """Store the connection, the injected clock and the two audience predicates."""
+    def __init__(self, conn, clock, *, visible, memory_visible,
+                 settings: Any = None) -> None:
+        """Store the connection, the injected clock, the audience predicates and the settings."""
         self.conn, self.clock = conn, clock
         self.visible, self.memory_visible = visible, memory_visible
+        self.settings = settings
 
     def capabilities(self) -> tuple[dict[str, Any], ...]:
         """Return the capability descriptors this tool declares."""
@@ -88,7 +90,8 @@ class SelfTool:
         """Apply an approved identity change or answer a recall."""
         if action.capability == "recall":
             return await search(self.conn, action, visible=self.visible,
-                                memory_visible=self.memory_visible)
+                                memory_visible=self.memory_visible,
+                                settings=self.settings)
         if action.capability != "set_identity":
             raise ValueError(f"Unsupported action kind: {action.capability!r}")
         if action.caused_by is None:
