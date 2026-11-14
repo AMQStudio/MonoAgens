@@ -8,35 +8,32 @@ findings:
   - {file: monoagens/middleware/contract.py, line: 37, ban: text-parse}
   - {file: monoagens/middleware/identity.py, line: 8, ban: text-parse}
   - {file: monoagens/middleware/interaction.py, line: 7, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 65, ban: text-parse}
+  - {file: monoagens/middleware/interaction.py, line: 60, ban: text-parse}
+  - {file: monoagens/middleware/interaction.py, line: 306, ban: text-parse}
+  - {file: monoagens/middleware/interaction.py, line: 308, ban: text-parse}
   - {file: monoagens/middleware/interaction.py, line: 311, ban: text-parse}
   - {file: monoagens/middleware/interaction.py, line: 313, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 316, ban: text-parse}
+  - {file: monoagens/middleware/interaction.py, line: 317, ban: removed-field}
+  - {file: monoagens/middleware/interaction.py, line: 317, ban: text-parse}
   - {file: monoagens/middleware/interaction.py, line: 318, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 322, ban: removed-field}
+  - {file: monoagens/middleware/interaction.py, line: 319, ban: text-parse}
+  - {file: monoagens/middleware/interaction.py, line: 320, ban: text-parse}
   - {file: monoagens/middleware/interaction.py, line: 322, ban: text-parse}
   - {file: monoagens/middleware/interaction.py, line: 323, ban: text-parse}
   - {file: monoagens/middleware/interaction.py, line: 324, ban: text-parse}
   - {file: monoagens/middleware/interaction.py, line: 325, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 327, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 328, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 329, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 330, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 346, ban: removed-field}
-  - {file: monoagens/middleware/interaction.py, line: 377, ban: removed-field}
+  - {file: monoagens/middleware/interaction.py, line: 341, ban: removed-field}
+  - {file: monoagens/middleware/interaction.py, line: 372, ban: removed-field}
+  - {file: monoagens/middleware/interaction.py, line: 448, ban: text-parse}
+  - {file: monoagens/middleware/interaction.py, line: 453, ban: removed-field}
   - {file: monoagens/middleware/interaction.py, line: 453, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 458, ban: removed-field}
+  - {file: monoagens/middleware/interaction.py, line: 454, ban: text-parse}
+  - {file: monoagens/middleware/interaction.py, line: 455, ban: text-parse}
+  - {file: monoagens/middleware/interaction.py, line: 456, ban: text-parse}
+  - {file: monoagens/middleware/interaction.py, line: 457, ban: text-parse}
   - {file: monoagens/middleware/interaction.py, line: 458, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 459, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 460, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 461, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 462, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 463, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 502, ban: removed-field}
-  - {file: monoagens/middleware/interaction.py, line: 525, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 859, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 871, ban: text-parse}
-  - {file: monoagens/middleware/interaction.py, line: 877, ban: text-parse}
+  - {file: monoagens/middleware/interaction.py, line: 497, ban: removed-field}
+  - {file: monoagens/middleware/interaction.py, line: 743, ban: text-parse}
   - {file: monoagens/middleware/loader.py, line: 16, ban: text-parse}
   - {file: monoagens/middleware/loader.py, line: 37, ban: text-parse}
   - {file: monoagens/middleware/loader.py, line: 38, ban: text-parse}
@@ -50,8 +47,7 @@ findings:
   - {file: monoagens/middleware/loader.py, line: 758, ban: text-parse}
   - {file: monoagens/middleware/loader.py, line: 916, ban: text-parse}
   - {file: monoagens/middleware/policy.py, line: 39, ban: text-parse}
-  - {file: monoagens/middleware/policy.py, line: 111, ban: text-parse}
-  - {file: monoagens/middleware/policy.py, line: 483, ban: text-parse}
+  - {file: monoagens/middleware/policy.py, line: 480, ban: text-parse}
   - {file: monoagens/middleware/registry.py, line: 259, ban: text-parse}
   - {file: monoagens/middleware/roles.py, line: 23, ban: text-parse}
   - {file: monoagens/middleware/roles.py, line: 25, ban: text-parse}

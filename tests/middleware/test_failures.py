@@ -65,18 +65,18 @@ def _pfc(fake: _FakeLLM) -> Reasoning:
 
 
 class _FaultyBody:
-    """Adapter supporting all D82 shows that can fail on `show` or `act` or `run`."""
+    """A body whose `render`, `act` or `run` can fail in turn (D82)."""
 
     name = "telegram"
-    shows = ("typing", "read_receipts", "edit")
-    reads = ("text",)
-    gaps: dict[str, str] = {}
+    PERMISSIONS = {"say": "guest", "react": "guest", "edit": "guest", "pin": "guest",
+                   "unpin": "guest"}
 
     def __init__(self, *, fail_show: set[str] | None = None, fail_act: bool = False) -> None:
         self.fail_show = set(fail_show or ())
         self.fail_act = fail_act
         self.actions: list[Action] = []
         self.shown: list[tuple[str, str, dict[str, Any]]] = []
+        self.rendered: list[Any] = []
 
     def capabilities(self) -> tuple[dict[str, Any], ...]:
         return telegram_adapter.CAPABILITIES
@@ -87,11 +87,13 @@ class _FaultyBody:
             raise RuntimeError("adapter send failed")
         return None
 
-    async def show(self, place: str, kind: str, **data: Any) -> Any:
-        self.shown.append((place, kind, dict(data)))
-        if kind in self.fail_show:
-            raise RuntimeError(f"{kind} transport down")
-        return {"message_id": "shown-1"}
+    async def render(self, event: Any) -> None:
+        """Render one lifecycle event; the named ones fail on purpose (D82)."""
+        self.rendered.append(event)
+        name = "composing" if event.name == "composing" else event.name
+        self.shown.append((event.place, name, dict(event.data)))
+        if name in self.fail_show or ("typing" in self.fail_show and name == "composing"):
+            raise RuntimeError(f"{name} transport down")
 
 
 class _RaisingTool:
@@ -157,16 +159,14 @@ async def _feed(kernel: Any, event: Event) -> Any:
     return await put
 
 
-@pytest.mark.parametrize("failing_show", ["typing", "read_receipts", "edit"])
-async def test_show_failure_records_error_and_turn_continues(aconn, failing_show: str) -> None:
-    """Every show rule (`typing`, `read_receipts`, `progress`) failing never stops the turn."""
+@pytest.mark.parametrize("failing_show", ["composing", "seen"])
+async def test_render_failure_records_error_and_turn_continues(aconn, failing_show: str) -> None:
+    """A body's `render` failing is recorded and never stops the turn (§2.4.5, D82)."""
     fake = _FakeLLM([
         [("act", {"capability": "search.query", "arguments": {"q": "status"}})],
         [("act", {"capability": "telegram.say", "arguments": {"text": "halo juga"}})],
     ])
-    cfg = settings(bodies={"telegram": {"enabled": True, "show": {
-        "typing": "on", "read_receipts": "on", "steps": "all", "progress": "edit",
-    }}})
+    cfg = settings(bodies={"telegram": {"enabled": True}})
     kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=cfg)
     body = _FaultyBody(fail_show={failing_show})
     kernel.register_adapter(body)
@@ -190,11 +190,10 @@ async def test_show_failure_records_error_and_turn_continues(aconn, failing_show
 
 async def test_thinking_show_failure_records_error_and_continues(aconn) -> None:
     """Failing `thinking` show records an error naming rule, adapter, and `thinking`."""
-    cfg = settings(bodies={"telegram": {"enabled": True, "show": {
-        "thinking": "all", "steps": "off",
-    }}})
+    cfg = settings(bodies={"telegram": {"enabled": True}},
+                   interaction={"thinking": "all", "steps": "off"})
     kernel = build(aconn, clock=FakeClock(START), settings=cfg)
-    body = _FaultyBody(fail_show={"edit"})
+    body = _FaultyBody(fail_show={"thought"})
     kernel.register_adapter(body)
     trigger = await append_event(
         aconn, ts=START, kind="percept", who="person:owner", place="space:tg:10",
@@ -223,11 +222,9 @@ async def test_fault_injection_across_best_effort_progress_and_adapter_and_tool(
         [("act", {"capability": "search.query", "arguments": {"q": "cuaca"}})],
         [("act", {"capability": "telegram.say", "arguments": {"text": "pencarian gagal"}})],
     ])
-    cfg = settings(bodies={"telegram": {"enabled": True, "show": {
-        "steps": "all", "progress": "edit",
-    }}})
+    cfg = settings(bodies={"telegram": {"enabled": True}}, interaction={"steps": "all"})
     kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(fake), settings=cfg)
-    body = _FaultyBody(fail_show={"edit"})
+    body = _FaultyBody(fail_show={"progress"})
     kernel.register_adapter(body)
     kernel.tools.add_tool(_RaisingTool(), {
         "query": {"facts": ("network",), "permission": "search.query"},

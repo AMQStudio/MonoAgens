@@ -97,6 +97,13 @@ class TelegramBody:
         """Stop polling and release the HTTP client."""
         await self.aclose()
 
+    async def render(self, event: Any) -> None:
+        """Render one lifecycle event natively (§2.4.5): a chat action, an edit or a read mark."""
+        kind = "typing" if event.name == "composing" else event.name
+        if kind == "seen":
+            return  # Telegram has no read mark a bot may set
+        await self.show(str(event.place), kind, text=str(event.data.get("text") or ""))
+
     def prompt_section(self) -> str:
         """Return what reasoning should know about Telegram (≤1200 characters)."""
         return ("Telegram: one message per say, with optional files, reply, mentions, choices, "

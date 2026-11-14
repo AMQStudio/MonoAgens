@@ -73,6 +73,11 @@ class CLIBody:
             writer.close()
         self._writers.clear()
 
+    async def render(self, event: Any) -> None:
+        """Render one lifecycle event as a terminal line (§2.4.5)."""
+        kind = "typing" if event.name == "composing" else event.name
+        await self.show(str(event.place), kind, text=str(event.data.get("text") or ""))
+
     def prompt_section(self) -> str:
         """Return what reasoning should know about the local terminal (≤1200 characters)."""
         return ("The terminal: type a line to speak here; a line starting with @path sends that "

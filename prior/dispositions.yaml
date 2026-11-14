@@ -53,6 +53,7 @@ constants:        # engineering values; change only with replay evidence
   max_active: 200
   # robustness
   hook_timeout_ms: 500
+  presentation_timeout_ms: 500  # one body's render(); a slow redraw never holds the turn
   job_timeout_seconds: 120
   snapshot_every_events: 10000
   # work

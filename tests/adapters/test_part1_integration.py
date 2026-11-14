@@ -173,10 +173,10 @@ def test_the_boot_report_lists_every_body_and_the_surfaces_it_offers(tmp_path):
         loader._check_adapter(name, adapter, report)
 
     joined = "\n".join(report.lines)
-    assert "adapter cli: surfaces none" in joined
-    assert "adapter telegram: surfaces none" in joined
-    assert "adapter whatsapp: surfaces none" in joined
-    assert "adapter discord: surfaces history" in joined
+    assert "adapter cli: surfaces render" in joined
+    assert "adapter telegram: surfaces render" in joined
+    assert "adapter whatsapp: surfaces render" in joined
+    assert "adapter discord: surfaces history, render" in joined
     for name in ("cli", "telegram", "whatsapp", "discord"):
         assert f"adapter {name}: files " in joined
 

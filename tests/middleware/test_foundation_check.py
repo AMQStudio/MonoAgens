@@ -57,7 +57,7 @@ class Workspace:
 
 
 class Voice:
-    """A talking adapter that records actions and shown lines."""
+    """A talking adapter that records actions and the lifecycle events it was told to render."""
 
     PERMISSIONS = {"say": "guest"}
 
@@ -65,6 +65,7 @@ class Voice:
         self.name, self.shows = name, shows
         self.actions: list[Action] = []
         self.shown: list[tuple[str, str, dict[str, Any]]] = []
+        self.rendered: list[Any] = []
         self.FILES = {"per_message": 10}
 
     def capabilities(self):
@@ -79,6 +80,10 @@ class Voice:
 
     async def act(self, action: Action) -> None:
         self.actions.append(action)
+
+    async def render(self, event: Any) -> None:
+        """Render one lifecycle event, recording it as a body does."""
+        self.rendered.append(event)
 
     async def show(self, place: str, kind: str, **data: Any) -> None:
         self.shown.append((place, kind, dict(data)))
@@ -292,9 +297,10 @@ async def test_7_thinking_never_shows_in_a_group_and_does_in_the_owner_chat(acon
                                             "arguments": {"text": "hai"}})
     await rule(group_out, {"conn": aconn, "now": START})
 
-    shown = [(place, data.get("text")) for place, kind, data in voice.shown]
-    assert (OWNER_DM, "(berpikir) hati-hati") in shown
-    assert not any(place == GROUP for place, _ in shown)
+    rendered = [(item.place, str(item.data.get("text"))) for item in voice.rendered
+                if item.name == "thought"]
+    assert (OWNER_DM, "(berpikir) hati-hati") in rendered
+    assert not any(place == GROUP for place, _ in rendered)
     assert note.id is not None
 
 

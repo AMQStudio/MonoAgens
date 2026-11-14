@@ -646,6 +646,11 @@ class WhatsAppBody:
         """Disconnect the WhatsApp client and release its session."""
         await self.aclose()
 
+    async def render(self, event: Any) -> None:
+        """Render one lifecycle event natively (§2.4.5): presence, an edit or a read mark."""
+        kind = "typing" if event.name == "composing" else event.name
+        await self.show(str(event.place), kind, text=str(event.data.get("text") or ""))
+
     def prompt_section(self) -> str:
         """Return what reasoning should know about WhatsApp (≤1200 characters)."""
         return ("WhatsApp: one message per say, with optional files, reply or mentions; react "

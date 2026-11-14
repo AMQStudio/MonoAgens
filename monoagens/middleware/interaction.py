@@ -13,8 +13,15 @@ from typing import Any
 
 import yaml
 
+import asyncio
+
+from monoagens.contract import composing as composing_event
+from monoagens.contract import progress as progress_event
+from monoagens.contract import seen as seen_event
+from monoagens.contract import thought as thought_event
 from monoagens.core.hooks import Continue, Middleware, Replace
-from monoagens.infra.store import append_event, read_state
+from monoagens.infra.store import append_event, read_state, write_state
+from monoagens.infra.prior import constants
 from monoagens.middleware import contract, identity, loader, privacy, registry
 from monoagens.types import Event
 
@@ -24,26 +31,14 @@ DEFAULTS: dict[str, str] = {
     "thinking": "owner_direct",
     "steps": "long",
     "approvals": "owner",
-    "typing": "on",
-    "read_receipts": "on",
-    "progress": "edit",
-    "stickers": "on",
 }
+# What the `/show` command may set: the middleware's own decisions only (no body's options).
 ALLOWED_SHOW: dict[str, tuple[str, ...]] = {
     "thinking": ("off", "owner_direct", "all"),
     "steps": ("off", "long", "all"),
     "approvals": ("owner", "off"),
-    "typing": ("on", "off"),
-    "read_receipts": ("on", "off"),
-    "progress": ("edit", "new"),
-    "stickers": ("on", "off"),
 }
-CAPABILITY_REQUIRED: dict[tuple[str, str], str] = {
-    ("typing", "on"): "typing",
-    ("read_receipts", "on"): "read_receipts",
-    ("progress", "edit"): "edit",
-    ("stickers", "on"): "stickers",
-}
+
 OWNER = "person:owner"
 REQUEST = "approval.requested"
 ANSWERED = "approval.answered"
@@ -510,68 +505,61 @@ def answer(kernel: Any) -> Middleware:
 # ------------------------------------------------------ what the soul shows
 
 
-def switches(kernel: Any, *, body: str | None = None) -> dict[str, str]:
-    """Return effective interaction switches: defaults -> `interaction:` -> `bodies.<body>.show:`."""
-    merged = {**DEFAULTS, **{str(k): str(v) for k, v in (kernel.settings.get("interaction") or {}).items()}}
-    if body:
-        body_cfg = (kernel.settings.get("bodies") or {}).get(body) or {}
-        per_body = body_cfg.get("show") or {}
-        for k, v in per_body.items():
-            merged[str(k)] = _normalize_bool_str(str(v))
-    return {k: _normalize_bool_str(str(v)) for k, v in merged.items()}
+def switches(kernel: Any) -> dict[str, str]:
+    """Return the effective `interaction:` switches: the defaults, then config.yaml.
+
+    These are the middleware's own decisions (whether a thought or a step is worth drawing). What
+    a body draws with them is the body's own `render:` option, read by the body itself.
+    """
+    merged = {**DEFAULTS,
+              **{str(k): str(v) for k, v in (kernel.settings.get("interaction") or {}).items()}}
+    return {key: str(value) for key, value in merged.items()}
 
 
-def _normalize_bool_str(val: str) -> str:
-    low = val.strip().lower()
-    if low == "true":
-        return "on"
-    if low == "false":
-        return "off"
-    return low
-
-
-def shows(adapter: Any) -> tuple[str, ...]:
-    """Return what one adapter declared it can show, in the contract's vocabulary."""
-    return tuple(getattr(adapter, "shows", ()) or ())
+def presentation_timeout(kernel: Any) -> float:
+    """Return how long one body's `render` may take, in seconds."""
+    values = constants(getattr(kernel, "settings", None) or {})
+    return float(values.get("presentation_timeout_ms", 500)) / 1000
 
 
 async def present(kernel: Any, event: Event, kind: str, text: str) -> bool:
-    """Show one line where the adapter can, with the fallback the contract names."""
-    adapter = kernel.tools.adapters.get(str(event.body))
-    if adapter is None:
+    """Tell the body's own `render` what the soul is doing; never break the turn (§2.4.5).
+
+    A body that offers no `render` renders nothing, and one that raises is recorded as an `error`
+    and skipped: a redraw is best-effort, always.
+    """
+    adapter = kernel.tools.adapters.get(str(event.body or ""))
+    render = getattr(adapter, "render", None)
+    if not callable(render):
         return False
-    if kind in shows(adapter):
-        await adapter.show(str(event.place), kind, text=text)
-        return True
-    if kind == "typing":
+    lifecycle = _lifecycle(kind, event, text)
+    if lifecycle is None:
         return False
-    await kernel.tools.act(registry.own_action(event, f"{event.body}.say", {"text": text}))
+    # A slow or failing render is the calling best-effort rule's error to record (§2.4.5, D82):
+    # it never breaks the turn, but it is never silent either.
+    await asyncio.wait_for(render(lifecycle), presentation_timeout(kernel))
     return True
 
 
+def _lifecycle(kind: str, event: Event, text: str) -> Any:
+    """Return the contract lifecycle event one kind of presentation means, or None."""
+    place = str(event.place or "")
+    if kind == "composing":
+        return composing_event(place)
+    if kind == "progress":
+        return progress_event(place, {"text": text})
+    if kind == "thought":
+        return thought_event(place, text)
+    if kind == "seen":
+        return seen_event(int(event.id or 0), place)
+    return None
+
+
 async def _present_step(kernel: Any, event: Event, line: str, *, chain: int, place: str) -> None:
-    """Show a progress step either by editing one message in place or sending a new message."""
-    adapter = kernel.tools.adapters.get(str(event.body))
-    if adapter is None:
-        return
-    body = str(event.body)
-    mode = switches(kernel, body=body).get("progress", "edit")
-    if mode == "edit" and "edit" in shows(adapter):
-        row = await (await kernel.conn.execute(
-            "SELECT payload->>'message_id' FROM events WHERE kind = %s AND place = %s "
-            "AND body = %s AND payload->>'kind' = 'progress' AND payload->>'chain' = %s "
-            "AND COALESCE(payload->>'message_id', '') <> '' ORDER BY id DESC LIMIT 1",
-            (SHOWN, place, body, str(chain)))).fetchone()
-        kwargs: dict[str, Any] = {"text": line}
-        if row and row[0]:
-            kwargs["message_id"] = str(row[0])
-        res = await adapter.show(place, "edit", **kwargs)
-        if isinstance(res, Mapping) and res.get("message_id"):
-            await kernel._emit(event, SHOWN, {
-                "kind": "progress", "chain": str(chain),
-                "message_id": str(res["message_id"])}, place=place)
-        return
-    await kernel.tools.act(registry.own_action(event, f"{body}.say", {"text": line}))
+    """Tell the body one step of long work, and remember it so it is never said twice."""
+    del chain
+    if await present(kernel, replace(event, place=place), "progress", line):
+        await kernel._emit(event, SHOWN, {"kind": "progress", "note": event.id}, place=place)
 
 
 async def _last_shown(conn: Any, place: str) -> int:
@@ -603,7 +591,7 @@ def thinking_show(kernel: Any) -> Middleware:
             return Continue()
         cat = catalog(getattr(kernel, "settings", None))
         think_prefix = str((cat.get("thinking") or {}).get("prefix") or "")
-        think_mode = switches(kernel, body=str(item.body or "")).get("thinking", "owner_direct")
+        think_mode = switches(kernel).get("thinking", "owner_direct")
         if think_mode == "off":
             return Continue()
         chain = int(item.caused_by or item.id or 0)
@@ -618,7 +606,7 @@ def thinking_show(kernel: Any) -> Middleware:
                                                             source=note_place, before=note):
                     continue
                 line = f"{think_prefix} {thought}".strip()
-                if await present(kernel, replace(item, place=place), "edit", line):
+                if await present(kernel, replace(item, place=place), "thought", line):
                     await kernel._emit(item, SHOWN, {"place": place, "kind": "thinking",
                                                      "note": note}, place=place)
         return Continue()
@@ -660,7 +648,7 @@ def progress_show(kernel: Any) -> Middleware:
         place = str(item.place or "")
         if not place or item.kind != "act.result":
             return Continue()
-        steps_mode = switches(kernel, body=str(item.body or "")).get("steps", "long")
+        steps_mode = switches(kernel).get("steps", "long")
         if steps_mode == "off":
             return Continue()
         capability = str((item.payload or {}).get("capability") or "")
@@ -702,136 +690,43 @@ def _short(text: str) -> str:
     return text if len(text) <= STEP_CHARS else text[:STEP_CHARS] + "…"
 
 
-def typing(kernel: Any) -> Middleware:
-    """Action rule: show typing ONLY when the soul is going to speak (`communicative`)."""
+def composing(kernel: Any) -> Middleware:
+    """Action rule: tell the body the soul is about to speak in this place (§2.4.5)."""
 
     async def rule(item: Any, ctx: Any) -> Any:
-        """Show typing for a communicative act when enabled and supported; silent/tools skip."""
+        """Compose only for a communicative act, once the hook let it through."""
         del item
         if ctx.get("refusal") or ctx.get("handled"):
             return Continue()
-        descriptor = ctx.get("descriptor") or {}
-        if not descriptor.get("communicative"):
+        if not (ctx.get("descriptor") or {}).get("communicative"):
             return Continue()
-        body = str(ctx["event"].body or "")
-        if switches(kernel, body=body).get("typing", "on") == "off":
-            return Continue()
-        adapter = kernel.tools.adapters.get(body)
-        if adapter is None or "typing" not in shows(adapter):
-            return Continue()
-        await adapter.show(str(ctx["event"].place), "typing")
+        await present(kernel, ctx["event"], "composing", "")
         return Continue()
 
-    return contract.mark_rule(rule, name="typing", kind="best-effort")
+    return contract.mark_rule(rule, name="composing", kind="best-effort")
 
 
-async def _is_shared_with_owner(conn: Any, body: str) -> bool:
-    """True when `body`'s self-account is bound to `person:owner` (D70 shared account)."""
-    acc = (await read_state(conn, f"self_account:{body}") or {}).get("account")
-    if not acc:
-        return False
-    alias = await read_state(conn, f"alias:{acc}")
-    return bool(alias and (alias.get("who") or alias.get("person")) == OWNER)
-
-
-async def _is_read_marked(conn: Any, place: str, msg_id: str) -> bool:
-    """True when `interaction.shown` (`kind='read'`) already recorded `msg_id` in `place`."""
-    row = await (await conn.execute(
-        "SELECT 1 FROM events WHERE kind = %s AND place = %s "
-        "AND payload->>'kind' = 'read' AND payload->>'message_id' = %s LIMIT 1",
-        (SHOWN, place, msg_id))).fetchone()
-    return row is not None
-
-
-async def _unread_messages(conn: Any, place: str, body: str) -> list[str]:
-    """Return un-marked non-owner percept message ids in `place`, oldest first."""
-    cur = await conn.execute(
-        "SELECT e.payload->'data'->>'message_id' FROM events e "
-        "WHERE e.kind = 'percept' AND e.place = %s AND e.body = %s "
-        "AND COALESCE((e.payload->>'imported')::boolean, false) = false "
-        "AND COALESCE((e.payload->>'backfill')::boolean, false) = false "
-        "AND COALESCE(e.origin_actor, e.who, '') <> %s "
-        "AND COALESCE(e.payload->'data'->>'message_id', '') <> '' "
-        "AND NOT EXISTS ("
-        "  SELECT 1 FROM events s WHERE s.kind = %s AND s.place = e.place "
-        "  AND s.payload->>'kind' = 'read' "
-        "  AND s.payload->>'message_id' = e.payload->'data'->>'message_id') "
-        "ORDER BY e.id ASC",
-        (place, body, OWNER, SHOWN))
-    seen: set[str] = set()
-    mids: list[str] = []
-    for row in await cur.fetchall():
-        mid = str(row[0] or "")
-        if mid and mid not in seen:
-            seen.add(mid)
-            mids.append(mid)
-    return mids
-
-
-def read_receipts_inbound(kernel: Any) -> Middleware:
-    """Inbound rule: mark a live percept read on non-shared adapters and record the mark."""
+def seen(kernel: Any) -> Middleware:
+    """Inbound rule: tell the body the soul has taken in a live percept, once per event."""
 
     async def rule(item: Any, ctx: Any) -> Any:
-        """Mark the percept read unless imported/backfilled, disabled, or shared with owner."""
+        """Render `seen` for a live percept, and never for an imported or backfilled one."""
         del ctx
-        if getattr(item, "kind", "") != "percept":
+        if getattr(item, "kind", "") != "percept" or getattr(item, "id", None) is None:
             return Continue()
-        payload = item.payload or {}
-        if payload.get("imported") is True or payload.get("backfill") is True:
+        if getattr(item, "imported", False) or getattr(item, "backfill", False):
             return Continue()
-        place = str(item.place or "")
-        body = str(item.body or "")
-        if not place or not body:
+        key = f"seen:{int(item.id)}"
+        if await read_state(kernel.conn, key) is not None:
             return Continue()
-        if switches(kernel, body=body).get("read_receipts", "on") == "off":
+        if not await present(kernel, item, "seen", ""):
             return Continue()
-        adapter = kernel.tools.adapters.get(body)
-        if adapter is None or "read_receipts" not in shows(adapter):
-            return Continue()
-        msg_id = (payload.get("data") or {}).get("message_id")
-        if not msg_id or await _is_shared_with_owner(kernel.conn, body):
-            return Continue()
-        if await _is_read_marked(kernel.conn, place, str(msg_id)):
-            return Continue()
-        await adapter.show(place, "read_receipts", message_id=msg_id, message_ids=[msg_id])
-        await kernel._emit(item, SHOWN, {"kind": "read", "message_id": str(msg_id)}, place=place)
+        event = await kernel._emit(item, SHOWN, {"kind": "seen", "event": int(item.id)},
+                                   place=item.place)
+        await write_state(kernel.conn, key, {"event": int(item.id)}, event.id)
         return Continue()
 
-    return contract.mark_rule(rule, name="read_receipts_inbound", kind="best-effort")
-
-
-def read_receipts_action(kernel: Any) -> Middleware:
-    """Action rule: on an owner-shared account, mark earlier unread messages read on speak."""
-
-    async def rule(item: Any, ctx: Any) -> Any:
-        """Mark unread non-owner messages in `place` read when an allowed communicative act fires."""
-        del item
-        if ctx.get("refusal"):
-            return Continue()
-        descriptor = ctx.get("descriptor") or {}
-        if not descriptor.get("communicative"):
-            return Continue()
-        event = ctx["event"]
-        place = str(ctx.get("place") or event.place or "")
-        if not place or place != str(event.place or ""):
-            return Continue()
-        body = str(event.body or "")
-        if not body or switches(kernel, body=body).get("read_receipts", "on") == "off":
-            return Continue()
-        adapter = kernel.tools.adapters.get(body)
-        if adapter is None or "read_receipts" not in shows(adapter):
-            return Continue()
-        if not await _is_shared_with_owner(kernel.conn, body):
-            return Continue()
-        mids = await _unread_messages(kernel.conn, place, body)
-        if not mids:
-            return Continue()
-        await adapter.show(place, "read_receipts", message_id=mids[-1], message_ids=mids)
-        for mid in mids:
-            await kernel._emit(event, SHOWN, {"kind": "read", "message_id": mid}, place=place)
-        return Continue()
-
-    return contract.mark_rule(rule, name="read_receipts_action", kind="best-effort")
+    return contract.mark_rule(rule, name="seen", kind="best-effort")
 
 
 def install_commands(kernel: Any) -> None:
@@ -839,64 +734,34 @@ def install_commands(kernel: Any) -> None:
     if kernel.tools.command("show") is None:
         kernel.tools.add_command(registry.CommandEntry(
             "show",
-            "Switch interaction display: /show <name> <value> [adapter].",
+            "Switch one interaction setting: /show <name> <value>.",
             "interaction.show", show_switch, owner="interaction"))
 
 
-def _set_body_show_entry(text: str, adapter_name: str, key: str, value: str) -> str:
-    """Update `bodies.<adapter>.show.<key>: <value>` in config.yaml cleanly."""
-    doc = yaml.safe_load(text) if text.strip() else {}
-    if not isinstance(doc, dict):
-        doc = {}
-    bodies = doc.setdefault("bodies", {})
-    adapter_cfg = bodies.setdefault(adapter_name, {})
-    show_cfg = adapter_cfg.setdefault("show", {})
-    show_cfg[key] = value
-    return yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
-
-
-def _resolve_show_value(what: str, raw_val: str) -> str | None:
-    low = raw_val.strip().lower()
-    if low == "on" and what in ("thinking", "steps"):
+def _resolve_show_value(what: str, raw_value: str) -> str | None:
+    """Return the value `/show` should write, or None when it is not one this setting allows."""
+    value = raw_value.strip().lower()
+    if value == "on" and what in ("thinking", "steps"):
         return DEFAULTS[what]
-    allowed = ALLOWED_SHOW.get(what, ())
-    return low if low in allowed else None
+    return value if value in ALLOWED_SHOW.get(what, ()) else None
 
 
 async def show_switch(kernel: Any, event: Event, arguments: list[str]) -> str:
-    """Write `interaction:` or `bodies.<adapter>.show:` in config.yaml and apply at once."""
-    usage = "usage: /show <thinking|steps|approvals|typing|read_receipts|progress|stickers> <value> [adapter]"
+    """Write one `interaction:` setting in config.yaml and apply it at once.
+
+    Only the middleware's own decisions are here; what a body draws with them is that body's own
+    `render:` option, which the body reads itself (§2.4.5).
+    """
+    names = ", ".join(DEFAULTS)
+    usage = f"usage: /show <{names}> <value>"
     if len(arguments) < 2:
         return usage
-    what = arguments[0].lower()
+    what = arguments[0]
     if what not in DEFAULTS:
         return usage
     after = _resolve_show_value(what, arguments[1])
     if after is None:
         return f"invalid value {arguments[1]!r} for {what}; expected {', '.join(ALLOWED_SHOW[what])}"
-    adapter_name = arguments[2].lower() if len(arguments) > 2 else ""
-
-    if adapter_name:
-        adapter = kernel.tools.adapters.get(adapter_name)
-        if adapter is None:
-            return f"refused: unknown adapter {adapter_name!r}"
-        needed = CAPABILITY_REQUIRED.get((what, after))
-        if needed and needed not in shows(adapter):
-            reason = (getattr(adapter, "gaps", {}) or {}).get(needed) or f"{adapter_name} cannot show {needed}"
-            return f"refused for {adapter_name}: {reason}"
-        before = switches(kernel, body=adapter_name).get(what)
-        path = _config_path(kernel)
-        if path is not None:
-            loader.edit_config(
-                path, lambda text: _set_body_show_entry(text, adapter_name, what, after),
-                now=kernel.clock.now())
-            await loader.record_config_change(
-                kernel, event, plugin="interaction",
-                key=f"bodies.{adapter_name}.show.{what}", before=before, after=after)
-        kernel.settings.setdefault("bodies", {}).setdefault(adapter_name, {}).setdefault(
-            "show", {})[what] = after
-        return f"{adapter_name}.{what} is now {after}"
-
     before = switches(kernel).get(what)
     path = _config_path(kernel)
     if path is not None:
@@ -915,72 +780,3 @@ def _config_path(kernel: Any) -> Any:
     if root is None:
         return None
     return pathlib.Path(root) / "config.yaml"
-
-
-# -------------------------------------------------------------- attachments & fallbacks
-
-
-def split_attachments(adapter: Any, arguments: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return one argument dict per message the adapter can send."""
-    limit = int((getattr(adapter, "FILES", {}) or {}).get("per_message") or 0) or 1
-    found = [str(ref) for ref in arguments.get("attachments") or ()]
-    total = -(-len(found) // limit)
-    parts: list[dict[str, Any]] = []
-    for index in range(total):
-        chunk = found[index * limit:(index + 1) * limit]
-        part: dict[str, Any] = {**{key: value for key, value in arguments.items()
-                                   if key != "attachments"}, "attachments": chunk}
-        if index == 0:
-            if arguments.get("text"):
-                part["text"] = arguments["text"]
-        else:
-            part["text"] = f"(part {index + 1}/{total})"
-        parts.append(part)
-    return parts
-
-
-def split(kernel: Any) -> Middleware:
-    """Action rule: handle sticker fallback (`stickers: off`) and split multi-file sends."""
-
-    async def rule(item: Any, ctx: Any) -> Any:
-        """Rewrite sticker fallback to emoji when off, or split large attachment lists."""
-        if ctx.get("refusal") or ctx.get("handled"):
-            return Continue()
-        descriptor = ctx.get("descriptor") or {}
-        arguments = dict(item or {})
-        body = str(ctx["event"].body or "")
-        adapter = kernel.tools.adapters.get(body)
-        if adapter is None or not descriptor.get("communicative"):
-            return Continue()
-
-        # Sticker fallback: stickers: off (or unsupported) -> fallback text
-        sticker_mode = switches(kernel, body=body).get("stickers", "on")
-        if arguments.get("sticker") and (sticker_mode == "off" or "stickers" not in shows(adapter)):
-            emoji = str(arguments.pop("sticker_emoji", "") or "[sticker]")
-            arguments.pop("sticker", None)
-            existing = str(arguments.get("text") or "").strip()
-            arguments["text"] = f"{existing} {emoji}".strip() if existing else emoji
-            if not arguments.get("attachments"):
-                return Replace(arguments)
-
-        attachments = list(arguments.get("attachments") or ())
-        if not attachments:
-            return Replace(arguments) if arguments != dict(item or {}) else Continue()
-        limit = int((getattr(adapter, "FILES", {}) or {}).get("per_message") or 0)
-        if not limit or len(attachments) <= limit:
-            return Replace(arguments) if arguments != dict(item or {}) else Continue()
-        parts = split_attachments(adapter, arguments)
-        await kernel._emit(ctx["event"], SPLIT, {
-            "capability": ctx["capability"], "parts": len(parts),
-            "attachments": len(attachments)})
-        for part in parts:
-            passed = {key: value for key, value in part.items() if key not in registry.ROUTING}
-            await kernel._emit(ctx["event"], "act.out", {
-                "capability": ctx["capability"], "arguments": passed,
-                "communicative": True}, place=ctx["event"].place)
-            await kernel.tools.act(registry.own_action(ctx["event"], str(ctx["capability"]),
-                                                       passed))
-        ctx["handled"] = True
-        return Continue()
-
-    return rule

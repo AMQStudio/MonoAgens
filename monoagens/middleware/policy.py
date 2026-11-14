@@ -102,13 +102,11 @@ def modules_for(hook: str, kernel: Any) -> tuple[tuple[str, Middleware], ...]:
                         ("commands", registry.commands(kernel)),
                         ("privacy-intent", privacy.intent_words(kernel)),
                         ("narrate", interaction.narrate(kernel)),
-                        ("read-receipts", compose(interaction.read_receipts_inbound(kernel),
-                                                  kernel=kernel)),
+                        ("seen", compose(interaction.seen(kernel), kernel=kernel)),
                         ("attachment-sweep", attachment_sweep(kernel))),
             "context": (("identity-cards", identity.cards(kernel.conn, roles=_LiveRoles(kernel))),
                         ("self-block", registry.self_block(kernel))),
-            "action": (("identity-route", identity.route(kernel.conn)),
-                       ("attachments-split", interaction.split(kernel)))}.get(hook, ())
+            "action": (("identity-route", identity.route(kernel.conn)),)}.get(hook, ())
 
 
 def attachment_sweep(kernel: Any) -> Middleware:
@@ -136,11 +134,10 @@ def policy_for(hook: str, when: str, kernel: Any) -> Middleware:
     if hook == "action":
         if when == "first":
             return compose(identity.identity_line(), permission_line(kernel),
-                           interaction.typing(kernel), privacy.guard(kernel, "first"),
+                           interaction.composing(kernel), privacy.guard(kernel, "first"),
                            kernel=kernel)
         return compose(privacy.guard(kernel, "last"), quiet_line(kernel),
-                       approval_line(kernel), interaction.read_receipts_action(kernel),
-                       kernel=kernel)
+                       approval_line(kernel), kernel=kernel)
     return compose(identity.identity_line(), privacy.delegation(kernel), kernel=kernel)
 
 

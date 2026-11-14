@@ -171,6 +171,11 @@ class DiscordBody:
         """Stop the gateway connection and close the client."""
         await self.aclose()
 
+    async def render(self, event: Any) -> None:
+        """Render one lifecycle event natively (§2.4.5): typing, an edit or a read mark."""
+        kind = "typing" if event.name == "composing" else event.name
+        await self.show(str(event.place), kind, text=str(event.data.get("text") or ""))
+
     def prompt_section(self) -> str:
         """Return what reasoning should know about Discord (≤1200 characters)."""
         return ("Discord: one message per say, with optional files, reply, mentions, choices, "

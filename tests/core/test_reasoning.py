@@ -672,8 +672,8 @@ async def test_dm_gets_a_reply_through_the_telegram_body(aconn):
 
     assert sent == [{"chat_id": "111", "text": "halo!"}]
     assert await _kinds(aconn) == [
-        "identity.registered", "percept", "model.call", "act.out", "act.result",
-        "decision.silent"]
+        "identity.registered", "percept", "interaction.shown", "model.call", "act.out",
+        "act.result", "decision.silent"]
 
 
 async def test_recent_includes_other_places_prefixed(aconn):

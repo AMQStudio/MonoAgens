@@ -32,6 +32,7 @@ class Screen:
         self.name, self.shows = name, shows
         self.actions: list[Action] = []
         self.shown: list[tuple[str, str, dict[str, Any]]] = []
+        self.rendered: list[Any] = []
 
     def capabilities(self):
         return ({"name": "say", "description": "Speak here.",
@@ -47,6 +48,10 @@ class Screen:
     async def act(self, action: Action) -> Any:
         self.actions.append(action)
         return {"text": "hasil" if action.capability == "run" else None}
+
+    async def render(self, event: Any) -> None:
+        """Render one lifecycle event, recording it as a body does (§2.4.5)."""
+        self.rendered.append(event)
 
     async def show(self, place: str, kind: str, **data: Any) -> None:
         self.shown.append((place, kind, dict(data)))
@@ -83,15 +88,17 @@ async def test_thinking_shows_in_the_owners_chat_and_never_in_a_group(aconn):
     rule = interaction.narrate(kernel)
     await rule(later, {"conn": aconn, "now": START})
 
-    assert any("(berpikir) aku ragu" in data["text"] for _, kind, data in
-               kernel.tools.adapters["telegram"].shown)
+    rendered = kernel.tools.adapters["telegram"].rendered
+    assert any(item.name == "thought" and "(berpikir) aku ragu" in str(item.data.get("text"))
+               for item in rendered)
 
     group = await append_event(aconn, ts=START, kind="act.out", who="person:owner",
                                place=GROUP, body="telegram", caused_by=trigger.id,
                                payload={"capability": "telegram.say",
                                         "arguments": {"text": "hai"}})
     await rule(group, {"conn": aconn, "now": START})
-    assert not any(place == GROUP for place, _, _ in kernel.tools.adapters["telegram"].shown)
+    assert not any(item.place == GROUP
+                   for item in kernel.tools.adapters["telegram"].rendered)
 
 
 async def test_a_thought_is_shown_once(aconn):
@@ -107,8 +114,9 @@ async def test_a_thought_is_shown_once(aconn):
     await rule(later, {"conn": aconn, "now": START})
     await rule(later, {"conn": aconn, "now": START})
 
-    shown = [data["text"] for _, kind, data in kernel.tools.adapters["telegram"].shown]
-    assert shown.count("(berpikir) satu") == 1
+    rendered = [str(item.data.get("text")) for item in kernel.tools.adapters["telegram"].rendered
+                if item.name == "thought"]
+    assert rendered.count("(berpikir) satu") == 1
     assert note.id is not None
 
 
@@ -126,8 +134,9 @@ async def test_a_long_act_shows_one_step_and_a_short_one_nothing(aconn):
     await rule(long_result, {"conn": aconn, "now": START})
     await rule(short_result, {"conn": aconn, "now": START})
 
-    shown = [data["text"] for _, _, data in kernel.tools.adapters["telegram"].shown]
-    steps = [text for text in shown if text.startswith("(langkah)")]
+    rendered = [str(item.data.get("text")) for item in kernel.tools.adapters["telegram"].rendered
+                if item.name == "progress"]
+    steps = [text for text in rendered if text.startswith("(langkah)")]
     assert len(steps) == 1 and "telegram.run" in steps[0]
     assert len(steps[0]) < 260
     assert trigger.id is not None
@@ -211,7 +220,7 @@ async def test_the_cli_renders_typing_and_the_approval_text(aconn):
     kernel = await _kernel(aconn, body=body)
     trigger = await _percept(aconn)
 
-    await interaction.typing(kernel)({"text": "halo"}, {
+    await interaction.composing(kernel)({"text": "halo"}, {
         "conn": aconn, "event": trigger, "now": START,
         "descriptor": {"communicative": True}, "long_running": False})
 
@@ -252,8 +261,8 @@ def test_the_boot_report_names_each_body_and_the_surfaces_it_has():
     Loader(ROOT, env={"TELEGRAM_BOT_TOKEN": "t"})._check_adapter(
         "cli", __import__("monoagens.adapters.cli", fromlist=["create"]).create({}, {}), report)
     loader_lines = "\n".join(report.lines)
-    assert "adapter telegram: surfaces none" in loader_lines
-    assert "adapter cli: surfaces none" in loader_lines
+    assert "adapter telegram: surfaces render" in loader_lines
+    assert "adapter cli: surfaces render" in loader_lines
     assert "adapter telegram: files 10 per message" in loader_lines
     assert "adapter cli: files 1 per message" in loader_lines
 
@@ -299,7 +308,7 @@ async def test_typing_fires_only_for_communicative_acts_and_respects_body_overri
     screen = _RichScreen(shows=("typing", "edit"))
     kernel = await _kernel(aconn, body=screen)
     trigger = await _percept(aconn)
-    rule = interaction.typing(kernel)
+    rule = interaction.composing(kernel)
 
     # Non-communicative long_running tool -> NO typing.
     await rule({}, {"conn": aconn, "event": trigger, "now": START,
@@ -309,7 +318,7 @@ async def test_typing_fires_only_for_communicative_acts_and_respects_body_overri
     # Communicative act -> shows typing.
     await rule({"text": "halo"}, {"conn": aconn, "event": trigger, "now": START,
                                   "descriptor": {"communicative": True}})
-    assert [k for _, k, _ in screen.shown] == ["typing"]
+    assert [item.name for item in screen.rendered] == ["composing"]
 
     # Per-adapter show override off -> suppressed.
     kernel.settings.setdefault("bodies", {})["telegram"] = {"show": {"typing": "off"}}
@@ -341,128 +350,29 @@ async def test_thinking_all_shows_group_thoughts_but_hides_private_dm_thoughts(a
 
     await interaction.narrate(kernel)(later, {"conn": aconn, "now": START})
 
-    texts = [data["text"] for _, _, data in screen.shown]
+    texts = [str(item.data.get("text")) for item in screen.rendered if item.name == "thought"]
     assert "(berpikir) group thought" in texts
     assert not any("leaked dm" in t or "private thought" in t for t in texts)
 
 
-async def test_read_receipts_respect_inbound_action_hooks_and_restart_dedup(aconn):
-    screen = _RichScreen(name="whatsapp", shows=("read_receipts", "typing"))
-    kernel = await _kernel(aconn, body=screen)
 
-    async def _noop(*_args):
-        return None
-
-    # Normal live percept: read receipt emitted by the inbound hook and recorded in the Log.
-    trigger = await append_event(
-        aconn, ts=START, kind="percept", who="person:budi", place="space:wa:1",
-        body="whatsapp", payload={"description": "hi", "data": {"message_id": "m1"}})
-    await kernel.hooks.inbound.run(trigger, {"conn": aconn, "now": START},
-                                   on_stop=_noop, on_error=_noop)
-    assert [(k, d["message_id"]) for _, k, d in screen.shown] == [("read_receipts", "m1")]
-
-    # Restarting kernel and seeing m1 again does NOT emit a duplicate read receipt.
-    screen.shown.clear()
-    restarted = await _kernel(aconn, body=screen)
-    await restarted.hooks.inbound.run(trigger, {"conn": aconn, "now": START},
-                                      on_stop=_noop, on_error=_noop)
-    assert not screen.shown
-
-    # Imported & backfill percepts are NEVER marked read.
-    imp = await append_event(
-        aconn, ts=START, kind="percept", who="person:budi", place="space:wa:1",
-        body="whatsapp", payload={"description": "old", "imported": True, "backfill": True,
-                                  "data": {"message_id": "m2"}})
-    await restarted.hooks.inbound.run(imp, {"conn": aconn, "now": START},
-                                      on_stop=_noop, on_error=_noop)
-    assert not screen.shown
-
-    # Shared owner account: inbound hook leaves messages unread until soul speaks in action hook.
-    await write_state(aconn, "self_account:whatsapp", {"account": "wa:+62000"}, trigger.id)
-    await write_state(aconn, "alias:wa:+62000", {"who": "person:owner"}, trigger.id)
-    owner_msg = await append_event(
-        aconn, ts=START, kind="percept", who="person:owner", place="space:wa:2",
-        body="whatsapp", payload={"description": "manual", "data": {"message_id": "m3"}})
-    await restarted.hooks.inbound.run(owner_msg, {"conn": aconn, "now": START},
-                                      on_stop=_noop, on_error=_noop)
-    friend_msg = await append_event(
-        aconn, ts=START, kind="percept", who="person:budi", place="space:wa:2",
-        body="whatsapp", payload={"description": "ping", "data": {"message_id": "m5"}})
-    await restarted.hooks.inbound.run(friend_msg, {"conn": aconn, "now": START},
-                                      on_stop=_noop, on_error=_noop)
-    assert not screen.shown
-
-    # Communicative act in space:wa:2 runs action hook -> marks friend_msg m5 read (not owner m3).
-    ctx = {"conn": aconn, "event": friend_msg, "now": START, "capability": "whatsapp.say",
-           "descriptor": {"communicative": True}, "origin_actor": "person:owner",
-           "arguments": {"text": "halo"}, "to": None, "via": None, "place": None,
-           "refusal": None, "handled": False, "labels": {}, "long_running": False,
-           "identity_changing": False}
-    await restarted.hooks.action.run({"text": "halo"}, ctx, on_stop=_noop, on_error=_noop)
-    read_calls = [d["message_id"] for _, k, d in screen.shown if k == "read_receipts"]
-    assert read_calls == ["m5"]
-
-    # Another speak (or restart) does NOT re-mark m5.
-    screen.shown.clear()
-    await restarted.hooks.action.run({"text": "lagi"}, {**ctx, "place": None, "refusal": None},
-                                     on_stop=_noop, on_error=_noop)
-    assert [d["message_id"] for _, k, d in screen.shown if k == "read_receipts"] == []
-
-
-async def test_progress_edits_single_message_when_edit_mode_else_sends_new(aconn):
-    screen = _RichScreen(shows=("edit",))
-    kernel = await _kernel(aconn, body=screen,
-                           interaction_settings={"thinking": "off", "steps": "long", "progress": "edit"})
-    trigger = await _percept(aconn)
-    step1 = await append_event(
-        aconn, ts=START, kind="act.result", who="person:owner", place=OWNER_DM,
-        body="telegram", caused_by=trigger.id,
-        payload={"capability": "telegram.run", "result": {"text": "first"}})
-    step2 = await append_event(
-        aconn, ts=START, kind="act.result", who="person:owner", place=OWNER_DM,
-        body="telegram", caused_by=trigger.id,
-        payload={"capability": "telegram.run", "result": {"text": "second"}})
-    await interaction.narrate(kernel)(step1, {"conn": aconn, "now": START})
-
-    # Even after a kernel restart, step2 resolves prog-1 from the Log.
-    restarted = await _kernel(
-        aconn, body=screen,
-        interaction_settings={"thinking": "off", "steps": "long", "progress": "edit"})
-    await interaction.narrate(restarted)(step2, {"conn": aconn, "now": START})
-
-    assert len(screen.shown) == 2
-    assert "message_id" not in screen.shown[0][2]
-    assert screen.shown[1][2]["message_id"] == "prog-1"
-    assert not screen.actions
-
-    # Switching progress to `new` sends each step via say instead of editing.
-    screen.shown.clear()
-    restarted.settings["interaction"]["progress"] = "new"
-    await interaction.narrate(restarted)(step2, {"conn": aconn, "now": START})
-    assert not screen.shown
-    assert len(screen.actions) == 1 and screen.actions[0].capability == "say"
-
-
-async def test_show_switch_per_adapter_writes_config_and_refuses_gaps(aconn, tmp_path):
+async def test_show_switch_writes_one_interaction_setting_and_refuses_a_bodys_option(
+        aconn, tmp_path):
+    """§2.4.5: `/show` sets the middleware's own decisions; a body's render option is its own."""
     (tmp_path / "config.yaml").write_text("version: 2\ninteraction:\n  thinking: owner_direct\n",
                                           encoding="utf-8")
-    tg = _RichScreen(name="telegram", shows=("typing", "edit"),
-                     gaps={"read_receipts": "Telegram Bot API has no outgoing read receipts."})
-    kernel = await _kernel(aconn, body=tg)
+    kernel = await _kernel(aconn, body=_RichScreen(shows=("typing", "edit")))
     kernel.deployment_root = tmp_path
 
-    ok = await interaction.show_switch(kernel, _percept_event(), ["typing", "off", "telegram"])
-    assert ok == "telegram.typing is now off"
-    assert interaction.switches(kernel, body="telegram")["typing"] == "off"
-    assert interaction.switches(kernel)["typing"] == "on"
-    assert "read_receipts" not in interaction.shows(tg)
+    ok = await interaction.show_switch(kernel, _percept_event(), ["thinking", "all"])
+    assert ok == "thinking is now all"
+    assert interaction.switches(kernel)["thinking"] == "all"
+    written = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+    assert "thinking: all" in written
 
     refused = await interaction.show_switch(kernel, _percept_event(),
-                                            ["read_receipts", "on", "telegram"])
-    assert refused.startswith("refused for telegram:")
-    assert "Telegram Bot API" in refused
-    written = (tmp_path / "config.yaml").read_text(encoding="utf-8")
-    assert "bodies:" in written and ("typing: off" in written or "typing: 'off'" in written)
+                                            ["typing", "off", "telegram"])
+    assert refused.startswith("usage: /show")
 
 
 async def test_reaction_approval_answered_after_restart_still_counts(aconn):
@@ -502,19 +412,6 @@ async def test_reaction_approval_answered_after_restart_still_counts(aconn):
     assert queued.kind == "intent" and queued.payload["approved"] == asked.id
 
 
-async def test_stickers_off_rewrites_sticker_argument_to_emoji_fallback(aconn):
-    screen = _RichScreen(shows=("typing", "stickers"))
-    kernel = await _kernel(aconn, body=screen, interaction_settings={"stickers": "off"})
-    trigger = await _percept(aconn)
-
-    outcome = await interaction.split(kernel)(
-        {"text": "hi", "sticker": "sticker-123", "sticker_emoji": "🐱"},
-        {"conn": aconn, "event": trigger, "now": START, "descriptor": {"communicative": True}},
-    )
-
-    assert outcome.item == {"text": "hi 🐱"}
-
-
 async def test_progress_step_from_invisible_source_place_is_not_shown(aconn):
     """P.9: progress_show skips steps whose source/causal chain is not visible at the target place."""
     screen = _RichScreen(shows=("edit",))
@@ -530,7 +427,7 @@ async def test_progress_step_from_invisible_source_place_is_not_shown(aconn):
         body="telegram", caused_by=dm_trigger.id,
         payload={"capability": "telegram.run", "result": {"text": "secret output"}})
     await interaction.narrate(kernel)(leaked_step, {"conn": aconn, "now": START})
-    assert not screen.shown and not screen.actions
+    assert not screen.rendered and not screen.actions
 
     # Same-place step in GROUP IS visible and shown.
     group_step = await append_event(
@@ -538,6 +435,6 @@ async def test_progress_step_from_invisible_source_place_is_not_shown(aconn):
         body="telegram", caused_by=group_trigger.id,
         payload={"capability": "telegram.run", "result": {"text": "public progress"}})
     await interaction.narrate(kernel)(group_step, {"conn": aconn, "now": START})
-    assert len(screen.shown) == 1
-    assert "public progress" in screen.shown[0][2]["text"]
+    assert len(screen.rendered) == 1
+    assert "public progress" in str(screen.rendered[0].data.get("text"))
 
