@@ -16,16 +16,16 @@ steps:
     who: person:owner
     place: space:tg:1001
     text: "Mona, aku lagi mikirin rencana pindah kantor. Menurutmu gimana?"
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T10:03:00+07:00"
     who: person:owner
     place: space:tg:1001
     text: "Kantor barunya lebih dekat rumah kan?"
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T10:10:00+07:00"
     restart: true
   - at: "2026-11-10T10:11:00+07:00"
     who: person:owner
     place: space:tg:1001
     text: "Lanjut yang tadi ya, soal pindah kantor."
-    addressed: true
+    features: {addressed: 1}

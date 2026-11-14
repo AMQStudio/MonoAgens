@@ -97,6 +97,7 @@ async def test_crashing_adapter_records_error_restarts_alone_and_keeps_others_ru
     })
     assert config.adapter_retry(values) == {
         "initial_seconds": 0.01, "max_seconds": 0.05, "factor": 2.0,
+        "stable_seconds": 60.0,
     }
     kernel = build(aconn, clock=FakeClock(START), settings=values)
     failing = _CrashingAdapter(fail_times=2)

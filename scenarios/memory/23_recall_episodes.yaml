@@ -43,17 +43,17 @@ steps:
     who: person:owner
     place: space:tg:1001
     text: "Kita buka kafe bulan depan. Namanya Kopi Senja."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-10-20T16:30:00+07:00"
     who: person:owner
     place: space:tg:1001
     text: "Harga biji kopi naik dua belas persen."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-11T09:00:00+07:00"
     who: person:owner
     place: space:tg:1001
     text: "apa yang kita lakukan bulan lalu?"
-    addressed: true
+    features: {addressed: 1}
 model_answers:
   - step: 3
     tool: decide

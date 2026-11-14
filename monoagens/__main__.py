@@ -42,6 +42,9 @@ def configure_logging(stream: TextIO | None = None) -> logging.Handler:
     return handler
 
 
+STABLE_RUN_SECONDS = 60.0
+
+
 async def supervise_adapter(
     kernel: Any,
     adapter: Any,
@@ -54,6 +57,9 @@ async def supervise_adapter(
     initial = float(cfg["initial_seconds"])
     maximum = float(cfg["max_seconds"])
     factor = float(cfg["factor"])
+    # A run shorter than this does not reset the backoff: a body that dies right after it
+    # connects must not be retried every second (E.4).
+    stable = float(cfg.get("stable_seconds", STABLE_RUN_SECONDS))
     name = str(getattr(adapter, "name", "") or type(adapter).__name__)
 
     async def put(item: Any) -> Any:
@@ -65,7 +71,8 @@ async def supervise_adapter(
         started = asyncio.get_running_loop().time()
         try:
             await adapter.run(put)
-            backoff = initial
+            if asyncio.get_running_loop().time() - started >= stable:
+                backoff = initial
             if stop.is_set():
                 return
             delay = backoff
@@ -78,7 +85,7 @@ async def supervise_adapter(
                 payload={"adapter": name, "error": f"{name}: {detail}"},
             ))
             elapsed = asyncio.get_running_loop().time() - started
-            if elapsed >= initial:
+            if elapsed >= stable:
                 backoff = initial
             delay = min(backoff, maximum)
             backoff = min(backoff * factor, maximum)

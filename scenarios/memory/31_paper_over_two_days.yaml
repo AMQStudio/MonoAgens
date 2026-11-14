@@ -390,25 +390,25 @@ steps:
 - at: '2026-11-11T10:00:00+07:00'
   who: person:owner
   place: space:tg:1001
-  addressed: true
+  features: {addressed: 1}
   text: 'Tolong buatkan draft paper di papers/paper_v1.md dengan format persis: # Judul, ## Ringkasan,
     ## Data, ## Kesimpulan. Baca seluruh isi data/metrics_log.txt di workspace sampai akhir lewat registry.more
     kalau terpotong untuk ambil nilai APPENDIX_Z_MARKER, dan simpan catatan di progress.md.'
 - at: '2026-11-11T11:00:00+07:00'
   who: person:owner
   place: space:tg:1001
-  addressed: true
+  features: {addressed: 1}
   text: 'Tolong revisi papers/paper_v1.md: tambahkan bagian ## Limitasi sebelum ## Kesimpulan, lalu perbarui
     progress.md.'
 - at: '2026-11-11T13:00:00+07:00'
   who: person:owner
   place: space:tg:1001
-  addressed: true
+  features: {addressed: 1}
   text: Kirimkan ringkasan dan paper hasil revisinya ke Budi di WhatsApp sekarang.
 - at: '2026-11-11T15:00:00+07:00'
   who: person:owner
   place: space:tg:1001
-  addressed: true
+  features: {addressed: 1}
   text: Lanjutkan nanti malam jam 20:00 untuk menulis bagian penutup akhir di papers/paper_v1.md, dan
     catat statusnya di progress.md.
 - at: '2026-11-11T16:00:00+07:00'
@@ -418,7 +418,7 @@ steps:
 - at: '2026-11-12T09:00:00+07:00'
   who: person:owner
   place: space:tg:1001
-  addressed: true
+  features: {addressed: 1}
   text: Pagi! Buatkan paper baru tentang Arsitektur Cache di papers/paper_v2.md mengikuti persis format
     bagian dari paper kemarin di workspace.
 model_answers:

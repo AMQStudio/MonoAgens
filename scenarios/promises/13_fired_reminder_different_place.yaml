@@ -20,7 +20,7 @@ steps:
     who: person:owner
     place: space:tg:1001
     text: "Mona, ingetin aku telepon ibu jam 10 pagi ya."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T09:30:00+07:00"
     who: person:tg:3001
     place: space:tg:-1001

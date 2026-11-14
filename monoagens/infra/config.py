@@ -121,6 +121,7 @@ def adapter_retry(settings: Mapping[str, Any]) -> dict[str, float]:
         "initial_seconds": float(raw["initial_seconds"]),
         "max_seconds": float(raw["max_seconds"]),
         "factor": float(raw["factor"]),
+        "stable_seconds": float(raw.get("stable_seconds") or 60.0),
     }
 
 

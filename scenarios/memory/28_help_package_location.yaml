@@ -61,7 +61,7 @@ steps:
   - at: "2026-11-10T17:00:00+07:00"
     who: person:owner
     place: space:tg:1001
-    addressed: true
+    features: {addressed: 1}
     text: "Mona, paketku sudah kutaruh di lemari depan, yang dekat pintu."
   - at: "2026-11-10T17:00:00+07:00"
     advance: "35m"
@@ -74,7 +74,7 @@ steps:
   - at: "2026-11-10T17:39:00+07:00"
     who: person:owner
     place: space:tg:1001
-    addressed: true
+    features: {addressed: 1}
     text: "Boleh, bilang saja di lemari depan."
 model_answers:
   - step: 1

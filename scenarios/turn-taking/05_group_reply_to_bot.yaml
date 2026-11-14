@@ -10,9 +10,9 @@ steps:
     who: person:owner
     place: space:tg:-1001
     text: "Mona, tolong catat ya besok rapat jam 9 pagi."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T09:03:00+07:00"
     who: person:tg:2005
     place: space:tg:-1001
     text: "Mona, itu rapatnya jam berapa tadi?"
-    addressed: true
+    features: {addressed: 1}

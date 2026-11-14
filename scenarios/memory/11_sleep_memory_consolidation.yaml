@@ -14,11 +14,11 @@ steps:
     who: person:owner
     place: space:tg:1001
     text: "Mona, aku suka banget kopi susu tanpa gula."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T20:02:00+07:00"
     who: person:owner
     place: space:tg:1001
     text: "Besok aku harus bangun jam 5 pagi buat olahraga."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T20:02:00+07:00"
     advance: "35m"

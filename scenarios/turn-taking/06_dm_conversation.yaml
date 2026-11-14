@@ -10,4 +10,4 @@ steps:
     who: person:owner
     place: space:tg:1001
     text: "Halo Mona, apa kabar?"
-    addressed: true
+    features: {addressed: 1}

@@ -11,7 +11,7 @@ steps:
     who: person:owner
     place: space:tg:1001
     text: "Mona, tanya lagi ya kalau aku belum jawab dalam 1 jam soal proposal itu."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T10:00:00+07:00"
     advance: "1h"
 model_answers:

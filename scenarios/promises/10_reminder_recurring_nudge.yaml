@@ -15,7 +15,7 @@ steps:
     text: >-
       Mona, tolong buat pengingat berulang ya: cue setiap 1d dengan policy cooldown 1d
       dan max_fires 3; isinya ingetin aku minum air tiap hari jam 9 pagi.
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T09:00:00+07:00"
     advance: "1d"
   - at: "2026-11-11T09:00:00+07:00"

@@ -15,7 +15,7 @@ steps:
     who: person:owner
     place: space:tg:1001
     text: "Mona, aku paling suka kopi susu tanpa gula, bukan teh."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T20:01:00+07:00"
     who: person:owner
     place: space:tg:1001
@@ -122,7 +122,7 @@ steps:
     who: person:owner
     place: space:cli
     text: "Mona, aku suka minum apa ya? Masih ingat nggak?"
-    addressed: true
+    features: {addressed: 1}
 model_answers:
   - step: 1
     tool: decide

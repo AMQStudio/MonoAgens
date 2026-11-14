@@ -10,4 +10,4 @@ steps:
     who: person:tg:2004
     place: space:tg:-1001
     text: "@Mona tolong bantu cek ini, dokumennya nggak kebuka."
-    addressed: true
+    features: {addressed: 1}

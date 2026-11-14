@@ -59,9 +59,9 @@ steps:
     who: person:tg:4011
     place: space:tg:-1002
     text: "Mona, tolong rangkum diskusi tadi dong."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T12:06:00+07:00"
     who: person:tg:4012
     place: space:tg:-1002
     text: "Mona? Kok diem aja?"
-    addressed: true
+    features: {addressed: 1}

@@ -45,7 +45,7 @@ steps:
   - at: "2026-11-10T09:00:00+07:00"
     who: person:owner
     place: space:tg:1001
-    addressed: true
+    features: {addressed: 1}
     text: "kabari aku ya kalau dokumennya sudah selesai"
   - at: "2026-11-10T09:10:00+07:00"
     who: person:tg:7001

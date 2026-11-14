@@ -29,7 +29,7 @@ steps:
     who: person:owner
     place: space:tg:1001
     text: "kabari aku kalau ada yang bilang server down di grup"
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T08:05:00+07:00"
     who: person:tg:6001
     place: space:tg:-10099

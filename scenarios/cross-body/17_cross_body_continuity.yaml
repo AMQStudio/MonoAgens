@@ -11,12 +11,12 @@ steps:
     who: person:owner
     place: space:tg:1001
     text: "Mona, aku lagi belajar bahasa pemrograman Rust untuk bikin tool CLI."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T10:02:00+07:00"
     who: person:owner
     place: space:cli
     text: "lanjut yang tadi, apa fitur paling penting yang perlu kupahami dulu?"
-    addressed: true
+    features: {addressed: 1}
 model_answers:
   - step: 1
     tool: decide

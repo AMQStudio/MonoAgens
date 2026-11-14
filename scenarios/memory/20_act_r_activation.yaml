@@ -26,69 +26,69 @@ steps:
     who: person:owner
     place: space:tg:1001
     text: "Mona, kunci cadanganku kusimpan di laci meja kerja, catat ya."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T20:00:00+07:00"
     advance: "35m"
   - at: "2026-11-10T20:36:00+07:00"
     who: person:owner
     place: space:tg:1001
     text: "Mona, kunci cadanganku masih aman kan?"
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T20:37:00+07:00"
     who: person:owner
     place: space:tg:1001
     text: "Kunci cadanganku tadi kupakai, sudah kukembalikan."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T20:38:00+07:00"
     who: person:owner
     place: space:tg:1001
     text: "Kunci cadanganku jangan sampai hilang ya."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T20:39:00+07:00"
     who: person:owner
     place: space:tg:1001
     text: "Aku cek kunci cadanganku tadi pagi."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T20:40:00+07:00"
     who: person:owner
     place: space:tg:1001
     text: "Kunci cadanganku masih di tempatnya."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T20:41:00+07:00"
     who: person:owner
     place: space:tg:1001
     text: "Kunci cadanganku kupinjam ke adikku sebentar."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T20:42:00+07:00"
     who: person:owner
     place: space:tg:1001
     text: "Kunci cadanganku sudah kembali ke tanganku."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T20:43:00+07:00"
     who: person:owner
     place: space:tg:1001
     text: "Kunci cadanganku satu-satunya, jadi hati-hati."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T20:44:00+07:00"
     who: person:owner
     place: space:tg:1001
     text: "Kunci cadanganku kupakai kalau kunci utama hilang."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T20:45:00+07:00"
     who: person:owner
     place: space:tg:1001
     text: "Kunci cadanganku masih kuingat letaknya."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T20:46:00+07:00"
     who: person:owner
     place: space:tg:1001
     text: "Kunci cadanganku aman, tenang saja."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T20:47:00+07:00"
     who: person:owner
     place: space:tg:1001
     text: "Kunci cadanganku sudah kucek dua kali hari ini."
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-10T20:47:00+07:00"
     advance: "35m"
   - at: "2026-11-10T21:22:00+07:00"
@@ -97,7 +97,7 @@ steps:
     who: person:owner
     place: space:cli
     text: "Mona, kunci cadanganku disimpan di mana ya?"
-    addressed: true
+    features: {addressed: 1}
 model_answers:
   - step: 2
     tool: call

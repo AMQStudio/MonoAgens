@@ -150,19 +150,19 @@ steps:
     text: >-
       Tolong selesaikan kodeku dulu, lalu kirim ke Budi lewat WhatsApp dan ke
       grup. Kodenya ada di workspace dev, file src/parser.py, tesnya masih gagal.
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-11T09:06:00+07:00"
     who: person:owner
     place: space:game:world1
     members: ["person:owner"]
     text: "Kamu masih di situ?"
-    addressed: true
+    features: {addressed: 1}
   - at: "2026-11-11T09:10:00+07:00"
     who: person:owner
     place: space:game:world1
     members: ["person:owner"]
     text: "Yang space:wa:1203630001@g.us ya (Tim Alpha)."
-    addressed: true
+    features: {addressed: 1}
 model_answers:
   - step: 4
     tool: decide

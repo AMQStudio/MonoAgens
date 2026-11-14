@@ -139,14 +139,14 @@ May touch: `monoagens/adapters/` (all), `monoagens/__main__.py` (supervision onl
 - [x] 4.2 Telegram, with E.2.
 - [x] 4.3 WhatsApp, with E.1.
 - [x] 4.4 Discord, with E.3.
-- [ ] 4.5 Every adapter (E.4): its own capabilities and `prompt_section`; features; `place.audience`
+- [x] 4.5 Every adapter (E.4): its own capabilities and `prompt_section`; features; `place.audience`
   with its platform's rule folded in ([spec.md](../spec.md) *Places and audiences*); `render` from its own `render:` options;
   `ask`; deduplication by action id; splitting and length limits by itself; a fresh client on
   restart; a backoff that does not reset after a short run; the CLI socket created with its mode.
-- [ ] 4.6 Fakes from the real thing: `create_autospec` of the neonize and discord.py clients,
+- [x] 4.6 Fakes from the real thing: `create_autospec` of the neonize and discord.py clients,
   recorded Telegram Bot API responses (errors included); the conformance suite of 1.4 over all four
   adapters.
-- [ ] 4.7 Recording mode (`bodies.<adapter>.record: true` into `var/recordings/`, git-ignored)
+- [x] 4.7 Recording mode (`bodies.<adapter>.record: true` into `var/recordings/`, git-ignored)
   and `scripts/recording.py anonymize` to turn a recording into a committed fixture; shadow mode
   (`dry_run: true`: everything sensed, nothing sent, each would-be action recorded with
   `dry_run`).
@@ -156,15 +156,15 @@ Read first: [spec.md](../spec.md) *Plugins*, *Plugins*
 May touch: `plugins/`, `monoagens/core/expectations.py`, `monoagens/core/memory/`,
 `monoagens/middleware/lang/`, `tests/plugins/`, `tests/core/`
 
-- [ ] 5.1 S.6: a cancelled run kills its sandbox; a ceiling on the run timeout; a plugin gets only
+- [x] 5.1 S.6: a cancelled run kills its sandbox; a ceiling on the run timeout; a plugin gets only
   the environment variables its manifest declares; `web-fetch` total timeout and size cap;
   `pdf-reader` page and size caps; blocking calls through `asyncio.to_thread`.
 - [ ] 5.2 Every plugin on the contract: facts, permissions in its own namespace, no text parsing
   in regulating middleware (a narrowing rule works on facts: place, person, kind).
-- [ ] 5.3 O.5: an Expectation's default expiry is never before its next cue; `cooldown`, `once`
+- [x] 5.3 O.5: an Expectation's default expiry is never before its next cue; `cooldown`, `once`
   and `max_fires` hold on the event path and for reminders; an Expectation that can never fire is
   refused when made.
-- [ ] 5.4 O.6: `LogView.search` escapes `%` and `_`; recall uses the injected settings; the
+- [x] 5.4 O.6: `LogView.search` escapes `%` and `_`; recall uses the injected settings; the
   newest active Expectations are listed; a retrieval counts a use once; the inbound encode runs
   after the inbound hook; the remaining English strings move to the language catalog.
 
@@ -172,10 +172,10 @@ May touch: `plugins/`, `monoagens/core/expectations.py`, `monoagens/core/memory/
 Read first: [spec.md](../spec.md) *Tests that hold the contract* to *Five test bodies*, [AGENTS.md](../../AGENTS.md) (Tests)
 May touch: `tests/` (all), `scenarios/`, `scripts/replay.py`
 
-- [ ] 6.1 Every test that calls a private function, asserts on an internal payload or on prompt
+- [x] 6.1 Every test that calls a private function, asserts on an internal payload or on prompt
   wording is rewritten through the contract or deleted; the architecture test refuses private
   imports in `tests/`. This is the only time tests are rewritten in bulk.
-- [ ] 6.2 The five fake bodies of 1.4 run through the real core and middleware with the fake
+- [x] 6.2 The five fake bodies of 1.4 run through the real core and middleware with the fake
   model: percepts in, audiences, capabilities out, receipts, lifecycle events, questions and
   answers, back-fill — **with no change to `monoagens/contract/`**. A body that needs one stops the
   work and is reported.
@@ -183,9 +183,9 @@ May touch: `tests/` (all), `scenarios/`, `scripts/replay.py`
   exactly one receipt per action; nothing sent twice across restarts; every Stop recorded; a merge
   never splits; the owner's direct place sees everything.
 - [ ] 6.4 The architecture baseline of 1.3 is empty.
-- [ ] 6.5 The fault-injection test: each adapter member, each best-effort rule and each tool
+- [x] 6.5 The fault-injection test: each adapter member, each best-effort rule and each tool
   fails in turn; the soul keeps working and records the error.
-- [ ] 6.6 Scenarios on contract v2 facts (`place.audience`, features); scenarios 18 and 19 check
+- [x] 6.6 Scenarios on contract v2 facts (`place.audience`, features); scenarios 18 and 19 check
   behavior, not prompt text.
 
 ## Part 7 — Lock and real use
@@ -826,3 +826,61 @@ weakening the rule: `policy.py`'s `off_words` check and `roles.py`'s `add|remove
 both of which read a person's words. Emptying the baseline therefore needs the owner's decision:
 either those two paths are rewritten to take a structured argument, or the ban's rule is narrowed
 to text fields — a change to the rule the owner wrote.
+
+### Notes — Part 6 and 7.1 (session of 2026-11-14, night)
+
+**Line counts**, `.py` only, from the repository root (baseline `44f9c1f` in brackets):
+
+| folder | now | baseline |
+|---|---|---|
+| `monoagens/core` | 4076 | 3842 |
+| `monoagens/middleware` | 5210 | 6144 |
+| `monoagens/adapters` | 5835 | 5465 |
+| `plugins` | 1973 | 2065 |
+| `tests` | 18776 | 18577 |
+| `monoagens/contract` | 749 | 805 |
+| `monoagens/infra` | 1975 | — |
+
+**6.1 (done).** `tests-private` is 0: the boot check runs through `Loader.load`, the back-fill gate
+through `kernel.put`, and the output cap through `ToolRegistry.act`. Every adapter test asserts the
+contract's own shape now (`actor`, `place`, `features`, `data`, `description`, `backfill`), not a
+version 1 payload.
+
+**6.2 (done).** `tests/contract/test_through_the_kernel.py` runs all five fake bodies through the
+real core and middleware — audience in the Log under the body's own name, percepts stored, one
+action routed back as that body's receipt, a question drawn by the body, and a back-filled percept
+recorded — with no change to `monoagens/contract/`.
+
+**6.5 (done).** The fault matrix already covers a failing `composing`/`seen` render, a failing
+`progress`, a failing adapter `run` (supervision restarts it), a hung tool, a failing `apply` call
+with siblings still running, a backlog flush, a malformed expectation and a refused place.
+
+**6.6 (done).** Every scenario step now writes the v2 facts (`features: {addressed: n}`, `members`
+for the audience); the removed `place_kind` is gone from all 22 scenario files and the replay is
+still 158/158.
+
+**6.3 and 6.4 remain open, for the owner.**
+
+- **6.3** needs Hypothesis, which is not in `pyproject.toml`; the rules forbid adding a dependency
+  the owner has not approved. The invariants themselves are proven elsewhere (privacy over the
+  audience, one receipt per action id, no double send across restarts), so this is a dependency
+  decision, not a design one.
+- **6.4** cannot reach an empty baseline without a decision on the ban's rule. 28 `text-parse`
+  findings remain, and every one of them is string work on **ids and config**: splitting a
+  capability name (`registry.py`), editing `config.yaml` lines (`loader.py`), reading an
+  `HH:MM` cue (`expectations.py`), a language tag (`interaction.py`), an address with a zone
+  (`policy.py`). The spec's ban names word lists, keyword/substring matching over message text and
+  regexes over rendered text; a `.split(":")` on an id is none of those. The two sites that did
+  read a person's words are fixed (the `/role` split and `/quiet`'s argument count). Emptying the
+  list therefore means either narrowing the scanner to text fields (a change to the owner's rule)
+  or replacing every `.split()/.lower()`/`re` in the core and middleware, which would make config
+  editing and id parsing worse for no gain. Reported, not silently weakened.
+
+**4.5 and 4.6 (this commit).** `tests/adapters/test_conformance.py` runs the same suite over the
+four shipped adapters (surface, promise of optional surfaces, descriptor of every capability, one
+receipt per action id, no second send), builds the gateway fakes from the libraries themselves
+(`create_autospec` of `discord.Client` and neonize's `NewClient`, so a test cannot invent a method
+the library lacks), and proves shadow mode: a `dry_run` body answers `done {dry_run: true}` and the
+line is in `var/recordings/<body>.jsonl`. The supervisor's backoff no longer resets after a short
+run (`runtime.adapter_retry.stable_seconds`, default 60 s), so a body that dies right after it
+connects is retried with a growing delay instead of once a second.
