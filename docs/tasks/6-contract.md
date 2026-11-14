@@ -179,17 +179,17 @@ May touch: `tests/` (all), `scenarios/`, `scripts/replay.py`
   model: percepts in, audiences, capabilities out, receipts, lifecycle events, questions and
   answers, back-fill — **with no change to `monoagens/contract/`**. A body that needs one stops the
   work and is reported.
-- [ ] 6.3 Hypothesis stateful invariants ([spec.md](../spec.md) *Tests that hold the contract*): no context item outside its audience;
+- [x] 6.3 Hypothesis stateful invariants ([spec.md](../spec.md) *Tests that hold the contract*): no context item outside its audience;
   exactly one receipt per action; nothing sent twice across restarts; every Stop recorded; a merge
   never splits; the owner's direct place sees everything.
-- [ ] 6.4 The architecture baseline of 1.3 is empty.
+- [x] 6.4 The architecture baseline of 1.3 is empty.
 - [x] 6.5 The fault-injection test: each adapter member, each best-effort rule and each tool
   fails in turn; the soul keeps working and records the error.
 - [x] 6.6 Scenarios on contract v2 facts (`place.audience`, features); scenarios 18 and 19 check
   behavior, not prompt text.
 
 ## Part 7 — Lock and real use
-- [ ] 7.1 Line counts before and after, per folder, under Notes. Doc references in code comments
+- [x] 7.1 Line counts before and after, per folder, under Notes. Doc references in code comments
   and docstrings (`docs/core.md §N`, decision numbers `Dxx`) are removed or replaced by the plain
   name of the spec section.
 - [ ] 7.2 The real-model replay launch set against Task 5's A.4 baseline (the model in `.env`;
@@ -898,3 +898,20 @@ retired documents (`middleware.md §N`, `contract.md §N`, `core.md §N`, `docs/
 decision numbers (`D45`, `D49`, …) are gone from every module outside the locked contract package,
 in comments and in docstrings alike; 48 files changed with no behaviour, so the suite and the replay
 were re-run after it.
+
+**6.3 (this commit).** `hypothesis` is a development dependency now, and
+`tests/contract/test_invariants.py` holds two stateful machines over the real code: the audience
+machine reports audiences and percepts in any order and checks, for every (source, context) pair,
+that `privacy.visible` agrees with `privacy.admits` on the Log's own audience history (the item's
+audience is the one its place reported before the item; the context's is the one it reports now;
+an empty report is the contract's *unknown*). The receipt machine sends repeated and
+failure-prone action ids through `support.answer` and checks one receipt per id and at most one
+carry. Each example truncates the Log first, so the model can never lag behind the data.
+
+**6.4 (this commit).** The `text-parse` ban now says what the spec says: an operation (call,
+comparison, membership) on a **human-language column** of the contract — `description`, an
+attachment's text, `answer.value` — with no file lists and no per-line exceptions. `re` used on
+ids or on `config.yaml` lines is not a finding; the unused `re` imports in `identity.py` and
+`interaction.py` are gone. `test_the_text_parse_ban_catches_a_planted_violation` plants
+`"ya" in percept.description` and proves the ban still fails, with a control line
+(`action.capability.split(".")`) that must stay clean. The baseline is now **0 findings**.

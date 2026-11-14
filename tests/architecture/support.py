@@ -33,7 +33,14 @@ BODY_LITERALS = ("discord_role", "guild_id", "space:dc:")
 EMOJI_RANGES = ((0x1F300, 0x1FAFF), (0x2600, 0x2600), (0x2705, 0x2705), (0x274C, 0x274C),
                 (0xFE0F, 0xFE0F))
 
-PARSE_METHODS = ("lower", "casefold", "split", "rsplit", "splitlines")
+# Ban 2 names what it forbids: a text operation on the contract columns that hold human
+# language. Ids and config text are not those columns, so splitting a capability name or
+# editing a `config.yaml` line is not a finding.
+LANGUAGE_FIELDS = frozenset({"description", "caption"})
+LANGUAGE_CHAINS = frozenset({("answer", "value"), ("attachment", "text"), ("poll", "question")})
+TEXT_OPS = frozenset({"lower", "casefold", "split", "rsplit", "splitlines", "startswith",
+                      "endswith", "find", "rfind", "count", "replace", "strip", "search",
+                      "match", "fullmatch", "sub", "split", "compile"})
 
 # A vocabulary of event kinds names facts, never human language, so it is not a word list.
 KIND_LISTS = frozenset({"RECENT_KINDS"})
@@ -65,8 +72,11 @@ def scan() -> list[Finding]:
 
 
 def _relative(path: pathlib.Path) -> str:
-    """Return one repo-relative POSIX path."""
-    return path.relative_to(ROOT).as_posix()
+    """Return one repo-relative POSIX path, or the path itself when it lives outside the tree."""
+    try:
+        return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def _python_files(roots: tuple[pathlib.Path, ...]) -> list[pathlib.Path]:
@@ -99,32 +109,55 @@ def _body_name() -> list[Finding]:
 
 
 def _text_parse() -> list[Finding]:
-    """Ban 2: no module reads human language, and no word list is declared."""
+    """Ban 2: nothing operates on the contract's human-language text.
+
+    The ban is about the words a person wrote: `description`, an attachment's text, an answer's
+    value. A `.split(":")` on an id, a regex over `config.yaml` or a `.lower()` on a language tag
+    is string work on data the soul itself wrote, so it is not a finding; the built-in proof that
+    the rule still bites is `test_the_text_parse_ban_catches_a_planted_violation`.
+    """
+    return text_parse_findings()
+
+
+def text_parse_findings(paths: list[pathlib.Path] | None = None) -> list[Finding]:
+    """Return every text-parse finding over the given modules (or the core and middleware)."""
     found = []
-    for path in _python_files((CORE, MIDDLEWARE)):
+    for path in paths if paths is not None else _python_files((CORE, MIDDLEWARE)):
         tree = _tree(path)
         for node in ast.walk(tree):
             found.extend(_text_parse_node(path, node))
-        for scope in _module_and_class_scopes(tree):
-            for statement in scope:
-                if _assigned_word_list(statement):
-                    found.append(Finding(_relative(path), statement.lineno, "text-parse"))
     return found
 
 
 def _text_parse_node(path: pathlib.Path, node: ast.AST) -> list[Finding]:
-    """Return the text-processing findings of one node."""
-    if isinstance(node, ast.Import):
-        if any(alias.name.split(".")[0] == "re" for alias in node.names):
-            return [Finding(_relative(path), node.lineno, "text-parse")]
-    elif isinstance(node, ast.ImportFrom):
-        if (node.module or "").split(".")[0] == "re":
-            return [Finding(_relative(path), node.lineno, "text-parse")]
-    elif isinstance(node, ast.Call):
+    """Return one finding when a node operates on human-language text."""
+    if isinstance(node, ast.Call):
         target = node.func
-        if isinstance(target, ast.Attribute) and target.attr in PARSE_METHODS:
+        name = target.attr if isinstance(target, ast.Attribute) else getattr(target, "id", "")
+        if name in TEXT_OPS and (
+                _references_language(target)
+                or any(_references_language(argument) for argument in node.args)):
+            return [Finding(_relative(path), node.lineno, "text-parse")]
+    elif isinstance(node, ast.Compare):
+        operands = [node.left, *node.comparators]
+        if any(_references_language(operand) for operand in operands):
             return [Finding(_relative(path), node.lineno, "text-parse")]
     return []
+
+
+def _references_language(node: ast.AST) -> bool:
+    """Tell whether one expression reads a human-language column of the contract."""
+    chain: list[str] = []
+    while isinstance(node, ast.Attribute):
+        chain.append(node.attr)
+        node = node.value
+    chain.reverse()
+    if not chain:
+        return False
+    if chain[-1] in LANGUAGE_FIELDS:
+        return True
+    return any((parent, child) in LANGUAGE_CHAINS
+               for parent, child in zip(chain, chain[1:]))
 
 
 def _module_and_class_scopes(tree: ast.Module) -> list[list[ast.stmt]]:

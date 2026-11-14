@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tests.architecture import support
 from tests.architecture.support import ACTIVE, counts, load_baseline, scan
 
 
@@ -33,3 +34,26 @@ def test_no_stale_baseline() -> None:
     assert not stale, (
         "the ratchet can only shrink: delete the extra lines from the baseline\n"
         + "\n".join(stale))
+
+
+def test_the_text_parse_ban_catches_a_planted_violation(tmp_path):
+    """The narrowed ban still fails on the one thing it forbids: words from a person.
+
+    A planted line reads a sentenced field (`"ya" in percept.description`); a control line splits
+    an id, which is data the soul wrote, and must stay clean. Without this proof a scanner that
+    flags nothing would look like a clean tree.
+    """
+    planted = tmp_path / "planted.py"
+    planted.write_text(
+        'def f(percept):\n'
+        '    return "ya" in percept.description\n', encoding="utf-8")
+    control = tmp_path / "control.py"
+    control.write_text(
+        'def g(action):\n'
+        '    return action.capability.split(".", 1)[1]\n', encoding="utf-8")
+
+    found = support.text_parse_findings([planted])
+
+    assert [finding.ban for finding in found] == ["text-parse"]
+    assert found[0].line == 2
+    assert support.text_parse_findings([control]) == []

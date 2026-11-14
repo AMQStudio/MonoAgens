@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-import re
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timedelta
