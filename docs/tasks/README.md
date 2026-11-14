@@ -1,13 +1,38 @@
 # Tasks
 
-Work for coding workers. **One file = one task = one worker.** Each task is split into parts and
-items, numbered in the order they are done (`3.2` = part 3, item 2). Tasks run **one after
-another**: one worker takes one task file, works through its parts in order (one commit per item
-when practical), verifies its own work, ends with the real-model test in the last part, and
-reports to the owner. The next task starts after that report.
+**One file = one task.** A task states the behavior to achieve and how to prove it, in theory:
+no files, functions or fields. The owner designs it with the theory architect; the code
+architect turns it into work, ticks the items and writes the Notes. Tasks run **one after
+another**; parts and items are numbered in the order they are done (`3.2` = part 3, item 2).
 
-Tasks are numbered in the order they are done. Finished tasks stay as history. Tasks written
-before Task 3 name files by their earlier names; the [spec.md](../spec.md) *Terms* maps them.
+## Format of an open task
+
+```
+# Task N — Title
+Status: todo | doing | stopped | done | Depends on: …
+
+**Goal.** What the soul can do when the task is done, and which spec sections hold the theory.
+
+## Part 1 — Name
+- [ ] **1.1 What must be true, in one line.**
+  - *Function:* what it is for.
+  - *Must hold:* the behavior anyone can observe.
+  - *Proof:* the condition a test or a sealed scenario checks.
+  - *Neutral:* for a mechanism, the setting at which it has no effect.
+
+**Done when.** …
+
+**Notes.** Written by the code architect: results, material checks, theory questions.
+```
+
+Short items may keep only the lines they need. Rules:
+- Code never adds a behavior rule that the task or the spec does not state. A case the theory
+  does not catch is written in **Notes** as a theory question and brought to the design; it is
+  never patched in code.
+- The theory architect writes the goal, the items and *Done when*; the code architect ticks the
+  items, writes Notes, and keeps the `Status` line and the table below up to date.
+- Tasks before Task 7 are history and keep the form they were written in; they may name files by
+  earlier names, which the spec's *Terms* maps.
 
 | Task | File | Status | Depends on |
 |---|---|---|---|
@@ -17,11 +42,11 @@ before Task 3 name files by their earlier names; the [spec.md](../spec.md) *Term
 | 4 | [Middleware and first plugins](done/4-middleware-plugins.md) | **done** — 539 tests, fake 133/133, launch set 24/26 (Task 3: 22/26), sandbox 53/53 real, honesty counts claims; 5.1–5.3 moved to Task 6; loop in 19 and leaks vs desk carried to Task 5 0.0 | Task 3 |
 | 5 | [Adapters: WhatsApp, Discord and more](done/5-adapters.md) | **stopped** at 1.12 P (2026-11-14) — providers, loop, brakes, full outputs, identity and linking, WhatsApp, Discord, Telegram and CLI native, the audit's S, A, F.1 and P; the rest (1.10, 1.11, 1.12 F/E/O, 1.8) moved to Task 6 | Task 4 |
 | 6 | [The locked contract](6-contract.md) | **done** (2026-11-14) — contract v2 as code (no hash lock: the owner dropped it, the ratchet and `tests/contract/` hold it), core and middleware on v2, four adapters translating everything with their own `ask`/`render`/`audience`, tests through the contract only, five fake bodies through the real kernel, 684 tests green, fake replay 158/158, ratchet 0; real launch set 113/158 reported, live WhatsApp findings fixed (LID addressing, owner claim, command wake, conversation window) | Task 5 |
-| 7 | [Core: depth of mind](7-core-mind.md) | todo — after weeks of daily use | Task 6 and some weeks of daily use |
+| 7 | [Core: depth of mind](7-core-mind.md) | todo — Parts 1–2 now; Parts 3–7 after weeks of daily use | Task 6 |
 | 8 | [First users and release](8-release.md) | todo | Task 7 |
 | — | [Later: voice, Home Assistant, more model providers](later-voice-home.md) | todo — moved out of Task 5 Part 2; its number and place are decided with the web panel task | Task 6 |
 
-The architect updates this table and each file's `Status:` line; workers never do.
+The code architect updates this table and each file's `Status` line.
 
 ## Launch
 "Launch" means: the owner uses the soul every day in a direct chat and one group. Task 2 is the
@@ -31,10 +56,10 @@ precision: a needless wake costs a few tokens and reasoning can still stay silen
 moment is a failure.
 
 **Deferred until weeks of real logs** (the spec stays; only the work waits):
-- Extending upcasting: `monoagens/versioning.py` exists from Task 1; leave it as it is until a
-  payload schema first changes.
-- The full prior loader with its loading rules ([spec.md](../spec.md) *Prior (format version 1)*); the code reads
-  `prior/dispositions.yaml` directly until then.
+- Extending upcasting: it exists since Task 1; it stays as it is until a payload schema first
+  changes.
+- The full prior loader with its loading rules ([spec.md](../spec.md) *Prior (format version 1)*);
+  until then only the dispositions are read.
 - Snapshots of `state` ([spec.md](../spec.md) *Contract*).
 
-The rules every task follows are in [AGENTS.md](../../AGENTS.md).
+How the code architect and workers work is in [AGENTS.md](../../AGENTS.md).

@@ -322,6 +322,147 @@ kernel.
   [Klein et al. 2009 (seL4), PR]. Plugins are trusted in-process code for now; per-plugin lever
   declarations in the manifest are the path toward least privilege without changing the core.
 
+## 17. Grounding: every act waits for evidence it landed
+
+**Conditional relevance.** A first action makes a fitting next action expected; when it does not
+come, its absence is noticed [Schegloff 1968; Schegloff & Sacks 1973, PR]. **Grounding.** People
+keep looking for evidence that they were understood: an acknowledgement, a relevant next turn, or
+continued attention; how much evidence is enough depends on the purpose and the medium
+[Clark & Brennan 1991, PR]. A "huh?"-like reaction is an open-class repair initiator: it says
+something in the last turn did not land without saying what [Enfield et al. 2013, PR].
+
+Mapping: the core opens a `predict` after every act, toward whom it acted, in that place, until it
+expires. Three outcomes, one mechanism:
+- the expected evidence comes → the prediction is answered; a reply to the soul's act wakes it
+  through the circuit breaker, which is how a conversation continues without a time window;
+- nothing comes before expiry → a noticed absence (a prediction error by time);
+- something comes that misses the expected content → a prediction error by content (wave 1). The
+  gate measures the miss cheaply (whose reply, how early or late, how far its vector is from what
+  was expected); reasoning judges what kind of miss it is (accepted, confused, corrected, a new
+  topic).
+The same holds for a body: a robot pushes a door and expects the door sensor to change; if it
+does not, that absence is the same kind of error. The criterion rises with the stakes (*Drives as opportunity
+costs*).
+
+## 18. Theory of mind as a perception ledger
+
+Mentalizing is modeled as joint inference of a person's beliefs, desires and percepts from their
+actions [Baker, Jara-Ettinger, Saxe & Tenenbaum 2017, PR]. Language models fail theory-of-mind
+tasks mostly through unreliable implicit tracking of who saw what, not through weak reasoning:
+small alterations of classic tasks break them [Ullman 2023, PP], while an explicit per-character
+belief tracker built from who witnessed each event makes them robust and zero-shot
+[Sclar et al. 2023, SymbolicToM, ACL, PR], and making perception explicit improves false-belief
+inference [Jung et al. 2024, EMNLP, PR].
+
+Mapping (wave 1): the core keeps, per source, facts only — what it witnessed (from the audiences
+the log already records), what the soul told it and whether that was grounded, its open requests,
+and what changed after it last witnessed it (a candidate false belief). Reasoning infers what the
+person wants and believes from those facts. Inferences about minds are stored as `inferred`, with
+credence, and tested by the next predictions; they are never facts. "Witnessed" is generic: in the
+same place for a chat, in sensor range for a robot, in range for a game. The soul keeps the same
+card for itself (self-model): what it said, promised and claimed, to whom, and what its body can
+do now.
+
+## 19. Sense of agency
+
+The comparator model: a copy of the motor command predicts its sensory result, and a match marks
+the change as self-caused [Frith, Blakemore & Wolpert 2000, PR]. Mapping (wave 1): an outcome
+that matches the soul's own open `predict` is marked self-caused (a fourth source in source
+monitoring) and is not appraised as a new stimulus; a similar change that was not predicted is
+external.
+
+## 20. Judging silence
+
+Learning from outcomes needs a prediction to compare with. Today only acts open one, so the soul
+learns from speaking and never from staying silent. Mapping (wave 1): a chosen silence opens a
+`predict` too ("if I stay silent, someone else answers" or "nothing is needed"); a miss — the
+question stays unanswered, the person asks again — is a prediction error the delta rule of
+*Learning with bounds* uses like any other. Wrong silences become visible in the log as errors.
+
+## 21. Event boundaries
+
+When prediction error spikes, people mark the boundary of an event and update their working model
+[Zacks et al. 2007, PR]; surprise-based segmentation also gives language models episodes that match
+human-perceived events [Fountas et al. 2025, EM-LLM, ICLR, PR]. Mapping: an episode ends at a spike
+of prediction error, not after a fixed time; the same boundaries are the right moments for an
+initiative (*Idle mode and initiative*).
+
+## 22. Who a line is for (wave 2)
+
+Listeners hold roles: addressee, side participant, overhearer, eavesdropper [Goffman 1979;
+Clark & Carlson 1982, PR]. Even human annotators agree only moderately on the addressee, and a
+continuous degree fits better than one label [Mori et al. 2026, PP]. In bodies, the formation of
+people in space decides who is inside an interaction [Kendon 1990, book], and trajectory and
+orientation predict who is about to engage [Bohus & Horvitz 2009, SIGDIAL, PR].
+
+Mapping: the adapter's `addressed` stays an explicit fact of the contract. Inside the core, each
+listener gets a degree from 0 to 1, from cheap structural cues in order: an explicit address; a
+link to an open prediction (whose question this answers); the continuity of who is talking with
+whom; orientation and distance for physical bodies. Reasoning judges the meaning. The soul answers
+a line meant for someone else only as a side participant with something that clears the gate.
+
+## 23. Idle mode and initiative (wave 2)
+
+Thought does not stop when nothing happens: memories and intentions surface on their own
+[Christoff et al. 2016, PR]. Involuntary memories are triggered by a distinctive overlap between
+the present cues and a memory [Berntsen 2021, PR]; pending intentions surface when their focal cue
+appears [McDaniel & Einstein 2000, PR]. Too strong automatic constraint turns into repetition
+(rumination) [Christoff et al. 2016].
+
+Mapping, all in the core without a model call:
+1. when idle, spreading activation from the present context (place, who is present, time) raises
+   only memories whose overlap with it is distinctive;
+2. a pending promise or goal becomes active when its cue is present (the person appears, the place
+   or the time comes), reusing Expectations;
+3. a candidate thought enters the same gate, valued as benefit × probability it matters − cost of
+   interrupting; act only when that beats staying silent [Horvitz 1999, CHI, PR].
+Against chattiness: an initiative budget (the threshold rises after each initiative), delivery at
+an event boundary rather than after a quiet spell — in one study proactive help was welcomed at
+subtask boundaries and judged worse when triggered by user inactivity [Pu et al. 2025, CHI, PR] —
+and habituation of a thought the gate already refused. Incubation needs no mechanism of its own:
+an unsolved problem stays an active goal and meets new cues in sleep or idle recall.
+
+## 24. Drives as opportunity costs (wave 2)
+
+Fatigue and boredom can be modeled without feelings: fatigue as the rising value of offline
+computation, boredom as the rising value of exploration [Agrawal, Mattar, Cohen & Daw 2022, PR],
+in line with effort as an opportunity cost [Kurzban et al. 2013, PR]. How deeply to think is the
+expected value of control: reward minus the cost of control [Shenhav, Botvinick & Cohen 2013, PR].
+Curiosity is a drive to reduce uncertainty that matters, distinct from attraction to novelty
+[Gottlieb, Oudeyer, Lopes & Baranes 2013, PR]. Sleep follows homeostatic pressure plus rhythm
+[Borbély 1982, PR].
+
+Mapping: four numbers, never shown as feelings and never changing the tone of speech —
+- sleep pressure = unconsolidated backlog, released when the world is quiet (fatigue is this);
+- switching = long effort in one thread without progress lowers the bar to change approach or
+  report (boredom is this; it stops loops);
+- curiosity = a low-credence belief or open gap that changes a pending decision pushes to ask or
+  check; a gap that changes nothing does not;
+- effort = the stakes (commitments, uncertainty, the cost of an error, a conflict between sources
+  or with a commitment) set how deeply reasoning thinks.
+
+## 25. Wave 3: maps, habits and conventions
+
+A cognitive map is a general way to organise knowledge, physical, social or conceptual
+[Behrens et al. 2018, PR]: relations between sources, places and topics, with activation spreading
+over them. Habit and goal-directed control are arbitrated by uncertainty: each is used where it is
+most accurate [Daw, Niv & Dayan 2005, PR]; a reliable action sequence becomes a skill offered to
+reasoning and loses that right on a prediction error. A growing library of reusable skills carried
+an agent across new game worlds [Wang et al. 2023, Voyager, PP]. Conventions of a place are learned
+from others' observed outcomes with the same delta rule.
+
+## 26. Proving a mechanism: ablation and sealed sets
+
+Each component of an agent architecture is justified by removing it and measuring the loss
+[Park et al. 2023, UIST, PR]. Agent benchmarks without proper holdouts let agents overfit and take
+shortcuts; holdouts should match the level of generality claimed, and cost must be reported with
+accuracy [Kapoor et al. 2025, *AI Agents That Matter*, TMLR, PR]. Mapping: every mechanism has a
+neutral value and a measured claim (*Mental model*); scenarios are split into development,
+validation and sealed sets (*Evaluation (later)*), with sealed sets grouped by generality: small
+alterations, new kinds of surprise, other bodies. The main thread, the task threads and the gate
+already form a global workspace with ignition [Mashour, Roelfsema, Changeux & Dehaene 2020, PR],
+so it needs no row of its own.
+
 ---
 
 ## References
@@ -448,6 +589,59 @@ kernel.
 - STALE (2026). arXiv 2605.06527. [PP]
 - OWASP Top 10 for LLM Applications 2025; OWASP Top 10 for Agentic Applications. [IND]
 - OpenAI, Prompt caching guide. [IND]
+
+- Schegloff, E. A. (1968). Sequencing in conversational openings. *American Anthropologist*. [PR]
+- Schegloff, E. A., & Sacks, H. (1973). Opening up closings. *Semiotica*, 8, 289–327. [PR]
+- Clark, H. H., & Brennan, S. E. (1991). Grounding in communication. In *Perspectives on
+  Socially Shared Cognition*. APA. [PR]
+- Enfield, N. J., Dingemanse, M., et al. (2013). Huh? What? A first survey in 21 languages. In
+  *Conversational Repair and Human Understanding*. Cambridge UP. [PR]
+- Baker, C. L., Jara-Ettinger, J., Saxe, R., & Tenenbaum, J. B. (2017). Rational quantitative
+  attribution of beliefs, desires and percepts in human mentalizing. *Nature Human Behaviour*. [PR]
+- Sclar, M., et al. (2023). Minding language models' (lack of) theory of mind: a plug-and-play
+  multi-character belief tracker (SymbolicToM). *ACL*. [PR]
+- Jung, C., et al. (2024). Perceptions to beliefs: exploring precursory inferences for theory of
+  mind in large language models. *EMNLP*. [PR]
+- Ullman, T. (2023). Large language models fail on trivial alterations to theory-of-mind tasks.
+  arXiv 2302.08399. [PP]
+- Frith, C. D., Blakemore, S.-J., & Wolpert, D. M. (2000). Abnormalities in the awareness and
+  control of action. *Phil. Trans. R. Soc. B*. [PR]
+- Zacks, J. M., et al. (2007). Event perception: a mind–brain perspective. *Psychological
+  Bulletin*. [PR]
+- Fountas, Z., et al. (2025). Human-like episodic memory for infinite context LLMs (EM-LLM).
+  *ICLR*. [PR]
+- Goffman, E. (1979). Footing. *Semiotica*, 25, 1–29. [PR]
+- Clark, H. H., & Carlson, T. B. (1982). Hearers and speech acts. *Language*, 58, 332–373. [PR]
+- Kendon, A. (1990). *Conducting Interaction*. Cambridge UP. [book]
+- Bohus, D., & Horvitz, E. (2009). Learning to predict engagement with a spoken dialog system in
+  open-world settings. *SIGDIAL*. [PR]
+- Mori et al. (2026). Preprint on graded addressee annotation in multi-party conversation;
+  title to verify. [PP]
+- Christoff, K., et al. (2016). Mind-wandering as spontaneous thought: a dynamic framework.
+  *Nature Reviews Neuroscience*. [PR]
+- Berntsen, D. (2021). Involuntary autobiographical memories and their relation to other forms of
+  spontaneous thoughts. *Phil. Trans. R. Soc. B*. [PR]
+- McDaniel, M. A., & Einstein, G. O. (2000). Strategic and automatic processes in prospective
+  memory retrieval. *Applied Cognitive Psychology*. [PR]
+- Horvitz, E. (1999). Principles of mixed-initiative user interfaces. *CHI*. [PR]
+- Pu et al. (2025). A field study of proactive AI assistance; title to verify. *CHI*. [PR]
+- Agrawal, M., Mattar, M. G., Cohen, J. D., & Daw, N. D. (2022). The temporal dynamics of
+  opportunity costs: a normative account of cognitive fatigue and boredom. *Psychological
+  Review*. [PR]
+- Kurzban, R., Duckworth, A., Kable, J. W., & Myers, J. (2013). An opportunity cost model of
+  subjective effort and task performance. *Behavioral and Brain Sciences*. [PR]
+- Shenhav, A., Botvinick, M. M., & Cohen, J. D. (2013). The expected value of control. *Neuron*. [PR]
+- Gottlieb, J., Oudeyer, P.-Y., Lopes, M., & Baranes, A. (2013). Information-seeking, curiosity,
+  and attention. *Trends in Cognitive Sciences*. [PR]
+- Borbély, A. A. (1982). A two process model of sleep regulation. *Human Neurobiology*. [PR]
+- Behrens, T. E. J., et al. (2018). What is a cognitive map? *Neuron*. [PR]
+- Daw, N. D., Niv, Y., & Dayan, P. (2005). Uncertainty-based competition between prefrontal and
+  dorsolateral striatal systems for behavioral control. *Nature Neuroscience*. [PR]
+- Wang, G., et al. (2023). Voyager: an open-ended embodied agent with large language models.
+  arXiv 2305.16291. [PP]
+- Kapoor, S., et al. (2025). AI agents that matter. *TMLR*. [PR]
+- Mashour, G. A., Roelfsema, P., Changeux, J.-P., & Dehaene, S. (2020). Conscious processing and
+  the global neuronal workspace hypothesis. *Neuron*. [PR]
 
 Author names and venues for 2026 preprints are given as found during research; verify against
 arXiv before citing them formally.

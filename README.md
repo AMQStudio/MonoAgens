@@ -6,16 +6,21 @@ arrived, run the model". MonoAgens starts from "something happened, record it, t
 whether it is worth thinking about": it remembers across apps and time, keeps its promises,
 knows when to stay quiet in a group, and can replay every decision it made.
 
-**Built like the Linux kernel.** Three layers, each with one job:
-- **Core** — neutral and primitive, only a brain: perception, attention, memory, expectations,
-  a cheap decision to act, and reasoning (the LLM) woken only when a moment deserves it. It knows
-  no case and no person, only opaque ids, labels and numbers, and restricts nothing itself.
-- **Middleware** — the regulator, like drivers: privacy, identity, the owner policy, limits,
-  tools and commands, install. It is the only path in and out of the core and keeps it from
-  running wild. Like the core it is generic: it knows no platform and translates nothing.
-- **Adapters and plugins** — Telegram, WhatsApp, Discord, CLI, later devices, robots and apps;
-  search, files, modes. Each translates its own world into the contract's facts and talks only
-  to the middleware.
+**Built like the Linux kernel.** Layers, each with one job:
+- **Core** — the whole soul, fully autonomous, and the research subject of the project: how far a
+  harness can carry a mind. Perception, attention, memory, expectations, a cheap decision to act,
+  and reasoning (the LLM) woken only when a moment deserves it. It knows no case and no person,
+  only opaque ids, labels and numbers, restricts nothing itself, and can run with no middleware
+  at all.
+- **Middleware** — the safety valve and regulator: privacy, identity, the owner policy, limits,
+  tools and commands, install, and a switch for each mechanism of the core. On by default; the
+  owner may switch it off for experiments, and the log shows when it was off. Like the core it is
+  generic: it knows no platform and translates nothing.
+- **Plugins** — added abilities and experiments (search, files, modes, even emotions), acting
+  only through the middleware's levers.
+- **Adapters** — the environment and the body: Telegram, WhatsApp, Discord, CLI, later devices,
+  robots, games and apps. Each translates its own world into the contract's facts and never
+  decides for the soul.
 
 One contract ([`docs/spec.md`](docs/spec.md) *The contract*) sits between the layers: six generic
 facts (actor, place, audience, event, capability, receipt) that fit a chat, a robot, a workspace
@@ -36,8 +41,8 @@ list, a payload read, a removed field or an upward import.
 - [`docs/research.md`](docs/research.md) — the formulas behind the core, why each was chosen, and
   their sources.
 - [`AGENTS.md`](AGENTS.md) — how coding agents work on this repository: rules, invariants, tests.
-- [`docs/tasks/`](docs/tasks/README.md) — the work for coding workers, in order; finished tasks in
-  `docs/tasks/done/`.
+- [`docs/tasks/`](docs/tasks/README.md) — the work, in order: behavior to achieve and how to prove
+  it; finished tasks in `docs/tasks/done/`.
 - [`prior/`](prior/) — the default instincts (knob values) a new soul is born with; tune with replay.
 - `scripts/replay.py` — scenario replay: tests, metrics and tuning.
 - `scripts/recording.py` — turn one body's recording into a committed fixture (`anonymize`).

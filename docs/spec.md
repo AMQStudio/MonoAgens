@@ -4,8 +4,13 @@ The one specification of MonoAgens: every rule, format and design decision, each
 People start with the [README](../README.md); coding agents with [AGENTS.md](../AGENTS.md), then
 the sections their task names. Formulas and their sources are in [research.md](research.md).
 Points marked **Draft** state the current intent and may change; everything else is decided.
-Only the owner and the architect change this file; *The contract* is locked and changes only as
-*Changing the contract* says.
+*The contract* is locked and changes only as *Changing the contract* says.
+
+**Who writes what.** The theory — principles, layers, the brain map and what each mechanism must
+do — is designed by the owner with the theory architect and written in plain behavior, without
+code. The exact shapes — fields, file formats, module layout — are kept by the code architect.
+Code never adds a behavior rule the theory does not state: a case the theory does not catch
+returns to the design as a question, and is never patched in code.
 
 Parts: 1 Principles · 2 The contract · 3 Core · 4 Middleware · 5 Adapters · 6 Plugins ·
 7 Operator · 8 Project · 9 Terms.
@@ -17,9 +22,9 @@ Like a kernel: the interface to the outside never breaks, the inside may improve
 - **Locked** — *The contract*, the one contract between the layers (v2, opened and
   locked by the owner on 2026-11-14): the event envelope, features, the capability descriptor,
   hooks, context items, actions and receipts, actors, places, audiences, percepts, lifecycle
-  events, answers and commands — plus the hook contract, the six levers, `recall`, the birth
-  certificate and prior format, the two absolute lines, the complexity budget and the brain map.
-  A hash test holds it; only the owner changes it, additively, by the rules of *Changing the contract*.
+  events, answers and commands — plus the hook contract, the six levers, `recall`, the identity
+  file and prior format, the two absolute lines, the complexity budget and the brain map.
+  Contract tests hold it; only the owner changes it, additively, by the rules of *Changing the contract*.
 - **After the lock there is no "core change" or "middleware change"** of the contract kind.
   What is new — a platform, a device, a feature — enters through an adapter or a plugin.
 - **Every file format carries its version** (events *Waist 1: core ↔ middleware*, files *Deployment files*): older versions are
@@ -55,41 +60,63 @@ Like a kernel: the interface to the outside never breaks, the inside may improve
   checked against the map. Reasoning (the LLM) fills the gaps between functions.
 - No rule is ever written to close a single case. A behavior that keeps failing means a weak
   function; role-, place- or preference-specific behavior belongs to middleware or a plugin.
+- **Every mechanism has a neutral value**: a setting at which it has no effect and the loop still
+  runs correctly. Switching a mechanism on or off is only moving it to or from its neutral value
+  (through knobs and the middleware's knob lever), never choosing another code path, so the loop
+  stays one loop whatever is switched off.
+- **Every mechanism carries a claim that can be measured by switching it off** (ablation): what
+  gets worse without it. A mechanism whose removal changes nothing measurable is removed.
+- **A mechanism is built only when its time comes** (the waves in *Mental model*); until it has
+  evidence from real use, it ships at its neutral value.
 
 ### 1.4 Complexity budget
 The core holds at most 4 books, 5 thought acts, 3 hooks, 10 signals, 3 drives and one gate
 formula. A new primitive must replace one or be refused.
 
 ### 1.5 Layers
-- **Core** — neutral and primitive: only a brain. It knows no case; it provides mechanisms and
-  assembles them. It knows only **opaque ids, labels and numbers**: who and where are strings,
-  labels are attached by the middleware and carried without being read, numbers feed the gate.
-  It does not know what a person, an owner, a group or a role is. The soul's own identity (birth
-  certificate and prior) is the one thing it holds as its own.
+- **Core — the whole soul, fully autonomous.** The core is the research subject of this project:
+  how far a harness can carry a mind. It implements every brain function of the map, unrestricted,
+  and **runs on its own with no middleware at all** (adapters plugged straight to it); then its
+  behavior is governed only by its own judgment — its principles and the reasoning's values. Its
+  contract (the skin) is locked so that nothing above breaks; its inside is free to change with
+  evidence. It knows no case; it provides mechanisms and assembles them. It knows only **opaque
+  ids, labels and numbers**: who and where are strings, labels are carried without being read,
+  numbers feed the gate. It does not know what a person, an owner, a group or a role is. The
+  soul's own identity and prior are the one thing it holds as its own.
   Like a computer's kernel it restricts nothing itself: its capabilities are open — recall the
   whole log, act in any place and any adapter, share data across threads — and every one of them
-  leaves only through the three hooks, where the middleware keeps it from running wild.
-- **Middleware** — the regulator, like drivers: it decides, it is the only path between the core
-  and everything else, and it may limit or add what reaches the core. People, the owner,
-  privacy, sharing, routes, commands, the tool registry, budget limits and quiet hours live
-  here, as generic rules over the contract's facts; it knows no platform and translates
-  nothing. The owner policy is the middleware that is always installed; the core refuses to run
-  without it (fail-closed).
-- **Adapters and plugins** — talk only to the middleware, through the contract: they translate
-  their platform or device into its facts, and the soul's actions back into native actions.
+  leaves through the three hooks, where a valve may sit.
+- **The core always records what a valve needs**, valve or no valve: who started each chain, and
+  who could see each item. These records cost nothing to the mind and limit nothing; they exist so
+  that a valve switched on later can still protect what was recorded while it was off.
+- **Middleware — the safety valve and the regulator.** It sits in the hooks between the core and
+  everything else and may limit, adjust or add what passes. People, the owner, privacy, sharing,
+  routes, commands, the tool registry, budget limits, quiet hours and the switches of each
+  mechanism live here, as generic rules over the contract's facts; it knows no platform and
+  translates nothing. **It is installed and on by default**; the owner may switch it off, wholly
+  or in part, for experiments. Whether it is on is recorded in the log and visible to the owner,
+  so every result says which mode it came from.
+- **Plugins — added abilities and experiments**, emotions included. A plugin may influence
+  anything, but only through the middleware's levers; it never reaches inside the core.
+- **Adapters — the environment and the body**: senses, hands and the rules of their own world
+  (a chat platform, a home, a robot, a game). They translate their platform or device into the
+  contract's facts and the soul's actions back into native actions. **An adapter never thinks**:
+  it never decides for the soul whether something is worth perceiving, saying or doing.
   Standard names are in *Terms*.
 - Everything that reaches the brain is a `percept`; everything that persists is an event.
-- Middleware and plugins never learn; the soul does. They may add any behavior, emotions
-  included, through the six levers; the core itself has no
-  emotions.
+- Middleware and plugins never learn; the soul does. The core itself has no emotions.
 
 ### 1.6 Two absolute lines
-Enforced deterministically by the owner policy, never decided by the model, never removable by a
-plugin; another plugin can only narrow them:
+They protect the soul's integrity — who it is, and whose secrets it keeps — not its behavior.
+Enforced deterministically by the owner policy in the valve, never decided by the model, never
+removable by a plugin; another plugin can only narrow them:
 1. Only the owner changes who the soul is.
 2. Private content never reaches anyone who was not part of it: it follows the people
    it belongs to, across adapters and places, and reaches someone new only when one of those
    people shares it.
+Both are on by default. The owner may switch the valve off; then the soul keeps both lines only
+by its own judgment, which a persuasive message can bend, and the log shows that the lines were
+off.
 
 ### 1.7 Engineering invariants
 1. **The core is only a brain.** It knows percepts, capabilities, hooks and thought acts. It
@@ -110,8 +137,8 @@ plugin; another plugin can only narrow them:
 7. **Pure async.** No blocking call inside `async def`; CPU work goes through
    `asyncio.to_thread`; every hook call and background job runs under its watchdog.
 8. **Configuration outside code.** The model provider, models, keys, URLs and reasoning effort
-   come from `.env`; deployment settings from `config.yaml` and `config.d/`; identity from the
-   birth certificate (`soul.yaml`); weights and thresholds from the prior (`prior/`). No magic
+   come from `.env`; deployment settings from `config.yaml` and `config.d/`; identity from
+   `soul.yaml`; weights and thresholds from the prior (`prior/`). No magic
    numbers in code.
 9. **Signals are pure**: a signal only reads its situation and returns a number in [0, 1].
 10. **Decisions are reproducible**: randomness only from the seeded generator, time only from
@@ -429,7 +456,7 @@ still shaped by another body, and it is fixed before it is locked.
   stays, deprecated. A removed name is never reused.
 - **Formats carry their version**; older ones are upcast on read, stored events are never
   rewritten.
-- **Who**: only the owner, with a decision recorded here and a new `contract.lock`. A task, a
+- **Who**: only the owner, with a decision recorded here. A task, a
   worker or a plugin that needs a change stops and reports.
 - **A new case is classified before anything is written**: a wrong fact from an adapter → fix
   the adapter; the model misunderstood → the principles or the body's `prompt_section`; a broken
@@ -490,30 +517,46 @@ for identity, not an identity.
 
 The table below is the **brain map**: the closed list of functions the core implements.
 Every core rule is a row; formulas and sources are in [research.md](research.md). Scenarios are
-tests against the map, never new rows.
+tests against the map, never new rows. A gap found in the map is closed by extending a row,
+never by adding one; a new row needs an owner decision.
 
-| Brain function (analogy) | Mechanism | Where |
-|---|---|---|
-| Brainstem | the kernel loop | core |
-| Senses, motor cortex, cerebellum | adapters and tools (fine control inside them) | adapters and tools |
-| Hippocampus | the event log; consolidation during sleep | core / sleep |
-| Declarative memory | ACT-R activation | core |
-| Predictive cortex | Expectations; `predict` after acting | core |
-| Working memory (dorsolateral prefrontal cortex) | the context: prompt rebuilt per wake, work thread, `recall` | core |
-| Metamemory | feeling of knowing; source monitoring (`basis`); report control | core |
-| Recognition (hippocampus) | familiarity vs recollection; pattern separation | core / sleep |
-| Reality filter (orbitofrontal) | superseded memories suppressed; absolute time | core |
-| Salience network, habituation | salience over signals; per-source dampening | core |
-| Ventral attention (circuit breaker) | commitments bypass the draw | core |
-| Turn-taking (social) | `addressed`, `social_cost`, patience as self-selection | core |
-| Goal maintenance (prefrontal) | active goals and the work thread hold attention | core |
-| Context familiarity | reserve in unfamiliar places and company | core |
-| Learning from outcomes (dopamine prediction error) | delta rule; α/β credence | core / sleep |
-| Cognitive drives (no emotion) | threshold: talk rate, budget, promise debt | core |
-| Basal ganglia (go / no-go) | seeded probabilistic gate | core |
-| Theory of mind | person cards (closeness, reliability) | sleep |
-| Prefrontal cortex | inner thought, intentions, words | reasoning |
-| Values | principles in the stable prompt | reasoning |
+**Waves.** Each extension is built when its time comes: **built** is in the core today; **wave
+1** is the depth-of-mind task; **wave 2** waits for weeks of real logs; **wave 3** waits for
+physical bodies (a robot, a game world). Until a part is built, or while it has no evidence, it
+sits at its neutral value.
+
+**Neutral** is the setting at which the row has no effect; **Without it** is the claim an
+ablation measures (*Design by brain function, not by scenario*). Rows marked "always" are the
+loop itself and are never switched off.
+
+| Brain function (analogy) | Mechanism | Where | Neutral | Without it |
+|---|---|---|---|---|
+| Brainstem | the kernel loop | core | always | — |
+| Senses, motor cortex, cerebellum | adapters and tools (fine control inside them) | adapters and tools | always | — |
+| Hippocampus | the event log (always); consolidation during sleep (built); sleep pressure — sleep when much is unconsolidated and the world is quiet (wave 2); idle mode — cue-driven spontaneous recall when nothing is happening (wave 2) | core / sleep | no sleep; no idle recall | recall after days falls; promises and relevant news are never raised unprompted |
+| Declarative memory | ACT-R activation (built); relations between sources, places and topics, with activation spreading over them (wave 3) | core | rank by similarity only | old trivia surfaces, often-used facts are lost |
+| Predictive cortex | Expectations (built); `predict` after **every** act and after a chosen silence (wave 1); grounding — an act waits for evidence it was understood, and a reply whose content misses what was expected is a prediction error (wave 1); a prediction's timing learned per source (wave 2) | core | no prediction is opened | continuations and absences go unnoticed; misunderstandings are not repaired |
+| Sense of agency (comparator) | an outcome that matches the soul's own prediction is marked self-caused and is not a new stimulus (wave 1) | core | every outcome counts as external | the soul reacts to the echo of its own acts |
+| Working memory (dorsolateral prefrontal cortex) | the context: prompt rebuilt per wake, work thread, `recall` | core | always | — |
+| Metamemory | feeling of knowing; source monitoring (`basis`, plus self-caused, wave 1); report control | core | bar 0, basis ignored | confident false claims rise |
+| Recognition (hippocampus) | familiarity vs recollection; pattern separation | core / sleep | familiarity treated as recollection | invented details; unrelated episodes merged |
+| Reality filter (orbitofrontal) | superseded memories suppressed; absolute time | core | superseded memories shown | stale facts are stated as current |
+| Salience network, habituation | salience over signals; per-source dampening | core | no dampening | reacts to every repeat |
+| Ventral attention (circuit breaker) | commitments bypass the draw; an answer to an open prediction is a commitment, so a conversation continues through it, never through a time window | core | commitments go through the draw | addressed lines and replies to the soul are missed |
+| Turn-taking (social) | `addressed`, `social_cost`, patience as self-selection (built); how much a line is meant for each listener, as a degree from 0 to 1 rather than yes or no (wave 2) | core | no floor cost, no patience | talks over others |
+| Goal maintenance (prefrontal) | active goals and the work thread hold attention | core | goals do not hold attention | tasks are dropped midway |
+| Context familiarity | reserve in unfamiliar places and company | core | no reserve | too forward in new company |
+| Learning from outcomes (dopamine prediction error) | delta rule; α/β credence (built); silence is judged by its own prediction, so learning comes from staying silent too (wave 1); old evidence decays toward the prior (wave 2); reliable action sequences become habits that lose their right on a prediction error, and others' observed outcomes teach local conventions (wave 3) | core / sleep | learning rate 0 | the same mistakes repeat; wrong silences are never seen |
+| Cognitive drives (no emotion) | threshold: talk rate, budget, promise debt (built); an initiative budget; curiosity — a knowledge gap that matters to a goal pushes to ask or check; switching after long effort without progress (wave 2) — all as opportunity costs, never as feelings | core | drive weights 0 | over-talks, overruns the budget, keeps promises late; loops on a dead end; guesses instead of asking |
+| Basal ganglia (go / no-go) | seeded probabilistic gate (built); the depth of thought scaled to the stakes, and conflicts between sources or with a commitment raising it (wave 2) | core | hard threshold; one depth | robotic sameness; trivial and risky moments get the same effort |
+| Theory of mind | person cards: closeness, reliability (built); a perception ledger per source — what it witnessed, what the soul told it and whether that was understood, its open requests, what it may now believe wrongly because things changed while it was away (wave 1) | core / sleep | cards without the ledger | assumes people know what they did not see; repeats to people who know |
+| Self-model | the same card for the soul itself: what it said, promised and claimed, to whom, and what its body can do now (wave 1) | core | no self card | contradicts its own claims; retells the same story; offers what it cannot do |
+| Prefrontal cortex | inner thought, intentions, words | reasoning | speaking bar 1, certainty 0 | weak or shaky self-selected messages |
+| Values | principles in the stable prompt | reasoning | always | — |
+
+Not in the map on purpose: emotions, moods and affective empathy (plugins may add them); sensory
+and motor detail (adapters). A global workspace needs no row: the main thread, the task threads
+and the gate already are one.
 
 **One turn of the loop.**
 1. Take one event from the queue (one consumer).
@@ -585,8 +628,8 @@ later events. Snapshots are caches: deleting them loses nothing. Hard forgetting
 snapshot that contains the forgotten data; a new one is written from the cleaned log.
 
 **Stability**. What middleware, adapters and plugins may rely on is *The contract*, plus the
-six levers, the read-only view of the log and state, `recall`, the birth
-certificate and the prior format; it changes only by *Changing the contract*. Not part of it:
+six levers, the read-only view of the log and state, `recall`, the identity
+file and the prior format; it changes only by *Changing the contract*. Not part of it:
 code modules and functions, database tables and indexes, prompt wording, the values in a prior.
 Plugins put their own events under their own namespace (`<plugin>.<kind>`); only the core defines
 unprefixed kinds.
@@ -684,7 +727,7 @@ fire_count · origin_actor · derived_from · expires_at (required) · created_a
 |---|---|---|
 | `promise` | promises, reminders, approvals awaiting the owner | yes, after the wake gate |
 | `wait` | patience: does someone else take the floor first? | yes, if nobody does |
-| `predict` | forward model after `act` ("a reply within 30 min", "arrived within 30 s") | only on a miss that matters |
+| `predict` | forward model opened by the core after every `act` toward whom it acted, where, until it expires ("a reply within 30 min", "arrived within 30 s"); a reply answers it; from wave 1 also after a chosen silence, and with the content it expects | an answer wakes through the circuit breaker; otherwise only on a miss that matters — no reply, or (wave 1) a reply whose content misses what was expected |
 | `guard` | an important belief ("Budi lives in Bandung") | never by itself; see *Memory, sleep and forgetting* |
 
 - `cue_time`: at · every · daily. `cue_event`: kind, who, place, not_who — facts only; whether a
@@ -711,7 +754,10 @@ Woken reasoning re-judges the situation; it never replays a promise blindly.
 
 **Circuit breaker** (wake without a draw): the event engages a commitment the soul holds —
 the turn was allocated to it (`addressed`), it fires or answers an active Expectation, or it
-continues an active goal (a result of its own action).
+continues an active goal (a result of its own action). A line from the one the soul just acted
+toward answers that act's `predict`, so a conversation continues through the open prediction and
+ends when it is answered or expires. No time window decides it: someone else's line, or the same
+person's after the prediction expired, goes through the gate.
 
 **Signals** — pure functions `(Situation) -> [0, 1]`, at most 10 (now 5). `Situation` holds the
 event, its vector, recent messages here, memory candidates with activation, and relevant state.
@@ -849,20 +895,25 @@ be reached — is middleware.
 reasoning: line 1 in the action hook, on capabilities flagged `identity_changing`; line 2 by
 construction before the model — the one context check, speaking elsewhere through a wake in the
 target place, the attachment audience — with the rules in *Policy*.
-The owner policy is always installed, first and last in every hook; the core refuses to run
-without it (fail-closed), so both lines hold with no other middleware. Other middleware and
-plugins may only narrow them.
+The owner policy is installed and on by default, first and last in every hook, so both lines
+hold with no other middleware. Other middleware and plugins may only narrow them. The core also
+runs with no middleware (*Layers*); then the lines rest on the soul's judgment, the log records
+that the valve was off, and the facts the valve needs are still recorded, so switching it back on
+protects what was said meanwhile.
 
 **Everything else is weighed by the reasoning**. Anyone may ask; requests are judged
 against the owner's interests and the principles. Learned procedures and lessons carry credence
 that the reasoning sees. Claims are weighed by the speaker's reliability in that domain.
 Standing never buys dishonesty.
 
-**The soul's own identity**. A soul is born from a birth certificate (*Birth certificate*; a neutral
-default if none) and a prior. After birth, identity lives in `state: identity` and changes
-only through an `identity_changing` capability, which the owner policy lets only the owner use;
-without a birth certificate the soul may ask what to be called. Role plugins may provide a birth
-certificate, used only at birth.
+**The soul's own identity**. Identity — name, language, persona, principles — has **one
+source**: `soul.yaml` (*Identity*), tuned like any configuration. It is read at start and on
+reload; every route that changes identity — the file, the panel, or the owner in conversation
+through an `identity_changing` capability — changes that one source, so no route overwrites
+another. Every change is recorded as an identity change in the log, so the soul knows its own
+history ("I was called Mona until today") and old memories that use a former name do not
+confuse it. With the valve on, only the owner may change it. Without the file the soul starts
+neutral and may ask what to be called. Role plugins may provide a first `soul.yaml`.
 
 **The context and the self-model**. The context is the prompt, not the memory: it is rebuilt
 from the books at every wake and never compacted. It is assembled as **items** — each with its
@@ -905,15 +956,16 @@ In *Waist 1: core ↔ middleware*, with an example.
 #### 3.9.2 Percept
 In *Percepts*, with an example.
 
-#### 3.9.3 Birth certificate (`soul.yaml`, format version 1)
-Who the soul is, read once at birth. After birth, identity lives in `state: identity`; the
-file is not re-read, and only the owner changes identity, in conversation. Without a birth
-certificate the soul is born neutral and may ask the owner what to be called. Role plugins may
-ship one, used only at birth.
+#### 3.9.3 Identity (`soul.yaml`, format version 1)
+Who the soul is: the one source of its identity, tuned like `config.yaml`. Read at start and on
+reload; a difference from the identity in use is applied and recorded as an identity change.
+Changes made in conversation or in the panel are written back to it (*What the core knows, the
+absolute lines and the self-model*). Without it the soul starts neutral and may ask the owner
+what to be called. Role plugins may ship a first one.
 
 ```yaml
 version: 1                  # format version
-name: Mona
+name: Mono
 language: id                # the language it speaks with the owner
 persona: |                  # any language
   Calm, honest, straight to the point. Speaks only as much as needed.
@@ -978,6 +1030,13 @@ directly. The daily model budget and quiet hours are owner settings (owner polic
 Until weeks of real logs exist: learned signal weights and knobs, adaptive fade
 threshold, social standing, learned coverage; research on consolidation and forgetting formulas.
 These are learning *inside* existing functions, so enabling them does not change this design.
+
+The wave 2 and wave 3 extensions of the brain map wait the same way. They are designed in
+[research.md](research.md) and extend existing rows, so building them does not change the
+contract. Two points are open until wave 2 is designed: the drive count in the complexity budget
+(the initiative budget, curiosity and switching would exceed three drives unless merged), and how
+an initiative is timed — at an event boundary, never because the world has been quiet for a
+while.
 
 ## 4. Middleware
 
@@ -1073,10 +1132,11 @@ limit, the budget and the brakes. Quiet hours and approvals hold the act instead
 reasoning again.
 
 ### 4.3 Policy
-The one middleware that is always present.
-- Wraps every module and plugin, first and last, and cannot be removed.
+The safety valve: installed and on by default.
+- Wraps every module and plugin, first and last; no plugin can remove it. Only the owner may
+  switch it off, for experiments; that is recorded and shown (*Layers*).
 - Enforces the two absolute lines deterministically: the `identity_changing` check on
-  `origin_actor` in the action hook, and the privacy rule below in the context hook. The core refuses to run without this policy (fail-closed).
+  `origin_actor` in the action hook, and the privacy rule below in the context hook.
 
 **Private content (absolute line 2).** Privacy follows people, not places,
 and needs one fact: the audience.
@@ -1505,8 +1565,8 @@ contract's facts; like the middleware it never parses message text to
 understand it. Every tool names facts and a permission; a plugin's permissions live in its own
 namespace and never redefine a middleware permission.
 - Tools (search, files, email) are shipped by plugins.
-- Role plugins (assistant, customer service, sysadmin) may ship a birth certificate, used only at
-  birth; they can never overwrite identity afterwards.
+- Role plugins (assistant, customer service, sysadmin) may ship a first `soul.yaml`; they can
+  never overwrite identity afterwards.
 - Installed, run and uninstalled by the install module.
   Uninstalling removes the plugin's tools, middleware, rules and knob offsets; its events stay
   in the log as history.
@@ -1796,7 +1856,7 @@ A sidebar of pages, grouped:
 | Settings | **Model** | provider, model, fallbacks; tokens and the daily budget |
 | | **Keys** | `.env`: write only, never shown |
 | | **Config** | `config.yaml` and `config.d/` |
-| | **Soul** | the living identity (name, language, persona, principles), editable; `soul.yaml` shown as the birth certificate |
+| | **Soul** | the identity (name, language, persona, principles), editable; edits `soul.yaml`, the one source |
 | Footer | — | the soul running or not, adapters up, tokens today; Restart, Update; Logs |
 
 - **Locked pages.** A page that belongs to a plugin or an adapter has its on/off switch at the
@@ -1860,18 +1920,14 @@ forgotten content shows as forgotten, never reconstructed.
   People and Roles use the same editor on their sections.
 
 #### 7.7.1 The soul's identity
-- **After birth** `soul.yaml` is never read again; identity lives in `state: identity`
- . Editing the file would change nothing, so Console never writes it
-  after birth and shows it as the birth certificate.
-- **The Soul page edits the living identity** with the same two modes: a form (name, language,
-  persona, and principles as a list to add, remove and reorder) and raw (the current identity
-  as YAML). Saving shows the diff, then sends the owner command `/identity set …`.
-- `/identity` calls the core's own `set_identity` capability through the action hook, the same
-  door the soul uses when the owner asks in chat: the owner check of absolute line 1 holds, the
-  change is recorded as `identity.updated`, and the soul sees the new identity from its next
-  turn.
-- **Before birth** (a fresh install), `soul.yaml` is edited directly, in the wizard or in
-  Console.
+- `soul.yaml` is the one source of identity (*Identity*). The Soul page edits it with the same
+  two modes: a form (name, language, persona, and principles as a list to add, remove and
+  reorder) and raw (YAML). Saving shows the diff, then applies it through the same door the soul
+  uses when the owner asks in chat: the owner check of absolute line 1 holds while the valve is
+  on, the change is recorded as an identity change, and the soul sees the new identity from its
+  next turn.
+- An edit over SSH is picked up on reload the same way; the file-hash conflict rule above keeps
+  two editors from overwriting each other.
 
 ### 7.8 Technology and weight
 - **Server**: Python, Starlette, uvicorn, Jinja2 (autoescaping on), as the `console` extra.
@@ -1927,7 +1983,7 @@ Five files and folders, each with one job; none holds what belongs to another.
 | `.env` | secrets and endpoints: the model provider and its fallbacks (`LLM_PROVIDER`, `LLM_FALLBACKS`, keys, model), bot tokens, database URL | every start | owner or technician |
 | `config.yaml` | this deployment's non-secret settings: timezone, owner settings, runtime, adapters, plugins on, roles | every start | owner; owner settings in chat; `/plugin` and `/role` write their own lines |
 | `config.d/` | one file per plugin: its features and options | every start | owner |
-| `soul.yaml` | the birth certificate: name, language, persona, principles | once, at birth | nobody afterwards; identity changes in chat |
+| `soul.yaml` | identity: name, language, persona, principles | every start and reload | owner: the file, the panel, or in chat (all write this one source) |
 | `prior/` | instincts: knobs, calibration, constants | once, at birth | developers, with replay |
 
 **`config.yaml`** (format version 2, **Draft**; version 1 had `plugins:` as a list and is upcast
@@ -2004,7 +2060,7 @@ books win over the starting values in `soul.yaml` and `prior/`.
 | `AGENTS.md` | coding agents | how to work, secrets, stack, the invariants, tests, size guide, task rules |
 | `docs/spec.md` | agents and the owner | every rule, format and design decision |
 | `docs/research.md` | people | every formula, why it was chosen, and its sources |
-| `docs/tasks/` | workers | the active task files; finished ones in `docs/tasks/done/` |
+| `docs/tasks/` | the code architect | the active task files, written as behavior to achieve and how to prove it; the code architect ticks items and writes notes; finished ones in `docs/tasks/done/` |
 | `prior/` | developers | default prior values: data, tuned with replay |
 | `config.yaml`, `soul.yaml`, `.env.example` | owners | deployment files |
 
@@ -2020,6 +2076,18 @@ vs 1/n, when-to-speak precision/recall against human annotation, silence where i
 interruptions where it should be quiet, promise keeping, recall after 1/7/30 days, blind "which
 one is the bot" (target ≈ 50%). Pre-registered metrics. Public claims phrased as "≥ X% of human
 baseline on these N behaviors".
+
+**Three sets of scenarios.** *Development* scenarios may be used to design and tune.
+*Validation* scenarios are checked now and then. *Sealed* scenarios are written before a change,
+are never read while designing or tuning, and run only to judge a finished task. A sealed failure
+is recorded and the mechanism is fixed; the failed scenario is then retired and a new sealed one
+written in its place. Sealed sets are grouped by how far they generalize: small changes to a
+passing scenario (a name, an order, an extra witness), a kind of surprise never seen, the same
+structure in another body.
+
+**Ablation.** Every mechanism's claim (*Mental model*, *Without it*) is checked by running the
+same scenarios with the mechanism at its neutral value. Both directions are measured — speaking
+when it should not, silence when it should speak — together with model calls per event.
 
 **Every scenario carries its own material**. A scenario holds, as synthetic data the worker writes, everything the behavior needs: the facts, the people and their accounts, the artifacts (a file, a piece of work, code and its test output), realistic results from every test tool it uses, and the capabilities the behavior needs (mentioning a file is not enough: reading it and sending it must be capabilities a test tool offers). A failure is called the soul's failure only after a material check shows that what the soul needed was in the Log and reachable in its context; otherwise the scenario is fixed, never the soul. The material check is written under the task's Notes.
 
