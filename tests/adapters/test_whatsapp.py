@@ -841,3 +841,19 @@ async def test_whatsapp_undecryptable_emits_after_retry_grace_and_suppresses_whe
     assert failed[0].features["addressed"] == 1
 
 
+
+
+async def test_a_direct_message_goes_to_the_contacts_lid_when_whatsapp_uses_one() -> None:
+    """WhatsApp addresses a DM by LID now: sending to the phone number is accepted and lost."""
+    from monoagens.adapters.whatsapp.identity import WhatsAppDirectory
+    from monoagens.adapters.whatsapp.send import send_jid
+
+    directory = WhatsAppDirectory()
+    directory.learn_lid("73041086251252@lid", f"{BUDI_PN}@s.whatsapp.net")
+
+    direct = send_jid(f"{BUDI_PN}@s.whatsapp.net", directory)
+    group = send_jid("120363427398681748@g.us", directory)
+
+    assert direct.User == "73041086251252" and direct.Server == "lid"
+    assert group.User == "120363427398681748" and group.Server == "g.us"
+    assert send_jid(f"{BUDI_PN}@s.whatsapp.net").Server == "s.whatsapp.net"

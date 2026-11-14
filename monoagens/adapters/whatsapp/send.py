@@ -21,12 +21,52 @@ def jid_of(chat_jid: str) -> Any:
     return build_jid(user, server or "s.whatsapp.net")
 
 
+def send_jid(chat_jid: str, directory: Any = None) -> Any:
+    """Return the JID one message really goes to.
+
+    WhatsApp addresses a direct contact by LID now; sending to the phone-number JID is accepted
+    by the server and never delivered (the session store holds the contact under its LID), which
+    is what "typing, then nothing" looks like. A known LID wins for a DM; groups and channels are
+    addressed as they always were.
+    """
+    if directory is not None and str(chat_jid or "").endswith("@s.whatsapp.net"):
+        lid = directory.lid_for(chat_jid)
+        if lid:
+            return jid_of(lid)
+    return jid_of(chat_jid)
+
+
 LOGGER = logging.getLogger(__name__)
+
+
+async def resolved_send_jid(client: Any, chat_jid: str, directory: Any = None) -> Any:
+    """Return the JID one message goes to, asking WhatsApp for a LID when none is known yet.
+
+    A session that just started has learned no LID from a stanza, and WhatsApp's own store knows
+    it: `get_lid_from_pn` answers it. The mapping is remembered, so the next send costs nothing.
+    """
+    jid = send_jid(chat_jid, directory)
+    if jid.Server != "s.whatsapp.net" or directory is None:
+        return jid
+    getter = getattr(client, "get_lid_from_pn", None)
+    if not callable(getter):
+        return jid
+    try:
+        lid = await getter(jid)
+    except Exception:  # the store may not know the contact yet: the PN send is the fallback
+        return jid
+    lid_text = str(getattr(lid, "User", "") or "")
+    if not lid_text or lid_text == jid.User:
+        return jid
+    directory.learn_lid(f"{lid_text}@lid", chat_jid)
+    return jid_of(f"{lid_text}@lid")
 
 
 def _mask(jid: Any) -> str:
     """Return a JID with the middle of its user part hidden, for logs."""
-    text = str(jid or "")
+    text = str(getattr(jid, "User", "") or "") + "@" + str(getattr(jid, "Server", "") or "")
+    if text == "@":
+        text = str(jid or "").partition("@")[0] + "@" + str(jid or "").partition("@")[2]
     user, _, server = text.partition("@")
     shown = user[:4] + "…" + user[-3:] if len(user) > 8 else user[:2] + "…"
     return f"{shown}@{server}" if server else text
@@ -72,7 +112,7 @@ async def send_say(client: Any, directory: WhatsAppDirectory, files: Any, place:
     if client is None:
         raise RuntimeError("WhatsApp client is not connected")
     chat_jid = chat_jid_from_place(place)
-    jid = jid_of(chat_jid)
+    jid = await resolved_send_jid(client, chat_jid, directory)
     text = str(payload.get("text") or "")
     thread = str(payload.get("thread") or "").strip()
     if thread:
@@ -118,8 +158,7 @@ async def send_say(client: Any, directory: WhatsAppDirectory, files: Any, place:
         resp = await client.send_message(jid, msg_payload)
         # A send WhatsApp accepts but never delivers is invisible without this line: it names the
         # exact target, the id it answered, and whether the server echoed the message back.
-        LOGGER.info("whatsapp sent to %s id=%s echoed=%s", _mask(jid), _msg_id(resp),
-                    bool(getattr(resp, "Message", None)))
+        LOGGER.info("whatsapp sent to %s id=%s", _mask(jid), _msg_id(resp))
         if mid := _msg_id(resp):
             sent_ids.append(mid)
 
@@ -185,7 +224,7 @@ async def send_react(client: Any, place: str, emoji: str, message_id: str) -> di
     """React to one WhatsApp message with an emoji."""
     if client is None or not message_id or not emoji:
         return {}
-    jid = jid_of(chat_jid_from_place(place))
+    jid = await resolved_send_jid(client, chat_jid_from_place(place))
     me = getattr(client, "me", None) or await client.get_me()
     built = await client.build_reaction(jid, me.JID, str(message_id), str(emoji))
     resp = await client.send_message(jid, built)
@@ -199,7 +238,7 @@ async def send_edit(client: Any, place: str, message_id: str, text: str) -> dict
 
     if client is None or not message_id:
         return {}
-    jid = jid_of(chat_jid_from_place(place))
+    jid = await resolved_send_jid(client, chat_jid_from_place(place))
     resp = await client.edit_message(jid, str(message_id), Message(conversation=text))
     mid = _msg_id(resp, str(message_id))
     return {"message_id": mid}
@@ -212,7 +251,7 @@ async def send_show(client: Any, place: str, kind: str, **data: Any) -> Any:
             return None
         from neonize.utils.enum import ChatPresence, ChatPresenceMedia
 
-        jid = jid_of(chat_jid_from_place(place))
+        jid = await resolved_send_jid(client, chat_jid_from_place(place))
         return await client.send_chat_presence(
             jid, ChatPresence.CHAT_PRESENCE_COMPOSING, ChatPresenceMedia.CHAT_PRESENCE_MEDIA_TEXT)
     if kind == "read_receipts":
@@ -239,7 +278,7 @@ async def send_show(client: Any, place: str, kind: str, **data: Any) -> Any:
     if kind == "delete":
         if client is None or not data.get("message_id"):
             return None
-        jid = jid_of(chat_jid_from_place(place))
+        jid = await resolved_send_jid(client, chat_jid_from_place(place))
         return await client.revoke_message(jid, jid, str(data["message_id"]))
     if kind == "reply":
         return await send_say(client, None, None, place,

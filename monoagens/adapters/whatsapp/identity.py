@@ -125,6 +125,16 @@ class WhatsAppDirectory:
             return self.jids.get(digits) or f"{digits}@s.whatsapp.net"
         return raw
 
+    def lid_for(self, account_or_jid: Any) -> str:
+        """Return the LID JID this account is addressed by now, or "" when none is known.
+
+        WhatsApp moved DMs to LID addressing: a message sent to a phone-number JID is accepted by
+        the server and never reaches the phone, because the session store holds the contact by LID.
+        """
+        digits = digits_of(account_or_jid)
+        lid = self.pn_to_lid.get(digits, "")
+        return f"{lid}@lid" if lid else ""
+
     def jid_for_account(self, account: str) -> str:
         """Return the JID string for sending a DM or mention to `whatsapp:<digits>`."""
         digits = self.canonical_digits(account)

@@ -1063,3 +1063,28 @@ applied 5. The exception is narrow by construction: the flag `monoagens.migratin
 column compared between `OLD` and `NEW`, so only `occurred_at` may be filled and a bug still raises
 `events table is append-only` (proved on the live dev database: the pending migrations applied
 `[5, 6]`, a second run applied nothing, no row lacked a time, and a hand-made `UPDATE` was refused).
+
+### 7.4 — the failures a live session showed (owner's phone, 2026-11-14)
+
+Two failures, both visible only on a real account:
+
+1. **A reply the server accepted and the phone never got.** `act.result` said `done` with a message
+   id, the person saw typing and no message — every time, from the first message on. The cause is
+   in the session store, not in the contract: `whatsmeow_lid_map` says this contact's LID is
+   `130799689031758` for the phone number `6285111242960`, and **every key in
+   `whatsmeow_sessions` is LID-shaped** (`<lid>_1:<device>`). WhatsApp now addresses a direct
+   contact by LID; a message sent to the phone-number JID is accepted by the server and dropped on
+   the way to the phone. `send.send_jid`/`resolved_send_jid` now resolve a DM to its LID (asking
+   `get_lid_from_pn` and remembering the answer), and every send path — `say`, `react`, `edit`,
+   presence, `revoke` — goes through it. Test:
+   `test_a_direct_message_goes_to_the_contacts_lid_when_whatsapp_uses_one`.
+2. **The owner was a stranger to the soul.** The soul's own words at 20:14 (*"Status akun belum
+   tertaut ke pemilik"*) and the state rows agree: `owner → person:owner` but
+   `alias:whatsapp:6285111242960 → person:p_15b623ff`. The claim stored only the resolved person
+   id; when that alias row was gone, the same number registered again as a new person. The claim
+   now records the accounts it can see, and `resolve_account`/`as_owner` honour them
+   (`test_a_claimed_owner_keeps_their_native_account_after_its_alias_is_lost`). The existing
+   database keeps the old state, so the owner re-pairs once (send the code printed at boot).
+
+Also repaired while reading that boot report: the loader printed each plugin's missing-library note
+twice (`_requirements` added it and the caller added it again).

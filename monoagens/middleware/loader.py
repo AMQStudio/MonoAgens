@@ -182,7 +182,7 @@ class Loader:
         apis: list[Any] = []
         for name in order:
             manifest = manifests[name]
-            note = self._requirements(name, manifest, report)
+            note = self._requirements(name, manifest)
             if note:
                 report.add(note)  # a lazily imported library is a note; the plugin still loads
             effective = self._features(name, manifest, config_d.get(name) or {}, report)
@@ -302,8 +302,8 @@ class Loader:
         return order
 
     @staticmethod
-    def _requirements(name: str, manifest: Mapping[str, Any], report: BootReport) -> str:
-        """Return the one line that refuses one plugin whose Python module is missing, or ""."""
+    def _requirements(name: str, manifest: Mapping[str, Any]) -> str:
+        """Return the one note that names a plugin's missing library, or ""."""
         for module in manifest.get("requires") or ():
             try:
                 found = (str(module) in sys.modules
@@ -311,10 +311,8 @@ class Loader:
             except (ImportError, ValueError):
                 found = False
             if not found:
-                line = (f"plugin {name}: needs {module}; install it with: "
+                return (f"plugin {name}: needs {module}; install it with: "
                         f"uv pip install -r plugins/{name}/requirements.txt")
-                report.add(line)
-                return line
         return ""
 
     @staticmethod
