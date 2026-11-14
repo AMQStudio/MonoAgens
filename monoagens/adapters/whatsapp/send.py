@@ -51,6 +51,19 @@ async def resolved_send_jid(client: Any, chat_jid: str, directory: Any = None) -
     return send_jid(chat_jid, directory)
 
 
+def _message_id(value: Any) -> str:
+    """Return one WhatsApp message id, or "" for anything that is not one.
+
+    A model sometimes fills `reply_to` with the person or place it means (`person:p_…`); a quote
+    needs the stanza id, so a value that names a person, a place or a body is dropped instead of
+    being sent as a broken `stanzaID`.
+    """
+    text = str(value or "").strip()
+    if not text or text.startswith(("person:", "space:", "whatsapp:", "telegram:", "discord:")):
+        return ""
+    return text if len(text) >= 8 else ""
+
+
 def _mask(jid: Any) -> str:
     """Return a JID with the middle of its user part hidden, for logs."""
     text = str(getattr(jid, "User", "") or "") + "@" + str(getattr(jid, "Server", "") or "")
@@ -106,7 +119,7 @@ async def send_say(client: Any, directory: WhatsAppDirectory, files: Any, place:
     thread = str(payload.get("thread") or "").strip()
     if thread:
         text = f"*{thread}*\n{text}".strip() if text else f"*{thread}*"
-    reply_to = str(payload.get("reply_to") or "")
+    reply_to = _message_id(payload.get("reply_to"))
     mentions = _mention_jids(payload.get("mentions"), directory)
     voice = bool(payload.get("voice"))
     sent_ids: list[str] = []

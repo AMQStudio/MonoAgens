@@ -75,7 +75,29 @@ async def _engaged(event: Event, conn: Any) -> bool:
                and not (row["condition"] or {}).get("text") for row in rows)
 
 
-async def reflex(event: Event, conn: Any = None) -> tuple[str, str] | None:
+async def _in_conversation(event: Event, conn: Any,
+                           settings: Mapping[str, Any] | None = None) -> bool:
+    """Return whether the soul answered this person here moments ago.
+
+    A line that follows an answer in the same place by the same person is part of that exchange,
+    so it does not have to clear the gate's threshold: replying to "okeee bagus" right after the
+    soul answered is a conversation, not chatter. The window is `talk_window_seconds`.
+    """
+    if not event.place or not event.who:
+        return False
+    window = float(constants(settings if settings is not None else load_settings())
+                   .get("talk_window_seconds") or 120)
+    cur = await conn.execute(
+        "SELECT ts FROM events WHERE kind = 'act.out' AND place = %s AND who = %s "
+        "ORDER BY id DESC LIMIT 1", (event.place, event.who))
+    row = await cur.fetchone()
+    if row is None:
+        return False
+    return abs((event.ts - row[0]).total_seconds()) <= window
+
+
+async def reflex(event: Event, conn: Any = None,
+                 settings: Mapping[str, Any] | None = None) -> tuple[str, str] | None:
     """Return (reason, reflex) when a commitment bypasses the draw (docs/)."""
     if event.kind == "expectation.fired":
         return "fired expectation", "pfc_expectation"
@@ -87,6 +109,8 @@ async def reflex(event: Event, conn: Any = None) -> tuple[str, str] | None:
         return "goal continued", "goal"
     if conn is not None and await _engaged(event, conn):
         return "expectation engaged", "expectation"
+    if conn is not None and await _in_conversation(event, conn, settings):
+        return "in a conversation", "addressed"
     return None
 
 
@@ -129,7 +153,7 @@ async def appraise(event: Event, *, conn: Any = None, situation: Situation | Non
         age = max(0.0, (now - happened).total_seconds() / 3600)
         decay = math.exp(-memory.decay_d(settings) * age)
         signals = {name: value * decay for name, value in signals.items()}
-    tag = await reflex(event, conn)
+    tag = await reflex(event, conn, settings)
     if tag is not None:
         return Appraisal(decision="wake", reason=tag[0], reflex=tag[1], signals=signals,
                          s=1.0, s_eff=1.0, p=1.0, u=u, tau=params.tau)

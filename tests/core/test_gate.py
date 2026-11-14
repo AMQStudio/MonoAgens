@@ -1022,3 +1022,30 @@ async def test_kernel_run_flushes_backfill_batch_once_after_settle(aconn):
     assert len(decisions) == 1
     assert decisions[0][0] == "decision.silent"
     assert fake.requests == []
+
+
+async def test_a_line_right_after_an_answer_is_the_same_conversation(aconn):
+    """`okeee bagus` right after the soul answered does not have to clear the threshold."""
+    from monoagens.infra.store import append_event
+
+    place, who = "space:wa:120363415422117951@g.us", "person:p_chat"
+    answered_at = START - timedelta(seconds=20)
+    await append_event(aconn, ts=answered_at, kind="act.out", who=who, place=place,
+                       body="whatsapp", payload={"capability": "whatsapp.say",
+                                                 "arguments": {"text": "Tahu."}})
+    follow_up = Event(None, START, "percept", who=who, place=place,
+                      payload={"data": {}}, description="okeee bagus",
+                      features={"addressed": 0})
+    stranger = Event(None, START, "percept", who="person:p_other", place=place,
+                     payload={"data": {}}, description="okeee bagus",
+                     features={"addressed": 0})
+    late = Event(None, START + timedelta(minutes=10), "percept", who=who, place=place,
+                 payload={"data": {}}, description="okeee bagus",
+                 features={"addressed": 0})
+
+    appraisal = await appraise(follow_up, conn=aconn, settings=SETTINGS)
+
+    assert (appraisal.decision, appraisal.reflex, appraisal.reason) == (
+        "wake", "addressed", "in a conversation")
+    assert (await appraise(stranger, conn=aconn, settings=SETTINGS)).reflex != "addressed"
+    assert (await appraise(late, conn=aconn, settings=SETTINGS)).reflex != "addressed"
