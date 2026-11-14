@@ -35,6 +35,7 @@ CORE_PERMISSIONS: dict[str, str | None] = {
     "identity.set": None,
     "self.recall": "guest",
     "privacy.share": "guest",
+    "self.answer": "guest",
     "registry.describe": "guest",
     "registry.more": "guest",
     "config.reload": "admin",

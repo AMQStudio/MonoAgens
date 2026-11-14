@@ -57,6 +57,7 @@ def install(kernel: Any) -> None:
                           permissions={"recall": "self.recall",
                                        "set_identity": IDENTITY_SET})
     privacy.register(kernel.tools)
+    interaction.register(kernel.tools)
     registry.install_own(kernel.tools)
     kernel.roles = roles.RoleBook.empty()
     kernel.prior_knobs = prior_knobs(kernel.settings)
@@ -134,6 +135,7 @@ def policy_for(hook: str, when: str, kernel: Any) -> Middleware:
     if hook == "action":
         if when == "first":
             return compose(identity.identity_line(), permission_line(kernel),
+                           interaction.answer_guard(kernel),
                            interaction.composing(kernel), privacy.guard(kernel, "first"),
                            kernel=kernel)
         return compose(privacy.guard(kernel, "last"), quiet_line(kernel),

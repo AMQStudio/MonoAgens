@@ -344,6 +344,47 @@ async def _brake_origin(conn: Any, held: Mapping[str, Any]) -> str | None:
     return None
 
 
+async def settle_answer(kernel: Any, item: Event, request_id: int, allowed: bool,
+                        answerer: str, *, owner: bool) -> None:
+    """Record one answer and carry out what it allows (§2.4.6, F.9).
+
+    A brake resumes as the chain that was held (its `origin_actor`), never as the person who said
+    yes; an approval runs the call as its requester. Both are read from the Log, so a restart
+    answers the same way.
+    """
+    now = kernel.clock.now()
+    asked = await by_id(kernel.conn, request_id)
+    if asked is None:
+        held = await brake_by_id(kernel.conn, request_id) if owner else None
+        if held is not None:
+            await _answer_brake(kernel, item, request_id, held, allowed, answerer)
+        return
+    if await _is_closed(kernel.conn, request_id) or now - asked["ts"] > APPROVAL_TTL:
+        return
+    requester = str(asked.get("who") or "") or None
+    await append_event(kernel.conn, ts=now, kind=ANSWERED,
+                       who=requester, origin_actor=requester,
+                       place=asked.get("place"), body=item.body, caused_by=item.id,
+                       payload={"request": request_id, "allowed": allowed,
+                                "who": requester, "by": answerer})
+    if not allowed:
+        return
+    kernel.enqueue(Event(
+        id=None, ts=now, kind="intent", who=requester, origin_actor=requester,
+        place=str(asked.get("place") or item.place), body=item.body,
+        payload={
+            "description": (
+                f"the owner approved {asked.get('capability')} with these arguments; "
+                f"carry it out now: "
+                f"{json.dumps(asked.get('arguments') or {}, ensure_ascii=False, sort_keys=True)}"
+            ),
+            "capability": asked.get("capability"),
+            "arguments": asked.get("arguments") or {},
+            "intent": request_id, "approved": request_id,
+        },
+    ))
+
+
 async def question_by_ref(conn: Any, ref: str) -> dict[str, Any] | None:
     """Return the open question one answer's `prompt` ref names, or None (§2.4.6)."""
     if not ref:
@@ -432,37 +473,8 @@ def answer(kernel: Any) -> Middleware:
                 await _answer_brake(kernel, item, int(payload["brake"]), held,
                                     bool(payload["answer"]), answerer)
             return Continue()
-        if request_id is None:
-            return Continue()
-        asked = await by_id(kernel.conn, request_id)
-        if asked is None:
-            held = await brake_by_id(kernel.conn, request_id) if owner else None
-            if held is not None:
-                await _answer_brake(kernel, item, request_id, held, allowed, answerer)
-            return Continue()
-        if await _is_closed(kernel.conn, request_id) or now - asked["ts"] > APPROVAL_TTL:
-            return Continue()
-        requester = str(asked.get("who") or "") or None
-        await append_event(kernel.conn, ts=now, kind=ANSWERED,
-                           who=requester, origin_actor=requester,
-                           place=asked.get("place"), body=item.body, caused_by=item.id,
-                           payload={"request": request_id, "allowed": allowed,
-                                    "who": requester, "by": answerer})
-        if allowed:
-            kernel.enqueue(Event(
-                id=None, ts=now, kind="intent", who=requester, origin_actor=requester,
-                place=str(asked.get("place") or item.place), body=item.body,
-                payload={
-                    "description": (
-                        f"the owner approved {asked.get('capability')} with these arguments; "
-                        f"carry it out now: {json.dumps(asked.get('arguments') or {}, ensure_ascii=False, sort_keys=True)}"
-                    ),
-                    "capability": asked.get("capability"),
-                    "arguments": asked.get("arguments") or {},
-                    "intent": request_id, "approved": request_id,
-                    "place_kind": asked.get("place_kind"),
-                },
-            ))
+        if request_id is not None:
+            await settle_answer(kernel, item, request_id, allowed, answerer, owner=owner)
         return Continue()
 
     return rule
@@ -746,3 +758,83 @@ def _config_path(kernel: Any) -> Any:
     if root is None:
         return None
     return pathlib.Path(root) / "config.yaml"
+
+
+# ------------------------------------------------ the middleware's own answer door (§2.4.6)
+
+ANSWER = "self.answer"
+ANSWER_CAPABILITY = {
+    "name": "answer",
+    "description": "Answer an open question the middleware asked: name the request and the value "
+                   "the person said. Only the person asked, or the owner, may answer.",
+    "schema": {"type": "object", "properties": {
+        "request": {"type": "integer", "description": "The request id of the question."},
+        "value": {"type": "string", "description": "The choice they gave, in their words."}},
+        "required": ["request", "value"]},
+    "facts": (), "communicative": False, "long_running": False, "identity_changing": False,
+}
+
+
+def register(registry: Any) -> None:
+    """Declare the middleware's own `self.answer` capability (§2.4.6)."""
+    registry.add_capability(ANSWER, ANSWER_CAPABILITY, facts=(), permission="self.answer",
+                            result=False)
+
+
+def answer_guard(kernel: Any) -> Middleware:
+    """Action rule: turn one answered request into the question it belongs to, from facts."""
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        """Settle an answer the soul recorded, never by matching words itself."""
+        if ctx.get("capability") != ANSWER or ctx.get("refusal") or ctx.get("handled"):
+            return Continue()
+        arguments = dict(item or {})
+        try:
+            request_id = int(arguments["request"])
+        except (KeyError, TypeError, ValueError):
+            ctx["refusal"] = "answer: a request id is required"
+            return Stop(ctx["refusal"])
+        value = str(arguments.get("value") or "")
+        question = await _open_request(kernel.conn, request_id)
+        if question is None:
+            ctx["refusal"] = f"answer: no open question {request_id}"
+            return Stop(ctx["refusal"])
+        labels = [str(choice.get("label") or "") for choice in question["choices"]]
+        matched = _choice_index(labels, value)
+        if matched is None:
+            ctx["refusal"] = f"answer: {value!r} is not one of the choices"
+            return Stop(ctx["refusal"])
+        actor = str(ctx.get("origin_actor") or "")
+        owner = actor == OWNER
+        allowed = matched == 0
+        if question["kind"] == "approval" and not owner:
+            if not kernel.roles.can(actor, "approval.answer", ctx["event"].place):
+                ctx["refusal"] = "answer: only the person asked, or the owner, may answer"
+                return Stop(ctx["refusal"])
+        if question["kind"] == "brake" and not owner:
+            ctx["refusal"] = "answer: only the owner may answer a brake"
+            return Stop(ctx["refusal"])
+        await kernel._emit(ctx["event"], QUESTION_ANSWERED, {
+            "question": question["id"], "ref": question.get("ref"), "request": request_id,
+            "value": value, "allowed": allowed, "by": actor,
+        }, place=ctx["event"].place)
+        await settle_answer(kernel, ctx["event"], request_id, allowed, actor, owner=owner)
+        ctx["handled"] = True
+        return Continue()
+
+    return contract.mark_rule(rule, name="answer", kind="guard")
+
+
+async def _open_request(conn: Any, request_id: int) -> dict[str, Any] | None:
+    """Return one open question by its request id, with the choices it offered (§2.4.6)."""
+    row = await (await conn.execute(
+        "SELECT id, ts, payload FROM events WHERE kind = %s AND payload->>'request' = %s "
+        "ORDER BY id DESC LIMIT 1", (QUESTION_ASKED, str(request_id)))).fetchone()
+    if row is None:
+        return None
+    if await _is_closed(conn, request_id):
+        return None
+    payload = dict(row[2] or {})
+    choices = [dict(choice) for choice in (payload.get("choices") or ())
+               if isinstance(choice, Mapping)]
+    return {"id": int(row[0]), "ts": row[1], **payload, "choices": choices}

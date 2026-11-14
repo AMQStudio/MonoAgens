@@ -6,8 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from monoagens.infra.clock import Clock
-from monoagens.contract import describe_attachments
-from monoagens.types import Event
+from monoagens.contract import Answer, Command, Percept, describe_attachments
 
 PLACE = "space:cli"
 OWNER = "person:owner"
@@ -32,35 +31,31 @@ def match_choice(text: str, last_prompt: tuple[str, list[str]] | None) -> tuple[
 
 def event(text: str, *, clock: Clock, name: str = "cli",
           attachments: Sequence[Mapping[str, Any]] = (),
-          last_prompt: tuple[str, list[str]] | None = None) -> Event:
-    """Build the percept of one typed line (the owner typing in their own terminal)."""
-    data: dict[str, Any] = {}
+          last_prompt: tuple[str, list[str]] | None = None) -> Percept:
+    """Build the percept of one typed line (the owner typing in their own terminal) (§2.4.2)."""
+    answer = None
     choice_matched = match_choice(text, last_prompt)
     if choice_matched is not None:
-        choice_val, q_id = choice_matched
-        raw = text.strip()
-        data["choice"] = choice_val
-        data["answer"] = raw if raw.isdigit() else choice_val
-        data["reply_to"] = {"message_id": q_id}
+        choice_value, question_ref = choice_matched
+        answer = Answer(prompt=str(question_ref), value=choice_value)
+    summary = ""
     if attachments:
-        data["attachments"] = [dict(item) for item in attachments]
         summary = describe_attachments(attachments, sent_by=OWNER)
-        desc = f"{text} {summary}".strip() if text else summary
-    else:
-        desc = text
-    payload: dict[str, Any] = {
-        "description": desc,
-        "addressed": True,
-        "place_kind": "direct",
-    }
-    if data:
-        payload["data"] = data
-    return Event(id=None, ts=clock.now(), kind="percept", who=OWNER, place=PLACE, body=name,
-                 payload=payload)
+    description = f"{text} {summary}".strip() if text else summary
+    return Percept(
+        actor=OWNER,
+        place=PLACE,
+        occurred_at=clock.now(),
+        description=description,
+        ref=str(int(clock.now().timestamp() * 1000)),
+        answer=answer,
+        attachments=tuple(attachments),
+        features={"addressed": 1, "named": 0, "addressed_other": 0},
+    )
 
 
-def command_event(line: str, *, clock: Clock, name: str = "cli") -> Event | None:
-    """Return a command event when one typed line is a command (`/help` or `:help`)."""
+def command_event(line: str, *, clock: Clock, name: str = "cli") -> Percept | None:
+    """Return the percept of one typed command (`/help` or `:help`), or None (§2.4.7)."""
     text = str(line).strip()
     if not text or text[0] not in "/:":
         return None
@@ -68,9 +63,14 @@ def command_event(line: str, *, clock: Clock, name: str = "cli") -> Event | None
     if not parts:
         return None
     command = parts[0].partition("@")[0].lower()
-    return Event(id=None, ts=clock.now(), kind="command", who=OWNER, place=PLACE, body=name,
-                 payload={"command": command, "arguments": parts[1:], "description": text,
-                          "place_kind": "direct", "addressed": True})
+    return Percept(
+        actor=OWNER,
+        place=PLACE,
+        occurred_at=clock.now(),
+        description=text,
+        command=Command(name=command, args=tuple(parts[1:])),
+        features={"addressed": 1, "named": 0, "addressed_other": 0},
+    )
 
 
 def split_line(line: str) -> tuple[list[str], str]:

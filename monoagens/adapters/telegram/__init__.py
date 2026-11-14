@@ -260,6 +260,13 @@ class TelegramBody:
 
     async def act(self, action: Action) -> Any:
         """Perform `say`, `react`, `edit`, or enabled optional Telegram actions."""
+
+        return await support.answer(
+            self, action, capability=f"{self.name}.{action.capability}",
+            function=lambda: self._carry(action))
+
+    async def _carry(self, action: Action) -> Any:
+        """Carry one action out; `support.answer` turns what comes back into the receipt."""
         p = action.arguments or {}
         if action.capability == "say":
             return await self._say(action)

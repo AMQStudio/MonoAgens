@@ -569,6 +569,13 @@ class WhatsAppBody:
 
     async def act(self, action: Action) -> Any:
         """Perform `say`, `react`, or `edit` in a WhatsApp chat and record sent message ids."""
+
+        return await support.answer(
+            self, action, capability=f"{self.name}.{action.capability}",
+            function=lambda: self._carry(action))
+
+    async def _carry(self, action: Action) -> Any:
+        """Carry one action out; `support.answer` turns what comes back into the receipt."""
         if action.capability == "say":
             res = await send.send_say(self._client, self.directory, self._files,
                                       action.place, dict(action.arguments or {}))

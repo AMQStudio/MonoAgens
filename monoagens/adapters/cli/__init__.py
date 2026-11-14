@@ -8,7 +8,9 @@ import pathlib
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
+from monoagens.adapters import support
 from monoagens.adapters.cli import receive, send
+from monoagens.adapters.cli.format import PLACE as CLI_PLACE
 from monoagens.adapters.cli.capabilities import (
     CAPABILITIES,
     GAPS,
@@ -18,11 +20,11 @@ from monoagens.adapters.cli.capabilities import (
 )
 from monoagens.adapters.cli.format import command_event, event, split_line
 from monoagens.infra.clock import Clock
-from monoagens.contract import Action
-from monoagens.types import Event
+from monoagens import contract
+from monoagens.contract import Action, Percept
 
 DEFAULT_SOCKET = "/tmp/monoagens.sock"
-Put = Callable[[Event], Awaitable[None]]
+Put = Callable[[Any], Awaitable[None]]
 REQUIRES: tuple[str, ...] = ()
 
 
@@ -88,15 +90,24 @@ class CLIBody:
         return "cli:local"
 
     async def run(self, put: Put) -> None:
-        """Serve typed lines from local clients until the task is cancelled."""
+        """Publish this terminal's audience, then serve typed lines until cancelled (§4.1)."""
+        await put(contract.audience_event(
+            CLI_PLACE, contract.Audience(frozenset({"person:owner"})),
+            ts=self._clock.now(), body=self.name))
 
         async def accept(text: str) -> None:
             await put(await self._event(text))
 
         await receive.serve(self.path, accept, self._writers)
 
-    async def act(self, action: Action) -> Any:
-        """Write one rendered line or optional platform action to connected clients."""
+    async def act(self, action: Action) -> contract.Receipt:
+        """Write one line or optional platform action, and answer one receipt (§2.4.4)."""
+        return await support.answer(
+            self, action, capability=f"{self.name}.{action.capability}",
+            function=lambda: self._carry(action))
+
+    async def _carry(self, action: Action) -> Any:
+        """Carry one action out; `support.answer` turns what comes back into the receipt."""
         p = action.arguments or {}
         if action.capability == "say":
             self._seq += 1
@@ -132,7 +143,7 @@ class CLIBody:
         if action.capability == "pin" and "pin" in self.enabled_tools:
             await send.broadcast(self._writers, f"[pinned] {p.get('text') or ''}\n")
             return {"pinned": True}
-        raise ValueError(f"Unsupported action kind: {action.capability!r}")
+        raise ValueError(f"Unsupported action: {action.capability!r}")
 
     async def show(self, place: str, kind: str, **data: Any) -> None:
         """Show one non-message thing as a status/fallback line; unknown kinds are refused."""
@@ -149,7 +160,7 @@ class CLIBody:
         found = self.files.store.find(str(ref))
         return str(found) if found is not None else str(ref)
 
-    async def _event(self, line: str) -> Event:
+    async def _event(self, line: str) -> Any:
         """Turn one typed line into a command or a percept, storing any files it names."""
         found = command_event(line, clock=self._clock, name=self.name)
         if found is not None:
