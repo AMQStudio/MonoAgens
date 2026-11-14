@@ -585,9 +585,10 @@ class Kernel:
         else:
             if reminded:
                 condition = str(item.get("condition_text") or "")
-                reason = (f"this line may relate to an expectation of yours "
-                          f"({item['about']}); condition: {condition}; "
-                          f"does this line fulfil it?")
+                # The line names neither the expectation's words nor its source: this place's
+                # audience decides, through the desk, what it may be told (D45).
+                reason = (f"this line may relate to an expectation of yours; "
+                          f"condition: {condition}; does this line fulfil it?")
             else:
                 # The reason names the expectation, never its words: this place's audience may
                 # not be allowed to see them, so the desk decides, not this line (D45).

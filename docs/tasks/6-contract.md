@@ -527,7 +527,7 @@ replay are **red**, and the next session resumes from the list below. Nothing he
 the architect must take: the shape is settled by DEC-1/DEC-2/DEC-8 and the work left is finishing
 it, not choosing.
 
-Measured at this commit: **657 passed, 8 failed, 1 skipped**; `scripts/replay.py --fake`
+Measured at this commit: **660 passed, 5 failed, 1 skipped**; `scripts/replay.py --fake`
 **158/158 with absolute-line violations 0**; the architecture ratchet **70 findings** (from 101):
 `text-parse 54 · payload-read 1 (jobs.py) · labels-read 0 · removed-field 11 · tests-private 4 ·
 body-name 0 · layer-import 0`.
@@ -563,19 +563,17 @@ What this commit implements, one home each:
 
 ### What is left
 
-| where | count | next action |
+| where | count | what it needs |
 |---|---|---|
-| `tests/middleware/test_policy.py` | 3 | approval/brake still drive `ctx["labels"]["hold"]`; read the held receipt and the `approval.*` events (3.5) |
-| `tests/middleware/test_interaction.py` | 1 | `read_receipts` and `/show`'s body half (3.5) |
-| `tests/adapters/test_part1_integration.py` | 2 | the cross-body link and deferred-file tests need their places' audiences |
-| `tests/plugins/test_workspace*.py` | 2 | one task-thread step count, one approval-mode flag (4.x/5.x) |
+| `tests/adapters/test_part1_integration.py` | 2 | the cross-body link test reads a stale answer (a kernel task outliving its test); the deferred-file test needs its places' audiences published before it asserts a `PermissionError` |
+| `tests/middleware/test_policy.py` | 1 | `test_brake_continue_keeps_held_chain_origin_actor`: the resume after a brake must carry the *held chain's* `origin_actor` (alice), not the owner who said "continue" — the fix is in `policy.brake_line`'s resume path (3.5, F.9) |
+| `tests/plugins/test_workspace*.py` | 2 | the workspace plugin's tools declare `long_running: False`, so no task thread opens: either the plugin's `run` is long-running (a manifest fact) or the test no longer expects a thread. Decide from `plugins.md` §3 before changing either. |
 
-**A bug worth chasing first**: several of these used to fail with `events_caused_by_fkey` on an id
-from an *earlier* test — a kernel task outliving its test and writing into the truncated schema.
-Draining the loop after each applied act (`test_policy._call`) removed it there; the same discipline
-is what the remaining files need. Cancelling every leftover task in the `aconn` fixture made it
-*worse* (23 failures), so the fix belongs in the test helpers that start the work, not in the
-fixture.
+**The bug behind most of the churn this session**: several tests failed with `events_caused_by_fkey`
+on an id from an *earlier* test — a kernel task outliving its test and writing into the truncated
+schema. Draining the loop where the work starts fixes it (`test_policy._call` now ends with
+`run_until_idle`); cancelling every leftover task in the `aconn` fixture made the suite *worse*
+(23 failures), so the fix belongs in each helper that starts work, not in the fixture.
 
 ### Where the work stands (session of 2026-11-14, evening)
 

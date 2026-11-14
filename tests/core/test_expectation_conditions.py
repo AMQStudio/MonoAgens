@@ -145,7 +145,8 @@ async def test_a_line_at_or_above_lo_wakes_the_pfc_once_with_the_reminder(aconn)
     prompt = harness.fake.requests[0]["messages"][2]["content"]
     assert line in prompt
     assert f"{OTHER}: {line}" in prompt  # the line keeps its own speaker
-    assert "this line may relate to your expectation: kabari kalau server down;" in prompt
+    assert "this line may relate to an expectation of yours;" in prompt
+    assert "kabari kalau server down" in prompt  # the expectation's own line is on the desk
     assert "condition: server down; does this line fulfil it?" in prompt
     assert "fired expectation" not in prompt
     reminders = await _kinds(aconn, "expectation.reminded")

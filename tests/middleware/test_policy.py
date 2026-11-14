@@ -261,16 +261,15 @@ async def test_quiet_hours_refuse_a_group_and_allow_the_owners_own_chat(aconn):
 
 async def test_leaving_no_longer_uses_text_similarity_while_context_hides_private_memory(aconn):
     kernel, tool, _ = await _kernel(aconn, facts=("network",), permission="search.run")
+    await append_event(aconn, ts=START, kind="place.audience", place="space:tg:9",
+                       payload={"place": "space:tg:9", "actors": ["person:owner"]})
     source = await append_event(aconn, ts=START, kind="percept", who="person:owner",
                                 place="space:tg:9", body="telegram",
-                                payload={"description": "rahasia kantor pindah", "place_kind":
-                                         "direct"})
+                                payload={"description": "rahasia kantor pindah"})
     await aconn.execute("INSERT INTO memories (text, derived_from) VALUES (%s, %s)",
                         ("rahasia kantor", [source.id]))
     await append_event(aconn, ts=START, kind="percept", who="person:budi", place=GROUP,
-                       body="telegram",
-                       payload={"description": "halo semua", "place_kind": "shared",
-                                "place_info": {"members": ["person:budi", "person:owner"]}})
+                       body="telegram", payload={"description": "halo semua"})
     trigger = await _trigger(aconn, place=GROUP, who="person:owner")
 
     await kernel._apply(trigger, ToolCall("act", {
@@ -337,14 +336,13 @@ async def test_brake_stops_endless_loop_tells_owner_once_and_can_resume(aconn):
     tool = Tool(facts=("reads",))
     kernel.tools.add_tool(tool, {"run": {"facts": ["reads"], "permission": "dev.run"}})
     kernel.roles = open_book("person:owner", "dev.run")
+    await _audiences(aconn)
     await append_event(aconn, ts=START, kind="percept", who="person:owner", place=OWNER_DM,
-                       body="telegram",
-                       payload={"description": "halo", "place_kind": "direct"})
+                       body="telegram", payload={"description": "halo"})
 
     loop_msg = Event(id=None, ts=START, kind="percept", who="person:owner", place=GROUP,
                      body="telegram", origin_actor="person:owner",
-                     payload={"description": "kerjakan terus", "place_kind": "shared",
-                              "addressed": True}, description="kerjakan terus")
+                     description="kerjakan terus", features={"addressed": 1})
     await _drive(kernel, loop_msg)
 
     assert pfc.calls == 3
