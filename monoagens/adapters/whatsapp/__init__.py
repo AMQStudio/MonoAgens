@@ -87,7 +87,7 @@ class WhatsAppBody:
     name = "whatsapp"
     FILES = {"per_message": 20, "max_bytes": 100_000_000, "mimes": ()}
     PERMISSIONS = {"say": "guest", "react": "guest", "edit": "guest", "pin": "guest",
-                   "reject_call": "guest"}
+                   "reject_call": "guest", "chats": "guest"}
     reads = READS
     shows = SHOWS
     gaps = GAPS
@@ -596,6 +596,11 @@ class WhatsAppBody:
 
     async def _carry(self, action: Action) -> Any:
         """Carry one action out; `support.answer` turns what comes back into the receipt."""
+        if action.capability == "chats":
+            await self._sync_places(self._client)
+            return {"chats": [{"place": place, "name": str(meta.get("name") or ""),
+                               "members": list(meta.get("members") or ())}
+                              for place, meta in sorted(self.directory.places.items())]}
         if action.capability == "say":
             res = await send.send_say(self._client, self.directory, self._files,
                                       action.place, dict(action.arguments or {}))
@@ -694,7 +699,8 @@ class WhatsAppBody:
         """Return what reasoning should know about WhatsApp (≤1200 characters)."""
         return ("WhatsApp: one message per say, with optional files, reply or mentions; react "
                 "adds one emoji; edit rewrites a sent message. A personal chat is a direct "
-                "place; a group or a channel is shared.")
+                "place; a group or a channel is shared. chats lists every place this account "
+                "is in, with its name and members, so you can reach a group by name.")
 
     def self_actor(self) -> str:
         """Return the actor id this body acts as: its own account."""

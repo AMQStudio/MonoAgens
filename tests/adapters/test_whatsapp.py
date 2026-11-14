@@ -857,3 +857,42 @@ async def test_a_direct_message_goes_to_the_contacts_lid_when_whatsapp_uses_one(
     assert direct.User == "73041086251252" and direct.Server == "lid"
     assert group.User == "120363427398681748" and group.Server == "g.us"
     assert send_jid(f"{BUDI_PN}@s.whatsapp.net").Server == "s.whatsapp.net"
+
+
+async def test_a_slash_line_is_this_platforms_command_form(aconn, tmp_path) -> None:
+    """`/help` is a command here, as it is in the terminal, and a path is not."""
+    from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import Message as E2EMessage
+
+    body = WhatsAppBody(clock=FakeClock(START), client=FakeWAClient(),
+                        self_account=f"whatsapp:{OWN_PN}")
+    body.files = _door(aconn, tmp_path)
+
+    async def put(_ev: Any) -> None:
+        return None
+
+    help_ev = _make_ev(msg_id="CMD_1", message=E2EMessage(conversation="/help budget"))
+    path_ev = _make_ev(msg_id="CMD_2", message=E2EMessage(conversation="/tmp/berkas.txt ada"))
+
+    command = await body.handle_message(help_ev, put)
+    plain = await body.handle_message(path_ev, put)
+
+    assert command is not None and command.command is not None
+    assert command.command.name == "help" and command.command.args == ("budget",)
+    assert plain is not None and plain.command is None
+
+
+async def test_the_chats_capability_lists_the_places_this_account_is_in(aconn, tmp_path) -> None:
+    """The soul cannot reach a group it cannot name: one call lists every place with its name."""
+    body = WhatsAppBody(clock=FakeClock(START), client=FakeWAClient(),
+                        self_account=f"whatsapp:{OWN_PN}")
+    body.files = _door(aconn, tmp_path)
+    body.directory.places["space:wa:120363427398681748@g.us"] = {
+        "form": "group", "name": "Grup ALD", "members": [f"whatsapp:{BUDI_PN}"]}
+
+    receipt = await body.act(Action(id="chats:1", capability="chats", place="space:wa:dm",
+                                    arguments={}))
+
+    assert receipt.state == "done"
+    assert receipt.result["chats"] == [
+        {"place": "space:wa:120363427398681748@g.us", "name": "Grup ALD",
+         "members": [f"whatsapp:{BUDI_PN}"]}]

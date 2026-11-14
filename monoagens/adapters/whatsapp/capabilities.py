@@ -51,6 +51,16 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "permission": "whatsapp.say",
     },
     {
+        "name": "chats",
+        "description": "List the chats this account is in: the place id, its name and who is in it.",
+        "schema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "facts": ("reads",),
+        "communicative": False,
+        "long_running": False,
+        "identity_changing": False,
+        "permission": "whatsapp.chats",
+    },
+    {
         "name": "react",
         "description": "React to a WhatsApp message with one emoji.",
         "schema": {

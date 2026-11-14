@@ -24,7 +24,8 @@ from monoagens.adapters.whatsapp.media import (
     views_once,
 )
 from monoagens.adapters import support
-from monoagens.contract import Answer, Audience, Percept, describe_attachments
+from monoagens.contract import (Answer, Audience, Command, Percept,
+                                describe_attachments)
 from monoagens.types import Event
 
 
@@ -32,6 +33,7 @@ def percept_of(*, actor: str, place: str, occurred_at: datetime, description: st
                features: Mapping[str, float], data: Mapping[str, Any],
                ref: str = "", about: str = "", involves: Sequence[str] = (),
                attachments: Sequence[Mapping[str, Any]] = (), answer: Answer | None = None,
+               command: Command | None = None,
                imported: bool = False, backfill: bool = False) -> Percept:
     """Return one percept with its `data` scrubbed to plain JSON (§2.4.2)."""
     return Percept(actor=actor, place=place, occurred_at=occurred_at,
@@ -39,7 +41,8 @@ def percept_of(*, actor: str, place: str, occurred_at: datetime, description: st
                    about=clean_text(about), involves=tuple(clean_text(item)
                                                           for item in involves),
                    attachments=_clean_attachments(attachments),
-                   features=dict(features), answer=answer, backfill=backfill,
+                   features=dict(features), answer=answer, command=command,
+                   backfill=backfill,
                    imported=imported, data=clean_json(dict(data)))
 
 
@@ -370,6 +373,12 @@ def format_message(raw: Any, *, directory: WhatsAppDirectory, now: datetime,
         desc = f"{sender_label}: {text}".strip()
 
     del choices_prompts  # free words are reasoning's; a poll or a button is the answer
+    command = None
+    slash = text.strip()
+    if slash.startswith("/") and len(slash) > 1:
+        parts = slash[1:].split()
+        if parts and parts[0].isalpha():
+            command = Command(name=parts[0].lower(), args=tuple(parts[1:]))
     addressed = _is_self_addressed(
         message, chat_jid, from_me=from_me, directory=directory, own_digits=own_digits,
         own_sent=own_sent, reply_msg_id=reply_id)
@@ -380,7 +389,8 @@ def format_message(raw: Any, *, directory: WhatsAppDirectory, now: datetime,
         features={"addressed": 1 if addressed else 0, "named": 0,
                   "addressed_other": 0 if addressed else 1},
         data=data, ref=msg_id, about=reply_id, involves=mentions,
-        attachments=attachments, imported=imported, backfill=backfill)
+        attachments=support.attachments_of(attachments), command=command,
+        imported=imported, backfill=backfill)
 
 
 def format_album(events: Sequence[Percept], *, album_id: str,
