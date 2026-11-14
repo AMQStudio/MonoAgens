@@ -13,8 +13,8 @@ locked contract. This file is how you work here; the design is in `docs/spec.md`
    variable names from `.env.example`; check that one is set by presence only
    (`test -n "$LLM_API_KEY"`). Never put a secret in a command, a log, a test, a commit, a report
    or a prompt. If one is exposed anyway, stop and tell the owner which one.
-2. **Never change the contract**: `monoagens/contract/` and `contract.lock` belong to the owner.
-3. **Never touch a file** outside your part's **May touch** line.
+2. **Never change the contract** (`monoagens/contract/`) without the owner's decision.
+3. **Stay inside your task**: change only what its items need.
 4. **Never add a dependency** the owner has not approved; the approved ones are those in
    `pyproject.toml`.
 5. **Never edit** `docs/spec.md`, `docs/research.md` or this file. In your own task file you may
@@ -44,8 +44,8 @@ locked contract. This file is how you work here; the design is in `docs/spec.md`
   `scripts/replay.py` without `--fake`.
 - Tests speak through the contract: they feed percepts and check actions, receipts and events.
   No private functions, no internal payloads, no prompt wording.
-- The architecture tests, the contract lock and the ratchet hold the generic rules. When one
-  fails, fix the code — never the test, the lock or the baseline.
+- The architecture tests and the ratchet hold the generic rules. When one
+  fails, fix the code — never the test or the baseline.
 
 ## Code
 - Python 3.13 with `uv`. Code, comments, logs and docs in English; persona text in `soul.yaml`
