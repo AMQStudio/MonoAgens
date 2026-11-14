@@ -896,3 +896,24 @@ async def test_the_chats_capability_lists_the_places_this_account_is_in(aconn, t
     assert receipt.result["chats"] == [
         {"place": "space:wa:120363427398681748@g.us", "name": "Grup ALD",
          "members": [f"whatsapp:{BUDI_PN}"]}]
+
+
+async def test_the_lid_map_is_read_from_the_session_store(tmp_path) -> None:
+    """The LID mapping comes from WhatsApp's own table; the library lookup segfaults instead."""
+    import sqlite3
+
+    from monoagens.adapters.whatsapp.identity import WhatsAppDirectory, load_lid_map
+
+    session = tmp_path / "wa.db"
+    con = sqlite3.connect(session)
+    con.execute("CREATE TABLE whatsmeow_lid_map (lid TEXT, pn TEXT)")
+    con.execute("INSERT INTO whatsmeow_lid_map VALUES (?, ?)", ("130799689031758", BUDI_PN))
+    con.commit()
+    con.close()
+
+    directory = WhatsAppDirectory()
+    learned = load_lid_map(session, directory)
+
+    assert learned == 1
+    assert directory.lid_for(f"{BUDI_PN}@s.whatsapp.net") == "130799689031758@lid"
+    assert load_lid_map(tmp_path / "missing.db", directory) == 0

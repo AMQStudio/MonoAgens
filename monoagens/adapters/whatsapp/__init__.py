@@ -39,6 +39,7 @@ from monoagens.adapters.whatsapp.history_sync import (
 from monoagens.adapters.whatsapp.identity import (
     WhatsAppDirectory,
     digits_of,
+    load_lid_map,
     import_contacts_sqlite,
     jid_text,
     place_id,
@@ -198,6 +199,8 @@ class WhatsAppBody:
             if conn is not None:
                 self._sent.update(await sent_ids_from_log(conn, body=self.name))
             self._sent_loaded = True
+        # Direct contacts are addressed by LID now; the session store knows every pair.
+        load_lid_map(self.session_db, self.directory)
         if self._client is None:
             self.session_db.parent.mkdir(parents=True, exist_ok=True)
             if callable(self._client_factory):

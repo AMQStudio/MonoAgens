@@ -40,26 +40,15 @@ LOGGER = logging.getLogger(__name__)
 
 
 async def resolved_send_jid(client: Any, chat_jid: str, directory: Any = None) -> Any:
-    """Return the JID one message goes to, asking WhatsApp for a LID when none is known yet.
+    """Return the JID one message goes to.
 
-    A session that just started has learned no LID from a stanza, and WhatsApp's own store knows
-    it: `get_lid_from_pn` answers it. The mapping is remembered, so the next send costs nothing.
+    WhatsApp addresses a direct contact by LID now, and the mapping is in the session store
+    (`whatsmeow_lid_map`), which the adapter loads at start. The library's own lookup
+    (`get_lid_from_pn`) is never called: its Go binding segfaults the whole process when the
+    contact is not in that map yet.
     """
-    jid = send_jid(chat_jid, directory)
-    if jid.Server != "s.whatsapp.net" or directory is None:
-        return jid
-    getter = getattr(client, "get_lid_from_pn", None)
-    if not callable(getter):
-        return jid
-    try:
-        lid = await getter(jid)
-    except Exception:  # the store may not know the contact yet: the PN send is the fallback
-        return jid
-    lid_text = str(getattr(lid, "User", "") or "")
-    if not lid_text or lid_text == jid.User:
-        return jid
-    directory.learn_lid(f"{lid_text}@lid", chat_jid)
-    return jid_of(f"{lid_text}@lid")
+    del client
+    return send_jid(chat_jid, directory)
 
 
 def _mask(jid: Any) -> str:

@@ -48,6 +48,37 @@ def chat_jid_from_place(place: str) -> str:
     return str(place or "").removeprefix(PLACE_PREFIX)
 
 
+def load_lid_map(session_db: Any, directory: "WhatsAppDirectory") -> int:
+    """Load the phone-number ↔ LID pairs WhatsApp keeps in its own session store.
+
+    Sending to a direct contact needs the LID (a message to the phone-number JID is accepted and
+    dropped). The store holds the answer in `whatsmeow_lid_map`; reading it here is a plain
+    read-only sqlite query, and the library's own Go lookup is avoided — that binding segfaults
+    the process when the contact is not in the map yet. Returns how many pairs were learned.
+    """
+    import sqlite3
+
+    path = str(session_db or "")
+    if not path:
+        return 0
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2.0)
+    except sqlite3.Error:
+        return 0
+    try:
+        rows = list(connection.execute("SELECT lid, pn FROM whatsmeow_lid_map"))
+    except sqlite3.Error:
+        return 0
+    finally:
+        connection.close()
+    learned = 0
+    for lid, pn in rows:
+        if lid and pn:
+            directory.learn_lid(f"{lid}@lid", f"{pn}@s.whatsapp.net")
+            learned += 1
+    return learned
+
+
 class WhatsAppDirectory:
     """Maps LIDs to phone numbers, tracks contact names, and keeps place metadata."""
 
