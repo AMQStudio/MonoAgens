@@ -44,7 +44,8 @@ from monoagens.adapters.whatsapp.identity import (
 from monoagens.adapters.whatsapp.media import fetch_media, store_deferred
 from monoagens.infra import config
 from monoagens.infra.clock import Clock
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 
 Put = Callable[[Event], Awaitable[None]]
 LOGGER = logging.getLogger(__name__)
@@ -569,31 +570,31 @@ class WhatsAppBody:
 
     async def act(self, action: Action) -> Any:
         """Perform `say`, `react`, or `edit` in a WhatsApp chat and record sent message ids."""
-        if action.kind == "say":
+        if action.capability == "say":
             res = await send.send_say(self._client, self.directory, self._files,
                                       action.place, dict(action.arguments or {}))
-        elif action.kind == "react":
+        elif action.capability == "react":
             res = await send.send_react(
                 self._client, action.place, str(action.arguments.get("emoji") or ""),
                 str(action.arguments.get("message_id") or ""))
-        elif action.kind == "edit":
+        elif action.capability == "edit":
             res = await send.send_edit(
                 self._client, action.place, str(action.arguments.get("message_id") or ""),
                 str(action.arguments.get("text") or ""))
-        elif action.kind == "pin" and "pin" in self.enabled_tools:
+        elif action.capability == "pin" and "pin" in self.enabled_tools:
             getter = getattr(self._client, "pin_message", None)
             if callable(getter):
                 await getter(send.jid_of(send.chat_jid_from_place(action.place)),
                              str(action.arguments.get("message_id") or ""))
             res = {"pinned": True}
-        elif action.kind == "reject_call" and "reject_call" in self.enabled_tools:
+        elif action.capability == "reject_call" and "reject_call" in self.enabled_tools:
             rejector = getattr(self._client, "reject_call", None)
             if callable(rejector):
                 await rejector(str(action.arguments.get("caller") or ""),
                                str(action.arguments.get("call_id") or ""))
             res = {"rejected": True}
         else:
-            raise ValueError(f"Unsupported action kind: {action.kind!r}")
+            raise ValueError(f"Unsupported action kind: {action.capability!r}")
         if isinstance(res, dict):
             if res.get("message_id"):
                 self.remember_sent(str(res["message_id"]))

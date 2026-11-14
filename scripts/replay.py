@@ -462,7 +462,7 @@ class FakeBody:
     async def act(self, action: Action) -> Any:
         """Record the action; a long action reports the output it produced."""
         self.actions.append(action)
-        if action.kind in TEST_LONG_RUNNING.get(self.name, frozenset()):
+        if action.capability in TEST_LONG_RUNNING.get(self.name, frozenset()):
             return {"ok": True, "finished": True, "text": self._output(action)}
 
     @staticmethod

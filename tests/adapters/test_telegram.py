@@ -9,7 +9,8 @@ import httpx
 import pytest
 
 from monoagens.adapters.telegram import TelegramBody
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 
 OWNER_ID = 777
 CHAT_PRIVATE = 777
@@ -252,7 +253,7 @@ async def test_act_say_sends_message():
     fake = FakeTelegram()
     body = _body(fake)
 
-    await body.act(Action(kind="say", place="space:tg:-100123", arguments={"text": "halo"}))
+    await body.act(Action(id="test:1", capability="say", place="space:tg:-100123", arguments={"text": "halo"}))
 
     assert fake.calls == [("sendMessage", {"chat_id": "-100123", "text": "halo"})]
 
@@ -262,7 +263,7 @@ async def test_act_react_sets_reaction():
     body = _body(fake)
 
     await body.act(
-        Action(kind="react", place="space:tg:-100123", arguments={"message_id": 7, "emoji": "👍"})
+        Action(id="test:2", capability="react", place="space:tg:-100123", arguments={"message_id": 7, "emoji": "👍"})
     )
 
     assert fake.calls == [
@@ -341,7 +342,7 @@ async def test_forum_topic_percept_and_say_carry_thread():
     assert events[0].payload["place_info"]["form"] == "thread"
     assert events[0].payload["place_info"]["parent"] == f"space:tg:{CHAT_GROUP}"
 
-    await body.act(Action(kind="say", place=f"space:tg:{CHAT_GROUP}:44",
+    await body.act(Action(id="test:3", capability="say", place=f"space:tg:{CHAT_GROUP}:44",
                           arguments={"text": "siap"}))
     assert ("sendMessage", {"chat_id": str(CHAT_GROUP), "text": "siap",
                             "message_thread_id": 44}) in fake.calls

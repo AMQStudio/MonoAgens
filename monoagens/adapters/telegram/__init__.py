@@ -27,7 +27,8 @@ from monoagens.adapters.telegram.format import (
     reaction_event,
 )
 from monoagens.infra.clock import Clock
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 
 Put = Callable[[Event], Awaitable[None]]
 GetCursor = Callable[[], Awaitable[Any | None]]
@@ -253,20 +254,20 @@ class TelegramBody:
     async def act(self, action: Action) -> Any:
         """Perform `say`, `react`, `edit`, or enabled optional Telegram actions."""
         p = action.arguments or {}
-        if action.kind == "say":
+        if action.capability == "say":
             return await self._say(action)
-        if action.kind == "react":
+        if action.capability == "react":
             return await send.react(self._call, action.place, str(p["emoji"]),
                                     int(p.get("message_id") or 0))
-        if action.kind == "edit":
+        if action.capability == "edit":
             return await send.edit(self._call, action.place,
                                    int(p.get("message_id") or 0), str(p.get("text") or ""))
-        if action.kind == "pin" and "pin" in self.enabled_tools:
+        if action.capability == "pin" and "pin" in self.enabled_tools:
             return await send.pin(self._call, action.place, int(p.get("message_id") or 0),
                                   silent=bool(p.get("silent", False)))
-        if action.kind == "unpin" and "unpin" in self.enabled_tools:
+        if action.capability == "unpin" and "unpin" in self.enabled_tools:
             return await send.unpin(self._call, action.place, int(p.get("message_id") or 0))
-        raise ValueError(f"Unsupported action kind: {action.kind!r}")
+        raise ValueError(f"Unsupported action kind: {action.capability!r}")
 
     async def _say(self, action: Action) -> Any:
         """Send text/choices/thread/location and attachments in a Telegram chat."""

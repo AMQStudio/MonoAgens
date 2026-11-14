@@ -25,7 +25,8 @@ from monoagens.infra.providers import OpenAICompatibleProvider
 from monoagens.infra.store import (append_event, insert_event_vector, read_event_vector,
                                   read_state, write_state)
 from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 from monoagens.boot import build, install
 from tests.support import body_tiers, open_book, settings
 
@@ -758,7 +759,7 @@ async def test_action_hook_replaces_the_payload_and_continue_passes(aconn):
     kernel.hooks.action.add("rewrite", rewrite)
     await _feed(kernel, _msg("halo"))
 
-    assert [(a.kind, a.place, dict(a.arguments)) for a in body.actions] == [
+    assert [(a.capability, a.place, dict(a.arguments)) for a in body.actions] == [
         ("say", PLACE, {"text": "hai (checked)"})]
     # F.10: the act records the arguments the action hook returned, not the ones asked for.
     assert (await _payload(aconn, "act.out"))["arguments"]["text"] == "hai (checked)"

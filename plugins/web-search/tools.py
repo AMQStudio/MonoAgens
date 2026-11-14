@@ -47,13 +47,13 @@ class WebSearchTool:
 
     async def act(self, action: Any) -> dict[str, Any]:
         """Run one of the two tools."""
-        if action.kind == "web_search":
+        if action.capability == "web_search":
             return await self.search(str(action.arguments.get("query") or ""),
                                      int(action.arguments.get("max_results") or 5))
-        if action.kind == "web_fetch":
+        if action.capability == "web_fetch":
             return await self.fetch(str(action.arguments.get("url") or ""),
                                     int(action.arguments.get("max_chars") or 12000))
-        return {"error": f"unknown tool: {action.kind}"}
+        return {"error": f"unknown tool: {action.capability}"}
 
     async def search(self, query: str, max_results: int = 5) -> dict[str, Any]:
         """Search through the provider chain; an empty query is refused."""

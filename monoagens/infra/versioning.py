@@ -69,6 +69,14 @@ def upcast_incoming(event: Event) -> Event:
     middleware still reads until every steer is a hook outcome (2.2).
     """
     payload = dict(event.payload or {})
+    if isinstance(payload.get("command"), str) and payload["command"]:
+        # A version 1 command wrote `{command: name, arguments: [...]}`; the contract's percept
+        # carries `command: {name, args}` (§2.4.7), so it is written once, here.
+        event = replace(event, payload={
+            **{key: value for key, value in payload.items() if key != "arguments"},
+            "command": {"name": payload["command"],
+                        "args": [str(arg) for arg in payload.get("arguments") or ()]}})
+        payload = dict(event.payload)
     if not V1_ONLY_KEYS.intersection(payload):
         return from_legacy_event(event)
     # The door reads the actor and the description from the payload; a version 1 event keeps

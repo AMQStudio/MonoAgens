@@ -97,6 +97,7 @@ def modules_for(hook: str, kernel: Any) -> tuple[tuple[str, Middleware], ...]:
     """Return the scoped middleware of one hook, in the order it runs."""
     return {"inbound": (("identity-pairing", identity.claim(kernel.conn)),
                         ("audience-size", privacy.audience_size(kernel)),
+                        ("place-owner", registry.place_owner(kernel.tools)),
                         ("approval-answer", interaction.answer(kernel)),
                         ("commands", registry.commands(kernel)),
                         ("privacy-intent", privacy.intent_words(kernel)),

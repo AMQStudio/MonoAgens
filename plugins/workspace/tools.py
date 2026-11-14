@@ -80,9 +80,9 @@ class WorkspaceTool:
         who = str(action.arguments.get("_who") or "")
         handlers = {"read": self.read, "write": self.write, "edit": self.edit,
                     "grep": self.grep, "glob": self.glob, "run": self.run}
-        handler = handlers.get(action.kind)
+        handler = handlers.get(action.capability)
         if handler is None:
-            return {"error": f"unknown tool: {action.kind}"}
+            return {"error": f"unknown tool: {action.capability}"}
         try:
             return await handler(who, action)
         except PermissionError as refused:

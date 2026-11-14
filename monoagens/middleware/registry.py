@@ -22,7 +22,8 @@ from monoagens.core.hooks import Continue, Middleware, Replace
 from monoagens.infra.store import payload_text
 from monoagens.contract import OUTPUT_MARKER
 from monoagens.middleware.contract import open_attachment
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 
 ROUTING = ("to", "via")
 LOGGER = logging.getLogger(__name__)
@@ -97,6 +98,7 @@ class ToolRegistry:
         """Start with no tool, no command and no skill present."""
         self.kernel = kernel
         self.adapters: dict[str, Any] = {}
+        self.place_body: dict[str, str] = {}  # the body that senses and acts in each place
         self.capabilities: dict[str, dict[str, Any]] = {}
         self.entries: dict[str, ToolEntry] = {}
         self.rules: list[str] = []
@@ -234,25 +236,64 @@ class ToolRegistry:
             if not entry.permission or (roles is not None
                                         and roles.can(who, entry.permission)))
 
-    async def act(self, event: Event, capability: str, payload: dict[str, Any], *,
-                  event_id: int | None = None, action_id: str = "") -> Any:
-        """Hand one action to the adapter or plugin that declared the capability."""
-        declared_by, _, name = capability.partition(".")
-        adapter = self.adapters.get(declared_by)
-        if adapter is None:
-            raise RuntimeError(f"No adapter registered for {declared_by!r}")
-        action = Action(id=action_id, kind=name, place=event.place or "", arguments=payload,
-                        adapter=declared_by, event_id=event_id)
+    async def act(self, action: contract.Action) -> contract.Receipt:
+        """Carry out one action and answer with one receipt (§3, §4.4).
+
+        A body's own capability goes to the body that senses its place; a tool (a plugin's or
+        the middleware's own) runs where its owner is. A place another body reaches is refused
+        with that body's name, never retried behind its back.
+        """
+        entry = self.entries.get(action.capability)
+        if entry is None:
+            return contract.Receipt("failed", reason=f"nothing declares {action.capability}")
+        if entry.body:
+            here = await self.place_body_of(str(action.place))
+            if here is not None and here != entry.owner:
+                # A place another body senses is reached through it, never behind its back.
+                return contract.Receipt(
+                    "refused", reason=f"this place is reached through {here}")
+        body = self.adapters.get(entry.owner)
+        if body is None:
+            return contract.Receipt("refused",
+                                    reason=f"nothing carries {action.capability}")
+        short = action.capability.split(".", 1)[1]
         try:
-            result = await adapter.act(action)
+            answer = await body.act(replace(action, capability=short))
         except PermissionError as exc:
             # A place the body may not post in answers `refused` with its reason (§4.4).
             return contract.Receipt("refused", reason=str(exc))
         except Exception as exc:
             kind = type(exc).__name__
-            LOGGER.error("tool %s failed (%s)", capability, kind)
-            return {"error": f"{capability} failed ({kind})"}
-        return await self._cap_result(result, self.output_cap(capability))
+            LOGGER.error("tool %s failed (%s)", action.capability, kind)
+            return contract.Receipt("failed", reason=f"{action.capability} failed ({kind})")
+        receipt = (answer if isinstance(answer, contract.Receipt)
+                   else contract.Receipt("done", result=answer))
+        if receipt.state == "held":
+            LOGGER.error("a body cannot hold an action: %s", action.capability)
+            return contract.Receipt(
+                "failed", reason=f"{action.capability}: a body cannot hold an action")
+        if receipt.state != "done":
+            return receipt
+        if isinstance(receipt.result, Mapping) and receipt.result.get("error"):
+            return contract.Receipt("failed", reason=str(receipt.result["error"]))
+        capped = await self._cap_result(receipt.result, self.output_cap(action.capability))
+        return replace(receipt, result=capped)
+
+    async def place_body_of(self, place: str) -> str | None:
+        """Return the body that senses a place: the live cache, else the Log's newest percept."""
+        known = self.place_body.get(place)
+        if known is not None or not place:
+            return known
+        conn = getattr(self.kernel, "conn", None)
+        if conn is None:
+            return None
+        row = await (await conn.execute(
+            "SELECT body FROM events WHERE place = %s AND kind = 'percept' "
+            "AND body IS NOT NULL ORDER BY id DESC LIMIT 1", (place,))).fetchone()
+        if row is None:
+            return None
+        self.place_body[place] = str(row[0])
+        return str(row[0])
 
     async def more(self, ref: str, offset: int = 0, limit: int = DEFAULT_OUTPUT_CAP,
                    *, context: str | None = None) -> dict[str, Any]:
@@ -366,10 +407,10 @@ class RegistryTool:
         """Declare `describe` and `more`."""
         return (DESCRIBE_CAPABILITY, MORE_CAPABILITY)
 
-    async def act(self, action: Action) -> dict[str, Any]:
+    async def act(self, action: Any) -> dict[str, Any]:
         """Return a tool/skill entry (`describe`) or a slice of archived output (`more`)."""
         payload = action.arguments or {}
-        if action.kind == "more":
+        if action.capability == "more":
             limit = payload.get("limit")
             return await self.registry.more(
                 str(payload.get("ref") or ""),
@@ -457,6 +498,33 @@ def _cut(text: str, cap: int, *, ref: str = "none") -> str:
 # ---------------------------------------------------------------- commands
 
 
+def place_owner(tools: ToolRegistry) -> Middleware:
+    """Inbound rule: remember which body senses and acts in each place (§4.4)."""
+
+    async def rule(item: Any, ctx: Any) -> Any:
+        """Record the body that delivered a percept in its place (§2.4.4)."""
+        del ctx
+        place = str(getattr(item, "place", None) or "")
+        body = str(getattr(item, "body", None) or "")
+        if (place and body and getattr(item, "kind", "") == "percept"
+                and not getattr(item, "imported", False)):
+            tools.place_body[place] = body
+        return Continue()
+
+    return rule
+
+
+def own_action(event: Event, capability: str, arguments: Mapping[str, Any]) -> contract.Action:
+    """Return the action one act the middleware itself decided on becomes (§3).
+
+    The id is derived from the event it belongs to, so a retried internal act carries the same
+    id a body already answered.
+    """
+    return contract.Action(
+        id=contract.action_id("middleware", int(event.id or 0), 0, 0), capability=capability,
+        place=str(event.place or ""), arguments=dict(arguments), caused_by=event.id)
+
+
 async def _help(kernel: Any, event: Event, arguments: list[str]) -> str:
     """Render `/help` for one requester: the commands and tools they may use."""
     who = event.origin_actor or event.who
@@ -497,12 +565,13 @@ def commands(kernel: Any) -> Middleware:
     """Inbound rule: handle a `command` event in the registry, without a model call."""
 
     async def rule(item: Any, ctx: Any) -> Any:
-        """Answer one typed command through the adapter that delivered it."""
-        if getattr(item, "kind", "") != "command":
+        """Answer one typed command, from the `command` a body put in its percept (§2.4.7)."""
+        payload = dict(getattr(item, "payload", None) or {})
+        command = payload.get("command")
+        if not isinstance(command, Mapping) or not command.get("name"):
             return Continue()
-        payload = item.payload or {}
-        name = str(payload.get("command") or "").strip().lstrip("/:").partition("@")[0].lower()
-        arguments = [str(argument) for argument in payload.get("arguments") or ()]
+        name = str(command["name"])
+        arguments = [str(argument) for argument in command.get("args") or ()]
         entry = kernel.tools.command(name)
         who, roles = item.origin_actor or item.who, _roles(kernel)
         if entry is None:
@@ -510,7 +579,11 @@ def commands(kernel: Any) -> Middleware:
         elif not may_use(entry.permission, who, roles, item.place):
             text = f"/{name} is not allowed for you"
         else:
-            text = await entry.handler(kernel, item, arguments)
+            try:
+                text = await entry.handler(kernel, item, arguments)
+            except Exception as exc:
+                await kernel._record_error(item, f"/{name} failed ({type(exc).__name__})")
+                text = f"/{name} failed: {type(exc).__name__}"
         if text:
             await _answer(kernel, item, text)
         return Continue()
@@ -519,13 +592,9 @@ def commands(kernel: Any) -> Middleware:
 
 
 async def _answer(kernel: Any, event: Event, text: str) -> None:
-    """Send one command's reply through the adapter that delivered the command."""
+    """Answer one command through the action hook, like every other act (F.12)."""
     capability = f"{event.body}.say"
-    stored = await kernel._emit(event, "act.out", {
-        "capability": capability, "arguments": {"text": text}, "communicative": True},
-        place=event.place)
-    await kernel.tools.act(event, capability, {"text": text}, event_id=stored.id)
-    await kernel._emit(event, "act.result", {"capability": capability, "result": None})
+    await kernel.act_via_hooks(event, capability, {"text": text})
 
 
 # --------------------------------------------------------------- the block

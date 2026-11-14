@@ -580,6 +580,16 @@ model_answers:
   calls:
   - name: act
     arguments:
+      capability: whatsapp.say
+      arguments:
+        to: person:budi
+        text: 'Halo Budi, berikut ringkasan revisi paper Benchmark Sistem: throughput 412 req/s (p99 18
+          ms), lengkap dengan bagian Limitasi dan Kesimpulan.'
+- step: 4
+  tool: decide
+  calls:
+  - name: act
+    arguments:
       capability: telegram.say
       arguments:
         text: Revisi paper sudah dibagikan dan dikirim ke Budi via WhatsApp.

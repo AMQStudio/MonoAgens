@@ -11,7 +11,8 @@ from monoagens.infra import config
 from monoagens.infra.clock import FakeClock
 from monoagens.infra.embedding import FakeEmbedder
 from monoagens.infra.store import append_event, read_event_vector
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 from tests.support import settings
 
 START = datetime(2026, 11, 10, 8, 0, tzinfo=timezone.utc)
@@ -92,7 +93,7 @@ async def test_imported_percepts_embed_in_batches_and_stay_searchable(aconn) -> 
 
     found = await recall.search(
         aconn,
-        Action(kind="self.recall", place="space:wa:100", arguments={"query": "topicalpha"}),
+        Action(id="test:1", capability="self.recall", place="space:wa:100", arguments={"query": "topicalpha"}),
         visible=_allow,
         memory_visible=_allow,
     )

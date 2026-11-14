@@ -20,7 +20,8 @@ from monoagens.middleware import privacy, registry
 from monoagens.contract import OUTPUT_MARKER
 from monoagens.middleware.registry import (CommandEntry, SkillEntry, ToolRegistry, help_text,
                                            self_block)
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 from tests.support import open_book, publish_audience, settings
 
 START = datetime(2026, 11, 12, 8, 0, tzinfo=timezone.utc)
@@ -117,6 +118,12 @@ def test_every_capability_must_declare_a_permission():
         tools.register(_Body("quiet", ({"name": "read", "description": "Read.",
                                         "schema": {}, "communicative": True,
                                         "long_running": False, "identity_changing": False},)))
+
+
+async def _act(kernel, event: Event, capability: str,
+               arguments: dict[str, Any] | None = None) -> Any:
+    """Carry one action through the registry and answer with its receipt."""
+    return await kernel.tools.act(registry.own_action(event, capability, arguments or {}))
 
 
 async def _help_on(aconn, body: _Body) -> str:
@@ -280,7 +287,9 @@ async def test_overflow_output_archives_full_text_and_reads_50mb_in_parts(aconn,
     trigger = Event(id=1, ts=START, kind="percept", who="person:owner",
                     place="space:tg:dm:owner", body="telegram", payload={})
 
-    capped = await kernel.tools.act(trigger, "bulk.dump", {})
+    done = await _act(kernel, trigger, "bulk.dump")
+    assert done.state == "done"
+    capped = done.result
     ref = capped["full"]["ref"]
     assert capped["full"] == {"ref": ref, "size": 50 * 1024 * 1024}
     marker_idx = capped["output"].index("\n...[truncated:")
@@ -294,11 +303,12 @@ async def test_overflow_output_archives_full_text_and_reads_50mb_in_parts(aconn,
 
     from monoagens.middleware.registry import MORE_OUTPUT_CAP
 
-    first = await kernel.tools.act(trigger, "registry.more",
-                                   {"ref": ref, "offset": len(prefix), "limit": 30_000_000})
+    first = (await _act(kernel, trigger, "registry.more",
+                        {"ref": ref, "offset": len(prefix),
+                         "limit": 30_000_000})).result
     tail_offset = len(full_text) - 500
-    tail = await kernel.tools.act(trigger, "registry.more",
-                                  {"ref": ref, "offset": tail_offset, "limit": 1000})
+    tail = (await _act(kernel, trigger, "registry.more",
+                       {"ref": ref, "offset": tail_offset, "limit": 1000})).result
     assert len(first["text"]) == MORE_OUTPUT_CAP
     assert first["remaining"] == len(full_text) - len(prefix) - MORE_OUTPUT_CAP
     assert first["next_offset"] == len(prefix) + MORE_OUTPUT_CAP
@@ -330,7 +340,7 @@ async def test_full_output_respects_privacy_and_hard_forget(aconn, tmp_path):
     dm_event = await append_event(aconn, ts=START, kind="percept", who="person:bob",
                                   place="space:tg:dm:bob", body="telegram",
                                   payload={"description": "dump it"})
-    capped = await kernel.tools.act(dm_event, "bulk.dump", {})
+    capped = (await _act(kernel, dm_event, "bulk.dump")).result
     ref = capped["full"]["ref"]
     stored = await append_event(aconn, ts=START, kind="act.result", who="self",
                                 place="space:tg:dm:bob",
@@ -340,20 +350,20 @@ async def test_full_output_respects_privacy_and_hard_forget(aconn, tmp_path):
     group_event = await append_event(aconn, ts=START, kind="percept", who="person:alice",
                                      place=PLACE, body="telegram",
                                      payload={"description": "and it?"})
-    blocked = await kernel.tools.act(group_event, "registry.more", {"ref": ref, "offset": 0})
-    assert "may not see" in blocked["error"]
+    blocked = await _act(kernel, group_event, "registry.more", {"ref": ref, "offset": 0})
+    assert blocked.state == "failed" and "may not see" in blocked.reason
 
     await privacy.grant(kernel, stored, {"items": [int(stored.id)]},
                         to=PLACE, source="space:tg:dm:bob")
-    opened = await kernel.tools.act(group_event, "registry.more",
-                                    {"ref": ref, "offset": 0, "limit": 50})
-    assert opened["text"].startswith("TOP-SECRET-CHUNK-")
+    opened = await _act(kernel, group_event, "registry.more",
+                        {"ref": ref, "offset": 0, "limit": 50})
+    assert opened.result["text"].startswith("TOP-SECRET-CHUNK-")
 
     await forget_hard(aconn, [stored.id], now=START)
     removed = await kernel.attachments.sweep(aconn)
     assert removed == 1 and kernel.attachments.find(ref) is None
-    gone = await kernel.tools.act(dm_event, "registry.more", {"ref": ref, "offset": 0})
-    assert "error" in gone
+    gone = await _act(kernel, dm_event, "registry.more", {"ref": ref, "offset": 0})
+    assert gone.state == "failed"
 
 
 async def test_registry_more_denies_without_place_and_caps_limit(aconn, tmp_path):
@@ -380,7 +390,7 @@ async def test_registry_more_denies_without_place_and_caps_limit(aconn, tmp_path
     dm_event = await append_event(aconn, ts=START, kind="percept", who="person:owner",
                                   place="space:tg:dm:owner", body="telegram",
                                   payload={"place_kind": "direct"})
-    capped = await kernel.tools.act(dm_event, "bulk.emit", {})
+    capped = (await _act(kernel, dm_event, "bulk.emit")).result
     ref = capped["full"]["ref"]
     await append_event(aconn, ts=START, kind="act.result", who="self",
                        place="space:tg:dm:owner",
@@ -388,14 +398,42 @@ async def test_registry_more_denies_without_place_and_caps_limit(aconn, tmp_path
 
     no_place_event = Event(id=None, ts=START, kind="percept", who="person:owner",
                            place="", body="telegram", payload={})
-    denied_act = await kernel.tools.act(no_place_event, "registry.more", {"ref": ref, "offset": 0})
-    assert "error" in denied_act
+    denied_act = await _act(kernel, no_place_event, "registry.more", {"ref": ref, "offset": 0})
+    assert denied_act.state == "failed" and "place" in denied_act.reason
     denied_direct = await kernel.tools.more(ref, offset=0, limit=100, context=None)
     assert "error" in denied_direct
 
-    sliced = await kernel.tools.act(dm_event, "registry.more",
-                                    {"ref": ref, "offset": 0, "limit": 999_999})
+    sliced = (await _act(kernel, dm_event, "registry.more",
+                         {"ref": ref, "offset": 0, "limit": 999_999})).result
     assert len(sliced["text"]) == MORE_OUTPUT_CAP
     assert sliced["next_offset"] == MORE_OUTPUT_CAP
     assert sliced["remaining"] == MORE_OUTPUT_CAP * 2
 
+
+
+async def test_an_action_for_a_place_another_body_owns_is_refused(aconn):
+    """§2.4.4: a place is reached through the body that senses it, never behind its back."""
+    kernel = build(aconn, clock=FakeClock(START), settings=SETTINGS)
+    kernel.register_adapter(_Body("telegram", TELEGRAM_CAPABILITIES))
+    kernel.register_adapter(_Body("cli", CLI_CAPABILITIES))
+    kernel.tools.place_body[PLACE] = "cli"
+
+    receipt = await _act(kernel, Event(id=None, ts=START, kind="percept", who="person:owner",
+                                      place=PLACE, body="cli", payload={}),
+                         "telegram.say", {"text": "hai"})
+
+    assert receipt.state == "refused"
+    assert receipt.reason == "this place is reached through cli"
+
+
+async def test_a_place_no_body_has_sensed_yet_is_carried_by_its_declaring_body(aconn):
+    """§2.4.4: only a place *another* body owns is refused; an unreported place has no owner."""
+    kernel = build(aconn, clock=FakeClock(START), settings=SETTINGS)
+    body = _Body("telegram", TELEGRAM_CAPABILITIES)
+    kernel.register_adapter(body)
+
+    receipt = await _act(kernel, Event(id=None, ts=START, kind="percept", place="space:ghost",
+                                      payload={}), "telegram.say", {"text": "hai"})
+
+    assert receipt.state == "done"
+    assert [action.arguments["text"] for action in body.actions] == ["hai"]

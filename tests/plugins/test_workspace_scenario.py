@@ -176,7 +176,7 @@ async def test_the_work_is_read_shared_approved_and_sent(aconn, tmp_path):
     cur = await aconn.execute("SELECT kind, place, payload FROM events ORDER BY id")
     rows = [(kind, place, payload) for kind, place, payload in await cur.fetchall()]
     intents = [row for row in rows if row[0] == "act.intent"]
-    sent = [action for action in adapter.actions if action.kind == "send_file"]
+    sent = [action for action in adapter.actions if action.capability == "send_file"]
     assert intents and intents[0][2]["target"] == BUDI
     assert sent and sent[-1].place == BUDI
     assert attachment["ref"] in sent[-1].arguments["attachments"]

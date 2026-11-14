@@ -16,7 +16,8 @@ from monoagens.core.kernel import Kernel
 from monoagens.core.reasoning import Reasoning
 from monoagens.infra.providers import OpenAICompatibleProvider
 from monoagens.infra.store import append_event, project_event, read_state, rebuild_state
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 from monoagens.boot import build
 from monoagens.middleware import privacy
 from tests.support import open_book, settings
@@ -138,8 +139,8 @@ async def test_set_identity_rejects_unknown_fields(aconn):
     await identity.ensure(aconn, SETTINGS["identity"], now=START)
     tool = identity.SelfTool(aconn, FakeClock(START), visible=privacy.visible,
                                memory_visible=privacy.memory_visible)
-    action = Action(kind="set_identity", place=PLACE,
-                    arguments={"name": "Mona", "owner": "x"}, event_id=1)
+    action = Action(id="test:1", capability="set_identity", place=PLACE,
+                    arguments={"name": "Mona", "owner": "x"}, caused_by=1)
     with pytest.raises(ValueError, match="unknown fields"):
         await tool.act(action)
 
@@ -174,7 +175,7 @@ async def test_dispatch_applies_identity_only_for_identity_changing_and_refreshe
 
         async def act(self, action):
             return {"identity": {**SETTINGS["identity"],
-                                 "name": "Evil" if action.kind == "spoof" else "Renamed"}}
+                                 "name": "Evil" if action.capability == "spoof" else "Renamed"}}
 
     await identity.ensure(aconn, SETTINGS["identity"], now=START)
     kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(FakeLLM({})), settings=SETTINGS,

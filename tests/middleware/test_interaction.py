@@ -13,7 +13,8 @@ from monoagens.infra.clock import FakeClock
 from monoagens.infra.store import append_event, write_state
 from monoagens.middleware import interaction
 from monoagens.middleware.loader import Loader
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 from tests.support import settings
 
 ROOT = __import__("pathlib").Path(__file__).resolve().parent.parent.parent
@@ -45,7 +46,7 @@ class Screen:
 
     async def act(self, action: Action) -> Any:
         self.actions.append(action)
-        return {"text": "hasil" if action.kind == "run" else None}
+        return {"text": "hasil" if action.capability == "run" else None}
 
     async def show(self, place: str, kind: str, **data: Any) -> None:
         self.shown.append((place, kind, dict(data)))
@@ -269,7 +270,7 @@ class _RichScreen(Screen):
 
     async def act(self, action: Action) -> Any:
         self.actions.append(action)
-        if action.kind == "say":
+        if action.capability == "say":
             self._msg_seq += 1
             mid = f"m{self._msg_seq}"
             choices = list((action.arguments or {}).get("choices") or ())
@@ -285,7 +286,7 @@ class _RichScreen(Screen):
                 return {"message_id": mid, "choices": [
                     {"label": opt, "answer": str(i)} for i, opt in enumerate(choices, 1)]}
             return {"message_id": mid}
-        return {"text": "hasil" if action.kind == "run" else None}
+        return {"text": "hasil" if action.capability == "run" else None}
 
     async def show(self, place: str, kind: str, **data: Any) -> Any:
         self.shown.append((place, kind, dict(data)))
@@ -439,7 +440,7 @@ async def test_progress_edits_single_message_when_edit_mode_else_sends_new(aconn
     restarted.settings["interaction"]["progress"] = "new"
     await interaction.narrate(restarted)(step2, {"conn": aconn, "now": START})
     assert not screen.shown
-    assert len(screen.actions) == 1 and screen.actions[0].kind == "say"
+    assert len(screen.actions) == 1 and screen.actions[0].capability == "say"
 
 
 async def test_show_switch_per_adapter_writes_config_and_refuses_gaps(aconn, tmp_path):

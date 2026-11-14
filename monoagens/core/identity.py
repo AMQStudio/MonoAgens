@@ -86,18 +86,18 @@ class SelfTool:
 
     async def act(self, action) -> dict[str, Any]:
         """Apply an approved identity change or answer a recall."""
-        if action.kind == "recall":
+        if action.capability == "recall":
             return await search(self.conn, action, visible=self.visible,
                                 memory_visible=self.memory_visible)
-        if action.kind != "set_identity":
-            raise ValueError(f"Unsupported action kind: {action.kind!r}")
-        if action.event_id is None:
+        if action.capability != "set_identity":
+            raise ValueError(f"Unsupported action kind: {action.capability!r}")
+        if action.caused_by is None:
             raise ValueError("set_identity needs the act.out event it belongs to")
         current = await read_state(self.conn, KEY) or {}
         identity = _update(current, action.arguments)
         async with self.conn.transaction():
             event = await append_event(self.conn, ts=self.clock.now(), kind=UPDATED,
-                                       caused_by=action.event_id,
+                                       caused_by=action.caused_by,
                                        payload={"identity": identity})
             await project_event(self.conn, event)
         return {"identity": identity}

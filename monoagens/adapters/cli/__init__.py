@@ -18,7 +18,8 @@ from monoagens.adapters.cli.capabilities import (
 )
 from monoagens.adapters.cli.format import command_event, event, split_line
 from monoagens.infra.clock import Clock
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 
 DEFAULT_SOCKET = "/tmp/monoagens.sock"
 Put = Callable[[Event], Awaitable[None]]
@@ -92,7 +93,7 @@ class CLIBody:
     async def act(self, action: Action) -> Any:
         """Write one rendered line or optional platform action to connected clients."""
         p = action.arguments or {}
-        if action.kind == "say":
+        if action.capability == "say":
             self._seq += 1
             msg_id = f"cli:{self._seq}"
             choices = [str(c) for c in (p.get("choices") or ()) if str(c)]
@@ -120,13 +121,13 @@ class CLIBody:
                 res["choices"] = [{"label": opt, "answer": str(idx)}
                                   for idx, opt in enumerate(choices, 1)]
             return res
-        if action.kind == "react":
+        if action.capability == "react":
             await send.broadcast(self._writers, f"[{p.get('emoji', '')}]\n")
             return {"emoji": p.get("emoji", "")}
-        if action.kind == "pin" and "pin" in self.enabled_tools:
+        if action.capability == "pin" and "pin" in self.enabled_tools:
             await send.broadcast(self._writers, f"[pinned] {p.get('text') or ''}\n")
             return {"pinned": True}
-        raise ValueError(f"Unsupported action kind: {action.kind!r}")
+        raise ValueError(f"Unsupported action kind: {action.capability!r}")
 
     async def show(self, place: str, kind: str, **data: Any) -> None:
         """Show one non-message thing as a status/fallback line; unknown kinds are refused."""

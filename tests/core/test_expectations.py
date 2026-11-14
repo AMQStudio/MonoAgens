@@ -18,7 +18,8 @@ from monoagens.core.reasoning import Reasoning
 from monoagens.infra.providers import OpenAICompatibleProvider
 from monoagens.infra.store import append_event, read_expectations, write_state
 from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 from monoagens.boot import build
 from tests.support import body_tiers, settings
 
@@ -433,7 +434,7 @@ async def test_mvp_c_remind_me_at_seven_exactly_once_across_a_restart(aconn):
     kinds = await _kinds(aconn)
     assert kinds.count("expectation.fired") == 1
     assert kinds.count("act.out") == 1
-    assert [(a.kind, a.place, dict(a.arguments)) for a in body.actions] == [
+    assert [(a.capability, a.place, dict(a.arguments)) for a in body.actions] == [
         ("say", PLACE, {"text": "sudah jam 7"})]
     why_awake = fake.last_prompt.split("<why_awake>")[1]
     assert "is due here" in why_awake

@@ -137,7 +137,7 @@ async def test_mvp_a_restart_preserves_conversation_context(aconn):
     assert "besok kita bahas apa?" in recent
     assert "Mona: kita bahas kopi ya" in recent
     assert "<event>person:owner: lanjut</event>" in volatile
-    assert [(a.kind, a.place, dict(a.arguments)) for a in body.actions] == [
+    assert [(a.capability, a.place, dict(a.arguments)) for a in body.actions] == [
         ("say", PLACE, {"text": "lanjut soal kopi"})]
     assert (await _kinds(aconn)).count("act.out") == 2
 
@@ -181,7 +181,7 @@ async def test_mvp_b_silence_and_mention(aconn):
     assert len(fake.requests) == 1
     assert "<why_awake>addressed message</why_awake>" in _volatile(fake)
     assert (await _kinds(aconn)).count("act.out") == 1
-    assert [(a.kind, a.place, dict(a.arguments)) for a in body.actions] == [
+    assert [(a.capability, a.place, dict(a.arguments)) for a in body.actions] == [
         ("say", GROUP, {"text": "iya, ada apa?"})]
 
 
@@ -212,7 +212,7 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
     kinds = await _kinds(aconn)
     assert kinds.count("expectation.fired") == 1
     assert kinds.count("act.out") == 1
-    assert [(a.kind, a.place, dict(a.arguments)) for a in body.actions] == [
+    assert [(a.capability, a.place, dict(a.arguments)) for a in body.actions] == [
         ("say", PLACE, {"text": "sudah jam 7"})]
     # The reason names the expectation, never its words: the desk decides what may be shown
     # (D45), so the prompt says one is due and the `<expectations>` item carries it.

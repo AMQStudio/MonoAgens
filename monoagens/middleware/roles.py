@@ -16,6 +16,7 @@ from typing import Any, Mapping
 from monoagens.core.hooks import Continue, Middleware
 from monoagens.infra.store import append_event, read_state, write_state
 from monoagens.middleware import identity, privacy
+from monoagens.middleware import registry as registry_module
 from monoagens.middleware.registry import CommandEntry
 from monoagens.types import Event
 
@@ -681,8 +682,9 @@ async def tell(kernel: Any, event: Event, place: str, text: str) -> None:
     stored = await kernel._emit(event, "act.out", {
         "capability": capability, "arguments": {"text": text}, "communicative": True},
         place=place)
-    await kernel.tools.act(replace(event, place=place), capability, {"text": text},
-                           event_id=stored.id)
+    await kernel.tools.act(replace(registry_module.own_action(replace(event, place=place), capability,
+                                                       {"text": text}),
+                                   caused_by=stored.id))
 
 
 async def edit_people(kernel: Any, event: Event, who: str, held: Sequence[str]) -> None:

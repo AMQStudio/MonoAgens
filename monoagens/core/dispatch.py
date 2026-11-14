@@ -56,15 +56,6 @@ def action_for(job: JobRef | None, event: Event, round_index: int, n: int,
                            caused_by=caused_by)
 
 
-def as_receipt(capability: str, raw: Any) -> contract.Receipt:
-    """Answer with the receipt one tool result means (contract.md §3)."""
-    if isinstance(raw, contract.Receipt):
-        return raw
-    if isinstance(raw, dict) and raw.get("error"):
-        return contract.Receipt("failed", reason=str(raw["error"]))
-    return contract.Receipt("done", result=raw)
-
-
 async def dispatch(kernel: Any, event: Event, args: dict[str, Any], *,
                    said: set[str] | None = None, job: JobRef | None = None,
                    round_index: int = 0, n: int = 0) -> Dispatch:
@@ -157,20 +148,17 @@ async def carry(kernel: Any, act: Act) -> contract.Receipt:
 
     A tool that overruns is a `failed` receipt with its timeout named, never a hung turn.
     """
-    trigger = replace(act.out, place=act.action.place)
+    action = replace(act.action, caused_by=act.out.id)
     timeout = getattr(getattr(kernel, "jobs", None), "timeout", None)
     try:
-        coro = kernel.tools.act(trigger, act.action.capability,
-                                dict(act.action.arguments), event_id=act.out.id,
-                                action_id=act.action.id)
-        raw = await (asyncio.wait_for(coro, timeout) if timeout else coro)
+        coro = kernel.tools.act(action)
+        return await (asyncio.wait_for(coro, timeout) if timeout else coro)
     except asyncio.TimeoutError:
         return contract.Receipt(
-            "failed", reason=f"{act.action.capability} timed out after {timeout:g}s")
+            "failed", reason=f"{action.capability} timed out after {timeout:g}s")
     except Exception as exc:
         return contract.Receipt(
-            "failed", reason=f"{act.action.capability} failed ({type(exc).__name__}): {exc}")
-    return as_receipt(act.action.capability, raw)
+            "failed", reason=f"{action.capability} failed ({type(exc).__name__}): {exc}")
 
 
 async def _project_identity(kernel: Any, event: Event, act: Act,

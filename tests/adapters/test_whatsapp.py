@@ -27,7 +27,8 @@ from monoagens.core.reasoning import ToolCall
 from monoagens.infra.attachments import AttachmentStore
 from monoagens.infra.clock import FakeClock
 from monoagens.middleware import contract, identity
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 
 START = datetime(2026, 11, 13, 12, 0, tzinfo=timezone.utc)
 OWN_PN = "6281100001"
@@ -294,7 +295,7 @@ async def test_shared_account_d66_distinguishes_soul_vs_phone_and_adds_context_n
         place=f"space:wa:{OWN_PN}@s.whatsapp.net", body="whatsapp",
         payload={"description": code, "self_account": f"whatsapp:{OWN_PN}"}, description=code), now=START)
     # Record a message sent by the soul via act()
-    res = await body.act(Action(kind="say", place=f"space:wa:{BUDI_PN}@s.whatsapp.net",
+    res = await body.act(Action(id="test:1", capability="say", place=f"space:wa:{BUDI_PN}@s.whatsapp.net",
                                 arguments={"text": "dari soul"}))
     soul_msg_id = res["message_id"]
     # Simulate Log act.result persisting across a restart (new WhatsAppBody with empty _sent)
@@ -456,14 +457,14 @@ async def test_channels_broadcast_and_communities_parent_and_say_outputs(aconn, 
         (START, f"space:wa:{BUDI_PN}@s.whatsapp.net",
          __import__("json").dumps({"data": {"attachments": [voice_att]}})),
     )
-    await body.act(Action(kind="say", place=f"space:wa:{BUDI_PN}@s.whatsapp.net", arguments={
+    await body.act(Action(id="test:2", capability="say", place=f"space:wa:{BUDI_PN}@s.whatsapp.net", arguments={
         "text": "halo", "reply_to": "Q9", "mentions": [f"whatsapp:{BUDI_PN}"],
         "thread": "Topic", "location": {"lat": -6.2, "lon": 106.8, "name": "Office"},
         "choices": ["A", "B"], "attachments": [voice_att["ref"]], "voice": True,
     }))
-    await body.act(Action(kind="react", place=f"space:wa:{BUDI_PN}@s.whatsapp.net",
+    await body.act(Action(id="test:3", capability="react", place=f"space:wa:{BUDI_PN}@s.whatsapp.net",
                           arguments={"emoji": "👍", "message_id": "M9"}))
-    await body.act(Action(kind="edit", place=f"space:wa:{BUDI_PN}@s.whatsapp.net",
+    await body.act(Action(id="test:4", capability="edit", place=f"space:wa:{BUDI_PN}@s.whatsapp.net",
                           arguments={"message_id": "M9", "text": "fixed"}))
     kinds = [kind for kind, _ in client.sent]
     assert "send_message" in kinds and "send_audio" in kinds and "edit_message" in kinds

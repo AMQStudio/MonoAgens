@@ -12,7 +12,8 @@ from monoagens.core.reasoning import ToolCall
 from monoagens.infra.clock import FakeClock
 from monoagens.infra.store import append_event
 from monoagens.middleware import interaction, policy, privacy, roles
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 from tests.support import open_book, settings
 
 START = datetime(2026, 1, 1, 3, 0, tzinfo=timezone.utc)  # 10:00 in Jakarta
@@ -188,7 +189,7 @@ async def test_the_owners_yes_leads_to_exactly_one_retry(aconn):
     kernel, tool, voice = await _kernel(aconn)
     trigger = await _trigger(aconn)
     await _call(kernel, trigger)
-    assert voice.actions and voice.actions[0].kind == "say"
+    assert voice.actions and voice.actions[0].capability == "say"
     assert voice.actions[0].arguments["choices"] == ["Ya", "Tidak"]
     (request_id,) = [int((await (await aconn.execute(
         "SELECT id FROM events WHERE kind = 'approval.requested'")).fetchone())[0])]
@@ -355,7 +356,7 @@ async def test_brake_stops_endless_loop_tells_owner_once_and_can_resume(aconn):
     assert kinds.count("guard.stopped") == 1
     assert len(voice.actions) == 1
     prompt_act = voice.actions[0]
-    assert prompt_act.kind == "say" and prompt_act.place == OWNER_DM
+    assert prompt_act.capability == "say" and prompt_act.place == OWNER_DM
     assert prompt_act.arguments["choices"] == ["Lanjutkan", "Berhenti"]
     notice = prompt_act.arguments["text"]
     assert "Pekerjaan dihentikan" in notice and "max_wakes_per_hour" in notice

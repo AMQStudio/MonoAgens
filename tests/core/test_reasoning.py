@@ -23,7 +23,8 @@ from monoagens.infra.store import (active_expectation_lines, append_event, close
 from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens import contract
 from monoagens.contract import Receipt
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 from monoagens.core.context.working import doing_lines
 from monoagens.boot import build
 from monoagens.middleware import privacy
@@ -269,8 +270,8 @@ async def test_say_is_recorded_before_the_body_acts(aconn):
 
     # act.out is already in the Log when act() is called.
     assert body.log_at_act == [["percept", "model.call", "act.out"]]
-    assert [(a.kind, a.place, dict(a.arguments), a.adapter) for a in body.actions] == [
-        ("say", PLACE, {"text": "halo juga"}, "telegram")]
+    assert [(a.capability, a.place, dict(a.arguments)) for a in body.actions] == [
+        ("say", PLACE, {"text": "halo juga"})]
     last_spoke = await read_state(aconn, f"last_spoke:{PLACE}")
     assert datetime.fromisoformat(last_spoke["ts"]) == START
 
@@ -289,8 +290,8 @@ async def test_react_is_recorded_before_the_body_acts(aconn):
         "capability": "telegram.react", "arguments": {"emoji": "👍"},
         "communicative": False}
     assert body.log_at_act == [["percept", "model.call", "act.out"]]
-    assert [(a.kind, a.place, dict(a.arguments), a.adapter) for a in body.actions] == [
-        ("react", PLACE, {"emoji": "👍"}, "telegram")]
+    assert [(a.capability, a.place, dict(a.arguments)) for a in body.actions] == [
+        ("react", PLACE, {"emoji": "👍"})]
 
 
 async def test_a_tool_result_is_recorded_as_act_result(aconn):
@@ -815,7 +816,7 @@ async def test_recall_lists_the_month_after_vectors_faded_and_sleep_failed(aconn
                                memory_visible=privacy.memory_visible)
     args = {"from": "2026-10-01T00:00:00+00:00", "to": "2026-11-01T00:00:00+00:00"}
 
-    result = await tool.act(Action(kind="recall", place=PLACE, arguments=dict(args)))
+    result = await tool.act(Action(id="test:1", capability="recall", place=PLACE, arguments=dict(args)))
 
     assert result["searched"]["from"] == args["from"]
     assert result["count"] == 2
@@ -826,7 +827,7 @@ async def test_recall_lists_the_month_after_vectors_faded_and_sleep_failed(aconn
         "INSERT INTO memories (text, place, derived_from, created_at, embedding) "
         "VALUES (%s, %s, %s, %s, NULL)",
         ("Episod Oktober: kafe dan harga kopi.", PLACE, [first.id, second.id], START))
-    result = await tool.act(Action(kind="recall", place=PLACE, arguments=dict(args)))
+    result = await tool.act(Action(id="test:2", capability="recall", place=PLACE, arguments=dict(args)))
 
     memory = next(item for item in result["found"] if item["kind"] == "memory")
     assert "Episod Oktober" in memory["text"]
@@ -848,7 +849,7 @@ async def test_recall_obeys_absolute_line_two(aconn):
     tool = SelfTool(aconn, FakeClock(START), visible=privacy.visible,
                                memory_visible=privacy.memory_visible)
 
-    hidden = await tool.act(Action(kind="recall", place=group,
+    hidden = await tool.act(Action(id="test:3", capability="recall", place=group,
                                     arguments={"query": "rahasia fulan"}))
     assert hidden["found"] == []
 
@@ -857,7 +858,7 @@ async def test_recall_obeys_absolute_line_two(aconn):
                        payload={"place": owner, "actors": ["person:owner"]})
     await append_event(aconn, ts=START, kind="percept", who="person:owner", place=owner,
                        payload={"description": "halo"})
-    allowed = await tool.act(Action(kind="recall", place=owner,
+    allowed = await tool.act(Action(id="test:4", capability="recall", place=owner,
                                      arguments={"query": "rahasia fulan"}))
     assert "rahasia fulan" in json.dumps(allowed["found"])
 

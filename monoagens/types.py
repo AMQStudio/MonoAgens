@@ -1,31 +1,18 @@
-"""Core-facing types: the contract's event, and the store's state row.
+"""Core-facing types: the contract's event and action, and the store's state row.
 
-`Event` and the schema version come from `monoagens.contract` (contract.md §7). `Action`
-is still the version 1 shape the adapters and the tool registry build; Part 4 switches them
-to `monoagens.contract.Action`, which is why it is spelled here for now.
+`Event`, `Action` and the schema version come from `monoagens.contract` (§2.3): the core, the
+middleware, the adapters and the plugins speak those types and nothing else.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from monoagens.contract import SCHEMA_VERSION as CURRENT_SCHEMA_VERSION
-from monoagens.contract import Event
+from monoagens.contract import Action, Event
 
 __all__ = ["CURRENT_SCHEMA_VERSION", "Action", "Event", "StateEntry"]
-
-
-@dataclass(frozen=True, slots=True)
-class Action:
-    """One thing an adapter should do in the world (version 1 shape, until Part 4)."""
-
-    kind: str
-    place: str
-    arguments: dict[str, Any] = field(default_factory=dict)
-    id: str = ""
-    adapter: str | None = None
-    event_id: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)

@@ -12,7 +12,8 @@ import sys
 import pytest
 
 from monoagens.adapters.cli import CLIBody
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 
 
 async def _wait_for(path: str, predicate, message: str, timeout: float = 5.0) -> None:
@@ -56,10 +57,10 @@ async def test_socket_round_trip_with_cli_body(tmp_path):
         assert event.payload == {"description": "halo", "addressed": True,
                                  "place_kind": "direct"}
 
-        await body.act(Action(kind="say", place="space:cli", arguments={"text": "hai"}))
+        await body.act(Action(id="test:1", capability="say", place="space:cli", arguments={"text": "hai"}))
         assert await asyncio.wait_for(reader.readline(), timeout=5.0) == b"hai\n"
 
-        await body.act(Action(kind="react", place="space:cli", arguments={"emoji": "👍"}))
+        await body.act(Action(id="test:2", capability="react", place="space:cli", arguments={"emoji": "👍"}))
         assert await asyncio.wait_for(reader.readline(), timeout=5.0) == "[👍]\n".encode()
         writer.close()
     finally:

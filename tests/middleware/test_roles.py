@@ -10,7 +10,8 @@ from monoagens.infra.clock import FakeClock
 from monoagens.infra.store import append_event, write_state
 from monoagens.middleware import identity, roles
 from monoagens.middleware.loader import BootReport
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 from tests.support import settings
 
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)

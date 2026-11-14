@@ -12,7 +12,8 @@ from monoagens.infra.clock import FakeClock
 from monoagens.middleware import identity
 from monoagens.core.hooks import Continue
 from monoagens.infra.store import append_event, read_state, write_state
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 from tests.support import settings
 
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -329,7 +330,7 @@ async def test_link_merges_two_ids_into_one_card_memory_and_recall(aconn):
     assert f"<event>{older_id}: alergi kacang</event>" in rendered
     assert f"{younger_id}:" not in rendered
     res = await recall.search(
-        aconn, Action(kind="recall", place="space:dc:99", arguments={"query": older_id}),
+        aconn, Action(id="test:1", capability="recall", place="space:dc:99", arguments={"query": older_id}),
         visible=privacy.visible, memory_visible=privacy.memory_visible)
     found_texts = [item["text"] for item in res["found"]]
     assert "Budi alergi kacang" in found_texts

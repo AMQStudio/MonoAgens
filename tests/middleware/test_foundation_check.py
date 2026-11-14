@@ -16,9 +16,10 @@ from monoagens.core.reasoning import ToolCall
 from monoagens.infra.attachments import AttachmentStore
 from monoagens.infra.clock import FakeClock
 from monoagens.infra.store import append_event, write_state
-from monoagens.middleware import contract, identity, interaction, roles
+from monoagens.middleware import contract, identity, interaction, registry as registry_module, roles
 from monoagens.middleware.contract import AttachmentDoor
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 from tests.support import settings
 
 START = datetime(2026, 1, 1, 3, 0, tzinfo=timezone.utc)
@@ -48,7 +49,7 @@ class Workspace:
 
     async def act(self, action: Action) -> Any:
         self.calls.append(action)
-        if action.kind == "read":
+        if action.capability == "read":
             data, info = await self.door.open(str(action.arguments["ref"]),
                                               context=action.place)
             return {"name": info["name"], "text": data.decode()}
@@ -351,7 +352,9 @@ async def test_11_three_files_arrive_read_and_are_forwarded(aconn):
                                           "data": {"attachments": files}})
 
     assert len(trigger.payload["data"]["attachments"]) == 3
-    read = await kernel.tools.act(trigger, "workspace.read", {"ref": files[0]["ref"]})
+    read = (await kernel.tools.act(
+        registry_module.own_action(trigger, "workspace.read",
+                                   {"ref": files[0]["ref"]}))).result
     assert read == {"name": "f0.txt", "text": "isi 0"}
     await kernel._apply(trigger, ToolCall("act", {
         "capability": "telegram.say",

@@ -10,7 +10,8 @@ from monoagens.boot import build
 from monoagens.core.reasoning import ToolCall
 from monoagens.infra.clock import FakeClock
 from monoagens.infra.store import append_event
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 from tests.support import open_book, settings
 
 def _doing(context) -> str:

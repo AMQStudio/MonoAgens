@@ -38,7 +38,8 @@ from monoagens.adapters.discord.media import (
     fetch_deferred,
 )
 from monoagens.infra.clock import Clock
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 
 Put = Callable[[Event], Awaitable[None]]
 REQUIRES: tuple[str, ...] = ("DISCORD_BOT_TOKEN",)
@@ -296,7 +297,7 @@ class DiscordBody:
     async def act(self, action: Action) -> Any:
         """Perform `say`, `react`, or `edit` on Discord."""
         p = action.arguments or {}
-        if action.kind == "say":
+        if action.capability == "say":
             return await send.say(
                 self._resolve_channel, self._files, action.place,
                 text=str(p.get("text") or ""),
@@ -311,17 +312,17 @@ class DiscordBody:
                 remember_sent=self.remember_sent,
                 remember_choices=self.remember_choices,
             )
-        if action.kind == "react":
+        if action.capability == "react":
             return await send.react(
                 self._resolve_channel, action.place,
                 str(p.get("emoji") or ""), str(p.get("message_id") or ""),
             )
-        if action.kind == "edit":
+        if action.capability == "edit":
             return await send.edit(
                 self._resolve_channel, action.place,
                 str(p.get("message_id") or ""), str(p.get("text") or ""),
             )
-        if action.kind == "pin" and "pin" in self.enabled_tools:
+        if action.capability == "pin" and "pin" in self.enabled_tools:
             ch = await self._resolve_channel(action.place)
             if ch is None:
                 return {"error": f"Discord place not found: {action.place}"}
@@ -329,7 +330,7 @@ class DiscordBody:
             if hasattr(msg, "pin"):
                 await msg.pin()
             return {"pinned": True, "message_id": str(p.get("message_id") or "")}
-        if action.kind == "manage_role" and "manage_role" in self.enabled_tools:
+        if action.capability == "manage_role" and "manage_role" in self.enabled_tools:
             ch = await self._resolve_channel(action.place)
             guild = getattr(ch, "guild", None)
             if guild is None:
@@ -343,7 +344,7 @@ class DiscordBody:
             else:
                 await member.add_roles(role)
             return {"ok": True, "action": p.get("action"), "role_id": str(role.id)}
-        raise ValueError(f"Unsupported action kind: {action.kind!r}")
+        raise ValueError(f"Unsupported action kind: {action.capability!r}")
 
     async def show(self, place: str, kind: str, **data: Any) -> Any:
         """Show typing, edit, buttons/menus or reactions via the adapter."""

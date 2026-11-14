@@ -146,5 +146,5 @@ async def test_an_unclosed_action_whose_tool_is_gone_gets_a_failed_receipt(aconn
     receipt = await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'act.result'")).fetchone()
     assert receipt[0]["state"] == "failed"
-    assert "No adapter registered for 'gone'" in receipt[0]["reason"]
+    assert "gone.say" in receipt[0]["reason"]
     assert await unresolved_actions(aconn) == []

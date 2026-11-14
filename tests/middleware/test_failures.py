@@ -21,7 +21,8 @@ from monoagens.infra.clock import FakeClock
 from monoagens.infra.providers import OpenAICompatibleProvider
 from monoagens.infra.store import append_event
 from monoagens.middleware import contract, interaction
-from monoagens.types import Action, Event
+from monoagens.contract import Action
+from monoagens.types import Event
 from tests.support import settings
 
 START = datetime(2026, 11, 14, 2, 0, tzinfo=timezone.utc)
@@ -477,7 +478,7 @@ async def test_f3_failing_call_in_apply_calls_lets_siblings_run_and_counts_task_
 
         async def act(self, action: Action) -> Any:
             self.actions.append(action)
-            return {"ok": True, "ran": action.kind}
+            return {"ok": True, "ran": action.capability}
 
     kernel = build(aconn, clock=FakeClock(START), pfc=_pfc(_FakeLLM([])), settings=SETTINGS)
     tool = _RecordingTool()
@@ -495,10 +496,10 @@ async def test_f3_failing_call_in_apply_calls_lets_siblings_run_and_counts_task_
 
     real_tools_act = kernel.tools.act
 
-    async def boom_tools_act(event: Event, capability: str, payload: dict[str, Any], **kw: Any) -> Any:
-        if capability == "work.first":
+    async def boom_tools_act(action: Any) -> Any:
+        if action.capability == "work.first":
             raise RuntimeError("broken tool dispatcher on first call")
-        return await real_tools_act(event, capability, payload, **kw)
+        return await real_tools_act(action)
 
     monkeypatch.setattr(kernel.tools, "act", boom_tools_act)
     acts = await jobs.apply_calls(kernel, root, [{"calls": [
@@ -509,7 +510,7 @@ async def test_f3_failing_call_in_apply_calls_lets_siblings_run_and_counts_task_
     await threads.after_step(kernel, fake_job, root, acts)
     await kernel.run_until_idle()
 
-    assert [a.kind for a in tool.actions] == ["second"]
+    assert [a.capability for a in tool.actions] == ["second"]
     rows = await (await aconn.execute(
         "SELECT id, caused_by, payload FROM events WHERE kind IN ('act.out', 'act.result') "
         "ORDER BY id"

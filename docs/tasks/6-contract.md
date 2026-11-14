@@ -111,7 +111,7 @@ that asserts behavior the contract removes), `scenarios/`, `scripts/replay.py`
   context items in the last context slot, plus attachments on open and forward. Delete the regexes
   over rendered lines, the second filter, `kernel.visible`, `_delegated_share_source`, the
   stopword and topic-word code. `share` takes ids; asking on someone's behalf by `about` or the chain's `wait`.
-- [ ] 3.4 Registry ([spec.md](../spec.md) *Registry*): each body's own capabilities, routed by place ownership,
+- [x] 3.4 Registry ([spec.md](../spec.md) *Registry*): each body's own capabilities, routed by place ownership,
   an action for another body's place refused with its reason; no neutral `say`, nothing hidden, no
   permission exception; commands from `command`; a failing handler answers with an error; command
   answers through the action hook (F.12); `registry.more` without a place refused, capped.
@@ -679,3 +679,34 @@ no `_delegated_share_source`, no stopword or topic-word code, and `privacy.py` h
 One home per rule, named: the audience a place reports is `privacy.audience`; the one privacy
 predicate is `privacy.admits`; the count of known people is `privacy.audience_size`; the actor map
 is `identity.resolve_event`.
+
+**3.4 (this commit).** One door: `ToolRegistry.act(action: contract.Action) -> contract.Receipt`.
+It answers a receipt for every call — `refused` when the place belongs to another body ("this place
+is reached through …"), when a permission says no, or when a body cannot hold;
+`failed` when nothing declares the capability, when the body raises, when it answers `held`, or
+when the result carries an `error`; `done` otherwise, with the output capped and archived. Routing
+reads one fact: the body that delivered a **percept** in that place (`registry.place_owner`, in the
+inbound hook; `place_body_of` falls back to the Log's newest percept there, so a restart keeps it).
+A place no body has sensed yet has no owner, so the body that declares the capability carries it —
+the spec refuses only a *conflict* (§2.4.4), never an unknown place.
+
+Commands are structured: the rule reads `payload["command"]` as `{name, args}` and never parses a
+string; a version 1 command (`{command: name, arguments: […]}`) is upcast once in
+`infra/versioning.upcast_incoming`, beside the percept upcast (§2.9). An unknown name answers
+`no command /<name>; /help lists them`, a handler that raises records `error` and answers
+`/<name> failed: <Type>`, and every answer goes through `kernel.act_via_hooks` (F.12) instead of
+calling a body directly. `monoagens/types.Action` (the version 1 shape) is gone; the core, the
+middleware, the adapters, the plugins and the tests speak `contract.Action` with `capability` and
+`caused_by`. `dispatch.carry` builds that action and keeps the one watchdog; `as_receipt` is gone
+because the registry answers receipts itself.
+
+One home per rule: routing by place is `registry.act` + `registry.place_owner`; the action id is
+`contract.action_id` (the middleware's own acts use `registry.own_action`); the output cap is
+`registry._cap_result`.
+
+Deviation: the plan made an action for a place nobody senses `refused` ("no body owns the place").
+The spec refuses only a place another body owns, and a scenario's first message to a place with no
+percept yet must still be delivered, so an unreported place is carried by the declaring body. The
+fake replay proved it: `31_paper_over_two_days` sent to Budi before any percept arrived there.
+Its recorded answers also had to model the intent hand-off (the summary is said where it lands),
+which is scenario material, not a code change.

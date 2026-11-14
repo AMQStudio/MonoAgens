@@ -107,7 +107,8 @@ async def _send_prompt(kernel: Any, trigger: Event, place: str, text: str, *,
     if adapter is not None:
         out_event = Event(id=None, ts=kernel.clock.now(), kind="act.out", who=OWNER,
                           place=place, body=body, caused_by=act_out.id)
-        result = await kernel.tools.act(out_event, f"{body}.say", args)
+        receipt = await kernel.tools.act(registry.own_action(out_event, f"{body}.say", args))
+        result = receipt.result if receipt.state == "done" else None
         if result is not None:
             await kernel._emit(act_out, "act.result", {
                 "capability": f"{body}.say", "result": result}, place=place)
@@ -544,7 +545,7 @@ async def present(kernel: Any, event: Event, kind: str, text: str) -> bool:
         return True
     if kind == "typing":
         return False
-    await kernel.tools.act(event, f"{event.body}.say", {"text": text})
+    await kernel.tools.act(registry.own_action(event, f"{event.body}.say", {"text": text}))
     return True
 
 
@@ -570,7 +571,7 @@ async def _present_step(kernel: Any, event: Event, line: str, *, chain: int, pla
                 "kind": "progress", "chain": str(chain),
                 "message_id": str(res["message_id"])}, place=place)
         return
-    await kernel.tools.act(event, f"{body}.say", {"text": line})
+    await kernel.tools.act(registry.own_action(event, f"{body}.say", {"text": line}))
 
 
 async def _last_shown(conn: Any, place: str) -> int:
@@ -977,7 +978,8 @@ def split(kernel: Any) -> Middleware:
             await kernel._emit(ctx["event"], "act.out", {
                 "capability": ctx["capability"], "arguments": passed,
                 "communicative": True}, place=ctx["event"].place)
-            await kernel.tools.act(ctx["event"], str(ctx["capability"]), passed)
+            await kernel.tools.act(registry.own_action(ctx["event"], str(ctx["capability"]),
+                                                       passed))
         ctx["handled"] = True
         return Continue()
 
