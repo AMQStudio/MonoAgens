@@ -9,6 +9,7 @@ from typing import Any
 
 import discord
 
+from monoagens.adapters import support
 from monoagens.adapters.discord import send
 from monoagens.adapters.discord.capabilities import (
     CAPABILITIES,
@@ -172,7 +173,9 @@ class DiscordBody:
         await self.aclose()
 
     async def render(self, event: Any) -> None:
-        """Render one lifecycle event natively (§2.4.5): typing, an edit or a read mark."""
+        """Render one lifecycle event natively (§2.4.5): typing or an edit, never a read mark."""
+        if event.name == "seen":
+            return  # Discord has no read mark a bot may set
         kind = "typing" if event.name == "composing" else event.name
         await self.show(str(event.place), kind, text=str(event.data.get("text") or ""))
 

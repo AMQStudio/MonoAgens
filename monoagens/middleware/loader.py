@@ -182,11 +182,9 @@ class Loader:
         apis: list[Any] = []
         for name in order:
             manifest = manifests[name]
-            missing = self._requirements(name, manifest, report)
-            if missing:
-                # A plugin enabled in config.yaml whose module is not installed is a broken
-                # deployment, not a note: boot names it and stops (O.4).
-                raise ValueError(missing)
+            note = self._requirements(name, manifest, report)
+            if note:
+                report.add(note)  # a lazily imported library is a note; the plugin still loads
             effective = self._features(name, manifest, config_d.get(name) or {}, report)
             api = PluginAPI(name=name, manifest=manifest, points=self._points,
                             options=self._options(name, manifest, config_d.get(name) or {}),

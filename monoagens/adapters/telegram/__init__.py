@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 
+from monoagens.adapters import support
 from monoagens.adapters.telegram import receive, send
 from monoagens.adapters.telegram.capabilities import (
     CAPABILITIES,

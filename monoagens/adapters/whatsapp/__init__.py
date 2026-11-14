@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
+from monoagens.adapters import support
 from monoagens.adapters.whatsapp import send
 from monoagens.adapters.whatsapp.capabilities import (
     CAPABILITIES,
@@ -654,6 +655,12 @@ class WhatsAppBody:
 
     async def render(self, event: Any) -> None:
         """Render one lifecycle event natively (§2.4.5): presence, an edit or a read mark."""
+        if event.name == "seen":
+            message_id = (event.data or {}).get("message_id")
+            if message_id:
+                await self.show(str(event.place), "read_receipts", message_id=str(message_id),
+                                message_ids=[str(message_id)])
+            return
         kind = "typing" if event.name == "composing" else event.name
         await self.show(str(event.place), kind, text=str(event.data.get("text") or ""))
 
