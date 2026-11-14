@@ -91,9 +91,11 @@ class JobRunner:
         try:
             job.outcome = {"result": await asyncio.wait_for(work(), self.timeout)}
         except asyncio.TimeoutError:
-            job.outcome = {"error": f"{job.name} timed out after {self.timeout:g}s"}
+            job.outcome = {"error": f"{job.name} timed out after {self.timeout:g}s",
+                           "rounds": []}
         except Exception as exc:  # a broken job reports it; the loop lives on
-            job.outcome = {"error": config.redact_connection_secrets(
+            job.outcome = {"rounds": getattr(exc, "rounds", None) or [],
+                           "error": config.redact_connection_secrets(
                 describe_failure(exc), self.kernel.conn)}
         payload = {"job": job.name, "place": job.place, "key": job.key,
                    "started": started.id, "result": _view(job)}
@@ -123,9 +125,20 @@ class JobRunner:
 
 async def decide(pfc: Any, context: Any, rounds: int, clock: Any,
                   settings: dict[str, Any]) -> dict[str, Any]:
-    """Run one wake's reasoning rounds in the background, each keeping its usage (D51)."""
+    """Run one wake's reasoning rounds in the background, each keeping its usage (D51, O.3).
+
+    The rounds made before a failure come back with the error, so the kernel counts every one of
+    them; the failure itself is re-raised for the job to record.
+    """
     check = turn_check(context, clock.now(), settings)
-    made = await turns(pfc, context, rounds, check=check)
+    made: list[dict[str, Any]] = []
+    try:
+        made = await turns(pfc, context, rounds, check=check)
+    except BaseException as exc:
+        # The rounds already made travel on the exception so the kernel can count them; the
+        # failure keeps its own wording, which the job records as before (O.3).
+        exc.rounds = made  # type: ignore[attr-defined]
+        raise
     calls = [call for item in made for call in item["calls"]]
     return {"calls": calls, "rounds": made}
 

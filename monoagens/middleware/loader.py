@@ -164,8 +164,13 @@ class Loader:
     # ------------------------------------------------------------- loading
 
     def load(self, settings: Mapping[str, Any], *, notes: Sequence[str] = (),
-             who: str = "the owner") -> Loaded:
-        """Read config.yaml's plugins, config.d/ and the manifests, then call each register."""
+             who: str = "the owner", existing: Sequence[Any] = ()) -> Loaded:
+        """Read config.yaml's plugins, config.d/ and the manifests, then call each register.
+
+        `existing` are the adapters a running kernel already senses through: a reload reuses them
+        by name and calls `create` only for the bodies that are new, so nothing is torn down
+        before the whole load has succeeded (O.1).
+        """
         self.who = who
         report = BootReport(list(notes))
         installed = self._installed(settings)
@@ -175,12 +180,13 @@ class Loader:
         order = self._order(installed, manifests, report)
         self._points: dict[str, dict[str, Any]] = {}
         apis: list[Any] = []
-        unavailable: list[str] = []
         for name in order:
             manifest = manifests[name]
-            if not self._requirements(name, manifest, report):
-                unavailable.append(name)
-                continue
+            missing = self._requirements(name, manifest, report)
+            if missing:
+                # A plugin enabled in config.yaml whose module is not installed is a broken
+                # deployment, not a note: boot names it and stops (O.4).
+                raise ValueError(missing)
             effective = self._features(name, manifest, config_d.get(name) or {}, report)
             api = PluginAPI(name=name, manifest=manifest, points=self._points,
                             options=self._options(name, manifest, config_d.get(name) or {}),
@@ -190,14 +196,12 @@ class Loader:
                 api.open_point(str(point))
             self._register(name, api, report)
             apis.append(api)
-        adapters, tiers = self.adapters(settings, report)
+        adapters, tiers = self.adapters(settings, report, existing=existing)
         loaded = Loaded(report=report, plugins=tuple(api.name for api in apis),
                         adapters=adapters,
                         permissions={**self._permissions(manifests, config_d), **tiers},
                         knob_bounds=self._knob_bounds(manifests), apis=tuple(apis),
                         roles=self._roles(settings, manifests, config_d, report, tiers))
-        if unavailable:
-            report.add(f"plugins unavailable: {', '.join(sorted(unavailable))}")
         return loaded
 
     def _installed(self, settings: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
@@ -300,8 +304,8 @@ class Loader:
         return order
 
     @staticmethod
-    def _requirements(name: str, manifest: Mapping[str, Any], report: BootReport) -> bool:
-        """Return whether every Python module one plugin requires can be imported."""
+    def _requirements(name: str, manifest: Mapping[str, Any], report: BootReport) -> str:
+        """Return the one line that refuses one plugin whose Python module is missing, or ""."""
         for module in manifest.get("requires") or ():
             try:
                 found = (str(module) in sys.modules
@@ -309,10 +313,11 @@ class Loader:
             except (ImportError, ValueError):
                 found = False
             if not found:
-                report.add(f"plugin {name}: needs {module}; install it with: "
-                           f"uv pip install -r plugins/{name}/requirements.txt")
-                return False
-        return True
+                line = (f"plugin {name}: needs {module}; install it with: "
+                        f"uv pip install -r plugins/{name}/requirements.txt")
+                report.add(line)
+                return line
+        return ""
 
     @staticmethod
     def _options(name: str, manifest: Mapping[str, Any],
@@ -369,10 +374,15 @@ class Loader:
                                      "places": settings.get("places") or {}},
                                     catalog, manifests, config_d, report)
 
-    def adapters(self, settings: Mapping[str, Any],
-                 report: BootReport) -> tuple[tuple[Any, ...], dict[str, str]]:
-        """Create every enabled adapter, and read the base tier each declares per capability."""
+    def adapters(self, settings: Mapping[str, Any], report: BootReport,
+                 *, existing: Sequence[Any] = ()) -> tuple[tuple[Any, ...], dict[str, str]]:
+        """Create every enabled adapter, and read the base tier each declares per capability.
+
+        A name in `existing` is reused as it stands (a reload must not stop a running body), and
+        only the bodies that are new are created here.
+        """
         bodies = settings.get("bodies") or {}
+        running = {str(getattr(adapter, "name", "")): adapter for adapter in existing}
         found: list[Any] = []
         tiers: dict[str, str] = {}
         for name in sorted(bodies):
@@ -381,6 +391,13 @@ class Loader:
                 raise ValueError(f"bodies.{name}: expected a map")
             if not bool(options.get("enabled", False)):
                 report.add(f"adapter {name}: off")
+                continue
+            reused = running.get(name)
+            if reused is not None:
+                self._check_adapter(name, reused, report)
+                for short, tier in (getattr(reused, "PERMISSIONS", None) or {}).items():
+                    tiers[f"{name}.{short}"] = str(tier)
+                found.append(reused)
                 continue
             module_name = str(options.get("module") or f"monoagens.adapters.{name}")
             module = importlib.import_module(module_name)
@@ -547,6 +564,7 @@ class Loader:
             adapter.files = door
             if hasattr(adapter, "get_cursor"):
                 adapter.get_cursor = _cursor_for(kernel, adapter.name)
+            kernel.tools.discard_owner(adapter.name)  # a reload replaces, never duplicates
             kernel.register_adapter(adapter)
             await identity.record_self_account(kernel.conn, adapter.name,
                                                adapter.self_actor(), now=kernel.clock.now())
@@ -645,6 +663,36 @@ def edit_config(path: pathlib.Path, edit: Callable[[str], str], *, now: datetime
 
 
 PLUGINS_BLOCK = re.compile(r"^plugins:(?:\s+#.*)?\s*$")
+
+
+def set_config_d_entry(text: str, section: str, key: str, value: Any) -> str:
+    """Return the text with `section.key` set, as YAML, keeping every other byte (O.2).
+
+    Only the one line changes: its comment, the file's order and every other entry stay as the
+    owner left them. A section that does not exist yet is appended once, at the end.
+    """
+    rendered = yaml.safe_dump({key: value}, sort_keys=False, allow_unicode=True).strip()
+    entry = rendered.splitlines()[0]
+    lines = text.splitlines(keepends=True)
+    header = re.compile(rf"^{re.escape(section)}:\s*(?:#.*)?$")
+    start = next((index for index, line in enumerate(lines)
+                  if header.match(line.rstrip("\n"))), None)
+    if start is None:
+        tail = "" if not text or text.endswith("\n") else "\n"
+        return f"{text}{tail}{section}:\n  {entry}\n"
+    indent = re.compile(r"^(\s+)([A-Za-z0-9_.-]+):(.*)$")
+    for index in range(start + 1, len(lines)):
+        found = indent.match(lines[index].rstrip("\n"))
+        if found is None:
+            break  # the section ended: append the entry as its last line
+        if found.group(2) == key:
+            original = lines[index].rstrip("\n")
+            _, _, comment = original.partition(" #")
+            suffix = f"  # {comment.strip()}" if comment.strip() else ""
+            lines[index] = f"{found.group(1)}{entry}{suffix}\n"
+            return "".join(lines)
+    lines.insert(start + 1, f"  {entry}\n")
+    return "".join(lines)
 
 
 def set_plugin_enabled(text: str, name: str, enabled: bool) -> str:
@@ -830,22 +878,34 @@ def _defaults(loader: "Loader", name: str) -> str:
 
 
 def _write_config_d(loader: "Loader", name: str, manifest: Mapping[str, Any],
-                    now: datetime) -> bool:
-    """Create config.d/<name>.yaml from the manifest the first time; keep the owner's file."""
+                    now: datetime) -> dict[str, Any]:
+    """Create config.d/<name>.yaml from the manifest the first time; keep the owner's file.
+
+    Answers the values it wrote (`section.key -> value`), so `/plugin update` can move exactly the
+    lines `/plugin enable` put there and never one the owner changed (O.4).
+    """
     path = loader.root / "config.d" / f"{name}.yaml"
     if path.is_file():
-        return False
+        return {}
     values = {
         "version": CONFIG_D_VERSION,
         "permissions": {key: (spec or {}).get("base")
                         for key, spec in (manifest.get("permissions") or {}).items()},
         "role_settings": manifest.get("role_settings") or {},
+        "features": {key: list(value or ())
+                     for key, value in (manifest.get("features") or {}).items()},
+        "options": {key: spec.get("default")
+                    for key, spec in (manifest.get("settings") or {}).items()},
     }
     text = (f"# written by /plugin enable from {name} {manifest.get('version')}\n"
             + yaml.safe_dump(values, sort_keys=True, allow_unicode=True))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
-    return True
+    written: dict[str, Any] = {}
+    for section in ("permissions", "role_settings", "features", "options"):
+        for key, value in (values[section] or {}).items():
+            written[f"{section}.{key}"] = value
+    return written
 
 
 async def _toggle(loader: "Loader", kernel: Any, event: Any, name: str, enabled: bool) -> str:
@@ -858,10 +918,16 @@ async def _toggle(loader: "Loader", kernel: Any, event: Any, name: str, enabled:
         await record_config_change(kernel, event, plugin=name,
                                    key=f"config.yaml:plugins.{name}.enabled",
                                    before=not enabled, after=enabled)
-    if manifest is not None and _write_config_d(loader, name, manifest, kernel.clock.now()):
-        await record_config_change(kernel, event, plugin=name,
-                                   key=f"config.d/{name}.yaml", before=None,
-                                   after={"version": CONFIG_D_VERSION})
+    if manifest is not None:
+        written = _write_config_d(loader, name, manifest, kernel.clock.now())
+        for key, value in written.items():
+            await record_config_change(kernel, event, plugin=name,
+                                       key=f"config.d/{name}.yaml:{key}", before=None,
+                                       after=value)
+        if written:
+            await record_config_change(kernel, event, plugin=name,
+                                       key=f"config.d/{name}.yaml", before=None,
+                                       after={"version": CONFIG_D_VERSION})
     reply, _ = await reload_into(loader, kernel, event)
     return f"/plugin {'enable' if enabled else 'disable'} {name}: {reply}"
 
@@ -878,6 +944,8 @@ async def _update(loader: "Loader", kernel: Any, event: Any, name: str) -> str:
         "permissions": {key: (spec or {}).get("base")
                         for key, spec in (manifest.get("permissions") or {}).items()},
         "role_settings": manifest.get("role_settings") or {},
+        "features": {key: list(value or ())
+                     for key, value in (manifest.get("features") or {}).items()},
         "options": {key: spec.get("default")
                     for key, spec in (manifest.get("settings") or {}).items()},
     }
@@ -896,12 +964,14 @@ async def _update(loader: "Loader", kernel: Any, event: Any, name: str) -> str:
     if not moved:
         return f"/plugin update {name}: nothing to update"
     if kept:
-        updated = {key: dict(value or {}) for key, value in current.items()
-                   if key in CONFIG_D_KEYS}
-        for section, entries in kept.items():
-            updated[section] = {**(updated.get(section) or {}), **entries}
-        text = yaml.safe_dump(updated, sort_keys=True, allow_unicode=True)
-        edit_config(path, lambda _old: text, now=kernel.clock.now())
+        def _apply(text: str) -> str:
+            changed = text
+            for section, entries in kept.items():
+                for key, value in entries.items():
+                    changed = set_config_d_entry(changed, section, key, value)
+            return changed
+
+        edit_config(path, _apply, now=kernel.clock.now())
         for section, entries in kept.items():
             for key, value in entries.items():
                 await record_config_change(kernel, event, plugin=name,

@@ -308,6 +308,26 @@ async def brake_by_id(conn: Any, brake_id: int) -> dict[str, Any] | None:
     return data
 
 
+async def notify_brake(kernel: Any, trigger: Event, *, root_id: int, place: str, work: str,
+                       reason: str, limit: str, value: int, cap: int) -> Event:
+    """Record a held brake and ask the owner once, through the one question door (§2.4.6)."""
+    brake = await kernel._emit(trigger, BRAKE_HELD, {
+        "root": root_id, "place": place, "work": work, "reason": reason,
+        "limit": limit, "value": value, "cap": cap,
+        "origin_actor": trigger.origin_actor or trigger.who,
+    }, place=place)
+    direct = await identity.direct_place(kernel.conn, OWNER)
+    if direct is None:
+        return brake
+    cat = catalog(getattr(kernel, "settings", None))["brake"]
+    text = str(cat["prompt"]).format(work=work, reason=reason, limit=limit, value=value, cap=cap)
+    choices = [str(cat["continue_label"]), str(cat["stop_label"])]
+    assert brake.id is not None
+    await _send_prompt(kernel, brake, direct, text, prompt_kind="brake",
+                       prompt_id=int(brake.id), choices=choices)
+    return brake
+
+
 async def _brake_origin(conn: Any, held: Mapping[str, Any]) -> str | None:
     """Return the held chain's `origin_actor` (from `held` or its root event), never owner."""
     origin = str(held.get("origin_actor") or "").strip()

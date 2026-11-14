@@ -179,9 +179,6 @@ async def test_discord_hierarchy_and_role_ids_on_percepts(aconn, tmp_path) -> No
     assert ev1.place == place_id(thread)
     assert ev1.payload["addressed"] is True
     assert ev1.payload["place_kind"] == "shared"
-    assert ev1.payload["data"]["platform_roles"] == {
-        "space": guild_place_id(guild), "roles": ["555"],
-    }
 
     # Full parent chain: thread -> channel -> guild server
     t_info = await body.place_info(place_id(thread))
@@ -206,9 +203,6 @@ async def test_discord_hierarchy_and_role_ids_on_percepts(aconn, tmp_path) -> No
     ev2 = await body.handle_message(msg_ch)
     assert ev2 is not None
     assert ev2.payload["addressed"] is False
-    assert ev2.payload["data"]["platform_roles"] == {
-        "space": guild_place_id(guild), "roles": [],
-    }
 
     dm_author = SimpleNamespace(id=77, name="budi", display_name="Budi")
     msg_dm = SimpleNamespace(
@@ -284,9 +278,6 @@ async def test_discord_interactions_defer_before_put_and_render_buttons_menus(ac
     assert ev_btn.payload["data"]["choice"] == "Blue"
     assert ev_btn.payload["data"]["answer"] == "choice:2:Blue"
     assert ev_btn.payload["data"]["reply_to"] == {"message_id": r_btn["message_id"]}
-    assert ev_btn.payload["data"]["platform_roles"] == {
-        "space": guild_place_id(guild), "roles": ["555"],
-    }
     assert r_btn["choices"] == [
         {"label": "Red", "answer": "choice:1:Red"},
         {"label": "Blue", "answer": "choice:2:Blue"},

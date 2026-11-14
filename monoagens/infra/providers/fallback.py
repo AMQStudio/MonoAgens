@@ -186,13 +186,11 @@ def build_provider(
         clean = str(fb_name).strip().lower()
         if not clean:
             continue
-        fb_key = _fallback_env(env, clean, "API_KEY") or str(llm.get("api_key") or "")
+        # A fallback provider uses its own variables only: borrowing the primary's key would
+        # bill the wrong account and hide a missing key until the first failure (O.3).
+        fb_key = _fallback_env(env, clean, "API_KEY")
         fb_model = _fallback_env(env, clean, "MODEL")
         fb_base = _fallback_env(env, clean, "BASE_URL")
-        if clean == "openai-compatible":
-            fb_key = fb_key or env.get("LLM_API_KEY", "")
-            fb_base = fb_base or env.get("LLM_BASE_URL", "")
-            fb_model = fb_model or env.get("LLM_MODEL", "")
         chain.append(
             _make_single(
                 clean,

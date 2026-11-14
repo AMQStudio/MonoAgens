@@ -35,9 +35,11 @@ async def record_call(conn, trigger_id: int | None, pfc: Any, *, purpose: str,
                       now: datetime, settings: Mapping[str, Any],
                       usage: Mapping[str, Any] | None = None,
                       ) -> tuple[Event | None, dict[str, int]]:
-    """Record one model call with its purpose and tokens, then count it for today."""
-    if trigger_id is None:
-        return None, {}
+    """Record one model call with its purpose and tokens, then count it for today.
+
+    A call with no trigger (the sleep job) still counts its tokens; only the `model.call` event
+    needs the chain it belongs to (O.3).
+    """
     raw = usage if usage is not None else getattr(pfc, "last_usage", None) or {}
     totals_usage = {name: int(raw.get(name) or 0) for name in COUNTERS}
     payload: dict[str, Any] = {
@@ -49,9 +51,19 @@ async def record_call(conn, trigger_id: int | None, pfc: Any, *, purpose: str,
         payload["provider"] = str(raw["provider"])
     if raw.get("fallbacks"):
         payload["fallbacks"] = list(raw["fallbacks"])
-    call = await append_event(
-        conn, ts=now, kind="model.call", caused_by=trigger_id, payload=payload)
+    call = (await append_event(conn, ts=now, kind="model.call", caused_by=trigger_id,
+                               payload=payload)) if trigger_id is not None else None
+    anchor = call.id if call is not None else await _last_event_id(conn)
+    if anchor is None:
+        return call, {}  # an empty Log has nothing to point the count at
     totals = await add_budget_usage(
         conn, now=now, timezone=str(settings.get("timezone") or "UTC"),
-        usage=totals_usage, updated_by_event=call.id)
+        usage=totals_usage, updated_by_event=anchor)
     return call, totals
+
+
+async def _last_event_id(conn) -> int | None:
+    """Return the newest event id, the one a count with no chain of its own points at."""
+    row = await (await conn.execute("SELECT max(id) FROM events")).fetchone()
+    value = int((row or (0,))[0] or 0)
+    return value or None

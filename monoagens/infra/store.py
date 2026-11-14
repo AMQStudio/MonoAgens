@@ -283,16 +283,30 @@ async def unresolved_actions(conn) -> list[dict[str, Any]]:
     return found
 
 
+BUDGET_COUNTERS = ("prompt_tokens", "cached_tokens", "completion_tokens", "reasoning_tokens",
+                   "total_tokens")
+
+
 async def add_budget_usage(conn, *, now: datetime, timezone: str, usage: dict[str, int],
                            updated_by_event: int) -> dict[str, int]:
-    """Add one LLM call's token usage to the budget key of its local date; return totals."""
+    """Add one LLM call's tokens to the budget of its local day in one statement (O.3).
+
+    One upsert computes the new totals in SQL from the stored value and this call's own, so two
+    callers can never read-modify-write over each other and a crash between the append and the
+    count cannot lose a call.
+    """
     key = f"budget:{now.astimezone(ZoneInfo(timezone)).date().isoformat()}"
-    current = await read_state(conn, key) or {}
-    totals = {name: int(current.get(name) or 0) + int(usage.get(name) or 0)
-              for name in ("prompt_tokens", "cached_tokens", "completion_tokens",
-                           "reasoning_tokens", "total_tokens")}
-    await write_state(conn, key, totals, updated_by_event)
-    return totals
+    added = ", ".join(
+        f"'{name}', COALESCE((state.value->>'{name}')::bigint, 0) + {int(usage.get(name) or 0)}"
+        for name in BUDGET_COUNTERS)
+    inserted = ", ".join(
+        f"'{name}', {int(usage.get(name) or 0)}" for name in BUDGET_COUNTERS)
+    row = await (await conn.execute(
+        "INSERT INTO state (key, value, updated_by_event) VALUES (%s, jsonb_build_object("
+        + inserted + "), %s) ON CONFLICT (key) DO UPDATE SET value = jsonb_build_object("
+        + added + "), updated_by_event = EXCLUDED.updated_by_event RETURNING value",
+        (key, updated_by_event))).fetchone()
+    return {name: int((row[0] or {}).get(name) or 0) for name in BUDGET_COUNTERS}
 
 
 async def project_event(conn, event: Event) -> None:

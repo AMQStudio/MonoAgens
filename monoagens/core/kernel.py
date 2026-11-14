@@ -537,18 +537,22 @@ class Kernel:
         if job is None:
             return
         result = job.outcome.get("result") or {}
-        if "error" in job.outcome:
-            await self._record_error(job.trigger, str(job.outcome["error"]))
-            if job.name == "sleep":
-                await self._emit(job.trigger, "sleep.failed", {"error": str(job.outcome["error"])})
-        elif job.name == "pfc":
-            rounds = result.get("rounds") or []
-            for item in rounds:
+        failure = job.outcome.get("error") or result.get("error")
+        if job.name == "pfc":
+            # Every round is counted before the failure is judged: a round whose wake then failed
+            # was still paid for (O.3).
+            for item in result.get("rounds") or []:
                 call, totals = await budget.record_call(
                     self.conn, job.trigger.id, self.pfc, purpose="pfc.decide",
                     now=self.clock.now(), settings=self.settings, usage=item.get("usage"))
                 if call is not None and self.after_model_call is not None:
                     await self.after_model_call(call.id, totals)
+        if failure:
+            await self._record_error(job.trigger, str(failure))
+            if job.name == "sleep":
+                await self._emit(job.trigger, "sleep.failed", {"error": str(failure)})
+        elif job.name == "pfc":
+            rounds = result.get("rounds") or []
             acts = await jobs.apply_calls(self, job.trigger, rounds,
                                           dispatch.JobRef(job.key, job.started_event_id))
             self._track_batch(job, acts)

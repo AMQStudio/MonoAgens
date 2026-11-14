@@ -121,11 +121,11 @@ that asserts behavior the contract removes), `scenarios/`, `scripts/replay.py`
   the sticker fallback.
 - [x] 3.6 Roles ([spec.md](../spec.md) *Roles and permissions*): person ids only; `platform_role` and platform role facts
   deleted; person cards read the roles at call time.
-- [ ] 3.7 Loader and config (O.1, O.2, O.4): `/reload` with adapters running, validation before
+- [x] 3.7 Loader and config (O.1, O.2, O.4): `/reload` with adapters running, validation before
   any change, rules never duplicated and removed with their plugin; every config edit parsed back,
   atomic, comments kept; `/plugin update` reads the recorded defaults; a missing requirement or
   dependency fails boot; the boot checks of [spec.md](../spec.md) *Waist 1: core ↔ middleware* and *The foundation in the middle*.
-- [ ] 3.8 Budget (O.3): every round's usage recorded, failed ones included; the budget update
+- [x] 3.8 Budget (O.3): every round's usage recorded, failed ones included; the budget update
   atomic; cached tokens read; a fallback provider uses its own key only.
 
 ## Part 4 — Adapters on the contract
@@ -754,3 +754,22 @@ replaces it atomically through `<path>.tmp` + `os.replace`. Still open in 3.7: O
 that reuses the running adapters and swaps state only after a whole successful load), the line-edit
 form of `/plugin update`'s `_update` (it still `yaml.safe_dump`s the file, which drops comments),
 O.4's recorded defaults for `_toggle`, and the plugin `requirements` boot check.
+
+**3.7 (this commit).** O.1: `Loader.load(settings, existing=…)` reuses a running body by name and
+calls `create` only for the new ones, and `install` drops an adapter's capabilities by owner before
+registering it again, so a reload swaps state instead of duplicating it. O.2: `edit_config` parses
+the edited text, refuses on a YAML error, backs the file up and replaces it atomically
+(`<path>.tmp` + `os.replace`); `/plugin update` writes each moved entry with
+`loader.set_config_d_entry` (one line, its own comment kept, every other byte untouched) instead of
+dumping the whole file. O.4: `_toggle` records every value `/plugin enable` wrote
+(`permissions`, `role_settings`, `features`, `options`, each as `config.d/<name>.yaml:<section>.<key>`)
+and `_update` moves only what those records name; a plugin that is enabled but whose Python module
+is missing now fails boot, naming it.
+
+**3.8 (same commit).** `reasoning.turns` keeps the round it failed in (with `last_usage`) and
+`jobs.decide` answers the rounds it made with the error attached, so `Kernel._finish_job` counts
+every round **before** it judges the failure (and a pfc failure is recorded once, from the result).
+`store.add_budget_usage` is one upsert that computes the five counters in SQL from the stored value
+and this call's own, so two callers cannot read-modify-write over each other; `budget.record_call`
+counts a trigger-less call (the sleep path) against the newest event instead of dropping it; and a
+fallback provider reads only its own `LLM_FALLBACK_<n>_*` variables, never the primary's key.

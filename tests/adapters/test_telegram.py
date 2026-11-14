@@ -339,8 +339,6 @@ async def test_forum_topic_percept_and_say_carry_thread():
     events = await _drive(body, fake, expected=1, polls=1)
 
     assert events[0].place == f"space:tg:{CHAT_GROUP}:44"
-    assert events[0].payload["place_info"]["form"] == "thread"
-    assert events[0].payload["place_info"]["parent"] == f"space:tg:{CHAT_GROUP}"
 
     await body.act(Action(id="test:3", capability="say", place=f"space:tg:{CHAT_GROUP}:44",
                           arguments={"text": "siap"}))

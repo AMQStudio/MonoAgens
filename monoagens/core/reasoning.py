@@ -171,7 +171,12 @@ async def turns(pfc: Any, context: PFCContext, limit: int,
     """Run one wake's rounds: a thought act's result returns to the model (D51)."""
     taken, made = [], []
     while len(made) < max(1, int(limit)):
-        calls = await pfc.decide(replace(context, results=tuple(taken)))
+        try:
+            calls = await pfc.decide(replace(context, results=tuple(taken)))
+        except BaseException:
+            # A failed round was still paid for: its usage is part of the wake's record (O.3).
+            made.append({"calls": [], "usage": dict(getattr(pfc, "last_usage", None) or {})})
+            raise
         raw, notes = [], []
         for call in calls:
             item = {"name": call.name, "arguments": call.arguments}
