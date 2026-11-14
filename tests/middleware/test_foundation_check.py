@@ -58,6 +58,8 @@ class Workspace:
 class Voice:
     """A talking adapter that records actions and shown lines."""
 
+    PERMISSIONS = {"say": "guest"}
+
     def __init__(self, name: str = "telegram", shows=("typing", "edit", "buttons")) -> None:
         self.name, self.shows = name, shows
         self.actions: list[Action] = []
@@ -72,7 +74,7 @@ class Voice:
                                                            "items": {"type": "string"}}},
                             "required": ["text"]},
                  "communicative": True, "long_running": False, "identity_changing": False,
-                 "facts": (), "permission": None},)
+                 "facts": (), "permission": "telegram.say"},)
 
     async def act(self, action: Action) -> None:
         self.actions.append(action)

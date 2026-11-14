@@ -112,6 +112,14 @@ class RoleBook:
         """Return the default book: the owner may do everything, everyone else only talks."""
         return cls(bases=dict(CORE_PERMISSIONS))
 
+    def with_bases(self, more: Mapping[str, str | None]) -> "RoleBook":
+        """Return this book with the base tier of each named permission added.
+
+        A body declares the base tier of its own capabilities; the book learns them when the
+        body registers, so a kernel with no deployment still knows what talking costs.
+        """
+        return replace(self, bases={**dict(self.bases), **dict(more)})
+
     @classmethod
     def build(cls, config: Mapping[str, Any], catalog: Mapping[str, str | None],
               manifests: Mapping[str, Mapping[str, Any]],

@@ -27,6 +27,7 @@ class Voice:
     """A talking adapter so an approval has somewhere to go."""
 
     name = "telegram"
+    PERMISSIONS = {"say": "guest"}
     shows = ("buttons",)
 
     def __init__(self) -> None:
@@ -37,7 +38,7 @@ class Voice:
                  "schema": {"type": "object", "properties": {"text": {"type": "string"}},
                             "required": ["text"]},
                  "communicative": True, "long_running": False, "identity_changing": False,
-                 "facts": (), "permission": None},)
+                 "facts": (), "permission": "telegram.say"},)
 
     async def act(self, action) -> None:
         self.actions.append(action)

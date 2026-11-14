@@ -25,6 +25,8 @@ GROUP = "space:tg:-500"
 class Screen:
     """A body that records what it showed and what it sent."""
 
+    PERMISSIONS = {"say": "guest", "run": "guest"}
+
     def __init__(self, name: str = "telegram", shows: tuple[str, ...] = ("typing", "edit")) -> None:
         self.name, self.shows = name, shows
         self.actions: list[Action] = []
@@ -35,7 +37,7 @@ class Screen:
                  "schema": {"type": "object", "properties": {"text": {"type": "string"}},
                             "required": ["text"]},
                  "communicative": True, "long_running": False, "identity_changing": False,
-                 "facts": (), "permission": None},
+                 "facts": (), "permission": "telegram.say"},
                 {"name": "run", "description": "Work.",
                  "schema": {"type": "object", "properties": {}},
                  "communicative": False, "long_running": True, "identity_changing": False,
@@ -238,7 +240,7 @@ def _percept_event() -> Event:
                  body="telegram", payload={"description": "halo"}, description="halo")
 
 
-def test_the_boot_report_names_each_adapters_missing_optional_parts():
+def test_the_boot_report_names_each_body_and_the_surfaces_it_has():
     from monoagens.middleware.loader import BootReport
 
     report = BootReport()
@@ -249,10 +251,10 @@ def test_the_boot_report_names_each_adapters_missing_optional_parts():
     Loader(ROOT, env={"TELEGRAM_BOT_TOKEN": "t"})._check_adapter(
         "cli", __import__("monoagens.adapters.cli", fromlist=["create"]).create({}, {}), report)
     loader_lines = "\n".join(report.lines)
-    assert "adapter telegram: shows typing, edit, buttons, reactions" in loader_lines
-    assert "adapter telegram: has place_info" in loader_lines
-    assert "adapter telegram fallback approval: buttons" in loader_lines
-    assert "adapter cli fallback progress: new message (fallback from edit)" in loader_lines
+    assert "adapter telegram: surfaces none" in loader_lines
+    assert "adapter cli: surfaces none" in loader_lines
+    assert "adapter telegram: files 10 per message" in loader_lines
+    assert "adapter cli: files 1 per message" in loader_lines
 
 
 class _RichScreen(Screen):

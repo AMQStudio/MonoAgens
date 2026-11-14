@@ -17,7 +17,7 @@ from monoagens.infra.attachments import AttachmentStore
 from monoagens.infra.clock import FakeClock
 from monoagens.infra.store import append_event
 from monoagens.middleware import privacy, registry
-from monoagens.middleware.contract import OUTPUT_MARKER
+from monoagens.contract import OUTPUT_MARKER
 from monoagens.middleware.registry import (CommandEntry, SkillEntry, ToolRegistry, help_text,
                                            self_block)
 from monoagens.types import Action, Event
@@ -45,6 +45,7 @@ class _Tool:
     """A plugin tool: one capability, facts supplied by the manifest."""
 
     name = "workspace"
+    PERMISSIONS = {"edit": "guest", "exec": "guest", "react": "guest", "read": "guest", "run": "guest", "say": "guest"}
 
     def __init__(self) -> None:
         self.actions: list[Action] = []
@@ -100,30 +101,22 @@ def test_a_duplicate_command_fails_at_boot():
         tools.add_command(CommandEntry("help", "List things.", "help", _no_handler))
 
 
-def test_only_a_talking_capability_may_declare_no_permission():
+def test_every_capability_must_declare_a_permission():
+    """There are no exceptions, talking capabilities included (contract.md §3, §10)."""
     tools = ToolRegistry()
     tools.register(_Body("silent", (
         {"name": "say", "description": "Speak.", "schema": {}, "communicative": True,
-         "long_running": False, "identity_changing": False, "permission": None},
+         "long_running": False, "identity_changing": False, "permission": "silent.say"},
         {"name": "react", "description": "React.", "schema": {}, "communicative": False,
-         "long_running": False, "identity_changing": False, "permission": None},
-        {"name": "edit", "description": "Edit.", "schema": {}, "communicative": False,
-         "long_running": False, "identity_changing": False, "permission": None},
+         "long_running": False, "identity_changing": False, "permission": "silent.react"},
     )))
-    assert tools.permission("silent.say") == ""
-    assert tools.permission("silent.react") == ""
-    assert tools.permission("silent.edit") == ""
+    assert tools.permission("silent.say") == "silent.say"
+    assert tools.permission("silent.react") == "silent.react"
 
     with pytest.raises(ValueError, match="quiet.read: an entry without a permission"):
         tools.register(_Body("quiet", ({"name": "read", "description": "Read.",
-                                        "schema": {}, "communicative": False,
+                                        "schema": {}, "communicative": True,
                                         "long_running": False, "identity_changing": False},)))
-
-    with pytest.raises(ValueError, match="silent2.exec: an entry without a permission"):
-        tools.register(_Body("silent2", ({"name": "exec", "description": "Exec.",
-                                          "schema": {}, "communicative": False,
-                                          "long_running": False, "identity_changing": False,
-                                          "permission": None},)))
 
 
 async def _help_on(aconn, body: _Body) -> str:
@@ -249,7 +242,7 @@ async def test_the_registry_reports_facts_and_permissions(aconn):
     kernel.register_adapter(_Body("telegram", TELEGRAM_CAPABILITIES))
 
     assert kernel.tools.permission("self.share") == "privacy.share"
-    assert kernel.tools.permission("telegram.say") == ""
+    assert kernel.tools.permission("telegram.say") == "telegram.say"
     assert kernel.tools.facts("registry.describe") == frozenset({"reads"})
     assert kernel.tools.facts("telegram.say") == frozenset()
 

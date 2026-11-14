@@ -32,7 +32,6 @@ from monoagens.types import Action, Event
 Put = Callable[[Event], Awaitable[None]]
 GetCursor = Callable[[], Awaitable[Any | None]]
 REQUIRES = ("TELEGRAM_BOT_TOKEN",)
-FILES = {"per_message": 10, "max_bytes": 50_000_000, "mimes": ()}
 GROUP_COLLECT_SECONDS = 1.0
 
 
@@ -57,6 +56,9 @@ class TelegramBody:
     """Eyes and hands for Telegram: full Bot API updates in, native `say`/`react`/`edit` out."""
 
     name = "telegram"
+    FILES = {"per_message": 10, "max_bytes": 50_000_000, "mimes": ()}
+    PERMISSIONS = {"say": "guest", "react": "guest", "edit": "guest", "pin": "guest",
+                   "unpin": "guest"}
     reads = READS
     shows = SHOWS
     gaps = GAPS
@@ -89,6 +91,20 @@ class TelegramBody:
         """Return declared capabilities plus any platform tools enabled in `bodies.telegram.tools`."""
         extras = tuple(OPTIONAL_CAPABILITIES[name] for name in self.enabled_tools)
         return CAPABILITIES + extras
+
+    async def stop(self) -> None:
+        """Stop polling and release the HTTP client."""
+        await self.aclose()
+
+    def prompt_section(self) -> str:
+        """Return what reasoning should know about Telegram (≤1200 characters)."""
+        return ("Telegram: one message per say, with optional files, reply, mentions, choices, "
+                "thread or location; react adds one emoji; edit rewrites a sent message. A "
+                "private chat is a direct place; a group, channel or forum topic is shared.")
+
+    def self_actor(self) -> str:
+        """Return the actor id this body acts as: its own bot account."""
+        return f"telegram:{self.bot_id}" if self.bot_id is not None else "telegram:unknown"
 
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -227,7 +243,7 @@ class TelegramBody:
         if not specs or self.files is None:
             return []
         found = []
-        for spec in specs[:FILES["per_message"]]:
+        for spec in specs[:self.FILES["per_message"]]:
             data = await receive.download(self._http(), self._api_base, self._token,
                                           str(spec["file_id"]))
             found.append(await self.files.put(data, name=str(spec["name"]),

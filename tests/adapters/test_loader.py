@@ -25,7 +25,7 @@ def test_a_test_adapter_loads_from_config_alone():
     assert adapter.name == "echo"
     assert adapter.options == {"enabled": True, "pitch": 2}
     assert adapter.greeting == "hai"
-    assert "adapter echo: shows typing" in loaded.report.lines
+    assert "adapter echo: surfaces none" in loaded.report.lines
 
 
 async def test_the_loaded_test_adapter_is_registered(aconn):
@@ -56,7 +56,7 @@ def test_a_missing_required_variable_fails_at_boot():
 
 
 def test_a_missing_required_part_fails_with_its_name():
-    with pytest.raises(ValueError, match="adapter broken: missing required part 'run'"):
+    with pytest.raises(ValueError, match="adapter broken: missing required member 'run'"):
         Loader(ROOT).load(settings(
             bodies={"broken": {"enabled": True, "module": "tests.fixtures.broken_adapter"}}))
 
@@ -68,22 +68,16 @@ def test_a_disabled_adapter_is_off_and_need_not_exist():
     assert "adapter ghost: off" in loaded.report.lines
 
 
-def test_an_adapter_that_cannot_show_a_kind_fails_at_boot():
-    class Loud:
-        name = "loud"
-        shows = ("hologram",)
+def test_a_capability_without_a_permission_fails_at_boot():
+    """Every entry declares its permission; the boot report says which one is wrong (§3)."""
+    body = cli_adapter.create({}, {})
+    body.capabilities = lambda: ({"name": "say", "description": "Say a line.",
+                                  "schema": {"type": "object", "properties": {
+                                      "text": {"type": "string"}}},
+                                  "facts": ()},)
 
-        def capabilities(self):
-            return ()
-
-        async def run(self, put):
-            return None
-
-        async def act(self, action):
-            return None
-
-    with pytest.raises(ValueError, match="adapter loud: cannot show 'hologram'"):
-        Loader._check_adapter("loud", Loud(), __import__(
+    with pytest.raises(ValueError, match="adapter cli: say: permission is required"):
+        Loader._check_adapter("cli", body, __import__(
             "monoagens.middleware.loader", fromlist=["BootReport"]).BootReport())
 
 

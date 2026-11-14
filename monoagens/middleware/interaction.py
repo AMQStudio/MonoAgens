@@ -44,7 +44,6 @@ CAPABILITY_REQUIRED: dict[tuple[str, str], str] = {
     ("progress", "edit"): "edit",
     ("stickers", "on"): "stickers",
 }
-FALLBACKS = contract.FALLBACKS
 OWNER = "person:owner"
 REQUEST = "approval.requested"
 ANSWERED = "approval.answered"
@@ -623,7 +622,7 @@ def thinking_show(kernel: Any) -> Middleware:
                                                      "note": note}, place=place)
         return Continue()
 
-    return contract.mark_rule(rule, name="narrate.thinking", kind="best-effort", show="thinking")
+    return contract.mark_rule(rule, name="narrate.thinking", kind="best-effort")
 
 
 async def _step_visible(conn: Any, item: Any, *, place: str) -> bool:
@@ -677,7 +676,7 @@ def progress_show(kernel: Any) -> Middleware:
             await _present_step(kernel, item, line, chain=chain, place=place)
         return Continue()
 
-    return contract.mark_rule(rule, name="narrate.progress", kind="best-effort", show="progress")
+    return contract.mark_rule(rule, name="narrate.progress", kind="best-effort")
 
 
 def narrate(kernel: Any) -> Middleware:
@@ -722,7 +721,7 @@ def typing(kernel: Any) -> Middleware:
         await adapter.show(str(ctx["event"].place), "typing")
         return Continue()
 
-    return contract.mark_rule(rule, name="typing", kind="best-effort", show="typing")
+    return contract.mark_rule(rule, name="typing", kind="best-effort")
 
 
 async def _is_shared_with_owner(conn: Any, body: str) -> bool:
@@ -797,8 +796,7 @@ def read_receipts_inbound(kernel: Any) -> Middleware:
         await kernel._emit(item, SHOWN, {"kind": "read", "message_id": str(msg_id)}, place=place)
         return Continue()
 
-    return contract.mark_rule(rule, name="read_receipts_inbound",
-                              kind="best-effort", show="read_receipts")
+    return contract.mark_rule(rule, name="read_receipts_inbound", kind="best-effort")
 
 
 def read_receipts_action(kernel: Any) -> Middleware:
@@ -832,8 +830,7 @@ def read_receipts_action(kernel: Any) -> Middleware:
             await kernel._emit(event, SHOWN, {"kind": "read", "message_id": mid}, place=place)
         return Continue()
 
-    return contract.mark_rule(rule, name="read_receipts_action",
-                              kind="best-effort", show="read_receipts")
+    return contract.mark_rule(rule, name="read_receipts_action", kind="best-effort")
 
 
 def install_commands(kernel: Any) -> None:

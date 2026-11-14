@@ -23,7 +23,6 @@ from monoagens.types import Action, Event
 DEFAULT_SOCKET = "/tmp/monoagens.sock"
 Put = Callable[[Event], Awaitable[None]]
 REQUIRES: tuple[str, ...] = ()
-FILES = {"per_message": 1, "max_bytes": 50_000_000, "mimes": ()}
 
 
 def socket_path() -> str:
@@ -45,6 +44,8 @@ class CLIBody:
     """Eyes and hands for the local terminal over a Unix socket."""
 
     name = "cli"
+    FILES = {"per_message": 1, "max_bytes": 50_000_000, "mimes": ()}
+    PERMISSIONS = {"say": "guest", "react": "guest", "pin": "guest"}
     reads = READS
     shows = SHOWS
     gaps = GAPS
@@ -65,10 +66,20 @@ class CLIBody:
         extras = tuple(OPTIONAL_CAPABILITIES[name] for name in self.enabled_tools)
         return CAPABILITIES + extras
 
-    async def place_info(self, place: str) -> dict[str, Any]:
-        """Return structured place info for the local owner terminal."""
-        del place
-        return {"form": "dm", "parent": None, "can_post": True, "name": "Terminal"}
+    async def stop(self) -> None:
+        """Stop the socket server and close every connected client."""
+        for writer in list(self._writers):
+            writer.close()
+        self._writers.clear()
+
+    def prompt_section(self) -> str:
+        """Return what reasoning should know about the local terminal (≤1200 characters)."""
+        return ("The terminal: type a line to speak here; a line starting with @path sends that "
+                "file; reply by the id of an earlier line; /name args runs a command.")
+
+    def self_actor(self) -> str:
+        """Return the actor id this body acts as."""
+        return "cli:local"
 
     async def run(self, put: Put) -> None:
         """Serve typed lines from local clients until the task is cancelled."""

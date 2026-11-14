@@ -27,7 +27,7 @@ from monoagens.infra.store import (append_event, insert_event_vector, read_event
 from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
 from monoagens.boot import build, install
-from tests.support import open_book, settings
+from tests.support import body_tiers, open_book, settings
 
 SETTINGS = settings()
 PLACE = "space:tg:1"
@@ -71,6 +71,7 @@ class CountingEmbedder:
 
 class RecordingBody:
     name = "telegram"
+    PERMISSIONS = body_tiers(TELEGRAM_CAPABILITIES)
 
     def __init__(self) -> None:
         self.actions: list[Action] = []

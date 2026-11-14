@@ -20,7 +20,8 @@ from typing import Any
 from monoagens import contract
 from monoagens.core.hooks import Continue, Middleware, Replace
 from monoagens.infra.store import payload_text
-from monoagens.middleware.contract import OUTPUT_MARKER, open_attachment
+from monoagens.contract import OUTPUT_MARKER
+from monoagens.middleware.contract import open_attachment
 from monoagens.types import Action, Event
 
 ROUTING = ("to", "via")
@@ -65,6 +66,7 @@ class ToolEntry:
     permission: str  # empty only for an adapter's talking capability
     output_cap: int
     result: bool = True  # False for a capability the middleware handles itself
+    body: bool = False  # a sense or a hand of one body, not a tool a person asks for
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,8 +105,15 @@ class ToolRegistry:
 
     # ------------------------------------------------------------- tools
 
-    def register(self, adapter: Any, *, permissions: Mapping[str, str] | None = None) -> None:
-        """Register one adapter-like owner and every capability it declares."""
+    def register(self, adapter: Any, *, permissions: Mapping[str, str] | None = None,
+                 body: bool = False) -> None:
+        """Register one adapter-like owner and every capability it declares (§4.1).
+
+        `permissions` names the permission of a capability whose descriptor states none: the
+        middleware's own tools declare theirs here, beside the role catalog that carries it.
+        `body` marks the capabilities of a body (a sense or a hand) instead of a tool a person
+        asks for by name, which `/help` therefore does not list.
+        """
         name = getattr(adapter, "name", None)
         if not name:
             raise ValueError("An adapter must expose a name")
@@ -115,10 +124,11 @@ class ToolRegistry:
         for capability in getattr(adapter, "capabilities", lambda: ())():
             short = str(capability["name"])
             full = f"{name}.{short}"
-            permission = self._permission(full, capability, given.get(short))
+            permission = given.get(short) or self._permission(full, capability)
             self._add(full, name, capability,
                       facts=tuple(capability.get("facts") or ()), permission=permission,
-                      output_cap=int(capability.get("output_cap") or DEFAULT_OUTPUT_CAP))
+                      output_cap=int(capability.get("output_cap") or DEFAULT_OUTPUT_CAP),
+                      body=body)
 
     def add_tool(self, tool: Any, facts: Mapping[str, Any] | None = None, *,
                  owner: str | None = None) -> None:
@@ -136,12 +146,9 @@ class ToolRegistry:
             spec = declared.get(short)
             if not spec or "facts" not in spec:
                 raise ValueError(f"{full}: a tool without facts")
-            if "permission" in spec and not spec["permission"]:
-                if not self._allows_no_permission(capability):
-                    raise ValueError(f"{full}: an entry without a permission")
-                permission = ""
-            else:
-                permission = str(spec.get("permission") or full)
+            permission = str(spec.get("permission") or "")
+            if not permission:
+                raise ValueError(f"{full}: an entry without a permission")
             self._add(full, name, capability, facts=tuple(spec["facts"]),
                       permission=permission,
                       output_cap=int(spec.get("output_cap") or DEFAULT_OUTPUT_CAP))
@@ -156,32 +163,18 @@ class ToolRegistry:
                   permission=permission, output_cap=output_cap, result=result)
 
     def _add(self, full: str, owner: str, capability: Mapping[str, Any], *, facts: Any,
-             permission: str, output_cap: int, result: bool = True) -> None:
+             permission: str, output_cap: int, result: bool = True,
+             body: bool = False) -> None:
         if full in self.capabilities:
             raise ValueError(f"Capability collision: {full}")
         descriptor = {"organ": owner, **capability}
         self.capabilities[full] = descriptor
         self.entries[full] = ToolEntry(full, owner, descriptor, frozenset(facts),
-                                       permission, output_cap, result)
+                                       permission, output_cap, result, body)
 
     @staticmethod
-    def _allows_no_permission(capability: Mapping[str, Any]) -> bool:
-        """True for communicative capabilities and the D67 expression tools (react, edit)."""
-        return (bool(capability.get("communicative"))
-                or str(capability.get("name") or "") in ("react", "edit"))
-
-    @staticmethod
-    def _permission(full: str, capability: Mapping[str, Any], given: str | None) -> str:
-        """Return an entry's permission; only talking and expression tools may omit one."""
-        allows_none = ToolRegistry._allows_no_permission(capability)
-        if given is not None:
-            if not given and not allows_none:
-                raise ValueError(f"{full}: an entry without a permission")
-            return given
-        if "permission" in capability and capability["permission"] is None:
-            if allows_none:
-                return ""
-            raise ValueError(f"{full}: an entry without a permission")
+    def _permission(full: str, capability: Mapping[str, Any]) -> str:
+        """Return an entry's permission: every entry declares one (contract.md §3)."""
         permission = str(capability.get("permission") or "")
         if not permission:
             raise ValueError(f"{full}: an entry without a permission")
@@ -398,7 +391,7 @@ def install_own(registry: ToolRegistry) -> None:
 def may_use(permission: str, who: Any, roles: Any, place: str | None = None) -> bool:
     """Return whether one requester may use an entry with this permission (fail closed)."""
     if not permission:
-        return True  # a talking capability of an adapter
+        return False  # every entry declares one (§3); one that does not is never used
     return roles is not None and roles.can(who, permission, place)
 
 
@@ -481,7 +474,7 @@ def help_text(registry: ToolRegistry, who: Any, roles: Any = None) -> str:
                          for entry in registry.commands(who, roles))
     tools = "\n".join(_tool_line(entry)
                       for entry in sorted(registry.entries.values(), key=lambda e: e.name)
-                      if entry.permission and may_use(entry.permission, who, roles))
+                      if not entry.body and may_use(entry.permission, who, roles))
     return f"Commands:\n{commands or 'none'}\n\nTools:\n{tools or 'none'}"
 
 

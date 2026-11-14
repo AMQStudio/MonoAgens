@@ -115,6 +115,7 @@ class _SayBody:
     """A body that answers `say` and records what it was asked to send."""
 
     name = "telegram"
+    PERMISSIONS = {"say": "guest"}
 
     def __init__(self) -> None:
         self.actions = []
@@ -124,7 +125,7 @@ class _SayBody:
                  "schema": {"type": "object", "properties": {"text": {"type": "string"}},
                             "required": ["text"]},
                  "communicative": True, "long_running": False,
-                 "identity_changing": False, "permission": None},)
+                 "identity_changing": False, "permission": "telegram.say"},)
 
     async def act(self, action):
         self.actions.append(action)

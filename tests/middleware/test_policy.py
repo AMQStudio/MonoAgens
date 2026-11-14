@@ -25,6 +25,7 @@ class Tool:
     """A tool with declared facts and a permission, recording what it was asked to do."""
 
     name = "dev"
+    PERMISSIONS = {"run": "guest", "say": "guest"}
 
     def __init__(self, facts: tuple[str, ...] = ("runs_code",),
                  permission: str = "dev.run") -> None:
@@ -47,6 +48,7 @@ class Voice:
     """A talking adapter, so approvals and quiet hours have somewhere to go."""
 
     name = "telegram"
+    PERMISSIONS = {"say": "guest"}
     shows = ("buttons",)
 
     def __init__(self) -> None:
@@ -58,7 +60,7 @@ class Voice:
                  "schema": {"type": "object", "properties": {"text": {"type": "string"}},
                             "required": ["text"]},
                  "communicative": True, "long_running": False, "identity_changing": False,
-                 "facts": (), "permission": None},)
+                 "facts": (), "permission": "telegram.say"},)
 
     async def act(self, action: Action) -> None:
         self.actions.append(action)

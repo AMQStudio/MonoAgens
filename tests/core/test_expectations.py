@@ -20,7 +20,7 @@ from monoagens.infra.store import append_event, read_expectations, write_state
 from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.types import Action, Event
 from monoagens.boot import build
-from tests.support import settings
+from tests.support import body_tiers, settings
 
 SETTINGS = settings()
 PLACE = "space:tg:1"
@@ -58,6 +58,7 @@ def _pfc(fake: FakeLLM) -> Reasoning:
 
 class RecordingBody:
     name = "telegram"
+    PERMISSIONS = body_tiers(TELEGRAM_CAPABILITIES)
 
     def __init__(self) -> None:
         self.actions: list[Action] = []

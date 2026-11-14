@@ -24,6 +24,7 @@ class _HealthyAdapter:
     """Adapter that emits one live percept and stays alive until cancelled."""
 
     name = "cli"
+    PERMISSIONS = {"say": "guest"}
     shows = ("typing",)
     reads = ("text",)
     gaps = {}
@@ -37,7 +38,7 @@ class _HealthyAdapter:
                  "schema": {"type": "object", "properties": {"text": {"type": "string"}},
                             "required": ["text"]},
                  "communicative": True, "long_running": False,
-                 "identity_changing": False, "facts": (), "permission": None},)
+                 "identity_changing": False, "facts": (), "permission": "cli.say"},)
 
     async def act(self, action: Action) -> Any:
         del action
@@ -56,6 +57,7 @@ class _CrashingAdapter:
     """Adapter whose `run()` raises immediately N times, then stays healthy."""
 
     name = "discord"
+    PERMISSIONS = {"say": "guest"}
     shows = ("typing",)
     reads = ("text",)
     gaps = {}
@@ -70,7 +72,7 @@ class _CrashingAdapter:
                  "schema": {"type": "object", "properties": {"text": {"type": "string"}},
                             "required": ["text"]},
                  "communicative": True, "long_running": False,
-                 "identity_changing": False, "facts": (), "permission": None},)
+                 "identity_changing": False, "facts": (), "permission": "discord.say"},)
 
     async def act(self, action: Action) -> Any:
         del action

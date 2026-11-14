@@ -78,6 +78,8 @@ class Kernel:
         self.jobs = jobs.JobRunner(self)
         self.tools: Any | None = None
         self.intake: Callable[[Event], Awaitable[Event]] | None = None
+        self._roles: Any = None
+        self._body_bases: dict[str, str] = {}
         self.budget_limit: float = 0.0
         self.after_model_call: Callable[[int, Mapping[str, int]], Awaitable[None]] | None = None
         self.hooks = hooks.HookRegistry(self.settings)
@@ -163,11 +165,25 @@ class Kernel:
             raise RuntimeError("kernel loop is not running")
         return asyncio.run_coroutine_threadsafe(self.put(event), loop)
 
+    @property
+    def roles(self) -> Any:
+        """The role book, carrying every registered body's declared base tier (§3)."""
+        return self._roles
+
+    @roles.setter
+    def roles(self, book: Any) -> None:
+        self._roles = book.with_bases(self._body_bases) if book is not None else book
+
     def register_adapter(self, adapter: Any) -> None:
-        """Register an adapter and the capabilities it declares."""
+        """Register a body, the capabilities it declares and the base tier of each (§3)."""
         if self.tools is None:
             raise RuntimeError("the tool registry is not installed")
-        self.tools.register(adapter)
+        self.tools.register(adapter, body=True)
+        declared = getattr(adapter, "PERMISSIONS", None) or {}
+        self._body_bases = {**self._body_bases,
+                            **{f"{adapter.name}.{short}": str(tier)
+                               for short, tier in declared.items()}}
+        self.roles = self._roles
 
     async def _append(self, event: Event, kind: str, payload: dict[str, Any], *,
                       caused_by: int | None = None, project: bool = True,

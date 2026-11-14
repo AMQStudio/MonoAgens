@@ -42,7 +42,6 @@ from monoagens.types import Action, Event
 
 Put = Callable[[Event], Awaitable[None]]
 REQUIRES: tuple[str, ...] = ("DISCORD_BOT_TOKEN",)
-FILES = {"per_message": 10, "max_bytes": 25_000_000, "mimes": ()}
 
 
 def create(options: dict[str, Any], env: dict[str, str]) -> "DiscordBody":
@@ -61,6 +60,9 @@ class DiscordBody:
     """Discord gateway adapter on discord.py: DMs, guild channels, threads, components & roles."""
 
     name = "discord"
+    FILES = {"per_message": 10, "max_bytes": 25_000_000, "mimes": ()}
+    PERMISSIONS = {"say": "guest", "react": "guest", "edit": "guest", "pin": "guest",
+                   "manage_role": "admin"}
     reads = READS
     shows = SHOWS
     gaps = GAPS
@@ -164,6 +166,20 @@ class DiscordBody:
             return
         await self._stop_event.wait()
 
+    async def stop(self) -> None:
+        """Stop the gateway connection and close the client."""
+        await self.aclose()
+
+    def prompt_section(self) -> str:
+        """Return what reasoning should know about Discord (≤1200 characters)."""
+        return ("Discord: one message per say, with optional files, reply, mentions, choices, "
+                "thread or location; react adds one emoji; edit rewrites a sent message. A DM "
+                "is a direct place; a server channel is shared and its members are the role's.")
+
+    def self_actor(self) -> str:
+        """Return the actor id this body acts as: its own bot account."""
+        return f"discord:{self.bot_id}" if self.bot_id else "discord:unknown"
+
     async def aclose(self) -> None:
         """Close the Discord client cleanly."""
         self._stop_event.set()
@@ -183,7 +199,7 @@ class DiscordBody:
         place = place_id(channel) if channel is not None else "space:dc:unknown"
         atts = await collect_attachments(
             message, self._files, place=place,
-            per_message=FILES["per_message"], deferred=self._defer_media,
+            per_message=self.FILES["per_message"], deferred=self._defer_media,
         )
         sticker = await collect_sticker(message, self._files, place=place)
         ev = format_message(

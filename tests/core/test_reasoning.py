@@ -27,7 +27,7 @@ from monoagens.types import Action, Event
 from monoagens.core.context.working import doing_lines
 from monoagens.boot import build
 from monoagens.middleware import privacy
-from tests.support import settings, context
+from tests.support import body_tiers, context, settings
 
 SETTINGS = settings()
 PLACE = "space:tg:1"
@@ -88,6 +88,7 @@ class RecordingBody:
     """A body that records actions and snapshots the Log when each action arrives."""
 
     name = "telegram"
+    PERMISSIONS = body_tiers(TELEGRAM_CAPABILITIES)
 
     def __init__(self, conn=None) -> None:
         self.conn = conn

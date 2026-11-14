@@ -77,6 +77,19 @@ def settings(**sections: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
+def body_tiers(*capability_sets) -> dict[str, str]:
+    """Return the base tier a test body declares for each capability it is handed.
+
+    A body's talking and expression capabilities are what everyone may use (contract.md §10);
+    a test body that borrows a real adapter's descriptors declares its tiers with this.
+    """
+    found: dict[str, str] = {}
+    for capabilities in capability_sets:
+        for capability in capabilities:
+            found[str(capability["name"])] = "guest"
+    return found
+
+
 def open_book(who: str, *permissions: str):
     """Return a role book in which one person holds these permissions (guard tests)."""
     from monoagens.middleware import roles

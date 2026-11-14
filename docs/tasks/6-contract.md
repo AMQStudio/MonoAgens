@@ -102,7 +102,7 @@ May touch: `monoagens/middleware/` (all), `monoagens/core/` (only for the combin
 and 2.5 above), `monoagens/infra/` (attachment store, budget), `config.yaml`, `tests/` (any test
 that asserts behavior the contract removes), `scenarios/`, `scripts/replay.py`
 
-- [ ] 3.1 The contract types move out of `middleware/contract.py` into `monoagens/contract/`;
+- [x] 3.1 The contract types move out of `middleware/contract.py` into `monoagens/contract/`;
   the middleware imports them; what contract v2 removed is deleted (`SHOWS`, ladders, the neutral
   `say` fields).
 - [ ] 3.2 Identity on actors ([spec.md](../spec.md) *Identity*): the actor map over `actor` and `involves`;
@@ -607,3 +607,56 @@ Next, in the plan's order (see `local://task6-to-part6-plan.md`, step 7 onwards)
 - Then **2.2 (label half) + 3.5**, **3.4**, **3.6**, **3.7**, **3.8**, Parts 4, 5 and 6.
 
 The audit items carried by Parts 3-5 (S.6, F.9-F.12, O.1-O.6) are untouched.
+
+### Notes — Part 3 (session of 2026-11-14, night)
+
+Line counts (`.py`/`.yaml`/`.sql`, from the repository root) at the start of Part 3, baseline
+`44f9c1f` in brackets:
+
+| folder | now | baseline |
+|---|---|---|
+| `monoagens/core` | 4047 | 3842 |
+| `monoagens/middleware` | 5309 | 6144 |
+| `monoagens/adapters` | 5524 | 5465 |
+| `plugins` | 2065 | 2065 |
+| `tests` | 18982 | 18577 |
+| `monoagens/contract` | 749 | 805 |
+| `monoagens/infra` | 1889 | — |
+
+**Step 0 (the green tip, commit `adea72b`).** The five red tests built a version 1 percept while
+the dataclass claims version 2, so the door never upcast it. One home: `infra/versioning.py`
+(`upcast_incoming`), outside the lock (§7) and outside the core's payload ban — it adds the two
+things the contract's door cannot see (the envelope's `who` and `description`) and keeps the
+payload keys the contract's payload does not name, which the middleware still reads until 3.5.
+`infra/observability.py` reads a percept's length from the envelope's `description`; `recall.py`
+searches and reports `description`; `privacy.bind_store` is now called by `loader.install` (it was
+dead, so `carries_file` was always false and DEC-9's forwarding confirmation never fired). Four
+tests published the `place.audience` fact their places were missing (`test_part1_integration` ×2,
+`test_policy` brake, `test_workspace_*` ×2) — scenario material, D54.
+
+**3.1 (this commit).** What contract v2 removed is deleted from `middleware/contract.py`: `SHOWS`,
+`READS`, `check_coverage`, the `FALLBACKS` ladders with `fallback_choice`/`adapter_fallbacks`, its
+copy of `OUTPUT_MARKER`, and `mark_rule`/`best_effort`'s `show` plumbing. Homes: what a body must
+provide is `contract/surfaces.py` (`missing_members`, `surfaces`), what a capability must declare
+is `contract/capability.py` (`descriptor_errors`), the output marker is `contract/action.py`.
+`loader._check_adapter` now refuses a body that lacks a required member or declares a capability
+without facts or its permission, and lists the optional surfaces it offers.
+
+**Permission, no exception (§3, §10).** Every capability declares `<body>.<capability>`; a body
+also declares the base tier of each of its own capabilities (`PERMISSIONS` on the four adapter
+classes), and `Kernel.register_adapter` hands those tiers to the role book
+(`RoleBook.with_bases`), so a kernel with no deployment still knows what talking costs. The
+`roles` property on the kernel re-applies them whenever a book is set, so a test that installs its
+own book keeps the bodies' tiers. `registry.register` lost `_allows_no_permission`; `may_use("")`
+is `False`, and `policy.permission_line` stays the one refusal. `/help` lists the tools a person
+may ask for, not a body's own senses and hands (`ToolEntry.body`).
+
+**Also fixed here**: `Loader.adapters` returns the bodies *and* the tiers they declare (the role
+catalog is built with them); `FILES` is a body attribute, so the boot report and the split limit
+read the same fact; `telegram`, `discord` and `whatsapp` gained `stop`, `prompt_section` and
+`self_actor` (the CLI too), so the boot check is honest from the start rather than gated.
+
+Deviations: the plan put the tier map in a module constant and forwarded it through
+`Kernel.register_adapter(permissions=…)`; the class attribute on the body is one home instead, and
+`registry.register`'s `permissions` stays what it already was — the permission of a middleware-owned
+tool whose descriptor states none (`SelfTool`).

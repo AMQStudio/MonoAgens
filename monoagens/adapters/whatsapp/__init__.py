@@ -49,7 +49,6 @@ from monoagens.types import Action, Event
 Put = Callable[[Event], Awaitable[None]]
 LOGGER = logging.getLogger(__name__)
 REQUIRES: tuple[str, ...] = ()
-FILES = {"per_message": 20, "max_bytes": 100_000_000, "mimes": ()}
 DEFAULT_ALBUM_WINDOW = 0.8
 
 
@@ -80,6 +79,9 @@ class WhatsAppBody:
     """Eyes and hands for WhatsApp over neonize: shared account, history import, deferred media."""
 
     name = "whatsapp"
+    FILES = {"per_message": 20, "max_bytes": 100_000_000, "mimes": ()}
+    PERMISSIONS = {"say": "guest", "react": "guest", "edit": "guest", "pin": "guest",
+                   "reject_call": "guest"}
     reads = READS
     shows = SHOWS
     gaps = GAPS
@@ -638,6 +640,20 @@ class WhatsAppBody:
                         if meta is not None:
                             return self.directory.record_newsletter(meta)
         return self.directory.place_meta(place)
+
+    async def stop(self) -> None:
+        """Disconnect the WhatsApp client and release its session."""
+        await self.aclose()
+
+    def prompt_section(self) -> str:
+        """Return what reasoning should know about WhatsApp (≤1200 characters)."""
+        return ("WhatsApp: one message per say, with optional files, reply or mentions; react "
+                "adds one emoji; edit rewrites a sent message. A personal chat is a direct "
+                "place; a group or a channel is shared.")
+
+    def self_actor(self) -> str:
+        """Return the actor id this body acts as: its own account."""
+        return str(self.self_account or "whatsapp:unknown")
 
     async def aclose(self) -> None:
         """Cancel pending album and undecryptable timers and stop the neonize client cleanly."""

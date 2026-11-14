@@ -205,13 +205,14 @@ class _Body:
     """A body that declares a talking capability and can name its places."""
 
     name = "telegram"
+    PERMISSIONS = {"say": "guest"}
 
     def capabilities(self):
         return ({"name": "say", "description": "Speak here.",
                  "schema": {"type": "object", "properties": {"text": {"type": "string"}},
                             "required": ["text"]},
                  "communicative": True, "long_running": False, "identity_changing": False,
-                 "facts": (), "permission": None},)
+                 "facts": (), "permission": "telegram.say"},)
 
     async def act(self, action: Action) -> None:
         return None

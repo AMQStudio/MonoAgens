@@ -122,8 +122,8 @@ async def test_compose_distinguishes_guard_from_best_effort() -> None:
     async def guard_rule(item: Any, ctx: Any) -> Any:
         raise RuntimeError("guard failure")
 
-    async def broken_show(item: Any, ctx: Any) -> Any:
-        raise RuntimeError("show down")
+    async def broken_rule(item: Any, ctx: Any) -> Any:
+        raise RuntimeError("best-effort down")
 
     class _FakeKernel:
         def __init__(self) -> None:
@@ -136,14 +136,12 @@ async def test_compose_distinguishes_guard_from_best_effort() -> None:
     ev = Event(id=1, ts=START, kind="percept", who="person:budi", place="space:tg:1",
                body="telegram", payload={"description": "halo"}, description="halo")
 
-    show_mw = contract.compose(
-        contract.mark_rule(broken_show, name="typing", kind="best-effort", show="typing"),
-        kernel=kernel,
-    )
-    assert isinstance(await show_mw(ev, {"conn": None}), Continue)
+    best_effort_mw = contract.compose(
+        contract.mark_rule(broken_rule, name="typing", kind="best-effort"), kernel=kernel)
+    assert isinstance(await best_effort_mw(ev, {"conn": None}), Continue)
     assert len(kernel.errors) == 1
     msg = kernel.errors[0][1]
-    assert "typing" in msg and "telegram" in msg and "show=typing" in msg
+    assert "typing" in msg and "telegram" in msg
 
     guard_mw = contract.compose(guard_rule, kernel=kernel)
     with pytest.raises(RuntimeError, match="guard failure"):
@@ -213,7 +211,7 @@ async def test_thinking_show_failure_records_error_and_continues(aconn) -> None:
     assert isinstance(outcome, Continue)
     errs = [row[0]["error"] for row in await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'error'")).fetchall()]
-    assert any("narrate.thinking" in e and "telegram" in e and "show=thinking" in e for e in errs)
+    assert any("narrate.thinking" in e and "telegram" in e for e in errs)
 
 
 async def test_fault_injection_across_best_effort_progress_and_adapter_and_tool(aconn) -> None:
@@ -246,7 +244,7 @@ async def test_fault_injection_across_best_effort_progress_and_adapter_and_tool(
     assert any("search.query failed (ConnectionError)" in r.get("reason", "") for r in results)
     errs = [row[0]["error"] for row in await (await aconn.execute(
         "SELECT payload FROM events WHERE kind = 'error'")).fetchall()]
-    assert any("narrate.progress" in e and "telegram" in e and "show=progress" in e for e in errs)
+    assert any("narrate.progress" in e and "telegram" in e for e in errs)
 
     # 2. Adapter `act` raises -> honest act.result error (type name only), no unhandled crash.
     body_fail_act = _FaultyBody(fail_act=True)

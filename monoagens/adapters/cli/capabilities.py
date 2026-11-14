@@ -44,7 +44,7 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "long_running": False,
         "identity_changing": False,
         "facts": (),
-        "permission": None,
+        "permission": "cli.say",
     },
     {
         "name": "react",
@@ -58,7 +58,7 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "long_running": False,
         "identity_changing": False,
         "facts": (),
-        "permission": None,
+        "permission": "cli.react",
     },
 )
 

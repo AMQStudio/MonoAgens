@@ -20,6 +20,7 @@ class SendingAdapter:
     """A tool that records every action id it was handed and the line it carried."""
 
     name = "telegram"
+    PERMISSIONS = {"react": "guest", "say": "guest"}
 
     def __init__(self) -> None:
         """Start with nothing sent."""
@@ -32,12 +33,12 @@ class SendingAdapter:
                  "schema": {"type": "object", "properties": {"text": {"type": "string"}},
                             "required": ["text"]},
                  "communicative": True, "long_running": False, "identity_changing": False,
-                 "permission": None},
+                 "permission": "telegram.say"},
                 {"name": "react", "description": "React with an emoji.",
                  "schema": {"type": "object", "properties": {"emoji": {"type": "string"}},
                             "required": ["emoji"]},
                  "communicative": False, "long_running": False, "identity_changing": False,
-                 "permission": None})
+                 "permission": "telegram.react"})
 
     async def act(self, action: Action) -> dict:
         """Record the id and the line, and answer with what the body did."""

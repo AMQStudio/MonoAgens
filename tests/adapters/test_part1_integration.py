@@ -156,7 +156,7 @@ async def _put_idle(kernel, *events):
     return [t.result() for t in tasks]
 
 
-def test_boot_report_coverage_table_covers_all_adapters_without_undeclared_gaps(tmp_path):
+def test_the_boot_report_lists_every_body_and_the_surfaces_it_offers(tmp_path):
     report = BootReport()
     loader = Loader(ROOT, env={
         "TELEGRAM_BOT_TOKEN": "tg-tok",
@@ -173,13 +173,12 @@ def test_boot_report_coverage_table_covers_all_adapters_without_undeclared_gaps(
         loader._check_adapter(name, adapter, report)
 
     joined = "\n".join(report.lines)
+    assert "adapter cli: surfaces none" in joined
+    assert "adapter telegram: surfaces none" in joined
+    assert "adapter whatsapp: surfaces none" in joined
+    assert "adapter discord: surfaces history" in joined
     for name in ("cli", "telegram", "whatsapp", "discord"):
-        assert f"adapter {name} coverage: reads " in joined
-        assert f"adapter {name} coverage: shows " in joined
-        assert f"adapter {name} fallback approval:" in joined
-    assert "adapter telegram gap history:" in joined
-    assert "adapter telegram gap read_receipts:" in joined
-    assert "adapter whatsapp gap threads:" in joined
+        assert f"adapter {name}: files " in joined
 
 
 async def test_conversation_and_private_context_continue_across_wa_dc_tg_after_verified_link(

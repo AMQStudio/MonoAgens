@@ -28,8 +28,8 @@ from typing import Any
 from monoagens.infra.store import EVENT_COLUMNS as _EVENT_COLUMNS
 from monoagens.types import Event
 
-from monoagens.contract.hooks import (OWNER_POLICY, RULE_KINDS, SLOTS, Continue, HookOutcome,
-                                      Middleware, Registration, Replace, Stop)
+from monoagens.contract import (OWNER_POLICY, RULE_KINDS, SLOTS, Continue, HookOutcome,
+                                Middleware, Registration, Replace, Stop)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -37,129 +37,24 @@ LOGGER = logging.getLogger(__name__)
 FACTS = ("reads", "changes", "runs_code", "network")
 CALL_FACTS = FACTS + ("sensitive",)  # `sensitive` is added to one call, never declared
 
-# What an adapter can show besides a message (adapters.md §4, middleware.md §9).
-SHOWS = (
-    "typing", "read_receipts", "edit", "delete", "reply", "reactions",
-    "buttons", "menus", "polls", "stickers", "embeds", "threads", "locations",
-)
-
-# What an adapter can read from incoming platform events (adapters.md §4).
-READS = (
-    "text", "reply", "mention", "edit", "delete", "reaction", "sticker",
-    "location", "contact", "poll", "view_once", "files", "call",
-    "place_event", "voice_note", "choices_answer",
-)
-
-
-def check_coverage(name: str, adapter: Any) -> tuple[str, ...]:
-    """Validate an adapter's declared reads, shows and gaps against D67 vocabulary.
-
-    Returns coverage lines suitable for the boot report. Adapters that have not yet
-    declared `reads` or `gaps` only have their `shows` checked.
-    """
-    shows = tuple(getattr(adapter, "shows", ()) or ())
-    unknown_shows = [kind for kind in shows if kind not in SHOWS]
-    if unknown_shows:
-        raise ValueError(f"adapter {name}: cannot show {unknown_shows[0]!r}")
-
-    has_reads = hasattr(adapter, "reads")
-    has_gaps = hasattr(adapter, "gaps")
-    if not (has_reads or has_gaps):
-        return ()
-
-    reads = tuple(getattr(adapter, "reads", ()) or ())
-    unknown_reads = [kind for kind in reads if kind not in READS]
-    if unknown_reads:
-        raise ValueError(f"adapter {name}: unknown read kind {unknown_reads[0]!r}")
-
-    gaps = getattr(adapter, "gaps", None)
-    if not isinstance(gaps, Mapping):
-        raise ValueError(f"adapter {name}: missing coverage gaps map")
-
-    expected_gaps = [k for k in READS if k not in reads] + [k for k in SHOWS if k not in shows]
-    if getattr(adapter, "history", None) is None and "history" not in expected_gaps:
-        expected_gaps.append("history")
-    missing = [k for k in expected_gaps if k not in gaps or not str(gaps[k] or "").strip()]
-    if missing:
-        raise ValueError(f"adapter {name}: undeclared coverage gap {missing[0]!r}")
-
-    lines = [
-        f"adapter {name} coverage: reads {', '.join(reads) or 'none'}",
-        f"adapter {name} coverage: shows {', '.join(shows) or 'none'}",
-    ]
-    for kind in sorted(gaps):
-        lines.append(f"adapter {name} gap {kind}: {gaps[kind]}")
-    lines.extend(adapter_fallbacks(name, adapter))
-    return tuple(lines)
-
-
-# D70/D81 fallback chains (adapters.md §4, middleware.md §9).
-FALLBACKS: dict[str, tuple[tuple[str | None, str], ...]] = {
-    "approval": (("buttons", "buttons"), ("menus", "menus"), ("reactions", "reactions"),
-                 ("polls", "poll"), (None, "numbered list")),
-    "choices": (("buttons", "buttons"), ("menus", "menus"), ("reactions", "reactions"),
-                ("polls", "poll"), (None, "numbered list")),
-    "thread": (("threads", "new thread"), (None, "reply with the title")),
-    "location": (("locations", "native"), (None, "text")),
-    "sticker": (("stickers", "sticker"), (None, "emoji")),
-    "progress": (("edit", "edit"), (None, "new message")),
-}
-
-
-def fallback_choice(feature: str, shows: Sequence[str] | set[str]) -> tuple[str | None, str]:
-    """Return `(required_show_cap, label)` for `feature`, never picking an unshown capability."""
-    show_set = set(shows)
-    for cap, label in FALLBACKS[feature]:
-        if cap is None or cap in show_set:
-            if cap is not None and cap not in SHOWS:
-                raise ValueError(f"unknown fallback capability {cap!r} for {feature}")
-            return cap, label
-    raise ValueError(f"fallback chain for {feature!r} has no plain-text terminal step")
-
-
-def adapter_fallbacks(name: str, adapter: Any) -> tuple[str, ...]:
-    """Return the fallback choice per D70 chain for `adapter` so the boot report shows it."""
-    shows = set(getattr(adapter, "shows", ()) or ())
-    lines: list[str] = []
-    for feature, chain in FALLBACKS.items():
-        cap, chosen = fallback_choice(feature, shows)
-        if cap is not None and cap not in shows:
-            raise ValueError(f"adapter {name} fallback {feature} chose unshown {cap!r}")
-        top = chain[0][1]
-        note = chosen if chosen == top else f"{chosen} (fallback from {top})"
-        lines.append(f"adapter {name} fallback {feature}: {note}")
-    return tuple(lines)
-
-# The one marker for a cut tool output; a tool never invents a second one.
-OUTPUT_MARKER = (
-    "\n...[truncated: output exceeds {limit} chars; "
-    "full in {ref}; continue from character {n}]"
-)
-
-__all__ = ["CALL_FACTS", "FACTS", "FALLBACKS", "OUTPUT_MARKER", "OWNER_POLICY", "READS",
-           "RULE_KINDS", "SHOWS", "SLOTS", "AttachmentDoor", "LogView", "adapter_fallbacks",
-           "attachment_origins", "best_effort", "check_coverage", "find_attachment",
+__all__ = ["CALL_FACTS", "FACTS", "OWNER_POLICY", "RULE_KINDS", "SLOTS", "AttachmentDoor",
+           "LogView", "attachment_origins", "best_effort", "compose", "find_attachment",
            "mark_rule", "open_attachment", "Continue", "HookOutcome", "Middleware",
-           "Registration", "Replace", "Stop", "compose"]
+           "Registration", "Replace", "Stop"]
 
 
-def mark_rule(rule: Middleware, *, name: str, kind: str = "guard",
-              show: str = "") -> Middleware:
-    """Attach rule kind ('guard' default, or 'best-effort') and show metadata to a rule."""
+def mark_rule(rule: Middleware, *, name: str, kind: str = "guard") -> Middleware:
+    """Attach one rule's kind ('guard' default, or 'best-effort') and name to it."""
     if kind not in RULE_KINDS:
         raise ValueError(f"unknown rule kind: {kind!r}")
     setattr(rule, "rule_kind", kind)
     setattr(rule, "rule_name", name)
-    if show:
-        setattr(rule, "show_kind", show)
     return rule
 
 
-def best_effort(rule: Middleware, *, kernel: Any = None, name: str = "",
-                show: str = "") -> Middleware:
+def best_effort(rule: Middleware, *, kernel: Any = None, name: str = "") -> Middleware:
     """Wrap one best-effort rule: failures record `error` and the hook continues."""
     rule_name = name or str(getattr(rule, "rule_name", "") or getattr(rule, "__name__", "rule"))
-    show_kind = show or str(getattr(rule, "show_kind", "") or "")
 
     async def wrapped(item: Any, ctx: Any) -> HookOutcome:
         try:
@@ -169,11 +64,7 @@ def best_effort(rule: Middleware, *, kernel: Any = None, name: str = "",
             if event is None:
                 event = item
             adapter = str(getattr(event, "body", "") or "-")
-            detail = (ctx.get("show_kind") if isinstance(ctx, Mapping) else None) or show_kind
-            parts = [f"rule={rule_name}", f"adapter={adapter}"]
-            if detail:
-                parts.append(f"show={detail}")
-            message = f"best-effort rule failed ({', '.join(parts)}): {exc}"
+            message = f"best-effort rule failed (rule={rule_name}, adapter={adapter}): {exc}"
             rec = getattr(kernel, "_record_error", None)
             if rec is not None and isinstance(event, Event):
                 await rec(event, message)
@@ -181,7 +72,7 @@ def best_effort(rule: Middleware, *, kernel: Any = None, name: str = "",
                 LOGGER.warning("%s", message)
             return Continue()
 
-    return mark_rule(wrapped, name=rule_name, kind="best-effort", show=show_kind)
+    return mark_rule(wrapped, name=rule_name, kind="best-effort")
 
 
 def compose(*rules: Middleware, kernel: Any = None) -> Middleware:

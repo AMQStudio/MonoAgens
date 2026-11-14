@@ -24,6 +24,7 @@ from weakref import WeakKeyDictionary
 
 import yaml
 
+from monoagens.contract import descriptor_errors, missing_members, surfaces
 from monoagens.core.hooks import Continue, Middleware
 from monoagens.infra import attachments as attachments_module
 from monoagens.infra import config as config_module
@@ -188,11 +189,12 @@ class Loader:
                 api.open_point(str(point))
             self._register(name, api, report)
             apis.append(api)
+        adapters, tiers = self.adapters(settings, report)
         loaded = Loaded(report=report, plugins=tuple(api.name for api in apis),
-                        adapters=self.adapters(settings, report),
-                        permissions=self._permissions(manifests, config_d),
+                        adapters=adapters,
+                        permissions={**self._permissions(manifests, config_d), **tiers},
                         knob_bounds=self._knob_bounds(manifests), apis=tuple(apis),
-                        roles=self._roles(settings, manifests, config_d, report))
+                        roles=self._roles(settings, manifests, config_d, report, tiers))
         if unavailable:
             report.add(f"plugins unavailable: {', '.join(sorted(unavailable))}")
         return loaded
@@ -350,9 +352,11 @@ class Loader:
 
     @staticmethod
     def _roles(settings: Mapping[str, Any], manifests: Mapping[str, Mapping[str, Any]],
-               config_d: Mapping[str, Mapping[str, Any]], report: BootReport) -> Any:
-        """Resolve the role book from config.yaml, the manifests and config.d."""
+               config_d: Mapping[str, Mapping[str, Any]], report: BootReport,
+               along: Mapping[str, str] | None = None) -> Any:
+        """Resolve the role book from config.yaml, the manifests, config.d and the bodies."""
         catalog = dict(roles.CORE_PERMISSIONS)
+        catalog.update({name: tier for name, tier in (along or {}).items()})
         for manifest in manifests.values():
             for name, spec in (manifest.get("permissions") or {}).items():
                 catalog.setdefault(str(name), (spec or {}).get("base"))
@@ -364,10 +368,12 @@ class Loader:
                                      "places": settings.get("places") or {}},
                                     catalog, manifests, config_d, report)
 
-    def adapters(self, settings: Mapping[str, Any], report: BootReport) -> tuple[Any, ...]:
-        """Create every enabled adapter from `bodies:` through its `create(options, env)`."""
+    def adapters(self, settings: Mapping[str, Any],
+                 report: BootReport) -> tuple[tuple[Any, ...], dict[str, str]]:
+        """Create every enabled adapter, and read the base tier each declares per capability."""
         bodies = settings.get("bodies") or {}
         found: list[Any] = []
+        tiers: dict[str, str] = {}
         for name in sorted(bodies):
             options = bodies[name] or {}
             if not isinstance(options, dict):
@@ -388,29 +394,27 @@ class Loader:
             adapter = factory({key: value for key, value in options.items() if key != "module"},
                               env)
             self._check_adapter(name, adapter, report)
+            for short, tier in (getattr(adapter, "PERMISSIONS", None) or {}).items():
+                tiers[f"{name}.{short}"] = str(tier)
             found.append(adapter)
-        return tuple(found)
+        return tuple(found), tiers
 
     @staticmethod
     def _check_adapter(name: str, adapter: Any, report: BootReport) -> None:
-        """Refuse an adapter that cannot do its job; report what it can additionally do."""
-        for part in ("capabilities", "run", "act"):
-            if not callable(getattr(adapter, part, None)):
-                raise ValueError(f"adapter {name}: missing required part {part!r}")
-        if not isinstance(getattr(adapter, "name", None), str) or not adapter.name:
-            raise ValueError(f"adapter {name}: missing required part 'name'")
-        shows = tuple(getattr(adapter, "shows", ()) or ())
-        cov_lines = contract.check_coverage(name, adapter)
-        report.add(f"adapter {name}: shows {', '.join(shows) or 'nothing'}")
-        for line in cov_lines:
-            report.add(line)
+        """Refuse a body that cannot do its job; list the optional surfaces it offers."""
+        missing = missing_members(adapter)
+        if missing:
+            raise ValueError(f"adapter {name}: missing required member {missing[0]!r}")
+        found = surfaces(adapter)
+        report.add(f"adapter {name}: surfaces {', '.join(found) or 'none'}")
+        for capability in adapter.capabilities():
+            errors = descriptor_errors(name, capability, require_facts=True)
+            if errors:
+                raise ValueError(f"adapter {name}: {errors[0]}")
         limits = getattr(adapter, "FILES", None)
         if isinstance(limits, dict):
             report.add(f"adapter {name}: files {limits.get('per_message')} per message, "
                        f"up to {limits.get('max_bytes')} bytes each")
-        for part in ("history", "place_info", "get_cursor"):
-            if getattr(adapter, part, None) is not None:
-                report.add(f"adapter {name}: has {part}")
 
     # ---------------------------------------------------------- registering
 

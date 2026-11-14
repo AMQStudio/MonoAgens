@@ -26,6 +26,7 @@ class FileTest:
     """A test adapter that can send a text and a file, as WhatsApp will (Task 5)."""
 
     name = "filetest"
+    PERMISSIONS = {"say": "guest", "send": "guest"}
     FILES = {"per_message": 2, "max_bytes": 50_000_000, "mimes": ()}
 
     def __init__(self) -> None:
@@ -36,7 +37,7 @@ class FileTest:
                  "schema": {"type": "object", "properties": {"text": {"type": "string"}},
                             "required": ["text"]},
                  "communicative": True, "long_running": False, "identity_changing": False,
-                 "facts": (), "permission": None},
+                 "facts": (), "permission": "filetest.say"},
                 {"name": "send_file", "description": "Send a file with a note.",
                  "schema": {"type": "object",
                             "properties": {"text": {"type": "string"},

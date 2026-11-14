@@ -51,7 +51,7 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "long_running": False,
         "identity_changing": False,
         "facts": (),
-        "permission": None,
+        "permission": "discord.say",
     },
     {
         "name": "react",
@@ -65,7 +65,7 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "long_running": False,
         "identity_changing": False,
         "facts": (),
-        "permission": None,
+        "permission": "discord.react",
     },
     {
         "name": "edit",
@@ -79,7 +79,7 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "long_running": False,
         "identity_changing": False,
         "facts": (),
-        "permission": None,
+        "permission": "discord.edit",
     },
 )
 

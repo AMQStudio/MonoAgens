@@ -25,11 +25,23 @@ class EchoAdapter:
                  "schema": {"type": "object", "properties": {"text": {"type": "string"}},
                             "required": ["text"]},
                  "communicative": True, "long_running": False, "identity_changing": False,
-                 "facts": (), "permission": None},)
+                 "facts": (), "permission": "echo.say"},)
 
     async def run(self, put) -> None:
         """A test adapter is driven by the test, never by the network."""
         return None
+
+    async def stop(self) -> None:
+        """Stop sensing; this adapter never sensed."""
+        return None
+
+    def prompt_section(self) -> str:
+        """Return what reasoning should know about this body."""
+        return "The echo: one test adapter that repeats what it is asked to say."
+
+    def self_actor(self) -> str:
+        """Return the actor this body acts as."""
+        return "echo:test"
 
     async def act(self, action) -> dict[str, Any]:
         """Record one line and report it."""

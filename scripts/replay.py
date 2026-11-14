@@ -441,13 +441,23 @@ class FakeBody:
         self.name = name
         self.actions: list[Action] = []
 
+    @property
+    def PERMISSIONS(self) -> dict[str, str]:
+        """Return the base tier this organ declares for each capability of its own."""
+        return {str(capability["name"]): "guest" for capability in self.capabilities()}
+
     def capabilities(self) -> Sequence[dict[str, Any]]:
-        """Declare the same capabilities as the real body of that name."""
+        """Declare the same capabilities as the real body of that name, in its namespace."""
         if self.name == CLI_BODY:
-            return CLI_CAPABILITIES
-        if self.name == BODY_NAME:
-            return TELEGRAM_CAPABILITIES
-        return TEST_CAPABILITIES[self.name]
+            found = CLI_CAPABILITIES
+        elif self.name == BODY_NAME:
+            found = TELEGRAM_CAPABILITIES
+        else:
+            found = TEST_CAPABILITIES[self.name]
+        return tuple({**capability,
+                      "permission": str(capability.get("permission")
+                                        or f"{self.name}.{capability['name']}")}
+                     for capability in found)
 
     async def act(self, action: Action) -> Any:
         """Record the action; a long action reports the output it produced."""

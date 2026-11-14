@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import discord
 
-from monoagens.adapters.discord import DiscordBody, FILES, REQUIRES, create
+from monoagens.adapters.discord import DiscordBody, REQUIRES, create
 from monoagens.adapters.discord.identity import guild_place_id, place_id
 from monoagens.infra.attachments import AttachmentStore
 from monoagens.infra.clock import FakeClock
@@ -375,9 +375,10 @@ async def test_discord_multi_attachments_edits_deletes_reactions_and_out(aconn, 
     await body.show(place_id(general), "typing")
     assert general.typing_count == 1
     assert REQUIRES == ("DISCORD_BOT_TOKEN",)
-    assert FILES["per_message"] == 10
-    loaded = Loader(tmp_path, env={"DISCORD_BOT_TOKEN": "tok"}).adapters(
+    assert DiscordBody.FILES["per_message"] == 10
+    loaded, tiers = Loader(tmp_path, env={"DISCORD_BOT_TOKEN": "tok"}).adapters(
         {"bodies": {"discord": {"enabled": True}}}, BootReport()
     )
     assert loaded[0].name == "discord"
+    assert tiers["discord.say"] == "guest"
     assert isinstance(create({}, {"DISCORD_BOT_TOKEN": "t"}), DiscordBody)
