@@ -508,29 +508,33 @@ From this commit on the contract does not move again (6.2's promise).
 `describe_attachments` from `monoagens.contract` (one renderer for the one line reasoning
 reads). The hook vocabulary already came from there (DEC-2).
 
-### Where the work stands (session of 2026-11-14)
+### Where the work stands (session of 2026-11-14, evening)
 
-Green and pushed: Part 1 (1.1-1.4), Part 2 items 2.1 and 2.3. `uv run pytest -q` is **687 passed,
-1 skipped, 0 failed** and `scripts/replay.py --fake` is **158/158** at commit `b47d615`. The
-baseline's one red test is fixed.
+Green and pushed: Part 1 (1.1-1.4) and Part 2 except 2.2's label half and 2.5 — items **2.1,
+2.3, 2.4, 2.6, 2.7, 2.8, 2.9** are ticked, plus DEC-2 (one hook vocabulary) and the first half of
+3.1 (`describe_attachments` in the contract). `uv run pytest -q` is **690 passed, 1 skipped, 0
+failed**, `scripts/replay.py --fake` is **158/158**, and the architecture ratchet is down from
+136 to **102 findings** at commit `68a5721`.
 
-Not started, in the order the plan asks for them, with what each one meets:
+What each of those commits settled, in one line each:
 
-- **2.2** the remaining payload reads in the core are `context/parts.py` (rendering),
-  `context/working.py` (chain lines), `expectations.py:269` (`reminded`/`reminder`), and
-  `identity.py:97`, plus the label reads in `jobs.py:187` and `dispatch.py`/`threads.py`
-  (`audience`, `hold_for`, `delivers`, `words_hidden`, `place_kind`). The label half cannot be
-  done inside Part 2's May-touch: the middleware must return `Replace`/`Stop(held=True)` first
-  (3.2, 3.3, 3.5). Do the rendering half (parts/working/expectations/identity/recall) first; it
-  needs `_emit(..., description=...)` at every core site that carries words today.
-- **2.4** reads `text_like` in `expectations.matches_cue`, `is_met` and `validate`, and the tests
-  that assert it are **not all in Part 2's scope**: `tests/core/test_expectations.py`,
-  `test_gate.py`, `test_reasoning.py` are, but `tests/test_mvp.py:235` and
-  `tests/test_replay_scenarios.py:221-274` are not. Either widen 2.4's May-touch to those two
-  files by a line in this task file, or land 2.4 together with 6.1.
-- **2.5** changes the type the context hook receives; the middleware's context rules
-  (`privacy.py` 44 tests) parse the rendered lines, so 2.5 and 3.3 are one change, not two.
-- **2.6-2.8**: 2.6 needs `registry.act` to answer with a receipt (3.4) and the eight sequence
-  tests in `tests/core/test_reasoning.py` rewritten to the universal `act.result`.
+- **2.2 (rendering half)** the desk reads the envelope and the ledger, never a payload;
+- **2.6** deterministic action ids, one `act.result` per `act.out`, a ledger in `state:
+  action:<id>`, a restart that re-hands an unclosed action with the same id, `sends.py` gone;
+- **2.4** a cue states facts only, a stored `text_like` becomes a free-text condition on read;
+- **2.7** one watchdog in `dispatch.carry`, a per-call failure, a loop that survives a broken
+  recovery, a broken backlog flush and one malformed expectation;
+- **2.8** the intent quotes only what the action hook let through; privacy returns `Replace`
+  instead of the deleted `words_hidden` label;
+- **2.9** `upcast_event` lives in `monoagens/infra/versioning.py`; `contract.lock` was regenerated
+  once, there.
 
-The audit items carried by Parts 2-5 (S.6, E.1-E.4, F.2-F.5, F.9-F.12, O.1-O.6) are untouched.
+Next, in the plan's order (see `local://task6-to-part6-plan.md`, step 7 onwards):
+
+- **2.5 + 3.1 + 3.2 + 3.3** are one change (the hinge): the context type becomes items, the
+  privacy checks collapse into one rule over them, and identity maps actors in the inbound hook.
+  It is the largest commit of the task: `core/context/{layout,parts,items}.py`,
+  `middleware/{privacy,identity,contract,loader,registry}.py`, and ~60 tests move with it.
+- Then **2.2 (label half) + 3.5**, **3.4**, **3.6**, **3.7**, **3.8**, Parts 4, 5 and 6.
+
+The audit items carried by Parts 3-5 (S.6, F.9-F.12, O.1-O.6) are untouched.
