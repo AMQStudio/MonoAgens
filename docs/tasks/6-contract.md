@@ -748,3 +748,10 @@ registration, and the platform line of `describe_role`; `reconcile_merges` now l
 place fact from a payload any more: an audience comes from `place.audience`. `whoami` prints the
 person id, label, linked actors (in a direct chat only) and roles with tier and approval mode.
 `identity._card` keeps reading `roles.contexts(who)` at call time.
+
+**3.7, in progress (O.2 landed).** `loader.edit_config` now reads the file, applies the line edit,
+checks the result with `yaml.safe_load` (a config nobody can read is never written), backs it up and
+replaces it atomically through `<path>.tmp` + `os.replace`. Still open in 3.7: O.1 (a `/reload`
+that reuses the running adapters and swaps state only after a whole successful load), the line-edit
+form of `/plugin update`'s `_update` (it still `yaml.safe_dump`s the file, which drops comments),
+O.4's recorded defaults for `_toggle`, and the plugin `requirements` boot check.

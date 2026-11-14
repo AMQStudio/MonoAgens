@@ -10,6 +10,7 @@ them only on the owner's command, narrowly and after a backup.
 from __future__ import annotations
 
 import importlib
+import os
 import importlib.util
 import json
 import pathlib
@@ -619,19 +620,27 @@ def _owned_skill(entry: SkillEntry, owner: str) -> SkillEntry:
 
 
 def edit_config(path: pathlib.Path, edit: Callable[[str], str], *, now: datetime) -> bool:
-    """Back up <path> to <path>.bak-<UTC stamp>, apply a text edit, keep every other byte.
+    """Back up <path>, apply a line edit, parse the result, then replace the file atomically.
 
-    Returns whether the file changed. The backup carries the clock's time, never the wall
-    clock, so a replay writes the same names.
+    A text edit that no longer parses aborts and answers False, so a running deployment never
+    holds half a config: the file is read, edited, checked with `yaml.safe_load`, written to
+    `<path>.tmp` and moved into place. The backup carries the clock's time, never the wall clock,
+    so a replay writes the same names.
     """
     path = pathlib.Path(path)
     text = path.read_text(encoding="utf-8")
     changed = edit(text)
     if changed == text:
         return False
+    try:
+        yaml.safe_load(changed)
+    except yaml.YAMLError:
+        return False  # refuse to write a config nobody can read
     stamp = now.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     shutil.copy2(path, path.with_name(f"{path.name}.bak-{stamp}"))
-    path.write_text(changed, encoding="utf-8")
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(changed, encoding="utf-8")
+    os.replace(temporary, path)
     return True
 
 
