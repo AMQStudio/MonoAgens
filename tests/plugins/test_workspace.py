@@ -305,7 +305,6 @@ def test_the_sandbox_quota_parses_and_compares():
 
 async def test_workspace_registers_progress_md_standing_rule_in_self_block(aconn, tmp_path):
     from monoagens.core.context import layout
-    from monoagens.core.context.parts import VOLATILE
     from monoagens.middleware.registry import self_block
 
     kernel, _ = await _kernel(aconn, tmp_path)
@@ -319,7 +318,7 @@ async def test_workspace_registers_progress_md_standing_rule_in_self_block(aconn
                                          settings=kernel.settings, memories=(),
                                          capabilities=kernel.tools.descriptors())
     outcome = await self_block(kernel)(context, {"conn": aconn, "event": trigger, "now": START})
-    self_text = "\n".join(part.text for part in outcome.item.blocks if part.layer == VOLATILE)
+    self_text = outcome.item.self_text
 
     assert "progress.md" in self_text
     assert "update it after each step" in self_text

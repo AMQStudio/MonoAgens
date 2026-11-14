@@ -27,7 +27,7 @@ from monoagens.types import Action, Event
 from monoagens.core.context.working import doing_lines
 from monoagens.boot import build
 from monoagens.middleware import privacy
-from tests.support import settings
+from tests.support import settings, context
 
 SETTINGS = settings()
 PLACE = "space:tg:1"
@@ -752,7 +752,7 @@ def _doing(steps: int) -> tuple[str, ...]:
 
 
 def _desk(**changes) -> PFCContext:
-    return PFCContext(now=START, place="space:task:1", reason="work",
+    return context(now=START, place="space:task:1", reason="work",
                       **changes)
 
 

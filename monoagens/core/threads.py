@@ -59,24 +59,22 @@ async def closed_reason(conn, event) -> str | None:
 
 async def _goal_for(conn, event) -> str:
     """Return the chain's triggering description or text when opening on a follow-up act."""
-    text = str(event.payload.get("description") or event.payload.get("text") or "")
-    if text or event.caused_by is None:
-        return text
+    if event.description or event.caused_by is None:
+        return event.description
     cur = await conn.execute(
         "WITH RECURSIVE chain AS ("
-        "SELECT id, caused_by, payload FROM events WHERE id = %s "
-        "UNION ALL SELECT e.id, e.caused_by, e.payload FROM events e JOIN chain c "
-        "ON e.id = c.caused_by) SELECT payload FROM chain ORDER BY id",
+        "SELECT id, caused_by, description FROM events WHERE id = %s "
+        "UNION ALL SELECT e.id, e.caused_by, e.description FROM events e JOIN chain c "
+        "ON e.id = c.caused_by) SELECT description FROM chain ORDER BY id",
         (int(event.caused_by),),
     )
-    for (payload,) in await cur.fetchall():
-        found = str((payload or {}).get("description") or (payload or {}).get("text") or "")
+    for (found,) in await cur.fetchall():
         if found:
-            return found
+            return str(found)
     return ""
 
 
-async def open_for(kernel, event, audience) -> dict[str, Any] | None:
+async def open_for(kernel, event) -> dict[str, Any] | None:
     """Open a task place for one chain when it does not already have one."""
     conn, place = kernel.conn, event.place
     if place and await read_state(conn, KEY + str(place)):
@@ -89,10 +87,9 @@ async def open_for(kernel, event, audience) -> dict[str, Any] | None:
     if len(tasks) >= int(constants(kernel.settings).get("max_open_tasks", 3)):
         return None
     task_place = f"space:task:{event.id}"
-    opened = await kernel._emit(event, "task.opened",
-                               {"parent": place, "audience": sorted(audience)}, place=task_place)
+    opened = await kernel._emit(event, "task.opened", {"parent": place}, place=task_place)
     goal = await _goal_for(conn, event)
-    task = {"place": task_place, "parent": place, "audience": sorted(audience),
+    task = {"place": task_place, "parent": place,
             "status": OPEN, "steps": 0, "waiting_for": None, "opened_event": opened.id,
             "goal": goal, "since": event.id}
     await write_state(conn, KEY + task_place, task, opened.id)
@@ -113,27 +110,54 @@ async def place_for(conn, event, place: str | None) -> str | None:
     return None
 
 
-async def after_step(kernel, job, event,
-                      acts: Sequence[tuple[dict[str, Any], Mapping[str, Any]]]) -> None:
+async def after_step(kernel, job, event, acts: Sequence[tuple[dict[str, Any], Any]]) -> None:
     """Count one step, keep a thread open while it asks, and close it when done.
 
-    `acts` is one `(call, labels)` per dispatched act; the labels say whether this act
-    left the thread waiting for someone, or delivered into the place it waited for.
+    `acts` is one `(call, dispatch)` per act. An act answered to a person (`to:` a person id)
+    leaves the thread waiting for that person; a later act that lands in a place while it
+    waits delivers and closes the thread (DEC-8). The arguments and the receipt states are
+    the facts; no label is read.
     """
     conn, place = kernel.conn, str(job.place)
     task = await read_state(conn, KEY + place)
     if not task or task.get("status") != OPEN:
         return
     steps = int(task.get("steps") or 0) + len(acts)
-    held = next((labels.get("hold_for") for _, labels in acts if labels.get("hold_for")), None)
+    held = next((found for raw, outcome in acts
+                 if (found := _person_target(raw, outcome))), None)
     if held:
         return await _save(kernel, task, event, steps=steps, waiting_for=held)
     asking = bool(task.get("waiting_for"))
-    if asking and any(labels.get("delivers") for _, labels in acts):
+    if asking and any(_delivers(raw, outcome) for raw, outcome in acts):
         return await close(kernel, task, event, "done")
     if steps >= int(constants(kernel.settings).get("max_task_steps", 30)):
         return await close(kernel, task, event, "max_task_steps")
     await _save(kernel, task, event, steps=steps)
+
+
+def _state(outcome: Any) -> str:
+    """Return the state of one act's receipt, or "" when the act made none."""
+    receipt = getattr(outcome, "receipt", None)
+    return str(getattr(receipt, "state", "") or "")
+
+
+def _target(raw: Any) -> str:
+    """Return the `to:` one `act` call names, or "" when it names none."""
+    outer = raw.get("arguments") or {}
+    return str((outer.get("arguments") or {}).get("to") or "")
+
+
+def _person_target(raw: Any, outcome: Any) -> str:
+    """Return the person an act left the thread waiting for, or "" when it left it waiting for none."""
+    target = _target(raw)
+    return target if target.startswith("person:") and _state(outcome) in ("done", "held") else ""
+
+
+def _delivers(raw: Any, outcome: Any) -> bool:
+    """Return whether one act went out to a place while the thread waited for a person."""
+    target = _target(raw)
+    return bool(target) and not target.startswith("person:") \
+        and _state(outcome) not in ("refused", "failed")
 
 
 async def close(kernel, task: dict[str, Any], event, reason: str) -> None:

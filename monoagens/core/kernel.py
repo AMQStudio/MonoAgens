@@ -474,7 +474,7 @@ class Kernel:
         so no place ever waits on a result that cannot arrive.
         """
         fast, slow = 0, 0
-        for raw, _labels in acts:
+        for raw, _outcome in acts:
             capability = str((raw.get("arguments") or {}).get("capability") or "")
             declared = self.tools.get(capability)
             if declared is None:

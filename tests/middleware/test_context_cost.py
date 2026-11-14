@@ -1,6 +1,6 @@
 """The context hook stays inside its watchdog on a long desk (1.0c).
 
-`privacy.filter_context` is the expensive part of the context hook: it checks one line
+`privacy.items_rule` is the expensive part of the context hook: it checks one line
 and one memory at a time against the audience of the place. This test builds a desk as
 large as the biggest replay scenario (500 events, 200 memories, 50 places) and measures
 the rule; the number is recorded under the task's Notes.
@@ -41,7 +41,7 @@ async def _world(conn) -> None:
         "FROM generate_series(0, %s) AS i", (START, MEMORIES - 1))
 
 
-async def test_filter_context_fits_the_hook_watchdog(aconn):
+async def test_the_items_check_fits_the_hook_watchdog(aconn):
     await _world(aconn)
     trigger = await append_event(aconn, ts=START, kind="percept", who="person:tg:1",
                                  place=DESK, body="telegram",
@@ -53,12 +53,12 @@ async def test_filter_context_fits_the_hook_watchdog(aconn):
     assert len(context.recent) + len(context.recent_elsewhere) >= 10
 
     started = time.perf_counter()
-    outcome = await privacy.filter_context(aconn)(context, {"conn": aconn, "now": START})
+    outcome = await privacy.items_rule()(context, {"conn": aconn, "now": START})
     elapsed = time.perf_counter() - started
 
     filtered = outcome.item if isinstance(outcome, Replace) else context
     assert filtered.place == DESK
     assert filtered.withheld  # the owner-only memories came from a private chat
-    print(f"\nfilter_context on {EVENTS} events, {MEMORIES} memories, {PLACES} places: "
+    print(f"\nthe items check on {EVENTS} events, {MEMORIES} memories, {PLACES} places: "
           f"{elapsed * 1000:.1f} ms")
     assert elapsed < 0.5 * HOOK_TIMEOUT_SECONDS

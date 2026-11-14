@@ -16,7 +16,7 @@ The action hook carries one act in a context dict. The keys the core sets are fi
 | `place` | middleware | the place resolved for this act; `None` means the current place |
 | `refusal` | middleware | a reason: the core records it as this act's `act.result` error |
 | `handled` | middleware | the middleware performed the act itself; the core records nothing |
-| `labels` | middleware | neutral values the core stores and passes on, unread |
+| `held` | middleware | the act waits for someone or something instead of being refused |
 """
 
 from __future__ import annotations
@@ -168,8 +168,7 @@ def best_effort(rule: Middleware, *, kernel: Any = None, name: str = "",
             event = ctx.get("event") if isinstance(ctx, Mapping) else None
             if event is None:
                 event = item
-            labels = ctx.get("labels") if isinstance(ctx, Mapping) else None
-            adapter = str((labels or {}).get("body") or getattr(event, "body", "") or "-")
+            adapter = str(getattr(event, "body", "") or "-")
             detail = (ctx.get("show_kind") if isinstance(ctx, Mapping) else None) or show_kind
             parts = [f"rule={rule_name}", f"adapter={adapter}"]
             if detail:

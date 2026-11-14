@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from monoagens.core.context.parts import VOLATILE, Part
+from monoagens.contract import ContextItem
 from monoagens.core.hooks import Continue, Replace
 from monoagens.infra.store import append_event
 
@@ -40,8 +40,8 @@ def block(api: Any):
         """Add one volatile block: the mode first, then its rule, then the examples."""
         mode = await current_mode(ctx.get("conn"), api)
         examples = modes.from_options(getattr(api, "options", {}) or {})
-        blocks = (*item.blocks, Part(BLOCK, VOLATILE, BLOCK_ORDER, text=render(mode, examples)))
-        return Replace(replace(item, blocks=blocks))
+        note = ContextItem(section="notes", kind=BLOCK, text=render(mode, examples))
+        return Replace(replace(item, items=(*item.items, note)))
 
     return rule
 

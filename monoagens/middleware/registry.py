@@ -17,7 +17,6 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
-from monoagens.core.context.parts import VOLATILE, Part
 from monoagens.core.hooks import Continue, Middleware, Replace
 from monoagens.infra.store import payload_text
 from monoagens.middleware.contract import OUTPUT_MARKER, open_attachment
@@ -29,8 +28,6 @@ DESCRIBE = "registry.describe"
 MORE = "registry.more"
 DEFAULT_OUTPUT_CAP = 8000
 MORE_OUTPUT_CAP = 16000
-SKILL_WORD = 4
-RULE_BLOCK_ORDER = 5  # before the core's `now` block (order 10)
 
 DESCRIBE_CAPABILITY = {
     "name": "describe",
@@ -538,19 +535,18 @@ async def _answer(kernel: Any, event: Event, text: str) -> None:
 
 
 def self_block(kernel: Any) -> Middleware:
-    """Context rule: offer this turn only what its requester may use, behind `<self>`."""
+    """Context rule: offer this turn only what its requester may use, and say what is installed."""
 
     async def rule(item: Any, ctx: Any) -> Any:
-        """Filter the offered capabilities and add the `<self>` block."""
+        """Narrow the offered capabilities and set the `<self>` block."""
         trigger = item.trigger
         who = ((trigger.origin_actor or trigger.who) if trigger is not None else None)
         roles = _roles(kernel)
         allowed = kernel.tools.allowed(who, roles)
-        text = _self_text(kernel.tools, item, who, roles)
-        blocks = (*item.blocks, Part("self", VOLATILE, RULE_BLOCK_ORDER, text=text))
+        text = self_text(kernel.tools, who, roles)
         capabilities = tuple(capability for full, capability in item_capabilities(item)
                              if full in allowed)
-        return Replace(replace(item, blocks=blocks, capabilities=capabilities))
+        return Replace(replace(item, self_text=text, capabilities=capabilities))
 
     return rule
 
@@ -561,14 +557,14 @@ def item_capabilities(item: Any) -> tuple[tuple[str, dict[str, Any]], ...]:
                  for capability in item.capabilities)
 
 
-def _self_text(registry: ToolRegistry, item: Any, who: Any, roles: Any) -> str:
-    """Render the `<self>` block: the commands, the relevant skills and the rules."""
+def self_text(registry: ToolRegistry, who: Any, roles: Any) -> str:
+    """Render `<self>`: the commands, every installed skill and the standing rules (D-I)."""
     lines = ["<self>"]
     commands_line = ", ".join(f"/{entry.name}" for entry in registry.commands(who, roles))
     if commands_line:
         lines.append(f"Commands: {commands_line}")
     skills_line = ", ".join(f"{entry.name} — {entry.description}"
-                            for entry in relevant_skills(registry, item))
+                            for entry in registry.skills())
     if skills_line:
         lines.append(f"Skills: {skills_line}")
     if registry.rules:
@@ -578,21 +574,6 @@ def _self_text(registry: ToolRegistry, item: Any, who: Any, roles: Any) -> str:
     return "\n".join(lines)
 
 
-def relevant_skills(registry: ToolRegistry, item: Any) -> tuple[SkillEntry, ...]:
-    """Return the skills whose name or description words appear in this wake (deterministic)."""
-    haystack = " ".join([payload_text((item.trigger.payload if item.trigger else {}) or {}),
-                         *(str(line) for line in (item.recent or ())[-10:]),
-                         *(str(line) for line in (item.recent_elsewhere or ())[-10:])])
-    words = {word for word in _words(haystack) if len(word) >= SKILL_WORD}
-    return tuple(entry for entry in registry.skills()
-                 if words & {word for word in _words(entry.name + " " + entry.description)
-                             if len(word) >= SKILL_WORD})
-
-
-def _words(text: str) -> set[str]:
-    """Return the lowercase words of a text."""
-    return {word.strip(".,;:!?()[]\"'").lower() for word in str(text).split()}
-
-
 __all__ = ["CommandEntry", "SkillEntry", "ToolEntry", "ToolRegistry", "commands",
-           "help_text", "install_commands", "install_own", "may_use", "self_block"]
+           "help_text", "install_commands", "install_own", "may_use", "self_block",
+           "self_text"]

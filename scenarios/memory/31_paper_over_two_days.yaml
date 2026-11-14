@@ -558,7 +558,7 @@ model_answers:
     arguments:
       capability: self.share
       arguments:
-        item: papers/paper_v1.md benchmark 412 req/s
+        items: ["@percept"]
         to: person:budi
   - name: act
     arguments:

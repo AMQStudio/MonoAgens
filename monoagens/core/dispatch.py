@@ -9,7 +9,7 @@ reads only opaque ids, times and the outcome the hook returned.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 from monoagens import contract
@@ -29,10 +29,10 @@ class JobRef:
 
 @dataclass(frozen=True, slots=True)
 class Dispatch:
-    """What one `act` did: whether it acted, the labels it carried and its receipt."""
+    """What one `act` did: whether it acted, where it landed, and its receipt."""
 
     acted: bool
-    labels: dict[str, Any] = field(default_factory=dict)
+    place: str = ""
     receipt: contract.Receipt | None = None
 
 
@@ -93,13 +93,13 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any], *,
     ctx = {"conn": kernel.conn, "event": event, "now": kernel.clock.now(),
            "capability": capability, "descriptor": cap, "origin_actor": event.origin_actor,
            "arguments": dict(raw), "to": raw.get("to"), "via": raw.get("via"),
-           "place": None, "refusal": None, "handled": False, "labels": {},
+           "place": None, "refusal": None, "handled": False, "held": False,
            "long_running": bool(cap.get("long_running")),
            "identity_changing": bool(cap.get("identity_changing"))}
     payload = await kernel._run_hooks("action", passed, ctx, event,
                                       tool=capability.partition(".")[0])
     if ctx.get("refusal"):
-        receipt = contract.Receipt("held" if ctx["labels"].get("hold") else "refused",
+        receipt = contract.Receipt("held" if ctx.get("held") else "refused",
                                    reason=str(ctx["refusal"]))
         act = await record(kernel, event, job, round_index, n, capability,
                            event.place or "", dict(payload if payload else passed), cap,
@@ -107,7 +107,7 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any], *,
         await kernel._settle_action(event, act, receipt)
         return Dispatch(acted=True, receipt=receipt)
     if payload is None or ctx.get("handled"):
-        return Dispatch(acted=True, labels=ctx["labels"])
+        return Dispatch(acted=True, place=ctx.get("place") or "")
     place, to = ctx.get("place") or event.place, ctx.get("to")
     if cap.get("communicative") and said is not None and place in said:
         receipt = contract.Receipt(
@@ -115,26 +115,26 @@ async def dispatch(kernel: Any, event: Event, args: dict[str, Any], *,
         act = await record(kernel, event, job, round_index, n, capability, place, passed,
                            cap, to=to)
         await kernel._settle_action(event, act, receipt)
-        return Dispatch(acted=True, receipt=receipt)
+        return Dispatch(acted=True, place=place, receipt=receipt)
     if place != event.place:
         await _intend(kernel, event, capability, dict(payload), asked, to, place)
         if said is not None:
             said.add(place)
-        return Dispatch(acted=True, labels=ctx["labels"])
+        return Dispatch(acted=True, place=place)
     act = await record(kernel, event, job, round_index, n, capability, place,
                        dict(payload), cap, to=to)
     if cap.get("communicative") and said is not None:
         said.add(place)
     await kernel._encode(act.out, str(passed.get("text") or "") or None)
     if cap.get("long_running"):
-        await threads.open_for(kernel, event, ctx["labels"].get("audience") or ())
+        await threads.open_for(kernel, event)
     receipt = await carry(kernel, act)
     await kernel._settle_action(event, act, receipt)
     if (cap.get("identity_changing") and receipt.state == "done"
             and isinstance(receipt.result, dict)
             and isinstance(receipt.result.get("identity"), dict)):
         await _project_identity(kernel, event, act, receipt.result["identity"])
-    return Dispatch(acted=True, labels=ctx["labels"], receipt=receipt)
+    return Dispatch(acted=True, place=ctx.get("place") or "", receipt=receipt)
 
 
 async def record(kernel: Any, event: Event, job: JobRef | None, round_index: int, n: int,

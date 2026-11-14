@@ -129,15 +129,8 @@ async def apply_merge(conn: Any, src: str, dst: str, event_id: int) -> str:
         task = dict(val or {})
         if task.get("status") != "open":
             continue
-        changed = False
         if task.get("waiting_for") == source:
             task["waiting_for"] = target
-            changed = True
-        audience = list(task.get("audience") or ())
-        if source in audience:
-            task["audience"] = sorted({target if item == source else item for item in audience})
-            changed = True
-        if changed:
             await write_state(conn, str(key), task, event_id)
 
     await conn.execute("UPDATE memories SET who = %s WHERE who = %s", (target, source))

@@ -1,42 +1,64 @@
-"""The context parts: every prompt block declared once, with its layer and its order.
+"""The three messages, rendered from the context's items after the last hook has run.
 
-A part is either `stable` (the cached prefix: who the soul is and how it works), `semi`
-(the rarely changing block: core memory and the person cards) or `volatile` (what is true
-now). The middleware and plugins add volatile blocks through the context hook; nothing
-else may touch the prefix.
+The stable prefix is who the soul is and how it works; the semi-stable one is core memory, the
+person cards and what is installed; the volatile one is what is true now. No hook ever sees this
+text: it renders whatever items survived the context hook (contract.md §3).
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
-from monoagens.core.context.layout import PFCContext, withheld_note
+from monoagens.contract import ContextItem
+from monoagens.core.context.layout import PFCContext
 from monoagens.core.principles import work_guidance
 from monoagens.infra.prior import constants
-from monoagens.core.kinds import RECENT_KINDS
-from monoagens.types import Event
 
-STABLE, SEMI, VOLATILE = "stable", "semi", "volatile"
-_SEPARATORS = {STABLE: "\n\n", SEMI: "\n", VOLATILE: "\n"}
+# The order the volatile sections render in, after the clock, the place and the reason.
+VOLATILE_SECTIONS = ("doing", "expectations", "memories", "notes", "recent", "trigger")
+
+_WRAPPERS = {
+    "doing": ("<doing>\n", "\n</doing>"),
+    "expectations": ("<expectations>", "</expectations>"),
+    "memories": ("<memories>\n", "\n</memories>"),
+    "notes": ("<notes>\n", "\n</notes>"),
+    "core_memory": ("<core_memory>", "</core_memory>"),
+    "trigger": ("<event>", "</event>"),
+}
+
+NOTHING_YET = "(nothing yet)"
+
+RECENT_WRAPPER = ("<recent>\n", "\n</recent>")
+
+EMPTY = "none"
 
 
-@dataclass(frozen=True, slots=True)
-class Part:
-    """One block of the prompt: its layer, its order, and how it produces its text."""
+def messages(soul: Any, context: PFCContext) -> list[dict[str, Any]]:
+    """Build the three messages from the context: stable, semi-stable, volatile."""
+    return [
+        {"role": "system", "content": "\n\n".join(_stable(soul, context))},
+        {"role": "system", "content": "\n".join(_semi(soul, context))},
+        {"role": "user", "content": _volatile(soul, context)},
+    ]
 
-    name: str
-    layer: str
-    order: int
-    produce: Callable[[Any, PFCContext], str] | None = None
-    text: str = ""
 
-    @property
-    def stable(self) -> bool:
-        """Return whether this part belongs to the cached prefix."""
-        return self.layer == STABLE
+def _stable(soul: Any, context: PFCContext) -> list[str]:
+    """Return the cached prefix: who the soul is and how it works."""
+    return [text for text in (_identity(soul, context), work_guidance()) if text]
+
+
+def _semi(soul: Any, context: PFCContext) -> list[str]:
+    """Return the rarely changing block: core memory, the person cards and what is installed."""
+    sections = _grouped(context.items)
+    parts = [_wrap("core_memory", [item.text for item in sections.get("core_memory") or ()])
+             if sections.get("core_memory") else ""]
+    cards = [item.text for item in sections.get("cards") or ()]
+    if cards:
+        parts.append("\n<people>\n" + "\n".join(cards) + "\n</people>")
+    parts.append(context.self_text)
+    return [text for text in parts if text]
 
 
 def _identity(soul: Any, context: PFCContext) -> str:
@@ -49,230 +71,114 @@ def _identity(soul: Any, context: PFCContext) -> str:
     return "\n\n".join(part for part in parts if part)
 
 
-def _principles(soul: Any, context: PFCContext) -> str:
-    """Return the general instructions a soul gets with every prompt."""
-    return work_guidance()
+def _volatile(soul: Any, context: PFCContext) -> str:
+    """Return the volatile message: what is true now, trimmed to its token budgets."""
+    sections = _fit_sections(soul, _grouped(context.items))
+    texts = [
+        f"<now>{_clock(soul, context)}</now>",
+        f"<place>{context.place}</place>",
+        f"<why_awake>{context.reason}</why_awake>",
+    ]
+    if context.results:
+        texts.append(f"<results>\n{_listed(context.results)}\n</results>")
+    texts.extend(_render_sections(sections))
+    return "\n".join(text for text in texts if text)
 
 
-def _core_memory(soul: Any, context: PFCContext) -> str:
-    """Return the always-visible core memory."""
-    return f"<core_memory>{context.core_memory}</core_memory>"
-
-
-def _people(soul: Any, context: PFCContext) -> str:
-    """Return the person cards the middleware attached, if there are any (D55)."""
-    if not context.people:
-        return ""
-    return "\n<people>\n" + "\n".join(context.people) + "\n</people>"
-
-
-def _now(soul: Any, context: PFCContext) -> str:
+def _clock(soul: Any, context: PFCContext) -> str:
     """Return the local time, the zone and the time since the last interaction."""
     local = context.now.astimezone(soul.timezone)
-    return (f"<now>{local:%Y-%m-%d %H:%M}, {local:%A}, {soul.timezone.key}, "
+    return (f"{local:%Y-%m-%d %H:%M}, {local:%A}, {soul.timezone.key}, "
             "time since last interaction: "
-            f"{_duration(context.now, context.last_interaction)}</now>")
+            f"{_duration(context.now, context.last_interaction)}")
 
 
-def _place(soul: Any, context: PFCContext) -> str:
-    """Return the place this wake belongs to."""
-    return f"<place>{context.place}</place>"
+def _render_sections(sections: dict[str, list[ContextItem]]) -> list[str]:
+    """Return every volatile section's text, in the fixed order."""
+    texts: list[str] = []
+    for name in VOLATILE_SECTIONS:
+        held = [item.text for item in sections.get(name) or ()]
+        if name == "recent":
+            texts.append(_render_recent(sections))
+        elif name == "notes":
+            texts.append(_notes(held))
+        else:
+            texts.append(_wrap(name, held))
+    return [text for text in texts if text]
 
 
-def _why_awake(soul: Any, context: PFCContext) -> str:
-    """Return why this wake happened."""
-    return f"<why_awake>{context.reason}</why_awake>"
+def _notes(lines: Sequence[str]) -> str:
+    """Return the notes section, which exists only when a rule added one."""
+    start, end = _WRAPPERS["notes"]
+    kept = [line for line in lines if line]
+    return f"{start}{chr(10).join(kept)}{end}" if kept else ""
 
 
-def _results(soul: Any, context: PFCContext) -> str:
-    """Return the previous rounds' results, shown only when the model already thought."""
-    if not context.results:
-        return ""
-    return f"<results>\n{_listed(context.results)}\n</results>"
+def _render_recent(sections: dict[str, list[ContextItem]]) -> str:
+    """Return this place's recent lines together with the ones from elsewhere."""
+    lines = [item.text for name in ("recent", "elsewhere")
+             for item in sections.get(name) or ()]
+    start, end = RECENT_WRAPPER
+    return f"{start}{chr(10).join(lines) if lines else NOTHING_YET}{end}"
 
 
-def _doing(soul: Any, context: PFCContext) -> str:
-    """Return every chain in progress (D52)."""
-    return f"<doing>\n{_listed(context.doing)}\n</doing>"
+def _wrap(name: str, texts: Sequence[str]) -> str:
+    """Wrap one section's lines, or return "" when the section has no lines."""
+    if name not in _WRAPPERS:
+        lines = [text for text in texts if text]
+        return "\n".join(lines)
+    start, end = _WRAPPERS[name]
+    return f"{start}{_listed(texts)}{end}"
 
 
-def _expectations(soul: Any, context: PFCContext) -> str:
-    """Return the active expectations of this place."""
-    return f"<expectations>{_listed(context.expectations)}</expectations>"
+def _grouped(items: Sequence[ContextItem]) -> dict[str, list[ContextItem]]:
+    """Group the context's items by their section, keeping their order."""
+    grouped: dict[str, list[ContextItem]] = {}
+    for item in items:
+        grouped.setdefault(item.section, []).append(item)
+    return grouped
 
 
-def _memories(soul: Any, context: PFCContext) -> str:
-    """Return the memories retrieved for this wake."""
-    return f"<memories>\n{_listed(context.memories)}\n</memories>"
-
-
-def _withheld(soul: Any, context: PFCContext) -> str:
-    """Return the withheld note as one section, if anything was withheld."""
-    note = withheld_note(context)
-    return f"<withheld>{note}</withheld>" if note else ""
-
-
-def _recent(soul: Any, context: PFCContext) -> str:
-    """Return the recent lines of this place and of the others."""
-    return f"<recent>\n{chr(10).join(_recent_lines(soul, context))}\n</recent>"
-
-
-def _event(soul: Any, context: PFCContext) -> str:
-    """Return the trigger event as the line that woke the soul."""
-    return f"<event>{_event_text(context.trigger)}</event>"
-
-
-CORE_PARTS: tuple[Part, ...] = (
-    Part("identity", STABLE, 10, _identity),
-    Part("principles", STABLE, 20, _principles),
-    Part("core_memory", SEMI, 10, _core_memory),
-    Part("people", SEMI, 20, _people),
-    Part("now", VOLATILE, 10, _now),
-    Part("place", VOLATILE, 20, _place),
-    Part("why_awake", VOLATILE, 30, _why_awake),
-    Part("results", VOLATILE, 40, _results),
-    Part("doing", VOLATILE, 50, _doing),
-    Part("expectations", VOLATILE, 60, _expectations),
-    Part("memories", VOLATILE, 70, _memories),
-    Part("withheld", VOLATILE, 80, _withheld),
-    Part("recent", VOLATILE, 90, _recent),
-    Part("event", VOLATILE, 100, _event),
-)
-
-
-def messages(soul: Any, context: PFCContext) -> list[dict[str, Any]]:
-    """Build the three messages from the parts: stable, semi-stable, volatile."""
-    blocks = _extension_blocks(context.blocks)
-    return [
-        {"role": "system", "content": _SEPARATORS[STABLE].join(_texts(soul, context, STABLE))},
-        {"role": "system", "content": _SEPARATORS[SEMI].join(_texts(soul, context, SEMI))},
-        {"role": "user", "content": _volatile(soul, context, blocks)},
-    ]
-
-
-def _extension_blocks(blocks: Sequence[Part]) -> tuple[Part, ...]:
-    """Return the middleware's blocks; a prefix block or a taken name is refused."""
-    names = {part.name for part in CORE_PARTS}
-    found = []
-    for block in blocks:
-        if block.layer != VOLATILE:
-            raise ValueError(f"an extension block must be volatile: {block.name!r}")
-        if block.name in names:
-            raise ValueError(f"duplicate block name: {block.name!r}")
-        names.add(block.name)
-        found.append(block)
-    return tuple(sorted(found, key=lambda part: part.order))
-
-
-def _texts(soul: Any, context: PFCContext, layer: str,
-           blocks: Sequence[Part] = ()) -> list[str]:
-    """Return the non-empty texts of one layer's parts, in order."""
-    parts = [part for part in CORE_PARTS if part.layer == layer]
-    if layer == VOLATILE:
-        parts += list(blocks)
-    return [text for text in (_render(part, soul, context) for part in parts) if text]
-
-
-def _render(part: Part, soul: Any, context: PFCContext) -> str:
-    """Return one part's text: its producer's, or its own literal text."""
-    return part.produce(soul, context) if part.produce is not None else part.text
-
-
-def _volatile(soul: Any, context: PFCContext, blocks: Sequence[Part]) -> str:
-    """Return the volatile message: every volatile part, trimmed to its token budgets."""
+def _fit_sections(soul: Any, sections: dict[str, list[ContextItem]],
+                  ) -> dict[str, list[ContextItem]]:
+    """Trim every section to its own token budget and the volatile message to its own."""
     values = constants(soul.settings)
-    view = replace(
-        context,
-        doing=tuple(_fit(list(context.doing), int(values["thread_result_tokens"]),
-                         keep_first=True)),
-        memories=tuple(_fit([str(item) for item in context.memories],
-                            int(values["memory_tokens"]))))
-    view = _trim_recent(soul, view, int(values["recent_tokens"]))
+    sections = dict(sections)
+    sections["doing"] = _fit(sections.get("doing") or [],
+                             int(values["thread_result_tokens"]), keep_first=True)
+    sections["memories"] = _fit(sections.get("memories") or [], int(values["memory_tokens"]))
+    sections = _fit_recent(sections, int(values["recent_tokens"]))
     limit = int(values["volatile_tokens_max"])
-    texts = _texts(soul, view, VOLATILE, blocks)
-    for name in ("recent", "memories"):
-        while _tokens("\n".join(texts)) > limit and _count(view, name) > 1:
-            view = _drop_oldest(view, name)
-            texts = _texts(soul, view, VOLATILE, blocks)
-    return "\n".join(texts)
+    while _tokens("\n".join(_render_sections(sections))) > limit:
+        if not _drop_oldest(sections, "recent"):
+            break
+    return sections
 
 
-def _count(view: PFCContext, name: str) -> int:
-    """Return how many items one trimmed section holds."""
-    if name == "recent":
-        return len(view.recent) + len(view.recent_elsewhere)
-    return len(view.memories)
-
-
-def _drop_oldest(view: PFCContext, name: str) -> PFCContext:
-    """Return the view with the oldest item of one section dropped."""
-    if name == "memories":
-        return replace(view, memories=tuple(view.memories[1:]))
-    if view.recent:
-        return replace(view, recent=tuple(view.recent[1:]))
-    return replace(view, recent_elsewhere=tuple(view.recent_elsewhere[1:]))
-
-
-def _trim_recent(soul: Any, view: PFCContext, limit: int) -> PFCContext:
+def _fit_recent(sections: dict[str, list[ContextItem]], limit: int,
+                ) -> dict[str, list[ContextItem]]:
     """Drop the oldest recent lines until the section fits its own budget."""
-    while _count(view, "recent") > 1 and \
-            sum(map(_tokens, _recent_lines(soul, view))) > limit:
-        view = _drop_oldest(view, "recent")
-    return view
+    sections = dict(sections)
+    while (len(sections.get("recent") or ()) + len(sections.get("elsewhere") or ())) > 1 and \
+            sum(map(_tokens, (item.text for item in
+                              (sections.get("recent") or []) + (sections.get("elsewhere") or [])))) > limit:
+        _drop_oldest(sections, "recent")
+    return sections
 
 
-def _recent_lines(soul: Any, context: PFCContext) -> list[str]:
-    lines = [_recent_line(soul, event) for event in context.recent]
-    lines += [_recent_line(soul, event, f"[{event.place}] ")
-              for event in context.recent_elsewhere]
-    return [line for line in lines if line] or ["(nothing yet)"]
+def _drop_oldest(sections: dict[str, list[ContextItem]], name: str) -> bool:
+    """Drop the oldest item of one section, then the other place's, deepest section first."""
+    order = ("recent", "elsewhere") if name == "recent" else (name, "memories")
+    for key in order:
+        held = sections.get(key) or []
+        if len(held) > 1 or (key != name and held):
+            sections[key] = held[1:]
+            return True
+    return False
 
 
-def _recent_line(soul: Any, event: Event, prefix: str = "") -> str:
-    if event.kind not in SHOWN_KINDS:
-        return ""
-    speaker, text = _recent_parts(soul, event)
-    return (f"{prefix}{event.ts.astimezone(soul.timezone):%H:%M} "
-            f"{speaker}: {text}") if text else ""
-
-
-SHOWN_KINDS = (*RECENT_KINDS, "intent")  # an intent stays pending on that place's desk
-
-
-def _recent_parts(soul: Any, event: Event) -> tuple[str, Any]:
-    """Return one recent line's speaker and words from the envelope alone."""
-    if event.kind == "act.out":
-        return soul.name, event.description
-    if event.kind == "expectation.fired":
-        return "expectation", event.description
-    if event.kind == "intent":
-        return "intent", event.description
-    return str(event.who or "?"), event.description
-
-
-def _event_text(event: Event | None) -> str:
-    """Return the line that woke the soul, read from the envelope."""
-    if event is None:
-        return "(no trigger event)"
-    if event.kind == "expectation.reminded":
-        return _reminder_text(event)
-    text = event.description
-    who = str(event.who or "?")
-    return f"{who}: {text}" if text else f"[{event.kind}]"
-
-
-def _reminder_text(event: Event) -> str:
-    """Render a reminder as the line with its place and speaker, from the envelope.
-
-    The question it asks is `why_awake`'s: the wake records the expectation, its condition
-    and the question in the reason, so the line is not repeated here.
-    """
-    where = f"[{event.place}] " if event.place else ""
-    return f"{where}{event.who or '?'}: {event.description}" if event.description else ""
-
-
-def _listed(items: Sequence[str]) -> str:
-    return "\n".join(str(item) for item in items) if items else "none"
+def _listed(lines: Sequence[str]) -> str:
+    return "\n".join(str(line) for line in lines) if lines else EMPTY
 
 
 def _tokens(text: str) -> int:
@@ -280,15 +186,15 @@ def _tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def _fit(lines: list[str], limit: int, *, keep_first: bool = False) -> list[str]:
-    """Drop the oldest lines until the section fits its token budget."""
-    lines = list(lines)
-    while len(lines) > 1 and sum(map(_tokens, lines)) > limit:
-        if keep_first and len(lines) > 2:
-            lines.pop(1)
+def _fit(items: list[ContextItem], limit: int, *, keep_first: bool = False) -> list[ContextItem]:
+    """Drop the oldest items until the section fits its token budget."""
+    items = list(items)
+    while len(items) > 1 and sum(map(_tokens, (item.text for item in items))) > limit:
+        if keep_first and len(items) > 2:
+            items.pop(1)
         else:
-            lines.pop(0)
-    return lines
+            items.pop(0)
+    return items
 
 
 def _duration(now: datetime, then: datetime | None) -> str:

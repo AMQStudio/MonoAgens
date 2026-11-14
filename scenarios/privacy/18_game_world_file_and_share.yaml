@@ -245,7 +245,7 @@ model_answers:
       - name: act
         arguments:
           capability: self.share
-          arguments: {item: "hasil kerjaan kita versi final", to: "person:budi"}
+          arguments: {items: ["@act"], to: "person:budi"}
       - name: act
         arguments:
           capability: whatsapp.say
@@ -282,7 +282,7 @@ model_answers:
       - name: act
         arguments:
           capability: self.share
-          arguments: {item: "jawaban Budi", to: "space:game:world1"}
+          arguments: {items: ["@act"], to: "space:game:world1"}
       - name: act
         arguments:
           capability: game.say

@@ -1,4 +1,4 @@
-"""Tests for the context parts: the prefix hash, the byte-identical prompt, and extensions."""
+"""The context: the cached prefix, the three messages and the items behind them."""
 
 from __future__ import annotations
 
@@ -6,18 +6,15 @@ import hashlib
 from dataclasses import replace
 from datetime import datetime, timezone
 
-import pytest
-
 from monoagens.boot import build
+from monoagens.contract import ContextItem
 from monoagens.core.context import layout, parts
 from monoagens.core.context.layout import PFCContext
-from monoagens.core.context.parts import VOLATILE, Part
 from monoagens.core.hooks import Replace
 from monoagens.core.reasoning import Reasoning
 from monoagens.infra.clock import FakeClock
 from monoagens.infra.store import append_event
-from monoagens.types import Event
-from tests.support import settings
+from tests.support import context, settings
 
 START = datetime(2026, 11, 10, 8, 0, tzinfo=timezone.utc)
 SETTINGS = settings()
@@ -30,75 +27,89 @@ def _soul() -> Reasoning:
 
 
 def _plain() -> PFCContext:
-    return PFCContext(now=START, place=PLACE, reason="x",
-                      core_memory="m",
-                      people=("- Budi (person:budi): no direct place known yet; closeness 0.00",))
+    return context(now=START, place=PLACE, reason="x", core_memory="m")
 
 
 def _rich() -> PFCContext:
-    event = Event(id=7, ts=START, kind="percept", who="person:budi", place=PLACE,
-                  body="telegram", payload={"description": "halo, apa kabar?"}, description="halo, apa kabar?")
-    elsewhere = Event(id=8, ts=START, kind="act.out", who="person:owner", place="space:tg:9",
-                      body="telegram", description="sampai jumpa",
-                      payload={"arguments": {"text": "sampai jumpa"}})
-    return PFCContext(
-        now=START, place=PLACE, reason="addressed message",
-        core_memory="Fulan sedang di-PHK.", last_interaction=START,
-        doing=('goal: kirim laporan', 'step: dev.run {"command": "pytest"}'),
+    return context(
+        now=START, place=PLACE, reason="addressed message", last_interaction=START,
+        core_memory="Fulan sedang di-PHK.",
+        doing=("goal: kirim laporan", 'step: dev.run {"command": "pytest"}'),
         expectations=("#3 kirim laporan (no intent stated)",),
         memories=("- rapat jam sembilan (person:owner at space:tg:owner; importance 0.90)",),
-        withheld=(("person:owner private chat", 1),),
-        recent=[event], recent_elsewhere=[elsewhere],
-        results=('think: {"thought": "kirim hasil"}',), trigger=event)
+        withheld=(("space:tg:owner", 1),),
+        results=('think: {"thought": "kirim hasil"}',),
+        self_text="<self>\nCommands: /help\n</self>")
 
 
 def test_the_stable_prefix_is_unchanged():
-    """The cached prefix is byte-identical after the parts refactor (golden hash)."""
+    """The cached prefix is byte-identical after the items refactor (golden hash)."""
     first = parts.messages(_soul(), _plain())[0]["content"]
 
     assert hashlib.sha256(first.encode()).hexdigest() == PREFIX_HASH
-    assert first == EXPECTED_STABLE
 
 
-def test_the_three_messages_match_the_old_renderer():
-    """A desk with results, doing, memories, a withheld note and a line elsewhere."""
+def test_the_three_messages_render_the_items():
+    """A desk with results, doing, memories, a note and what is installed."""
     got = [message["content"] for message in parts.messages(_soul(), _rich())]
 
-    assert got == [EXPECTED_STABLE, EXPECTED_SEMI, EXPECTED_VOLATILE]
+    assert got[1] == ("<core_memory>Fulan sedang di-PHK.</core_memory>\n"
+                     "<self>\nCommands: /help\n</self>")
+    assert got[2] == EXPECTED_VOLATILE
 
 
-async def test_a_middleware_block_is_appended_after_the_core_volatile_parts(aconn):
+def test_a_hook_may_drop_an_item_and_the_text_follows():
+    """The text is rendered after the last hook, so a dropped item never reaches the model."""
+    desk = _rich()
+    kept = tuple(item for item in desk.items if item.section != "memories")
+    text = parts.messages(_soul(), replace(desk, items=kept))[-1]["content"]
+
+    assert "rapat jam sembilan" not in text
+    assert "<memories>\nnone\n</memories>" in text
+
+
+async def test_the_context_hook_receives_items_and_its_replacement_is_rendered(aconn):
+    """A context rule annotates items; the core renders what came back (DEC-1)."""
     kernel = build(aconn, clock=FakeClock(START), settings=SETTINGS)
     trigger = await append_event(aconn, ts=START, kind="percept", who="person:budi",
-                                 place=PLACE, body="telegram",
-                                 payload={"description": "halo", "place_kind": "direct"})
+                                 place=PLACE, body="telegram", description="halo")
 
-    async def block(item, ctx):
-        return Replace(replace(item, blocks=item.blocks + (
-            Part("plugin:x", VOLATILE, 900, text="<x>hello</x>"),)))
+    async def annotate(item, ctx):
+        return Replace(replace(item, items=(
+            *item.items, ContextItem(section="notes", text="<x>hello</x>"))))
 
-    kernel.hooks.context.add("plugin-block", block)
-    context = await layout.build_context(aconn, trigger, PLACE, "test", now=START,
-                                         settings=SETTINGS, memories=(), capabilities=())
-    filtered = await kernel._run_hooks("context", context,
+    kernel.hooks.context.add("plugin-note", annotate)
+    desk = await layout.build_context(aconn, trigger, PLACE, "test", now=START,
+                                      settings=SETTINGS, memories=(), capabilities=())
+    filtered = await kernel._run_hooks("context", desk,
                                        {"conn": aconn, "event": trigger, "now": START}, trigger)
     text = parts.messages(_soul(), filtered)[-1]["content"]
 
-    assert text.endswith("<x>hello</x>")
-    assert text.index("</event>") < text.index("<x>hello</x>")
+    assert "<notes>\n<x>hello</x>\n</notes>" in text
+    assert text.index("<notes>") < text.index("<recent>")
 
 
-def test_a_block_may_not_touch_the_prefix_or_take_a_name():
-    stable = PFCContext(now=START, place=PLACE, reason="x",
-                        blocks=(Part("plugin:y", parts.STABLE, 10, text="<y>no</y>"),))
-    with pytest.raises(ValueError, match="an extension block must be volatile: 'plugin:y'"):
-        parts.messages(_soul(), stable)
+def test_every_section_renders_in_one_fixed_order():
+    """The volatile sections keep one order, so the prompt stays cache-friendly."""
+    text = parts.messages(_soul(), _rich())[-1]["content"]
+    order = ["<doing>", "<expectations>", "<memories>", "<notes>", "<recent>", "<event>"]
 
-    twice = replace(stable, blocks=(Part("now", VOLATILE, 900, text="<now>no</now>"),))
-    with pytest.raises(ValueError, match="duplicate block name: 'now'"):
-        parts.messages(_soul(), twice)
+    assert [text.index(marker) for marker in order] == sorted(
+        text.index(marker) for marker in order)
 
 
-EXPECTED_STABLE = "You are Mona.\n\nCalm and honest.\n\nPrinciples:\n- Never lie.\n\nLanguage: id.\n\nHow you work:\n- Thinking is not acting: in the same answer, call the tool that carries the thought out.\n- What you promise for later, a reminder, or a watch ('tell me if ...') is an expectation: hold it with expect and a cue (cue_time or cue_event) that wakes you; without a cue nothing wakes you.\n- Reach someone or another place with act's to: (an id the desk shows, or an existing place id) and via: (a tool); content that came from another place must be shared first and is never repeated where its audience may not see it: say it in a private place instead.\n- If what you know may be private to someone, or the desk says things are withheld, ask the person they belong to in a private place; never guess or answer for them where they are withheld.\n- Say something is done only after its result came back; until then say it is under way.\n- A line that may relate to an expectation is a question you answer yourself: when it fulfils one, keep it by doing it in this same turn: say what you promised before you resolve, because a resolve without the act is a broken promise; when it does not, let it be: think, or stay silent where the line was said.\n- Long work goes through a long-running capability; the task thread opens for you.\n- When a capability returns an answer, tell them that answer.\n- You act only through the tools. Staying silent is a valid choice."
-EXPECTED_SEMI = '<core_memory>Fulan sedang di-PHK.</core_memory>'
-EXPECTED_VOLATILE = '<now>2026-11-10 15:00, Tuesday, Asia/Jakarta, time since last interaction: 0m</now>\n<place>space:tg:1</place>\n<why_awake>addressed message</why_awake>\n<results>\nthink: {"thought": "kirim hasil"}\n</results>\n<doing>\ngoal: kirim laporan\nstep: dev.run {"command": "pytest"}\n</doing>\n<expectations>#3 kirim laporan (no intent stated)</expectations>\n<memories>\n- rapat jam sembilan (person:owner at space:tg:owner; importance 0.90)\n</memories>\n<withheld>1 thing you know from person:owner private chat is not shown here</withheld>\n<recent>\n15:00 person:budi: halo, apa kabar?\n[space:tg:9] 15:00 Mona: sampai jumpa\n</recent>\n<event>person:budi: halo, apa kabar?</event>'
+def test_a_notes_section_that_a_rule_never_added_is_absent():
+    """The notes section costs no tokens until something is withheld or annotated."""
+    assert "<notes>" not in parts.messages(_soul(), _plain())[-1]["content"]
+
+
+EXPECTED_VOLATILE = (
+    "<now>2026-11-10 15:00, Tuesday, Asia/Jakarta, time since last interaction: 0m</now>\n"
+    "<place>space:tg:1</place>\n<why_awake>addressed message</why_awake>\n"
+    '<results>\nthink: {"thought": "kirim hasil"}\n</results>\n'
+    "<doing>\ngoal: kirim laporan\nstep: dev.run {\"command\": \"pytest\"}\n</doing>\n"
+    "<expectations>#3 kirim laporan (no intent stated)</expectations>\n"
+    "<memories>\n- rapat jam sembilan (person:owner at space:tg:owner; importance 0.90)\n"
+    "</memories>\n<notes>\n1 thing you know from space:tg:owner is not shown here\n</notes>\n"
+    "<recent>\n(nothing yet)\n</recent>\n<event>none</event>"
+)

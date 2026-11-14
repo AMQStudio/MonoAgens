@@ -519,6 +519,79 @@ Architecture counts (per file, per ban) after this commit: `text-parse: 68` · `
 `describe_attachments` from `monoagens.contract` (one renderer for the one line reasoning
 reads). The hook vocabulary already came from there (DEC-2).
 
+### Where the work stands (session of 2026-11-14, late)
+
+**This commit is not green. It is labelled `wip` on purpose.** It lands the whole of the hinge
+(2.5 + 3.1 + 3.2 + 3.3) in the source and only part of its test migration; the suite and the fake
+replay are **red**, and the next session resumes from the list below. Nothing here is a decision
+the architect must take: the shape is settled by DEC-1/DEC-2/DEC-8 and the work left is finishing
+it, not choosing.
+
+Green, measured at this commit:
+
+- `scripts/replay.py --fake` **156/158** (the two misses are below);
+- `tests/core/test_context.py` 6/6, `tests/middleware/test_privacy.py` 22/22,
+  `tests/core/test_context.py`, `tests/middleware/test_registry.py` 16/16;
+- the architecture ratchet shrank from 101 to **70 findings**:
+  `text-parse 54 · payload-read 1 (jobs.py) · labels-read 0 · removed-field 11 ·
+  tests-private 4 · body-name 0 · layer-import 0`.
+
+What this commit implements, one home each:
+
+- **the context is items** (DEC-1): `monoagens/core/context/items.py` builds one item per section
+  (`recent`, `elsewhere`, `memories`, `core_memory`, `doing`, `expectations`, `trigger`), each with
+  the event ids it quotes; `layout.PFCContext` keeps `now`, `place`, `reason`, `items`,
+  `self_text`, `trigger`, `last_interaction`, `capabilities`, `results`, and `build_context` fills
+  the items from the same reads it made before. `parts.messages` renders the three messages from
+  the items after the last hook has run, with the section budgets kept per section and a section
+  that no rule filled costing nothing (`notes`).
+- **one privacy fact and one check** (DEC-1, 3.3): `middleware/privacy.audience` reads the newest
+  `place.audience` event at or before a moment and returns `None` for *unknown*; `admits` is the
+  only predicate; `items_rule` is the only context check (`kernel.visible` never existed; the
+  attachment door and the intent line call the same `visible`/`admits`); `withheld_line` renders
+  D56. `share` now names event ids (`items`/`episode`), `grant` records exactly those, and
+  `granted_people` folds a grant into an event's audience. Every regex, `.lower()`/`.split()` over
+  rendered lines, `place_kind`, `place_info`, `_place_members`, `_shared_info`, `_share_tokens`,
+  `_event_share_text`, `_delegated_share_source`, `topic_rule`, `narrowing` and the per-field
+  `filter_context` are gone.
+- **typing and no labels in the core** (2.2's label half, early): `Dispatch` carries
+  `place`/`receipt` and no `labels`; a held act is `ctx["held"]`; `threads.after_step` reads the
+  act's `to` and the receipt's state (a person target waits, a place target delivers); the core's
+  `labels-read` count is 0.
+- **identity on actors** (3.2, partly): `cards` builds `cards` items, `person_cards` reads only the
+  place's audience and the trigger's `involves`, `_direct_places` reads `place.audience`, and the
+  place tracker, `record_place`, `read_place`, `can_post` and `shared_account_blocks` are gone
+  (`shared_account_items` + `record_self_account` replace them).
+- **registry**: `self_block` sets `self_text` (D-I: every installed skill, no word overlap) and the
+  word-overlap `relevant_skills` is deleted.
+- **the harness** (`scripts/replay.py`): each step reports its place's audience before its percept
+  (a declared `members`, else the owner and everyone who has spoken there), the fake prompt is the
+  real rendering of the same context, and a scenario's `self.share` may name `@act`/`@percept` so a
+  fake answer can name the ids the contract's `share` takes.
+
+Red, and the exact resumption point:
+
+1. **`tests/` migration (77 failures)**. Most are mechanical: a test still calls `open_for` with an
+   audience, builds a desk with the old field names, or asserts the old wording. The rest are real
+   and must be answered before the next commit:
+   - `test_failure*`, `test_foundation_check`, `test_identity`, `test_roles`, `test_interaction`,
+     `test_failures`, `test_attachments`, `test_plugins/*` — each needs an audience published for
+     its places, because an unknown audience now admits only unknown content;
+   - `test_policy`'s approval/brake tests use `ctx["labels"]["hold"]`; they must read the held
+     receipt instead;
+   - `test_replay_metrics`'s desk scan still builds a desk from the old fields.
+2. **Two replay checks (26, 28)**: the owner's private line reaches the group desk at the fired
+   expectation's wake. The `<why_awake>` reason for a fired expectation still quotes the
+   expectation's `intent`, which names the fact; the fix belongs in `Kernel._wake`'s reason line
+   (quote the place and the question, never the intent's words) or in `expectation_items`.
+   Until it is fixed those two scenarios report **absolute-line violations 2**, which is a bug,
+   never a baseline.
+3. Then the rest of the plan in its order: 2.2's remaining steers, 3.5, 3.4, 3.6, 3.7, 3.8, Parts
+   4, 5, 6, 7.1, 7.2.
+
+Line counts at this commit: core 4028 · middleware 5389 · adapters 5465 · plugins 2065 · tests
+19211 (baseline 18577).
+
 ### Where the work stands (session of 2026-11-14, evening)
 
 Green and pushed: Part 1 (1.1-1.4) and Part 2 except 2.2's label half and 2.5 — items **2.1,

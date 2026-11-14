@@ -12,7 +12,6 @@ from monoagens.adapters.cli import CAPABILITIES as CLI_CAPABILITIES
 from monoagens.adapters.telegram import CAPABILITIES as TELEGRAM_CAPABILITIES
 from monoagens.boot import build
 from monoagens.core.context import layout
-from monoagens.core.context.parts import VOLATILE
 from monoagens.core.memory.forget import forget_hard
 from monoagens.infra.attachments import AttachmentStore
 from monoagens.infra.clock import FakeClock
@@ -22,7 +21,7 @@ from monoagens.middleware.contract import OUTPUT_MARKER
 from monoagens.middleware.registry import (CommandEntry, SkillEntry, ToolRegistry, help_text,
                                            self_block)
 from monoagens.types import Action, Event
-from tests.support import open_book, settings
+from tests.support import open_book, publish_audience, settings
 
 START = datetime(2026, 11, 12, 8, 0, tzinfo=timezone.utc)
 SETTINGS = settings()
@@ -197,20 +196,19 @@ async def test_a_skill_enters_the_self_block_by_name_only(aconn):
     kernel.tools.add_skill(SkillEntry("tax-filing", "How to file a tax return.", "BODY"))
     trigger = await append_event(aconn, ts=START, kind="percept", who="person:owner",
                                  place=PLACE, body="telegram",
-                                 payload={"description": "how do I brew coffee?",
-                                          "place_kind": "direct"})
+                                 payload={"description": "how do I brew coffee?"})
     context = await layout.build_context(aconn, trigger, PLACE, "test", now=START,
                                          settings=SETTINGS, memories=(), capabilities=())
     ctx = {"conn": aconn, "event": trigger, "now": START}
 
     outcome = await self_block(kernel)(context, ctx)
-    text = "\n".join(part.text for part in outcome.item.blocks if part.layer == VOLATILE)
+    text = outcome.item.self_text
 
     assert "<self>" in text and "</self>" in text
     assert ("Commands: /budget, /help, /link, /plugin, /quiet, /role, /roles, /show, /unlink, "
             "/whoami, /whois") in text
     assert "coffee-brewing — How to brew coffee well." in text
-    assert "tax-filing" not in text
+    assert "tax-filing — How to file a tax return." in text
     assert "SECRET BODY" not in text
 
 
@@ -227,7 +225,7 @@ async def test_the_self_block_lists_only_what_the_requester_may_use(aconn):
                                          capabilities=kernel.tools.descriptors())
     outcome = await self_block(kernel)(context, {"conn": aconn, "event": trigger, "now": START})
 
-    text = "\n".join(part.text for part in outcome.item.blocks if part.layer == VOLATILE)
+    text = outcome.item.self_text
     assert "Commands: /help" in text  # guests hold `help`, the guest tier permission
     assert "/plugin" not in text
     assert "self.share" in {f"{cap['organ']}.{cap['name']}"
@@ -335,22 +333,24 @@ async def test_full_output_respects_privacy_and_hard_forget(aconn, tmp_path):
     kernel.tools.add_tool(_SecretTool(), {"dump": {"facts": ["reads"],
                                                    "permission": "workspace.run",
                                                    "output_cap": 200}})
+    await publish_audience(aconn, "space:tg:dm:bob", ["person:bob"], ts=START)
     dm_event = await append_event(aconn, ts=START, kind="percept", who="person:bob",
                                   place="space:tg:dm:bob", body="telegram",
-                                  payload={"place_kind": "direct"})
+                                  payload={"description": "dump it"})
     capped = await kernel.tools.act(dm_event, "bulk.dump", {})
     ref = capped["full"]["ref"]
     stored = await append_event(aconn, ts=START, kind="act.result", who="self",
                                 place="space:tg:dm:bob",
                                 payload={"capability": "bulk.dump", "result": capped})
 
+    await publish_audience(aconn, PLACE, ["person:alice"], ts=START)
     group_event = await append_event(aconn, ts=START, kind="percept", who="person:alice",
                                      place=PLACE, body="telegram",
-                                     payload={"place_kind": "group"})
+                                     payload={"description": "and it?"})
     blocked = await kernel.tools.act(group_event, "registry.more", {"ref": ref, "offset": 0})
     assert "may not see" in blocked["error"]
 
-    await privacy.grant(kernel, stored, {"item": "secret output", "episode": str(stored.id)},
+    await privacy.grant(kernel, stored, {"items": [int(stored.id)]},
                         to=PLACE, source="space:tg:dm:bob")
     opened = await kernel.tools.act(group_event, "registry.more",
                                     {"ref": ref, "offset": 0, "limit": 50})

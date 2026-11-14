@@ -237,9 +237,15 @@ def _check_resolve(context: PFCContext, given: dict[str, Any]) -> str | None:
     if status not in ("satisfied", "dropped"):
         return "status must be satisfied or dropped"
     exp_id = given["id"]
-    shown = {int(line[1:].split(" ", 1)[0]) for line in context.expectations
-             if line.startswith("#") and line[1:2].isdigit()}
+    shown = {_leading_id(item.text) for item in context.items
+             if item.section == "expectations"}
     return None if exp_id in shown else f"no expectation #{exp_id} on the desk"
+
+
+def _leading_id(text: str) -> int | None:
+    """Return the record id a rendered expectation line opens with, if it names one."""
+    head = str(text).partition(" ")[0].removeprefix("#")
+    return int(head) if head.isdigit() else None
 
 
 def _recorded(calls: list[dict[str, Any]]) -> list[str]:

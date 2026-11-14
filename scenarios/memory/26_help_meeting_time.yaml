@@ -116,7 +116,7 @@ model_answers:
       - name: act
         arguments:
           capability: self.share
-          arguments: {item: "Rapat tim besok jam sembilan pagi", to: space:tg:-1006}
+          arguments: {items: ["@percept"], to: space:tg:-1006}
       - name: act
         arguments:
           capability: telegram.say

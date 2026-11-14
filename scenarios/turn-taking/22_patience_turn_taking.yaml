@@ -65,6 +65,7 @@ steps:
   - at: "2026-11-10T12:37:40+07:00"
     who: person:tg:4002
     place: space:tg:-1002
+    members: ["person:owner", "person:tg:4001", "person:tg:4002"]
     text: "Oke, makasih ya."
     should: silent
   - at: "2026-11-10T12:41:00+07:00"

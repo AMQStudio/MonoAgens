@@ -215,7 +215,7 @@ model_answers:
       - name: act
         arguments:
           capability: self.share
-          arguments: {item: "kode yang sudah selesai", to: "space:wa:1203630001@g.us"}
+          arguments: {items: ["@act"], to: "space:wa:1203630001@g.us"}
       - name: act
         arguments:
           capability: whatsapp.say

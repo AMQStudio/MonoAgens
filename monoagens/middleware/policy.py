@@ -96,7 +96,6 @@ class _LiveRoles:
 def modules_for(hook: str, kernel: Any) -> tuple[tuple[str, Middleware], ...]:
     """Return the scoped middleware of one hook, in the order it runs."""
     return {"inbound": (("identity-pairing", identity.claim(kernel.conn)),
-                        ("identity-place", identity.place_tracker(kernel.conn)),
                         ("approval-answer", interaction.answer(kernel)),
                         ("commands", registry.commands(kernel)),
                         ("privacy-intent", privacy.intent_words(kernel)),
@@ -129,7 +128,7 @@ def policy_for(hook: str, when: str, kernel: Any) -> Middleware:
         if when == "first":
             return compose(identity.identity_line(), brake_line(kernel), kernel=kernel)
         return compose(
-            privacy.filter_context(kernel.conn, kernel=kernel, settings=kernel.settings),
+            privacy.items_rule(kernel),
             kernel=kernel,
         )
     if hook == "action":
@@ -363,12 +362,12 @@ def approval_line(kernel: Any) -> Middleware:
         stored = await kernel._emit(ctx["event"], interaction.REQUEST, {
             "capability": capability, "arguments": dict(ctx.get("arguments") or {}),
             "who": ctx.get("origin_actor"), "place": ctx["event"].place,
-            "place_kind": ctx["labels"].get("place_kind") or "", "reason": reason,
+            "reason": reason,
             **({"retried_from": ctx["event"].payload.get("approved")}
                if ctx["event"].kind == "intent" and ctx["event"].payload.get("approved")
                else {})})
         ctx["refusal"] = "waiting for the owner's approval"
-        ctx["labels"]["hold"] = True
+        ctx["held"] = True
         await interaction.request(kernel, ctx["event"], int(stored.id), capability,
                                   dict(ctx.get("arguments") or {}), reason)
         return Continue()
@@ -417,8 +416,8 @@ def quiet_line(kernel: Any) -> Middleware:
         if not inside:
             return Continue()
         ctx["refusal"] = f"quiet hours: the owner asked for silence until {until}"
-        ctx["labels"]["hold"] = True
-        return Stop(ctx["refusal"])
+        ctx["held"] = True
+        return Continue()
 
     return rule
 

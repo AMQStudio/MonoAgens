@@ -64,7 +64,8 @@ from monoagens.infra.embedding import FastEmbedder, FakeEmbedder
 from monoagens.infra.migrate import migrate, migrate_url
 from monoagens.infra.providers import DEFAULT_OPENCODE_GO_MODEL, build_provider
 from monoagens.infra.store import append_event, write_state
-from monoagens.core.context.layout import PFCContext, withheld_note
+from monoagens.core.context import parts
+from monoagens.core.context.layout import PFCContext
 from monoagens.core.reasoning import Reasoning, ToolCall
 from monoagens.types import Action, Event
 
@@ -262,27 +263,14 @@ class Tracker:
         self.prompts.append((self.step_index, place or _prompt_place(content), content))
 
     async def record_desk(self, context: PFCContext) -> None:
-        """Store every item's source and line id for one wake, for the privacy metric."""
-        items = [DeskItem(line.place, line.id)
-                 for line in (*context.recent, *context.recent_elsewhere)]
-        items += [DeskItem(getattr(memory, "place", None), None,
-                           tuple(getattr(memory, "sources", ()) or ()))
-                  for memory in context.memories]
-        if context.core_memory:
-            items.append(DeskItem(None, None, await self._core_sources()))
+        """Store every item's place and sources for one wake, for the privacy metric."""
+        items = [DeskItem(item.place or None, None, tuple(item.sources))
+                 for item in context.items if item.section != "notes"]
         trigger = context.trigger.id if context.trigger is not None else None
         desk = Desk(self.step_index, context.place, trigger, tuple(items))
         self.desks.append(desk)
         if self.conn is not None:
             self.desk_violations.extend(await desk_violations(self.conn, [desk]))
-
-    async def _core_sources(self) -> tuple[int, ...]:
-        """Return the Log events the current core memory was built from."""
-        if self.conn is None:
-            return ()
-        row = await (await self.conn.execute(
-            "SELECT value FROM state WHERE key = 'core_memory'")).fetchone()
-        return tuple((row[0] if row else {}).get("derived_from") or ())
 
 
 class UsageTransport(httpx.AsyncBaseTransport):
@@ -319,20 +307,19 @@ class UsageTransport(httpx.AsyncBaseTransport):
 # -------------------------------------------------------------- fake agents
 
 
-def _fake_context_text(context: PFCContext) -> str:
-    """Render a fake-mode prompt from the pieces the kernel handed over."""
-    parts: list[str] = [context.core_memory, *context.people, *context.memories]
-    if context.doing:
-        parts.extend(["<doing>", *context.doing, "</doing>"])
-    note = withheld_note(context)
-    if note:
-        parts.append(note)
-    parts.extend(str(event.payload.get("description") or "") for event in context.recent)
-    parts.extend(str(event.payload.get("description") or "") for event in context.recent_elsewhere)
-    parts.extend(json.dumps(item, default=str) for item in context.results)
-    if context.trigger is not None:
-        parts.append(str(context.trigger.payload.get("description") or ""))
-    return "\n".join(part for part in parts if part)
+class _StubSoul:
+    """The little of a soul the parts need to render a prompt without a model."""
+
+    def __init__(self, settings: dict[str, Any]) -> None:
+        self.settings = settings
+        self.identity = dict(settings.get("identity") or {})
+        self.name = str(self.identity.get("name") or "monoagens")
+        self.timezone = ZoneInfo(str(settings.get("timezone") or "UTC"))
+
+
+def _fake_context_text(context: PFCContext, settings: dict[str, Any]) -> str:
+    """Render a fake-mode prompt exactly as the real one renders the same context."""
+    return parts.messages(_StubSoul(settings), context)[-1]["content"]
 
 
 def _fake_sleep_arguments(messages: Sequence[dict[str, Any]]) -> dict[str, Any]:
@@ -349,10 +336,11 @@ def _fake_sleep_arguments(messages: Sequence[dict[str, Any]]) -> dict[str, Any]:
 class FakePFC:
     """A scripted Reasoning: replay recorded answers, else say "ok" and keep one memory."""
 
-    def __init__(self, tracker: Tracker,
+    def __init__(self, tracker: Tracker, settings: dict[str, Any],
                  answers: dict[tuple[int, str], list[list[ToolCall]]] | None = None) -> None:
-        """Share the tracker and the scenario's recorded answers."""
+        """Share the tracker, the run's settings and the scenario's recorded answers."""
         self._tracker = tracker
+        self._settings = settings
         self._answers = answers or {}
 
     def _recorded(self, tool: str) -> list[ToolCall] | None:
@@ -365,15 +353,48 @@ class FakePFC:
         self._tracker.answers_used[key] = used + 1
         return list(queue[used]) if used < len(queue) else None
 
+    async def _resolved(self, calls: list[ToolCall]) -> list[ToolCall]:
+        """Resolve the scenario's `@` tokens in a `share` into the event ids it names.
+
+        A scenario cannot know an id before the run, so its fake answer writes `@last` (the
+        newest event), `@percept` or `@act`; the ids are what the contract's `share` takes.
+        """
+        found: list[ToolCall] = []
+        for call in calls:
+            if call.name != "act":
+                found.append(call)
+                continue
+            arguments = dict(call.arguments.get("arguments") or {})
+            if str(call.arguments.get("capability")) != "self.share":
+                found.append(call)
+                continue
+            items = arguments.get("items") or ()
+            resolved = [int(str(item).removeprefix("@") or 0) for item in ()]
+            resolved = [await self._resolve_ref(str(item)) for item in items]
+            found.append(ToolCall("act", {**call.arguments,
+                                          "arguments": {**arguments, "items": resolved}}))
+        return found
+
+    async def _resolve_ref(self, token: str) -> int:
+        """Return the event id one `@` token names, or 0 when the Log holds none."""
+        conn = self._tracker.conn
+        kinds = {"@last": None, "@percept": "percept", "@act": "act.out"}
+        kind = kinds.get(token, token.removeprefix("@"))
+        query, params = "SELECT max(id) FROM events WHERE id > 0", ()
+        if kind:
+            query, params = query + " AND kind = %s", (kind,)
+        row = await (await conn.execute(query, params)).fetchone() if conn is not None else None
+        return int((row or (0,))[0] or 0)
+
     async def decide(self, context: PFCContext) -> list[ToolCall]:
         """Return the recorded answer for this step, else say(text="ok") in the first round."""
         self._tracker.usage.calls += 1
-        self._tracker.record_prompt(_fake_context_text(context), context.place)
+        self._tracker.record_prompt(_fake_context_text(context, self._settings), context.place)
         if not context.results:
             await self._tracker.record_desk(context)
         recorded = self._recorded("decide")
         if recorded is not None:
-            return recorded
+            return await self._resolved(recorded)
         if context.results:
             return []  # a scripted model has nothing more to add after its thought round
         return [ToolCall("act", {"capability": "telegram.say", "arguments": {"text": "ok"}})]
@@ -385,7 +406,7 @@ class FakePFC:
         self._tracker.record_prompt(str(messages[-1].get("content") or ""))
         recorded = self._recorded("call")
         if recorded is not None:
-            return recorded
+            return await self._resolved(recorded)
         names = {tool["function"]["name"] for tool in tools}
         if "store_memories" in names:
             return [ToolCall("store_memories", _fake_sleep_arguments(messages))]
@@ -703,11 +724,13 @@ class ReplayRunner:
         self.loaded: Any = None
         self._last_id = 0
         self._message_id = 0
+        self._audiences: dict[str, tuple[bool, tuple[str, ...]]] = {}
+        self._speakers: dict[str, set[str]] = {}
 
     def _make_pfc(self) -> Any:
         """Build a fake Reasoning with the scenario's answers, or a real HTTP-tracked Reasoning."""
         if self.fake:
-            return FakePFC(self.tracker, self.answers)
+            return FakePFC(self.tracker, self.settings, self.answers)
         client = httpx.AsyncClient(
             transport=UsageTransport(httpx.AsyncHTTPTransport(), self.tracker), timeout=90.0)
         retries = int(self.settings["constants"]["model_call_retries"])
@@ -776,6 +799,8 @@ class ReplayRunner:
         self.extra_bodies = dict(scenario.bodies_extra)
         self._last_id = 0
         self._message_id = 0
+        self._audiences = {}
+        self._speakers = {}
         self.clock = FakeClock(initial_time=self._initial_time(scenario))
         async with await psycopg.AsyncConnection.connect(self.url, autocommit=True) as conn:
             self.conn = self.tracker.conn = conn
@@ -830,6 +855,8 @@ class ReplayRunner:
         addressed = bool(raw.get("addressed", False))
         features = {str(name): float(value) for name, value in
                     (raw.get("features") or {}).items()}
+        if addressed:
+            features.setdefault("addressed", 1.0)
         place_defaults = dict(getattr(self, "places", {}).get(place) or {})
         place_info = dict(place_defaults.get("place_info") or {})
         if isinstance(place_defaults.get("members"), (list, tuple)):
@@ -840,6 +867,9 @@ class ReplayRunner:
             place_info["members"] = list(raw["members"])
         step_place_kind = raw.get("place_kind") or place_defaults.get("place_kind")
         if kind == "message":
+            await self._report_audience(
+                place, who, raw.get("members") or place_defaults.get("members"),
+                unknown=bool(raw.get("unknown") or place_defaults.get("unknown")))
             await self._feed(who=who, place=place, text=text, addressed=addressed, body=body,
                              attach=list(raw.get("attach") or ()), features=features,
                              place_info=place_info or None,
@@ -871,6 +901,27 @@ class ReplayRunner:
                                    for event in events
                                    if event["kind"] == "act.out" and self._said(event)],
                           events=events)
+
+    async def _report_audience(self, place: str, who: str, members: Any, *,
+                               unknown: bool) -> None:
+        """Report who can perceive a place, before its first percept (DEC-1, item 12).
+
+        A step may name its `members` and mark the place `unknown`; otherwise the place holds
+        the owner and every person who has spoken there, which is what an adapter reports. One
+        event is written when the audience changes, so a steady place costs one row.
+        """
+        held = self._speakers.setdefault(place, set())
+        if who and who.startswith("person:"):
+            held.add(who)
+        actors = ({str(member) for member in members}
+                  if isinstance(members, (list, tuple)) else {OWNER, *held})
+        found = (unknown, tuple(sorted(actors)))
+        if self._audiences.get(place) == found:
+            return
+        self._audiences[place] = found
+        await append_event(self.conn, ts=self.clock.now(), kind="place.audience", place=place,
+                           payload={"place": place, "actors": list(found[1]),
+                                    "unknown": found[0]})
 
     @staticmethod
     def _native_account(who: str, body: str) -> str:
@@ -922,10 +973,10 @@ class ReplayRunner:
             data["attachments"] = files
             summary = describe_attachments(files, sent_by=who)
             description = f"{text} {summary}".strip() if text else summary
-        payload: dict[str, Any] = {"description": description, "addressed": addressed,
-                                   "place_kind": kind, "data": data}
+        del kind
+        payload: dict[str, Any] = {"description": description, "data": data}
         if place_info:
-            payload["place_info"] = dict(place_info)
+            payload["data"] = {**data, **place_info}
         event = Event(id=None, ts=self.clock.now(), kind="percept", who=native_who, place=place,
                       body=name, description=description, features=dict(features or {}),
                       payload=payload)

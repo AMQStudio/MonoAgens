@@ -16,7 +16,7 @@ from monoagens.core.context import layout
 from monoagens.core.gate import Appraisal
 from monoagens.core.context.layout import PFCContext
 from monoagens.infra.store import append_event, write_state
-from tests.support import settings
+from tests.support import settings, context
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 _SPEC = importlib.util.spec_from_file_location("replay_script", ROOT / "scripts" / "replay.py")
@@ -221,13 +221,13 @@ async def test_the_desk_scan_counts_core_memory_by_its_sources(aconn):
                                payload={"description": "rapat jam berapa?", "place_kind": "shared",
                                         "place_info": {"members": ["person:budi"]}})
     tracker = replay.Tracker(conn=aconn)
-    await tracker.record_desk(PFCContext(now=NOW, place=group, 
+    await tracker.record_desk(context(now=NOW, place=group, 
                                          reason="test", core_memory="rapat jam sembilan",
                                          trigger=asked))
     assert tracker.desks[0].items == (replay.DeskItem(None, None, (said.id,)),)
     assert await replay.desk_violations(aconn, tracker.desks) != []
     owner_tracker = replay.Tracker(conn=aconn)
-    await owner_tracker.record_desk(PFCContext(now=NOW, place=dm, 
+    await owner_tracker.record_desk(context(now=NOW, place=dm, 
                                                reason="test", core_memory="rapat jam sembilan",
                                                trigger=said))
     assert await replay.desk_violations(aconn, owner_tracker.desks) == []
@@ -261,7 +261,7 @@ async def test_the_withheld_note_is_not_a_private_item_on_the_desk(aconn):
                             place="space:tg:owner", sources=(dm.id,))
     context = await layout.build_context(aconn, asked, group, "test", now=NOW,
                                          settings=settings(), memories=(fact,), capabilities=())
-    desk = (await compose(privacy.filter_context(aconn), identity.cards(aconn))(
+    desk = (await compose(privacy.items_rule(), identity.cards(aconn))(
         context, {"conn": aconn, "now": NOW})).item
     assert desk.withheld
 
@@ -285,7 +285,7 @@ async def test_person_cards_are_not_private_items_on_the_desk(aconn):
                                payload={"description": "kirim ke Budi", "place_kind": "shared"})
     context = await layout.build_context(aconn, asked, group, "test", now=NOW,
                                          settings=settings(), memories=(), capabilities=())
-    desk = (await compose(privacy.filter_context(aconn), identity.cards(aconn))(
+    desk = (await compose(privacy.items_rule(), identity.cards(aconn))(
         context, {"conn": aconn, "now": NOW})).item
     assert any("person:budi" in card for card in desk.people)
 

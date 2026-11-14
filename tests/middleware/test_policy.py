@@ -279,37 +279,11 @@ async def test_a_public_search_still_passes(aconn):
     assert len(tool.actions) == 1
 
 
-async def test_a_topic_rule_drops_the_line_and_counts_it(aconn):
-    kernel, _, _ = await _kernel(aconn)
-    trigger = await _trigger(aconn)
-    line = Event(id=1, ts=START, kind="percept", who="person:budi", place=GROUP,
-                 body="telegram", payload={"description": "aku sedang sakit"}, description="aku sedang sakit")
-    other = Event(id=2, ts=START, kind="percept", who="person:budi", place=GROUP,
-                  body="telegram", payload={"description": "kapan rapat?"}, description="kapan rapat?")
-    context = _context(trigger, recent=(line, other))
-
-    outcome = await privacy.topic_rule(kernel, ["sakit"])(context, {"conn": aconn})
-
-    assert outcome.item.recent == (other,)
-    assert outcome.item.withheld == ((privacy.TOPIC_LABEL, 1),)
-
-
-async def test_narrowing_never_adds_anything(aconn):
-    kernel, _, _ = await _kernel(aconn)
-    trigger = await _trigger(aconn)
-    context = _context(trigger, recent=(Event(id=1, ts=START, kind="percept",
-                                              payload={"description": "biasa saja"}, description="biasa saja"),))
-
-    outcome = await privacy.narrowing(kernel, ["sakit"])(context, {"conn": aconn})
-
-    assert isinstance(outcome, Continue)
-
-
 def _context(trigger: Event, *, recent=()):
     """Build a minimal desk with the given recent lines."""
     from monoagens.core.context.layout import PFCContext
 
-    return PFCContext(now=START, place=GROUP, reason="test", recent=tuple(recent),
+    return context(now=START, place=GROUP, reason="test", recent=tuple(recent),
                       trigger=trigger)
 
 

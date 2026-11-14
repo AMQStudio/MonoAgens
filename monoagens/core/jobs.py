@@ -144,15 +144,15 @@ async def embed_batch(embedder: Any, items: Sequence[tuple[int, str]]) -> dict[s
 
 
 async def apply_calls(kernel: Any, trigger: Event, rounds: list[dict[str, Any]],
-                      job: JobRef) -> list[tuple[dict[str, Any], Mapping[str, Any]]]:
-    """Apply one finished job's rounds; one (call, labels) per act.
+                      job: JobRef) -> list[tuple[dict[str, Any], Any]]:
+    """Apply one finished job's rounds; one (call, dispatch) per act.
 
     Every round is applied and every call in it is tried: one call that raises records its
     own error and leaves its siblings alone (F.3). An act's action id is derived from the
     job, the round and its index in that round, so a resumed act keeps its id (DEC-3).
     """
     acted, thought = False, ""
-    acts: list[tuple[dict[str, Any], Mapping[str, Any]]] = []
+    acts: list[tuple[dict[str, Any], Any]] = []
     said: set[str] = set()
     for round_index, item in enumerate(rounds):
         calls = [raw for raw in item.get("calls") or [] if not raw.get("refused")]
@@ -169,7 +169,7 @@ async def apply_calls(kernel: Any, trigger: Event, rounds: list[dict[str, Any]],
                 continue
             acted = outcome.acted or acted
             if call.name == "act":
-                acts.append((raw, outcome.labels))
+                acts.append((raw, outcome))
                 n += 1
             if call.name == "think":
                 thought = str(call.arguments.get("thought") or "")

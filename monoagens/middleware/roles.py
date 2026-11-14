@@ -583,10 +583,10 @@ def _book(kernel: Any) -> RoleBook:
 
 
 async def whoami(kernel: Any, event: Event, arguments: list[str]) -> str:
-    """Show the asker's id, roles and this place; accounts only ever in a direct chat."""
+    """Show the asker's id and roles; accounts only ever in a direct chat."""
     conn, book = kernel.conn, _book(kernel)
     who, place = str(event.origin_actor or event.who), str(event.place or "")
-    shared = not await privacy.direct(conn, place)
+    shared = not await privacy.owner_direct(conn, place)
     name = await identity.name_of(conn, who)
     person = book.people.get(who)
     label = (person.label if person is not None and person.label else None) \
@@ -603,20 +603,6 @@ async def whoami(kernel: Any, event: Event, arguments: list[str]) -> str:
         lines.append("accounts: " + ", ".join(accounts))
     lines.append(f"roles: {_held_line(book, who, place)}; tier {book.tier(who, place)}; "
                  f"approval {book.approval(who, place)}")
-    stored = await identity.read_place(conn, place)
-    live = await place_info(kernel, event, place)
-    if live and event.id is not None and any(
-            k in live for k in ("form", "parent", "can_post", "name")):
-        await identity.record_place(conn, place, live, event_id=int(event.id))
-    info = {**stored, **{k: v for k, v in live.items() if v not in (None, "") or k == "parent"}}
-    form = info.get("form") or await privacy.place_kind(conn, place)
-    parent = f", parent {info['parent']}" if info.get("parent") else ""
-    readonly = ", read-only" if info.get("can_post") is False else ""
-    lines.append(f"place: {place} — {form}, {event.body}{parent}{readonly}"
-                 + (f', "{info["name"]}"' if info.get("name") else "")
-                 + (f' ({info["member_count"]} members)' if info.get("member_count") else ""))
-    if info.get("role_facts"):
-        lines.append("platform: " + ", ".join(str(fact) for fact in info["role_facts"]))
     return "\n".join(lines)
 
 
@@ -679,16 +665,6 @@ def _labels(kernel: Any) -> dict[str, str]:
     """Return the labels `config.yaml` gives people, for matching a query."""
     return {who: str(person.label) for who, person in _book(kernel).people.items()
             if person.label}
-
-
-async def place_info(kernel: Any, event: Event, place: str) -> dict[str, Any]:
-    """Return what the adapter reports about one place, empty when it reports nothing."""
-    adapter = kernel.tools.adapters.get(str(event.body))
-    reader = getattr(adapter, "place_info", None)
-    if adapter is None or not callable(reader):
-        return {}
-    found = await reader(place) or {}
-    return dict(found) if isinstance(found, dict) else {}
 
 
 async def tell(kernel: Any, event: Event, place: str, text: str) -> None:

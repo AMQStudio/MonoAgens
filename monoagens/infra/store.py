@@ -164,6 +164,13 @@ async def read_last_events(conn, place, limit=20, *, chronological=True,
     return await _recent(conn, where, params, limit, chronological)
 
 
+async def read_event_row(conn, event_id: int) -> dict[str, Any] | None:
+    """Return one event's envelope as a mapping, or None when the Log has no such id."""
+    row = await (await conn.execute(
+        f"SELECT {_EVENT_COLS} FROM events WHERE id = %s", (int(event_id),))).fetchone()
+    return dict(zip(EVENT_COLUMNS, row)) if row else None
+
+
 async def cursor(conn, body) -> Any | None:
     """Return the last cursor payload recorded by a body, if any."""
     cur = await conn.execute("SELECT payload->'cursor' FROM events WHERE body = %s "

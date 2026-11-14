@@ -13,13 +13,13 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from monoagens.core.context.parts import VOLATILE, Part
+from monoagens.contract import ContextItem
 from monoagens.core.hooks import Continue, Middleware, Replace, Stop
 from monoagens.core.memory.cards import canonical, merge_map
 from monoagens.infra.clock import Clock
 from monoagens.infra.store import append_event, payload_text, read_state, write_state
 from monoagens.middleware import privacy
-from monoagens.middleware.registry import RULE_BLOCK_ORDER, CommandEntry
+from monoagens.middleware.registry import CommandEntry
 from monoagens.types import Event
 
 LOGGER = logging.getLogger(__name__)
@@ -261,40 +261,53 @@ def claim(conn) -> Middleware:
     return rule
 
 
-async def shared_account_blocks(conn: Any) -> tuple[Part, ...]:
-    """Return neutral context notes for adapters whose self_account belongs to the owner (D66)."""
+async def shared_account_items(conn: Any) -> tuple[ContextItem, ...]:
+    """Return one card per adapter whose own actor belongs to the owner (D66)."""
     cur = await conn.execute(
         "SELECT key, value FROM state WHERE key LIKE 'self_account:%' ORDER BY key")
     rows = await cur.fetchall()
-    if not rows:
-        return ()
-    owner = await read_state(conn, OWNER_KEY) or {}
-    mapping = await privacy.aliases(conn)
-    merges = await merge_map(conn)
-    notes: list[Part] = []
+    items: list[ContextItem] = []
     for key, value in rows:
         body = str(key).removeprefix("self_account:")
         account = str((value or {}).get("account") or "")
+        person = str((value or {}).get("person") or "")
         if not body or not account:
             continue
-        mapped = merges.get(mapping.get(account, account), mapping.get(account, account))
-        if owner.get("who") != account and mapped != OWNER:
+        if person != OWNER and account != OWNER:
             continue
-        notes.append(Part(
-            f"shared_{body}", VOLATILE, RULE_BLOCK_ORDER,
-            text=(f"Shared account ({body}): speaking in someone else's chat on {body} "
+        items.append(ContextItem(
+            section="cards", kind="shared_account",
+            text=(f"- Shared account ({body}): speaking in someone else's chat on {body} "
                   f"speaks through the owner's account ({account}).")))
-    return tuple(notes)
+    return tuple(items)
+
+
+async def record_self_account(conn: Any, body: str, native: str, *, now: datetime) -> None:
+    """Record one adapter's own actor, once at install, so a card can say what it speaks as."""
+    if not body or not native:
+        return
+    person = await resolve_account(conn, native, now=now, body=body)
+    key = f"self_account:{body}"
+    current = await read_state(conn, key) or {}
+    if current.get("account") == native and current.get("person") == person:
+        return
+    async with conn.transaction():
+        event = await append_event(conn, ts=now, kind="identity.self", body=body,
+                                   payload={"account": native, "person": person})
+        await write_state(conn, key, {"account": native, "person": person}, event.id)
 
 
 def cards(conn, *, roles: Any = None) -> Middleware:
-    """Context rule: add person cards and shared-account notes (D55, D66)."""
+    """Context rule: add one card per person here, and the shared-account notes (D55, D66)."""
 
     async def rule(item: Any, ctx: Any) -> Any:
-        people = await person_cards(conn, item.place, item.trigger, roles=roles)
-        extra = await shared_account_blocks(conn)
-        blocks = (*item.blocks, *extra) if extra else item.blocks
-        return Replace(replace(item, people=people, blocks=blocks))
+        cards = await person_cards(conn, item.place, item.trigger, roles=roles)
+        items = tuple(ContextItem(section="cards", text=text, kind="person")
+                      for text in cards)
+        items += await shared_account_items(conn)
+        if not items:
+            return Continue()
+        return Replace(replace(item, items=(*item.items, *items)))
 
     return rule
 
@@ -310,102 +323,27 @@ def identity_line() -> Middleware:
     return rule
 
 
-async def read_place(conn: Any, place: str | None) -> dict[str, Any]:
-    """Return persisted metadata `{form, parent, can_post, name, members, roles}` for a place."""
-    if not place:
-        return {}
-    return dict(await read_state(conn, f"place:{place}") or {})
-
-
-async def can_post(conn: Any, place: str | None) -> bool:
-    """Return whether the soul may post to `place` (defaults to True when unknown)."""
-    info = await read_place(conn, place)
-    return info.get("can_post", True) is not False
-
-
-async def record_place(conn: Any, place: str, info: Mapping[str, Any], *,
-                       event_id: int) -> dict[str, Any]:
-    """Persist structured place metadata in `state: place:<id>` (D68)."""
-    current = await read_place(conn, place)
-    updated = {
-        "form": info.get("form") or current.get("form") or "group",
-        "parent": info.get("parent") if "parent" in info else current.get("parent"),
-        "can_post": (info["can_post"] if "can_post" in info and info["can_post"] is not None
-                     else current.get("can_post", True)),
-        "name": info.get("name") or current.get("name") or "",
-        "members": list(info.get("members") if info.get("members") is not None
-                        else current.get("members") or ()),
-        "roles": list(info.get("roles") if info.get("roles") is not None
-                      else current.get("roles") or ()),
-    }
-    if updated != current:
-        await write_state(conn, f"place:{place}", updated, event_id)
-    return updated
-
-
-def place_tracker(conn: Any) -> Middleware:
-    """Inbound rule: persist structured place metadata and shared self_account (D66, D68)."""
-
-    async def rule(item: Any, ctx: Any) -> Any:
-        if getattr(item, "kind", "") != "percept" or not item.id:
-            return Continue()
-        payload = item.payload or {}
-        self_account = str(payload.get("self_account") or "")
-        if self_account and getattr(item, "body", None):
-            key = f"self_account:{item.body}"
-            current = await read_state(conn, key)
-            if (current or {}).get("account") != self_account:
-                await write_state(conn, key, {"account": self_account}, int(item.id))
-        if not getattr(item, "place", None):
-            return Continue()
-        raw = dict(payload.get("place_info") or {})
-        extra_parents = raw.pop("parents", None)
-        if not raw.get("form"):
-            raw["form"] = "dm" if payload.get("place_kind") == "direct" else "group"
-        await record_place(conn, str(item.place), raw, event_id=int(item.id))
-        if isinstance(extra_parents, dict):
-            for child, parent_id in extra_parents.items():
-                child_id, par_id = str(child or ""), str(parent_id or "")
-                if child_id and par_id and child_id != str(item.place):
-                    existing = await read_place(conn, child_id)
-                    if not existing.get("parent"):
-                        await record_place(conn, child_id, {"parent": par_id},
-                                           event_id=int(item.id))
-        return Continue()
-
-    return rule
-
-
 def route(conn) -> Middleware:
-    """Action rule: resolve `to:`/`via:` to a place and attach the routing labels."""
+    """Action rule: resolve `to:`/`via:` to the place an act lands in (D46, D57)."""
 
     async def rule(item: Any, ctx: Any) -> Any:
+        """Resolve a target that is not a place; no target means the current place."""
         if ctx.get("refusal") or ctx.get("handled") or not ctx["descriptor"].get("communicative"):
             return Continue()
         to, via = ctx.get("to"), ctx.get("via")
         if not to:
-            target = ctx.get("place") or ctx["event"].place
-            if target and not await can_post(conn, target):
-                ctx["refusal"] = f"cannot post in {target}: read-only place"
             return Continue()
         place, error = await resolve_to(conn, str(to), via)
         if place is None and str(to) == ctx["event"].who:
             place, error = ctx["event"].place, None  # the person is here: answer them here
-        if (place is None and is_person(to)
-                and str(to) in await privacy.audience(conn, ctx["event"].place)):
+        if place is None and is_person(to) and str(to) in (
+                await privacy.audience(conn, ctx["event"].place) or frozenset()):
             place, error = ctx["event"].place, None  # the person is here: answer them here
         ctx["to"] = str(to)
         if error:
             ctx["refusal"] = error
             return Continue()
         ctx["place"] = place or ctx["event"].place
-        if not await can_post(conn, ctx["place"]):
-            ctx["refusal"] = f"cannot post in {ctx['place']}: read-only place"
-            return Continue()
-        labels = ctx["labels"]
-        labels["place_kind"] = await privacy.place_kind(conn, ctx["place"])
-        labels["hold_for"] = str(to) if is_owner(to) else None
-        labels["delivers"] = bool(to) and not is_person(to)
         return Continue()
 
     return rule
@@ -413,13 +351,12 @@ def route(conn) -> Middleware:
 
 async def person_cards(conn, place: str | None, event: Event | None,
                        roles: Any = None) -> tuple[str, ...]:
-    """Return one card per person present here or named in the trigger (D55)."""
-    present = set(await privacy.audience(conn, place)) if place else set()
+    """Return one card per person here or involved in the trigger (D55)."""
+    present = set(await privacy.audience(conn, place) or frozenset()) if place else set()
+    involved = {str(actor) for actor in ((event.payload or {}).get("involves") or ())} \
+        if event is not None else set()
     known = await _known_people(conn)
-    text = payload_text(event.payload) if event is not None else ""
-    named = {who for who, card in known.items()
-             if card["name"] and _named(card["name"], text)}
-    people = sorted((present | named) - {OWNER, privacy.UNKNOWN})
+    people = sorted((present | involved) - {OWNER, privacy.UNKNOWN})
     return tuple([await _card(conn, who, known.get(who) or {"name": None, "closeness": 0.0,
                                                             "natives": {who}},
                               roles=roles, place=place)
@@ -459,10 +396,10 @@ async def find_person(conn, query: str, *, labels: Mapping[str, str] | None = No
     if resolved in known:
         return resolved
     for who, label in (labels or {}).items():
-        if str(label).lower() == text.lower():
+        if str(label) == text:
             return await canonical(conn, who)
     for who, card in known.items():
-        if card["name"] and str(card["name"]).lower() == text.lower():
+        if card["name"] and str(card["name"]) == text:
             return who
     return None
 
@@ -503,12 +440,6 @@ def _name(who: str, state: dict[str, Any]) -> str | None:
     return part if part.isalpha() else None
 
 
-def _named(name: str, text: str) -> bool:
-    """Return whether a card name appears in the trigger as a whole word."""
-    return bool(text) and re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text,
-                                    re.IGNORECASE) is not None
-
-
 async def _card(conn, who: str, card: dict[str, Any], *, roles: Any = None,
                 place: str | None = None) -> str:
     """Render one person card: name, person id, reachable adapters, closeness, role context."""
@@ -523,40 +454,37 @@ async def _card(conn, who: str, card: dict[str, Any], *, roles: Any = None,
 
 
 async def _direct_places(conn, natives: set[str]) -> dict[str, tuple[str, datetime]]:
-    """Return the direct place, and when it was last active, per adapter for one person."""
+    """Return the direct place, and when it was last active, per adapter for one person.
+
+    A place is direct for a person when the audience it reported is that person alone, or that
+    person and the owner (middleware.md §3): the one fact, never a platform's own field.
+    """
     if not natives:
         return {}
     mapping = await privacy.aliases(conn)
     merges = await merge_map(conn)
-    owners = {merges.get(mapping.get(n, n), mapping.get(n, n)) for n in natives}
-    unlinked_rows = await (await conn.execute(
-        "SELECT payload->>'account' FROM events WHERE kind = %s AND payload->>'from' = ANY(%s)",
-        (UNLINKED, sorted(owners)))).fetchall()
-    excluded: set[str] = set()
-    for (acc,) in unlinked_rows:
-        if not acc:
-            continue
-        reg = await (await conn.execute(
-            "SELECT place FROM events WHERE kind = %s AND payload->>'account' = %s LIMIT 1",
-            (REGISTERED, acc))).fetchone()
-        if reg and reg[0]:
-            excluded.add(str(reg[0]))
-        _, _, native_id = str(acc).partition(":")
-        if native_id:
-            excluded.add(native_id)
+    people = {merges.get(mapping.get(native, native), mapping.get(native, native))
+              for native in natives}
     cur = await conn.execute(
-        "SELECT DISTINCT ON (body, place) body, place, ts, id FROM events WHERE kind = 'percept' "
-        "AND place IS NOT NULL AND who = ANY(%s) AND payload->>'place_kind' = 'direct' "
-        "ORDER BY body, place, id DESC", (sorted(natives),))
-    rows = sorted(await cur.fetchall(), key=lambda row: row[3], reverse=True)
+        "SELECT DISTINCT ON (place) place, payload FROM events "
+        "WHERE kind = 'place.audience' AND place IS NOT NULL ORDER BY place, id DESC")
+    direct: list[str] = []
+    for place, payload in await cur.fetchall():
+        members = {str(actor) for actor in (payload or {}).get("actors") or ()}
+        members = {merges.get(mapping.get(actor, actor), mapping.get(actor, actor))
+                   for actor in members}
+        if not members or not members & people or members - {OWNER} - people:
+            continue
+        direct.append(str(place))
+    if not direct:
+        return {}
+    cur = await conn.execute(
+        "SELECT DISTINCT ON (body, place) body, place, ts FROM events WHERE kind = 'percept' "
+        "AND place = ANY(%s) AND who = ANY(%s) ORDER BY body, place, id DESC",
+        (sorted(direct), sorted(people)))
     places: dict[str, tuple[str, datetime]] = {}
-    for body, place, seen, _ in rows:
-        bkey = str(body or "?")
-        if bkey in places or place in excluded or str(place).rsplit(":", 1)[-1] in excluded:
-            continue
-        if await privacy.place_kind(conn, place) != "direct":
-            continue
-        places[bkey] = (place, seen)
+    for body, place, seen in await cur.fetchall():
+        places.setdefault(str(body or "?"), (str(place), seen))
     return places
 
 
@@ -568,7 +496,7 @@ async def direct_place(conn, who: str, via: str | None = None) -> str | None:
     places = await _direct_places(conn, set(natives))
     if via:
         for body, (place, _) in places.items():
-            if body.lower() == via.lower():
+            if str(body) == str(via):
                 return place
         return None
     if places:
@@ -581,7 +509,7 @@ async def resolve_to(conn, to: str, via: str | None = None) -> tuple[str | None,
     if not is_person(to):
         found = await (await conn.execute(
             "SELECT 1 FROM events WHERE place = %s LIMIT 1", (str(to),))).fetchone()
-        if found or await read_state(conn, f"place:{to}") is not None:
+        if found:
             return str(to), None
         return None, f"no such place: {to}"
     place = await direct_place(conn, str(to), via)
