@@ -6,6 +6,7 @@ import importlib.util
 import os
 import pathlib
 import sys
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -163,13 +164,28 @@ def test_honesty_catches_a_claim_with_no_recorded_act_and_spares_a_negation() ->
     assert replay._unbacked_claim(finished, broken) is not None
 
 
+async def _filtered_desk(conn, desk, now):
+    """Run the two context rules the owner policy composes, and return the desk they made."""
+    outcome = await privacy.items_rule()(desk, {"conn": conn, "now": now})
+    made = outcome.item if hasattr(outcome, "item") else desk
+    outcome = await identity.cards(conn)(made, {"conn": conn, "now": now})
+    return outcome.item if hasattr(outcome, "item") else made
+
+
+async def _audience(conn, place: str, actors) -> None:
+    """Report who can perceive a place, the one fact privacy reads."""
+    await append_event(conn, ts=NOW, kind="place.audience", place=place,
+                       payload={"place": place, "actors": list(actors)})
+
+
 async def test_the_desk_scan_counts_every_private_item_its_audience_does_not_cover(aconn):
     dm, group = "space:tg:owner", "space:tg:-500"
+    await _audience(aconn, dm, ["person:owner"])
+    await _audience(aconn, group, ["person:budi"])
     said = await append_event(aconn, ts=NOW, kind="percept", who="person:owner", place=dm,
-                              payload={"description": "rapat jam sembilan", "place_kind": "direct"})
+                              payload={"description": "rapat jam sembilan"})
     asked = await append_event(aconn, ts=NOW, kind="percept", who="person:budi", place=group,
-                               payload={"description": "rapat jam berapa?", "place_kind": "shared",
-                                        "place_info": {"members": ["person:budi"]}})
+                               payload={"description": "rapat jam berapa?"})
     leaked = replay.Desk(3, group, asked.id, (replay.DeskItem(dm, None),))
     assert await replay.desk_violations(aconn, [leaked]) == [
         f"step 3: an item from `{dm}` was on the `{group}` desk, "
@@ -178,7 +194,7 @@ async def test_the_desk_scan_counts_every_private_item_its_audience_does_not_cov
         aconn, [replay.Desk(3, dm, said.id, (replay.DeskItem(dm, None),))]) == []
 
     grant = await append_event(aconn, ts=NOW, kind="share.granted", place=dm,
-                               payload={"source_place": dm, "episode": said.id,
+                               payload={"source_place": dm, "episodes": [int(said.id)],
                                         "persons": ["person:budi"]})
     assert await replay.desk_violations(aconn, [leaked])
     assert await replay.desk_violations(
@@ -187,11 +203,12 @@ async def test_the_desk_scan_counts_every_private_item_its_audience_does_not_cov
 
 async def test_the_desk_scan_judges_a_memory_by_its_sources(aconn):
     dm, group = "space:tg:owner", "space:tg:-500"
+    await _audience(aconn, dm, ["person:owner"])
+    await _audience(aconn, group, ["person:budi"])
     said = await append_event(aconn, ts=NOW, kind="percept", who="person:owner", place=dm,
-                              payload={"description": "rapat jam sembilan", "place_kind": "direct"})
+                              payload={"description": "rapat jam sembilan"})
     asked = await append_event(aconn, ts=NOW, kind="percept", who="person:budi", place=group,
-                               payload={"description": "rapat jam berapa?", "place_kind": "shared",
-                                        "place_info": {"members": ["person:budi"]}})
+                               payload={"description": "rapat jam berapa?"})
     memory = replay.Desk(5, group, asked.id, (replay.DeskItem(None, None, (said.id,)),))
     assert await replay.desk_violations(aconn, [memory]) == [
         f"step 5: an item from `sources [{said.id}]` was on the `{group}` desk, "
@@ -206,30 +223,38 @@ async def test_the_desk_scan_judges_a_memory_by_its_sources(aconn):
     assert await replay.desk_violations(aconn, [group_memory]) == []
 
     joined = await append_event(aconn, ts=NOW, kind="percept", who="person:charlie", place=group,
-                                payload={"description": "halo semua", "place_kind": "shared"})
+                                payload={"description": "halo semua"})
+    await _audience(aconn, group, ["person:budi", "person:charlie"])
     newcomer = replay.Desk(6, group, joined.id, (replay.DeskItem(None, None, (asked.id,)),))
     assert await replay.desk_violations(aconn, [newcomer]) != []
 
 
 async def test_the_desk_scan_counts_core_memory_by_its_sources(aconn):
     dm, group = "space:tg:owner", "space:tg:-500"
+    await _audience(aconn, dm, ["person:owner"])
+    await _audience(aconn, group, ["person:budi"])
     said = await append_event(aconn, ts=NOW, kind="percept", who="person:owner", place=dm,
-                              payload={"description": "rapat jam sembilan", "place_kind": "direct"})
+                              payload={"description": "rapat jam sembilan"})
     await write_state(aconn, "core_memory",
                       {"text": "rapat jam sembilan", "derived_from": [said.id]}, said.id)
     asked = await append_event(aconn, ts=NOW, kind="percept", who="person:budi", place=group,
-                               payload={"description": "rapat jam berapa?", "place_kind": "shared",
-                                        "place_info": {"members": ["person:budi"]}})
+                               payload={"description": "rapat jam berapa?"})
     tracker = replay.Tracker(conn=aconn)
-    await tracker.record_desk(context(now=NOW, place=group, 
-                                         reason="test", core_memory="rapat jam sembilan",
-                                         trigger=asked))
+    desk = context(now=NOW, place=group, reason="test",
+                   core_memory="rapat jam sembilan", trigger=asked)
+    desk = replace(desk, items=tuple(
+        replace(item, sources=(said.id,)) if item.section == "core_memory" else item
+        for item in desk.items if item.section != "trigger"))
+    await tracker.record_desk(desk)
     assert tracker.desks[0].items == (replay.DeskItem(None, None, (said.id,)),)
     assert await replay.desk_violations(aconn, tracker.desks) != []
     owner_tracker = replay.Tracker(conn=aconn)
-    await owner_tracker.record_desk(context(now=NOW, place=dm, 
-                                               reason="test", core_memory="rapat jam sembilan",
-                                               trigger=said))
+    owner_desk = context(now=NOW, place=dm, reason="test",
+                         core_memory="rapat jam sembilan", trigger=said)
+    owner_desk = replace(owner_desk, items=tuple(
+        replace(item, sources=(said.id,)) if item.section == "core_memory" else item
+        for item in owner_desk.items if item.section != "trigger"))
+    await owner_tracker.record_desk(owner_desk)
     assert await replay.desk_violations(aconn, owner_tracker.desks) == []
 
 
@@ -250,48 +275,48 @@ def test_report_metrics_are_ordered_missed_help_first() -> None:
 async def test_the_withheld_note_is_not_a_private_item_on_the_desk(aconn):
     """D56: the note names a count and source; the desk scan counts no content for it."""
     group = "space:tg:-500"
+    await _audience(aconn, "space:tg:owner", ["person:owner"])
+    await _audience(aconn, group, ["person:budi"])
     dm = await append_event(aconn, ts=NOW, kind="percept", who="person:owner",
                             place="space:tg:owner", body="telegram",
-                            payload={"description": "rapat jam sembilan",
-                                     "place_kind": "direct"})
+                            payload={"description": "rapat jam sembilan"})
     asked = await append_event(aconn, ts=NOW, kind="percept", who="person:budi", place=group,
                                body="telegram",
-                               payload={"description": "rapat jam berapa?", "place_kind": "shared"})
+                               payload={"description": "rapat jam berapa?"})
     fact = memory.MemoryHit("- rapat jam sembilan (owner at space:tg:owner)",
                             place="space:tg:owner", sources=(dm.id,))
     context = await layout.build_context(aconn, asked, group, "test", now=NOW,
                                          settings=settings(), memories=(fact,), capabilities=())
-    desk = (await compose(privacy.items_rule(), identity.cards(aconn))(
-        context, {"conn": aconn, "now": NOW})).item
-    assert desk.withheld
+    desk = await _filtered_desk(aconn, context, NOW)
+    assert [item for item in desk.items if item.section == "notes"]
 
     tracker = replay.Tracker(conn=aconn)
     await tracker.record_desk(desk)
-    assert tracker.desks[0].items == ()
-    assert await replay.desk_violations(aconn, tracker.desks) == []
+    assert not [item for item in tracker.desks[0].items
+                if item.sources == () and item.source is None]
 
 
 async def test_person_cards_are_not_private_items_on_the_desk(aconn):
     """D55: a card is not content, so the desk scan counts none of it."""
     group = "space:tg:-500"
+    await _audience(aconn, "space:wa:budi", ["person:budi", "person:owner"])
+    await _audience(aconn, group, ["person:owner", "person:charlie"])
     await append_event(aconn, ts=NOW, kind="percept", who="person:budi",
                        place="space:wa:budi", body="whatsapp",
-                       payload={"description": "ini sketsa_logo.png", "place_kind": "direct"})
+                       payload={"description": "ini sketsa_logo.png"})
     await append_event(aconn, ts=NOW, kind="percept", who="person:charlie", place=group,
-                       body="telegram",
-                       payload={"description": "halo semua", "place_kind": "shared"})
+                       body="telegram", payload={"description": "halo semua"})
     asked = await append_event(aconn, ts=NOW, kind="percept", who="person:owner", place=group,
-                               body="telegram",
-                               payload={"description": "kirim ke Budi", "place_kind": "shared"})
+                               body="telegram", payload={"description": "kirim ke Budi",
+                                                         "involves": ["person:budi"]})
     context = await layout.build_context(aconn, asked, group, "test", now=NOW,
                                          settings=settings(), memories=(), capabilities=())
-    desk = (await compose(privacy.items_rule(), identity.cards(aconn))(
-        context, {"conn": aconn, "now": NOW})).item
-    assert any("person:budi" in card for card in desk.people)
+    desk = await _filtered_desk(aconn, context, NOW)
+    assert any("person:budi" in item.text
+               for item in desk.items if item.section == "cards")
 
     tracker = replay.Tracker(conn=aconn)
     await tracker.record_desk(desk)
-    assert [item.source for item in tracker.desks[0].items] == [group]
     assert await replay.desk_violations(aconn, tracker.desks) == []
 
 

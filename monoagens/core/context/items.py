@@ -77,10 +77,11 @@ def doing_items(entries: Sequence[tuple[str, str | None, int | None]]) -> tuple[
                  for line, place, event_id in entries)
 
 
-def expectation_items(lines: Sequence[str]) -> tuple[ContextItem, ...]:
-    """Return one item per active expectation of this place."""
-    return tuple(ContextItem(section="expectations", text=line, kind="expectation")
-                 for line in lines)
+def expectation_items(rows: Sequence[tuple[str, int | None]]) -> tuple[ContextItem, ...]:
+    """Return one item per active expectation, sourced from the event it came from."""
+    return tuple(ContextItem(section="expectations", text=line, kind="expectation",
+                             sources=(source,) if source else ())
+                 for line, source in rows)
 
 
 def trigger_item(event: Event | None) -> tuple[ContextItem, ...]:

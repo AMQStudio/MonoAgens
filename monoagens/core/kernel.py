@@ -585,11 +585,14 @@ class Kernel:
         else:
             if reminded:
                 condition = str(item.get("condition_text") or "")
-                reason = (f"this line may relate to your expectation: {item['about']}; "
-                          f"condition: {condition}; does this line fulfil it?")
+                reason = (f"this line may relate to an expectation of yours "
+                          f"({item['about']}); condition: {condition}; "
+                          f"does this line fulfil it?")
             else:
-                reason = (f"expectation missed: {item['about']} "
-                          f"(intent: {item['intent'] or 'none'}); {appraisal.reason}")
+                # The reason names the expectation, never its words: this place's audience may
+                # not be allowed to see them, so the desk decides, not this line (D45).
+                reason = (f"expectation #{item['id']} is due here; what it was about is on the "
+                          f"desk only if this place may see it; {appraisal.reason}")
             await self._think(woken, reason, place)
         if not reminded:
             await expectations.settle(self.conn, item["id"], now=now, settings=self.settings)

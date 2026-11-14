@@ -214,7 +214,11 @@ async def test_mvp_c_expectation_remind_at_seven_and_restart(aconn):
     assert kinds.count("act.out") == 1
     assert [(a.kind, a.place, dict(a.arguments)) for a in body.actions] == [
         ("say", PLACE, {"text": "sudah jam 7"})]
-    assert "expectation missed: remind the owner at 7" in _volatile(fake).split("<why_awake>")[1]
+    # The reason names the expectation, never its words: the desk decides what may be shown
+    # (D45), so the prompt says one is due and the `<expectations>` item carries it.
+    why_awake = _volatile(fake).split("<why_awake>")[1]
+    assert "is due here" in why_awake
+    assert "remind the owner at 7" in _volatile(fake)
     assert "<event>person:owner: remind the owner at 7</event>" in _volatile(fake)
 
     cur = await aconn.execute("SELECT status, fire_count FROM expectations")

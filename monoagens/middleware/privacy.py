@@ -169,13 +169,25 @@ async def source_audience(conn, event_id: int | None, cache: dict | None = None
     return found | extra
 
 
+MEMORY_SECTIONS = ("memories", "core_memory")
+
+
 async def item_audience(conn, item: ContextItem, place: str, cache: dict | None = None
                         ) -> frozenset[str] | None:
-    """Return the audience one context item was said to: the union over its sources."""
+    """Return the audience one context item was said to: the union over its sources.
+
+    A memory is judged by the events it was derived from (D53); one with no sources has no
+    known audience at all, so it enters the owner's own place and nothing else.
+    """
+    memory = item.section in MEMORY_SECTIONS
     if not item.sources:
-        return await audience(conn, place, None, cache)
+        return frozenset() if memory else await audience(conn, place, None, cache)
     union: frozenset[str] | None = frozenset()
     for source in item.sources:
+        if memory:
+            row = await read_event_row(conn, int(source))
+            if row is not None and not row.get("place"):
+                return frozenset()  # a memory with a source from nowhere is unknown (D53)
         found = await source_audience(conn, source, cache)
         if found is None:
             return None
@@ -202,7 +214,7 @@ async def memory_visible(conn, *, context: str | None, sources: Any = (),
     target = await audience(conn, context, None, cache)
     ids = [int(source) for source in sources or ()]
     if not ids:
-        return admits(target, None)
+        return target == frozenset({OWNER})  # a memory with no source is the owner's alone
     union: frozenset[str] | None = frozenset()
     for event_id in ids:
         found = await source_audience(conn, event_id, cache)

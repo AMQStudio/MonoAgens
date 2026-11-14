@@ -20,7 +20,7 @@ from monoagens.core.memory.cards import canonical, merge_map
 from monoagens.core.memory.retrieval import recent_lines
 from monoagens.core.kinds import RECENT_KINDS
 from monoagens.infra.prior import constants
-from monoagens.infra.store import active_expectation_lines, read_last_events, read_state
+from monoagens.infra.store import active_expectations, read_last_events, read_state
 from monoagens.types import Event
 
 
@@ -69,7 +69,7 @@ async def build_context(conn: psycopg.AsyncConnection[Any], event: Event, place:
         now=now, place=place, reason=reason,
         items=(*builders.core_memory_items(core),
                *builders.doing_items(doing),
-               *builders.expectation_items(await active_expectation_lines(conn, place)),
+               *builders.expectation_items(await active_expectations(conn, place)),
                *builders.memory_items(memories),
                *builders.recent_items(shown, zone=zone, name=name),
                *builders.elsewhere_items(elsewhere, zone=zone, name=name),

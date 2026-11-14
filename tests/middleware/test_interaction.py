@@ -59,10 +59,13 @@ async def _kernel(aconn, *, body=None, interaction_settings=None):
 
 
 async def _percept(aconn, place=OWNER_DM, who="person:owner", text="halo"):
+    """Record one percept and report who can perceive its place (the one privacy fact)."""
+    actors = [who, "person:owner"] if place == OWNER_DM else [who, "person:owner",
+                                                              "person:other"]
+    await append_event(aconn, ts=START, kind="place.audience", place=place,
+                       payload={"place": place, "actors": actors})
     return await append_event(aconn, ts=START, kind="percept", who=who, place=place,
-                              body="telegram",
-                              payload={"description": text,
-                                       "place_kind": "direct" if place == OWNER_DM else "shared"})
+                              body="telegram", payload={"description": text})
 
 
 async def test_thinking_shows_in_the_owners_chat_and_never_in_a_group(aconn):

@@ -434,7 +434,9 @@ async def test_mvp_c_remind_me_at_seven_exactly_once_across_a_restart(aconn):
     assert kinds.count("act.out") == 1
     assert [(a.kind, a.place, dict(a.arguments)) for a in body.actions] == [
         ("say", PLACE, {"text": "sudah jam 7"})]
-    assert "expectation missed: remind the owner at 7" in fake.last_prompt.split("<why_awake>")[1]
+    why_awake = fake.last_prompt.split("<why_awake>")[1]
+    assert "is due here" in why_awake
+    assert "remind the owner at 7" in fake.last_prompt
 
     cur = await aconn.execute("SELECT status, fire_count FROM expectations")
     assert await cur.fetchone() == ("satisfied", 1)

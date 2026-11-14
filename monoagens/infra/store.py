@@ -411,9 +411,16 @@ async def fire_expectation(conn, row, now: datetime) -> dict[str, Any]:
 
 async def active_expectation_lines(conn, place) -> list[str]:
     """Render the active expectations for a place as prompt lines."""
-    cur = await conn.execute("SELECT id, about, intent, next_check_at FROM expectations "
+    return [line for line, _source in await active_expectations(conn, place)]
+
+
+async def active_expectations(conn, place) -> list[tuple[str, int | None]]:
+    """Return each active expectation's line and the event it came from (the item's source)."""
+    cur = await conn.execute("SELECT id, about, intent, next_check_at, source_event "
+                             "FROM expectations "
                              "WHERE status = 'active' AND (place = %s OR place IS NULL) "
                              "ORDER BY id LIMIT 20", (place,))
-    return [f"#{i} {about} ({intent or 'no intent stated'}"
-            f"{f', next check {at:%Y-%m-%d %H:%M}' if at else ''})"
-            for i, about, intent, at in await cur.fetchall()]
+    return [(f"#{i} {about} ({intent or 'no intent stated'}"
+             f"{f', next check {at:%Y-%m-%d %H:%M}' if at else ''})",
+             int(source) if source is not None else None)
+            for i, about, intent, at, source in await cur.fetchall()]

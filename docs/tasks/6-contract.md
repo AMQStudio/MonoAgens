@@ -527,66 +527,60 @@ replay are **red**, and the next session resumes from the list below. Nothing he
 the architect must take: the shape is settled by DEC-1/DEC-2/DEC-8 and the work left is finishing
 it, not choosing.
 
-Measured at this commit: **636 passed, 31 failed, 1 skipped**; `scripts/replay.py --fake`
-**156/158**; the architecture ratchet **70 findings** (from 101): `text-parse 54 ·
-payload-read 1 (jobs.py) · labels-read 0 · removed-field 11 · tests-private 4 · body-name 0 ·
-layer-import 0`.
+Measured at this commit: **643 passed, 24 failed, 1 skipped**; `scripts/replay.py --fake`
+**158/158 with absolute-line violations 0**; the architecture ratchet **70 findings** (from 101):
+`text-parse 54 · payload-read 1 (jobs.py) · labels-read 0 · removed-field 11 · tests-private 4 ·
+body-name 0 · layer-import 0`.
 
-Green and rewritten for the item contract: `tests/core/test_context.py` 6/6,
-`tests/middleware/test_privacy.py` 22/22, `test_registry` 16/16, `test_identity` 20/20,
-`test_attachments` 12/12, `test_foundation_check` 12/12, `test_failures` 14/14,
-`test_memory` 19/19, `test_reasoning` 42/42, `test_context_cost` 1/1, `test_fail_closed` 6/6,
-`test_batch`, `test_whatsapp`, `test_soul_tuning`.
+**The two absolute-line violations are gone.** They came from a memory whose `derived_from`
+included an event with no place at all (`pair.claimed`): its audience was "unknown", and unknown
+content flows freely. `privacy.item_audience` now treats a memory as only as visible as its least
+known source (D53) — a memory with a source from nowhere enters the owner's own place and nothing
+else — while any other item said where nobody was certain still flows freely (middleware.md §3).
+`Kernel._expect_wake` also stopped quoting a fired expectation's `about`/`intent` in `<why_awake>`:
+the reason names the expectation's id and lets the desk decide what may be shown (D45).
 
 What this commit implements, one home each:
 
-- **the context is items** (DEC-1): `monoagens/core/context/items.py` builds one item per section
-  (`recent`, `elsewhere`, `memories`, `core_memory`, `doing`, `expectations`, `trigger`), each with
-  the event ids it quotes; `layout.PFCContext` keeps `now`, `place`, `reason`, `items`,
-  `self_text`, `trigger`, `last_interaction`, `capabilities`, `results`, and `build_context` fills
-  the items from the same reads it made before. `parts.messages` renders the three messages from
-  the items after the last hook has run, with the section budgets kept per section and a section
-  that no rule filled costing nothing (`notes`).
-- **one privacy fact and one check** (DEC-1, 3.3): `middleware/privacy.audience` reads the newest
-  `place.audience` event at or before a moment and returns `None` for *unknown*; `admits` is the
-  only predicate; `items_rule` is the only context check (the attachment door and the intent line
-  call the same `visible`/`admits`); `withheld_line` renders D56. `share` names event ids
-  (`items`/`episode`), `grant` records exactly those, and `granted_people` folds a grant into an
-  event's audience. Every regex, `.lower()`/`.split()` over rendered lines, `place_kind`,
-  `place_info`, `_place_members`, `_shared_info`, `_share_tokens`, `_event_share_text`,
-  `_delegated_share_source`, `topic_rule`, `narrowing` and the per-field `filter_context` are gone.
-- **no labels in the core** (2.2's label half, early): `Dispatch` carries `place`/`receipt` and no
-  `labels`; a held act is `ctx["held"]`; `threads.after_step` reads the act's `to` and the
-  receipt's state (a person target waits, a place target delivers); the core's `labels-read`
-  count is 0.
-- **identity on actors** (3.2, partly): `cards` builds `cards` items, `person_cards` reads only the
-  place's audience and the trigger's `involves`, `_direct_places` reads `place.audience`, and the
-  place tracker, `record_place`, `read_place`, `can_post` and `shared_account_blocks` are gone
-  (`shared_account_items` + `record_self_account` replace them).
-- **registry**: `self_block` sets `self_text` (D-I: every installed skill, no word overlap), the
-  word-overlap `relevant_skills` is deleted, and a body's `PermissionError` answers
-  `Receipt("refused", reason=...)` (§4.4).
-- **the harness** (`scripts/replay.py`): each step reports its place's audience before its
-  percept (a declared `members`, else the owner and everyone who has spoken there), the fake
-  prompt is the real rendering of the same context, and a scenario's `self.share` may name
-  `@act`/`@percept` so a fake answer can name the ids the contract's `share` takes.
+- **the context is items** (DEC-1): `monoagens/core/context/items.py` builds one item per section,
+  each with the event ids it quotes (an expectation's source event included); `PFCContext` keeps
+  `now`, `place`, `reason`, `items`, `self_text`, `trigger`, `last_interaction`, `capabilities`,
+  `results`; `parts.messages` renders the three messages after the last hook has run, with the
+  section budgets kept per section and a section no rule filled costing nothing.
+- **one privacy fact and one check** (DEC-1, 3.3): `audience` reads the newest `place.audience` at
+  or before a moment (`None` = unknown), `admits` is the only predicate, `items_rule` the only
+  context check; `share` names event ids, a grant folds into an event's audience; every regex,
+  `.lower()`/`.split()`, `place_kind`, `place_info`, `_share_tokens`, `topic_rule`, `narrowing` and
+  `filter_context` are gone.
+- **no labels in the core**: `Dispatch` carries `place`/`receipt`; a held act is `ctx["held"]`;
+  `threads.after_step` reads the act's `to` and the receipt's state; `labels-read` is 0.
+- **identity on actors**: `cards` builds card items, `person_cards` reads the place's audience and
+  the trigger's `involves`, `_direct_places` reads `place.audience`, `record_self_account` writes
+  an adapter's own actor once at install; the place tracker and `read_place`/`can_post` are gone.
+- **registry**: `self_text` (D-I), `PermissionError` from a body answers `refused` (§4.4).
+- **the harness**: a step reports its place's audience before its percept, the fake prompt is the
+  real rendering, `@act`/`@percept` resolve `share` ids, and the desk scan skips cards and notes
+  because they are not content (D55, D56).
 
-The 31 failures left, grouped by the step that owns them — none is a design question:
+### The one open bug, and the 24 failures
+
+**A foreign-key failure that looks like a leftover task.** In `tests/middleware/test_policy.py`
+seven tests fail with `events_caused_by_fkey` on an id that existed in an *earlier* test, raised at
+`policy.py:362` (`kernel._emit(ctx["event"], interaction.REQUEST, ...)`) through
+`_run_hooks → stopped → _emit`. The same shape appears in `test_interaction`. Running one such test
+alone does not reproduce it, so a task from a previous test is still writing into the truncated
+schema. It is the first thing to chase: find the `asyncio.create_task` that outlives its test (start
+with `jobs.start` and `interaction.request`), await or cancel it, and the cluster should clear.
+
+The rest, by the step that owns them:
 
 | where | count | why it is still red |
 |---|---|---|
-| `tests/middleware/test_policy.py` | 7 | approval/brake tests still drive `ctx["labels"]["hold"]`; they must read the held receipt and the `approval.*` events (3.5) |
-| `tests/middleware/test_interaction.py` | 6 | `read_receipts`, `/show`'s body half and the thought's privacy are step 3.5 |
-| `tests/middleware/test_roles.py` | 5 | `whoami`'s place line and the platform-role subtree are deleted by 3.6 |
-| `tests/test_replay_metrics.py` | 5 | the desk scan's own fixtures build places with no audience; they need `place.audience` and an outcome unwrap |
-| `tests/plugins/*` | 3 | one `VOLATILE` import, one task-thread step count, one approval-mode flag (4.x/5.x) |
+| `tests/middleware/test_policy.py` | 8 | the FK bug above, plus approval/brake tests that still drive `ctx["labels"]["hold"]` (3.5) |
+| `tests/middleware/test_roles.py` | 5 | `whoami`'s place line and the platform-role subtree are deleted by 3.6; their tests go with them |
+| `tests/middleware/test_interaction.py` | ~1 | `read_receipts` and `/show`'s body half are step 3.5 |
 | `tests/adapters/test_part1_integration.py` | 2 | the cross-body link and deferred-file tests need audiences |
-| `tests/test_mvp.py`, `test_replay_metrics`, `widget` leftovers | 3 | same audience material |
-
-**Two replay checks (26 and 28) are absolute-line violations and must be fixed first**: the owner's
-private line reaches the group desk at a fired expectation's wake, because `<why_awake>` still
-quotes the expectation's `intent`, which names the fact. The fix belongs in `Kernel._wake`'s reason
-line (quote the place and the question, never the intent's words).
+| `tests/plugins/*` | 3 | one task-thread step count, one approval-mode flag, one scenario count (4.x/5.x) |
 
 ### Where the work stands (session of 2026-11-14, evening)
 

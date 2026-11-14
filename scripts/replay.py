@@ -264,8 +264,10 @@ class Tracker:
 
     async def record_desk(self, context: PFCContext) -> None:
         """Store every item's place and sources for one wake, for the privacy metric."""
+        # A card and a note are not content: the scan judges what the soul was told, not
+        # what it was told about whom (D55, D56).
         items = [DeskItem(item.place or None, None, tuple(item.sources))
-                 for item in context.items if item.section != "notes"]
+                 for item in context.items if item.section not in ("notes", "cards")]
         trigger = context.trigger.id if context.trigger is not None else None
         desk = Desk(self.step_index, context.place, trigger, tuple(items))
         self.desks.append(desk)
