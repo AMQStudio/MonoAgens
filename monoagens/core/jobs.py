@@ -106,8 +106,18 @@ class JobRunner:
             payload=payload))
 
     def finish(self, event: Event) -> Job | None:
-        """Remove and return the job that a `job.result` event closes."""
-        return self.in_flight.pop(str(event.payload.get("key") or ""), None)
+        """Remove and return the job that a `job.result` event closes.
+
+        The result names its job by the `job.started` it was caused by, so the core finds it
+        without reading a payload (2.2).
+        """
+        started = event.caused_by
+        if started is None:
+            return None
+        for key, job in list(self.in_flight.items()):
+            if job.started_event_id == int(started):
+                return self.in_flight.pop(key, None)
+        return None
 
     async def sleep(self, now: datetime) -> dict[str, Any]:
         """Consolidate on a private connection, so the consumer never waits on it."""

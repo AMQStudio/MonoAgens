@@ -404,14 +404,15 @@ async def reconcile_merges(conn: Any, book: RoleBook, report: Any = None) -> Rol
 
 
 def install_commands(kernel: Any) -> None:
-    """Register the role commands: whoami, whois, role and roles show."""
+    """Register the role commands: whoami, whois, role, unrole and roles show."""
     tools = kernel.tools
     for name, description, permission, handler in (
             ("whoami", "Show who you are here, and what you may do.", "identity.whoami",
              whoami),
             ("whois", "Show one person's id and linked accounts.", "identity.whois", whois),
-            ("role", "Give or take a role: /role add|remove <person> <role>.",
-             "roles.manage", give_role),
+            ("role", "Give a role: /role <person> <role>.", "roles.manage", give_role),
+            ("unrole", "Take a role back: /unrole <person> <role>.", "roles.manage",
+             take_role),
             ("roles", "Show what one role gets: /roles show <role>.", "roles.manage", show_role)):
         if tools.command(name) is None:
             tools.add_command(CommandEntry(name, description, permission, handler,
@@ -479,10 +480,23 @@ async def whois(kernel: Any, event: Event, arguments: list[str]) -> str:
 
 
 async def give_role(kernel: Any, event: Event, arguments: list[str]) -> str:
-    """Give or take one role: only below the giver's own tier, one line in config.yaml."""
-    if len(arguments) < 3 or arguments[0].lower() not in ("add", "remove"):
-        return "usage: /role add|remove <person> <role>"
-    action, query, role_name = arguments[0].lower(), arguments[1], arguments[2]
+    """Give one role: only below the giver's own tier, one line in config.yaml."""
+    return await _change_role(kernel, event, arguments, adding=True)
+
+
+async def take_role(kernel: Any, event: Event, arguments: list[str]) -> str:
+    """Take one role back: the same rules as giving it."""
+    return await _change_role(kernel, event, arguments, adding=False)
+
+
+async def _change_role(kernel: Any, event: Event, arguments: list[str], *,
+                       adding: bool) -> str:
+    """Apply one role change from the command's own arguments, never by matching words."""
+    verb = "role" if adding else "unrole"
+    if len(arguments) < 2:
+        return f"usage: /{verb} <person> <role>"
+    query, role_name = arguments[0], arguments[1]
+    action = "add" if adding else "remove"
     book = _book(kernel)
     if role_name not in book.roles:
         return f"no role called {role_name}"

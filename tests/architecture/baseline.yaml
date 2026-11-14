@@ -4,7 +4,6 @@ findings:
   - {file: monoagens/core/expectations.py, line: 18, ban: text-parse}
   - {file: monoagens/core/expectations.py, line: 36, ban: text-parse}
   - {file: monoagens/core/identity.py, line: 14, ban: text-parse}
-  - {file: monoagens/core/jobs.py, line: 110, ban: payload-read}
   - {file: monoagens/middleware/contract.py, line: 38, ban: text-parse}
   - {file: monoagens/middleware/identity.py, line: 8, ban: text-parse}
   - {file: monoagens/middleware/interaction.py, line: 7, ban: text-parse}
@@ -25,14 +24,7 @@ findings:
   - {file: monoagens/middleware/loader.py, line: 813, ban: text-parse}
   - {file: monoagens/middleware/loader.py, line: 993, ban: text-parse}
   - {file: monoagens/middleware/policy.py, line: 39, ban: text-parse}
-  - {file: monoagens/middleware/policy.py, line: 482, ban: text-parse}
   - {file: monoagens/middleware/registry.py, line: 259, ban: text-parse}
   - {file: monoagens/middleware/roles.py, line: 23, ban: text-parse}
   - {file: monoagens/middleware/roles.py, line: 25, ban: text-parse}
-  - {file: monoagens/middleware/roles.py, line: 483, ban: text-parse}
-  - {file: monoagens/middleware/roles.py, line: 485, ban: text-parse}
-  - {file: monoagens/middleware/roles.py, line: 515, ban: text-parse}
-  - {file: tests/adapters/test_loader.py, line: 80, ban: tests-private}
-  - {file: tests/core/test_gate.py, line: 988, ban: tests-private}
-  - {file: tests/middleware/test_registry.py, line: 170, ban: tests-private}
-  - {file: tests/middleware/test_registry.py, line: 182, ban: tests-private}
+  - {file: monoagens/middleware/roles.py, line: 529, ban: text-parse}

@@ -324,11 +324,11 @@ async def test_9_an_admin_cannot_grant_admin_or_above_their_tier(aconn):
 
     refused = await command.handler(kernel, Event(
         id=None, ts=START, kind="command", who="person:tg:admin", place=GROUP,
-        body="telegram", payload={"command": "role", "arguments": []}), ["add", "Budi", "admin"])
+        body="telegram", payload={"command": "role", "arguments": []}), ["Budi", "admin"])
     granted = await command.handler(kernel, Event(
         id=None, ts=START, kind="command", who="person:tg:admin", place=GROUP,
         body="telegram", payload={"command": "role", "arguments": []}),
-        ["add", "Fulan", "member"])
+        ["Fulan", "member"])
 
     assert refused == "only the owner may change admin"
     assert granted.startswith("person:tg:guest now holds member")

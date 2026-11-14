@@ -951,6 +951,7 @@ async def test_forty_offline_messages_across_three_groups_appraised_once_per_gro
     kernel.register_adapter(body)
 
     g1, g2, g3 = "space:wa:g1@g.us", "space:wa:g2@g.us", "space:wa:g3@g.us"
+    pending: list[asyncio.Task] = []
     for idx in range(40):
         if idx < 15:
             place, addressed, text = g1, False, f"obrolan grup 1 #{idx}"
@@ -960,7 +961,7 @@ async def test_forty_offline_messages_across_three_groups_appraised_once_per_gro
             place, addressed, text = g3, False, f"obrolan grup 3 #{idx}"
         else:
             place, addressed, text = g3, True, "tolong cek catatan ini dong"
-        await kernel.queue.put(_make_queued(Event(
+        pending.append(asyncio.create_task(kernel.put(Event(
             id=None, ts=START, kind="percept", who=f"person:u{idx % 5}",
             place=place, body="telegram",
             payload={
@@ -968,8 +969,11 @@ async def test_forty_offline_messages_across_three_groups_appraised_once_per_gro
                 "addressed": addressed, "backfill": True,
                 "sent_at": (START - timedelta(minutes=30 + idx)).isoformat(),
             }, description=text,
-        )))
+        ))))
 
+    while not all(task.done() for task in pending):
+        await kernel.run_until_idle()
+        await asyncio.sleep(0)
     await kernel.run_until_idle()
 
     rows = await (await aconn.execute(
@@ -984,10 +988,7 @@ async def test_forty_offline_messages_across_three_groups_appraised_once_per_gro
     assert len(fake.requests) == 1
 
 
-def _make_queued(event: Event):
-    from monoagens.core.kernel import _Queued
 
-    return _Queued(event, None)
 
 
 async def test_kernel_run_flushes_backfill_batch_once_after_settle(aconn):

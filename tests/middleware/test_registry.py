@@ -21,6 +21,7 @@ from monoagens.contract import OUTPUT_MARKER
 from monoagens.middleware.registry import (CommandEntry, SkillEntry, ToolRegistry, help_text,
                                            self_block)
 from monoagens.contract import Action
+from monoagens import contract
 from monoagens.types import Event
 from tests.support import open_book, publish_audience, settings
 
@@ -159,31 +160,37 @@ async def test_help_is_byte_identical_on_telegram_and_cli(aconn):
     assert "telegram.say" not in telegram and "cli.say" not in telegram
 
 
-def test_the_output_cap_cuts_with_the_one_marker():
+async def test_the_output_cap_cuts_with_the_one_marker():
+    """A long result reaches reasoning cut at its cap, with the marker that says so."""
     tools = ToolRegistry()
-    tool = _Tool()
-    tools.add_tool(tool, {"read": {"facts": ["reads"], "output_cap": 200,
-                                   "permission": "workspace.read"}})
-
+    tools.add_tool(_Tool(), {"read": {"facts": ["reads"], "output_cap": 200,
+                                      "permission": "workspace.read", "owner": "workspace"}})
     long_text = "x" * 400
-    assert tools.output_cap("workspace.read") == 200
-    result = registry._capped(long_text, tools.output_cap("workspace.read"), ref="att:abc")
-    expected_n = 200 - len(OUTPUT_MARKER.format(limit=200, ref="att:abc", n=100))
-    marker = OUTPUT_MARKER.format(limit=200, ref="att:abc", n=expected_n)
-    assert result.endswith(marker)
-    assert len(result) == 200
-    assert result == long_text[:expected_n] + marker
+
+    receipt = await tools.act(contract.Action(
+        id="a1", capability="workspace.read", place=PLACE,
+        arguments={"_result": long_text}))
+
+    assert receipt.state == "done"
+    assert len(receipt.result) == 200
+    assert receipt.result[:100] == long_text[:100]
+    assert "truncated: output exceeds" in receipt.result
 
 
-def test_a_dict_result_keeps_its_other_keys_and_caps_its_text():
+async def test_a_dict_result_keeps_its_other_keys_and_caps_its_text():
+    """Only the text is cut; a path and a count reach reasoning whole."""
     tools = ToolRegistry()
-    tools.add_tool(_Tool(), {"read": {"facts": ["reads"], "output_cap": 40,
-                                      "permission": "workspace.read"}})
-    capped = registry._capped({"text": "y" * 400, "path": "a.txt", "lines": 3}, 200)
+    tools.add_tool(_Tool(), {"read": {"facts": ["reads"], "output_cap": 200,
+                                      "permission": "workspace.read", "owner": "workspace"}})
 
+    receipt = await tools.act(contract.Action(
+        id="a2", capability="workspace.read", place=PLACE,
+        arguments={"_result": {"text": "y" * 400, "path": "a.txt", "lines": 3}}))
+
+    capped = receipt.result
     assert capped["path"] == "a.txt" and capped["lines"] == 3
-    expected_n = 200 - len(OUTPUT_MARKER.format(limit=200, ref="none", n=100))
-    assert capped["text"].endswith(OUTPUT_MARKER.format(limit=200, ref="none", n=expected_n))
+    assert len(capped["text"]) <= 200
+    assert "truncated: output exceeds" in capped["text"]
 
 
 async def test_a_skill_enters_the_self_block_by_name_only(aconn):
@@ -206,7 +213,7 @@ async def test_a_skill_enters_the_self_block_by_name_only(aconn):
 
     assert "<self>" in text and "</self>" in text
     assert ("Commands: /budget, /help, /link, /plugin, /quiet, /role, /roles, /show, /unlink, "
-            "/whoami, /whois") in text
+            "/unrole, /whoami, /whois") in text
     assert "coffee-brewing — How to brew coffee well." in text
     assert "tax-filing — How to file a tax return." in text
     assert "SECRET BODY" not in text

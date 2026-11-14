@@ -431,7 +431,7 @@ def install_commands(kernel: Any) -> None:
     for name, description, permission, handler in (
             ("budget", "Show today's token budget; /budget <n> sets it.", "budget.manage",
              _budget),
-            ("quiet", "Set the quiet hours: /quiet 22:00 06:00, or /quiet off.",
+            ("quiet", "Set the quiet hours: /quiet 22:00 06:00; /quiet <anything> turns them off.",
              "quiet.manage", _quiet)):
         if kernel.tools.command(name) is None:
             kernel.tools.add_command(registry.CommandEntry(name, description, permission,
@@ -477,9 +477,8 @@ async def _quiet(kernel: Any, event: Event, arguments: list[str]) -> str:
         window = _quiet_window(before)
         return "quiet hours: off" if window is None else \
             f"quiet hours: {window[0]} to {window[1]}"
-    off_words = tuple(interaction.catalog(kernel.settings).get("quiet", {}).get("off_words")
-                      or ("off", "none"))
-    if len(arguments) == 1 and arguments[0].lower() in off_words:
+    if len(arguments) == 1:
+        # One argument is the owner turning quiet hours off; no word is matched (§2.4.7).
         after: dict[str, Any] = {}
         rendered: Any = {}
     elif len(arguments) == 2:
@@ -487,11 +486,13 @@ async def _quiet(kernel: Any, event: Event, arguments: list[str]) -> str:
             time.fromisoformat(arguments[0])
             time.fromisoformat(arguments[1])
         except ValueError:
-            return "usage: /quiet 22:00 06:00, or /quiet off"
+            return str(interaction.catalog(kernel.settings).get("quiet", {}).get("usage")
+                       or "usage: /quiet 22:00 06:00, or /quiet off")
         after = {"from": arguments[0], "to": arguments[1]}
         rendered = after
     else:
-        return "usage: /quiet 22:00 06:00, or /quiet off"
+        return str(interaction.catalog(kernel.settings).get("quiet", {}).get("usage")
+                   or "usage: /quiet 22:00 06:00, or /quiet off")
     loader.edit_config(_config_path(kernel), lambda text: loader.set_block_entry(
         text, "owner_settings", "quiet_hours", rendered), now=kernel.clock.now())
     owner["quiet_hours"] = after

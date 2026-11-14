@@ -178,17 +178,22 @@ async def test_forget_hard_clears_overlapping_core_memory_and_blocks_inflight_ve
     ev_batch_forget = await _event(aconn, ts=START + timedelta(hours=3, minutes=1))
     ev_batch_keep = await _event(aconn, ts=START + timedelta(hours=3, minutes=2))
     from monoagens.core.jobs import Job
-    j1 = await append_event(aconn, ts=START, kind="job.result",
-                            payload={"name": "encode", "key": f"encode:{ev_encode.id}"})
-    j2 = await append_event(aconn, ts=START, kind="job.result",
-                            payload={"name": "embed_batch", "key": "embed_batch"})
+    # A job's result names its job by the start it was caused by, never by a payload key.
+    started1 = await append_event(aconn, ts=START, kind="job.started",
+                                  payload={"job": "encode"})
+    started2 = await append_event(aconn, ts=START, kind="job.started",
+                                  payload={"job": "embed_batch"})
+    j1 = await append_event(aconn, ts=START, kind="job.result", caused_by=started1.id)
+    j2 = await append_event(aconn, ts=START, kind="job.result", caused_by=started2.id)
     kernel.jobs.in_flight[f"encode:{ev_encode.id}"] = Job(
         name="encode", key=f"encode:{ev_encode.id}", trigger=ev_encode, place=PLACE,
         outcome={"result": {"event_id": ev_encode.id, "vector": [0.1] * 384}})
+    kernel.jobs.in_flight[f"encode:{ev_encode.id}"].started_event_id = started1.id
     kernel.jobs.in_flight["embed_batch"] = Job(
         name="embed_batch", key="embed_batch", trigger=ev_batch_keep, place="",
         outcome={"result": {"items": [(ev_batch_forget.id, [0.2] * 384),
                                       (ev_batch_keep.id, [0.3] * 384)]}})
+    kernel.jobs.in_flight["embed_batch"].started_event_id = started2.id
     await forget_hard(aconn, [ev_encode.id, ev_batch_forget.id],
                       now=START + timedelta(hours=3, minutes=5))
     await kernel._finish_job(j1)

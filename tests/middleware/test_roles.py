@@ -300,8 +300,7 @@ async def test_a_role_command_writes_one_line_and_applies_without_restart(aconn,
     kernel = await _kernel(aconn)
     kernel.deployment_root = tmp_path
 
-    reply = await kernel.tools.command("role").handler(kernel, _command(), ["add", "Fulan",
-                                                                           "toko-a"])
+    reply = await kernel.tools.command("role").handler(kernel, _command(), ["Fulan", "toko-a"])
 
     assert reply == "person:tg:3 now holds quiet-member, toko-a"
     text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
@@ -339,7 +338,7 @@ async def test_an_admin_cannot_grant_admin(aconn):
     kernel = await _kernel(aconn)
 
     reply = await kernel.tools.command("role").handler(
-        kernel, _command(who="person:tg:2"), ["add", "Fulan", "admin"])
+        kernel, _command(who="person:tg:2"), ["Fulan", "admin"])
 
     assert reply == "only the owner may change admin"
     assert kernel.roles.people["person:tg:3"].roles == ("quiet-member",)

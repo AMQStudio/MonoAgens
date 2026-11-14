@@ -11,4 +11,4 @@ thinking:
 step:
   prefix: "(step)"
 quiet:
-  off_words: ["off", "none", "no"]
+  usage: "usage: /quiet 22:00 06:00, or /quiet off"

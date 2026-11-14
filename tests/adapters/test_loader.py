@@ -68,7 +68,7 @@ def test_a_disabled_adapter_is_off_and_need_not_exist():
     assert "adapter ghost: off" in loaded.report.lines
 
 
-def test_a_capability_without_a_permission_fails_at_boot():
+def test_a_capability_without_a_permission_fails_at_boot(monkeypatch):
     """Every entry declares its permission; the boot report says which one is wrong (§3)."""
     body = cli_adapter.create({}, {})
     body.capabilities = lambda: ({"name": "say", "description": "Say a line.",
@@ -76,9 +76,9 @@ def test_a_capability_without_a_permission_fails_at_boot():
                                       "text": {"type": "string"}}},
                                   "facts": ()},)
 
+    monkeypatch.setattr(cli_adapter, "create", lambda options, env: body)
     with pytest.raises(ValueError, match="adapter cli: say: permission is required"):
-        Loader._check_adapter("cli", body, __import__(
-            "monoagens.middleware.loader", fromlist=["BootReport"]).BootReport())
+        Loader(ROOT).load(settings(bodies={"cli": {"enabled": True}}))
 
 
 def test_the_telegram_factory_reads_the_token_from_the_environment():
