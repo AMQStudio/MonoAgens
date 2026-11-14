@@ -20,7 +20,7 @@ plugins.
   the line counts of `monoagens/core/`, `monoagens/middleware/`, `monoagens/adapters/`,
   `plugins/` and `tests/` before you start and after each part, under Notes.
 - Every rule has one home (AGENTS.md invariant 13). Note each fix's home under Notes.
-- After each part: `uv run pytest` and `uv run python scripts/replay.py --fake` pass; commit, push.
+- Tests and the fake replay run once, after Part 6, as AGENTS.md says; commit and push as you go.
 - Audit items carried from Task 5 1.12 keep their ids (S.6, E.1–E.4, F.x, O.x); a carried item
   that the contract removes (F.6–F.8: the middleware no longer shows or splits) is ticked as
   removed, with the commit that removed it.
@@ -54,9 +54,8 @@ May touch: `monoagens/contract/` (new), `contract.lock` (new), `tests/contract/`
 **Parts 2 and 3 interleave where one change spans both** (architect, 2026-11-14, from the
 worker's report): **2.5 and 3.3 are one item**, done together (the context hook's item type and
 the one privacy check over it), and **2.2's label half is done together with 3.2, 3.3 and 3.5**
-(a label can leave the core only when the middleware returns the hook outcome instead). Every
-commit still keeps `uv run pytest` and the fake replay green; tick both items when the combined
-change lands. Order: 2.2 (rendering half), 2.4, 2.6, 2.7, 2.8, 2.9, then 2.5 + 3.3 with 3.1 and
+(a label can leave the core only when the middleware returns the hook outcome instead). Tick
+both items when the combined change lands. Order: 2.2 (rendering half), 2.4, 2.6, 2.7, 2.8, 2.9, then 2.5 + 3.3 with 3.1 and
 3.2, then 2.2 (label half) with 3.5, then 3.4, 3.6–3.8.
 
 ## Part 2 — The core on waist 1

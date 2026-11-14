@@ -23,8 +23,9 @@ locked contract. This file is how you work here; the design is in `docs/spec.md`
 ## How to work
 - Work through the task's parts in order, one commit per item when practical.
   `git pull --rebase` before you start and before you push.
-- An item is done when `uv run pytest` and `uv run python scripts/replay.py --fake` pass. Push
-  only green commits.
+- Write all of the task's code first; the tests come at the end. Then run `uv run pytest` and
+  `uv run python scripts/replay.py --fake`, collect every failure, and fix them together until
+  both pass. The task is done only then.
 - A behavior change ships with a replay scenario that carries all its material as synthetic data
   (facts, people, files, realistic tool results). A failure is the soul's only after you checked
   that what it needed was in the Log and in its context.
@@ -53,5 +54,6 @@ locked contract. This file is how you work here; the design is in `docs/spec.md`
 - The engineering invariants are in `docs/spec.md` (*Principles → Engineering invariants*).
 - Gotchas: call `register_vector_async` on every async connection; pytest-asyncio 1.x runs with
   `asyncio_mode = "auto"` and has no `event_loop` fixture.
-- Tools that help: graphify (callers and dependencies before moving code) and Context7 (current
-  library docs).
+- Use GitNexus to see a change's impact (callers, dependencies) before you move code. Revert any
+  edit it makes to `AGENTS.md` or `CLAUDE.md`, and never commit its index. Context7 gives current
+  library docs.
