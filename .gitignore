@@ -1,0 +1,16 @@
+# Rust
+target/
+
+# Souls and their logs
+souls/
+*.db
+*.db-wal
+*.db-shm
+
+# Secrets
+secrets.toml
+.env
+
+# Lab run records, except published reference results
+lab/runs/*
+!lab/runs/reference/
