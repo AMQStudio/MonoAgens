@@ -15,6 +15,11 @@ refactors.
 - One test: `cargo test -p monoagens-core <test_name>`
 - Lint: `cargo clippy --workspace -- -D warnings`
 
+## Dependencies & Documentation
+
+- Always target the **latest stable release** of Rust (`rustup` stable, Edition 2024), TypeScript/Python runtimes, and Cargo/npm/PyPI dependencies pinned in lockfiles (`Cargo.lock`, `uv.lock`, `package-lock.json`) rather than freezing stale patch versions in specs.
+- Query the **`context7`** MCP (`resolve-library-id` -> `query-docs`) for up-to-date official documentation and APIs before implementing code, SDK adapters, or external benchmark wrappers (`cedar-policy`, `cedar-policy-symcc`, `rusqlite`, `usearch`, `hnsw_rs`, `ort`, `jsonrpsee`, `schemars`, `proptest`, `criterion`, `mem0`, `letta-client`, `langgraph`, `graphiti`, etc.).
+
 ## Gotchas
 
 - No code exists yet, and `cargo` is not installed (use `rustup`).

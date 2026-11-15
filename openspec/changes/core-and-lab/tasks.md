@@ -4,9 +4,9 @@ This checklist implements `monoagens-protocol`, `monoagens-core`, `monoagens-sto
 
 ## 1. Phase 0 — Toolchain, workspace, and crate boundaries
 
-- [ ] 1.1 Install Rust stable via `rustup` and add `rust-toolchain.toml` pinning `stable`, `rustfmt`, and `clippy`; verify `cargo --version` and `cargo clippy --version` succeed.
+- [ ] 1.1 Install latest stable Rust via `rustup` (`rustup toolchain install stable`) and add `rust-toolchain.toml` pinning the active stable channel with `rustfmt` and `clippy`; query `context7` MCP (`resolve-library-id` -> `query-docs`) for latest upstream docs (`rusqlite`, `usearch`, `hnsw_rs`, `ort`, `proptest`, `criterion`, `mem0`, `letta-client`, `langgraph`, `graphiti`) and verify `cargo --version` and `cargo clippy --version` succeed.
 - [x] 1.2 Initialize a git repository with `.gitignore` for `target/`, data directories, and `lab/runs/`.
-- [ ] 1.3 Configure Cargo workspace crates (`protocol`, `core`, `store`, `lab`) with edition 2024 and `#![forbid(unsafe_code)]`; verify `store` deps include `rusqlite` (`bundled`, `PRAGMA secure_delete = ON`), `usearch`, `blake3`, and `postcard` or `minicbor`.
+- [ ] 1.3 Configure Cargo workspace crates (`protocol`, `core`, `store`, `lab`) using latest stable compatible crates in `Cargo.lock` with Edition 2024 and `#![forbid(unsafe_code)]`; verify `store` deps include `rusqlite` (`bundled`, `PRAGMA secure_delete = ON`), `VectorIndex` (`usearch` primary + pure-Rust `hnsw_rs` fallback), `blake3`, and `postcard` or `minicbor`, plus workspace dev-deps `proptest` and `criterion`.
 - [ ] 1.4 Structure `core` modules (`loop`, `gate`, `recall`, `expectations`, `beliefs`, `consolidation`, `map/`, `privacy/`, `tck_hooks.rs`) and add a `cargo metadata` test failing if `monoagens-core` depends on anything beyond `monoagens-protocol` and `serde`.
 
 ## 2. Phase 0 — Waist 1 & Waist 2 protocol (`monoagens-protocol`)
@@ -53,20 +53,21 @@ This checklist implements `monoagens-protocol`, `monoagens-core`, `monoagens-sto
 - [ ] 7.2 Implement monotonic `origin_actor` and minimum-trust `taint` propagation across percepts, recalled memories, thoughts, and emitted actions.
 - [ ] 7.3 Enforce `[ANCHOR_CHECK]`, `PrincipleAudit`, `CommitCheck` (`R-49`), and `CitationLock` before dispatching outbound or promise-mutating acts.
 - [ ] 7.4 Implement `[0, 20]` anchored confidence + balanced `1–5` motivation parsing, `0/0`-guarded report control `P_rc` (`A-01`), structured `memory.recall` auto-recall loop, and safe `withheld` logging.
+- [ ] 7.5 Implement `R-38` progressive `Tool RAG` disclosure (`<= 4` static `OwnerSigned` core tools in cached prefix + hybrid BM25/`256d` retrieval of `<= k_cap = 8` capabilities & `<= k_proc = 3` procedures filtered by `ActiveCaps ∩ VisibleScope` and matching `capability_schema_hash`, plus neutral ablation `k_cap = |C_avail|, k_proc = 0`).
 
 ## 8. Phase 1–2 — Durable segmented storage (`monoagens-store`)
 
 - [ ] 8.1 Implement WAL-mode `hot.db` SQLite store (`rusqlite` bundled, `PRAGMA secure_delete = ON`) with transactional append and ordered scans.
-- [ ] 8.2 Implement read-only sealed temporal shards, per-shard FTS5 tables (`'secure-delete'=1`), and `usearch` HNSW vector persistence partitioned by `(embed_model_ver, dim_d, prompt_regime_id)`.
+- [ ] 8.2 Implement read-only sealed temporal shards, per-shard FTS5 tables (`'secure-delete'=1`), and pluggable `VectorIndex` trait (`usearch` `i8`/`bf16` in-traversal HNSW primary + pure-Rust `hnsw_rs` and `BruteForceFlat` fallbacks) partitioned by `(embed_model_ver, dim_d, prompt_regime_id)`.
 - [ ] 8.3 Implement `blake3`-checksummed `postcard` or `minicbor` state snapshots synced with `Two-Epoch Replay` sequence watermarks.
-- [ ] 8.4 Implement atomic `hard_forget` erasure scrubbing SQLite rows, FTS5 tokens, and `usearch` entries followed by an immediate clean snapshot (`R-34`).
+- [ ] 8.4 Implement atomic `hard_forget` erasure scrubbing SQLite rows, FTS5 tokens, and `VectorIndex` entries followed by an immediate clean snapshot and raw byte scan check (`R-34`).
 
 ## 9. Phase 1–2 — Model providers & unified `256d` `EmbeddingGemma 2`
 
 - [ ] 9.1 Define strict `R | null` schema validators for thought acts (`think`, `act`, `expect`, `resolve`, `revise`, `consolidate`) with diagnostic `failed_wake` errors on malformed responses.
 - [ ] 9.2 Implement `consolidate` structured outputs (`gist`, `lesson`, `procedure`) and `[0, 20]` / `1–5` rubric decoding.
 - [ ] 9.3 Implement `scripted`, offline deterministic, OpenAI-compatible HTTP model adapters with zero secret leakage in error events.
-- [ ] 9.4 Integrate unified Apache 2.0 `EmbeddingGemma 2` (`256d` MRL, `8K` ctx, `arXiv:2610.37364`) across text, image, and `audio_voice` with mandatory task prefixes (`t_clf`, `t_sts`, `t_q`, `t_d`) and strict `(embed_model_ver, dim_d, prompt_regime_id)` non-mixing, plus `EmbeddingGemma-300M` Lab comparative baseline and `none` fallback.
+- [ ] 9.4 Integrate unified Apache 2.0 `EmbeddingGemma 2` (`256d` MRL, `8K` ctx, `arXiv:2610.37364`) behind one embedder trait runnable via native `ort` (`ONNX Runtime`) / `LiteRT`, local stdio/HTTP sidecar, or remote endpoint across text, image, and `audio_voice` with mandatory task prefixes (`t_clf`, `t_sts`, `t_q`, `t_d`) and strict `(embed_model_ver, dim_d, prompt_regime_id)` non-mixing, plus `EmbeddingGemma-300M` Lab comparative baseline and `none` fallback.
 - [ ] 9.5 Verify provider error, HTTP timeout, and offline fallback leave the cognitive loop alive and log recoverable errors.
 - [ ] 9.6 Build golden fixture tests ensuring identical schema parsing across scripted and mock-HTTP providers.
 - [ ] 9.7 Implement `A-14` frozen logistic `dialogue_act_gap` head (replacing legacy `w_info = 0` static baseline) and blind `AttachmentHandle` byte resolution strictly after `VisibleScope` and door/`Valve` authorization.
@@ -78,12 +79,12 @@ This checklist implements `monoagens-protocol`, `monoagens-core`, `monoagens-sto
 - [ ] 10.3 Implement skeptical corroboration `k_corrob` discounting echoed untrusted sources and minimum-trust `taint` infection (`R-43`), plus `R-32` social convention discounting.
 - [ ] 10.4 Recompute `(α, β)` projections accurately when authorized `hard_forget` erases supporting claims (`R-34`).
 
-## 11. Phase 1–3 — Lab harness, 22 metrics, and Pareto baselines (`monoagens-lab`)
+## 11. Phase 1–3 — Lab harness, 22 metrics, `Mem0`/`Letta` baselines & Pareto (`monoagens-lab`)
 
 - [ ] 11.1 Implement Waist-2 `TestBody` JSON-RPC framing and virtual clock stepping directly to `next_due()` for deterministic multi-week simulation in milliseconds.
 - [ ] 11.2 Implement all 22 brain-map metrics plus extended `tasks.md` Section 10.5 metrics (`NI`, safety leakage, promise fulfillment, `hard_forget` zero-resurrection, barge-in latency).
-- [ ] 11.3 Implement paired statistical non-inferiority runner (`S >= 354–471` paired scenarios, `A-16`), `Arm T` transcript baseline comparison, and `1/n` `[0.5, 2.0]` calibration band checks.
-- [ ] 11.4 Implement `BaselineAdapter` and 5-domain Pareto frontier scorer (`R-39`) alongside Indonesian & informal register benchmarks (`MultiLexNorm`, `IndoCollex`, `A-15`).
+- [ ] 11.3 Implement standardized `BaselineAdapter` protocol & external harness shims for `Stateless ReAct`, `Full-Transcript Arm F`, `Mem0`, `Letta/MemGPT`, `LangGraph + LangMem`, `Zep/Graphiti`, and `Hermes Agent` enforcing virtual clock injection (`sim_time_rfc3339`), `PerceptView` oracle-stripping, explicit `noop()`/`[SILENT]` token parity, normalized 5-tuple `E_tok`/`C_share`, `restart_epoch` RAM eviction, and `SEALED_MODE=1` isolation, plus `adapter_conformance` self-tests.
+- [ ] 11.4 Implement `monoagens-lab benchmark` and `pareto` runners across curated 5-domain suites (`LoCoMo` incl. Cat-5, `LongMemEval`, `MemoryAgentBench`, `GroupMemBench`, `STALE`; `PM-Bench`/`PIS`; `PITCH`, `ProACT`, `ProactiveBench`, `CAPA`, `When2Speak`; `Ubuntu IRC`, `Molweni` excluding `MuTual` as multi-party; `FANToM ALL*`, `OpenToM`, `HI-TOM`, `ExploreToM`/`DynToM`), Indonesian (`MultiLexNorm`, `IndoCollex`, `A-15`), `Tool RAG` scaling (`N_caps = 50..200`, `R-38`), and `MPBench` security (`R-43`), reporting paired `S >= 354–471` `Arm T` restart parity (`A-16`), `1/n` `[0.5, 2.0]` calibration band checks, `Holm-Bonferroni` (`d_z`, `r_rb`) statistics, and undominated `Convex Pareto` JSON frontiers (`R-39`, `A-16`).
 
 ## 12. Phase 2 — Sleep consolidation: episodes & EM-LLM boundaries
 
@@ -116,11 +117,11 @@ This checklist implements `monoagens-protocol`, `monoagens-core`, `monoagens-sto
 - [ ] 16.3 Enforce non-penalty guard skipping `(α_c, β_c)` Beta and weight degradation when `Receipt.termination_reason` is `canceled_by_core` or `preempted_external` (`R-36`, Option A).
 - [ ] 16.4 Implement shrunk quantile calibration (`q_0.10`) for `wake_gate_lo` and event-logged weight rollback.
 
-## 17. Phase 1–2 — Deterministic replay & performance budgets
+## 17. Phase 1–2 — Deterministic replay, `proptest` invariants, and `criterion` scale budgets
 
-- [ ] 17.1 Implement full log replay and post-erasure `Two-Epoch Replay` verification comparing recomputed decisions bit-for-bit.
+- [ ] 17.1 Implement full log replay and post-erasure `Two-Epoch Replay` verification comparing recomputed decisions bit-for-bit, plus `proptest` randomized property suites covering replay determinism, `VisibleScope` `Δ_NI == 0`, and Petrov hybrid monotonicity.
 - [ ] 17.2 Add payload-independence tests confirming gate decisions depend strictly on extracted numeric/structural features and not raw opaque bytes.
-- [ ] 17.3 Enforce suite timing budgets (`monoagens-core < 3 s`, scripted `monoagens-lab` dev suite `< 30 s`, zero network IO in default unit suites).
+- [ ] 17.3 Enforce suite timing budgets (`monoagens-core < 3 s`, scripted `monoagens-lab` dev suite `< 30 s`, zero network IO in default unit suites) and add `criterion` + `R-40` long-log microbenchmarks validating `Core::open < 100 ms` across `10^5–10^7` events and filtered `VectorIndex` (`usearch` vs `hnsw_rs` vs `Flat`) `< 5 ms` p99 at `1%` selectivity (`Recall@10 >= 0.93`).
 
 ## 18. Phase 1–2 — Mechanism registry & 22 reachable neutral values
 

@@ -54,6 +54,17 @@ set, recalled items, place tail, `<now>`, cutoff, and Spotlighting trigger (`R-1
 - **WHEN** two wakes happen with the same identity anchor and capabilities
 - **THEN** rendered contexts share an identical static cacheable prefix covering slot-0 anchor and sorted capabilities
 
+### Requirement: Progressive capability and procedure disclosure stays within prompt budgets
+`ContextPlan` SHALL keep at most four static `OwnerSigned` core capabilities in the cacheable
+prefix and select at most `k_cap` (`default = 8`) additional capabilities plus `k_proc` (`default =
+3`) active procedures using hybrid BM25 and `256d` vector ranking filtered strictly by `VisibleScope ∩
+ActiveCaps` and matching `capability_schema_hash` (`R-38`). Setting `k_cap = |C_avail|` and `k_proc =
+0` SHALL act as the exact neutral ablation value.
+
+#### Scenario: Many MCP tools do not bloat prompts and stale procedures stay excluded
+- **WHEN** `60` capabilities are registered across connected bodies and one consolidated procedure carries a mismatched `capability_schema_hash`
+- **THEN** `ContextPlan` preserves the static core prefix, admits at most `k_cap` relevant dynamic capabilities, and excludes the schema-drifted procedure
+
 ### Requirement: The current time is always present
 Every context SHALL state the current time from the injected clock, and stored times SHALL be
 absolute so that relative expressions are resolved against the present only when shown.

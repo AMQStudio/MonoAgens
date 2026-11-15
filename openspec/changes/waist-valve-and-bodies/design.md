@@ -7,6 +7,7 @@ See [`proposal.md`](proposal.md) for motivation and scope. `ARCHITECTURE.md` fix
 Constraints shaping this design:
 - `ARCHITECTURE.md` invariants are read-only and immutable; Option A adds only optional `Receipt` metadata (`termination_reason`, `progress`, `delivered_units`) leaving the five core outcomes untouched.
 - `monoagens-core` depends solely on `monoagens-protocol` and `serde`. All IO, async orchestration, Cedar policy evaluation, attachment encryption, `EmbeddingGemma 2` inference, JSON-RPC 2.0 transport, and platform adapters stay in outer crates (`valve`, `gateway`, `bodies`, `cli`, `conformance`).
+- Target the **latest stable compatible versions** of Rust (`rustup` stable), TypeScript/Python runtimes, and external dependencies resolved into lockfiles at implementation time, checking upstream docs via **`context7` MCP** (`resolve-library-id` -> `query-docs`) before coding.
 - No Rust source code exists yet (`cargo` installed via `rustup` during Phase 0).
 
 ## Goals / Non-Goals
@@ -31,7 +32,7 @@ crates/
   protocol/     monoagens-protocol     Waist 1 & Waist 2 OpenRPC/serde types, Option A Receipt
   core/         monoagens-core         (core-and-lab) sans-IO state machine
   store/        monoagens-store        (core-and-lab) SQLite hot/sealed, usearch, blake3 snapshots
-  valve/        monoagens-valve        cedar-policy 4.14.1, symcc 0.8.1, H_act, PendingApproval, quiet hours
+  valve/        monoagens-valve        cedar-policy + symcc (latest stable), H_act, PendingApproval, quiet hours
   gateway/      monoagens-gateway      tokio loop, κ(b,a) identity, BLAKE3 attachments, EmbeddingGemma 2 256d
   cli/          monoagens              chat, log, replay, approvals, link, conformance, inspector
   conformance/  monoagens-conformance  B-MUST-01..07, B-SHOULD-01..03, C-MUST-01..04, SDK codegen
@@ -48,7 +49,7 @@ bodies/
 
 ### D2. Waist 2 (`monoagens.body.v1`) OpenRPC 1.4.1 & 12-method wire contract (`R-45`, `R-50`)
 
-- **Transport & schema:** NDJSON over `stdio` or Unix domain socket generated from single-source `OpenRPC 1.4.1` + `JSON Schema Draft 2020-12` (`schemars 1.2.3`, `serde_json 1.0.154`, `jsonrpsee 0.26.1`).
+- **Transport & schema:** NDJSON over `stdio` or Unix domain socket generated from single-source `OpenRPC 1.4.1` + `JSON Schema Draft 2020-12` using latest stable `schemars`, `serde_json`, and `jsonrpsee` (verified via Context7).
 - **Twelve stateless methods (`<= 12`):** `body/discover`, `body/heartbeat`, `body/shutdown`, `percept/emit`, `action/execute`, `action/cancel`, `action/receipt`, `approval/resolve`, `question/answer`, `state/query`, `blob/put`, `blob/get`.
 - **Envelopes & compatibility:** Carry `idempotency_key`, `protocol_version`, reverse-DNS `_meta` extensions, and `traceparent`. Accept `(M_msg == M_gw) && (m_msg <= m_gw)` while ignoring unknown keys outside strict `args`; reject errors cleanly with `-32001 ERR_UNKNOWN_CAPABILITY`, `-32002 ERR_DUPLICATE_IDEMPOTENCY`, `-32003 ERR_INVALID_RECEIPT_TRANSITION`, `-32004 ERR_UNSUPPORTED_VERSION`, `-32005 ERR_HASH_MISMATCH`, `-32006 ERR_UNDECLARED_AUDIENCE`.
 - **Single-receipt FSM:** `T_act = min(action_timeout_ms, body_limit)`. Emits at most one terminal/held receipt per `action_id`; timeout or crash resolves to `unknown`; duplicates drop cleanly (`receipt_cardinality == 1`).
@@ -64,14 +65,14 @@ bodies/
 ### D4. Keyed-`BLAKE3` attachment custody & unified `256d` `EmbeddingGemma 2` (`A-15`, `R-37`)
 
 - Payloads `<= B_inline = 256 KiB` may arrive inline on `percept/emit` and are immediately stripped before Core queueing; larger media transfer via `blob/put` / `blob/get` (HTTP/UDS/FD pass, `60 s` staging TTL, SHA-256 wire integrity check `-32005 ERR_HASH_MISMATCH`).
-- Gateway persists bytes in AEAD-at-rest `attachments/<scope_id>/<prefix>/<hex>` keyed with `blake3::keyed_hash(&scope_salt[scope_id], bytes)` (`blake3 1.8.7`) and indexed in SQLite `attachment_refs`. Core sees only opaque `AttachmentHandle`, numeric `f_modal` slots (zero emotion labels), and `256d` vectors. Authorized `hard_forget` wipes unreferenced blobs and decoded frame/STT caches before checkpointing.
-- Primary Gateway embedder is `google/embeddinggemma-2` (`arXiv:2610.37364`, Apache 2.0, `256d` MRL, `8K` ctx) with mandatory task instruction prefixes and strict `(embed_model_ver, dim_d, prompt_regime_id)` tagging plus `A-14` `dialogue_act_gap` scoring; outages degrade cleanly to vector-less percepts.
+- Gateway persists bytes in AEAD-at-rest `attachments/<scope_id>/<prefix>/<hex>` keyed with `blake3::keyed_hash(&scope_salt[scope_id], bytes)` (latest stable `blake3`) and indexed in SQLite `attachment_refs`. Core sees only opaque `AttachmentHandle`, numeric `f_modal` slots (zero emotion labels), and `256d` vectors. Authorized `hard_forget` wipes unreferenced blobs and decoded frame/STT caches before checkpointing.
+- Primary Gateway embedder is `google/embeddinggemma-2` (`arXiv:2610.37364`, Apache 2.0, `256d` MRL, `8K` ctx) behind one Gateway embedder port supporting native `ort` (`ONNX Runtime`) / `LiteRT`, local stdio/HTTP sidecar, or remote endpoints with mandatory task instruction prefixes, strict `(embed_model_ver, dim_d, prompt_regime_id)` tagging, `A-14` `dialogue_act_gap` scoring, and hybrid indexing of registered body/MCP `CapabilityDescriptor`s so Core's `Tool RAG` (`k_cap = 8`, `R-38`) scales across `50–200+` external tools without prompt bloat; outages degrade cleanly to vector-less percepts.
 
 ### D5. Embedded `cedar-policy` + `cedar-policy-symcc` Valve (`R-41`)
 
 - Evaluates deterministically over `(log_seq, t_now)` snapshots (zero LLM inference, zero live HTTP/DNS) and runs **first and last** in Inbound, Context, Action, and memory-write doors so secondary plugins can only narrow access.
 - Derives ephemeral room/co-location Cedar parents strictly from verified `PlacePresence` (`room_presence_ttl_s = 300 s`) or `PhysicalPresence` (`physical_presence_ttl_s = 15 s`, `physical_room_radius_m = 4.0 m`); natural-language self-claims carry zero authority.
-- Policy reload invokes `cedar-policy-symcc` (`0.8.1`) statically verifying UNSAT (`0` counterexamples) that `principal != Owner` can invoke `identity_changing` or `SelfModify` capabilities (`< 50 μs` p99 eval target).
+- Policy reload invokes latest stable `cedar-policy-symcc` (`CedarSymCompiler::new(LocalSolver::cvc5()?)` over `WellTypedPolicies` and `SymEnv`, verified async against `cvc5` on load) proving UNSAT (`0` counterexamples) that `principal != Owner` can invoke `identity_changing` or `SelfModify` capabilities (`< 50 μs` p99 `criterion` runtime eval target + `proptest` policy/identity invariant fuzzing).
 
 *Alternative rejected:* Embedded Rego (`regorus`, `42–80×` slower, incomplete SMT) or OpenFGA (no static Lean/SMT owner proofs).
 

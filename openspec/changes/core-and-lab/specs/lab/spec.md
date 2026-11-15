@@ -147,15 +147,73 @@ tokens/calls per event, cache share, and narrower-to-wider leakage (`Delta_NI ==
 - **WHEN** a scenario with three promises (two on time, one recovered after downtime) and pre-sleep idle chatter runs
 - **THEN** the report states two kept on time, one kept late, zero sleep spin loops, and `Delta_NI == 0`
 
-### Requirement: The Lab measures rebuilt context NI, 5-domain Pareto, Indonesian gaul, and Core TCK
-The Lab SHALL provide: paired 3-arm non-inferiority (`S >= 354–471`, including `Arm T` restart &
-thinking stratification, `A-16`), `BaselineAdapter` cost-normalized Pareto scorecards across 5
-domains (`R-39`), Indonesian/`MultiLexNorm`/`IndoCollex` `256d` checks (`A-15`), `hard_forget`/
-poisoning/drift suites (`R-34`, `R-43`, `R-48`), and black-box `Core TCK` (`C-MUST-01..04`, `R-50`).
+### Requirement: External BaselineAdapter benchmarks Mem0, Letta, and peer frameworks under parity
+The Lab SHALL expose an out-of-process `BaselineAdapter` protocol evaluating external agents—such
+as `Stateless ReAct`, `Arm F`, `Mem0`, `Letta/MemGPT`, `LangGraph+LangMem`, `Zep/Graphiti`, and
+`Hermes Agent`—with injected virtual time (`sim_time_rfc3339`), pinned RNG seeds, `PerceptView`
+oracle stripping, `restart_epoch` RAM eviction, and `SEALED_MODE=1` isolation (`R-39`).
 
-#### Scenario: Paired transcript comparison and Core TCK verification
-- **WHEN** `monoagens-lab baseline` and `monoagens-lab tck-core` execute against a multi-party scenario suite
-- **THEN** the Lab reports Pareto efficiency against baseline harnesses and verifies deterministic bit-identity, `Delta_NI == 0`, and zero-resurrection erasure
+#### Scenario: External adapters run under virtual time without label leakage
+- **WHEN** `monoagens-lab baseline` evaluates `Mem0`, `Letta`, `LangGraph+LangMem`, `Zep/Graphiti`, or `Hermes` over a 30-day multi-party scenario
+- **THEN** each adapter records injected `sim_time_rfc3339` timestamps, clears ephemeral RAM on `restart_epoch`, and receives no ground-truth labels
+
+#### Scenario: Sealed mode rejects payload leakage from any adapter
+- **WHEN** a `SEALED_MODE=1` baseline worker attempts to write message payloads or rendered prompts to disk or stdout
+- **THEN** preflight isolation aborts the run with a non-zero exit status and reveals no scenario text
+
+### Requirement: Baseline comparisons enforce NOOP silence parity and unified 5-tuple E_tok billing
+Every external `BaselineAdapter` wake SHALL provide explicit `noop()`/`[SILENT]` abstention tools
+and record `wake_invoked_llm`, wall timeout `step_wall_timeout_s`, normalized 5-tuple effective
+tokens (`E_tok`, `C_share`), and USD cost alongside MonoAgens (`0` LLM tokens on zero-LLM Gate
+abstentions, `R-39`).
+
+#### Scenario: LLM cost of chosen silence is billed symmetrically across harnesses
+- **WHEN** a multi-party scenario includes irrelevant turns where an external harness wakes its LLM only to emit `noop()`
+- **THEN** the harness ledger records full `E_tok`, latency, and `wake_invoked_llm = true` while MonoAgens records zero model tokens for gate suppression
+
+### Requirement: The Lab benchmarks 5 cognitive domains, Indonesian suites, Tool RAG, and security
+`monoagens-lab benchmark` SHALL run standardized evaluation suites covering all five cognitive
+domains (Memory, Prospective, Proactivity/Timing, Group Chat, and Theory of Mind), Indonesian informal
+register retrieval (`256d`), `Tool RAG` capability scaling (`N_caps = 50..200`), and security/privacy
+suites (`R-38`, `R-39`, `R-43`, `A-15`), while reporting Black-Box `Core TCK` checks (`R-50`).
+
+#### Scenario: Five-domain benchmark suite enforces dataset caveats and Cat-5 coverage
+- **WHEN** `monoagens-lab benchmark --suite standard --pareto` executes across `LoCoMo` (including Category-5 adversarial), `LongMemEval`, `MemoryAgentBench`, `GroupMemBench`, `STALE`, `PM-Bench`, `PIS`, `PITCH`, `ProACT`, `ProactiveBench`, `CAPA`, synthetic `When2Speak`, `Ubuntu IRC`, `Molweni`, `FANToM` (`ALL*`), `OpenToM`, `HI-TOM`, and `ExploreToM`
+- **THEN** the Lab emits domain-specific scorecards (`ALL*`, `PR`, `FIR`/`MIR`, `Delta_NI`), restricts `ToMi` to shortcut-perturbation checks, and excludes dyadic `MuTual` from multi-party addressee claims
+
+#### Scenario: Security, Indonesian register, and Tool RAG suites report dedicated metrics
+- **WHEN** `MPBench`, `VisibleScope`, `MultiLexNorm`/`IndoCollex`, and `Tool RAG` (`N_caps = 50..200`) suites execute
+- **THEN** the Lab reports compaction poisoning ASR, `Delta_NI`, `256d` retrieval accuracy, `Core TCK` verdicts, and schema token savings across connected capabilities
+
+### Requirement: Confirmatory paired comparisons report Holm-corrected statistics and Convex Pareto frontiers
+For confirmatory non-inferiority (`Arm T` restart parity and thinking stratification, `A-16`) and
+baseline comparisons, the Lab SHALL run cluster-paired suites (`S >= 354–471`) reporting
+`Holm-Bonferroni` step-down p-values (`alpha = 0.05`), Cohen's `d_z`, Kerby rank-biserial `r_rb`,
+co-primary NI checks, and an undominated `Convex Pareto` frontier (`Quality` vs `E_tok`/latency vs
+risk `Δ_NI`/ASR) in JSON (`monoagens-lab pareto`, `R-39`).
+
+#### Scenario: Pareto generator identifies undominated quality-cost-safety trade-offs
+- **WHEN** `monoagens-lab pareto` compares MonoAgens against baselines across `E_tok`, `p95_latency`, quality, `FIR`, and `Δ_NI`
+- **THEN** the JSON report emits cluster-adjusted confidence intervals, Holm-adjusted significance, and convex hull membership without collapsing raw 5-tuple token logs
+
+### Requirement: Property-based proptest suites verify core and protocol invariants
+The workspace SHALL execute randomized `proptest` suites validating seeded bit-identical
+`Core::step` replay, delimiter-safe `κ(b, a)` identity hashing, monotonic Petrov hybrid
+activation (`n > k ∧ t_n > t_k`), `VisibleScope` non-interference (`Delta_NI == 0`), and binary
+serialization round-trips.
+
+#### Scenario: Randomized traces preserve determinism and collision resistance
+- **WHEN** `proptest` generates random multi-body percept schedules and colon-bearing actor IDs
+- **THEN** replays match bit-for-bit, private items produce zero `Delta_NI` divergence, and `κ(b, a)` yields zero hash collisions
+
+### Requirement: Criterion and R-40 scale benchmarks enforce long-log latency and erasure SLOs
+The Lab SHALL include `criterion` microbenchmarks and `R-40` long-log stress runs verifying
+`Core::open` startup (`< 100 ms`), filtered `VectorIndex` query latency and recall (`usearch` vs
+`hnsw_rs` vs exact scan), and zero residual erased bytes after `hard_forget`.
+
+#### Scenario: Long-log scale and filtered HNSW benchmarks hold latency and erasure SLOs
+- **WHEN** `monoagens-lab` scale benchmarks evaluate `10^6` events at `1%` `VisibleScope` selectivity after `5%` `hard_forget` deletions
+- **THEN** `Core::open` boots under `100 ms`, filtered HNSW maintains `Recall@10 >= 0.93` under `5 ms` p99, and raw storage byte scans find zero surviving erased vectors or payloads
 
 ### Requirement: The foundation is proven end to end
 The development set SHALL contain end-to-end scenarios for: recall across places and a

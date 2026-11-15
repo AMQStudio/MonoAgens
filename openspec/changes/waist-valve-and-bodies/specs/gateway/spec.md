@@ -48,15 +48,25 @@ commands SHALL wipe zero-ref files and decoded caches synchronously.
 - **WHEN** `scope_A` and `scope_B` store identical bytes and `hard_forget` erases `scope_A`'s actor
 - **THEN** `scope_A`'s file and `attachment_refs` rows are overwritten and unlinked while `scope_B` remains intact
 
-### Requirement: Pre-queue unified 256d EmbeddingGemma 2 degrades cleanly
+### Requirement: Pre-queue unified 256d EmbeddingGemma 2 runs locally or remotely and degrades cleanly
 Before enqueueing percepts, the gateway SHALL compute unified Apache 2.0 `EmbeddingGemma 2`
-(`256d` MRL, `8K` ctx) vectors across text, image, and `audio_voice` tagged with
-`(embed_model_ver, dim_d, prompt_regime_id)` plus `dialogue_act_gap` scores. Embedder outages
-SHALL allow vector-less percepts to enter cleanly.
+(`256d` MRL, `8K` ctx) vectors—via native `ort`/`LiteRT`, local sidecar, or remote endpoint—across
+text, image, and `audio_voice` tagged with `(embed_model_ver, dim_d, prompt_regime_id)` plus
+`dialogue_act_gap` scores. Embedder outages SHALL allow vector-less percepts to enter cleanly.
 
 #### Scenario: Embedder outage leaves cognitive loop operational
 - **WHEN** the embedding provider times out or returns an error during percept ingestion
 - **THEN** the gateway records the diagnostic error and forwards the percept without a vector
+
+### Requirement: Gateway indexes capability catalogs for Tool RAG progressive disclosure
+The gateway SHALL maintain a hybrid BM25 and `256d` vector index over registered body and MCP
+`CapabilityDescriptor` metadata stamped with `capability_schema_hash`, supporting Core's bounded
+`Tool RAG` disclosure (`R-38`) and falling back cleanly to lexical BM25 matching when embeddings are
+unavailable.
+
+#### Scenario: Large MCP capability catalog indexes for progressive disclosure
+- **WHEN** connected bodies register `50` or more capabilities via `body/discover`
+- **THEN** the gateway updates its hybrid BM25/`256d` capability index stamped with `capability_schema_hash` so Core selects bounded `Tool RAG` subsets without shipping every full tool schema on every turn
 
 ### Requirement: Versioned config, isolated secrets, and honest lifecycle cues
 The gateway SHALL validate versioned `monoagens.toml`, reject newer config versions or inline API

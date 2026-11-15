@@ -28,30 +28,36 @@ contracts), paired cleanly with successor change `waist-valve-and-bodies` across
     `fade_threshold = -3.29` on `B`, `w_B` neutral switch (`A-01`), dual-process familiarity +
     recollection (`A-09`), Successor-Representation cognitive maps (`R-32`), pre-Step-5
     `VisibleScope` filtering (`R-33` `Delta_NI = 0`), segmented SQLite `hot.db` + sealed shards +
-    pre-filtered `usearch` HNSW + `postcard`/`minicbor` (`R-40`), atomic `hard_forget` +
-    `Two-Epoch Replay` (`R-34`);
+    abstracted `VectorIndex` (`usearch` primary HNSW + `hnsw_rs` pure-Rust / `BruteForceFlat`
+    fallback) + `postcard`/`minicbor` (`R-40`), atomic `hard_forget` + `Two-Epoch Replay` (`R-34`);
   - expectations & commitments: plural `places`/`people`, `continued_attention`, `(channel,
     Δ_obs, Δ_pred)` agency, Option A preemption/barge-in `Receipt` extensions (`termination_reason`,
     `progress`, `delivered_units`, preserving `ARCHITECTURE.md` L198 5 outcomes), `RecurrenceSpec`
     silent polling (`R-46`), `PendingApproval` (`R-42`), `PromiseMeta` conflicts/repair &
     pre-utterance `CommitCheck` (`R-49`);
   - reasoning & beliefs: `[0, 20]` anchored confidence + `0/0` `P_rc` guard + `CitationLock`
-    (`A-10`), Spotlighting `ContextPlan` & min-trust taint compaction (`R-43`), `OwnerSigned`
-    `IdentityAnchor` + `[ANCHOR_CHECK]` (`R-48`), source credence including `told` & skeptical
-    `k_corrob` (`A-01`, `R-43`), Hungarian-aligned domain centroids (`A-12`);
+    (`A-10`), progressive `Tool RAG` disclosure (`<= 4` static core + `k_cap = 8` capabilities +
+    `k_proc = 3` procedures masked by `ActiveCaps ∩ VisibleScope`, `R-38`), Spotlighting
+    `ContextPlan` & min-trust taint compaction (`R-43`), `OwnerSigned` `IdentityAnchor` +
+    `[ANCHOR_CHECK]` (`R-48`), source credence including `told` & skeptical `k_corrob` (`A-01`,
+    `R-43`), Hungarian-aligned domain centroids (`A-12`);
   - sleep, skills & self-model: `{open, provisional, sealed}` episodes (`A-05`), `[0, 1]` EM-LLM
     boundaries (`A-06`), contrastive lessons & `capability_schema_hash` / CUSUM procedures
     (`A-11`, `R-38`), and 4-pillar event-derived `sources.self_card` (`R-35`);
   - learning: sign-corrected `r ∈ {0, 1}` + clipped IPS `min(M_ips, 1/ρ)` (`A-01`, `R-19`),
     and Beta non-penalization guard on `canceled_by_core`/`preempted_external` receipts (`R-36`).
 - Add `reason`: deterministic rendering, strict nullable JSON schemas (`A-10`), unified
-  `EmbeddingGemma 2` (`256d` MRL, Apache 2.0, `arXiv:2610.37364`) with mandatory task prefixes &
-  `embed_model_ver` partitioning (`A-15`, `R-37`), `AttachmentHandle` resolution post-`VisibleScope`/
-  `Valve`, plus scripted and OpenAI-compatible providers.
+  `EmbeddingGemma 2` (`256d` MRL, Apache 2.0, `arXiv:2610.37364`) via native `ort` ONNX Runtime /
+  `LiteRT` or local stdio/HTTP sidecar with mandatory task prefixes & `embed_model_ver` partitioning
+  (`A-15`, `R-37`), `AttachmentHandle` resolution post-`VisibleScope`/`Valve`, plus scripted and
+  OpenAI-compatible providers.
 - Add the Lab: all 22 brain-map ablation metrics (`A-02`), Indonesian/`MultiLexNorm`/`IndoCollex`
-  benchmarks (`A-15`), `S >= 354–471` paired 3-arm non-inferiority protocol (`A-16`), `BaselineAdapter`
-  & 5-domain Pareto scorecard (`R-39`), `Delta_NI = 0` & `hard_forget` audits, identity drift &
-  poisoning suites, and black-box Core TCK hooks (`R-50`).
+  benchmarks (`A-15`), `S >= 354–471` paired 3-arm non-inferiority protocol (`A-16`), standardized
+  `BaselineAdapter` comparing against `Stateless ReAct`, `Arm F`, `Mem0`, `Letta/MemGPT`,
+  `LangGraph+LangMem`, `Zep/Graphiti`, and `Hermes Agent` on Holm-Bonferroni & convex Pareto
+  scorecards across all 5 domains (`R-39`), `Delta_NI = 0` & `hard_forget` audits, identity drift
+  & poisoning suites, `proptest` property tests + `criterion` `R-40` long-log/HNSW latency
+  microbenchmarks, and black-box Core TCK hooks (`R-50`).
 
 Left for paired change `waist-valve-and-bodies` (superseding early `bootstrap-vertical-slice` in git commit `ac3b240`,
 co-developed across Phases 0–3): live `monoagens-gateway`, `cedar-policy` `Valve`, Waist-2
@@ -96,12 +102,15 @@ None. `openspec/specs/` is empty.
 - **Code**: new Rust workspace (`crates/`), `prior/`, `lab/` (scenarios, run records),
   `research/`, `docs/`. There is no existing code.
 - **Toolchain**: Rust stable is required and is not installed on the development machine yet.
-- **Dependencies**: SQLite (`rusqlite`, `PRAGMA secure_delete = ON`), `usearch` pre-filtered HNSW,
-  `blake3`, `postcard`/`minicbor` binary encoding (`store`), blocking HTTP (`reason`). `core`
-  depends on `protocol`, `serde`, and pure deterministic math only (`0` IO/async/threads).
+- **Dependencies**: SQLite (`rusqlite`, `PRAGMA secure_delete = ON`), abstracted `VectorIndex`
+  (`usearch` pre-filtered HNSW primary + `hnsw_rs` pure-Rust / `BruteForceFlat` fallback), `blake3`,
+  `postcard`/`minicbor` binary encoding (`store`), blocking HTTP + native `ort` (`ONNX Runtime`) /
+  `LiteRT` or local sidecar (`reason`), and `proptest` + `criterion` for property invariants and
+  scale microbenchmarks (`dev-dependencies`). `core` depends on `protocol`, `serde`, and pure
+  deterministic math only (`0` IO/async/threads).
 - **External systems**: live runs need an OpenAI-compatible chat endpoint and `EmbeddingGemma 2`
-  (`256d` Apache 2.0, local ONNX/LiteRT or endpoint) for text+multimodal recall. Default tests
-  need neither.
+  (`256d` Apache 2.0, native `ort`/`LiteRT`, local sidecar, or endpoint) for text+multimodal recall.
+  Default tests need neither.
 - **Cost**: sleep, classification and learning add model calls. Each is recorded with its
   purpose, and the Lab's cost guard caps tokens per run and wakes per chain.
 - **Documents**: `RESEARCH.md` and `research/findings/2026-11-16-run-2.md` are synchronized with

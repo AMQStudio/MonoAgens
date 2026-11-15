@@ -6,7 +6,7 @@ See `proposal.md` for motivation. The repository holds `ARCHITECTURE.md`, `RESEA
 (`research/findings/2026-11-15-run-1.md`), Run 2 (`research/findings/2026-11-16-run-2.md` and
 `research/findings/run-2-notes/`), and no code yet. The owner's decisions so far:
 
-- Rust for everything in this change.
+- Rust (latest stable toolchain via `rustup`, Edition 2024) for core crates, paired with latest stable TypeScript/Python SDK & benchmark adapter runtimes resolved in lockfiles and verified against official docs via **`context7` MCP** (`resolve-library-id` -> `query-docs`) before coding.
 - This change builds the complete `core`, `store`, `reason`, and `lab` stack covering `RESEARCH.md`
   sections 1–26 as audited and upgraded by Run 2 (`A-01`–`A-16`, `R-29`–`R-40`, `R-43`, `R-46`,
   `R-48`–`R-50`), co-evolving across Phases 0–3 with successor change `waist-valve-and-bodies`.
@@ -104,14 +104,14 @@ crates/
     map/            graph.rs habits.rs conventions.rs
     privacy/        visible_scope.rs declass.rs
     replay.rs       reprocess a log and compare decisions (Two-Epoch post-forget)
-  store/src/        monoagens-store  (SQLite + usearch + blake3 + postcard): schema.rs log.rs text.rs vectors.rs shards.rs forget.rs snapshots.rs
+  store/src/        monoagens-store  (SQLite + VectorIndex[usearch|hnsw_rs|flat] + blake3 + postcard): schema.rs log.rs text.rs vectors.rs shards.rs forget.rs snapshots.rs
   reason/src/       monoagens-reason (what the core needs in order to think)
     render.rs tools.rs parse.rs secrets.rs info_gap_clf.rs
     model/          scripted.rs openai.rs
-    embed/          none.rs hash.rs openai.rs embeddinggemma2.rs scripted.rs
+    embed/          none.rs hash.rs openai.rs embeddinggemma2.rs scripted.rs  (ort/LiteRT/sidecar local backends)
   lab/src/          monoagens-lab    (library + `monoagens-lab` binary)
     scenario.rs soul_dir.rs driver.rs clock.rs test_body.rs guard.rs checks.rs metrics.rs
-    ablation.rs coverage.rs calibrate.rs baseline.rs pareto.rs tck_hooks.rs record.rs probe.rs inspect.rs main.rs
+    ablation.rs coverage.rs calibrate.rs baseline.rs benchmark.rs pareto.rs tck_hooks.rs record.rs probe.rs inspect.rs main.rs
 prior/              dispositions.json
 lab/scenarios/      dev/ validation/ sealed/
 lab/runs/           run records; reference/ for published results
@@ -265,11 +265,13 @@ tick appends only when it fires or updates recurring state (`RecurrenceSpec`).
   mapped to `c_raw = k/20` and domain-calibrated (`P_rc` guarded `0/0 -> certainty_bar`; explicit
   auto-recall query; emits `withheld` event with raw & calibrated numbers). `CitationLock` rejects
   uncited or hallucinated `used_ids[]`.
-- **`ContextPlan`, Self-Card, Spotlighting & Anchor Checks (R-11, R-35, R-43, R-48, R-49):** Stable-
-  to-volatile slot order with **`IdentityAnchor` (`OwnerSigned`) in slot 0** (`[ANCHOR]`), sorted
-  capabilities + `capability_schema_hash`, compact ledgers + read-only **4-pillar `self_card`**
-  (`(α_c, β_c)`+latency, `[0,20]` Brier/ECE/`meta-d'`, headroom, claim contradictions), commitments,
-  Spotlighting delimiters isolating `[UNTRUSTED_QUOTED]` from `[TRUSTED]`/`[SYSTEM]`. Pre-act
+- **`ContextPlan`, Progressive `Tool RAG`, Self-Card, Spotlighting & Anchor Checks (R-11, R-35, R-38, R-43, R-48, R-49):**
+  Stable-to-volatile slot order with **`IdentityAnchor` (`OwnerSigned`) in slot 0** (`[ANCHOR]`), `<= 4`
+  static core tools + hybrid BM25/`256d` progressive disclosure of top-`k_cap = 8` capabilities and
+  top-`k_proc = 3` active procedures filtered by `ActiveCaps ∩ VisibleScope` & `capability_schema_hash`
+  (neutral switch `k_cap = |C_avail|, k_proc = 0`, `R-38`), compact ledgers + read-only **4-pillar
+  `self_card`** (`(α_c, β_c)`+latency, `[0,20]` Brier/ECE/`meta-d'`, headroom, claim contradictions),
+  commitments, Spotlighting delimiters isolating `[UNTRUSTED_QUOTED]` from `[TRUSTED]`/`[SYSTEM]`. Pre-act
   **`[ANCHOR_CHECK]`**, **`PrincipleAudit`** (`R-48`), and **`CommitCheck`** (`R-49`) validate
   identity adherence & promise non-conflict before external dispatch.
 
@@ -320,7 +322,7 @@ interactive approvals live cleanly across Waist 1 in sibling change `waist-valve
 
 ### 14. `reason`: Unified `EmbeddingGemma 2` & Strictly Typed Adaptation (A-10, A-13, A-15, R-37)
 
-Blocking HTTP (`ureq`) or local ONNX/LiteRT runner; `openai-compatible` chat/tools with strict
+Blocking HTTP (`ureq`) or local ONNX (`ort`) / `LiteRT` / stdio-HTTP sidecar runner behind one embedder trait; `openai-compatible` chat/tools with strict
 nullable JSON schemas (`R | null`, `A-10`) and `[0, 20]` anchored confidence prompts.
 - **Default Gateway Embedder (`EmbeddingGemma 2`, `256d` MRL, Apache 2.0, `arXiv:2610.37364`):**
   Maps text, images, and `audio_voice` into one `256d` vector space with mandatory task instruction
@@ -330,18 +332,30 @@ nullable JSON schemas (`R | null`, `A-10`) and `[0, 20]` anchored confidence pro
   resolves permitted `AttachmentHandle`s into multimodal provider requests strictly *after*
   `VisibleScope` & `Valve` checks (`R-37`).
 
-### 15. Lab: Full 22-Row Suite, Paired Power, Pareto & Core TCK Hooks (A-02, A-15, A-16, R-39, R-50)
+### 15. Lab: Full 22-Row Suite, External Baselines (`Mem0`, `Letta`, ...), Pareto, `criterion` & Core TCK (A-02, A-15, A-16, R-39, R-40, R-50)
 
 Discrete-event virtual-time simulator driving real `Core::step` via `TestBody` (routed over canonical
 Waist-2 schema shapes, `R-50`), plus `monoagens-lab` CLI (`run`, `compare`, `coverage`, `calibrate`,
-`mechanisms`, `baseline`, `pareto`, `tck-core`, `log`, `explain`, `replay`, `talk`):
+`mechanisms`, `baseline`, `benchmark`, `pareto`, `tck-core`, `log`, `explain`, `replay`, `talk`):
 - **All 22 Brain-Map Metrics + `tasks.md` 10.5 (`A-02`):** Adds missing per-row metrics (floor
   violations/100, wakes/event, promises kept/kept-late/broken/repair, ECE/Brier, detail-without-R,
   stale-belief leak, self-echo reaction rate, boundary F1, sleep-spin count = `0`, `Δ_NI = 0`).
-- **Paired NI & Benchmarks (`A-15`, `A-16`, `R-39`):** Evaluates 5 domains + Indonesian/`MultiLexNorm`/
-  `IndoCollex` suites via unified **`BaselineAdapter`** on Pareto (accuracy vs tokens/latency) fronts,
-  sizing comparative rebuilt-context vs transcript trials (`Arm T`) at **$S \ge 354\text{--}471$**
-  cluster-paired scenarios including thinking-model stratification (`A-16`).
+- **External `BaselineAdapter` Roster & Fair-Play Contract (`R-39`):** Benchmarks `Stateless ReAct`,
+  `Full-Transcript Arm F`, **`Mem0`**, **`Letta/MemGPT`**, **`LangGraph + LangMem`**,
+  **`Zep/Graphiti`**, and **`Hermes Agent`** (plus pluggable harnesses) under injected `sim_time_rfc3339`
+  clock shims, `PerceptView` oracle-stripping, **`NOOP`/`[SILENT]` token & latency parity** (`wake_invoked_llm`),
+  unified 5-tuple `E_tok`/`C_share`, `restart_epoch` RAM clears, and `SEALED_MODE=1` isolation.
+- **5-Domain + Scale/Security Matrix & Convex Pareto (`A-15`, `A-16`, `R-39`, `R-40`):** Evaluates
+  Memory (`LoCoMo` incl. Cat-5, `LongMemEval`, `MemoryAgentBench`, `GroupMemBench`, `STALE`),
+  Prospective (`PM-Bench`, `PIS`), Timing (`PITCH`, `ProACT`, `ProactiveBench`, `CAPA`, synthetic
+  `When2Speak` FIR/MIR stress), Group (`Ubuntu IRC`, `Molweni` — banning dyadic `MuTual` as multi-party),
+  ToM (`FANToM ALL*`, `OpenToM`, `HI-TOM`, `ExploreToM`/`DynToM`), Indonesian `MultiLexNorm`/`IndoCollex`,
+  `Tool RAG` scaling (`N_caps = 50..200`), and `MPBench` poisoning on **Convex Pareto** `(Quality, E_tok, Risk)`
+  fronts with `Holm-Bonferroni` (`d_z`, `r_rb`), sizing paired confirmatory trials at **$S \ge 354\text{--}471$** (`A-16`).
+- **Property Tests & Scale Microbenchmarks (`proptest`, `criterion`, `R-40`):** Enforces `proptest`
+  fuzzing for replay determinism, `κ(b, a)`, and `Δ_NI = 0`, plus `criterion` microbenchmarks on
+  `Core::open` (`< 100 ms` across `10^5–10^7` events), `VectorIndex` (`usearch` vs `hnsw_rs` vs `Flat`,
+  `< 5 ms` p99 & `Recall@10 >= 0.93` down to `1%` `VisibleScope` selectivity), and forensic `hard_forget` scans.
 - **Core TCK Hooks (`R-50`):** Exposes black-box `C-MUST-01` (`Δ_NI = 0`), `C-MUST-02` (`hard_forget`
   0-byte/0-backflow), `C-MUST-03` (bit-exact determinism), and `C-MUST-04` (10k-tick neutral soak).
 

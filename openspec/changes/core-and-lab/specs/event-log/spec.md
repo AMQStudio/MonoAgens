@@ -23,14 +23,18 @@ The append-only log SHALL record 29 canonical event kinds, including `withheld` 
 - **THEN** the log appends a typed `withheld` or `action_feedback` event preserving turn correlation
 
 ### Requirement: Segmented storage, sealed shards, and checksummed snapshots
-The store SHALL partition active writes into WAL-mode `hot.db` and seal older windows into read-only temporal shards alongside filtered `usearch` HNSW vector indices and `blake3`-checksummed `postcard` or `minicbor` snapshots, recovering unconsumed tails inside `Core::open`.
+The store SHALL partition active writes into WAL-mode `hot.db` and seal older windows into read-only temporal shards alongside an abstracted `VectorIndex` trait (`usearch` `i8`/`bf16` HNSW primary with `hnsw_rs` pure-Rust and `BruteForceFlat` exact fallbacks) and `blake3`-checksummed `postcard` or `minicbor` snapshots, recovering unconsumed tails inside `Core::open` (`R-40`).
 
 #### Scenario: Startup verifies snapshot and replays only tail events
 - **WHEN** `Core::open` initializes storage with a valid snapshot and unconsumed `hot.db` events
 - **THEN** the store verifies the `blake3` checksum, loads the snapshot, and replays only tail events after the checkpoint cursor
 
+#### Scenario: Swappable VectorIndex backends satisfy pre-filtered recall SLOs
+- **WHEN** queries filter HNSW candidates by `(embed_model_ver, dim_d, prompt_regime_id)` and `LiveVecBitmap ∩ VisibleScope` down to `1%` selectivity using `usearch` or fallback `hnsw_rs`
+- **THEN** vector search executes traversal-time filtering and returns valid live candidates within the configured latency budget (`< 5 ms` p99 target on `10^6` `256d` vectors with `Recall@10 >= 0.93`)
+
 ### Requirement: Authorized hard-forget atomic erasure
-As the sole explicit exception to append-only immutability, an authorized `hard_forget` command SHALL atomically scrub matching event, episode, and FTS5 records using SQLite `PRAGMA secure_delete = ON` and FTS5 `'secure-delete'=1`, rebuild `usearch` indices, and write a post-erasure snapshot anchored by Two-Epoch Replay.
+As the sole explicit exception to append-only immutability, an authorized `hard_forget` command SHALL atomically scrub matching event, episode, and FTS5 records using SQLite `PRAGMA secure_delete = ON` and FTS5 `'secure-delete'=1`, purge/rebuild `VectorIndex` shards, and write a post-erasure snapshot anchored by Two-Epoch Replay.
 
 #### Scenario: Hard-forget permanently scrubs matching records
 - **WHEN** an authorized `hard_forget` command targets an event or entity identifier

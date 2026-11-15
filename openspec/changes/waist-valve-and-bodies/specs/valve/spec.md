@@ -3,17 +3,18 @@
 ## Purpose
 
 Defines the deterministic `Valve` policy engine embedded in Gateway's Inbound, Context, Action,
-and memory-write doors. Compiled via `cedar-policy` (`4.14.1`) and statically checked with
-`cedar-policy-symcc` (`0.8.1`), it enforces Absolute Lines 1 & 2, `PendingApproval` + `H_act`,
-3-door taint blocking, cost/chain brakes, and quiet-hours digests (`R-33`, `R-41`–`R-43`, `R-46`).
+and memory-write doors. Compiled via `cedar-policy` and statically checked with `cedar-policy-symcc`
+(using the latest stable crates verified via `context7`), it enforces Absolute Lines 1 & 2,
+`PendingApproval` + `H_act`, 3-door taint blocking, cost/chain brakes, and quiet-hours digests
+(`R-33`, `R-41`–`R-43`, `R-46`).
 
 ## ADDED Requirements
 
 ### Requirement: Deterministic Cedar ABAC and symcc verification govern every door
-The valve SHALL evaluate policies deterministically using `cedar-policy` (`4.14.1`) strictly over
-logged `(log_seq, t_now)` snapshots with zero LLM inference or live network lookups, default-denying
-unpermitted acts, and running `cedar-policy-symcc` (`0.8.1`) on policy load to prove non-owners
-can never trigger `identity_changing` or `SelfModify` actions.
+The valve SHALL evaluate policies deterministically using `cedar-policy` strictly over logged
+`(log_seq, t_now)` snapshots with zero LLM inference or live network lookups, default-denying
+unpermitted acts, and running `cedar-policy-symcc` (`LocalSolver::cvc5()`) on policy load to prove
+non-owners can never trigger `identity_changing` or `SelfModify` actions.
 
 #### Scenario: Symcc catches unauthorized identity policy loopholes at startup
 - **WHEN** Gateway loads a policy bundle permitting any non-owner path to `identity_changing` acts

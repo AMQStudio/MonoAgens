@@ -45,7 +45,11 @@ content from sources other than the soul as quoted data and stating times as abs
 - **THEN** the two requests are identical
 
 ### Requirement: Embeddings are interchangeable and optional
-Vectors SHALL flow through one embedding interface defaulting to unified Apache 2.0 `EmbeddingGemma 2` (`256d` MRL, `8K` context) across text, image, and `audio_voice` modalities, alongside `none`, deterministic offline, OpenAI-compatible, scripted Lab, and `EmbeddingGemma-300M` ablation providers plus a frozen `A-14` `dialogue_act_gap` logistic head.
+Vectors SHALL flow through one embedding interface defaulting to unified Apache 2.0 `EmbeddingGemma 2` (`256d` MRL, `8K` context) across text, image, and `audio_voice` modalities—runnable locally via native `ort` (`ONNX Runtime`) / `LiteRT`, local stdio/HTTP sidecar, or remote OpenAI-compatible endpoint—alongside `none`, deterministic offline, scripted Lab, and `EmbeddingGemma-300M` ablation providers plus a frozen `A-14` `dialogue_act_gap` logistic head.
+
+#### Scenario: Local EmbeddingGemma 2 runner swaps between native runtime and sidecar
+- **WHEN** settings switch the local `EmbeddingGemma 2` backend between native `ort`/`LiteRT` execution and a local stdio/HTTP sidecar
+- **THEN** the provider produces identical normalized `256d` vectors tagged with `(embed_model_ver, dim_d, prompt_regime_id)` without changing core or caller code
 
 #### Scenario: Frozen dialogue-act gap scorer operates independently of none embeddings
 - **WHEN** an epistemic information-gap check scores a percept while main embeddings are `none`
