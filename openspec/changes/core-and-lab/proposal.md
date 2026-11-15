@@ -46,11 +46,13 @@ contracts), paired cleanly with successor change `waist-valve-and-bodies` across
     (`A-11`, `R-38`), and 4-pillar event-derived `sources.self_card` (`R-35`);
   - learning: sign-corrected `r ∈ {0, 1}` + clipped IPS `min(M_ips, 1/ρ)` (`A-01`, `R-19`),
     and Beta non-penalization guard on `canceled_by_core`/`preempted_external` receipts (`R-36`).
-- Add `reason`: deterministic rendering, strict nullable JSON schemas (`A-10`), unified
-  `EmbeddingGemma 2` (`256d` MRL, Apache 2.0, `arXiv:2610.37364`) via native `ort` ONNX Runtime /
-  `LiteRT` or local stdio/HTTP sidecar with mandatory task prefixes & `embed_model_ver` partitioning
-  (`A-15`, `R-37`), `AttachmentHandle` resolution post-`VisibleScope`/`Valve`, plus scripted and
-  OpenAI-compatible providers.
+- Add `reason`: deterministic rendering, strict nullable JSON schemas (`A-10`), ablatable
+  zero-drift `[SELF_GUIDE]` prefix rendering + just-in-time working-set reason cues synthesized
+  from live `(CoreSelfSnapshot, ValveSelfSnapshot)` state (`self_mechanics_guide = false` neutral),
+  unified `EmbeddingGemma 2` (`256d` MRL, Apache 2.0, `arXiv:2610.37364`) via native `ort` ONNX
+  Runtime / `LiteRT` or local stdio/HTTP sidecar with mandatory task prefixes & `embed_model_ver`
+  partitioning (`A-15`, `R-37`), `AttachmentHandle` resolution post-`VisibleScope`/`Valve`, plus
+  scripted and OpenAI-compatible providers.
 - Add the Lab: all 22 brain-map ablation metrics (`A-02`), Indonesian/`MultiLexNorm`/`IndoCollex`
   benchmarks (`A-15`), `S >= 354–471` paired 3-arm non-inferiority protocol (`A-16`), standardized
   `BaselineAdapter` comparing against `Stateless ReAct`, `Arm F`, `Mem0`, `Letta/MemGPT`,

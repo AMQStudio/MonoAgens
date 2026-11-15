@@ -265,15 +265,25 @@ tick appends only when it fires or updates recurring state (`RecurrenceSpec`).
   mapped to `c_raw = k/20` and domain-calibrated (`P_rc` guarded `0/0 -> certainty_bar`; explicit
   auto-recall query; emits `withheld` event with raw & calibrated numbers). `CitationLock` rejects
   uncited or hallucinated `used_ids[]`.
-- **`ContextPlan`, Progressive `Tool RAG`, Self-Card, Spotlighting & Anchor Checks (R-11, R-35, R-38, R-43, R-48, R-49):**
+- **`ContextPlan`, Progressive `Tool RAG`, Self-Card, Derived `[SELF_GUIDE]`, Spotlighting & Anchor Checks (R-11, R-35, R-38, R-43, R-48, R-49):**
   Stable-to-volatile slot order with **`IdentityAnchor` (`OwnerSigned`) in slot 0** (`[ANCHOR]`), `<= 4`
-  static core tools + hybrid BM25/`256d` progressive disclosure of top-`k_cap = 8` capabilities and
+  static core tools + typed **Derived Self-Guide (`[SELF_GUIDE]`, optional behind `Switches.self_mechanics_guide`, neutral `false`)**
+  followed by hybrid BM25/`256d` progressive disclosure of top-`k_cap = 8` capabilities and
   top-`k_proc = 3` active procedures filtered by `ActiveCaps ∩ VisibleScope` & `capability_schema_hash`
   (neutral switch `k_cap = |C_avail|, k_proc = 0`, `R-38`), compact ledgers + read-only **4-pillar
   `self_card`** (`(α_c, β_c)`+latency, `[0,20]` Brier/ECE/`meta-d'`, headroom, claim contradictions),
-  commitments, Spotlighting delimiters isolating `[UNTRUSTED_QUOTED]` from `[TRUSTED]`/`[SYSTEM]`. Pre-act
-  **`[ANCHOR_CHECK]`**, **`PrincipleAudit`** (`R-48`), and **`CommitCheck`** (`R-49`) validate
-  identity adherence & promise non-conflict before external dispatch.
+  commitments, Spotlighting delimiters isolating `[UNTRUSTED_QUOTED]` from `[TRUSTED]`/`[SYSTEM]`.
+  For `[SELF_GUIDE]`, `Core` stays content-blind and Valve-unaware: it emits only a typed
+  `CoreSelfSnapshot` (active `Switches`/registry flags, `VisibleScope`, `auto_recall` trigger state,
+  protocol version) and `Doors::context` allows `Valve` (`waist-valve-and-bodies`) to attach an
+  optional `ValveSelfSnapshot` (`valve_mode`, `quiet_hours`, `PendingApproval`, `C_daily`, `taint`
+  gating). `reason/src/render.rs` compiles both snapshots via exhaustive Rust `match` templates into
+  a `~150–250`-token cacheable prefix block (zero prose stored inside `Core`, zero hidden formulas or
+  thresholds such as `θ` or `P_rc` formulas exposed, byte-identical across turns while config holds),
+  paired with single-line just-in-time working-set cues when `auto_recall` runs or `Valve` returns
+  `held`/`refused` with a canonical reason tag. Pre-act **`[ANCHOR_CHECK]`**, **`PrincipleAudit`**
+  (`R-48`), and **`CommitCheck`** (`R-49`) validate identity adherence & promise non-conflict before
+  external dispatch.
 
 ### 10. Beliefs & Taint Provenance (§7, §14; A-01, A-12, R-17, R-20, R-21, R-32, R-34, R-43)
 
@@ -353,7 +363,8 @@ Waist-2 schema shapes, `R-50`), plus `monoagens-lab` CLI (`run`, `compare`, `cov
   `Tool RAG` scaling (`N_caps = 50..200`), and `MPBench` poisoning on **Convex Pareto** `(Quality, E_tok, Risk)`
   fronts with `Holm-Bonferroni` (`d_z`, `r_rb`), sizing paired confirmatory trials at **$S \ge 354\text{--}471$** (`A-16`).
 - **Property Tests & Scale Microbenchmarks (`proptest`, `criterion`, `R-40`):** Enforces `proptest`
-  fuzzing for replay determinism, `κ(b, a)`, and `Δ_NI = 0`, plus `criterion` microbenchmarks on
+  fuzzing for replay determinism, `κ(b, a)`, and `Δ_NI = 0`, exhaustiveness/zero-drift parity tests
+  for `[SELF_GUIDE]` against `Switches` & `ValveSelfSnapshot`, plus `criterion` microbenchmarks on
   `Core::open` (`< 100 ms` across `10^5–10^7` events), `VectorIndex` (`usearch` vs `hnsw_rs` vs `Flat`,
   `< 5 ms` p99 & `Recall@10 >= 0.93` down to `1%` `VisibleScope` selectivity), and forensic `hard_forget` scans.
 - **Core TCK Hooks (`R-50`):** Exposes black-box `C-MUST-01` (`Δ_NI = 0`), `C-MUST-02` (`hard_forget`

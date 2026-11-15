@@ -54,6 +54,7 @@ This checklist implements `monoagens-protocol`, `monoagens-core`, `monoagens-sto
 - [ ] 7.3 Enforce `[ANCHOR_CHECK]`, `PrincipleAudit`, `CommitCheck` (`R-49`), and `CitationLock` before dispatching outbound or promise-mutating acts.
 - [ ] 7.4 Implement `[0, 20]` anchored confidence + balanced `1–5` motivation parsing, `0/0`-guarded report control `P_rc` (`A-01`), structured `memory.recall` auto-recall loop, and safe `withheld` logging.
 - [ ] 7.5 Implement `R-38` progressive `Tool RAG` disclosure (`<= 4` static `OwnerSigned` core tools in cached prefix + hybrid BM25/`256d` retrieval of `<= k_cap = 8` capabilities & `<= k_proc = 3` procedures filtered by `ActiveCaps ∩ VisibleScope` and matching `capability_schema_hash`, plus neutral ablation `k_cap = |C_avail|, k_proc = 0`).
+- [ ] 7.6 Add ablatable `Switches.self_mechanics_guide` (`neutral = false`), typed `CoreSelfSnapshot` + `Doors::context` `ValveSelfSnapshot` attachment slot on `ContextPlan`, exhaustive Rust `match` `[SELF_GUIDE]` prefix renderer (`<= 250` tokens, zero hidden formula leakage) + just-in-time `auto_recall`/`held` working-set cues in `reason/src/render.rs`, and compile/snapshot zero-drift parity tests.
 
 ## 8. Phase 1–2 — Durable segmented storage (`monoagens-store`)
 
@@ -133,6 +134,7 @@ This checklist implements `monoagens-protocol`, `monoagens-core`, `monoagens-sto
 - [ ] 19.1 Add `VisibleScope` pre-Step-5 leakage suite verifying zero private title/count leakage during FOK, recall, and cross-audience chains.
 - [ ] 19.2 Add `hard_forget` erasure verification confirming zero reconstruction via SQLite, FTS5, `usearch`, snapshots, or `Two-Epoch Replay`.
 - [ ] 19.3 Add indirect prompt-injection, Spotlighting bypass, `taint` laundering, and multi-turn `IdentityAnchor` sycophancy drift scenarios.
+- [ ] 19.4 Add `self_mechanics_guide` ablation suites measuring held/refused explanation truthfulness, `detail_without_recollection` under `R = 0`, zero-drift switch parity, and casual-conversation non-verbosity regression (`>= 5` seeds).
 
 ## 20. Phase 3 — Core Conformance TCK (`C-MUST-01..04`)
 

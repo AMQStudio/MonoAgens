@@ -71,6 +71,7 @@ bodies/
 ### D5. Embedded `cedar-policy` + `cedar-policy-symcc` Valve (`R-41`)
 
 - Evaluates deterministically over `(log_seq, t_now)` snapshots (zero LLM inference, zero live HTTP/DNS) and runs **first and last** in Inbound, Context, Action, and memory-write doors so secondary plugins can only narrow access.
+- During the `Context` door, `Valve` populates a typed read-only `ValveSelfSnapshot` on `ContextPlan` (`valve_mode`, `quiet_hours_active`/window, `pending_approval_enabled`, `c_daily`, `taint_blocking_active`) and stamps canonical structured `door_verdict` / `Receipt` reason codes (`PendingApproval`, `quiet_hours_digest`, `stale_or_mismatched_approval`, `oversight_budget_exhausted`, `taint_blocked`) so `core-and-lab`'s `[SELF_GUIDE]` renderer never drifts from live Valve config.
 - Derives ephemeral room/co-location Cedar parents strictly from verified `PlacePresence` (`room_presence_ttl_s = 300 s`) or `PhysicalPresence` (`physical_presence_ttl_s = 15 s`, `physical_room_radius_m = 4.0 m`); natural-language self-claims carry zero authority.
 - Policy reload invokes latest stable `cedar-policy-symcc` (`CedarSymCompiler::new(LocalSolver::cvc5()?)` over `WellTypedPolicies` and `SymEnv`, verified async against `cvc5` on load) proving UNSAT (`0` counterexamples) that `principal != Owner` can invoke `identity_changing` or `SelfModify` capabilities (`< 50 μs` p99 `criterion` runtime eval target + `proptest` policy/identity invariant fuzzing).
 

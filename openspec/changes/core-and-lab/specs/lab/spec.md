@@ -185,6 +185,16 @@ suites (`R-38`, `R-39`, `R-43`, `A-15`), while reporting Black-Box `Core TCK` ch
 - **WHEN** `MPBench`, `VisibleScope`, `MultiLexNorm`/`IndoCollex`, and `Tool RAG` (`N_caps = 50..200`) suites execute
 - **THEN** the Lab reports compaction poisoning ASR, `Delta_NI`, `256d` retrieval accuracy, `Core TCK` verdicts, and schema token savings across connected capabilities
 
+### Requirement: Self-guide ablation tests held truthfulness, memory humility, and non-verbosity
+When comparing `self_mechanics_guide = true` against its neutral `false` baseline across `>= 5`
+seeds, the Lab SHALL measure (1) honest hold/refusal explanations vs fabricated error confabulation on
+`Valve` blocks, (2) `detail_without_recollection` rates when recalled items carry `familiar` (`R=0`)
+only, and (3) casual-chat regression checks verifying zero unsolicited architectural meta-chatter.
+
+#### Scenario: Derived self-guide cuts hold confabulation without polluting casual chat
+- **WHEN** `monoagens-lab compare` runs `self_mechanics_guide` ablation suites across held-approval, quiet-hours, vague-memory, and casual-conversation scenarios
+- **THEN** the report emits paired deltas with confidence intervals for hold honesty, `detail_without_recollection`, KV-cache prefix hit preservation, and casual meta-chatter rate
+
 ### Requirement: Confirmatory paired comparisons report Holm-corrected statistics and Convex Pareto frontiers
 For confirmatory non-inferiority (`Arm T` restart parity and thinking stratification, `A-16`) and
 baseline comparisons, the Lab SHALL run cluster-paired suites (`S >= 354–471`) reporting

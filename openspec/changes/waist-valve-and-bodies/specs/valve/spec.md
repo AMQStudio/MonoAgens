@@ -71,3 +71,16 @@ receipts. Each rule SHALL be toggleable in config and logged on change.
 #### Scenario: Quiet-hours notification defers to digest as held while monitor obeys budget
 - **WHEN** a non-emergency `RecurrenceSpec` notification fires during quiet hours or after `daily_token_budget` is spent
 - **THEN** quiet-hours alerts hold in the next `3×/day` digest (`held` receipt) and budget-exhausted monitors are refused without promise bypass
+
+### Requirement: Valve attaches live policy snapshot to context door for zero-drift self-guidance
+During the `Context` door, `Valve` SHALL inject a read-only `ValveSelfSnapshot` reflecting live
+rules (`valve_mode`, `quiet_hours`, `PendingApproval`, `C_daily`, `taint` blocking) and SHALL stamp
+held or refused dispatches with canonical `door_verdict` reason tags consumed by `[SELF_GUIDE]`.
+
+#### Scenario: Toggling quiet hours or Valve mode removes stale guidance immediately
+- **WHEN** the owner disables `quiet_hours` or switches `Valve` into partial/off mode in config
+- **THEN** the next wake's `Context` door populates the updated `ValveSelfSnapshot` so disabled rules cease appearing in `[SELF_GUIDE]`
+
+#### Scenario: Held or refused action exposes canonical reason tag
+- **WHEN** `Valve` defers an outbound act to quiet hours (`quiet_hours_digest`) or blocks/holds via `PendingApproval`, `stale_or_mismatched_approval`, `oversight_budget_exhausted`, or `taint_blocked`
+- **THEN** the emitted `Receipt` and `door_verdict` carry that canonical reason tag without exposing internal Cedar policy internals or formula constants

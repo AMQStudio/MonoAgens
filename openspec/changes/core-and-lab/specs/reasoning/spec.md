@@ -47,12 +47,32 @@ recent observations in full, and older observations as references that can be re
 
 ### Requirement: Context order puts IdentityAnchor at slot 0 and keeps stable-to-volatile prefix
 `ContextPlan` SHALL place the immutable `OwnerSigned` `IdentityAnchor` (`[ANCHOR]`, `R-48`) in
-slot 0, sorted capabilities + schema hashes, ledgers + 4-pillar `self_card`, commitments, working
-set, recalled items, place tail, `<now>`, cutoff, and Spotlighting trigger (`R-11`, `R-43`).
+slot 0, sorted static core capabilities + schema hashes (and `[SELF_GUIDE]` when enabled), ledgers +
+4-pillar `self_card`, commitments, working set, recalled items, place tail, `<now>`, cutoff, and
+Spotlighting trigger (`R-11`, `R-43`).
 
 #### Scenario: Two consecutive wakes
-- **WHEN** two wakes happen with the same identity anchor and capabilities
-- **THEN** rendered contexts share an identical static cacheable prefix covering slot-0 anchor and sorted capabilities
+- **WHEN** two wakes happen with the same identity anchor, runtime self-guide snapshot, and capabilities
+- **THEN** rendered contexts share an identical static cacheable prefix covering slot-0 anchor, `[SELF_GUIDE]` (when active), and sorted capabilities
+
+### Requirement: Derived self-guide renders active mechanics without drift or threshold leakage
+Controlled by `self_mechanics_guide` (neutral `false`), `Core` SHALL emit a content-blind
+`CoreSelfSnapshot` while `Doors::context` accepts an optional `ValveSelfSnapshot`. `reason` SHALL
+synthesize `[SELF_GUIDE]` (`<= 250` tokens) in the cacheable prefix via exhaustive `match`
+templates—never handwritten Core prose or hidden formula thresholds—plus one-line working-set
+cues when `auto_recall` or `held`/`refused` receipts occur.
+
+#### Scenario: Neutral switch preserves baseline prompt byte-for-byte
+- **WHEN** `self_mechanics_guide` is set to its neutral value `false`
+- **THEN** rendered prompts omit `[SELF_GUIDE]` and match baseline contexts byte-for-byte
+
+#### Scenario: Disabled mechanism or Valve rule leaves zero stale prose
+- **WHEN** a mechanism switch is neutralized, `Valve` runs in `off` mode, or `quiet_hours` is disabled in config
+- **THEN** the next wake's `[SELF_GUIDE]` immediately omits that disabled capability or rule without manual text edits
+
+#### Scenario: Held receipt and auto-recall surface honest just-in-time working-set cues
+- **WHEN** `Valve` returns a `held` receipt (`PendingApproval` or `quiet_hours_digest`) or `P_rc` triggers `memory.recall`
+- **THEN** the working set renders one explicit factual cue naming the hold reason or recall trigger without revealing tunable formula constants
 
 ### Requirement: Progressive capability and procedure disclosure stays within prompt budgets
 `ContextPlan` SHALL keep at most four static `OwnerSigned` core capabilities in the cacheable
