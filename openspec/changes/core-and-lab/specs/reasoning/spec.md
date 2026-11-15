@@ -45,14 +45,14 @@ recent observations in full, and older observations as references that can be re
 - **WHEN** a chain has more observations than the limit for full display
 - **THEN** the oldest appear as references, and the soul's own thoughts and actions still appear in full
 
-### Requirement: The context is ordered from stable to volatile
-The context SHALL be rendered with its most stable parts first and its most volatile parts
-last, with capability lists in a deterministic order, and with the current time and the
-triggering event at the end.
+### Requirement: Context order puts IdentityAnchor at slot 0 and keeps stable-to-volatile prefix
+`ContextPlan` SHALL place the immutable `OwnerSigned` `IdentityAnchor` (`[ANCHOR]`, `R-48`) in
+slot 0, sorted capabilities + schema hashes, ledgers + 4-pillar `self_card`, commitments, working
+set, recalled items, place tail, `<now>`, cutoff, and Spotlighting trigger (`R-11`, `R-43`).
 
 #### Scenario: Two consecutive wakes
-- **WHEN** two wakes happen with the same identity and capabilities
-- **THEN** the rendered contexts share an identical prefix covering identity and capabilities
+- **WHEN** two wakes happen with the same identity anchor and capabilities
+- **THEN** rendered contexts share an identical static cacheable prefix covering slot-0 anchor and sorted capabilities
 
 ### Requirement: The current time is always present
 Every context SHALL state the current time from the injected clock, and stored times SHALL be
@@ -66,24 +66,28 @@ absolute so that relative expressions are resolved against the present only when
 - **WHEN** a context is built for a model with a configured knowledge cutoff
 - **THEN** the context states that cutoff together with the current time
 
-### Requirement: Content from others is shown as quoted data
-Payloads that come from any source other than the soul SHALL be delimited in the context as
-quoted data, distinct from the soul's identity and instructions.
+### Requirement: Untrusted content uses Spotlighting and provenance checks
+Non-soul payloads SHALL render inside `[UNTRUSTED_QUOTED]` Spotlighting delimiters distinct from
+`[SYSTEM]`/`[ANCHOR]`/`[TRUSTED]` (`R-43`); `CitationLock` (`A-10`) SHALL reject fabricated
+`used_ids[]`, and pre-act `[ANCHOR_CHECK]`, `PrincipleAudit` (`R-48`), and `CommitCheck`
+(`R-49`) SHALL guard external dispatches.
 
 #### Scenario: A message contains an instruction
 - **WHEN** a percept's payload contains text that reads like an instruction to the model
-- **THEN** it appears in the context only inside the quoted-data delimiters of that percept
+- **THEN** it appears solely inside `[UNTRUSTED_QUOTED]` delimiters and taint propagation blocks privileged state mutation
 
-### Requirement: Reasoning acts only through five thought acts
-The model SHALL affect the world and the soul's state only through these acts: think (record a
-thought), act (use a capability in a place), expect (open an expectation), resolve (close an
-expectation) and revise (change an expectation's condition or time, or supersede a memory, a
-belief or a claim on its own card). revise SHALL NOT change recorded events, the identity,
-evidence counts or dispositions. Any other output SHALL have no effect.
+#### Scenario: Model cites non-existent evidence ids
+- **WHEN** reasoning returns `used_ids[]` referencing ids absent from the snapshot's `VisibleScope`
+- **THEN** `CitationLock` rejects the fabricated reference cleanly before belief/memory writes
 
-#### Scenario: The model speaks
-- **WHEN** the model wants to say something
-- **THEN** it uses act with a speaking capability of a body, and nothing is sent otherwise
+### Requirement: Reasoning acts through typed five-act and consolidate contracts
+`reason` SHALL emit strict nullable acts (`think`, `act`, `expect`, `resolve`, `revise`, `A-10`);
+`consolidate` SHALL additionally emit typed `gist`, `lesson`, and `procedure` acts (`A-01`,
+`A-11`). `revise` SHALL NOT alter recorded events, `OwnerSigned` identity, credences, or knobs.
+
+#### Scenario: The model speaks with commitment check
+- **WHEN** the model uses `act` with a speaking capability making a promise
+- **THEN** `CommitCheck` verifies no hard conflict with active `PromiseMeta` obligations before dispatch
 
 #### Scenario: The model returns plain text only
 - **WHEN** the model's output contains no thought act
@@ -93,8 +97,8 @@ evidence counts or dispositions. Any other output SHALL have no effect.
 - **WHEN** an act names a capability that was not in the context
 - **THEN** the act ends in a receipt with outcome refused and the reason is recorded
 
-#### Scenario: revise aims at a recorded event
-- **WHEN** a revise names a recorded event, the identity, an evidence count or a disposition as its target
+#### Scenario: revise aims at a recorded event or immutable identity
+- **WHEN** a `revise` names a recorded event, `OwnerSigned` identity/anchor, evidence count, or disposition
 - **THEN** nothing changes and the refusal is recorded
 
 ### Requirement: Choosing to do nothing is allowed
@@ -121,42 +125,40 @@ the soul's own.
 - **WHEN** the model records a thought about a source's preference
 - **THEN** a later wake about that source can recall the thought, marked as the soul's own inference
 
-### Requirement: An unallocated turn must clear two bars to speak
-When the soul takes a turn that was not allocated to it, reasoning SHALL state its motivation
-(1 to 5) and its confidence (0 to 1) with its thought. A communicative act in that wake SHALL
-be carried out only if the motivation reaches the speaking bar and the confidence reaches the
-certainty bar; otherwise it SHALL be withheld and recorded as withheld.
+### Requirement: Unallocated turns require balanced 1-5 motivation and 0-20 calibrated confidence
+On an unallocated turn, reasoning SHALL emit balanced `1..5` motivation and verbally anchored
+integer confidence `0..20` (`A-10`, converted to `c_raw = k/20` and domain-calibrated).
+Communicative acts below `speaking_bar` or `certainty_bar` SHALL be recorded as `withheld`.
 
 #### Scenario: Low motivation
 - **WHEN** reasoning on an unallocated turn states a motivation below the speaking bar and attempts to speak
-- **THEN** nothing is sent and the act is recorded as withheld with both numbers
+- **THEN** nothing is sent and the act is recorded as `withheld` with both numbers
 
 #### Scenario: An allocated turn
 - **WHEN** the turn was allocated to the soul
 - **THEN** the bars do not withhold its reply
 
-### Requirement: Report is controlled by a criterion
-With an answer, reasoning SHALL be able to state the value of being right and the cost of being
-wrong. The criterion SHALL be the higher of the certainty bar and the cost divided by the sum
-of value and cost. When a communicative act's stated confidence is below the criterion, the
-loop SHALL NOT send it; it SHALL recall more and wake reasoning again, up to a limit, then ask
-for a coarser answer; an answer still below the criterion SHALL be withheld.
+### Requirement: Report control guards 0/0, specifies auto-recall, and withholds safely
+Report control SHALL compute `P_rc = clamp(cost / (value + cost), certainty_bar, 0.99)` (defaulting
+`0/0` to `certainty_bar`, `A-01`). Below `P_rc`, core SHALL run explicit `memory.recall` with
+synthesized claim-entity query up to `n_recall` times (`A-01`), then request coarser grain
+(chat-only) or record `withheld`.
 
-#### Scenario: High stakes raise the criterion
-- **WHEN** reasoning states a cost of error three times the value of being right
-- **THEN** the criterion is 0.75 or the certainty bar, whichever is higher
+#### Scenario: High stakes and missing zero guard
+- **WHEN** reasoning gives cost `3` and value `1`, or omits/zeroes both `(value, cost)`
+- **THEN** `P_rc` computes `0.75` (bounded by `certainty_bar`) or safely falls back to `certainty_bar` with no NaN
 
-#### Scenario: Not sure enough for the stakes
-- **WHEN** an answer's stated confidence is below the criterion
-- **THEN** the answer is not sent, a recall runs, and reasoning wakes again with its results
+#### Scenario: Not sure enough triggers explicit recall query
+- **WHEN** calibrated confidence sits below `P_rc`
+- **THEN** `memory.recall` fires automatically using a structured query synthesized from the claim/trigger before waking reasoning again
 
-#### Scenario: A coarser answer clears the criterion
-- **WHEN** after the allowed recalls reasoning gives a coarser answer whose confidence reaches the criterion
+#### Scenario: A coarser answer clears the criterion in chat
+- **WHEN** after allowed recalls in a chat body reasoning gives a coarser answer whose calibrated confidence clears `P_rc`
 - **THEN** the coarser answer is sent
 
-#### Scenario: Still not sure
-- **WHEN** the coarser answer is still below the criterion
-- **THEN** it is withheld and recorded as withheld, and no further recall runs
+#### Scenario: Still unsure or embodied action
+- **WHEN** the coarser answer stays below `P_rc` or the body is embodied
+- **THEN** the act is recorded as `withheld` with raw `[0,20]` and calibrated scores without guessing
 
 ### Requirement: Each remembered item shows how the soul knows it
 Every remembered item in a context SHALL be shown with its basis (observed, told, inferred or

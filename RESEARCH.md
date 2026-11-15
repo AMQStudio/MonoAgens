@@ -1,652 +1,145 @@
-# Research — formulas and their sources
+# Research — Master Formula & Mechanism Index
 
-Every formula the core uses, what each symbol means, why it was chosen, and where the idea
-comes from; *Engineering principles behind the core's shape* lists the systems principles behind the core's shape. [architecture.md](architecture.md) *Core* states *what* the core does; this file states *how* and *why*, so a
-scientist can check it and a new session does not have to rediscover it.
+Every formula, safety mechanism, and protocol contract behind MonoAgens' **Core**, **Valve**, and **Gateway**: what each symbol means, its verified literature source, and where full ablation derivations live. [`ARCHITECTURE.md`](file:///home/muqsith/Projects/Mono/ARCHITECTURE.md) states *what* the architecture guarantees (strict invariants owned by the repository owner); this index summarizes *how* and *why* each subsystem operates so both human reviewers and coding agents stay synchronized.
 
-Source tags: **[PR]** peer-reviewed · **[PP]** preprint · **[IND]** industry documentation or
-standard. Many 2025–2026 agent papers are preprints; treat their numbers as the authors' claims.
-Parameters named in `code font` are knobs, calibration values or constants of the prior
-([architecture.md](architecture.md) *Prior (format version 1)*; default values in [`prior/`](../prior/dispositions.json)).
+- **Full Research Compendia:** [`2026-11-15-run-1.md`](file:///home/muqsith/Projects/Mono/research/findings/2026-11-15-run-1.md) (`R-01`–`R-40` initial baseline) · [`2026-11-16-run-2.md`](file:///home/muqsith/Projects/Mono/research/findings/2026-11-16-run-2.md) (`A-01`–`A-16` spec audit & open-note resolutions + `R-29`–`R-50` full stack) · [`run-2-notes/`](file:///home/muqsith/Projects/Mono/research/findings/run-2-notes) (`15` detailed technical reports).
+- **Source Tags:** `[PR]` peer-reviewed · `[PP]` preprint · `[IND]` industry specification, crate, standard, or regulation. Parameters in `code font` are calibratable prior defaults; **start values** sit in bounded ranges tuned deterministically in `monoagens-lab`.
 
 ---
 
-## 1. Design stance: a quantized brain
-We do not simulate neurons. We keep a few brain *functions* whose input–output behavior is
-well studied and cheap to compute, in the spirit of resource-rational analysis: cognition as
-the best use of limited computation [Lieder & Griffiths 2020, PR]. The cycle "predict → notice
-surprise → attend → recall → choose an action at a cost → monitor oneself → consolidate in
-sleep" recurs across cognitive architectures [Laird, Lebiere & Rosenbloom 2017, PR;
-Sumers et al. 2024 (CoALA), PR]. The LLM plays the prefrontal cortex: it is only woken when
-the cheap machinery judges a moment worth it.
+## 1. Design Stance & Structural Corrections Over Initial Draft
 
-## 2. Signals
-Each signal is a pure function of the current situation with a value in [0, 1].
+We model **resource-rational cognitive functions** [Lieder & Griffiths 2020, `[PR]`] matching the canonical Soar/CoALA perception–appraisal–memory–action–consolidation loop [Laird, Lebiere & Rosenbloom 2017, `[PR]`; Sumers et al. 2024, `[PR]`]. The LLM (`reason`) runs strictly after a sub-millisecond, content-blind Core gate judges an event worth waking for [TGL `arXiv:2605.30152`, `[PP]`].
 
-- **own_name** ∈ {0, 1}: the `named` feature — the soul's name was said without the turn being
-  allocated to it (attention capture, *Generalization: one function instead of many rules*). The adapter reports it ([architecture.md](architecture.md) *Waist 1: core ↔ host*); the core
-  never searches text.
-- **info_gap** = max_r cos(v, r) over reference sentences r for the language
-  (`references.json`), where v is the event's embedding. Rationale: curiosity and helping start
-  from a perceived information gap [Loewenstein 1994, PR]; embeddings instead of keywords keep it
-  language- and style-independent.
-- **feeling_of_knowing** = σ((A* − `fok_threshold`) / `fok_scale`), where A* is the highest memory
-  activation among candidates, including recent messages in the place. Rationale:
-  metamemory's feeling-of-knowing predicts whether recall will succeed [Nelson & Narens 1990, PR];
-  LLMs show usable FOK/JOL signals when they are used for control [arXiv 2605.14186, PP].
-- **relevance** = max cos(v, u) over vectors u of active promises and core memory.
-- **social_cost** ∈ [0, 1]: the floor belongs to someone else — another person was selected, or
-  someone already answered — lowered by closeness to the speaker. The soul's own share of
-  talk is only in θ.
-
-σ(x) = 1 / (1 + e^(−x)) throughout.
-
-## 3. Salience, habituation, threshold and the go / no-go gate
-
-**Salience.** S = clamp(Σₖ wₖ·sₖ, 0, 1) over the signals sₖ with weights wₖ (from knobs and
-constants: `helpfulness` → info_gap and FOK weights; `own_name_weight`, `relevance_weight`;
-`restraint_after_speaking` → the social_cost weight, which is negative).
-Rationale: the salience network selects the most relevant stimuli and switches between
-inward and outward processing [Menon & Uddin 2010, PR; Menon 2011, PR].
-
-**Habituation.** For each (place, who): h ← h · γ^(Δt in minutes) + 1 at every stimulus;
-S_eff = S / (1 + h). γ comes from `boredom_with_repeats` (0 → 0.99/min, 1 → 0.8/min).
-Rationale: repeated stimuli without consequence lose their pull — the most basic form of
-learning in behavior.
-
-**Threshold (drives, no emotion).**
-θ = θ₀ + a · talk_rate + b · budget_used − c · promise_debt + r · (1 − familiarity)
-- θ₀ from `talkativeness` (0 → 0.85, 1 → 0.35).
-- talk_rate = the soul's communicative acts in this place over the last
-  `talk_rate_window_minutes`, divided by max(1, active participants). The 1/n reference rate is
-  how a fair participant behaves in group chat [Eckhaus et al. 2025, "Time to Talk", PR].
-- budget_used = tokens spent today / daily budget (owner setting).
-- promise_debt = share of the soul's promises due within the next hour.
-- familiarity = σ(B_ctx), B_ctx the ACT-R base-level activation of the soul's interactions
-  with this place and the people present (familiarity = 0 when there are none);
-  r = `reserve_when_unfamiliar`.
-- a from `restraint_after_speaking`; b = `budget_weight`; c = `promise_debt_weight`.
-Rationale: homeostatic drives shift the willingness to act without simulating feelings
-[Wang et al. 2023, "Humanoid Agents", PR — we keep their basic-needs idea and drop emotion].
-
-**Go / no-go.** P = σ((S_eff − θ) / τ). Draw u ∈ [0, 1) from a generator seeded with
-hash(seed, event.id); "go" if u < P. τ from `spontaneity` (0 → 0.02, 1 → 0.2).
-P below `note_band` is recorded as silent, otherwise as note when there is no go.
-Rationale: action selection as a soft, thresholded competition (a basal-ganglia-style
-go / no-go) gives natural variation without if-else rules, and the seed makes every decision
-exactly reproducible in replay. A small non-LLM trigger deciding *when* to act outperforms an
-LLM deciding it on every event, at a fraction of the cost [arXiv 2605.30152, PP].
-
-**Circuit breaker** bypasses the draw: the event engages a commitment — the turn was
-allocated to the soul, it fires or answers an active Expectation, or it continues an active goal.
-
-## 4. Patience and inner thought
-
-**Patience.** A go on a turn not allocated to the soul creates a `wait` Expectation: if someone other than the sender
-replies in this place within `patience_seconds`, the decision ends as silent; otherwise reasoning
-wakes. Rationale: in multi-party chat the agent should not take the floor when someone else is
-about to answer; silent abstention and interruption are the two failure modes to measure
-[arXiv 2609.03923 (CAPA), PP; arXiv 2607.03730 (ProACT), PP].
-
-**Inner thought.** When the soul self-selects, reasoning calls think(thought, motivation m ∈ 1..5,
-confidence c ∈ [0, 1]). A communicative act passes only if m ≥ `speaking_bar` and
-c ≥ `certainty_bar`. The criteria offered to reasoning are the eight heuristics of
-[Liu et al. 2025, "Inner Thoughts", CHI, PR]: relevance, information gap, expected impact,
-urgency, coherence, originality, balance, dynamics. Their own score is
-Σᵢ p(sᵢ) · sᵢ · λ^(t − τ_p) with λ = 1.02 (motivation grows while silent and resets after
-speaking); MonoAgens gets the same effect from talk_rate in θ and runs the LLM step only after
-the cheap gate.
-
-## 5. Memory activation (ACT-R)
-
-**Base-level activation.** B = ln(Σⱼ tⱼ^(−d)) over the times tⱼ since each use
-[Anderson & Schooler 1991, PR; Anderson 2007, ACT-R]. We use the cheap approximation
-B ≈ ln(n / (1 − d)) − d · ln(L), with n = use_count + 1 and L = age in hours from the injected
-clock [Petrov 2006, PR]. d from `memory_persistence` (0 → 0.7, 1 → 0.3; ACT-R's usual 0.5 in the
-middle).
-
-**Total activation.** A = B + `context_weight` · cos(context, memory) + `importance_weight` ·
-importance. The cosine term is spreading activation from the current context.
-
-**Retrieval.** Candidates = top 40 by vector ∪ top 20 by text; rank by A; return the top k;
-increment use_count. Rationale: power-law forgetting keeps memories that are used often alive
-for a long time and lets unused ones fade, unlike exponential decay, which flattens everything
-after a month. The original recency × importance × relevance retrieval of Generative Agents
-[Park et al. 2023, UIST, PR] is the precursor.
-
-**Fade.** During sleep, per-message vectors whose A falls below a fixed threshold are released;
-the gist remains in memories and the event remains in the log.
-
-## 6. Expectations and the wake gate
-
-**Prediction error.** An Expectation is a prediction about the world; a miss is a prediction
-error that may wake reasoning. This is the engineering core of predictive processing and active
-inference [Friston et al. 2016, PR], without the full free-energy machinery. Prospective memory
-(remembering to act later) is the least solved part of agent memory, and storing intentions as
-typed records whose lifecycle lives in code works better than leaving them to the model
-[arXiv 2609.01272 (PIS), PP; arXiv 2611.05731 (Pro-Memory), PP; arXiv 2607.12385 (PM-Bench), PP].
-
-**Free-text conditions.** m = cos(event vector, condition vector).
-- m < `wake_gate_lo` → ignore.
-- m ≥ `wake_gate_lo` → one classifier call; its verdict is recorded with m.
-- `wake_gate_hi` = 1 (no "clearly yes" band) until zero "no" verdicts are seen in n ≥ 3/ε
-  verdicts with m above a proposed hi (rule of three, *Generalization: one function instead of many rules*; ε = 0.06 → n = 50).
-Rationale: similarity measures "about the same thing", not "answers it" — a question on the
-same topic is as similar as its answer.
-
-**Band learning.** `wake_gate_lo` moves toward (lowest m with a "yes" verdict) − margin, within
-bounds, by the bounded-update rule of *Learning with bounds*.
-
-## 7. Trust, credence and reliability (beta reputation)
-
-Credence of a learned procedure or lesson, and a person's reliability in a domain, are stored as
-evidence counts (α, β), starting from a prior that depends on the source (owner high, stranger
-low). Expected value E = α / (α + β). Each confirmed outcome adds 1 to α, each failed one 1 to β;
-old evidence may be discounted by a forgetting factor [Jøsang & Ismail 2002, Beta Reputation
-System, PR]. Rationale: humans keep "epistemic vigilance" towards both the source and the
-content of what they are told [Sperber et al. 2010, PR]. Counts update conservatively by nature
-(a single event moves E little once α + β is large) and are easy to recompute from the log.
-
-**Closeness** to a person is the ACT-R base-level activation of the interactions with them.
-
-## 8. Learning with bounds
-
-**Delta rule** (for learned weights, when enabled):
-wₖ ← clamp(wₖ + α_learn · (r − P) · sₖ), r = 1 if the outcome was good, 0 otherwise
-[Rescorla & Wagner 1972, PR]. α_learn = `learning_rate`.
-
-**Bounded updates** (for knobs, when enabled):
-- move only when the 95% interval of the evidence excludes "no change";
-- each step ≤ a small share of the knob's range; total daily change ≤ 5% of the range;
-- every knob has a floor and a ceiling; a knob that sits at a bound for several days freezes
-  and is reported to the owner;
-- teachers: the owner's reactions and classifier verdicts only (others tune layer-3,
-  per-place and per-person values);
-- each change is an event storing its own delta, so rollback and replay never depend on
-  message contents.
-These numbers are engineering defaults, not results from a study; they are tuned with replay.
-
-## 9. Prompt layering for caching
-The prompt is ordered from stable to volatile so the provider's prefix cache can reuse it: a
-cache hit requires the whole rendered prefix to match [OpenAI prompt caching docs, IND].
-Capability lists are sorted deterministically; `<now>` and the triggering event are last.
-In replay with a real model, about 88% of prompt tokens were served from cache.
-
-## 10. Safety mechanics
-- **Absolute line 1** (identity changes only from the owner) is enforced by provenance:
-  `origin_actor` is inherited along the causal chain and checked in the action hook for
-  capabilities flagged `identity_changing`. This is a minimal form of separating control flow
-  from untrusted data [Debenedetti et al., CaMeL, arXiv 2503.18813, PP; SaTML 2026, PR].
-- **Absolute line 2** (private content never reaches anyone who was not part of it: the
-  audience of the context must be a subset of the audience of the content) is information-flow
-  control in the context hook: what is not in the prompt cannot leak. The core carries the
-  labels; the valve in the host judges them, like a reference monitor that
-  sees every access [Anderson 1972, IND]. Sharing is declassification
-  by owners in the decentralized label model [Myers & Liskov 1997]: each person in the audience
-  may extend the audience of what they were part of, and only that.
-- Messages from non-owners are delimited as quoted data (spotlighting) [Hines et al. 2024,
-  CAMLIS, PR]; this only lowers attack success and is never relied on for the absolute lines
-  [Shi et al., arXiv 2505.14534, PP].
-- Threat model follows the OWASP Top 10 for LLM Applications 2025 (prompt injection, data and
-  model poisoning, excessive agency, unbounded consumption) and memory/context poisoning in the
-  OWASP agentic list [IND].
-
-## 11. Grounding in time
-The knowledge cutoff comes from per-model configuration, set slightly earlier than claimed,
-because effective cutoffs differ from reported ones [Cheng et al., "Dated Data",
-arXiv 2403.12958, PP]; time-misaligned context hurts accuracy [EvolveBench, ACL 2025, PR].
-The current date is always in `<now>`.
-
-## 12. Sleep and consolidation
-Consolidation runs off the critical path, when idle, as in sleep-time compute [Lin et al.,
-arXiv 2504.13171, PP]. Raw events are never replaced by summaries: verbatim records beat lossy
-extraction on long-term memory benchmarks [arXiv 2601.00821, PP]. Superseding instead of
-overwriting (`valid_to`, `superseded_by`) is a minimal bi-temporal model [Zep, arXiv 2501.13956,
-PP]; stale beliefs are a known failure of agent memory [STALE, arXiv 2605.06527, PP].
-
-## 13. Measuring human-likeness honestly
-Report per behavior against a human baseline in the same group: reply-timing distribution,
-messages per hour vs 1/n, when-to-speak precision/recall against human annotation, false-speak
-and missed-help rates, promise keeping, recall after 1/7/30 days, and a blind "which one is the
-bot" test with a target near 50%. Turing-style tests measure persona skill, not cognition: a
-persona-prompted GPT-4.5 was judged human 73% of the time [Jones & Bergen, arXiv 2503.23674, PP].
-
-## 14. Knowing, not knowing and misremembering
-Seven brain functions, each with a studied model; together they decide what the soul may
-assert about the past.
-
-**Source monitoring.** People attribute a memory's source from its qualities (perceptual
-detail, context, the operations that produced it); most memory distortions are source
-misattributions, and prefrontal regions are central [Johnson, Hashtroudi & Lindsay 1993, PR;
-Johnson & Raye 1981, PR; Mitchell & Johnson 2009, PR]. The soul logs provenance, so `basis`
-(observed | told | inferred) is source monitoring without guessing.
-
-**Familiarity vs recollection.** Dual-process signal detection [Yonelinas 1994; 2002, PR]:
-recollection R is threshold-like (all-or-none retrieval of details) and depends on the
-hippocampus; familiarity F is a continuous signal-detection process:
-  P("seen before") = R + (1 − R) · P(F > c).
-Mapping: F = cosine and activation; R = `recall` recovering original events whose people,
-place and time match. Details are asserted only when R holds; F alone yields "sounds familiar".
-Déjà vu = F > c with R = 0.
-
-**Verbatim vs gist.** Fuzzy-trace theory: verbatim and gist traces are stored in parallel and
-independently; verbatim fades faster; gist drives false memories, and verbatim supports
-*recollection rejection* of meaning-consistent but unpresented items [Brainerd & Reyna 2002, PR;
-Reyna et al. 2016, PR]. The classic demonstration is the DRM paradigm [Roediger & McDermott
-1995, PR]. Mapping: events = verbatim, sleep summaries = gist; on conflict the events win.
-
-**Pattern separation and completion.** The dentate gyrus/CA3 orthogonalize similar inputs into
-distinct memories; CA3 completes a pattern from a partial cue [Yassa & Stark 2011, PR]. Mapping:
-sleep merges two episodes only when people, place and time agree (high overlap), never on vector
-similarity alone.
-
-**Reality filter.** The posterior medial orbitofrontal cortex suppresses evoked memories that do
-not pertain to ongoing reality; its failure produces spontaneous confabulation [Schnider 2003,
-PR; Schnider 2008, book]. Mapping: `valid_to` / `superseded_by`, absolute stored times, relative
-words resolved against `<now>` only at recall.
-
-**Metacognitive control of report.** Monitoring yields an assessed probability c that a
-candidate answer is correct; the answer is volunteered only if c ≥ P_rc, a response criterion
-set by the payoffs (higher cost of error → higher criterion); otherwise the person withholds
-("don't know") or reports at a coarser grain [Koriat & Goldsmith 1996, PR; Goldsmith & Koriat
-2008]. In utility form, choose the answer and grain g that maximize
-  U(g) = c(g) · value(g) − (1 − c(g)) · cost_error,
-where finer grain has more value and lower c. Mapping: P_rc starts at `certainty_bar` and reasoning
-raises it with the stakes; a criterion above the current c is what triggers `recall` first.
-
-**Reasoning from absence; filling gaps.** People reject an item confidently when they judge they
-*would* remember it had it occurred (memorability-based negative recognition) [Brown, Lewis &
-Monk 1977, PR]. In Bayesian form, with coverage q = P(recorded | it happened):
-  P(happened | not found) = (1 − q)·p / ((1 − q)·p + (1 − p)),  p = prior.
-High q (things here are said in chat) → absence is strong evidence; low q (things like this are
-said face to face) → absence says little. Gaps are filled by recombining nearby episodes into a
-hypothesis, as episodic memory does for simulation [Schacter & Addis 2007, PR]; the hypothesis
-is `inferred` and said as a guess. For now reasoning judges q from context; learning q per place
-and topic is deferred.
-
-## 15. Generalization: one function instead of many rules
-
-**Circuit breaker on commitments.** The ventral attention network interrupts ongoing processing
-for behaviorally relevant stimuli, acting as a "circuit breaker" for the goal-directed dorsal
-system [Corbetta & Shulman 2002, PR]. Relevance here is a commitment the soul holds: the turn was
-allocated to it, an active Expectation fires or is answered, or an active goal continues. Goals
-held in prefrontal cortex bias processing toward what serves them [Miller & Cohen 2001, PR].
-
-**Turn-taking.** Conversation allocates turns: the current speaker may select the next speaker,
-who then has the right and obligation to speak; otherwise the first to self-select takes the
-turn [Sacks, Schegloff & Jefferson 1974, PR]. Mapping: `addressed` = selected → circuit breaker;
-not selected → patience (`wait`) as the self-selection rule; `social_cost` = the floor is
-someone else's.
-
-**Own name.** One's own name breaks through unattended input [Moray 1959, PR; replicated by
-Röer & Cowan 2021, PR]: salience, not obligation.
-
-**Context familiarity.** Caution under unfamiliar context follows from report control: in a
-new place or company the soul's estimate that a contribution is welcome is uncertain, so the
-criterion rises. Familiarity reuses ACT-R base-level activation, so a place left long ago
-becomes unfamiliar again without any new constant.
-
-**Chunking a backlog.** Working memory holds about four chunks [Cowan 2001, PR]; a backlog of
-missed messages in one place is appraised as one chunk, with each signal discounted by age as
-(1 + L_hours)^(−d), the same decay as *Memory activation (ACT-R)*.
-
-**Enough evidence.** With zero failures in n trials, the 95% upper bound of the failure rate is
-about 3/n [Hanley & Lippman-Hand 1983, PR]; in general the bound comes from the beta posterior
-already used for credence. One rule replaces every hand-picked count.
-
-**Learning from outcomes.** Dopamine neurons signal reward prediction error, the quantity the
-delta rule uses [Schultz, Dayan & Montague 1997, PR]; it underlies *Learning with bounds*.
-
-## 16. Engineering principles behind the core's shape
-Not formulas, but the systems principles the architecture follows, so it can be checked like a
-kernel.
-- **Minimality.** A concept stays in the core only if moving it outside would prevent required
-  functionality [Liedtke 1995, PR] — hence the complexity budget and everything else in the host
-  and plugins.
-- **Mechanism, not policy.** The kernel provides mechanisms; policies live outside [Levin et al.
-  1975 (Hydra), PR; Wulf et al. 1974, PR] — the core gives hooks, the dispatch door and the gate; people, privacy, sharing, roles,
-  RBAC and modes are the host's and the valve's.
-- **Hooks before every access.** Modules mediate access by hooks placed just ahead of the access
-  [Wright et al. 2002 (Linux Security Modules), PR] — the three hooks with the valve first and
-  last.
-- **Protection principles.** Economy of mechanism, fail-safe defaults, complete mediation, least
-  privilege [Saltzer & Schroeder 1975, PR] — small core, fail-closed hooks, every percept, context
-  and action mediated.
-- **Event sourcing.** All changes are events; state can be rebuilt and queried in time
-  [Fowler 2005, IND]; snapshots and versioned events keep it workable over years.
-- **Ports and adapters.** The core is isolated from its devices behind ports [Cockburn 2005, IND]
-  — percept and capability descriptor are the ports; adapters and plugin tools are the adapters.
-- **Stable user-space contract.** Internals change freely, the interface to the outside does not
-  break [Linux kernel ABI policy, IND] — the stable skin in [architecture.md](architecture.md) *A stable skin, an inside that answers to evidence*.
-- **Capability-based isolation** (not adopted yet): every access through an unforgeable token
-  [Klein et al. 2009 (seL4), PR]. Installed plugins already run as their own processes, which
-  isolates crashes but not intent; per-plugin lever declarations in the manifest are the path
-  toward least privilege without changing the core.
-- **Process isolation for extensions.** Running extensions in a separate host process keeps a
-  misbehaving extension from affecting the main program and lets it strictly control the API
-  extensions see (VS Code's extension host) [Microsoft, VS Code extensibility docs, IND]; language
-  servers and debug adapters show the same pattern over a protocol in any language.
-
-## 17. Grounding: every act waits for evidence it landed
-
-**Conditional relevance.** A first action makes a fitting next action expected; when it does not
-come, its absence is noticed [Schegloff 1968; Schegloff & Sacks 1973, PR]. **Grounding.** People
-keep looking for evidence that they were understood: an acknowledgement, a relevant next turn, or
-continued attention; how much evidence is enough depends on the purpose and the medium
-[Clark & Brennan 1991, PR]. A "huh?"-like reaction is an open-class repair initiator: it says
-something in the last turn did not land without saying what [Enfield et al. 2013, PR].
-
-Mapping: the core opens a `predict` after every act, toward whom it acted, in that place, until it
-expires. Three outcomes, one mechanism:
-- the expected evidence comes → the prediction is answered; a reply to the soul's act wakes it
-  through the circuit breaker, which is how a conversation continues without a time window;
-- nothing comes before expiry → a noticed absence (a prediction error by time);
-- something comes that misses the expected content → a prediction error by content (wave 1). The
-  gate measures the miss cheaply (whose reply, how early or late, how far its vector is from what
-  was expected); reasoning judges what kind of miss it is (accepted, confused, corrected, a new
-  topic).
-The same holds for a body: a robot pushes a door and expects the door sensor to change; if it
-does not, that absence is the same kind of error. The criterion rises with the stakes (*Drives as opportunity
-costs*).
-
-## 18. Theory of mind as a perception ledger
-
-Mentalizing is modeled as joint inference of a person's beliefs, desires and percepts from their
-actions [Baker, Jara-Ettinger, Saxe & Tenenbaum 2017, PR]. Language models fail theory-of-mind
-tasks mostly through unreliable implicit tracking of who saw what, not through weak reasoning:
-small alterations of classic tasks break them [Ullman 2023, PP], while an explicit per-character
-belief tracker built from who witnessed each event makes them robust and zero-shot
-[Sclar et al. 2023, SymbolicToM, ACL, PR], and making perception explicit improves false-belief
-inference [Jung et al. 2024, EMNLP, PR].
-
-Mapping (wave 1): the core keeps, per source, facts only — what it witnessed (from the audiences
-the log already records), what the soul told it and whether that was grounded, its open requests,
-and what changed after it last witnessed it (a candidate false belief). Reasoning infers what the
-person wants and believes from those facts. Inferences about minds are stored as `inferred`, with
-credence, and tested by the next predictions; they are never facts. "Witnessed" is generic: in the
-same place for a chat, in sensor range for a robot, in range for a game. The soul keeps the same
-card for itself (self-model): what it said, promised and claimed, to whom, and what its body can
-do now.
-
-## 19. Sense of agency
-
-The comparator model: a copy of the motor command predicts its sensory result, and a match marks
-the change as self-caused [Frith, Blakemore & Wolpert 2000, PR]. Mapping (wave 1): an outcome
-that matches the soul's own open `predict` is marked self-caused (a fourth source in source
-monitoring) and is not appraised as a new stimulus; a similar change that was not predicted is
-external.
-
-## 20. Judging silence
-
-Learning from outcomes needs a prediction to compare with. Today only acts open one, so the soul
-learns from speaking and never from staying silent. Mapping (wave 1): a chosen silence opens a
-`predict` too ("if I stay silent, someone else answers" or "nothing is needed"); a miss — the
-question stays unanswered, the person asks again — is a prediction error the delta rule of
-*Learning with bounds* uses like any other. Wrong silences become visible in the log as errors.
-
-## 21. Event boundaries
-
-When prediction error spikes, people mark the boundary of an event and update their working model
-[Zacks et al. 2007, PR]; surprise-based segmentation also gives language models episodes that match
-human-perceived events [Fountas et al. 2025, EM-LLM, ICLR, PR]. Mapping: an episode ends at a spike
-of prediction error, not after a fixed time; the same boundaries are the right moments for an
-initiative (*Idle mode and initiative*).
-
-## 22. Who a line is for (wave 2)
-
-Listeners hold roles: addressee, side participant, overhearer, eavesdropper [Goffman 1979;
-Clark & Carlson 1982, PR]. Even human annotators agree only moderately on the addressee, and a
-continuous degree fits better than one label [Mori et al. 2026, PP]. In bodies, the formation of
-people in space decides who is inside an interaction [Kendon 1990, book], and trajectory and
-orientation predict who is about to engage [Bohus & Horvitz 2009, SIGDIAL, PR].
-
-Mapping: the adapter's `addressed` stays an explicit fact of the contract. Inside the core, each
-listener gets a degree from 0 to 1, from cheap structural cues in order: an explicit address; a
-link to an open prediction (whose question this answers); the continuity of who is talking with
-whom; orientation and distance for physical bodies. Reasoning judges the meaning. The soul answers
-a line meant for someone else only as a side participant with something that clears the gate.
-
-## 23. Idle mode and initiative (wave 2)
-
-Thought does not stop when nothing happens: memories and intentions surface on their own
-[Christoff et al. 2016, PR]. Involuntary memories are triggered by a distinctive overlap between
-the present cues and a memory [Berntsen 2021, PR]; pending intentions surface when their focal cue
-appears [McDaniel & Einstein 2000, PR]. Too strong automatic constraint turns into repetition
-(rumination) [Christoff et al. 2016].
-
-Mapping, all in the core without a model call:
-1. when idle, spreading activation from the present context (place, who is present, time) raises
-   only memories whose overlap with it is distinctive;
-2. a pending promise or goal becomes active when its cue is present (the person appears, the place
-   or the time comes), reusing Expectations;
-3. a candidate thought enters the same gate, valued as benefit × probability it matters − cost of
-   interrupting; act only when that beats staying silent [Horvitz 1999, CHI, PR].
-Against chattiness: an initiative budget (the threshold rises after each initiative), delivery at
-an event boundary rather than after a quiet spell — in one study proactive help was welcomed at
-subtask boundaries and judged worse when triggered by user inactivity [Pu et al. 2025, CHI, PR] —
-and habituation of a thought the gate already refused. Incubation needs no mechanism of its own:
-an unsolved problem stays an active goal and meets new cues in sleep or idle recall.
-
-## 24. Drives as opportunity costs (wave 2)
-
-Fatigue and boredom can be modeled without feelings: fatigue as the rising value of offline
-computation, boredom as the rising value of exploration [Agrawal, Mattar, Cohen & Daw 2022, PR],
-in line with effort as an opportunity cost [Kurzban et al. 2013, PR]. How deeply to think is the
-expected value of control: reward minus the cost of control [Shenhav, Botvinick & Cohen 2013, PR].
-Curiosity is a drive to reduce uncertainty that matters, distinct from attraction to novelty
-[Gottlieb, Oudeyer, Lopes & Baranes 2013, PR]. Sleep follows homeostatic pressure plus rhythm
-[Borbély 1982, PR].
-
-Mapping: four numbers, never shown as feelings and never changing the tone of speech —
-- sleep pressure = unconsolidated backlog, released when the world is quiet (fatigue is this);
-- switching = long effort in one thread without progress lowers the bar to change approach or
-  report (boredom is this; it stops loops);
-- curiosity = a low-credence belief or open gap that changes a pending decision pushes to ask or
-  check; a gap that changes nothing does not;
-- effort = the stakes (commitments, uncertainty, the cost of an error, a conflict between sources
-  or with a commitment) set how deeply reasoning thinks.
-
-## 25. Wave 3: maps, habits and conventions
-
-A cognitive map is a general way to organise knowledge, physical, social or conceptual
-[Behrens et al. 2018, PR]: relations between sources, places and topics, with activation spreading
-over them. Habit and goal-directed control are arbitrated by uncertainty: each is used where it is
-most accurate [Daw, Niv & Dayan 2005, PR]; a reliable action sequence becomes a skill offered to
-reasoning and loses that right on a prediction error. A growing library of reusable skills carried
-an agent across new game worlds [Wang et al. 2023, Voyager, PP]. Conventions of a place are learned
-from others' observed outcomes with the same delta rule.
-
-## 26. Proving a mechanism: ablation and sealed sets
-
-Each component of an agent architecture is justified by removing it and measuring the loss
-[Park et al. 2023, UIST, PR]. Agent benchmarks without proper holdouts let agents overfit and take
-shortcuts; holdouts should match the level of generality claimed, and cost must be reported with
-accuracy [Kapoor et al. 2025, *AI Agents That Matter*, TMLR, PR]. Mapping: every mechanism has a
-neutral value and a measured claim (*Mental model*); scenarios are split into development,
-validation and sealed sets (*Evaluation*), with sealed sets grouped by generality: small
-alterations, new kinds of surprise, other bodies. The main thread, the task threads and the gate
-already form a global workspace with ignition [Mashour, Roelfsema, Changeux & Dehaene 2020, PR],
-so it needs no row of its own.
+> **Architecture Alignment Notes (Round 1 & Round 2):** Earlier drafts referred to `architecture.md`, `host`, `dispatch door`, and phantom headings; canonical terms follow [`ARCHITECTURE.md`](file:///home/muqsith/Projects/Mono/ARCHITECTURE.md) (`Gateway`, `Valve` / `Doors`, `Waist 1`, `Waist 2`, per-actor Gateway weights instead of Core `"owner"`, opaque Gateway `Store` text-search ports returning IDs, pre-Step-5 audience visibility, and explicit separation of Waist-1's `6` domain payload facts from Waist-2's JSON-RPC lifecycle methods).
 
 ---
 
-## References
-- Anderson, J. P. (1972). *Computer Security Technology Planning Study* (the reference
-  monitor). ESD-TR-73-51, US Air Force. [IND]
-- Anderson, J. R., & Schooler, L. J. (1991). Reflections of the environment in memory.
-  *Psychological Science*. [PR]
-- Anderson, J. R. (2007). *How Can the Human Mind Occur in the Physical Universe?* Oxford UP.
-  (ACT-R) [PR, book]
-- Petrov, A. A. (2006). Computationally efficient approximation of the base-level learning
-  equation in ACT-R. *ICCM*. [PR]
-- Johnson, M. K., Hashtroudi, S., & Lindsay, D. S. (1993). Source monitoring. *Psychological
-  Bulletin*, 114(1), 3–28. [PR]
-- Johnson, M. K., & Raye, C. L. (1981). Reality monitoring. *Psychological Review*, 88, 67–85. [PR]
-- Mitchell, K. J., & Johnson, M. K. (2009). Source monitoring 15 years later. *Psychological
-  Bulletin*, 135(4), 638–677. [PR]
-- Yonelinas, A. P. (2002). The nature of recollection and familiarity: a review of 30 years of
-  research. *Journal of Memory and Language*, 46(3), 441–517. [PR]
-- Brainerd, C. J., & Reyna, V. F. (2002). Fuzzy-trace theory and false memory. *Current
-  Directions in Psychological Science*, 11(5), 164–169. [PR]
-- Reyna, V. F., Corbin, J. C., Weldon, R. B., & Brainerd, C. J. (2016). How fuzzy-trace theory
-  predicts true and false memories for words, sentences, and narratives. *Journal of Applied
-  Research in Memory and Cognition*. [PR]
-- Roediger, H. L., & McDermott, K. B. (1995). Creating false memories. *JEP: Learning, Memory,
-  and Cognition*. [PR]
-- Yassa, M. A., & Stark, C. E. L. (2011). Pattern separation in the hippocampus. *Trends in
-  Neurosciences*, 34(10), 515–525. [PR]
-- Schnider, A. (2003). Spontaneous confabulation and the adaptation of thought to ongoing
-  reality. *Nature Reviews Neuroscience*, 4, 662–671. [PR]
-- Schnider, A. (2008). *The Confabulating Mind*. Oxford UP. [PR, book]
-- Koriat, A., & Goldsmith, M. (1996). Monitoring and control processes in the strategic
-  regulation of memory accuracy. *Psychological Review*, 103(3), 490–517. [PR]
-- Goldsmith, M., & Koriat, A. (2008). The strategic regulation of memory accuracy and
-  informativeness. *Psychology of Learning and Motivation*, 48. [PR]
-- Brown, J., Lewis, V. J., & Monk, A. F. (1977). Memorability, word frequency and negative
-  recognition. *Quarterly Journal of Experimental Psychology*, 29(3), 461–473. [PR]
-- Schacter, D. L., & Addis, D. R. (2007). The cognitive neuroscience of constructive memory:
-  remembering the past and imagining the future. *Phil. Trans. R. Soc. B*, 362, 773–786. [PR]
-- Corbetta, M., & Shulman, G. L. (2002). Control of goal-directed and stimulus-driven attention
-  in the brain. *Nature Reviews Neuroscience*, 3, 201–215. [PR]
-- Miller, E. K., & Cohen, J. D. (2001). An integrative theory of prefrontal cortex function.
-  *Annual Review of Neuroscience*, 24, 167–202. [PR]
-- Sacks, H., Schegloff, E. A., & Jefferson, G. (1974). A simplest systematics for the
-  organization of turn-taking for conversation. *Language*, 50(4), 696–735. [PR]
-- Moray, N. (1959). Attention in dichotic listening: affective cues and the influence of
-  instructions. *Quarterly Journal of Experimental Psychology*, 11(1), 56–60. [PR]
-- Röer, J. P., & Cowan, N. (2021). A preregistered replication and extension of the cocktail
-  party phenomenon. *JEP: Learning, Memory, and Cognition*. [PR]
-- Cowan, N. (2001). The magical number 4 in short-term memory. *Behavioral and Brain Sciences*,
-  24(1), 87–114. [PR]
-- Hanley, J. A., & Lippman-Hand, A. (1983). If nothing goes wrong, is everything all right?
-  *JAMA*, 249(13), 1743–1745. [PR]
-- Schultz, W., Dayan, P., & Montague, P. R. (1997). A neural substrate of prediction and reward.
-  *Science*, 275, 1593–1599. [PR]
-- Liedtke, J. (1995). On µ-Kernel Construction. *SOSP*. [PR]
-- Wulf, W., et al. (1974). HYDRA: The Kernel of a Multiprocessor Operating System. *CACM*,
-  17(6). [PR]
-- Levin, R., et al. (1975). Policy/Mechanism Separation in Hydra. *SOSP*. [PR]
-- Wright, C., Cowan, C., Smalley, S., Morris, J., & Kroah-Hartman, G. (2002). Linux Security
-  Modules: General Security Support for the Linux Kernel. *USENIX Security*. [PR]
-- Saltzer, J. H., & Schroeder, M. D. (1975). The Protection of Information in Computer Systems.
-  *Proceedings of the IEEE*, 63(9). [PR]
-- Klein, G., et al. (2009). seL4: Formal Verification of an OS Kernel. *SOSP*. [PR]
-- Fowler, M. (2005). Event Sourcing. martinfowler.com. [IND]
-- Cockburn, A. (2005). Hexagonal Architecture (Ports and Adapters). [IND]
-- Linux kernel documentation, Documentation/ABI/README. [IND]
-- Park, J. S., et al. (2023). Generative Agents: Interactive Simulacra of Human Behavior.
-  *UIST*. arXiv 2304.03442. [PR]
-- Liu, X. B., et al. (2025). Proactive Conversational Agents with Inner Thoughts. *CHI*.
-  arXiv 2501.00383. [PR]
-- Eckhaus, N., Berger, U., & Stanovsky, G. (2025). Time to Talk: LLM Agents for Asynchronous
-  Group Communication in Mafia Games. *Findings of EMNLP*. arXiv 2506.05309. [PR]
-- Sumers, T., Yao, S., Narasimhan, K., & Griffiths, T. (2024). Cognitive Architectures for
-  Language Agents. *TMLR*. arXiv 2309.02427. [PR]
-- Laird, J., Lebiere, C., & Rosenbloom, P. (2017). A Standard Model of the Mind. *AI Magazine*.
-  [PR]
-- Lieder, F., & Griffiths, T. (2020). Resource-rational analysis. *Behavioral and Brain
-  Sciences*. [PR]
-- Friston, K., et al. (2016). Active inference and learning. *Neuroscience & Biobehavioral
-  Reviews*. [PR]
-- Menon, V., & Uddin, L. Q. (2010). Saliency, switching, attention and control: a network model
-  of insula function. *Brain Structure and Function*. [PR]
-- Menon, V. (2011). Large-scale brain networks and psychopathology: a unifying triple network
-  model. *Trends in Cognitive Sciences*. [PR]
-- Loewenstein, G. (1994). The psychology of curiosity. *Psychological Bulletin*. [PR]
-- Nelson, T. O., & Narens, L. (1990). Metamemory: a theoretical framework and new findings.
-  *Psychology of Learning and Motivation*. [PR]
-- Rescorla, R. A., & Wagner, A. R. (1972). A theory of Pavlovian conditioning. In *Classical
-  Conditioning II*. [PR]
-- Jøsang, A., & Ismail, R. (2002). The Beta Reputation System. *Bled eConference*. [PR]
-- Sperber, D., et al. (2010). Epistemic Vigilance. *Mind & Language*. [PR]
-- Wang, Z., et al. (2023). Humanoid Agents. *EMNLP System Demonstrations*. arXiv 2310.05418. [PR]
-- Debenedetti, E., et al. (2025/2026). Defeating Prompt Injections by Design (CaMeL).
-  arXiv 2503.18813; *SaTML 2026*. [PP → PR]
-- Myers, A. C., & Liskov, B. (1997). A Decentralized Model for Information Flow Control.
-  *SOSP*. [PR]
-- Hines, K., et al. (2024). Defending Against Indirect Prompt Injection Attacks With
-  Spotlighting. *CAMLIS*. arXiv 2403.14720. [PR]
-- Shi, C., et al. (2025). Lessons from Defending Gemini Against Indirect Prompt Injections.
-  arXiv 2505.14534. [PP]
-- Lin, K., et al. (2025). Sleep-time Compute: Beyond Inference Scaling at Test-time.
-  arXiv 2504.13171. [PP]
-- Rasmussen, P., et al. (2025). Zep: A Temporal Knowledge Graph Architecture for Agent Memory.
-  arXiv 2501.13956. [PP]
-- Chhikara, P., et al. (2025). Mem0. arXiv 2504.19413. [PP]
-- Cheng, J., et al. (2024). Dated Data: Tracing Knowledge Cutoffs in Large Language Models.
-  arXiv 2403.12958. [PP]
-- EvolveBench (2025). *ACL*. [PR]
-- Jones, C., & Bergen, B. (2025). Large Language Models Pass the Turing Test. arXiv 2503.23674.
-  [PP]
-- Hu, Y., et al. (2025). Memory in the Age of AI Agents (survey). arXiv 2512.13564. [PP]
-- Always-On Agents: A Survey of Persistent Memory, State, and Governance in LLM Agents (2026).
-  arXiv 2606.30306. [PP]
-- Do Proactive Agents Need an LLM to Decide When to Act? (TGL, 2026). arXiv 2605.30152. [PP]
-- Speak for Me (CAPA, 2026). arXiv 2609.03923. [PP]
-- ProACT (2026). arXiv 2607.03730. [PP]
-- DiscussLLM (2025). arXiv 2508.18167. [PP]
-- LLMs Know When They Know, but Do Not Act on It: A Metacognitive Harness (2026).
-  arXiv 2605.14186. [PP]
-- Prospective Intention Store (PIS, 2026). arXiv 2609.01272. [PP]
-- Pro-Memory (2026). arXiv 2611.05731. [PP]
-- PM-Bench (2026). arXiv 2607.12385. [PP]
-- Fidelity Before Structure (2026). arXiv 2601.00821. [PP]
-- STALE (2026). arXiv 2605.06527. [PP]
-- OWASP Top 10 for LLM Applications 2025; OWASP Top 10 for Agentic Applications. [IND]
-- OpenAI, Prompt caching guide. [IND]
+## 2. Core Signals (`s_k ∈ [0, 1]`)
 
-- Schegloff, E. A. (1968). Sequencing in conversational openings. *American Anthropologist*. [PR]
-- Schegloff, E. A., & Sacks, H. (1973). Opening up closings. *Semiotica*, 8, 289–327. [PR]
-- Clark, H. H., & Brennan, S. E. (1991). Grounding in communication. In *Perspectives on
-  Socially Shared Cognition*. APA. [PR]
-- Enfield, N. J., Dingemanse, M., et al. (2013). Huh? What? A first survey in 21 languages. In
-  *Conversational Repair and Human Understanding*. Cambridge UP. [PR]
-- Baker, C. L., Jara-Ettinger, J., Saxe, R., & Tenenbaum, J. B. (2017). Rational quantitative
-  attribution of beliefs, desires and percepts in human mentalizing. *Nature Human Behaviour*. [PR]
-- Sclar, M., et al. (2023). Minding language models' (lack of) theory of mind: a plug-and-play
-  multi-character belief tracker (SymbolicToM). *ACL*. [PR]
-- Jung, C., et al. (2024). Perceptions to beliefs: exploring precursory inferences for theory of
-  mind in large language models. *EMNLP*. [PR]
-- Ullman, T. (2023). Large language models fail on trivial alterations to theory-of-mind tasks.
-  arXiv 2302.08399. [PP]
-- Frith, C. D., Blakemore, S.-J., & Wolpert, D. M. (2000). Abnormalities in the awareness and
-  control of action. *Phil. Trans. R. Soc. B*. [PR]
-- Zacks, J. M., et al. (2007). Event perception: a mind–brain perspective. *Psychological
-  Bulletin*. [PR]
-- Fountas, Z., et al. (2025). Human-like episodic memory for infinite context LLMs (EM-LLM).
-  *ICLR*. [PR]
-- Goffman, E. (1979). Footing. *Semiotica*, 25, 1–29. [PR]
-- Clark, H. H., & Carlson, T. B. (1982). Hearers and speech acts. *Language*, 58, 332–373. [PR]
-- Kendon, A. (1990). *Conducting Interaction*. Cambridge UP. [book]
-- Bohus, D., & Horvitz, E. (2009). Learning to predict engagement with a spoken dialog system in
-  open-world settings. *SIGDIAL*. [PR]
-- Mori et al. (2026). Preprint on graded addressee annotation in multi-party conversation;
-  title to verify. [PP]
-- Christoff, K., et al. (2016). Mind-wandering as spontaneous thought: a dynamic framework.
-  *Nature Reviews Neuroscience*. [PR]
-- Berntsen, D. (2021). Involuntary autobiographical memories and their relation to other forms of
-  spontaneous thoughts. *Phil. Trans. R. Soc. B*. [PR]
-- McDaniel, M. A., & Einstein, G. O. (2000). Strategic and automatic processes in prospective
-  memory retrieval. *Applied Cognitive Psychology*. [PR]
-- Horvitz, E. (1999). Principles of mixed-initiative user interfaces. *CHI*. [PR]
-- Pu et al. (2025). A field study of proactive AI assistance; title to verify. *CHI*. [PR]
-- Agrawal, M., Mattar, M. G., Cohen, J. D., & Daw, N. D. (2022). The temporal dynamics of
-  opportunity costs: a normative account of cognitive fatigue and boredom. *Psychological
-  Review*. [PR]
-- Kurzban, R., Duckworth, A., Kable, J. W., & Myers, J. (2013). An opportunity cost model of
-  subjective effort and task performance. *Behavioral and Brain Sciences*. [PR]
-- Shenhav, A., Botvinick, M. M., & Cohen, J. D. (2013). The expected value of control. *Neuron*. [PR]
-- Gottlieb, J., Oudeyer, P.-Y., Lopes, M., & Baranes, A. (2013). Information-seeking, curiosity,
-  and attention. *Trends in Cognitive Sciences*. [PR]
-- Borbély, A. A. (1982). A two process model of sleep regulation. *Human Neurobiology*. [PR]
-- Behrens, T. E. J., et al. (2018). What is a cognitive map? *Neuron*. [PR]
-- Daw, N. D., Niv, Y., & Dayan, P. (2005). Uncertainty-based competition between prefrontal and
-  dorsolateral striatal systems for behavioral control. *Nature Neuroscience*. [PR]
-- Wang, G., et al. (2023). Voyager: an open-ended embodied agent with large language models.
-  arXiv 2305.16291. [PP]
-- Kapoor, S., et al. (2025). AI agents that matter. *TMLR*. [PR]
-- Mashour, G. A., Roelfsema, P., Changeux, J.-P., & Dehaene, S. (2020). Conscious processing and
-  the global neuronal workspace hypothesis. *Neuron*. [PR]
+Every signal is deterministic inside Core without reading raw message bytes or calling an LLM:
 
-Author names and venues for 2026 preprints are given as found during research; verify against
-arXiv before citing them formally.
+1. **Direct Mention / Name (`own_name`):** `1` if Gateway's adapter flagged the soul's identifier while unallocated, else `0` (attention capture [Moray 1959; Röer & Cowan 2021, `[PR]`]).
+2. **Information Gap (`info_gap` — Split Concepts, `A-14`):**
+   - **External Request (`dialogue_act_gap`):** Computed at `O(d)` from Gateway's frozen contrastive logistic head over prefixed text/modal embeddings: `σ(w_gap · e_d(t_clf; x) + b_gap)` [Snell et al. 2017; Tunstall et al. 2022, `[PP]`], replacing brittle positive-only cosine matching against `references.json`. Low speech ASR confidence (`asr_conf < 0.45`) adds an additive clarification cue (`R-37`).
+   - **Internal Epistemic Gap (`own_info_gap`):** Raised purely from low Beta belief credence on a pending high-stakes decision (`R-31`).
+3. **Feeling of Knowing (`feeling_of_knowing`):** `σ((A* − fok_threshold) / fok_scale)` over the top retrieval activation `A*` (`[0, 1]` confidence heuristic [Nelson & Narens 1990, `[PR]`]).
+4. **Relevance (`relevance`):** `max cos(v, u)` across vectors `u` of active Expectations and visible memories (`VisibleScope`, `R-33`), using the **unified `256d` `EmbeddingGemma 2` vector space** (`Apache 2.0`, `arXiv:2610.37364`) tagged by `(embed_model_ver, dim_d, prompt_regime_id)` (`A-15`, `R-37`).
+5. **Graded Addressivity (`deg(e, l) ∈ [0, 1]`, `R-29`):** Instead of single-label speaker selection, Core assigns each active participant `l` an independent noisy-OR address probability combining explicit mentions, open reply/prediction links, dyadic turn momentum (diluted across group broadcast turns), and optional embodied `orient(e, l)` gaze/distance (`R-29`; [Goffman 1979; Bohus & Horvitz 2009, `[PR]`; Mori et al. 2026 `arXiv:2607.15648`, `[PP]`]):
+   $$\text{deg}(e, l) = 1 - \prod_{i \in \{\text{expl}, \text{pred}, \text{mom}, \text{orient}\}} (1 - c_i(e, l))$$
+6. **Social Cost (`social_cost ∈ [0, 1]`, `R-02` + `R-29`):**
+   $$\text{social\_cost}(e) = \max\!\Big(\text{clamp}\big(\max_{l \neq \text{soul}} \text{deg}(e, l) - \text{deg}(e, \text{soul}),\; 0,\; 1\big),\; \text{answered}(e)\Big) \cdot (1 - \lambda_c \cdot \text{closeness}(\text{sender}(e)))$$
+   where `closeness(p) = σ(B_p)` over exchanges with `p` (neutral `0` on zero history), lowered by `λ_c ∈ [0, 1]`.
+
+*(Note: Multimodal & continuous-sensor bodies also pass Gateway Tier-1 novelty and a 10-element structural `audio_voice`/prosody vector `{speech_active, vad_prob, speaker_cluster_id, pitch_z, energy_z, pause_ms, turn_end_prob, noise_floor, asr_conf, modality_slot}` — zero emotion classification labels, zero `CHAT` impact (`R-36`, `R-37`).)*
+
+---
+
+## 3. Salience, Partitioned Habituation, Drives & Go/No-Go Gate
+
+1. **Salience (`S`):** `S = clamp(Σ_k w_k · s_k, 0, 1)` [Menon & Uddin 2010; Menon 2011, `[PR]`]. Weights derive from disposition knobs with **exact reachable neutrals** (`0` when disabled, `A-01`): e.g., `w_sc = −restraint_scale · restraint` (`0` when `restraint = 0` or `social_cost_off`), not an unreachable offset `−(0.2 + 0.6ρ)`.
+2. **Post-Evaluation Partitioned Habituation (`S_eff`, `A-03` + `R-36`):** Partitioned by `(place p, source_channel k_src)` so high-rate background sensors cannot silence alarms, and evaluated **before** incrementing so stimulus 1 is never halved:
+   $$h_{\text{pre}} = h_{(p, k_{\text{src}})} \cdot \gamma^{\Delta t_{\min}}, \qquad S_{\text{eff}} = \frac{S}{1 + \kappa \cdot h_{\text{pre}}}, \qquad h_{(p, k_{\text{src}})} \leftarrow h_{\text{pre}} + 1$$
+   Neutral value `κ = 0` gives `S_eff = S` exactly (`κ = 1.0` default; monotonic decay [Thompson & Spencer 1966; Staddon & Higa 1996, `[PR]`]).
+3. **Threshold & Opportunity-Cost Drives (`θ`, `R-03`, `R-30`, `R-31`, `A-04`, `A-13`):**
+   $$\theta = \theta_0 + a \cdot \text{talk\_rate} + b \cdot \text{budget\_used} - c \cdot \text{promise\_debt} + r \cdot (1 - \text{familiarity}) + \Delta\theta_{\text{init}}$$
+   - **Exact Neutrality:** `a` is `0` when restraint is disabled; `Δθ_sleep = 0` permanently in canonical Core because consolidation runs asynchronously on an immutable snapshot (`t_snapshot`) and `"or asleep"` is deleted (`A-04`).
+   - **Undiluted `promise_debt` (`R-10`, `R-46`, `R-49`):** Sum of urgency weights `Σ min(1, w_p)` over promises due within `H_debt` (excluding recurring `RecurrenceSpec` polls unless overdue/active), preventing low-priority future promises from diluting imminent obligations.
+   - **`talk_rate`:** Group-normalized vs `1/n` fair-share [Eckhaus et al. 2025, `[PR]`] with cold-start shrinkage smoothing (`A-07`).
+   - **Opportunity-Cost Drives (`R-31`):** Sleep pressure (`unconsolidated_backlog >= N_min`), switching (`exploration_pressure` on stalled goal), curiosity (`own_info_gap` weighted by stakes), and effort/thinking budget (`EVoC` scaled by stakes & queue load) map onto existing knobs/thresholds without extra emotion variables [Kurzban et al. 2013; Shenhav et al. 2013; Agrawal et al. 2022, `[PR]`].
+   - **Idle Initiative Cooldown (`Δθ_init`, `R-30`):** Unprompted or ignored initiatives raise temporary habituation cooldowns and only fire at natural `EM-LLM`/dialogue breakpoints [Horvitz 1999, `[PR]`; Pu et al. 2025 `arXiv:2502.18658`, `[PR]`; ProACT `arXiv:2607.03730`, `[PP]`].
+4. **Seeded Go/No-Go & Circuit Breaker:**
+   - `P = σ((S_eff − θ) / τ)` with explicit step limit `S_eff >= θ` as `τ → 0` (`A-01`); deterministic RNG keyed on `(seed, event.id)` returns `go` if `u < P`, else `note` (`P >= note_band`) or `silent` (`P < note_band`).
+   - **Circuit Breaker:** Unconditional bypass (`P = 1` without RNG draw) when turn is allocated to soul, active Expectation/prediction fires or needs response, or high-stakes active goal continues [Corbetta & Shulman 2002; Miller & Cohen 2001, `[PR]`].
+5. **Backlog Chunking (`R-14`, `A-04`, `R-29`):** Triggers only when `now − t_event > patience_place` or events arrived while Core was genuinely `stopped/down` (never while background sleep runs). Combines signals across chunked backlog via event-level `max` with `(1 + L_hours)^(−d)` decay.
+
+---
+
+## 4. Patience, Inner Thought & Calibrated Reasoning Reports
+
+1. **Shrinkage Patience (`wait`, `R-08`, `A-08`):** Unallocated `go` turns create a `wait` Expectation sized by a right-censored shrinkage quantile/survival estimator `clamp(t_p, [t_min, t_max])` per `(place, medium)` (`0` when disabled), cancelling cleanly if a third party replies first [Sacks, Schegloff & Jefferson 1974, `[PR]`; CAPA `arXiv:2609.03923`, `[PP]`].
+2. **Reasoning Reports (`[0, 20]` Scale & `R-15`, `A-10`):**
+   - Because raw LLM `[0, 1]` confidences cluster heavily near `0.85–1.0`, reasoning emits a verbally anchored **integer `0..20`** plus ordinal stakes and balanced `1..5` motivation (`Inner Thoughts`, [Liu et al. 2025, `[PR]`]); Core converts `c_raw = k / 20`, calibrates per-domain via temperature/histogram bins, and requires strict nullable JSON schemas (`R | null`) [Singh et al. 2026 `arXiv:2604.25359`, `[PP]`].
+   - **Metacognitive Report Control (`R-15`, `A-01`):** `P_rc = clamp(cost_error / (value + cost_error), certainty_bar, 0.99)` (guarded `0/0` -> `certainty_bar`). If `c < P_rc`, reasoning triggers one `memory.recall` query first; if still below bar, chat-only coarsens grain or outputs an explicit `withheld` event (both raw + calibrated scores logged) [Koriat & Goldsmith 1996, `[PR]`]. Embodied bodies defer/hold instead of guessing.
+   - **Citation Lock (`A-10`):** Every grounded claim MUST reference existing retrieved `event_id`/`mem_id` handles inside Core's snapshot; Core verifies ID existence & `basis ∈ {observed, told, inferred, self_caused}` deterministically (`0` fabricated citations).
+
+---
+
+## 5. Memory Activation (ACT-R), Dual-Process Recall & Long-Horizon Storage
+
+1. **Guarded Petrov Hybrid Base-Level Activation (`B`, `R-04`, `A-01`, `A-07`):**
+   Replacing Round 1's misattributed single-power approximation (`B ≈ ln(n/(1-d)) - d ln L`, non-monotonic in `d`), Core uses the real **Petrov (2006) hybrid (`k = 1` exact most-recent + power-law tail)**:
+   $$B = \ln\!\left( t_1^{-d} + \frac{(n - k)\left(t_n^{1-d} - t_k^{1-d}\right)}{(1 - d)(t_n - t_k)} \right) \quad \text{when } n > k \land t_n > t_k; \qquad B = \ln\!\left(\sum_{j=1}^n t_j^{-d}\right) \text{ otherwise}$$
+   with `t_j >= 1/60 h` (1-minute floor), eliminating `0/0` when `t_n = t_k` [Anderson & Schooler 1991; Petrov 2006, `[PR]`; Fisher et al. 2018, `[PR]`]. **Zero-history `n = 0` yields `B_0` -> neutral `familiarity = 0`**, shrinking via pseudo-counts toward body/place priors during cold start (`A-07`).
+2. **Total Activation & Fade Threshold (`A-01`, `R-01`):**
+   $$A = w_B \cdot B + \text{context\_weight} \cdot \cos(\mathbf{v}_{\text{ctx}}, \mathbf{v}_m) + \text{importance\_weight} \cdot \text{importance}$$
+   where explicit switch/weight `w_B` allows Row 10's exact neutral (`w_B = 0` -> similarity-only). Sleep vector fade (`vector_released`) checks **base activation `B < fade_threshold = -3.29`** (Petrov exact value for `n=1, t_1=720 h, d=0.5`), never undefined total `A` (`A-01`).
+3. **Dual-Process Automatic Recall (`A-09`, `R-16`):** Separation of familiarity (`A + threshold`) and recollection (`verbatim entity/place/time match`) happens *across* two channels without blocking 30-day familiarity hits behind mandatory LLM verification (`Yonelinas 1994, 2002, [PR]`). Text search executes behind Gateway's `Store` capability port (`R-12`).
+4. **Cognitive Map (`R-32`):** Core maintains an edge-weighted co-occurrence + Successor Representation (`SR`, `M = (1 - γ_sr) Σ ...`) transition graph purely over opaque `{actor, place, concept}` IDs inside the 6 books [Behrens et al. 2018, `[PR]`].
+5. **Long-Horizon Engine (`R-40`):** Segmented SQLite (`hot.db` WAL + read-only sealed temporal shards `ATTACH`ed cleanly), pre-filtered HNSW via `usearch v2.26.6` (with metadata bitsets synced under `R-33`/`R-34`), `blake3 v1.8.7` snapshots, and `postcard`/`minicbor` binary serialization (avoiding deprecated `bincode` `RUSTSEC-2025-0141`).
+
+---
+
+## 6. Expectations, Promises, Recurrence & Grounding (`R-07`–`R-10`, `R-46`, `R-49`)
+
+1. **Five Expectation Subtypes (`goal`, `wait`, `predict`, `monitor`, `pending_approval`):** Storing intentions in deterministic code guarantees reliable wakeup [PIS `arXiv:2609.01272`, `[PP]`; PM-Bench `arXiv:2607.12385`, `[PP]`]. Records track plural `places` and `people`, `domain?`, optional **`RecurrenceSpec`** (`cron`/`interval`, `missed_policy ∈ {coalesce_one, skip_to_next}`, zero `promise_debt` inflation for silent monitoring polls, `R-46`), and **`PromiseMeta`** (`promisee_ids`, `hard_deadline`, `depends_on?`, conflict detector, `R-49`).
+2. **Lifecycle Outcomes & Pre-Utterance `CommitCheck` (`A-01`, `R-49`):** `resolve` supports `{kept, kept_late, renegotiated, released, failed, cancelled, answered, reached}`. Before emitting an outbound utterance containing a promise, Core/Valve validates resource/time conflicts (`CommitCheck`) so conflicting obligations are refused/renegotiated *before* promising (`R-49`).
+3. **Grounding & Sense of Agency (`R-09`, `R-17`, `R-36`):** Every outbound act opens a `predict` carrying `(channel, Δ_obs, Δ_pred)` (tolerance scaled by medium & modality); matching outcomes mark `self_caused` rather than external surprise [Frith, Blakemore & Wolpert 2000; Clark & Brennan 1991, `[PR]`].
+4. **Preemption / Barge-In Receipts (`R-36`, `R-37` — Owner Option A):** Preserves `ARCHITECTURE.md` L198's exact 5-outcome enum (`{done, refused, held, failed, unknown}`) while adding optional fields `{termination_reason ∈ {normal, canceled_by_core, preempted_external, timed_out}, progress ∈ [0,1], delivered_units}`.
+
+---
+
+## 7. Credence, Bounded Learning & Metacognitive Self-Model (`R-20`, `R-26`, `R-35`, `A-01`)
+
+1. **Beta Reputation (`E = α / (α + β)`):** Initialized from Gateway per-actor source priors (`told` items included! fixing `beliefs/spec.md` L56 vs L86); updated by confirmed/refuted evidence and discounted over domain-specific forgetting factor `λ_domain` (`R-20`, [Jøsang & Ismail 2002, `[PR]`; Sperber et al. 2010, `[PR]`]). **Critical Guard (`R-36`):** `canceled_by_core` and `preempted_external` receipts NEVER increment `β_c`.
+2. **Sign-Corrected & IPS-Weighted Delta Rule (`R-19`, `R-26`, `A-01`, `A-13`):**
+   - For wake probability `P = P(go)`, target `r` MUST equal **`1`** for `{good_act, missed_silence}` and **`0`** for `{bad_act, answered_silence}` (fixing `core-and-lab` sign inversion where missed silence had `r = 0`), weighted by clipped Inverse Propensity Scoring `w_ips = min(M_ips, 1 / ρ)` on sampled judged silences (`R-19`) and Gateway per-actor `teacher_weight` (`R-26`).
+   - All knob updates respect statistical significance (95% CI excluding 0), per-day `<= 5%` range cap, and freeze-alert bounds [Rescorla & Wagner 1972, `[PR]`].
+3. **Event-Derived `self_card` (`R-35`):** Continuously updated in Core with 4 read-only pillars injected cleanly into `reason`:
+   1. Per-capability empirical `(α_c, β_c)` + latency (`action_feedback` / receipts);
+   2. Historical calibration (`[0, 20]` Brier/ECE + `meta-d'` gap);
+   3. Operational headroom (token budget, queue pressure, switch count);
+   4. Pending/recent claim-contradiction flags against log truth.
+
+---
+
+## 8. Sleep, Episodic Boundaries, Domains, Lessons & Skills (`A-05`, `A-06`, `A-11`, `A-12`, `R-38`)
+
+1. **Snapshot-Isolated Async Sleep (`A-04`, `A-05`):** Triggered when `unconsolidated >= N_min` (with `>=`, not `>`) and global idle `>= T_idle`, reading immutable `t_snapshot` with `Δθ_sleep = 0`. Episodes move across **`{open, provisional, sealed}`**: idle pre-sleep tails (`L >= N_ep_min` or `Δt > τ_stale`) soft-close into `provisional` for next-day recall and transparently reopen (marking prior gist `superseded_by`) if the session resumes seamlessly (`A-05`).
+2. **Normalized Event Boundaries (`R-23`, `A-06`):** Combines time surprise, content prediction error, and embedding novelty normalized consistently to `[0, 1]` (`EM-LLM`, [Zacks et al. 2007; Fountas et al. 2025, `[PR]`]) with cold-start shrinkage (`A-07`, `n <= 5` Samuelson bound guard). Episode merge requires high overlap in people, place, and time [Yassa & Stark 2011, `[PR]`].
+3. **Hungarian-Aligned Domain Clustering (`A-12`):** Sleep warm-starts spherical k-means from previous centroids and aligns cluster IDs via Hungarian matching (`domains_updated` split/merge Beta fusion events) so domain reliability history never shuffles across restarts.
+4. **Contrastive Lessons & Parameterized Procedures (`A-11`, `R-38`):** `consolidate` clusters repeated opaque failure signatures alongside paired successes to distill contrastive `lesson`s, traces cross-place `goal_id`/`caused_by` chains into slot-parameterized `procedure`s tagged with **`capability_schema_hash`** & CUSUM failure drift, and **retires** (never deletes silently) degraded skills (`R-32`, `R-38`; [Voyager `arXiv:2305.16291`, `[PP]`; AWM `arXiv:2409.07429`, `[PP]`]). Verbatim-vs-gist conflict resolution runs in `reason` (`consolidate`), with verbatim logged events beating gists [Brainerd & Reyna 2002, `[PR]`].
+
+---
+
+## 9. Privacy (`R-33`), Hard Forgetting (`R-34`), Security (`R-41`–`R-43`), Identity (`R-48`) & Prompting (`R-11`)
+
+1. **Exact Privacy Non-Interference (`R-33`):** Every candidate memory/event passes Valve/Core **`VisibleScope` projection BEFORE Step-4 recall & Step-5 appraisal** (enforcing `audience(context) ⊆ audience(item)` unless authorized by an explicit logged, scoped `DeclassToken` [Myers & Liskov 1997, `[PR]`; Anderson 1972, `[IND]`]). This achieves $\Delta_{\text{NI}} = 0$ — secrets neither leak into text nor distort wake urgency or activation counts.
+2. **Atomic `hard_forget` & `Two-Epoch Replay` (`R-34`):** Removes target events, scrubs SQLite (`PRAGMA secure_delete = ON`, FTS5 `'secure-delete'=1`), unlinks ref-counted `BLAKE3` attachments (`R-37`), deletes/re-synthesizes derived summaries, recomputes `(α, β)` solely from surviving evidence, and writes an epoch-bumping clean snapshot so deterministic replay never resurrects forgotten data (`GDPR` Art. 17 `[IND]`).
+3. **Valve Roles (`R-41`) & Anti-Fatigue Approvals (`R-42`):** Gateway compiles ephemeral **`cedar-policy` (`v4.14.1`)** entity memberships per request from logged `actor_facts` & `body_state` (zero Core knowledge of `"admin"` or `"moderator"`), verifiable via SMT (`cedar-policy-symcc`). External actions fall into 4 risk tiers; uncertain/high-risk mutations enter non-retrying **`PendingApproval`** pinned to canonical hash **`H_act`** (anti-TOCTOU / Loopjacking) with hourly prompt fatigue budgets.
+4. **Three-Door Defense Against Poisoning & Prompt Injection (`R-43`):** Instead of brittle perplexity or word blocklists (`47%–99%` adaptive bypass), MonoAgens enforces:
+   - **Write Door:** Skeptical corroboration (`k_corrob`) and min-trust taint propagation (`min(trust)` on compaction so stranger text never becomes trusted self-knowledge `[CaMeL Debenedetti et al. 2025/2026, [PR]]`);
+   - **Context Door:** Immutable `ContextPlan` Spotlighting boundaries (`[SYSTEM]`, `[ANCHOR]`, `[TRUSTED]`, `[UNTRUSTED_QUOTED]` [Hines et al. 2024, `[PR]`]) ordered static-to-volatile (`88%` prompt cache reuse);
+   - **Action Door:** Cedar blocks privileged/state-mutating/identity capabilities whenever untrusted taint touched the causal chain unless owner-approved [Wallace et al. 2025 `ICLR`, `[PP]`; OWASP Agentic `2026`, `[IND]`].
+5. **Identity Continuity Under Long Horizon (`R-48`):** Soul constitution locks under **`OwnerSigned`** provenance (`ARCHITECTURE.md` Absolute Line 1), carries an immutable `IdentityAnchor` in stable prompt slot `0`, and runs deterministic **`[ANCHOR_CHECK]`** / pre-act **`PrincipleAudit`** so multi-turn sycophancy or register drift cannot hijack the persona even across context compactions (`Cheng et al. 2025 ELEPHANT`; `Guan et al. 2024 Deliberative Alignment`).
+
+---
+
+## 10. Gateway, Identity, Waist-2 Bodies, Routines, Benchmarks & Standards (`R-36`–`R-40`, `R-44`–`R-50`)
+
+1. **Cross-Body Identity (`R-44`):** Each `(body_id, platform_account_id)` hashes deterministically to isolated opaque `per_` IDs; merging identities across bodies requires owner config or a bilateral challenge-response committed to the event log (preventing impersonation escalation).
+2. **Attachment Store & Blind Multimodal/Speech Pipeline (`R-37`):** Gateway computes scope-keyed `blake3::keyed_hash` (`v1.8.7`) and embeds text/image/`audio_voice` uniformly into `256d` via **`EmbeddingGemma 2`**; Body runs `Silero VAD` / `WebRTC VAD`, causal `RAPT`/`YIN` `F0`+RMS normalization (avoiding research-only `openSMILE`), `Pyannote`, and `VAP`, sustaining **$< 50\text{ ms}$** TTS barge-in mute mapped to Option A `Receipt`.
+3. **Waist-2 Protocol (`monoagens.body.v1`, `R-45`, `R-50`):** Stateless JSON-RPC 2.0 ($\le 12$ methods, OpenRPC `1.4.1` + JSON Schema `2020-12`, explicit `idempotency_key`, 3-class prioritized queue `256/512/256`), leaving all 40 cognitive rules behind Waist 1 while dedicated Gateway bridge plugins wrap **MCP `2026-07-28`**, **A2A `v1.0.1`**, and **ROS 2**.
+4. **Human-Like Honest Delivery (`R-47`):** Gateway emits honest in-flight lifecycle cues (`1 s` typing pulse, `10 s` progress note), never fake post-completion delays or impersonation (EU AI Act Art. 50 `[IND]`); Chat Body handles platform chunking (`message_ids` -> single Receipt).
+5. **Benchmarks, NI Power & TCK Rollout (`A-02`, `A-16`, `R-39`, `R-50`):** Every one of the **22 Brain Map rows** carries explicit ablation metrics in `monoagens-lab` (`A-02`), evaluated via `BaselineAdapter` on Pareto (accuracy vs cost/latency) fronts across 5 domains (`R-39`), powered at **$S \approx 354\text{--}471$** scenarios for paired non-inferiority (`A-16`), and validated externally by a public black-box **`monoagens-conformance` TCK** across interleaved Phases 0–3 (`R-50`).
+
+---
+
+## Key Sources Index (`[PR]` / `[PP]` / `[IND]`)
+
+Full verified citations (with DOIs, arXiv IDs, URLs, crate versions, and license checks through November 2026) are cataloged in:
+- [`2026-11-15-run-1.md`](file:///home/muqsith/Projects/Mono/research/findings/2026-11-15-run-1.md) (Round-1 baseline citations + primary-source verification in `R-28`)
+- [`2026-11-16-run-2.md`](file:///home/muqsith/Projects/Mono/research/findings/2026-11-16-run-2.md#verified-bibliography-across-all-38-run-2-questions) (Consolidated Run-2 bibliography across `A-01`–`A-16` and `R-29`–`R-50`)
+- [`run-2-notes/`](file:///home/muqsith/Projects/Mono/research/findings/run-2-notes) (Detailed proofs, benchmark tables, and primary-source audits per topic)
+
+Core foundational anchors referenced above: Anderson & Schooler (1991, `[PR]`); Anderson (2007, `[PR]`); Petrov (2006, *ICCM*, `[PR]`); Fisher, Houpt & Gunzelmann (2018, `[PR]`); Thompson & Spencer (1966, `[PR]`); Staddon & Higa (1996, `[PR]`); Rescorla & Wagner (1972, `[PR]`); Jøsang & Ismail (2002, `[PR]`); Sperber et al. (2010, `[PR]`); Nelson & Narens (1990, `[PR]`); Koriat & Goldsmith (1996, `[PR]`); Yonelinas (1994, 2002, `[PR]`); Brainerd & Reyna (2002, `[PR]`); Yassa & Stark (2011, `[PR]`); Frith, Blakemore & Wolpert (2000, `[PR]`); Zacks et al. (2007, `[PR]`); Fountas et al. (2025, `EM-LLM`, *ICLR*, `[PR]`); Sacks, Schegloff & Jefferson (1974, `[PR]`); Clark & Brennan (1991, `[PR]`); Goffman (1979, `[PR]`); Bohus & Horvitz (2009, `[PR]`); Mori et al. (2026, `arXiv:2607.15648`, `[PP]`); Liu et al. (2025, *CHI*, `[PR]`); Pu et al. (2025, *CHI*, `arXiv:2502.18658`, `[PR]`); Eckhaus et al. (2025, *Findings EMNLP*, `[PR]`); Debenedetti et al. (2025/2026, *CaMeL*, *SaTML 2026*, `[PR]`); Myers & Liskov (1997, *SOSP*, `[PR]`); Hines et al. (2024, *CAMLIS*, `[PR]`); Wallace et al. (2025, *ICLR*, `[PP]`); Kapoor et al. (2025, *TMLR*, `[PR]`); Schechter Vera et al. (2025, `arXiv:2509.20354`, `[PP]`; 2026, `EmbeddingGemma 2`, `arXiv:2610.37364`, `[PP]`); Ekstedt & Skantze (2022, `VAP`, `arXiv:2205.09812`, `[PP]`); Lin et al. (2025/2026, `Full-Duplex-Bench-v2`, `arXiv:2510.07838`, `[PP]`); MCP `2026-07-28`, A2A `v1.0.1`, OpenRPC `1.4.1`, JSON Schema `2020-12`, Cedar `v4.14.1`, SQLite `3.54.1`, `usearch v2.26.6`, `blake3 v1.8.7`, `postcard v1.1.3`, `minicbor v2.3.1` (`[IND]`).

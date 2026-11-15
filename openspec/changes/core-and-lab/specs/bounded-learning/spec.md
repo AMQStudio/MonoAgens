@@ -9,32 +9,44 @@ replayed and rolled back.
 ## ADDED Requirements
 
 ### Requirement: Learning uses the outcome of a prediction
-The teaching signal for a decision SHALL be the outcome of the prediction it opened. Good: a
-response prediction answered in time with no content miss and no repair, or an effect
-prediction matched. Bad: an absence, a content miss, a repair, a failed receipt, a negative
-flag from the body, or a judged silence that was missed. A decision with no resolved
-prediction SHALL teach nothing.
+Teaching signals derive from resolved predictions: positive (`r = 1`) for `{good_act, missed_silence}`
+and negative (`r = 0`) for `{bad_act, answered_silence}` (repair, miss, failure, negative flag).
+Preempted or cancelled receipts (`preempted_external`, `canceled_by_core`) SHALL NOT penalize
+learning or capability reliability (`R-36`).
 
 #### Scenario: A reply that landed
 - **WHEN** the soul spoke on an unallocated turn and its response prediction was answered in time without a miss
-- **THEN** that decision is available to learning with a good outcome
+- **THEN** that decision enters learning with target `r = 1`
+
+#### Scenario: A missed judged silence
+- **WHEN** the soul stayed silent on a sampled event and its judged-silence prediction confirms a miss
+- **THEN** that decision enters learning with target `r = 1` so positive weights on its active signals increase rather than invert
+
+#### Scenario: An externally interrupted speech act
+- **WHEN** an in-flight action receives `Receipt(failed, termination_reason = preempted_external)`
+- **THEN** weight learning and capability `(α_c, β_c)` record zero failure penalty
 
 #### Scenario: A negative flag
 - **WHEN** a body reports a negative flag on the soul's act
-- **THEN** that decision is available to learning with a bad outcome
+- **THEN** that decision enters learning with target `r = 0`
 
 #### Scenario: Nothing came back yet
 - **WHEN** a decision's prediction is still open
 - **THEN** learning does not use that decision
 
-### Requirement: Signal weights follow the delta rule
-When weight learning is enabled, each signal weight SHALL move by the learning rate times the
-difference between the outcome and the probability the gate had given, times that signal's
-value, clamped to the weight's range.
+### Requirement: Signal weights follow the IPS-weighted delta rule
+When weight learning is enabled, weights SHALL update via `w_k ← clamp(w_k + α_learn · w_ips ·
+teacher_weight · (r − P) · s_k)` using `r = 1` (`good_act`, `missed_silence`), `r = 0` (`bad_act`,
+`answered_silence`), and clipped Inverse Propensity Scoring `w_ips = min(M_ips, 1/ρ)` for sampled
+silences (`R-19`).
 
 #### Scenario: Speaking that was not welcome
-- **WHEN** the gate gave a high probability, the soul spoke, and the outcome was bad
-- **THEN** the weights of the signals that were high for that decision decrease
+- **WHEN** the gate gave a high probability, the soul spoke, and the outcome was `r = 0`
+- **THEN** the weights of the signals that were high for that decision decrease in proportion to teacher weight
+
+#### Scenario: Learning on a sampled missed silence
+- **WHEN** a judged silence sampled at probability `ρ = 0.05` yields `missed_silence` (`r = 1`)
+- **THEN** active signal weights increase weighted by `w_ips = min(M_ips, 1/ρ)`
 
 #### Scenario: The learning rate is zero
 - **WHEN** the learning rate is at its neutral value of zero
@@ -79,14 +91,14 @@ source SHALL learn from the outcomes of everyone there, by the same bounded rule
 - **WHEN** a source with a high teacher weight reacts badly many times
 - **THEN** the global values move, within their bounds
 
-### Requirement: The lower wake band learns from verdicts
-When band learning is enabled, the lower band of the wake gate SHALL move toward the lowest
-similarity that received a positive classification, less a margin, within its bounds and by
-the same bounded steps.
+### Requirement: The lower wake band learns from shrunk quantiles of verdicts
+When band learning is enabled, `wake_gate_lo` SHALL track a hierarchical cold-start shrunk lower
+quantile (`q_0.10`) of positive classification similarities minus a margin (`A-07`), bounded by
+its floor, ceiling, and daily step limit.
 
 #### Scenario: Positive verdicts appear lower than the band expected
 - **WHEN** events just above the lower band are repeatedly classified as meeting their condition
-- **THEN** the lower band moves down by bounded steps
+- **THEN** the lower band moves down smoothly by bounded steps without collapsing on a single outlier
 
 ### Requirement: Each change is an event that carries its own delta
 Every learned change SHALL be recorded as an event stating what changed, by how much and on

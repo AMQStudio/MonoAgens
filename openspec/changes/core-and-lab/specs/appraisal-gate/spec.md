@@ -15,44 +15,48 @@ The gate SHALL reach its decision for every event without calling a language mod
 - **WHEN** one hundred events arrive in a place and none is allocated to the soul or engages a commitment
 - **THEN** one hundred decisions are recorded and the number of model calls caused by decisions with outcome silent or note is zero
 
-### Requirement: Signals are bounded numbers from features
-Each signal SHALL be a pure function of the current situation with a value from 0 to 1,
-computed from numeric features and state only. The gate SHALL provide the signals own_name,
-info_gap, feeling_of_knowing, relevance and social_cost.
+### Requirement: Signals are bounded numbers from structural and embedding features
+Each signal (`own_name`, `dialogue_act_gap` via frozen contrastive logistic head `(w_gap, b_gap)`,
+`own_info_gap` from low belief credence, `feeling_of_knowing` over `VisibleScope`, `relevance`,
+and `social_cost`) SHALL evaluate deterministically in `[0, 1]` without word lists or LLMs (`A-14`).
 
 #### Scenario: A feature is missing
 - **WHEN** an event arrives without an embedding vector
-- **THEN** every signal that needs the vector takes its neutral value and the gate still decides
+- **THEN** vector-dependent signals take their neutral value (`0`) while non-vector structural cues still decide
 
-### Requirement: Salience is a weighted, clamped sum
-Salience SHALL be the sum of the signals multiplied by their weights, clamped to the range 0
-to 1. The weights SHALL come from the prior.
+#### Scenario: Topic chatter mimics a question without requesting help
+- **WHEN** a declarative statement shares topical keywords with an open thread (`cos` high, `dialogue_act_gap < 0.5`)
+- **THEN** the contrastive logistic head suppresses false `info_gap` waking compared to positive-only cosine matching
+
+### Requirement: Salience is a weighted, clamped sum with reachable neutrals
+Salience SHALL be `clamp(Σ wₖ·sₖ, 0, 1)` where every disposition map reaches exact neutral `0`
+when turned off or at zero restraint (`A-01`).
 
 #### Scenario: A negative weight lowers salience
 - **WHEN** social_cost is high and its weight is negative
 - **THEN** salience is lower than for the same event with social_cost at zero
 
-### Requirement: Repeated stimuli habituate
-For each pair of place and source, effective salience SHALL fall as stimuli from that source
-repeat in that place, and SHALL recover as time passes without them. The strength of
-habituation SHALL be a gain that, at zero, leaves salience unchanged.
+### Requirement: Repeated stimuli habituate cleanly per source channel
+Habituation SHALL track `h_{(p, k_src)}` partitioned per `(place, source_channel)`, decay by
+`γ^Δt`, and compute `S_eff = S / (1 + κ · h_pre)` **before** incrementing `h ← h_pre + 1`
+(`A-03`, `R-36`), so stimulus 1 keeps `S_eff = S` and background sensors never mute alarms.
 
-#### Scenario: The same source repeats quickly
-- **WHEN** one source sends ten similar events in one place within a minute
-- **THEN** the effective salience of the tenth is lower than that of the first
+#### Scenario: First stimulus preserves full salience
+- **WHEN** a first event arrives from a new source channel in a place (`h_pre = 0`, `κ = 1`)
+- **THEN** `S_eff` equals `S` (not `S / 2`) before habituation increments to `1`
 
-#### Scenario: Recovery after a pause
-- **WHEN** the same source returns after a long pause
-- **THEN** the effective salience is close to that of a first stimulus
+#### Scenario: High-rate telemetry leaves separate alarm channel sharp
+- **WHEN** a sensor repeats every second on `channel_a` while an alert fires once on `channel_b`
+- **THEN** `channel_b` retains full unhabituated `S_eff = S`
 
-#### Scenario: The habituation gain is zero
-- **WHEN** the habituation gain is zero and one source repeats ten times
-- **THEN** effective salience equals salience for each of the ten events
+#### Scenario: Recovery after a pause and zero neutral
+- **WHEN** a source returns after a long pause or when `κ = 0`
+- **THEN** effective salience recovers toward `S` (or equals `S` identically at `κ = 0`)
 
-### Requirement: The threshold moves with drives
-The threshold SHALL rise with the soul's recent share of talk in the place, with the share of
-the daily budget already used and with unfamiliarity of the place and the sources present, and
-SHALL fall with the share of the soul's promises that are due soon.
+### Requirement: The threshold moves with drives and opportunity costs
+`θ` SHALL combine `θ₀`, cold-start shrunk `talk_rate`, `budget_used`, undiluted urgent
+`promise_debt`, unfamiliarity reserve, idle cooldown `Δθ_init` (`R-30`), and opportunity-cost
+drives (`R-31`), keeping `Δθ_sleep = 0` (`A-04`) and reachable `a = 0`.
 
 #### Scenario: The soul has just spoken a lot
 - **WHEN** the soul's recent acts in a place exceed its fair share among the active participants
@@ -96,13 +100,13 @@ the threshold with its terms, the probability, the draw, the outcome and the rea
 - **WHEN** a decision is read from the log
 - **THEN** its outcome can be recomputed from the numbers stored in that same event
 
-### Requirement: Patience before taking an unallocated turn
-A go on a turn that was not allocated to the soul SHALL NOT wake reasoning at once. It SHALL
-open a wait: if a source other than the sender replies in that place within the patience time,
-the decision SHALL end as silent; otherwise reasoning SHALL wake.
+### Requirement: Shrunk patience and idle breakpoints regulate timing
+An unallocated `go` SHALL open a `wait` priced by a right-censored hierarchical shrinkage
+quantile estimator (`A-08`), cancelling as `silent` if a third party answers first; unprompted
+idle initiatives SHALL fire only on natural breakpoints and raise `Δθ_init` cooldowns (`R-30`).
 
 #### Scenario: Someone else answers first
-- **WHEN** the gate decides go on an unallocated question and another participant answers within the patience time
+- **WHEN** the gate decides go on an unallocated question and another participant answers within the shrunk patience window
 - **THEN** no model call is made and the decision is recorded as silent with the reason yielded
 
 #### Scenario: Nobody answers
@@ -113,16 +117,18 @@ the decision SHALL end as silent; otherwise reasoning SHALL wake.
 - **WHEN** the turn was allocated to the soul
 - **THEN** reasoning wakes without a wait
 
-### Requirement: A backlog in one place is appraised as one chunk
-Events of one place that reach the loop later than that place's patience time, or that arrived
-while the soul was stopped or asleep, SHALL be appraised as one chunk with one decision. Each
-signal of the chunk SHALL be the highest of its members' values after each is discounted by
-its age with the decay that memory uses. At most four chunks SHALL be handled in one wake, the
-most salient first.
+### Requirement: A backlog during downtime is appraised as one chunk
+Events arriving after `patience_place` or while the core was truly **stopped/down** (never
+merely during background async sleep, `A-04`) SHALL chunk per place via age-discounted event-level
+`max` across at most four chunks per wake (`R-14`).
 
-#### Scenario: Thirty missed messages
-- **WHEN** thirty events of one place arrive together, hours after they happened, none allocated to the soul
-- **THEN** one decision is recorded for the chunk, not thirty, and all thirty events are in the log
+#### Scenario: Live urgent interruption during background sleep consolidation
+- **WHEN** background consolidation is running on a snapshot and an urgent event arrives live
+- **THEN** the gate appraises the event immediately at normal `θ` (`Δθ_sleep = 0`) without deferring it to a backlog chunk
+
+#### Scenario: Thirty missed messages after downtime
+- **WHEN** thirty events of one place arrive together after core downtime, none allocated to the soul
+- **THEN** one decision is recorded for the chunk using event-level age-discounted max, and all thirty events remain in the log
 
 #### Scenario: An allocated turn inside a backlog
 - **WHEN** one event in a backlog was allocated to the soul
@@ -132,34 +138,28 @@ most salient first.
 - **WHEN** six places each have a backlog after downtime
 - **THEN** the first wake handles the four most salient chunks and the other two are handled afterwards
 
-### Requirement: Closeness comes from exchanges, familiarity from presence
-Closeness to a source SHALL be the activation of the soul's exchanges with it: events it
-addressed to the soul, the soul's acts addressed to it, and reply-linked pairs. Familiarity of
-a place SHALL combine the activation of the soul's presence there with its closeness to those
-present. Being in the same place SHALL NOT by itself count as an exchange. Both SHALL fade when
-contact stops.
+### Requirement: Closeness uses guarded Petrov activation
+Closeness (`σ(B_p)` from exchanges) and place familiarity (`σ(B_ctx)` across present actors)
+SHALL evaluate Petrov's hybrid with guard `n > k ∧ t_n > t_k` (1-min floor, neutral `0` on `n = 0`,
+pseudo-count shrinkage for cold start `A-07`) and fade when contact stops.
 
-#### Scenario: A large channel
-- **WHEN** the soul is present in a place with hundreds of sources it never exchanged with
-- **THEN** its closeness to each of them is zero
+#### Scenario: A large channel with identical first-minute timestamps
+- **WHEN** multiple events arrive within the 1-minute floor in a large channel with zero prior exchanges
+- **THEN** guarded Petrov activation avoids `0/0` NaN and closeness stays `0`
 
 #### Scenario: A place left long ago
 - **WHEN** the soul has not been present in a place for a long time
 - **THEN** the familiarity of that place is lower than it was during regular contact
 
-### Requirement: The floor of others carries a cost
-The social_cost signal SHALL be high when an event selected someone other than the soul as the
-next speaker, or when a third party has already responded to it, and SHALL be lowered by the
-soul's closeness to the sender.
+### Requirement: Continuous noisy-OR addressivity drives social floor cost
+Core SHALL compute noisy-OR graded addressivity `deg(e, l) ∈ [0, 1]` from mentions, open links,
+dyadic momentum, and optional `orient(e, l)` (`R-29`), setting `social_cost = max(clamp(
+max_{l≠soul} deg(e, l) − deg(e, soul), 0, 1), answered) · (1 − λ_c · closeness(sender))`.
 
-#### Scenario: Another person was selected
-- **WHEN** an event is addressed to a source other than the soul, from a sender the soul has no history with
-- **THEN** social_cost is at its maximum
+#### Scenario: Another person holds higher graded addressivity
+- **WHEN** an event carries high `deg(e, other)` or third-party reply `answered = 1` from an unfamiliar sender
+- **THEN** `social_cost` rises continuously near its maximum without requiring a strict binary addressee exclusion
 
-#### Scenario: Someone already answered
-- **WHEN** a third party has responded to the event before the soul appraises it
-- **THEN** social_cost is at its maximum for a sender the soul has no history with
-
-#### Scenario: A close sender
-- **WHEN** the same event comes from a sender the soul has exchanged with often
-- **THEN** social_cost is lower than for a stranger
+#### Scenario: A close sender addresses the room broadly
+- **WHEN** the same event comes from a close sender across a multi-party thread
+- **THEN** `social_cost` is discounted proportionally by `λ_c · closeness(sender)`

@@ -47,25 +47,31 @@ its prediction was answered, expired or missed.
 - **WHEN** the soul told a source something and the prediction for it ended as a content miss
 - **THEN** the card shows that item as told and not grounded
 
-### Requirement: Cards of those present enter the context
-When reasoning wakes, the cards of the sources in the triggering event's audience SHALL be
-placed in the context, within a bounded size.
+### Requirement: Cards of those present and promisees enter the context
+When reasoning wakes, bounded cards for sources in the triggering event's audience **plus** any
+active expectation's promisees/targets (`A-01` tick fix) SHALL enter the context.
+
+#### Scenario: A scheduled reminder wakes via internal tick
+- **WHEN** a timer tick fires an overdue promise whose trigger carries no external chat audience
+- **THEN** the promisee's ledger card (including open promises and candidate false-beliefs) is still included in the wake context
 
 #### Scenario: A question from someone with a stale view
 - **WHEN** a source with a flagged candidate false belief addresses the soul
 - **THEN** the context of that wake contains the flag
 
-### Requirement: The soul keeps a card of itself
-The soul SHALL keep the same kind of card for itself: what it said, promised and claimed, to
-whom, which of its promises are open, and which capabilities its bodies offer now.
+### Requirement: The soul keeps a four-pillar event-derived self card
+The soul's `self_card` SHALL expose four event-derived pillars (`R-35`): (1) per-capability
+empirical `(α_c, β_c)` & latency, (2) `[0, 20]` Brier/ECE calibration & `meta-d'` gap, (3)
+budget/queue headroom, and (4) open claim contradictions, driving deterministic door
+recalibration without trusting runtime LLM introspection.
 
-#### Scenario: Asked what it promised
-- **WHEN** a source asks the soul what it has promised them
-- **THEN** the context contains the soul's open promises toward that source from its own card
+#### Scenario: Asked what it promised or capability changes
+- **WHEN** a source asks what was promised or a body capability changes reliability or drops offline
+- **THEN** `self_card` reflects current open promises, removed/updated capabilities, and empirical calibration metrics read-only
 
-#### Scenario: A body goes away
-- **WHEN** a body stops offering a capability
-- **THEN** the soul's card no longer lists it as something it can do now
+#### Scenario: Uncalibrated overconfidence meets deterministic recalibration
+- **WHEN** historical calibration on `self_card` shows systematic overconfidence in a domain at an external door
+- **THEN** confidence passed to gate/report control is recalibrated deterministically from logged Brier/ECE curves
 
 ### Requirement: The ledger is a projection
 The ledger SHALL be rebuildable from the log alone.

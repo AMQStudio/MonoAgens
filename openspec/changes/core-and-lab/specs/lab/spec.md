@@ -8,14 +8,14 @@ nothing is claimed about the soul that a run does not show.
 
 ## ADDED Requirements
 
-### Requirement: Scenarios run against the real core
-A scenario SHALL be executed by the same core, store and reasoning code that any later program
-will use, with the world supplied by scripted test bodies. No scenario SHALL bypass the doors
-or write to the log directly.
+### Requirement: Scenarios run against the real core over canonical Waist-2 codecs
+A scenario SHALL execute against the real core, store, and reason crates with scripted test
+bodies speaking canonical Waist-2 schema payloads (`monoagens.body.v1`, `R-50`), never bypassing
+doors or writing directly to the log.
 
 #### Scenario: A scenario drives two test bodies
 - **WHEN** a scenario scripts percepts in two places from two test bodies
-- **THEN** the events pass the inbound door, are recorded and are appraised by the core
+- **THEN** the events traverse Waist-2 schema encoding and the inbound door, are recorded, and are appraised by the core
 
 ### Requirement: Test bodies stand for any kind of body
 A scenario SHALL be able to declare test bodies with their own places, sources, capabilities,
@@ -128,25 +128,34 @@ contexts or per-step traces.
 - **THEN** the output contains pass counts and metrics only, and the run record marks the run as sealed
 
 ### Requirement: The Lab reports behaviour against annotation
-A scenario SHALL be able to annotate, per event, whether a reply was warranted. From it the Lab
-SHALL report when-to-speak precision and recall, false speaks, missed replies, the soul's share
-of messages against one over the number of participants, and the distribution of its reply
-delays.
+A scenario SHALL annotate warranted replies (`SPEAK`/`SILENT`), floor ownership (`sel_other`/
+`answered`), and causal labels so the Lab reports when-to-speak precision/recall, false speaks,
+missed replies, `floor_violations_per_100`, `wakes_per_event`, `double_answers`, `self_echo_rates`,
+`boundary_f1`, `1/n` message share (`[0.5, 2.0]` band check, `R-03`), and reply-delay distributions.
 
 #### Scenario: An annotated group conversation
 - **WHEN** a scenario marks five of forty events as warranting a reply and the soul replies to four of those and to one other
-- **THEN** the report states precision 0.8 and recall 0.8
+- **THEN** the report states precision 0.8 and recall 0.8 and verifies whether message rate sits within `0.5x..2.0x` of `1/n`
 
-### Requirement: The Lab reports memory and honesty metrics
-The Lab SHALL report: recall hits at gaps of one, seven and thirty days; promises kept on time;
-assertions of detail made without recollection; superseded beliefs presented as current;
-correct answers on scripted false-belief questions; tokens and model calls per event and by
-purpose; the share of prompt tokens served from cache when the provider states it; and the
-number of items from a narrower audience placed in a wider context.
+### Requirement: The Lab reports full 22-row cognition, honesty, privacy, and calibration metrics
+The Lab SHALL report metrics covering all 22 brain-map rows (`A-02`): 1/7/30-day recall hits,
+promises kept on time, `kept_late`, broken, and repaired (`R-49`), `detail_without_recollection`,
+`stale_beliefs`, false-belief accuracy, `[0,20]` Brier/ECE (`R-35`), `sleep_spin_count` (`== 0`),
+tokens/calls per event, cache share, and narrower-to-wider leakage (`Delta_NI == 0`, `R-33`).
 
-#### Scenario: A promise scenario
-- **WHEN** a scenario with three promises runs and two are kept on time
-- **THEN** the report states two of three promises kept on time
+#### Scenario: A promise and sleep audit scenario
+- **WHEN** a scenario with three promises (two on time, one recovered after downtime) and pre-sleep idle chatter runs
+- **THEN** the report states two kept on time, one kept late, zero sleep spin loops, and `Delta_NI == 0`
+
+### Requirement: The Lab measures rebuilt context NI, 5-domain Pareto, Indonesian gaul, and Core TCK
+The Lab SHALL provide: paired 3-arm non-inferiority (`S >= 354–471`, including `Arm T` restart &
+thinking stratification, `A-16`), `BaselineAdapter` cost-normalized Pareto scorecards across 5
+domains (`R-39`), Indonesian/`MultiLexNorm`/`IndoCollex` `256d` checks (`A-15`), `hard_forget`/
+poisoning/drift suites (`R-34`, `R-43`, `R-48`), and black-box `Core TCK` (`C-MUST-01..04`, `R-50`).
+
+#### Scenario: Paired transcript comparison and Core TCK verification
+- **WHEN** `monoagens-lab baseline` and `monoagens-lab tck-core` execute against a multi-party scenario suite
+- **THEN** the Lab reports Pareto efficiency against baseline harnesses and verifies deterministic bit-identity, `Delta_NI == 0`, and zero-resurrection erasure
 
 ### Requirement: The foundation is proven end to end
 The development set SHALL contain end-to-end scenarios for: recall across places and a

@@ -57,14 +57,26 @@ them by base-level activation and importance.
 - **WHEN** the soul runs without an embedding provider and is asked about a recorded fact using one of its words
 - **THEN** the fact is returned
 
-### Requirement: Recall returns provenance
-Each recalled item SHALL carry the id of the event it comes from, its time, its place, its
-actor and its audience, so that a policy at the context door can judge what may be shown and to
-whom. Recall itself SHALL NOT leave an item out because of its audience.
+### Requirement: Pre-Step-5 VisibleScope filtering enforces privacy non-interference
+All candidate events, summaries, and activations SHALL be projected through `VisibleScope`
+(`audience(context) ⊆ audience(item)` or explicit logged `DeclassToken`) **before**
+feeling-of-knowing scoring, top-`k` recall selection, and activation use-count updates (`R-33`).
 
-#### Scenario: A recalled item comes from a narrower audience
-- **WHEN** recall returns an item whose audience does not include the present audience
-- **THEN** the item is returned with its audience stated, so that a rule at the context door could remove it
+#### Scenario: A private memory never leaks into Step-4 FOK or Step-5 gate urgency
+- **WHEN** an event arrives in a public channel while a highly relevant private secret exists in a narrower audience without a `DeclassToken`
+- **THEN** the private secret is excluded before FOK and top-`k` ranking, its use count stays unchanged, and gate decisions match an empty private history (`Delta_NI == 0`)
+
+#### Scenario: An owner-signed DeclassToken grants scoped cross-audience recall
+- **WHEN** a logged `DeclassToken` explicitly authorizes named source items for a target place
+- **THEN** those authorized items become visible inside `VisibleScope` for that target only while unrelated private items remain hidden
+
+### Requirement: Recall preserves provenance and blind AttachmentHandles
+Each visible recalled item SHALL carry its source event ids, time, place, actor, `basis`,
+`taint`, audience, and opaque `AttachmentHandle` (`R-37`), with raw bytes never readable in core.
+
+#### Scenario: Recalled item carries verifiable provenance
+- **WHEN** recall returns an episode summary or event across places
+- **THEN** it includes source event ids, provenance `basis`, and `taint` for `ContextPlan` rendering and Door checks
 
 ### Requirement: Reasoning can ask for recall explicitly
 The core SHALL offer its own capability, used through act, for recalling from the whole log by
@@ -79,24 +91,36 @@ event in the same chain of work.
 - **WHEN** a rule at the action door refuses a recall
 - **THEN** the act ends in a receipt with outcome refused and nothing is recalled
 
-### Requirement: Recollection is told apart from familiarity
-A recalled item SHALL be marked recollected only when at least one recorded event, not a
-summary, is recovered whose actor or audience contains the people concerned, whose place
-matches and whose time falls within the grain claimed. Otherwise it SHALL be marked familiar
-only. A summary whose events have lost their vectors SHALL still be tested through the events
-it links to.
+### Requirement: Dual-process familiarity and recollection without 30-day starvation
+Recall SHALL separate continuous familiarity (`A` + similarity) from episodic recollection (`R` =
+recovered source event matching people, place, and time grain), without blocking long-gap
+familiarity hits behind mandatory LLM verification (`A-09`). Explicit Row-10 weight `w_B = 0`
+SHALL yield pure similarity ranking.
 
-#### Scenario: Only a gist remains
-- **WHEN** a query matches a summary and no recorded event matching its people, place and time is recovered
-- **THEN** the item is marked familiar only
+#### Scenario: Only a gist remains after thirty days
+- **WHEN** a query matches a summary at a thirty-day gap and its source events remain valid or match via familiarity
+- **THEN** automatic recall retrieves the memory cleanly tagged as familiar-only unless full verbatim detail recovers `R`, never dropping valid long-horizon recall
 
 #### Scenario: The original events are recovered
-- **WHEN** a query matches recorded events with matching people, place and time
+- **WHEN** a query recovers recorded events matching the claimed people, place and time grain
 - **THEN** the items are marked recollected
 
 #### Scenario: The vectors have faded
-- **WHEN** a summary's source events no longer have vectors and are still in the log
-- **THEN** the summary can still be marked recollected through its links
+- **WHEN** a summary's source events no longer have vectors (`B < -3.29`) and remain in the log
+- **THEN** the summary can still verify recollection through its source event links
+
+#### Scenario: Row-10 activation weight neutral switch
+- **WHEN** `w_B` is set to zero for ablation
+- **THEN** recall ranking depends strictly on similarity and importance with base-level zeroed
+
+### Requirement: Cognitive map links and unified 256d index isolation
+Core SHALL maintain opaque Successor-Representation / co-occurrence links across `{actor, place,
+concept}` ids (`R-32`) inside existing books, and Gateway `usearch` vector lookups SHALL filter
+by `VisibleScope` and matching `(embed_model_ver, dim_d, prompt_regime_id)` (`R-37`, `R-40`).
+
+#### Scenario: Multi-hop recall across incompatible embedder versions
+- **WHEN** older `EmbeddingGemma-300M` vectors coexist with `EmbeddingGemma 2` `256d` vectors and SR graph edges
+- **THEN** vector search queries only matching `embed_model_ver` vectors while SR graph links bridge related actors and places without reading text
 
 ### Requirement: Superseded items do not pass as current
 Recall SHALL NOT return an item that has been superseded as if it were current. When a

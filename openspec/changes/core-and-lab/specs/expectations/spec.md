@@ -9,52 +9,49 @@ promise is kept even when nobody mentions it again.
 ## ADDED Requirements
 
 ### Requirement: An expectation is a typed record
-An expectation SHALL be a record with a kind (effect, response, wait, promise or goal), a
-condition, the place and source it concerns, an expiry and the event that created it. Its
-lifecycle SHALL be driven by the loop, not by a model call.
+An expectation SHALL hold a kind (`effect`, `response`, `wait`, `promise`, `goal`, `monitor`,
+`pending_approval`), plural `places` and `people`, optional `domain?`, `RecurrenceSpec` (`R-46`),
+`PromiseMeta` (`R-49`), expiry, and origin event, driven in code without model calls.
 
-#### Scenario: A promise is opened
-- **WHEN** reasoning commits to doing something at a later time
-- **THEN** an open promise with that due time, place and source is recorded
+#### Scenario: A multi-party or cross-place promise is opened
+- **WHEN** reasoning commits to ask one person and report back to another place
+- **THEN** an open expectation recording plural `places` and `people` and its `PromiseMeta` deadline is stored
 
-### Requirement: A time condition fires on its own
-An expectation whose condition is a due time SHALL fire when the injected clock reaches that
-time, with no external event needed, and firing SHALL wake reasoning as a commitment.
+### Requirement: Time conditions and startup recovery avoid storms
+Time conditions and recurring `RecurrenceSpec` triggers SHALL fire no earlier than scheduled;
+missed due items after downtime SHALL coalesce or stagger (`coalesce_one` / `skip_to_next`, once
+per place) without re-triggering storm bursts (`R-46`).
 
 #### Scenario: A reminder comes due
 - **WHEN** the soul promised a reminder in two hours and two hours pass in silence
 - **THEN** reasoning wakes with the promise in its context and no earlier than the due time
 
-#### Scenario: The soul was not running at the due time
-- **WHEN** promises fell due while the program was stopped and the program starts later
-- **THEN** they are marked overdue at start-up and reasoning wakes once for each place that has one
+#### Scenario: The soul was stopped across due times
+- **WHEN** single-shot promises and recurring monitors fell due while stopped and the core restarts
+- **THEN** overdue promises wake once per place and `RecurrenceSpec` monitors coalesce cleanly without catch-up bursts
 
-### Requirement: A promise is kept, retried or renegotiated, never dropped
-A promise SHALL stay open until it is kept, cancelled or renegotiated. A receipt of failed,
-refused, held or unknown SHALL NOT count as keeping it: the promise SHALL be retried with a
-growing delay up to a limit, after which reasoning SHALL wake to inform the source or
-renegotiate. A promise kept after its due time SHALL be recorded as kept late.
+### Requirement: Promises, approvals, and preempted acts handle receipts distinctly
+A promise stays open across retries unless `kept`, `kept_late`, `renegotiated`, `released`,
+`cancelled`, or `failed` (`R-49`). A `held` receipt SHALL park in non-retrying `PendingApproval`
+(`R-42`), and `preempted_external`/`canceled_by_core` receipts (`R-36`) SHALL resolve cleanly
+without backoff retry storms.
 
-#### Scenario: The attempt fails
-- **WHEN** the act that would keep a promise ends in a receipt of failed
-- **THEN** the promise is still open, still counts toward promise debt, and is retried after a delay
+#### Scenario: An action is held by Valve awaiting human approval
+- **WHEN** a capability dispatch returns `Receipt(held)` bound to canonical hash `H_act`
+- **THEN** the expectation transitions to `PendingApproval` and does not emit duplicate approval prompts on timers
 
-#### Scenario: A promise is kept
-- **WHEN** reasoning carries out the promised act and resolves the promise
-- **THEN** the promise is recorded as kept with a reference to the act that kept it
+#### Scenario: A promise is kept, retried, or kept late
+- **WHEN** the act fails transiently (`failed`, `normal`), retries with exponential backoff, and succeeds after the due time
+- **THEN** completion is recorded as `kept_late` separately from on-time `kept`
 
-#### Scenario: Retries run out
-- **WHEN** the retry limit is reached without success
-- **THEN** reasoning wakes as a commitment with the failed promise in its context
+#### Scenario: An action is preempted externally
+- **WHEN** an in-flight speech or body action ends with `Receipt(failed, termination_reason = preempted_external)`
+- **THEN** the expectation stops cleanly with `delivered_units` recorded instead of spamming exponential retries
 
-#### Scenario: Kept after the due time
-- **WHEN** a promise is kept later than its due time
-- **THEN** it is recorded as kept late, separately from kept
-
-### Requirement: Every act opens predictions of what should follow
-After each action the loop SHALL open an effect prediction when the capability declares a
-sensed effect, and a response prediction toward the source and place that a communicative act
-was aimed at. Each SHALL have an expiry.
+### Requirement: Acts open channel-aware effect and response predictions
+After each action the loop SHALL open an effect prediction carrying `(channel, window, Δ_pred)`
+when declared (`R-09`, `R-36`) and a response prediction accepting `done` receipts, addressee
+replies, or `continued_attention` (`R-08`).
 
 #### Scenario: The expected reply comes
 - **WHEN** the source the soul acted toward responds in that place before the expiry
@@ -99,13 +96,14 @@ change SHALL be recorded with the wake that made it.
 - **WHEN** the source asks to move a promised reminder to a later time
 - **THEN** the promise's due time is revised, the old due time no longer fires and the revision is recorded
 
-### Requirement: Promise debt is visible to the gate
-The share of the soul's open promises that fall due soon SHALL be available to the gate as a
-number.
+### Requirement: Undiluted urgency promise debt is visible to the gate
+`promise_debt` SHALL sum urgency weights over imminent active promises due within `H_debt`,
+excluding silent `RecurrenceSpec` monitoring schedules (`R-46`) so low-priority distant
+obligations never dilute urgent commitments (`A-01`).
 
-#### Scenario: Several promises are due within the hour
-- **WHEN** most open promises fall due within the next hour
-- **THEN** the promise debt the gate sees is higher than when none is due
+#### Scenario: Adding a distant promise does not dilute an imminent deadline
+- **WHEN** one promise is due in ten minutes and ten low-priority promises are scheduled next week
+- **THEN** `promise_debt` stays high based on summed urgency weights rather than shrinking by division over total count
 
 ### Requirement: A free-text condition is watched cheaply
 An expectation SHALL be able to carry a condition in free text. For each event the loop SHALL
@@ -179,13 +177,10 @@ latency the body declares and moving toward the observed values as observations 
 - **WHEN** no latency has been observed in a place yet
 - **THEN** its durations come from the latency the body declared
 
-### Requirement: A goal holds a multi-step task together
-Reasoning SHALL be able to open a goal: an expectation with a completion condition, a due time
-and an expiry. A receipt or reply linked to the goal's chain, or an event that matches the
-goal's open prediction, SHALL be attributed to the goal and SHALL wake reasoning as a
-commitment. An event that is only similar to the goal's condition SHALL be attributed after one
-classification and SHALL NOT bypass the gate. A goal SHALL end when it is resolved, answered,
-expired or revised away.
+### Requirement: Goals unite multi-step tasks and accept reached outcome
+Reasoning SHALL open `goal` expectations resolved via `{kept, kept_late, renegotiated, released,
+failed, cancelled, answered, reached}` (`A-01`). Linked receipts or replies wake via the circuit
+breaker; similar unlinked events classify without bypassing the gate.
 
 #### Scenario: A receipt arrives in a busy place
 - **WHEN** the receipt of a goal's action arrives among many unrelated events
@@ -195,6 +190,18 @@ expired or revised away.
 - **WHEN** an unlinked event is similar to a goal's condition and one classification says it concerns the goal
 - **THEN** it is attributed to the goal and appraised by the gate without bypassing it
 
+#### Scenario: A goal completes via reached outcome
+- **WHEN** reasoning resolves an active goal with outcome `reached`
+- **THEN** the goal closes cleanly without rejecting `reached` as an invalid enum variant
+
 #### Scenario: A goal expires
 - **WHEN** a goal's expiry passes
 - **THEN** it is recorded as expired and no later event is attributed to it
+
+### Requirement: Commitment dependencies and conflicts prevent over-promising
+`PromiseMeta` SHALL track `depends_on` expectation links and surface conflicting active promises
+(`R-49`) before new obligations commit.
+
+#### Scenario: A conflicting commitment is proposed while a hard dependency is open
+- **WHEN** a candidate act commits to overlapping exclusive resources against an open `PromiseMeta`
+- **THEN** conflict status is flagged to reasoning for renegotiation or refusal prior to emitting the promise

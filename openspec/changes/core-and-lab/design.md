@@ -2,45 +2,54 @@
 
 ## Context
 
-See `proposal.md` for motivation. The repository holds `ARCHITECTURE.md`, `RESEARCH.md`, the
-research brief and its first findings, and no code. The owner's decisions so far:
+See `proposal.md` for motivation. The repository holds `ARCHITECTURE.md`, `RESEARCH.md`, Run 1
+(`research/findings/2026-11-15-run-1.md`), Run 2 (`research/findings/2026-11-16-run-2.md` and
+`research/findings/run-2-notes/`), and no code yet. The owner's decisions so far:
 
 - Rust for everything in this change.
-- This change builds the core and the Lab only, with `RESEARCH.md` sections 1–21 and 26.
-- Nothing is restricted at the doors. Policy comes later, on top, without changing the core.
-- The architect designs and reviews; implementation is delegated to worker agents.
-- The architect does not choose where the research is silent. Open points go to the
-  researcher (`research/researcher-prompt.md`).
-- Research run 1 (`research/findings/2026-11-15-run-1.md`) is accepted as the basis for
-  R-01 to R-05 and R-07 to R-28. Every number in it is a start value to tune in the Lab.
+- This change builds the complete `core`, `store`, `reason`, and `lab` stack covering `RESEARCH.md`
+  sections 1–26 as audited and upgraded by Run 2 (`A-01`–`A-16`, `R-29`–`R-40`, `R-43`, `R-46`,
+  `R-48`–`R-50`), co-evolving across Phases 0–3 with successor change `waist-valve-and-bodies`.
+- `core` enforces structural privacy non-interference (`VisibleScope` before Step 5, `R-33`),
+  atomic erasure (`hard_forget` + `Two-Epoch Replay`, `R-34`), provenance taint tracking (`R-43`),
+  and `OwnerSigned` identity locks (`R-48`), while runtime `cedar-policy` Valve rules and live
+  bodies live in `waist-valve-and-bodies`.
+- Research Run 1 (`2026-11-15`) and Run 2 (`2026-11-16`) + 2026-11-16 Owner Decisions (Option A
+  additive `Receipt` keeping `ARCHITECTURE.md` L198 untouched; `EmbeddingGemma 2` `256d` Apache 2.0
+  unified Gateway space; dual-change split) are accepted as specification input.
 
-Reading the rules below: text tagged **(R-nn)** comes from that finding. Findings separate
-what the literature establishes from the researcher's inference; most formulas here are
-inference with sourced shape, and are expected to move with Lab results. Where a finding left
-something open, this design says so and does not fill it (Decision 19).
+Reading the rules below: text tagged **(R-nn)** / **(A-nn)** comes from that finding. Findings
+separate established literature from engineering synthesis; quantitative start values carry bounded
+ranges tuned deterministically in the Lab. Open hardware profiling and Lab calibration points stay
+explicitly flagged for Lab runs (Decision 19).
 
 Constraints:
 
-- The invariants of `ARCHITECTURE.md` are fixed.
-- `RESEARCH.md` uses older terms (*host*, *hooks*, *dispatch door*). This design uses the
-  terms of `ARCHITECTURE.md`: gateway, doors, valve.
+- The invariants of `ARCHITECTURE.md` are fixed (never edit `ARCHITECTURE.md`).
+- Canonical terms follow `ARCHITECTURE.md`: gateway, doors, valve, Waist 1, Waist 2.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- A core that runs `RESEARCH.md` §1–21 as corrected by run 1, with no IO, replayable exactly.
-- A Lab that can show, for each row of the brain map, what gets worse without it.
-- Tests fast enough to run on every edit (Decision 16).
-- Nothing in the core that the later gateway, bodies or policy would force us to change.
+- A sans-IO, bit-identical replayable `Core` implementing `RESEARCH.md` §§1–26 with zero Round-1
+  contradictions or sign/denominator/spin-loop bugs (`A-01`–`A-16`).
+- Structural `Delta_NI = 0` pre-Step-5 privacy projection (`R-33`), zero-resurrection `hard_forget`
+  (`R-34`), event-derived 4-pillar `self_card` (`R-35`), 3-door taint safety (`R-43`), and
+  commitment integrity (`R-49`).
+- A Lab covering all **22** brain-map ablation metrics (`A-02`), `S >= 354–471` paired NI power
+  (`A-16`), `BaselineAdapter` & 5-domain Pareto scorecard (`R-39`), Indonesian/`MultiLexNorm`
+  suites (`A-15`), and black-box `Core TCK` (`C-MUST-01..04`, `R-50`).
+- Freeze clean `Waist 1` (`monoagens.core.v1`) so `waist-valve-and-bodies` connects cleanly from
+  Phase 0 onward without reworking `Core`.
 
 **Non-Goals:**
 
-- Wave 2 and 3 (`RESEARCH.md` §22–25), the gateway, the valve, policy (§10), real bodies,
-  tools, plugins, the product CLI, hard forgetting, configuration migration.
-- Graded address (R-29). In this change an event is addressed to an actor or it is not.
-- `no_std` builds, an LLM judge in the Lab, snapshots of projections, approximate vector
-  indexes, the human blind test (R-27 gives the protocol; running it needs people).
+- Live network/stdio daemon process (`monoagens-gateway`), runtime `cedar-policy` policy bundle,
+  keyed-`BLAKE3` media server, `body-cli`, `body-mcp-bridge`, and standalone `monoagens-conformance`
+  CLI runner (owned by sibling change `waist-valve-and-bodies`).
+- Unrequested runtime emotion classification or unapproved edits to `ARCHITECTURE.md`.
+- `no_std` builds; running paid live LLMs in `cargo test`.
 
 ## Decisions
 
@@ -53,9 +62,13 @@ Constraints:
 | A reply that answers a prediction is marked self-caused (§17 against §19) | Predictions have two kinds. A matched *effect* prediction is self-caused. An answered *response* prediction wakes the soul. |
 | Who owns the hooks (§16 against `ARCHITECTURE.md`) | The core owns the three hook points and calls them inside its turn. What runs in them (the valve, plugin hooks) belongs to the gateway. |
 
-Also ruled: both formula fixes of run 1 are adopted (habituation gain κ; Petrov's hybrid for
-base-level activation); explicit recall is a capability used through `act`; `info_gap` takes
-its reference set from an annotated corpus and stays only if the Lab shows its effect.
+Also ruled (Run 1 & Run 2 Owner Decisions `2026-11-16`): post-eval partitioned habituation κ &
+guarded Petrov hybrid base-level (`n > k ∧ t_n > t_k`); explicit `memory.recall` capability;
+split `A-14` `dialogue_act_gap` contrastive logistic head `(w, b)` vs `own_info_gap`; **Option A**
+additive `Receipt` `{termination_reason, progress, delivered_units}` preserving `ARCHITECTURE.md`
+L198 5 outcomes; **`EmbeddingGemma 2` (`256d` MRL, Apache 2.0)** unified text+image+`audio_voice`
+embedder with `embed_model_ver` partitioning; and dual OpenSpec split (`core-and-lab` +
+`waist-valve-and-bodies`).
 
 ### 2. Five crates; dependencies point one way
 
@@ -88,15 +101,17 @@ crates/
     sleep/          trigger.rs boundaries.rs consolidate.rs merge.rs fade.rs
     ledger/         cards.rs self_card.rs
     learn/          outcome.rs delta.rs bounded.rs band.rs rollback.rs
-    replay.rs       reprocess a log and compare decisions
-  store/src/        monoagens-store  (SQLite): schema.rs log.rs text.rs vectors.rs
+    map/            graph.rs habits.rs conventions.rs
+    privacy/        visible_scope.rs declass.rs
+    replay.rs       reprocess a log and compare decisions (Two-Epoch post-forget)
+  store/src/        monoagens-store  (SQLite + usearch + blake3 + postcard): schema.rs log.rs text.rs vectors.rs shards.rs forget.rs snapshots.rs
   reason/src/       monoagens-reason (what the core needs in order to think)
-    render.rs tools.rs parse.rs secrets.rs
+    render.rs tools.rs parse.rs secrets.rs info_gap_clf.rs
     model/          scripted.rs openai.rs
-    embed/          none.rs hash.rs openai.rs scripted.rs
+    embed/          none.rs hash.rs openai.rs embeddinggemma2.rs scripted.rs
   lab/src/          monoagens-lab    (library + `monoagens-lab` binary)
     scenario.rs soul_dir.rs driver.rs clock.rs test_body.rs guard.rs checks.rs metrics.rs
-    ablation.rs coverage.rs calibrate.rs baseline.rs record.rs probe.rs inspect.rs main.rs
+    ablation.rs coverage.rs calibrate.rs baseline.rs pareto.rs tck_hooks.rs record.rs probe.rs inspect.rs main.rs
 prior/              dispositions.json
 lab/scenarios/      dev/ validation/ sealed/
 lab/runs/           run records; reference/ for published results
@@ -126,282 +141,209 @@ impl<S: Store> Core<S> {
 - `Doors` (port): `inbound`, `context`, `action`, called by the core at steps 3, 6 and 7 of
   its turn. The core ships a no-op implementation.
 - `step` appends the input first, then follows `ARCHITECTURE.md` *One turn of the loop*.
+  On `Core::open` (A-01 crash recovery), Core inspects trailing recorded inputs lacking a terminal
+  `decision`/`receipt_processed` marker and resumes them in deterministic timestamp order before
+  accepting new inputs (`Two-Epoch Replay` post-snapshot after `hard_forget`, R-34).
 
-### 4. Six books, one log (R-12)
+### 4. Six books, one log (R-12, R-34, R-40)
 
-All state is a projection of the log, in six books:
+All state is a projection of the log, in six books (`postcard`/`minicbor` snapshot serialization
+with `blake3` checksums over `hot.db` WAL + read-only sealed temporal shards + `usearch` HNSW, R-40):
 
 | Book | Holds |
 |---|---|
-| log | every event, with use times for activation |
-| memories | episodes, gists, lessons, procedures, each linked to its source events |
-| expectations | effect, response, wait, promise, goal |
-| sources | ledger cards, including the soul's own |
-| credences | (α, β) counts per belief and per (source, domain) |
-| dispositions | knobs, weights, and per-place and per-source offsets |
+| log | every event, with use times for activation (`hard_forget`-scrubbable, R-34) |
+| memories | episodes (`open`/`provisional`/`sealed`), gists, lessons, procedures, SR graph (R-32), domain centroids |
+| expectations | effect, response, wait, promise (`PromiseMeta`), goal, monitor (`RecurrenceSpec`), `pending_approval` |
+| sources | ledger cards (`tick` promisee-aware), `self_card` (4 pillars, R-35) |
+| credences | (α, β) counts per belief (`told`-initialized + `k_corrob` taint) and per (source, Hungarian-aligned domain) |
+| dispositions | knobs, weights, per-place/per-source offsets, partitioned `h_{(p, k_src)}` |
 
-Event kinds: `percept`, `decision`, `wake_started`, `model_call`, `thought`, `action`,
-`receipt`, `expectation_opened`, `expectation_changed`, `verdict`, `memory_used`,
-`belief_changed`, `evidence`, `episode_closed`, `sleep_run`, `domains_updated`,
-`vector_released`, `timing_updated`, `learning_change`, `rollback`, `door_verdict`,
-`identity_changed`, `body_state`, `actor_facts`, `tick`, `failure`.
+Event kinds (29 canonical): `percept`, `decision`, `wake_started`, `model_call`, `thought`,
+`withheld`, `action`, `action_feedback`, `receipt`, `expectation_opened`, `expectation_changed`,
+`verdict`, `memory_used`, `belief_changed`, `evidence`, `episode_closed`, `sleep_run`,
+`domains_updated`, `vector_released`, `timing_updated`, `learning_change`, `rollback`,
+`door_verdict`, `identity_changed`, `body_state`, `actor_facts`, `tick`, `failure`, `hard_forget`.
 
-Every event stores kind, format version, time, actor, place, audience, `origin_actor`,
-`caused_by`, numeric features and an opaque payload. A **chain** is the set of events linked
-by `caused_by` back to an origin (R-07); `origin_actor` is inherited along it and cannot be
-set by a model. A tick is appended only when it fires something.
+Every event stores kind, format version, time, actor, place, audience, `origin_actor`, `taint`,
+`caused_by`, numeric features (`f_modal`, `orient`, `deg`, etc.) and an opaque payload (plus
+optional `AttachmentHandle`s, never raw media bytes). A **chain** links events via `caused_by`;
+`origin_actor` and min-trust taint propagate monotonically and cannot be stripped by a model. A
+tick appends only when it fires or updates recurring state (`RecurrenceSpec`).
 
 ### 5. What the core is told, as numbers and ids
 
 | Fact | Supplied by | Used for |
 |---|---|---|
-| event vector, embedder tag | `reason` | signals, recall, wake gate, novelty, misses |
-| addressees, `named` | the body | circuit breaker, `own_name`, `social_cost`, exchanges |
-| `reply_to`, correlation id | the body | grounding, agency, goals |
-| length, negative flag | the body | content miss, learning |
-| typical latency; effect channel, window, noise | the capability descriptor | timing, agency |
-| condition and expected-reply vectors | `reason`, from the text of `expect` and `act` | wake gate, goals, misses |
-| reference vectors for `info_gap` | `reason` | `info_gap` |
-| reliability prior (α₀, β₀), teacher weight | whoever runs the soul, per actor | reliability, learning |
-| daily budget, knowledge cutoff | whoever runs the soul | budget drive, time grounding |
+| event vector, `embed_model_ver`/`dim_d`/`prompt_regime_id` | `reason` (`EmbeddingGemma 2` `256d`) | signals, recall, wake gate, novelty, misses |
+| `dialogue_act_gap` logistic score `(w, b)` | `reason` (`A-14`) | non-word-list `info_gap` gate signal |
+| addressees, `named`, `orient(e, l)`, `continued_attention` | the body | `deg(e, l)` (R-29), circuit breaker, `social_cost`, grounding |
+| `reply_to`, correlation id, `channel`, `Δ_obs`, `Δ_pred` | the body | grounding, agency (R-09), goals |
+| length, negative flag, `repair`, 10-slot `f_modal` | the body | content miss, learning, blind speech/turn-taking (`R-37`) |
+| `capability_schema_hash`, latency, effect window/noise | the capability descriptor | timing, agency, procedure schema validation (`R-38`) |
+| condition and expected-reply vectors, `domain?` | `reason` / external body | wake gate, goals, misses, belief domain (`A-01`) |
+| `AttachmentHandle` (`handle_id`, `modality_slot`, `ttl`) | Gateway (`blake3` store) | passed blindly to `ModelProvider` post-`VisibleScope`/`Valve` |
+| reliability prior (α₀, β₀), `teacher_weight` | Gateway per actor | reliability (`told` incl.), learning (`R-26`) |
+| `VisibleScope` / `DeclassToken` / `OwnerSigned` anchor | Gateway / Valve | pre-Step-5 privacy (`R-33`), identity lock (`R-48`) |
+| daily budget, knowledge cutoff | Gateway | budget drive, time grounding |
 
-### 6. Gate (§2–4, §15; R-02, R-03, R-04, R-14)
+### 6. Gate (§2–4, §15, §22–24; A-01, A-03, A-04, A-07, A-08, A-14, R-02..R-04, R-14, R-29..R-31, R-36)
 
-- **Signals:** `own_name`, `info_gap`, `feeling_of_knowing` and `relevance` as in §2.
-- **`social_cost` (R-02):**
-  `max(sel_other, answered) · (1 − λ_c · closeness(sender))`, where `sel_other` = 1 if the
-  event's addressees are non-empty and exclude the soul, and `answered` = 1 if an actor other
-  than the sender and the soul has an event in that place after it.
-- **Salience:** `S = clamp(Σ wₖ·sₖ, 0, 1)` with `w_info = 0.6·helpfulness`,
-  `w_fok = 0.4·helpfulness`, `w_sc = −(0.2 + 0.6·restraint)` (R-03).
-- **Habituation (R-01):** `h ← h·γ^Δt + 1`, `S_eff = S / (1 + κ·h)`. κ = 0 is neutral.
-- **Threshold:** as §3, with `a = 0.1 + 0.5·restraint` (R-03).
-- **Closeness and familiarity (R-04):** *presence* in a place (an event there with the soul in
-  its audience, or the soul's own act there) feeds place familiarity; an *exchange* with a
-  source (its event addressed to the soul, the soul's act addressed to it, or a reply-linked
-  pair) feeds closeness. `closeness(p) = σ(B_p)`, 0 with no exchange.
-  `B_ctx = (B_P + Σ_{p∈Present} B_p) / (1 + |Present|)`, `familiarity = σ(B_ctx)`, 0 with no
-  history.
-- **Base level (R-04), used everywhere:** Petrov's hybrid,
-  `B ≈ ln[Σ_{j=1..k} t_j^(−d) + (n−k)(t_n^(1−d) − t_k^(1−d)) / ((1−d)(t_n − t_k))]`, with
-  `t_j` the ages in hours of the k most recent uses, `t_n` the age of the first use, n the use
-  count, and t floored at one minute.
-- **Draw and circuit breaker:** as §3. The breaker fires for an allocated turn, an event that
-  fires or answers an expectation, and an event attributed to an active goal (Decision 8).
-- **Patience (§4):** a go on an unallocated turn opens a `wait` for the place's patience time
-  (Decision 8). Another actor's reply closes it as silent.
-- **Backlog (R-14):** an event is backlog if its ingest lag exceeds the place's patience, or it
-  arrived while the soul was stopped or asleep. A place's backlog is one chunk with
-  `s_k = max_i s_k(e_i)·(1 + L_i)^(−d)`. Any commitment in it fires the breaker. At most four
-  chunks are handled per wake, most salient first.
+- **Signals (A-14, R-29):** `own_name`, `feeling_of_knowing` (`A*` over `VisibleScope`-filtered
+  candidates), `relevance`, `dialogue_act_gap = σ(w_gap·e + b_gap)` + `own_info_gap` (`A-14`),
+  plus `asr_conf < 0.45` clarification boost (`R-37`).
+- **Graded Address & `social_cost` (R-02, R-29):** Noisy-OR `deg(e, l) ∈ [0, 1]` over explicit
+  address, open prediction link, dyadic momentum, and `orient(e, l)`.
+  `social_cost(e) = max(clamp(max_{l≠soul} deg(e, l) − deg(e, soul), 0, 1), answered(e)) · (1 − λ_c · closeness(sender))`.
+- **Salience & Reachable Neutral Weights (A-01, R-03):** `S = clamp(Σ wₖ·sₖ, 0, 1)` with
+  `w_info = info_scale·helpfulness`, `w_fok = fok_scale·helpfulness`, `w_sc = −restraint_scale·restraint`
+  (reaches exact `0` when `restraint = 0` or `social_cost_off`).
+- **Post-Eval Partitioned Habituation (A-03, R-36):** Partitioned by `(place p, source_channel k_src)`:
+  `h_pre = h_{(p, k_src)}·γ^Δt`; evaluate `S_eff = S / (1 + κ·h_pre)` FIRST; then `h ← h_pre + 1`.
+  `κ = 0` is exact neutral (`S_eff = S`); stimulus 1 is never halved.
+- **Threshold & Drives (A-01, A-04, R-30, R-31):**
+  `θ = θ₀ + a·talk_rate + b·budget_used − c·promise_debt + r·(1 − familiarity) + Δθ_init`, where
+  `a = a_scale·restraint` (reaches `0`), `Δθ_sleep = 0` permanently (`A-04`), `promise_debt` sums
+  urgency weights `Σ w_p` over imminent non-recurring promises (`A-01`/`R-46`), `talk_rate` uses
+  cold-start shrinkage (`A-07`), and `R-31` drives adjust idle/switch/depth budgets.
+- **Closeness & Guarded Petrov Base Level (A-01, R-04):** Guarded Petrov hybrid (`k = 1`): use tail
+  integral when `n > k ∧ t_n > t_k`, else exact `ln(Σ t_j^(−d))` (`0/0` guarded; 1-min floor);
+  `n = 0` yields neutral `0`. `B_ctx = (B_P + Σ_{p∈Present} B_p)/(1 + |Present|)`.
+- **Draw, Breaker & Idle Initiative (A-01, R-30):** Explicit step limit `S_eff >= θ` as `τ → 0`.
+  Breaker fires on allocated/high-`deg` turns, expectations, or active goals. Unprompted idle
+  initiatives respect `EM-LLM` breakpoints and raise temporary habituation cooldowns.
+- **Patience (A-08):** Unallocated `go` opens `wait` with right-censored shrinkage quantile
+  estimator `clamp(t_p, [t_min, t_max])`; `0` when disabled.
+- **Backlog (A-04, R-14):** Delete `"or asleep"` — backlog chunking triggers ONLY on
+  `now − t_event > patience_place` or genuine `stopped/down` downtime, combining via event-level
+  age-discounted `max` (≤ 4 chunks/wake).
 
-### 7. Memory (§5, §14; R-05, R-16)
+### 7. Memory & Pre-Step-5 Privacy (§5, §14, §25; A-01, A-09, R-05, R-16, R-32, R-33, R-37, R-40)
 
-- Candidates: top 40 by vector, top 20 by text. Rank by
-  `A = B + context_weight·cos + importance_weight·importance`.
-- **Importance (R-05):** `max(i_reason, i_commit, i_surprise)`. `i_reason` is given by
-  reasoning when it writes the memory; `i_commit` = 1 when the memory is linked to a promise,
-  goal or expectation; `i_surprise = clamp(z / z_max, 0, 1)` with z the surprise z-score at
-  encoding (Decision 11).
-- **Explicit recall** is the core's own capability `memory.recall`, used through `act`. It
-  passes the action door and its receipt (ids only) continues the chain.
-- **Recollection (R-16):** R holds iff recall returns at least one log event, not a gist,
-  whose actor or audience contains the people, whose place matches and whose time falls
-  within the grain claimed. A gist is tested through its source ids, so faded vectors do not
-  matter. `F = max(cosine, normalized activation)`; F alone marks an item familiar only.
-- Superseded items rank below current ones and carry `valid_to` and `superseded_by`.
+- **Pre-Step-5 `VisibleScope` (R-33):** Candidates are projected through `audience(context) ⊆
+  audience(item)` (or explicit `DeclassToken`) **before** Step-4 `feeling_of_knowing`/recall and
+  Step-5 gate scoring (`Δ_NI = 0`).
+- **Pre-Filtered Search & Unified `256d` Space (A-15, R-12, R-37, R-40):** Union of `usearch` HNSW
+  vector top-40 (within matching `(embed_model_ver, dim_d, prompt_regime_id)`) and Gateway `Store`
+  text top-20. Rank by `A = w_B·B + context_weight·cos + importance_weight·importance`, where
+  `w_B` enables exact Row-10 neutral (`similarity only`).
+- **Dual-Process Recollection (A-09, R-16):** Decouples continuous familiarity (`A` + `F`) from
+  recollection (`R` = matched verbatim event IDs) so 30-day recall hits are never blocked by
+  mandatory LLM verification.
+- **Importance (R-05):** `max(i_reason, i_commit, i_surprise)` (`A-06` normalized surprise).
+- **Cognitive Maps & Fade (A-01, R-32, R-40):** Core maintains opaque ID transition/co-occurrence
+  edges (`Successor Representation`) inside `memories` (`R-32`). Vector fade checks **base level
+  `B < fade_threshold = −3.29`** (`Petrov` exact 30-day threshold), never undefined total `A`.
 
-### 8. Expectations (§6, §17, §19, §20; R-07, R-08, R-09, R-10, R-18, R-19)
+### 8. Expectations, Routines & Commitments (§6, §17, §19–20; A-01, R-07..10, R-18..19, R-36, R-42, R-46, R-49)
 
-- **Kinds:** effect, response, wait, promise, goal. **Conditions:** due time, reply from a
-  source, free text.
-- **Timing per place (R-08):** `patience(P)` is the `q_p` quantile of the latency to the first
-  third-party reply; `expiry(P)` is the `q_e` quantile of the latency from an act to the
-  addressee's next event, times a stakes factor; the silence window uses the same rule for
-  anyone's reply. Each is shrunk toward the body's declared latency with `n₀`
-  pseudo-observations. Answering evidence is a `done` receipt, the addressee's next event in
-  the place, or a continued-attention number the body reports.
-- **Agency (R-09):** an event matches an effect prediction when it carries the act's
-  correlation id or its actor is the soul itself, or when it is on the declared channel
-  within `[t + lat_min, t + lat_max]` and `|Δ_obs − Δ_pred| ≤ k·σ_channel`. A match is
-  recorded with basis `self` and is not appraised. An unmet effect prediction is an error.
-- **Promises (R-10):** states pending → due → attempted → kept | failed → retry | overdue |
-  renegotiated | cancelled. A failed, refused, held or unknown receipt is not completion; the
-  promise stays open, counts in promise debt, and is retried at `t + b·2^(i−1)` for
-  `i ≤ n_max`. After that, or when a retry cannot finish in time, the breaker wakes reasoning
-  to inform or renegotiate. At start-up, promises with due < now are marked overdue and
-  reasoning wakes once per place. "Kept late" is recorded apart from "kept".
-- **Goals (R-07):** a goal is an expectation of kind `goal`, opened only by reasoning. It holds
-  its chain, places, people, a completion condition (description and vector), a due time and
-  an expiry. An incoming event is attributed in this order: (1) a receipt or reply-link to the
-  goal's chain: attributed, breaker fires; (2) a match to the goal's open prediction:
-  attributed, breaker fires; (3) cosine to the condition ≥ `wake_gate_lo` and one positive
-  classification: attributed, no breaker, relevance raised; (4) otherwise it belongs to the
-  main thread. The events attributed to a goal are its task thread.
-- **Wake gate (§6):** `m = cos(event, condition)`; below `wake_gate_lo` ignore; otherwise one
-  `classify` call recorded as a `verdict` with m. `wake_gate_hi` stays 1 until the rule of
-  three allows a lower value (n = 50 at ε = 0.06).
-- **Content miss (R-18):** the response prediction stores the act's vector and, optionally,
-  the vector of a reply reasoning said it expected.
-  `miss = 1 − max(cos(reply, act), cos(reply, expected))`. It is flagged when its z-score
-  against the place's unrepaired replies exceeds `z_miss`. The event records who replied, the
-  latency share, the length and the distance; reasoning judges the kind of miss.
-- **Judged silence (R-19):** every `note` decision, and a seeded fraction ρ of `silent`
-  decisions, opens a prediction "someone else responds to the sender within expiry". It is
-  missed when no other actor's event is reply-linked or addressed to the sender in that time,
-  or when the sender posts again with cosine to the original ≥ `wake_gate_lo` and one
-  classification confirms it. A confirmed miss feeds learning.
+- **Kinds:** `effect`, `response`, `wait`, `promise`, `goal`, `monitor`, `pending_approval`.
+  Records carry plural **`places`** and **`people`**, optional `domain?`, `RecurrenceSpec` (`R-46`:
+  `cron`/`interval`, `coalesce_one`/`skip_to_next`, isolated from `promise_debt`), and `PromiseMeta`
+  (`promisee_ids`, `hard_deadline`, `depends_on?`, conflict marker, `R-49`).
+- **Timing & Grounding (A-08, R-08):** Shrinkage quantiles per `(place, medium)`; answering cues
+  include `done` receipt, addressee follow-up, or `continued_attention` (`A-01`).
+- **Agency (R-09, R-36):** Effect match checks correlation ID, self-actor, or `(channel,
+  [lat_min, lat_max], |Δ_obs − Δ_pred| ≤ k·σ_channel)` (`basis = self_caused`).
+- **Preemption Receipts & Promises (R-10, R-36, R-37, R-42, R-49):** `Receipt` keeps 5 outcomes
+  `{done, refused, held, failed, unknown}` (`ARCHITECTURE.md` L198) + additive `{termination_reason,
+  progress, delivered_units}` (`normal | canceled_by_core | preempted_external | timed_out`).
+  `held` enters non-retrying **`PendingApproval`** pinned to canonical `H_act` (`R-42`);
+  `canceled_by_core`/`preempted_external` do not trigger false retry storms or reliability loss;
+  `resolve` supports `{kept, kept_late, renegotiated, released, failed, cancelled, answered, reached}`.
+- **Content Miss & Judged Silence (R-18, R-19):** Unchanged wake gate (`q_0.10` / rule of three),
+  plus IPS `w_ips = min(M_ips, 1/ρ)` weighting on sampled judged silences.
 
-### 9. Thinking (§4, §11, §14; R-11, R-12, R-15)
+### 9. Thinking, Self-Card, Taint & Anchors (§4, §11, §14; A-01, A-10, A-11, R-11..15, R-35, R-43, R-48..49)
 
-**Thought acts (R-12):**
+- **Acts (A-01, A-11, R-12):** `think(thought, motivation 1–5, confidence_0_20, used_ids[],
+  importance?, basis?, value?, cost?, domain?)`, `act(..., expected?)`, `expect(kind, about_ids,
+  places, people, condition, due, expiry, recurrence?, promise_meta?)`, `resolve(id, outcome)`,
+  `revise(target_id, new_version)` + typed `consolidate` acts (`gist`, `lesson`, `procedure` with
+  `required_cap_ids`, `capability_schema_hash`). Strict nullable schemas (`R | null`).
+- **Calibrated Self-Report & Citation Lock (A-10, R-15):** Reasoning reports integer `[0, 20]`
+  mapped to `c_raw = k/20` and domain-calibrated (`P_rc` guarded `0/0 -> certainty_bar`; explicit
+  auto-recall query; emits `withheld` event with raw & calibrated numbers). `CitationLock` rejects
+  uncited or hallucinated `used_ids[]`.
+- **`ContextPlan`, Self-Card, Spotlighting & Anchor Checks (R-11, R-35, R-43, R-48, R-49):** Stable-
+  to-volatile slot order with **`IdentityAnchor` (`OwnerSigned`) in slot 0** (`[ANCHOR]`), sorted
+  capabilities + `capability_schema_hash`, compact ledgers + read-only **4-pillar `self_card`**
+  (`(α_c, β_c)`+latency, `[0,20]` Brier/ECE/`meta-d'`, headroom, claim contradictions), commitments,
+  Spotlighting delimiters isolating `[UNTRUSTED_QUOTED]` from `[TRUSTED]`/`[SYSTEM]`. Pre-act
+  **`[ANCHOR_CHECK]`**, **`PrincipleAudit`** (`R-48`), and **`CommitCheck`** (`R-49`) validate
+  identity adherence & promise non-conflict before external dispatch.
 
-- `think(thought, motivation 1–5, confidence, used_ids[], importance?, basis?, value?, cost?)`
-- `act(capability, place, audience, args, expected?)`, which opens the predictions of
-  Decision 8
-- `expect(kind, about_ids, condition, due, expiry)`
-- `resolve(id, outcome ∈ {kept, failed, cancelled, answered})`
-- `revise(target_id, new_version)`: may supersede memories, belief statements, expectation
-  conditions and times, and claims on the self card. It may not change log events, the
-  identity, credence counts or dispositions.
+### 10. Beliefs & Taint Provenance (§7, §14; A-01, A-12, R-17, R-20, R-21, R-32, R-34, R-43)
 
-`basis`, `value`, `cost` and `expected` are the fields that R-17, R-15 and R-18 need reasoning
-to supply.
+- **Basis & Provenance (A-01, R-17, R-43):** `told` items initialize via source `(α₀, β₀)` (`A-01`
+  fixes L56 vs L86); verbatim-vs-gist conflict verification runs in `reason` (`consolidate`), not
+  inside blind `core`; writes enforce skeptical corroboration (`k_corrob`) & min-trust taint
+  propagation (`min(trust)` on compaction so non-owners never launder trusted lessons).
+- **Domains & `hard_forget` (A-12, R-20, R-34):** Domains map via Hungarian-aligned centroids (`K`)
+  or explicit `domain?`. Peer conventions (`R-32`) never override safety doors or direct observations.
+  `hard_forget` atomically recomputes all surviving `(α, β)` counts cleanly (`R-34`).
 
-**Context (R-11).** The core builds a `ContextPlan`; `reason` renders it. Order, stable to
-volatile: identity; capabilities (sorted); cards of the people present and the self card;
-commitments and the active goal; the chain's working set (the soul's own thoughts and acts in
-full, the last M observations in full, older ones as id placeholders); the top-k recalled
-memories with basis and time; the last N events of the place; `<now>` with the model's
-knowledge cutoff; the trigger. The plan passes the context door before rendering.
+### 11. Sleep, Consolidation & Procedures (§12, §21, §25; A-04..06, A-11, A-12, R-22..24, R-38, R-40)
 
-Each wake is one fresh request with the five acts offered as tools. Tool results are never
-returned inside the same conversation: a receipt is an event and, through the circuit
-breaker, causes the next wake with a rebuilt context.
+- **Async Trigger & 3-State Lifecycle (A-01, A-04, A-05):** Runs asynchronously on immutable
+  `t_snapshot` when `unconsolidated ≥ N_min` (not `>`) and global idle `≥ T_idle`, with zero delay
+  on live events (`Δθ_sleep = 0`). Episodes transition **`{open, provisional, sealed}`** so pre-sleep
+  tails consolidate cleanly without spin loops and reopen (`superseded_by`) on seamless resumption.
+- **Normalized Boundaries, Merge, Clusters & Fade (A-01, A-06, A-12):** `PE_time`, `PE_content`, and
+  novelty are normalized to `[0, 1]` (`EM-LLM`, shrunk cold start); merging checks `places`, `J`,
+  and time intervals (`R-24`). Sleep warm-starts spherical k-means and applies **Hungarian matching**
+  with split/merge Beta fusion (`domains_updated`, `A-12`), and fades vectors on `B < −3.29` (`A-01`).
+- **Contrastive Lessons & Retireable Procedures (A-11, R-32, R-38):** Groups shared opaque error
+  signatures with contrastive successes for `lesson`s; traces cross-place `goal_id`/`caused_by`
+  chains into slot-parameterized `procedure`s tagged with `capability_schema_hash`, CUSUM drift
+  detection, retirement (never silent deletion), and **embodied-only** habit bypass (`allow_chat_habit_bypass = false`).
 
-- **Bars (§4):** on an unallocated turn a communicative act passes only if
-  `motivation ≥ speaking_bar` and `confidence ≥ certainty_bar`.
-- **Report control (R-15):** `P_rc = max(certainty_bar, cost / (value + cost))`. If
-  `confidence < P_rc`: run `memory.recall` and wake again, up to `n_recall` times; then the
-  plan asks for a coarser grain (exact time → day → period; name → "someone in the group";
-  number → range); an answer still below `P_rc` is withheld.
-- **Purposes:** `reason` (all five acts), `consolidate` (think and revise only), `classify`
-  (verdict only).
+### 12. Ledger & Sign-Corrected Bounded Learning (§18, §8; A-01, A-13, R-19, R-25, R-26, R-35, R-36)
 
-### 10. Beliefs (§7, §14; R-17, R-20, R-21)
+- **Ledger & 4-Pillar `self_card` (A-01, R-25, R-35):** Compact per-actor cards (`tick` wakes
+  include promisees alongside trigger audience) plus event-derived 4-pillar `self_card` (`R-35`)
+  supporting deterministic confidence recalibration at external doors.
+- **Sign-Corrected & Preemption-Guarded Delta Rule (A-01, R-19, R-26, R-36):**
+  Target **`r = 1`** for `{good_act, missed_silence}` and **`r = 0`** for `{bad_act, answered_silence}`
+  (fixing the `R-19+R-26` sign inversion), scaled by Gateway `teacher_weight` and clipped IPS
+  `min(M_ips, 1/ρ)`. **Critical Guard:** `canceled_by_core` and `preempted_external` receipts (`R-36`,
+  `R-37`) NEVER count as failures in `(α_c, β_c)` or weight updates. `wake_gate_lo` uses shrunk `q_0.10`.
 
-- **Basis (R-17)** belongs to beliefs and memories, not to events. The event "X said P" is
-  observed; P is told by X. Reasoning assigns the basis in `think`; the core downgrades
-  `observed` to `inferred` when the belief's links do not reach percepts the soul witnessed.
-  Sensor readings are observed; another agent's message is told.
-- **Validity:** `revise` and consolidation write `belief_changed` with `valid_to` and
-  `superseded_by`. Nothing is rewritten. Times are stored absolute; relative wording is
-  produced when rendering, against `<now>`.
-- **Credence (R-20):** (α, β) per belief. An outcome credits only the items in the `used_ids`
-  of the think that made the decision. Once per period the counts relax toward the prior:
-  `α ← α₀ + (α − α₀)·λ^Δ`, likewise β.
-- **Reliability (R-21):** (α, β) per (actor, domain), starting from the actor's supplied prior
-  or Beta(1, 1). A domain is an opaque id: the nearest of K vector centroids recomputed during
-  sleep and recorded as `domains_updated`, or an id supplied from outside or by reasoning.
+### 13. Structural Privacy, Erasure & Trust Doors Inside Core (R-33, R-34, R-43, R-48)
 
-### 11. Sleep (§12, §21, §14; R-22, R-23, R-24)
+Replaces the provisional departure from `ARCHITECTURE.md`: even inside standalone Lab runs, `Core`
+enforces pre-Step-5 **`VisibleScope`** projection (`Δ_NI = 0` via `DeclassToken` isolation, `R-33`),
+atomic **`hard_forget`** (`SQLite secure_delete` + FTS5 + `Two-Epoch Replay`, `R-34`), monotonic
+`origin_actor` & min-trust taint propagation + `ContextPlan` Spotlighting (`R-43`), and
+**`OwnerSigned`** identity locks (`R-48`). Runtime multi-actor `cedar-policy` bundles and `H_act`
+interactive approvals live cleanly across Waist 1 in sibling change `waist-valve-and-bodies`.
 
-- **Trigger (R-22):** no event anywhere for `T_idle` and at least `N_min` unconsolidated
-  events. Consolidation runs as background work.
-- **Boundaries (R-23):** per place, `s_t = max(PE_time, PE_content, novelty)` with
-  `novelty = 1 − cos(event, centroid of the open episode)`. A boundary falls where
-  `s_t > μ_t + γ·σ_t` over the last w events. Without vectors: participant-set Jaccard < 0.5,
-  a gap above the place's 95th percentile, or a prediction miss.
-- **Products (R-22),** each linked to its source ids: a **gist** (a summary of one episode
-  written by reasoning, basis inferred); a **lesson** (a situation, action and outcome,
-  written when two or more episodes share a prediction error, with credence); a **procedure**
-  (an action sequence that reached a goal, with credence, recallable as a skill).
-- **Merging (R-24):** same place, participant Jaccard ≥ J, and time intervals that overlap or
-  fall within the place's gap threshold. Vector similarity alone never merges.
-- **Fading (§5):** events with `A < fade_threshold` get `vector_released`.
-- **Domains (R-21):** the K centroids are recomputed during sleep.
-- Progress is the `episode_closed` and `sleep_run` events, so a stopped run resumes without
-  repeating an episode.
+### 14. `reason`: Unified `EmbeddingGemma 2` & Strictly Typed Adaptation (A-10, A-13, A-15, R-37)
 
-### 12. Ledger and learning (§18, §8; R-25, R-26)
+Blocking HTTP (`ureq`) or local ONNX/LiteRT runner; `openai-compatible` chat/tools with strict
+nullable JSON schemas (`R | null`, `A-10`) and `[0, 20]` anchored confidence prompts.
+- **Default Gateway Embedder (`EmbeddingGemma 2`, `256d` MRL, Apache 2.0, `arXiv:2610.37364`):**
+  Maps text, images, and `audio_voice` into one `256d` vector space with mandatory task instruction
+  prefixes (`t_clf`, `t_sts`, `t_q`/`t_d`), tagged by `(embed_model_ver, dim_d, prompt_regime_id)`
+  so incompatible v1 (`EmbeddingGemma-300M`, kept for Lab ablation) and v2 vectors never mix.
+- **`A-14` Contrastive Head & Blind `AttachmentHandle`s:** Runs `dialogue_act_gap` at `O(d)` and
+  resolves permitted `AttachmentHandle`s into multimodal provider requests strictly *after*
+  `VisibleScope` & `Valve` checks (`R-37`).
 
-**Ledger (R-25).** A card holds: what the source witnessed (event ids, last-seen time per
-place); what the soul told it and whether that was grounded; its open requests; and what
-changed since it last witnessed (candidate false beliefs). "Witnessed" is the audience fact
-the body reports. One compact card per person present, with second-order facts only for the
-soul's own claims; at most `ledger_items` entries per field. The self card holds what the soul
-said, promised and claimed, to whom, and what its bodies can do now.
+### 15. Lab: Full 22-Row Suite, Paired Power, Pareto & Core TCK Hooks (A-02, A-15, A-16, R-39, R-50)
 
-**Learning (R-26).** Each kind has its own switch and is off unless switched on.
-
-- *Outcome:* r = 1 when a response prediction was answered in time with no miss or repair, or
-  an effect prediction matched; r = 0 on absence, a miss, a repair, a failed receipt, a
-  negative flag from the body, or a missed judged silence.
-- *What learns from what:* salience weights and threshold terms from outcomes; timing from
-  latencies (Decision 8); the wake band from classifier verdicts.
-- *Weights:* `w ← clamp(w + learning_rate·(r − P)·s)`, scaled by the teacher weight of the
-  actor involved.
-- *Bounded updates (§8):* move only when the 95% interval excludes "no change"; each step a
-  small share of the range; at most 5% of the range per day; floor, ceiling, freeze and
-  report.
-- *Scoped values:* per-place and per-source offsets keyed by opaque ids, learned by the same
-  bounded rule from everyone's outcomes.
-- *Band:* `wake_gate_lo` moves toward the lowest positively classified m minus `margin`,
-  inside its bounds.
-- Every change is a `learning_change` event with its delta; `rollback` records the reversing
-  deltas.
-
-### 13. Doors without a valve
-
-The three doors are hook points in the core's turn, and `origin_actor`, `caused_by` and
-audiences are recorded on every event. No rule ships in the core. The Lab installs one rule at
-the context door, the cost guard (run token limit, chain wake limit).
-
-**Departure from `ARCHITECTURE.md`:** the two absolute lines are not built in this change. The
-document is left unchanged; the lines arrive with the policy change (R-33). The Lab reports
-how many items from a narrower audience reach a wider context, as the baseline that change
-must beat.
-
-### 14. `reason`: providers without a runtime (R-13)
-
-Blocking HTTP (`ureq`), no async runtime. `openai-compatible` speaks chat completions with
-tools; `scripted` returns prepared outputs. Embedders: `none`, `hash`, `openai-compatible`,
-`scripted` (maps a scenario's concept labels to vectors).
-
-The reference embedding model is EmbeddingGemma-300M, truncated to 256 dimensions and
-re-normalized in `reason` (R-13). Vectors are stored with their events and tagged with model,
-dimension and quantization; vectors with different tags are never compared, and the tag is in
-every run record. The `hash` embedder is the lexical fallback; it lives in `reason`, never in
-the core.
-
-Secrets come from `MONOAGENS_MODEL_BASE_URL`, `MONOAGENS_MODEL_API_KEY`,
-`MONOAGENS_EMBEDDING_BASE_URL`, `MONOAGENS_EMBEDDING_API_KEY` or a `secrets.toml` with
-owner-only permissions.
-
-### 15. Lab: a discrete-event simulation of the world
-
-The driver keeps a queue ordered by virtual time: scripted steps, body receipts and follow-up
-percepts, model results (scheduled at request time plus a scripted or measured latency) and
-`next_due()`. It pops one item, calls `Core::step`, and schedules the effects. Single thread,
-no real waiting.
-
-- **Scenario (TOML):** soul (identity, seed, actor facts, limits), test bodies (places,
-  actors, capabilities with latency and effect declarations, scripted receipts and follow-up
-  percepts), timed steps with their reportable facts and concept labels, scripted model
-  outputs keyed by trigger and purpose, SPEAK / SILENT annotations (R-27), tagged checks.
-- **Soul directory:** `soul.toml` and `log.db`.
-- **Commands** (`monoagens-lab`): `run`, `compare`, `coverage`, `calibrate`, `mechanisms`,
-  `log`, `explain`, `replay`, `talk`.
-- **Ablation (R-01):** each side runs with at least five seeds; every metric is reported with
-  a confidence interval and the cost. Rows 6, 11 and 22 of the brain map are tested first.
-- **Calibration (R-03):** `calibrate` computes, on the development set only and per embedder:
-  `fok_threshold` (median of A*), `fok_scale` (IQR(A*)/2.7), `wake_gate_lo` (95th percentile
-  of cosine over unrelated pairs) and its bounds (80th and 99.5th percentiles).
-- **Transcript baseline (R-11):** `baseline` runs a scenario with the context replaced by the
-  full transcript, including a restart in mid-task, and reports success, tokens and cache
-  share for both.
-- **Run record:** one JSON file per run in `lab/runs/`.
-- **Sealed set:** loaded, reported in aggregate only; the directory ships empty with a note.
+Discrete-event virtual-time simulator driving real `Core::step` via `TestBody` (routed over canonical
+Waist-2 schema shapes, `R-50`), plus `monoagens-lab` CLI (`run`, `compare`, `coverage`, `calibrate`,
+`mechanisms`, `baseline`, `pareto`, `tck-core`, `log`, `explain`, `replay`, `talk`):
+- **All 22 Brain-Map Metrics + `tasks.md` 10.5 (`A-02`):** Adds missing per-row metrics (floor
+  violations/100, wakes/event, promises kept/kept-late/broken/repair, ECE/Brier, detail-without-R,
+  stale-belief leak, self-echo reaction rate, boundary F1, sleep-spin count = `0`, `Δ_NI = 0`).
+- **Paired NI & Benchmarks (`A-15`, `A-16`, `R-39`):** Evaluates 5 domains + Indonesian/`MultiLexNorm`/
+  `IndoCollex` suites via unified **`BaselineAdapter`** on Pareto (accuracy vs tokens/latency) fronts,
+  sizing comparative rebuilt-context vs transcript trials (`Arm T`) at **$S \ge 354\text{--}471$**
+  cluster-paired scenarios including thinking-model stratification (`A-16`).
+- **Core TCK Hooks (`R-50`):** Exposes black-box `C-MUST-01` (`Δ_NI = 0`), `C-MUST-02` (`hard_forget`
+  0-byte/0-backflow), `C-MUST-03` (bit-exact determinism), and `C-MUST-04` (10k-tick neutral soak).
 
 ### 16. Tests in layers, with time budgets
 
@@ -415,68 +357,66 @@ no real waiting.
 
 A budget overrun is a defect. The `feeling_of_knowing` probe is benchmarked at 10⁵ events.
 
-### 17. Two stages, each closed by evidence
+### 17. Four interleaved phases, each closed by evidence (R-50)
 
-- **Stage A, foundation:** loop, log, base gate, recall, base expectations including promises
-  and goals, thinking, store, `reason`, Lab. Closed by the foundation scenarios passing
-  scripted and live, an ablation report and the transcript comparison.
-- **Stage B, wave 1:** each mechanism lands with its row of the brain map, its development
-  scenario and an ablation difference. Closed by a second ablation report and live run.
+Aligned with Run-2's 4-phase standardization schedule across `core-and-lab` + `waist-valve-and-bodies`:
+- **Phase 0 (Waist Freeze):** Finalize `monoagens.core.v1` and `monoagens.body.v1`; route `TestBody`
+  through canonical Waist-2 JSON-RPC codecs (`0` shortcut structs).
+- **Phase 1 (Minimum Viable Loop + Foundation):** Loop, log, base gate, recall, promises/goals,
+  thinking, SQLite+`usearch` store, `reason`, `Lab`, paired with minimal `Gateway`/`Valve` +
+  `body-cli` + `body-mcp-bridge` + `monoagens-conformance v0.1`. Closed by foundation scenarios,
+  Core/Body TCK `MUST`, and `BaselineAdapter` transcript comparison.
+- **Phase 2 (Cognitive Depth Behind Frozen Waists):** All 22 brain-map mechanisms (`R-01`–`R-49`)
+  landed & ablated (`compare`, 5+ seeds), Indonesian/`MultiLexNorm` evaluation (`A-15`), paired
+  `S >= 354–471` NI check (`A-16`), and Pareto live runs (`R-39`) with `0` breaking Waist-2 changes.
+- **Phase 3 (Cross-Body & Multi-Core Matrix):** Multimodal/embodied verification + 2nd Core interop.
 
 A row whose ablation changes nothing beyond seed noise is listed for the owner; removing it is
 the owner's decision.
 
-### 18. The brain map (R-01)
+### 18. The brain map (A-01, R-01)
 
-The closed list of the core's functions for §1–21. A row is one studied brain function,
-implemented by one mechanism that reuses existing primitives, with a neutral value reachable
-by a parameter and a claim an ablation can falsify. Engineering concerns (§9–11, §13, §16)
-get no row. The registry in `registry.rs` holds exactly these rows; a row without a claim does
-not compile.
+The closed list of the core's cognitive mechanisms behind Waist 1. Every row has an exact reachable
+neutral value (`w_sc = 0`, `a = 0`, `w_B = 0`, etc.) and an explicit falsifiable metric in `lab`.
 
 | # | Function | Mechanism | Neutral value | Worse without it | § |
 |---|---|---|---|---|---|
 | 1 | Salience | weighted signals → S | all wₖ = 0 | when-to-speak recall, missed help | 2, 3 |
-| 2 | Floor cost | `social_cost` | w_sc = 0 | taking others' floors | 2, 15 |
-| 3 | Habituation | S / (1 + κh) | κ = 0 | wakes per repeated inconsequential stimulus | 3 |
-| 4 | Drive threshold | θ terms a, b, c | a = b = c = 0 | rate against 1/n; budget overruns; overdue promises | 3 |
+| 2 | Floor cost | `social_cost` (R-29 `deg` + `answered`) | w_sc = 0 (reachable) | floor violations per 100 | 2, 15 |
+| 3 | Habituation | partitioned `h_{(p,k)}`, post-eval `S/(1+κh_pre)` | κ = 0 | wakes per repeated inconsequential stimulus | 3 |
+| 4 | Drive threshold | θ terms a, b, c + opportunity costs (R-31) | a = b = c = 0 (reachable) | rate vs 1/n; budget overruns; overdue promises | 3 |
 | 5 | Familiarity reserve | r·(1 − familiarity) | r = 0 | false speaks in new places | 3, 15 |
-| 6 | Stochastic go / no-go | seeded σ draw | τ → 0 | distance to human timing | 3 |
+| 6 | Stochastic go / no-go | seeded σ draw + τ→0 step limit | τ → 0 (`S_eff >= θ`) | distance to human timing | 3 |
 | 7 | Commitment breaker | bypass on turn, expectation, goal | off | unanswered allocated turns | 3, 15 |
-| 8 | Patience | `wait` expectation | 0 s | double answers | 4 |
-| 9 | Report bar on thought | speaking and certainty bars | 1 and 0 | low-value messages | 4 |
-| 10 | Activation recall | B + context + importance | similarity only | recall at 7 and 30 days | 5 |
-| 11 | Vector fade | release low-A vectors | threshold −∞ | storage and latency | 5 |
-| 12 | Prediction and grounding | predictions after acts and chosen silences | none | unnoticed non-uptake | 6, 17, 20 |
-| 13 | Prospective memory | typed promise lifecycle | left to reasoning | promise keeping | 6 |
-| 14 | Credence | beta counts | frozen | calibration | 7 |
-| 15 | Bounded learning | delta rule | `learning_rate` = 0 | no improvement over weeks | 8 |
-| 16 | Memory truth | basis; recollection test; event beats gist; `valid_to` | each off | misattribution; confabulation; lures; stale beliefs | 12, 14 |
-| 17 | Report control | P_rc against confidence, grain | P_rc = 0 | wrong volunteered answers | 14 |
-| 18 | Consolidation and merge | idle gists; merge on people, place, time | none; never | 30-day recall; blended memories | 12, 14 |
-| 19 | Perception ledger | per-source cards and self card | absent | false-belief errors | 18 |
-| 20 | Agency | effect predictions | no marking | reactions to own echoes | 19 |
-| 21 | Event boundaries | surprise spike | fixed interval | boundary F1 | 21 |
-| 22 | Backlog chunking | one appraisal per place | per event | bursts after downtime | 15 |
+| 8 | Patience | shrunk quantile `wait` expectation (A-08) | 0 s | double answers / floor collisions | 4 |
+| 9 | Report bar on thought | speaking & certainty bars (`withheld` logged) | 1 and 0 | low-value messages | 4 |
+| 10 | Activation recall | `w_B·B + context + importance` (A-01) | `w_B = 0` (similarity only) | recall at 1/7/30 days | 5 |
+| 11 | Vector fade | release vectors where Petrov `B < -3.29` | threshold −∞ | storage and query latency | 5 |
+| 12 | Prediction and grounding | predictions after acts and chosen silences | none | unnoticed non-uptake / missed silences | 6, 17, 20 |
+| 13 | Prospective memory | typed promise + `RecurrenceSpec` + `CommitCheck` | left to reasoning | promise keeping & conflict rate | 6 |
+| 14 | Credence | beta counts (`told` incl. + `λ_domain`) | frozen | Brier / ECE calibration | 7 |
+| 15 | Bounded learning | sign-corrected & IPS-weighted delta rule | `learning_rate` = 0 | learning plateau over weeks | 8 |
+| 16 | Memory truth | basis; dual-process R/F; event beats gist; `valid_to` | each off | misattribution; confabulation; lures; stale beliefs | 12, 14 |
+| 17 | Report control | `0/0`-guarded P_rc vs `[0,20]` c, grain | P_rc = 0 | wrong volunteered answers | 14 |
+| 18 | Consolidation and merge | async `{open,provisional,sealed}` gists; overlap merge | none; never | 30-day recall; spin loops; blended memories | 12, 14 |
+| 19 | Perception ledger | promisee-aware cards & 4-pillar `self_card` (R-35) | absent | false-belief errors & self-claim contradictions | 18 |
+| 20 | Agency | `(channel, Δ_obs, Δ_pred)` effect predictions | no marking | reactions to own echoes | 19 |
+| 21 | Event boundaries | `[0,1]` normalized EM-LLM surprise + shrinkage | fixed interval | boundary F1 | 21 |
+| 22 | Backlog chunking | `stopped/down`-only chunking (`Δθ_sleep = 0`, A-04) | per event | bursts after downtime; sleep responsiveness | 15 |
 
-Run 1 expects rows 6, 11 and 22 to be the likeliest to show no effect.
+### 19. Open points resolved by Run 2 & remaining Lab calibration
 
-### 19. What is still open
+All 16 Open Notes (`A-01`–`A-16`) and Round-2 questions (`R-29`–`R-50`) from `research/researcher-prompt-2.md`
+are now folded into `core-and-lab` and sibling `waist-valve-and-bodies`. Remaining items strictly
+requiring runtime hardware profiling or empirical Lab sweeps stay explicitly non-blocking and unguessed:
 
-`research/backlog.md` tracks each question's status. Everything below is in research brief 2
-(`research/researcher-prompt-2.md`); its findings enter the changes after this one. After run 1:
-
-| Open point | Effect on this change |
+| Remaining empirical point | Status & handling |
 |---|---|
-| R-06: which annotated corpus supplies the `info_gap` references, and whether one set serves all languages | `info_gap` is built with no reference set and `w_info` = 0; the set arrives with the next change |
-| Open notes inside accepted findings (for example: averaging or minimum in R-04; max or noisy-OR in R-14; whether the act vector stands in for the expected reply in R-18; λ per domain in R-20; K in R-21; lesson thresholds in R-22; γ per medium in R-23; J in R-24; teacher weights in R-26) | built as run 1 states; each is a disposition to sweep in the Lab, not a decision of this design |
-| With κ = 1, `S_eff = S / (1 + κ·h)` halves even a first stimulus (h = 1), so `S_eff` ≤ 0.5 while θ₀ ranges from 0.35 to 0.85. Run 1 gives κ a neutral value but does not say whether a first stimulus should be reduced | built as run 1 states; raised with the researcher, because at default dispositions an unaddressed event may rarely reach the threshold |
-| Whether sleep closes an episode that has no boundary yet | not stated by R-22 or R-23; consolidation covers closed episodes only until a finding says otherwise |
-| How reasoning should estimate value and cost for report control (R-15) | the fields exist; their use is measured live |
-| Four citation details (R-28) and the corrections to `RESEARCH.md` listed in run 1 | documents only |
-| R-29 to R-34 partly answered; R-32, R-35 to R-38, R-40 not reached | block nothing here; needed for the changes that follow |
-
-Nothing in this table is to be settled from a worker's own judgement.
+| `EmbeddingGemma 2` (`439M`/`577M`/`740M` int4/int8) edge latency + Indonesian/Gaul `256d` vs `512d` curve (`A-15`, `R-37`) | Built with `EmbeddingGemma 2` `256d` + `embed_model_ver` tag; Gateway profiles target CPUs and sweeps `MultiLexNorm`/`IndoCollex` in Lab |
+| Indonesian + code-mixed `VAP` (`τ_barge`, `θ_turn_end`) & owner hourly approval cap `B_hr` (`R-37`, `R-42`) | Bounded prior defaults shipped; tuned via Lab calibration (`B_hr` warning-fatigue sweep) |
+| Comparative `S >= 354–471` non-inferiority & 5-domain Pareto scoreboard (`A-16`, `R-39`) | `lab/src/baseline.rs` + `pareto.rs` execute on explicit request once core & bodies are built |
+| Post-`hard_forget` rollback-replay vs freeze for order-dependent adaptive weights (`R-34`) | `Two-Epoch Replay` freezes pre-forget weights at the epoch snapshot unless explicit full-replay flag is selected |
+| Any mechanism whose Run-2 ablation shows no effect beyond seed noise (`R-01`, `A-02`) | Flagged in `lab/runs/reference/` for owner pruning |
 
 ## Risks / Trade-offs
 
@@ -490,15 +430,17 @@ Nothing in this table is to be settled from a worker's own judgement.
   per event.
 - [Scripted model outputs cannot show that a real model uses labels, cards and bars well] →
   Scripted runs prove the core's side; live runs measure the model's side as wording checks.
-- [Rules written for chat may not carry to other bodies: `social_cost`, exchanges] → Run 1
-  flags them as chat-centred until graded address (R-29); the device scenario keeps a
-  non-chat body in every run.
-- [Nothing but cost is restricted, and gate signals read private memories (R-33)] → Lab only;
-  stated in the proposal and the README; the leak baseline is measured.
-- [A row may show no measurable effect and be removed] → Expected by the architecture.
-- [Projections and vectors live in memory] → Fine to about 10⁵ events; question R-40.
-- [The researcher could not read this repository] → Run 1 was written without Decision 17 of
-  the earlier draft; this design adopts its map as given rather than merging the two.
+- [Rules written for chat may not carry to physical/continuous bodies] → Continuous `deg(e, l)`
+  (`R-29`), partitioned `h_{(p, k_src)}`, `f_modal` acoustic slots, and Tier-1 filtering (`R-36`,
+  `R-37`) generalize cleanly while remaining algebraically neutral in `chat-only`.
+- [Private items could bias Step-4/5 urgency even when omitted from prompts (`R-33`)] → Fixed by
+  enforcing pre-Step-5 `VisibleScope` projection (`Δ_NI = 0`) and explicit `DeclassToken` logging.
+- [Memory growth over multiple years] → Solved by segmented `hot.db` + read-only sealed shards +
+  `usearch` HNSW + `postcard`/`minicbor` snapshots (`R-40`) + `B < -3.29` vector fading (`A-01`).
+- [A row may show no measurable effect and be removed] → Expected by `ARCHITECTURE.md`; verified across
+  22 explicit metrics (`A-02`) and `S >= 354–471` paired power (`A-16`).
+- [Deferring real bodies until all 22 rows finish risks late Waist breakage (`R-50`)] → Resolved by
+  co-evolving `waist-valve-and-bodies` alongside `core-and-lab` across Phases 0–3.
 
 ## Migration Plan
 

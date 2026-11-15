@@ -17,8 +17,15 @@ none is given at first start, a default identity SHALL be created and recorded.
 - **THEN** a default identity is recorded and used
 
 ### Requirement: The identity has one source
-The identity SHALL have exactly one source, given from outside the core when the soul starts.
-What the soul learns SHALL NOT be written into the identity.
+The soul identity SHALL originate strictly from an external `OwnerSigned` configuration (`origin_actor == owner`) placing an opaque `IdentityAnchor` and immutable `PrincipleDescriptor`s in prompt slot 0. Online learning, sleep consolidation, and `revise` acts SHALL NEVER mutate core identity or principles.
+
+#### Scenario: Untrusted peer cannot drift slot-zero identity or principles
+- **WHEN** an untrusted peer or model output attempts to alter persona traits or override `PrincipleDescriptor`s
+- **THEN** slot-0 `IdentityAnchor` remains unchanged and `AnchorCheck` or `PrincipleAudit` flags or blocks identity drift
+
+#### Scenario: Learning and sleep leave owner-signed identity intact
+- **WHEN** bounded learning updates weights or sleep consolidates semantic beliefs
+- **THEN** `OwnerSigned` identity and `PrincipleDescriptor`s remain byte-for-byte untouched
 
 #### Scenario: The identity is edited between runs
 - **WHEN** the persona given at start differs from the last recorded one

@@ -22,9 +22,11 @@ the provider or the model SHALL require settings only.
 - **THEN** the same scenario runs against the new model with no other change
 
 ### Requirement: A provider's output becomes thought acts or a thought
-A provider SHALL translate the model's output into protocol thought acts. Output that contains
-no act SHALL become a single thought. Output that cannot be translated SHALL be reported as a
-failed wake with the reason.
+A provider SHALL enforce strict nullable schemas (`R | null`) and translate output into typed thought acts—including `[0, 20]` anchored confidence, balanced `1–5` motivation, and `consolidate` acts (`gist`, `lesson`, `procedure`)—falling back to one thought on act-less text or reporting malformed output as a failed wake.
+
+#### Scenario: Typed consolidate act and nullable field decode cleanly
+- **WHEN** a model emits a typed `consolidate` act or explicit `null` optional fields under `R | null` schema
+- **THEN** the provider decodes the typed payload or rejects schema violations as a failed wake with diagnostic reason
 
 #### Scenario: Several acts in one output
 - **WHEN** the model returns a thought, an action and an expectation together
@@ -43,9 +45,15 @@ content from sources other than the soul as quoted data and stating times as abs
 - **THEN** the two requests are identical
 
 ### Requirement: Embeddings are interchangeable and optional
-Vectors SHALL be produced through one embedding interface with at least: none, a deterministic
-offline embedder, an OpenAI-compatible embedder and a scripted embedder for the Lab. With none
-selected the soul SHALL still run.
+Vectors SHALL flow through one embedding interface defaulting to unified Apache 2.0 `EmbeddingGemma 2` (`256d` MRL, `8K` context) across text, image, and `audio_voice` modalities, alongside `none`, deterministic offline, OpenAI-compatible, scripted Lab, and `EmbeddingGemma-300M` ablation providers plus a frozen `A-14` `dialogue_act_gap` logistic head.
+
+#### Scenario: Frozen dialogue-act gap scorer operates independently of none embeddings
+- **WHEN** an epistemic information-gap check scores a percept while main embeddings are `none`
+- **THEN** the frozen logistic `(w_gap, b_gap)` scorer still produces a bounded gap probability without blocking the loop
+
+#### Scenario: Attachment handle media resolves only after access checks
+- **WHEN** a multimodal percept carries an `AttachmentHandle`
+- **THEN** `reason` resolves the referenced bytes only after `VisibleScope` projection and door (`Valve`) authorization pass
 
 #### Scenario: No embedder
 - **WHEN** no embedding provider is selected
@@ -56,8 +64,11 @@ selected the soul SHALL still run.
 - **THEN** the event is processed without a vector and the failure is recorded
 
 ### Requirement: Vectors of different embedders are never compared
-Each stored vector SHALL be tagged with the embedder that produced it, and similarity SHALL be
-computed only between vectors of the same embedder.
+Every stored vector SHALL record `(embed_model_ver, dim_d, prompt_regime_id)` and apply mandatory task instruction prefixes (`t_clf`, `t_sts`, `t_q`, `t_d`). Similarity search SHALL strictly partition and compare vectors only when all three tuple components match.
+
+#### Scenario: Asymmetric task prefixes partition by version, dimension, and regime
+- **WHEN** `t_q` queries search stored `t_d` vectors across mixed embedder versions or dimensions
+- **THEN** the index filters strictly to matching `(embed_model_ver, dim_d, prompt_regime_id)` partitions before computing similarity
 
 #### Scenario: The embedder is changed
 - **WHEN** a soul with stored vectors is run with a different embedder

@@ -27,14 +27,14 @@ witnessed. That a source said something is itself observed; what it said is told
 - **WHEN** reasoning records a conclusion through think or sleep derives one
 - **THEN** the belief's basis is inferred
 
-### Requirement: Verbatim and gist are kept in parallel and the record wins
-Recorded events are the verbatim trace and summaries are the gist trace. Both SHALL be kept.
-When a gist conflicts with the events it was made from, the events SHALL prevail and the gist
-SHALL be superseded.
+### Requirement: Verbatim and gist are kept in parallel and consolidation verifies conflicts
+Recorded events are the verbatim trace and summaries are the gist trace; both SHALL stay intact.
+During `consolidate` (`reason`, not inside blind core, `A-01`), details absent from source events
+cause the gist to be superseded.
 
 #### Scenario: A summary says more than happened
-- **WHEN** a summary states a detail that its source events do not contain and the detail is checked
-- **THEN** the source events are what recall presents as recollected, and the summary is superseded
+- **WHEN** consolidation detects a summary stating a detail absent from its linked source events
+- **THEN** the summary is superseded and recall presents the source events as recollected
 
 ### Requirement: A belief has a validity that can end
 A belief SHALL carry the time it is valid from and, once replaced, the time it stopped being
@@ -52,11 +52,14 @@ when an item is shown, against the current time.
 - **WHEN** an item recorded seven days ago is shown
 - **THEN** it carries its absolute time, and any relative wording says seven days ago
 
-### Requirement: Credence is counted evidence
-Lessons, procedures and inferred beliefs SHALL carry credence as two evidence counts, starting
-from a prior. A confirmed outcome SHALL raise the first count and a failed one the second, only
-for the items that the deciding thought cited as used. Old evidence SHALL relax toward the
-prior at a configured rate. The expected credence is the first count over their sum.
+### Requirement: Credence is counted evidence across inferred, told, and procedural items
+Told assertions (initialized from source reliability prior, `A-01`), lessons, procedures, and
+inferred beliefs SHALL hold `(α, β)` counts updating on cited outcomes, decaying toward prior at
+`λ_domain`, recomputable cleanly on `hard_forget` (`R-34`).
+
+#### Scenario: A told assertion initializes from source prior
+- **WHEN** a source tells the soul a claim in a domain where it holds prior `(α₀, β₀)`
+- **THEN** the resulting belief starts at that `(α₀, β₀)` count instead of missing credence
 
 #### Scenario: A lesson is confirmed repeatedly
 - **WHEN** decisions that cited a lesson have good outcomes five times in a row
@@ -74,16 +77,18 @@ prior at a configured rate. The expected credence is the first count over their 
 - **WHEN** no new evidence arrives for a long time
 - **THEN** the counts move toward the prior
 
-### Requirement: A source's reliability is learned per domain
-The soul SHALL keep, per source and per domain, evidence counts of whether what that source
-told it turned out right. A domain SHALL be an opaque id: the nearest of a set of vector
-clusters recomputed during sleep, or an id supplied from outside or by reasoning. The starting
-prior for a source SHALL be supplied from outside the core as numbers, and SHALL be uniform
-when none is supplied.
+### Requirement: Source reliability is domain-aligned and corruption-resistant
+Source reliability `(α, β)` SHALL track per `(source, domain)` using external domains or
+Hungarian-aligned sleep centroids (`A-12`). Uncorroborated single-stranger claims (`< k_corrob`),
+untrusted taint (`R-43`), and discounted conventions (`R-32`) SHALL NOT bypass direct observation.
 
 #### Scenario: A source is often wrong about one thing
-- **WHEN** several things a source said in one domain are later contradicted by what the soul observes
-- **THEN** new told items from that source in that domain start with lower credence, and its items in other domains do not
+- **WHEN** several things a source said in one domain are later contradicted by direct observations
+- **THEN** new told items from that source in that domain start with lower credence while other domains stay unaffected
+
+#### Scenario: Taint propagation and skeptical corroboration stop memory poisoning
+- **WHEN** an untrusted actor asserts a novel rule repeated only once without `k_corrob` independent sources
+- **THEN** the claim keeps untrusted `taint`, never upgrades to trusted basis, and never overrides direct observation or safety doors
 
 #### Scenario: No prior is supplied
 - **WHEN** a source appears with no prior supplied

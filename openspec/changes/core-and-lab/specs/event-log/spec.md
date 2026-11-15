@@ -13,7 +13,28 @@ written to the log before it is handed to a body.
 
 #### Scenario: A crash after recording loses nothing
 - **WHEN** the process stops after an event was recorded and before it was processed
-- **THEN** on the next start the event is in the log and is processed
+- **THEN** on the next `Core::open` start the event is discovered in the unconsumed tail and processed
+
+### Requirement: Structured event catalog including withheld, feedback, and erasure
+The append-only log SHALL record 29 canonical event kinds, including `withheld` silence outcomes, asynchronous `action_feedback` updates, and authorized `hard_forget` erasure tombstones, enabling deterministic replay and causal audit without implicit external state.
+
+#### Scenario: Deliberate silence and late feedback are logged
+- **WHEN** appraisal withholds speech or a body emits delayed delivery `action_feedback`
+- **THEN** the log appends a typed `withheld` or `action_feedback` event preserving turn correlation
+
+### Requirement: Segmented storage, sealed shards, and checksummed snapshots
+The store SHALL partition active writes into WAL-mode `hot.db` and seal older windows into read-only temporal shards alongside filtered `usearch` HNSW vector indices and `blake3`-checksummed `postcard` or `minicbor` snapshots, recovering unconsumed tails inside `Core::open`.
+
+#### Scenario: Startup verifies snapshot and replays only tail events
+- **WHEN** `Core::open` initializes storage with a valid snapshot and unconsumed `hot.db` events
+- **THEN** the store verifies the `blake3` checksum, loads the snapshot, and replays only tail events after the checkpoint cursor
+
+### Requirement: Authorized hard-forget atomic erasure
+As the sole explicit exception to append-only immutability, an authorized `hard_forget` command SHALL atomically scrub matching event, episode, and FTS5 records using SQLite `PRAGMA secure_delete = ON` and FTS5 `'secure-delete'=1`, rebuild `usearch` indices, and write a post-erasure snapshot anchored by Two-Epoch Replay.
+
+#### Scenario: Hard-forget permanently scrubs matching records
+- **WHEN** an authorized `hard_forget` command targets an event or entity identifier
+- **THEN** SQLite secure deletion, FTS5 purge, vector removal, and post-erasure snapshot checkpointing complete atomically so erased content cannot resurrect on replay
 
 #### Scenario: A failed write prevents the act
 - **WHEN** writing an action to the log fails

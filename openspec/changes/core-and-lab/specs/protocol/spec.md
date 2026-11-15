@@ -8,11 +8,9 @@ reaches the core.
 
 ## ADDED Requirements
 
-### Requirement: Six facts describe every body
-The protocol SHALL define exactly six facts: actor (who caused an event), place (where it
-happened and where an action lands), audience (who could perceive it), event (what happened),
-capability (what a body can do) and receipt (the outcome of an action). Every message that
-crosses a layer boundary SHALL be expressed in these facts.
+### Requirement: Six domain facts describe every body behind Waist 1
+The protocol SHALL define six domain facts across Waist 1: actor, place, audience, event,
+capability, and receipt, separated cleanly from Waist-2 JSON-RPC lifecycle envelopes.
 
 #### Scenario: A percept carries actor, place and audience
 - **WHEN** a body reports that something happened
@@ -21,6 +19,10 @@ crosses a layer boundary SHALL be expressed in these facts.
 #### Scenario: A percept without an audience is rejected
 - **WHEN** a body submits a percept that names no audience
 - **THEN** the percept is rejected with an error that names the missing fact, and it is not recorded as a percept
+
+#### Scenario: Waist-2 lifecycle messages do not pollute domain facts
+- **WHEN** Gateway and a body exchange discovery, heartbeat, cancellation, or approval lifecycle RPCs
+- **THEN** Waist-2 lifecycle envelopes translate into the six domain facts (`capability`, `body_state`, `receipt`, `percept`) without leaking transport details into the core
 
 ### Requirement: Ids are opaque
 Actors, places and capabilities SHALL be identified by opaque ids. No part of the protocol
@@ -41,8 +43,9 @@ allocated to the soul). The payload SHALL pass through the layers unchanged.
 - **THEN** the payload in the context is byte-for-byte the payload the body submitted
 
 ### Requirement: Every action ends in exactly one receipt
-Each action handed to a body SHALL end in exactly one receipt whose outcome is one of: done,
-refused, held, failed or unknown. A receipt SHALL name the action it belongs to.
+Each action SHALL end in one receipt naming the action with outcome `done`, `refused`, `held`,
+`failed`, or `unknown`, plus optional additive metadata `termination_reason`, `progress`, and
+`delivered_units` (`R-36`, `R-37`).
 
 #### Scenario: A body carries out an action
 - **WHEN** a body completes an action
@@ -50,21 +53,33 @@ refused, held, failed or unknown. A receipt SHALL name the action it belongs to.
 
 #### Scenario: A body does not answer in time
 - **WHEN** a body returns no receipt before the action's time limit
-- **THEN** one receipt with outcome unknown is produced for that action, and no second receipt for it is accepted afterwards
+- **THEN** one receipt with outcome unknown and termination_reason timed_out is produced, and no second receipt is accepted afterwards
+
+#### Scenario: A streaming or embodied action is preempted or cancelled
+- **WHEN** active output (such as speech) is interrupted externally by user barge-in or cancelled by the core
+- **THEN** a single terminal receipt (`failed`) records `termination_reason` (`preempted_external` or `canceled_by_core`), `progress` in `[0, 1]`, and `delivered_units`
 
 ### Requirement: Capabilities are declared by descriptors
-A body SHALL declare what it can do as capability descriptors. Each descriptor SHALL carry an
-id, a description for reasoning, the places it applies to, its flags (communicative,
-identity-changing), the typical latency of a response in its places and, when using it has a
-direct effect the body can sense, the channel, time window and noise of that effect.
+A body SHALL declare capabilities via sorted descriptors carrying id, description, places,
+flags (`communicative`, `identity_changing`, `irreversible`), typical latency,
+`capability_schema_hash` (`R-38`), and optional sensed effect `(channel, window, noise, Δ_pred)`.
 
 #### Scenario: A declared capability is offered to reasoning
 - **WHEN** a body registers a capability for a place
-- **THEN** that capability can appear in a context built for that place, with its description
+- **THEN** that capability appears deterministically sorted in a context built for that place with its description and schema hash
 
 #### Scenario: A capability with a sensed effect
-- **WHEN** a body declares that pushing a door changes a door sensor within two seconds
-- **THEN** an act using that capability carries the channel and window, so the core can predict the effect
+- **WHEN** a body declares that pushing a door changes a door sensor within two seconds with expected delta
+- **THEN** an act using that capability carries `channel`, window, and `Δ_pred` so the core can predict the effect
+
+### Requirement: Multimodal attachments use opaque handles
+A percept carrying media (`image`, `audio_voice`, `video`, `sensor_blob`) SHALL expose only
+opaque `AttachmentHandle` metadata (`handle_id`, `modality_slot`, `byte_len`, `expires_at_ms`,
+`embed_model_ver`) and zero raw media bytes across Waist 1 (`R-37`).
+
+#### Scenario: Multimodal percept preserves core blindness
+- **WHEN** a body submits an image or speech utterance through Gateway
+- **THEN** Core receives an opaque `AttachmentHandle`, its 256d embedding, and numeric slots while raw bytes remain solely in Gateway's keyed-BLAKE3 Attachment Store
 
 ### Requirement: The protocol is versioned and changes additively
 Every serialized protocol message SHALL carry the protocol version. A reader SHALL accept
@@ -87,19 +102,22 @@ harness written in another language can speak the protocol without sharing code 
 - **WHEN** any protocol message is serialized and read back
 - **THEN** the result equals the original message
 
-### Requirement: Reasoning's acts are part of the protocol
-The protocol SHALL define the five thought acts (think, act, expect, resolve, revise) with
-their fields as numbers, ids and opaque payloads, so that any model provider can be adapted to
-them.
+### Requirement: Reasoning's acts and consolidation outputs are part of the protocol
+The protocol SHALL define the five thought acts (`think`, `act`, `expect`, `resolve`, `revise`)
+with plural `places`/`people`, optional `domain?`, `RecurrenceSpec`/`PromiseMeta`, `resolve`
+outcomes (`kept`, `kept_late`, `renegotiated`, `released`, `failed`, `cancelled`, `answered`,
+`reached`), and typed `consolidate` acts (`gist`, `lesson`, `procedure`) under strict nullable
+schemas (`R | null`).
 
 #### Scenario: A provider's output is adapted
 - **WHEN** a provider's output is translated into thought acts
-- **THEN** each act validates against the protocol, and an output that fits no act is reported as invalid with the reason
+- **THEN** each act validates against the strict schema, and an output that fits no act is reported invalid with its reason
 
 ### Requirement: A percept carries what its body can report as numbers and ids
-A percept SHALL be able to carry, beside its content: the actors it is addressed to, whether it
-names the soul, the event or action it replies to, the correlation id of the action it echoes,
-its length and a negative flag. A body that cannot report one of these SHALL omit it.
+A percept SHALL carry optional `addressees`, `named`, `orient(e, l)`, `reply_to`, `correlation_id`,
+`channel`, `Δ_obs`, `length`, `negative_flag`, `repair`, `continued_attention`, the 10-element
+structural acoustic/prosody slot `f_modal`, and embeddings tagged by `(embed_model_ver, dim_d,
+prompt_regime_id)`.
 
 #### Scenario: A reply
 - **WHEN** a body reports a message that replies to the soul's earlier action
@@ -108,3 +126,11 @@ its length and a negative flag. A body that cannot report one of these SHALL omi
 #### Scenario: A body that reports nothing extra
 - **WHEN** a percept carries only actor, place, audience and content
 - **THEN** it is accepted, and the mechanisms that need the missing facts take their neutral values
+
+### Requirement: Governance tokens and schema hashes are serializable facts
+The protocol SHALL define `VisibleScope`/`DeclassToken`, `OwnerSigned` identity/principle bundles,
+`PrincipalLink`, and canonical action hash `H_act` (`R-33`, `R-42`, `R-44`, `R-48`) across Waist 1.
+
+#### Scenario: Cross-audience declassification token validates explicitly
+- **WHEN** an owner-signed `DeclassToken` authorizes sharing specific event ids with a wider target place
+- **THEN** the protocol serializes and preserves its issuer, scope, expiry, and target without loss

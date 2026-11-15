@@ -3,9 +3,11 @@
 ## Why
 
 MonoAgens asks one question: how far can a harness carry a mind? Today there is no code, so
-nothing in `RESEARCH.md` can be measured. The owner decided to answer that question first and
-alone: build the core as far as the research already reaches, and the Lab that measures it,
-and leave bodies, tools, plugins, the gateway and policy for later.
+nothing in `RESEARCH.md` can be measured. Following Deep Research Run 1 (`2026-11-15-run-1.md`)
+and Run 2 (`2026-11-16-run-2.md`), this change specifies the complete sans-IO `Core`, `Store`,
+`Reason`, and `Lab` stack (fixing all audited Round-1 defects and folding in Run-2 cognitive,
+privacy-projection, erasure, long-horizon, self-model, security-taint, commitment, and TCK
+contracts), paired cleanly with successor change `waist-valve-and-bodies` across Phases 0–3.
 
 ## What Changes
 
@@ -15,35 +17,48 @@ and leave bodies, tools, plugins, the gateway and policy for later.
 - Add the append-only event log, record-first ordering, projections and exact replay.
 - Add the cognitive loop with one queue and one consumer, three doors as empty hook points,
   seeded randomness, an injected clock and a registry of mechanisms with neutral values.
-- Implement every mechanism of `RESEARCH.md` sections 1–21 that has a stated model:
-  - the gate: signals, salience, habituation, drives, the seeded go / no-go draw, the circuit
-    breaker, patience and backlog chunking;
-  - memory: ACT-R activation, hybrid candidates, explicit recall, familiarity against
-    recollection, closeness;
-  - expectations: promises, predictions and waits; time, reply and free-text conditions with
-    the wake gate; grounding with content misses; sense of agency; judged silence;
-  - reasoning: a context rebuilt per wake, the five thought acts, inner-thought bars, control
-    of report, grounding in time;
-  - beliefs: source monitoring, verbatim against gist, the reality filter, credence and source
-    reliability;
-  - sleep: consolidation into gist at event boundaries, pattern separation and fading;
-  - the perception ledger for other minds and for the soul itself;
-  - learning with bounds: the delta rule, bounded knob updates and wake-band learning.
-- Add `reason`: prompt rendering and the model and embedding providers (scripted and
-  OpenAI-compatible), which the core needs in order to think at all.
-- Add the Lab: scenarios against the real core in virtual time, scripted test bodies with
-  scripted capabilities, ablation, run records, three scenario sets, human-likeness metrics,
-  a cost guard, deterministic scripted runs and live runs with a real model, and a probe for
-  talking to a persistent soul from the terminal.
-- Add a research backlog that ties each open question to a Lab measurement.
+- Implement every verified cognitive, safety-projection, and Lab mechanism of `RESEARCH.md` §§1–26
+  as corrected by Run 1 and Run 2 (`A-01`–`A-16`, `R-29`–`R-40`, `R-43`, `R-46`, `R-48`–`R-50`):
+  - the gate: `A-14` split `dialogue_act_gap` logistic head vs epistemic `own_info_gap`, noisy-OR
+    graded address `deg(e, l)` (`R-29`), post-evaluation partitioned habituation `h_{(p, k_src)}`
+    (`A-03`, `R-36`), async snapshot sleep without `"or asleep"` deferral (`A-04`), shrinkage
+    patience estimator (`A-08`), cold-start shrinkage (`A-07`), idle breakpoints & opportunity-cost
+    drives (`R-30`, `R-31`), reachable neutral parameters (`A-01`);
+  - memory & long-horizon store: guarded Petrov hybrid base-level (`n > k ∧ t_n > t_k`), exact
+    `fade_threshold = -3.29` on `B`, `w_B` neutral switch (`A-01`), dual-process familiarity +
+    recollection (`A-09`), Successor-Representation cognitive maps (`R-32`), pre-Step-5
+    `VisibleScope` filtering (`R-33` `Delta_NI = 0`), segmented SQLite `hot.db` + sealed shards +
+    pre-filtered `usearch` HNSW + `postcard`/`minicbor` (`R-40`), atomic `hard_forget` +
+    `Two-Epoch Replay` (`R-34`);
+  - expectations & commitments: plural `places`/`people`, `continued_attention`, `(channel,
+    Δ_obs, Δ_pred)` agency, Option A preemption/barge-in `Receipt` extensions (`termination_reason`,
+    `progress`, `delivered_units`, preserving `ARCHITECTURE.md` L198 5 outcomes), `RecurrenceSpec`
+    silent polling (`R-46`), `PendingApproval` (`R-42`), `PromiseMeta` conflicts/repair &
+    pre-utterance `CommitCheck` (`R-49`);
+  - reasoning & beliefs: `[0, 20]` anchored confidence + `0/0` `P_rc` guard + `CitationLock`
+    (`A-10`), Spotlighting `ContextPlan` & min-trust taint compaction (`R-43`), `OwnerSigned`
+    `IdentityAnchor` + `[ANCHOR_CHECK]` (`R-48`), source credence including `told` & skeptical
+    `k_corrob` (`A-01`, `R-43`), Hungarian-aligned domain centroids (`A-12`);
+  - sleep, skills & self-model: `{open, provisional, sealed}` episodes (`A-05`), `[0, 1]` EM-LLM
+    boundaries (`A-06`), contrastive lessons & `capability_schema_hash` / CUSUM procedures
+    (`A-11`, `R-38`), and 4-pillar event-derived `sources.self_card` (`R-35`);
+  - learning: sign-corrected `r ∈ {0, 1}` + clipped IPS `min(M_ips, 1/ρ)` (`A-01`, `R-19`),
+    and Beta non-penalization guard on `canceled_by_core`/`preempted_external` receipts (`R-36`).
+- Add `reason`: deterministic rendering, strict nullable JSON schemas (`A-10`), unified
+  `EmbeddingGemma 2` (`256d` MRL, Apache 2.0, `arXiv:2610.37364`) with mandatory task prefixes &
+  `embed_model_ver` partitioning (`A-15`, `R-37`), `AttachmentHandle` resolution post-`VisibleScope`/
+  `Valve`, plus scripted and OpenAI-compatible providers.
+- Add the Lab: all 22 brain-map ablation metrics (`A-02`), Indonesian/`MultiLexNorm`/`IndoCollex`
+  benchmarks (`A-15`), `S >= 354–471` paired 3-arm non-inferiority protocol (`A-16`), `BaselineAdapter`
+  & 5-domain Pareto scorecard (`R-39`), `Delta_NI = 0` & `hard_forget` audits, identity drift &
+  poisoning suites, and black-box Core TCK hooks (`R-50`).
 
-Left for later changes: wave 2 and wave 3 of `RESEARCH.md` (sections 22–25: addressee degrees,
-idle mode and initiative, drives as opportunity costs, maps, habits and conventions); the
-gateway, the valve and all policy (`RESEARCH.md` section 10: the two absolute lines, privacy,
-roles); real bodies, tools and plugins; the `monoagens` product CLI; hard forgetting.
-
-The earlier change `bootstrap-vertical-slice` is parked. Its gateway, valve, CLI and terminal
-body specs are kept as material for the change that follows this one.
+Left for paired change `waist-valve-and-bodies` (superseding early `bootstrap-vertical-slice` in git commit `ac3b240`,
+co-developed across Phases 0–3): live `monoagens-gateway`, `cedar-policy` `Valve`, Waist-2
+`monoagens.body.v1` JSON-RPC 2.0 transport, cross-body identity linking (`R-44`), keyed-`BLAKE3`
+Attachment Store & Silero/VAP audio pipeline (`R-37`), `body-cli`, `body-mcp-bridge` (`MCP
+2026-07-28`), honest delivery adapter (`R-47`), and standalone `monoagens-conformance` TCK
+runner (`R-50`).
 
 ## Capabilities
 
@@ -81,23 +96,26 @@ None. `openspec/specs/` is empty.
 - **Code**: new Rust workspace (`crates/`), `prior/`, `lab/` (scenarios, run records),
   `research/`, `docs/`. There is no existing code.
 - **Toolchain**: Rust stable is required and is not installed on the development machine yet.
-- **Dependencies**: SQLite compiled in (`store`), a blocking HTTP client (`reason`). The core
-  depends on the protocol crate and a serialization library only. No async runtime.
-- **External systems**: live runs need an OpenAI-compatible chat endpoint and, for
-  meaning-based recall, an embeddings endpoint, set through environment variables. Default
-  tests need neither.
+- **Dependencies**: SQLite (`rusqlite`, `PRAGMA secure_delete = ON`), `usearch` pre-filtered HNSW,
+  `blake3`, `postcard`/`minicbor` binary encoding (`store`), blocking HTTP (`reason`). `core`
+  depends on `protocol`, `serde`, and pure deterministic math only (`0` IO/async/threads).
+- **External systems**: live runs need an OpenAI-compatible chat endpoint and `EmbeddingGemma 2`
+  (`256d` Apache 2.0, local ONNX/LiteRT or endpoint) for text+multimodal recall. Default tests
+  need neither.
 - **Cost**: sleep, classification and learning add model calls. Each is recorded with its
   purpose, and the Lab's cost guard caps tokens per run and wakes per chain.
-- **Documents**: `RESEARCH.md` refers to sections, files and terms that `ARCHITECTURE.md` no
-  longer has. This change reconciles those references without changing formulas.
-- **Not a product yet**: there is no body except the Lab's test bodies, no tool, and no
-  restriction on who may cause what. Nothing in this change is meant for a shared deployment.
-- **Research**: the open points of `RESEARCH.md` and `ARCHITECTURE.md` went to a researcher
-  (`research/researcher-prompt.md`). Run 1 (`research/findings/2026-11-15-run-1.md`) is
-  accepted for R-01 to R-05 and R-07 to R-28, with every number as a start value to tune in
-  the Lab, and the owner ruled on four contradictions between the two documents (design,
-  Decision 1). No task waits for research: what run 1 left open is built as stated or left
-  neutral, and goes to research brief 2, whose findings enter the next change.
+- **Documents**: `RESEARCH.md` and `research/findings/2026-11-16-run-2.md` are synchronized with
+  `ARCHITECTURE.md`.
+- **Architecture safety**: `Core` enforces pre-Step-5 `VisibleScope` non-interference (`R-33`),
+  `hard_forget` erasure (`R-34`), `OwnerSigned` identity locking (`R-48`), and taint metadata
+  (`R-43`), while runtime `cedar-policy` Valve rules and real body processes live in
+  `waist-valve-and-bodies`.
+- **Research**: Both Deep Research Run 1 (`2026-11-15-run-1.md`) and Run 2
+  (`2026-11-16-run-2.md`, plus `run-2-notes/`) are folded into this specification along with
+  owner-ratified decisions (`2026-11-16`): dual-change split with `waist-valve-and-bodies`,
+  Option A additive `Receipt` fields preserving `ARCHITECTURE.md` L198, and `EmbeddingGemma 2`
+  (`256d`, Apache 2.0) unified Gateway embedding. Remaining quantitative parameters are tuned in
+  the Lab via deterministic ablation and the `S >= 354–471` paired protocol.
   Most formulas are the researcher's inference from sourced shapes, so they are expected to
   move with Lab results.
 - **Evidence rule**: by `ARCHITECTURE.md`, a mechanism whose removal changes nothing measurable

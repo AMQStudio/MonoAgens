@@ -9,9 +9,11 @@ switched off, and it runs the same way every time it is given the same events.
 ## ADDED Requirements
 
 ### Requirement: One queue and one consumer
-Every source of events SHALL only put events into one queue. Only the loop SHALL process them,
-one at a time, in order. Results of background work, including model results and receipts,
-SHALL return as events through the same queue.
+All event sources SHALL enqueue into three bounded priority queues—Class A Urgent Control (256), Class B Conversational (512), and Class C Background or Sleep (256)—drained strictly in A > B > C order by a single loop thread. Model completions, cancellations, and receipts SHALL return through the same ingress queues, emitting at most one terminal receipt per canceled or preempted action.
+
+#### Scenario: Urgent control preempts background work
+- **WHEN** Class C sleep or background events and a Class A barge-in or cancel event await dequeue
+- **THEN** the loop dequeues and handles Class A first and issues at most one terminal `preempted_external` or `canceled_by_core` receipt for the interrupted work
 
 #### Scenario: Two bodies speak at once
 - **WHEN** two bodies submit events at the same moment
@@ -45,11 +47,30 @@ its doors.
 - **WHEN** no rule is installed at any door and an event allocated to the soul arrives
 - **THEN** the event is recorded, reasoning wakes, and its action is carried out
 
+### Requirement: Pre-step-five visibility projection and taint tracking
+Before assembling working context in Step 5 or evaluating FOK or recall, the loop SHALL project candidate memories through `VisibleScope` without leaking out-of-scope titles or counts. It SHALL propagate monotonic `origin_actor` identity and minimum-trust `taint` across derived turn artifacts, and enforce authorized `hard_forget` exclusions.
+
+#### Scenario: Restricted memory excluded before recall scoring
+- **WHEN** a candidate memory falls outside the active `VisibleScope`
+- **THEN** the loop suppresses it before FOK scoring, recall, or context assembly without leaking counts or titles
+
+#### Scenario: Taint and hard-forget flow through turns
+- **WHEN** a turn consumes untrusted external content or receives an authorized `hard_forget` command
+- **THEN** derived outputs inherit the minimum-trust `taint` label and `hard_forget` excludes erased items from future turns
+
+### Requirement: Deterministic Core TCK and startup crash resume
+Upon `Core::open`, the loop SHALL inspect any unconsumed log tail after the last processed cursor and resume interrupted events deterministically before opening ingress. The core SHALL expose deterministic hooks verifying `C-MUST-01` through `C-MUST-04` queue isolation, atomic persistence, scope projection, and preemption non-penalty.
+
+#### Scenario: Preempted action incurs no learning penalty
+- **WHEN** an in-flight action terminates with `termination_reason` `canceled_by_core` or `preempted_external`
+- **THEN** bounded learning skips Beta and weight penalty updates while `C-MUST` hooks observe an unchanged prior
+
 ### Requirement: Three doors are hook points for whatever governs the soul
-Every percept SHALL pass the inbound door, every assembled context SHALL pass the context door
-and every action SHALL pass the action door, each with all its facts. A door's rule SHALL be
-able to remove context items, refuse a wake or refuse an action, and each such verdict SHALL be
-recorded with the name of the rule.
+Every percept SHALL pass the inbound door, every assembled context SHALL pass the context door, and every action SHALL pass the action door with its provenance and `taint` metadata. A door rule SHALL be able to strip untrusted items, require `DeclassToken` or `PendingApproval`, or refuse a wake or action, recording each verdict with the rule name.
+
+#### Scenario: Tainted item triggers door block or approval gate
+- **WHEN** an action carrying untrusted `taint` reaches the action door and a rule requires elevated consent
+- **THEN** the door holds execution in `PendingApproval` or refuses it while recording the blocking rule name
 
 #### Scenario: A rule refuses a wake
 - **WHEN** a rule at the context door refuses a wake
