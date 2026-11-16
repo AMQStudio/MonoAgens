@@ -83,7 +83,7 @@ This checklist implements `monoagens-protocol`, `monoagens-core`, `monoagens-sto
 ## 11. Phase 1–3 — Lab harness, 22 metrics, `Mem0`/`Letta` baselines & Pareto (`monoagens-lab`)
 
 - [ ] 11.1 Implement Waist-2 `TestBody` JSON-RPC framing and virtual clock stepping directly to `next_due()` for deterministic multi-week simulation in milliseconds.
-- [ ] 11.2 Implement all 22 brain-map metrics plus extended `tasks.md` Section 10.5 metrics (`NI`, safety leakage, promise fulfillment, `hard_forget` zero-resurrection, barge-in latency).
+- [ ] 11.2 Implement all 22 brain-map and safety metrics specified in `specs/lab/spec.md` (`A-02`, including `wakes_per_event`, calls/tokens by purpose, promises `kept`/`kept_late`/repaired, `ECE`/`Brier`, `detail_without_recollection`, `Delta_NI = 0`, safety leakage, `hard_forget` zero-resurrection, and barge-in latency).
 - [ ] 11.3 Implement standardized `BaselineAdapter` protocol & external harness shims for `Stateless ReAct`, `Full-Transcript Arm F`, `Mem0`, `Letta/MemGPT`, `LangGraph + LangMem`, `Zep/Graphiti`, and `Hermes Agent` enforcing virtual clock injection (`sim_time_rfc3339`), `PerceptView` oracle-stripping, explicit `noop()`/`[SILENT]` token parity, normalized 5-tuple `E_tok`/`C_share`, `restart_epoch` RAM eviction, and `SEALED_MODE=1` isolation, plus `adapter_conformance` self-tests.
 - [ ] 11.4 Implement `monoagens-lab benchmark` and `pareto` runners across curated 5-domain suites (`LoCoMo` incl. Cat-5, `LongMemEval`, `MemoryAgentBench`, `GroupMemBench`, `STALE`; `PM-Bench`/`PIS`; `PITCH`, `ProACT`, `ProactiveBench`, `CAPA`, `When2Speak`; `Ubuntu IRC`, `Molweni` excluding `MuTual` as multi-party; `FANToM ALL*`, `OpenToM`, `HI-TOM`, `ExploreToM`/`DynToM`), Indonesian (`MultiLexNorm`, `IndoCollex`, `A-15`), `Tool RAG` scaling (`N_caps = 50..200`, `R-38`), and `MPBench` security (`R-43`), reporting paired `S >= 354–471` `Arm T` restart parity (`A-16`), `1/n` `[0.5, 2.0]` calibration band checks, `Holm-Bonferroni` (`d_z`, `r_rb`) statistics, and undominated `Convex Pareto` JSON frontiers (`R-39`, `A-16`).
 
@@ -122,7 +122,7 @@ This checklist implements `monoagens-protocol`, `monoagens-core`, `monoagens-sto
 
 - [ ] 17.1 Implement full log replay and post-erasure `Two-Epoch Replay` verification comparing recomputed decisions bit-for-bit, plus `proptest` randomized property suites covering replay determinism, `VisibleScope` `Δ_NI == 0`, and Petrov hybrid monotonicity.
 - [ ] 17.2 Add payload-independence tests confirming gate decisions depend strictly on extracted numeric/structural features and not raw opaque bytes.
-- [ ] 17.3 Enforce suite timing budgets (`monoagens-core < 3 s`, scripted `monoagens-lab` dev suite `< 30 s`, zero network IO in default unit suites) and add `criterion` + `R-40` long-log microbenchmarks validating `Core::open < 100 ms` across `10^5–10^7` events and filtered `VectorIndex` (`usearch` vs `hnsw_rs` vs `Flat`) `< 5 ms` p99 at `1%` selectivity (`Recall@10 >= 0.93`).
+- [ ] 17.3 Enforce suite timing budgets (`monoagens-core < 3 s`, `store`/`reason < 10 s`, scripted `monoagens-lab` dev suite `< 30 s`, combined `dev + validation < 60 s`, zero network IO in default unit suites) and add `criterion` + `R-40` long-log microbenchmarks validating `Core::open < 100 ms` across `10^5–10^7` events and filtered `VectorIndex` (`usearch` vs `hnsw_rs` vs `Flat`) `< 5 ms` p99 at `1%` selectivity (`Recall@10 >= 0.93`).
 
 ## 18. Phase 1–2 — Mechanism registry & 22 reachable neutral values
 
@@ -136,11 +136,11 @@ This checklist implements `monoagens-protocol`, `monoagens-core`, `monoagens-sto
 - [ ] 19.3 Add indirect prompt-injection, Spotlighting bypass, `taint` laundering, and multi-turn `IdentityAnchor` sycophancy drift scenarios.
 - [ ] 19.4 Add `self_mechanics_guide` ablation suites measuring held/refused explanation truthfulness, `detail_without_recollection` under `R = 0`, zero-drift switch parity, and casual-conversation non-verbosity regression (`>= 5` seeds).
 
-## 20. Phase 3 — Core Conformance TCK (`C-MUST-01..04`)
+## 20. Phase 3 — Core invariants & Conformance TCK (`C-MUST-01..04`)
 
 - [ ] 20.1 Expose deterministic `tck_hooks.rs` test harness entry points inside `monoagens-core` (compiled behind test/TCK features without adding gateway deps).
-- [ ] 20.2 Verify `C-MUST-01` single-consumer queue order (`A > B > C`) & single-receipt preemption invariant.
-- [ ] 20.3 Verify `C-MUST-02` record-first crash recovery via `Core::open`, `C-MUST-03` pre-Step-5 `VisibleScope` + `taint` isolation, and `C-MUST-04` non-penalty on preemption.
+- [ ] 20.2 Verify core loop invariants: single-consumer queue order (`A > B > C`), single-receipt preemption non-penalty (`R-36`), record-first crash recovery via `Core::open`, and pre-Step-5 `VisibleScope` + `taint` isolation.
+- [ ] 20.3 Verify canonical `R-50` Core TCK checks via `tck_hooks`: `C-MUST-01` privacy non-interference (`Delta_NI = 0.0`), `C-MUST-02` atomic `hard_forget` zero-resurrection (`0-byte / 0-backflow`), `C-MUST-03` seeded bit-identical determinism/replay, and `C-MUST-04` 10k-tick neutral-profile stability soak.
 
 ## 21. Research sync & repository docs
 

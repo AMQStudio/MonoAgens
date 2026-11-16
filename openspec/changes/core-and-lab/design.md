@@ -347,9 +347,10 @@ nullable JSON schemas (`R | null`, `A-10`) and `[0, 20]` anchored confidence pro
 Discrete-event virtual-time simulator driving real `Core::step` via `TestBody` (routed over canonical
 Waist-2 schema shapes, `R-50`), plus `monoagens-lab` CLI (`run`, `compare`, `coverage`, `calibrate`,
 `mechanisms`, `baseline`, `benchmark`, `pareto`, `tck-core`, `log`, `explain`, `replay`, `talk`):
-- **All 22 Brain-Map Metrics + `tasks.md` 10.5 (`A-02`):** Adds missing per-row metrics (floor
-  violations/100, wakes/event, promises kept/kept-late/broken/repair, ECE/Brier, detail-without-R,
-  stale-belief leak, self-echo reaction rate, boundary F1, sleep-spin count = `0`, `Δ_NI = 0`).
+- **All 22 Brain-Map & Safety Metrics (`A-02`, `specs/lab/spec.md`):** Enforces complete per-row metrics (floor
+  violations/100, wakes/event, calls/tokens by purpose, promises kept/kept-late/broken/repair,
+  ECE/Brier, detail-without-R, stale-belief leak, self-echo reaction rate, boundary F1,
+  sleep-spin count = `0`, barge-in latency, and `Δ_NI = 0`).
 - **External `BaselineAdapter` Roster & Fair-Play Contract (`R-39`):** Benchmarks `Stateless ReAct`,
   `Full-Transcript Arm F`, **`Mem0`**, **`Letta/MemGPT`**, **`LangGraph + LangMem`**,
   **`Zep/Graphiti`**, and **`Hermes Agent`** (plus pluggable harnesses) under injected `sim_time_rfc3339`
@@ -374,9 +375,10 @@ Waist-2 schema shapes, `R-50`), plus `monoagens-lab` CLI (`run`, `compare`, `cov
 
 | Layer | What | Budget |
 |---|---|---|
-| core unit | in-memory store, no IO | under 5 s |
+| core unit | in-memory store, no IO (`monoagens-core`) | under 3 s |
 | store, reason | in-memory SQLite, mock HTTP server | under 10 s |
-| Lab scripted | development and validation sets, virtual time, one seed | under 60 s |
+| Lab scripted (dev) | development set, virtual time, one seed | under 30 s |
+| Lab scripted (full) | development and validation sets, virtual time, one seed | under 60 s |
 | Lab ablation | five seeds per side | on request |
 | Lab live | real model | on request, never in `cargo test` |
 

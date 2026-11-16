@@ -58,12 +58,16 @@ Before assembling working context in Step 5 or evaluating FOK or recall, the loo
 - **WHEN** a turn consumes untrusted external content or receives an authorized `hard_forget` command
 - **THEN** derived outputs inherit the minimum-trust `taint` label and `hard_forget` excludes erased items from future turns
 
-### Requirement: Deterministic Core TCK and startup crash resume
-Upon `Core::open`, the loop SHALL inspect any unconsumed log tail after the last processed cursor and resume interrupted events deterministically before opening ingress. The core SHALL expose deterministic hooks verifying `C-MUST-01` through `C-MUST-04` queue isolation, atomic persistence, scope projection, and preemption non-penalty.
+### Requirement: Deterministic Core TCK hooks and startup crash resume
+Upon `Core::open`, the loop SHALL inspect any unconsumed log tail after the last processed cursor
+and resume interrupted events deterministically before opening ingress, while skipping Beta/weight
+penalties on preempted acts (`R-36`). The core SHALL expose deterministic TCK hooks verifying
+`C-MUST-01` (`Delta_NI = 0.0`), `C-MUST-02` (`hard_forget` erasure), `C-MUST-03` (seeded bit-exact
+replay), and `C-MUST-04` (10k-tick neutral stability).
 
 #### Scenario: Preempted action incurs no learning penalty
 - **WHEN** an in-flight action terminates with `termination_reason` `canceled_by_core` or `preempted_external`
-- **THEN** bounded learning skips Beta and weight penalty updates while `C-MUST` hooks observe an unchanged prior
+- **THEN** bounded learning skips Beta and weight penalty updates cleanly while `tck_hooks` preserve deterministic replay
 
 ### Requirement: Three doors are hook points for whatever governs the soul
 Every percept SHALL pass the inbound door, every assembled context SHALL pass the context door, and every action SHALL pass the action door with its provenance and `taint` metadata. A door rule SHALL be able to strip untrusted items, require `DeclassToken` or `PendingApproval`, or refuse a wake or action, recording each verdict with the rule name.

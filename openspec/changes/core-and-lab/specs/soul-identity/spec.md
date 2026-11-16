@@ -10,14 +10,19 @@ added later at the doors.
 
 ### Requirement: An identity always exists
 The soul SHALL always have an identity consisting of a name, a persona and principles. When
-none is given at first start, a default identity SHALL be created and recorded.
+`Core::open` initializes an empty log without explicit configuration, the bootstrap host SHALL record
+one default identity over the external identity port carrying `OwnerSigned` trust provenance
+without requiring `Core` to recognize an `owner` identity concept.
 
 #### Scenario: First start without an identity
-- **WHEN** a soul is started for the first time with no identity given
-- **THEN** a default identity is recorded and used
+- **WHEN** a soul starts on an empty log with no explicit identity supplied by host configuration
+- **THEN** the bootstrap host records a default identity stamped `OwnerSigned` provenance over the external configuration port, remaining immutable to peers, sleep, and `revise`
 
 ### Requirement: The identity has one source
-The soul identity SHALL originate strictly from an external `OwnerSigned` configuration (`origin_actor == owner`) placing an opaque `IdentityAnchor` and immutable `PrincipleDescriptor`s in prompt slot 0. Online learning, sleep consolidation, and `revise` acts SHALL NEVER mutate core identity or principles.
+Aside from empty-log cold-start bootstrap of the default identity, soul identity definitions and
+updates SHALL arrive strictly through the external `OwnerSigned` configuration input (while any
+`principal == Owner` authorization stays outside `Core` at `Gateway`/`Valve` doors), placing slot-0
+`IdentityAnchor` and `PrincipleDescriptor`s; learning, sleep, and `revise` SHALL NEVER mutate them.
 
 #### Scenario: Untrusted peer cannot drift slot-zero identity or principles
 - **WHEN** an untrusted peer or model output attempts to alter persona traits or override `PrincipleDescriptor`s
