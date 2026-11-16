@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Option A additive termination reason (`R-36`, `R-37`).",
+  "enum": [
+    "normal",
+    "canceled_by_core",
+    "preempted_external",
+    "timed_out"
+  ],
+  "title": "TerminationReason",
+  "type": "string"
+}

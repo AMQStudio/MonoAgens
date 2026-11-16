@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "content_version": "2026-11-16.1",
+  "talkativeness": 0.5,
+  "spontaneity": 0.5,
+  "memory_persistence": 0.5,
+  "helpfulness": 0.5,
+  "restraint": 0.5,
+  "boredom_with_repeats": 0.5,
+  "certainty_bar": 0.5,
+  "speaking_bar": 3
+}

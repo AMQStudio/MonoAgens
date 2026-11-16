@@ -1,0 +1,68 @@
+{
+  "$defs": {
+    "ActorId": {
+      "description": "Opaque identifier of an actor (person, soul, or external participant).",
+      "type": "string"
+    },
+    "ProtocolVersion": {
+      "description": "Semantic major/minor protocol version carried by every message.",
+      "properties": {
+        "major": {
+          "format": "uint16",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "maximum": 0,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Reliability priors and teacher weight supplied per actor by Gateway (never \"owner\" inside Core).",
+  "properties": {
+    "actor_id": {
+      "$ref": "#/$defs/ActorId"
+    },
+    "alpha_0": {
+      "format": "double",
+      "type": "number"
+    },
+    "beta_0": {
+      "format": "double",
+      "type": "number"
+    },
+    "protocol_version": {
+      "$ref": "#/$defs/ProtocolVersion",
+      "default": {
+        "major": 1,
+        "minor": 0
+      }
+    },
+    "teacher_weight": {
+      "format": "double",
+      "type": "number"
+    },
+    "trusted_origin": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "actor_id",
+    "alpha_0",
+    "beta_0",
+    "teacher_weight",
+    "trusted_origin"
+  ],
+  "title": "ActorFacts",
+  "type": "object"
+}

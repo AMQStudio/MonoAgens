@@ -1,0 +1,59 @@
+{
+  "$defs": {
+    "CatchupPolicy": {
+      "description": "Catch-up policy when recurring triggers fell due during downtime (`R-46`).",
+      "enum": [
+        "coalesce_one",
+        "skip_to_next"
+      ],
+      "type": "string"
+    },
+    "RecurrenceSchedule": {
+      "description": "Schedule definition for a recurring monitor expectation (`R-46`).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "interval_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "interval_ms"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "cron": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cron"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Recurrence specification attached to a `monitor` expectation (`R-46`).",
+  "properties": {
+    "catchup": {
+      "$ref": "#/$defs/CatchupPolicy"
+    },
+    "schedule": {
+      "$ref": "#/$defs/RecurrenceSchedule"
+    }
+  },
+  "required": [
+    "schedule",
+    "catchup"
+  ],
+  "title": "RecurrenceSpec",
+  "type": "object"
+}

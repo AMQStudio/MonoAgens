@@ -1,0 +1,73 @@
+{
+  "$defs": {
+    "ActionId": {
+      "description": "Opaque identifier of a dispatched action.",
+      "type": "string"
+    },
+    "CapabilityId": {
+      "description": "Opaque identifier of a declared body capability.",
+      "type": "string"
+    },
+    "HAct": {
+      "description": "Canonical action digest `H_act` (`R-42`) binding approvals to exact action parameters.",
+      "type": "string"
+    },
+    "PlaceId": {
+      "description": "Opaque identifier of a place where percepts originate or actions land.",
+      "type": "string"
+    },
+    "Time": {
+      "description": "Millisecond timestamp from an injected clock (`u64` ms since epoch).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Non-retrying approval state bound to `H_act` when an action returns `held` (`R-42`).",
+  "properties": {
+    "action_id": {
+      "$ref": "#/$defs/ActionId"
+    },
+    "capability_id": {
+      "$ref": "#/$defs/CapabilityId"
+    },
+    "expires_at_ms": {
+      "$ref": "#/$defs/Time"
+    },
+    "h_act": {
+      "$ref": "#/$defs/HAct"
+    },
+    "places": {
+      "items": {
+        "$ref": "#/$defs/PlaceId"
+      },
+      "type": "array"
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "requested_at_ms": {
+      "$ref": "#/$defs/Time"
+    },
+    "state_epoch": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "action_id",
+    "capability_id",
+    "h_act",
+    "state_epoch",
+    "requested_at_ms",
+    "expires_at_ms",
+    "places"
+  ],
+  "title": "PendingApproval",
+  "type": "object"
+}

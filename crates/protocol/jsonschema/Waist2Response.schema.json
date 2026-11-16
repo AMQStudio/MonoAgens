@@ -1,0 +1,153 @@
+{
+  "$defs": {
+    "DomainFactKind": {
+      "description": "The six canonical domain facts across Waist 1.",
+      "enum": [
+        "actor",
+        "place",
+        "audience",
+        "event",
+        "capability",
+        "receipt"
+      ],
+      "type": "string"
+    },
+    "ProtocolVersion": {
+      "description": "Semantic major/minor protocol version carried by every message.",
+      "properties": {
+        "major": {
+          "format": "uint16",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "maximum": 0,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    },
+    "RpcId": {
+      "anyOf": [
+        {
+          "format": "int64",
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "JSON-RPC 2.0 request/response correlation identifier."
+    },
+    "Waist2Error": {
+      "description": "JSON-RPC 2.0 error object carrying typed Waist 2 failure codes `-32001`..`-32006`.",
+      "properties": {
+        "code": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Waist2ErrorData"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "Waist2ErrorData": {
+      "description": "Optional structured detail payload on a Waist 2 error object.",
+      "properties": {
+        "missing_fact": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DomainFactKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "received_version": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProtocolVersion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "supported_version": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProtocolVersion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "symbol": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Generic JSON-RPC 2.0 response envelope for Waist 2 calls.",
+  "properties": {
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Waist2Error"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RpcId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "jsonrpc": {
+      "const": "2.0",
+      "type": "string"
+    },
+    "result": true
+  },
+  "required": [
+    "jsonrpc"
+  ],
+  "title": "Waist2Response",
+  "type": "object"
+}

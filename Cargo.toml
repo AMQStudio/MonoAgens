@@ -1,0 +1,44 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/protocol",
+    "crates/core",
+    "crates/store",
+    "crates/reason",
+    "crates/valve",
+    "crates/gateway",
+    "crates/lab",
+    "crates/conformance",
+    "crates/cli",
+    "bodies/body-kit",
+    "bodies/body-cli",
+    "bodies/body-mcp-bridge",
+    "bodies/body-sim-actuator",
+    "bodies/plugin-a2a-bridge",
+    "bodies/plugin-ros2-bridge",
+    "bodies/body-voice",
+    "examples/cleanroom-body",
+]
+exclude = ["sdk/rust"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.43", features = ["bundled"] }
+usearch = "2.26"
+hnsw_rs = "0.3"
+blake3 = "1.8"
+postcard = { version = "1.1", features = ["use-std"] }
+tempfile = "3.27"
+proptest = "1.12"
+monoagens-protocol = { path = "crates/protocol" }
+monoagens-core = { path = "crates/core" }
+monoagens-store = { path = "crates/store" }
+monoagens-reason = { path = "crates/reason" }
+monoagens-gateway = { path = "crates/gateway" }
+monoagens-body-kit = { path = "bodies/body-kit" }

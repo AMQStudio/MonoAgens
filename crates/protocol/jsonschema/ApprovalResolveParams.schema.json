@@ -1,0 +1,144 @@
+{
+  "$defs": {
+    "ActionId": {
+      "description": "Opaque identifier of a dispatched action.",
+      "type": "string"
+    },
+    "ActorId": {
+      "description": "Opaque identifier of an actor (person, soul, or external participant).",
+      "type": "string"
+    },
+    "HAct": {
+      "description": "Canonical action digest `H_act` (`R-42`) binding approvals to exact action parameters.",
+      "type": "string"
+    },
+    "MetaValue": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "format": "int64",
+          "type": "integer"
+        },
+        {
+          "format": "double",
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/MetaValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/MetaValue"
+          },
+          "type": "object"
+        }
+      ],
+      "description": "JSON value subset for reverse-DNS `_meta` extensions without tying `protocol` to `serde_json`."
+    },
+    "ProtocolVersion": {
+      "description": "Semantic major/minor protocol version carried by every message.",
+      "properties": {
+        "major": {
+          "format": "uint16",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "maximum": 0,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    },
+    "Time": {
+      "description": "Millisecond timestamp from an injected clock (`u64` ms since epoch).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "Waist2Headers": {
+      "description": "Transport-level Waist 2 headers separated from domain facts.",
+      "properties": {
+        "_meta": {
+          "additionalProperties": {
+            "$ref": "#/$defs/MetaValue"
+          },
+          "type": "object"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "protocol_version": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "traceparent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "idempotency_key",
+        "protocol_version"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Parameters for `approval/resolve`.",
+  "properties": {
+    "action_id": {
+      "$ref": "#/$defs/ActionId"
+    },
+    "approved": {
+      "type": "boolean"
+    },
+    "h_act": {
+      "$ref": "#/$defs/HAct"
+    },
+    "headers": {
+      "$ref": "#/$defs/Waist2Headers"
+    },
+    "resolved_at_ms": {
+      "$ref": "#/$defs/Time"
+    },
+    "resolver": {
+      "$ref": "#/$defs/ActorId"
+    },
+    "state_epoch": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "headers",
+    "action_id",
+    "h_act",
+    "state_epoch",
+    "approved",
+    "resolver",
+    "resolved_at_ms"
+  ],
+  "title": "ApprovalResolveParams",
+  "type": "object"
+}

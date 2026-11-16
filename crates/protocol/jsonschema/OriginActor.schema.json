@@ -1,0 +1,12 @@
+{
+  "$defs": {
+    "ActorId": {
+      "description": "Opaque identifier of an actor (person, soul, or external participant).",
+      "type": "string"
+    }
+  },
+  "$ref": "#/$defs/ActorId",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Actor that originated an event chain; inherited monotonically along `caused_by`.",
+  "title": "OriginActor"
+}

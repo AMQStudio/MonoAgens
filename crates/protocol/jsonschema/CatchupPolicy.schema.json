@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Catch-up policy when recurring triggers fell due during downtime (`R-46`).",
+  "enum": [
+    "coalesce_one",
+    "skip_to_next"
+  ],
+  "title": "CatchupPolicy",
+  "type": "string"
+}

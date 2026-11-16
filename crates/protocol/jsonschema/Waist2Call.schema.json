@@ -1,0 +1,1082 @@
+{
+  "$defs": {
+    "ActionCancelParams": {
+      "description": "Parameters for `action/cancel`.",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/ActionId"
+        },
+        "headers": {
+          "$ref": "#/$defs/Waist2Headers"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "headers",
+        "action_id"
+      ],
+      "type": "object"
+    },
+    "ActionExecuteParams": {
+      "description": "Parameters for `action/execute`.",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/ActionId"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience",
+          "minItems": 1
+        },
+        "capability_id": {
+          "$ref": "#/$defs/CapabilityId"
+        },
+        "h_act": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HAct"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "headers": {
+          "$ref": "#/$defs/Waist2Headers"
+        },
+        "payload": {
+          "$ref": "#/$defs/OpaquePayload"
+        },
+        "places": {
+          "items": {
+            "$ref": "#/$defs/PlaceId"
+          },
+          "type": "array"
+        },
+        "timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "headers",
+        "action_id",
+        "capability_id",
+        "places",
+        "audience",
+        "payload"
+      ],
+      "type": "object"
+    },
+    "ActionId": {
+      "description": "Opaque identifier of a dispatched action.",
+      "type": "string"
+    },
+    "ActionReceiptParams": {
+      "description": "Parameters for `action/receipt`.",
+      "properties": {
+        "headers": {
+          "$ref": "#/$defs/Waist2Headers"
+        },
+        "receipt": {
+          "$ref": "#/$defs/Receipt"
+        }
+      },
+      "required": [
+        "headers",
+        "receipt"
+      ],
+      "type": "object"
+    },
+    "ActorId": {
+      "description": "Opaque identifier of an actor (person, soul, or external participant).",
+      "type": "string"
+    },
+    "ApprovalResolveParams": {
+      "description": "Parameters for `approval/resolve`.",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/ActionId"
+        },
+        "approved": {
+          "type": "boolean"
+        },
+        "h_act": {
+          "$ref": "#/$defs/HAct"
+        },
+        "headers": {
+          "$ref": "#/$defs/Waist2Headers"
+        },
+        "resolved_at_ms": {
+          "$ref": "#/$defs/Time"
+        },
+        "resolver": {
+          "$ref": "#/$defs/ActorId"
+        },
+        "state_epoch": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "headers",
+        "action_id",
+        "h_act",
+        "state_epoch",
+        "approved",
+        "resolver",
+        "resolved_at_ms"
+      ],
+      "type": "object"
+    },
+    "AttachmentHandle": {
+      "description": "Opaque attachment reference crossing Waist 1 with zero raw media bytes (`R-37`).",
+      "properties": {
+        "byte_len": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "embed_model_ver": {
+          "type": "string"
+        },
+        "expires_at_ms": {
+          "$ref": "#/$defs/Time"
+        },
+        "handle_id": {
+          "type": "string"
+        },
+        "modality_slot": {
+          "$ref": "#/$defs/ModalitySlot"
+        }
+      },
+      "required": [
+        "handle_id",
+        "modality_slot",
+        "byte_len",
+        "expires_at_ms",
+        "embed_model_ver"
+      ],
+      "type": "object"
+    },
+    "Audience": {
+      "description": "Set of actors that could perceive an event.",
+      "items": {
+        "$ref": "#/$defs/ActorId"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "BlobGetParams": {
+      "description": "Parameters for `blob/get`.",
+      "properties": {
+        "blob_ref": {
+          "type": "string"
+        },
+        "expected_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "headers": {
+          "$ref": "#/$defs/Waist2Headers"
+        }
+      },
+      "required": [
+        "headers",
+        "blob_ref"
+      ],
+      "type": "object"
+    },
+    "BlobPutParams": {
+      "description": "Parameters for `blob/put` out-of-band attachment staging (`60 s` TTL, SHA-256 verified).",
+      "properties": {
+        "byte_len": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "headers": {
+          "$ref": "#/$defs/Waist2Headers"
+        },
+        "inline_bytes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpaquePayload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "headers",
+        "sha256",
+        "byte_len"
+      ],
+      "type": "object"
+    },
+    "BodyDiscoverParams": {
+      "description": "Parameters for `body/discover`.",
+      "properties": {
+        "body_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BodyId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "headers": {
+          "$ref": "#/$defs/Waist2Headers"
+        }
+      },
+      "required": [
+        "headers"
+      ],
+      "type": "object"
+    },
+    "BodyHeartbeatParams": {
+      "description": "Parameters for `body/heartbeat`.",
+      "properties": {
+        "body_id": {
+          "$ref": "#/$defs/BodyId"
+        },
+        "headers": {
+          "$ref": "#/$defs/Waist2Headers"
+        },
+        "status": {
+          "$ref": "#/$defs/BodyStatus"
+        },
+        "timestamp_ms": {
+          "$ref": "#/$defs/Time"
+        }
+      },
+      "required": [
+        "headers",
+        "body_id",
+        "status",
+        "timestamp_ms"
+      ],
+      "type": "object"
+    },
+    "BodyId": {
+      "description": "Opaque identifier of a connected body adapter.",
+      "type": "string"
+    },
+    "BodyShutdownParams": {
+      "description": "Parameters for `body/shutdown`.",
+      "properties": {
+        "body_id": {
+          "$ref": "#/$defs/BodyId"
+        },
+        "headers": {
+          "$ref": "#/$defs/Waist2Headers"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "headers",
+        "body_id"
+      ],
+      "type": "object"
+    },
+    "BodyStatus": {
+      "description": "Operational health state reported for a body.",
+      "enum": [
+        "ready",
+        "busy",
+        "degraded",
+        "stopped"
+      ],
+      "type": "string"
+    },
+    "CapabilityId": {
+      "description": "Opaque identifier of a declared body capability.",
+      "type": "string"
+    },
+    "ChannelId": {
+      "description": "Opaque identifier of a sensed effect channel.",
+      "type": "string"
+    },
+    "ChannelPrediction": {
+      "description": "Channel prediction / observation tuple `(channel, Δ_obs, Δ_pred)` (`R-09`).",
+      "properties": {
+        "channel": {
+          "$ref": "#/$defs/ChannelId"
+        },
+        "delta_obs": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "delta_pred": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "channel"
+      ],
+      "type": "object"
+    },
+    "CorrelationId": {
+      "description": "Opaque correlation identifier linking an action and its outcome/reply.",
+      "type": "string"
+    },
+    "EmbeddingTag": {
+      "description": "Versioned embedding space identifier `(embed_model_ver, dim_d, prompt_regime_id)`.",
+      "properties": {
+        "dim_d": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "embed_model_ver": {
+          "type": "string"
+        },
+        "prompt_regime_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "embed_model_ver",
+        "dim_d",
+        "prompt_regime_id"
+      ],
+      "type": "object"
+    },
+    "EventId": {
+      "description": "Opaque monotonic event sequence identifier in the core log.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "FModal": {
+      "description": "10-element structural acoustic/prosody slot `f_modal` (`R-37`, zero emotion labels).",
+      "items": {
+        "format": "float",
+        "type": "number"
+      },
+      "maxItems": 10,
+      "minItems": 10,
+      "type": "array"
+    },
+    "HAct": {
+      "description": "Canonical action digest `H_act` (`R-42`) binding approvals to exact action parameters.",
+      "type": "string"
+    },
+    "MetaValue": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "format": "int64",
+          "type": "integer"
+        },
+        {
+          "format": "double",
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/MetaValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/MetaValue"
+          },
+          "type": "object"
+        }
+      ],
+      "description": "JSON value subset for reverse-DNS `_meta` extensions without tying `protocol` to `serde_json`."
+    },
+    "ModalitySlot": {
+      "description": "Media modality classification for opaque attachment handles (`R-37`).",
+      "enum": [
+        "image",
+        "audio_voice",
+        "video",
+        "sensor_blob"
+      ],
+      "type": "string"
+    },
+    "OpaquePayload": {
+      "description": "Opaque payload bytes carried unchanged through Core without interpretation.",
+      "items": {
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "array"
+    },
+    "OrientScore": {
+      "description": "Orientation score `orient(e, l)` toward a participant actor (`R-29`).",
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/ActorId"
+        },
+        "score": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "actor",
+        "score"
+      ],
+      "type": "object"
+    },
+    "OriginActor": {
+      "$ref": "#/$defs/ActorId",
+      "description": "Actor that originated an event chain; inherited monotonically along `caused_by`."
+    },
+    "PerceptEmitParams": {
+      "description": "Parameters for `percept/emit`, separating transport headers from domain facts.\n\n`audience` is modeled as `Option<Audience>` on the wire so missing or empty\naudiences yield `-32006 ERR_UNDECLARED_AUDIENCE` rather than a generic schema error.",
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/ActorId"
+        },
+        "addressees": {
+          "items": {
+            "$ref": "#/$defs/ActorId"
+          },
+          "type": "array"
+        },
+        "attachments": {
+          "items": {
+            "$ref": "#/$defs/AttachmentHandle"
+          },
+          "type": "array"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience",
+          "minItems": 1
+        },
+        "channel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChannelId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "channel_prediction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChannelPrediction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "continued_attention": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "correlation_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CorrelationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "delta_obs": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "dialogue_act_gap": {
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "embeddings": {
+          "items": {
+            "$ref": "#/$defs/TaggedEmbedding"
+          },
+          "type": "array"
+        },
+        "f_modal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FModal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "headers": {
+          "$ref": "#/$defs/Waist2Headers"
+        },
+        "length": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "named": {
+          "items": {
+            "$ref": "#/$defs/ActorId"
+          },
+          "type": "array"
+        },
+        "negative_flag": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "orient": {
+          "items": {
+            "$ref": "#/$defs/OrientScore"
+          },
+          "type": "array"
+        },
+        "origin_actor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OriginActor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/OpaquePayload"
+        },
+        "place": {
+          "$ref": "#/$defs/PlaceId"
+        },
+        "repair": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "reply_to": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "taint": {
+          "$ref": "#/$defs/Taint",
+          "default": "untrusted"
+        },
+        "timestamp_ms": {
+          "$ref": "#/$defs/Time"
+        }
+      },
+      "required": [
+        "actor",
+        "audience",
+        "headers",
+        "payload",
+        "place",
+        "timestamp_ms"
+      ],
+      "type": "object"
+    },
+    "PlaceId": {
+      "description": "Opaque identifier of a place where percepts originate or actions land.",
+      "type": "string"
+    },
+    "ProtocolVersion": {
+      "description": "Semantic major/minor protocol version carried by every message.",
+      "properties": {
+        "major": {
+          "format": "uint16",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "maximum": 0,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    },
+    "QuestionAnswerParams": {
+      "description": "Parameters for `question/answer`.",
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/ActorId"
+        },
+        "answer": {
+          "$ref": "#/$defs/OpaquePayload"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience",
+          "minItems": 1
+        },
+        "headers": {
+          "$ref": "#/$defs/Waist2Headers"
+        },
+        "place": {
+          "$ref": "#/$defs/PlaceId"
+        },
+        "question_id": {
+          "type": "string"
+        },
+        "timestamp_ms": {
+          "$ref": "#/$defs/Time"
+        }
+      },
+      "required": [
+        "headers",
+        "question_id",
+        "actor",
+        "place",
+        "audience",
+        "answer",
+        "timestamp_ms"
+      ],
+      "type": "object"
+    },
+    "Receipt": {
+      "description": "Terminal or held receipt produced for an action.",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/ActionId"
+        },
+        "capability_id": {
+          "$ref": "#/$defs/CapabilityId"
+        },
+        "delivered_units": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "h_act": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HAct"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "$ref": "#/$defs/ReceiptOutcome"
+        },
+        "progress": {
+          "format": "float",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "reason_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "termination_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminationReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timestamp_ms": {
+          "$ref": "#/$defs/Time"
+        }
+      },
+      "required": [
+        "action_id",
+        "capability_id",
+        "outcome",
+        "timestamp_ms"
+      ],
+      "type": "object"
+    },
+    "ReceiptOutcome": {
+      "description": "Five canonical outcomes of an action (`ARCHITECTURE.md` L198).",
+      "enum": [
+        "done",
+        "refused",
+        "held",
+        "failed",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "StateQueryParams": {
+      "description": "Parameters for `state/query` used after body crashes or restarts.",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/ActionId"
+        },
+        "headers": {
+          "$ref": "#/$defs/Waist2Headers"
+        }
+      },
+      "required": [
+        "headers",
+        "action_id"
+      ],
+      "type": "object"
+    },
+    "TaggedEmbedding": {
+      "description": "Embedding vector tagged with its model version, dimension, and prompt regime.",
+      "properties": {
+        "tag": {
+          "$ref": "#/$defs/EmbeddingTag"
+        },
+        "values": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tag",
+        "values"
+      ],
+      "type": "object"
+    },
+    "Taint": {
+      "description": "Monotonic minimum-trust provenance taint label (`Untrusted < Provisional < Trusted`).",
+      "oneOf": [
+        {
+          "const": "untrusted",
+          "description": "Lowest trust: external/unverified source or derived from one.",
+          "type": "string"
+        },
+        {
+          "const": "provisional",
+          "description": "Intermediate trust: corroborated or provisional.",
+          "type": "string"
+        },
+        {
+          "const": "trusted",
+          "description": "Highest trust: verified trusted origin.",
+          "type": "string"
+        }
+      ]
+    },
+    "TerminationReason": {
+      "description": "Option A additive termination reason (`R-36`, `R-37`).",
+      "enum": [
+        "normal",
+        "canceled_by_core",
+        "preempted_external",
+        "timed_out"
+      ],
+      "type": "string"
+    },
+    "Time": {
+      "description": "Millisecond timestamp from an injected clock (`u64` ms since epoch).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "Waist2Headers": {
+      "description": "Transport-level Waist 2 headers separated from domain facts.",
+      "properties": {
+        "_meta": {
+          "additionalProperties": {
+            "$ref": "#/$defs/MetaValue"
+          },
+          "type": "object"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "protocol_version": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "traceparent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "idempotency_key",
+        "protocol_version"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Adjacently-tagged dispatch representation covering all twelve Waist 2 methods.",
+  "oneOf": [
+    {
+      "properties": {
+        "method": {
+          "const": "body/discover",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/BodyDiscoverParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "body/heartbeat",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/BodyHeartbeatParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "body/shutdown",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/BodyShutdownParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "percept/emit",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/PerceptEmitParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "action/execute",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/ActionExecuteParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "action/cancel",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/ActionCancelParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "action/receipt",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/ActionReceiptParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "approval/resolve",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/ApprovalResolveParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "question/answer",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/QuestionAnswerParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "state/query",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/StateQueryParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "blob/put",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/BlobPutParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "blob/get",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/BlobGetParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "Waist2Call"
+}

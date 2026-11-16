@@ -1,0 +1,50 @@
+{
+  "$defs": {
+    "ModalitySlot": {
+      "description": "Media modality classification for opaque attachment handles (`R-37`).",
+      "enum": [
+        "image",
+        "audio_voice",
+        "video",
+        "sensor_blob"
+      ],
+      "type": "string"
+    },
+    "Time": {
+      "description": "Millisecond timestamp from an injected clock (`u64` ms since epoch).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Opaque attachment reference crossing Waist 1 with zero raw media bytes (`R-37`).",
+  "properties": {
+    "byte_len": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "embed_model_ver": {
+      "type": "string"
+    },
+    "expires_at_ms": {
+      "$ref": "#/$defs/Time"
+    },
+    "handle_id": {
+      "type": "string"
+    },
+    "modality_slot": {
+      "$ref": "#/$defs/ModalitySlot"
+    }
+  },
+  "required": [
+    "handle_id",
+    "modality_slot",
+    "byte_len",
+    "expires_at_ms",
+    "embed_model_ver"
+  ],
+  "title": "AttachmentHandle",
+  "type": "object"
+}

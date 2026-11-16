@@ -1,0 +1,36 @@
+{
+  "$defs": {
+    "ChannelId": {
+      "description": "Opaque identifier of a sensed effect channel.",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Optional expected physical/sensor effect declared for a capability (`R-09`).",
+  "properties": {
+    "channel": {
+      "$ref": "#/$defs/ChannelId"
+    },
+    "delta_pred": {
+      "format": "double",
+      "type": "number"
+    },
+    "noise": {
+      "format": "double",
+      "type": "number"
+    },
+    "window_ms": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "channel",
+    "window_ms",
+    "noise",
+    "delta_pred"
+  ],
+  "title": "SensedEffect",
+  "type": "object"
+}

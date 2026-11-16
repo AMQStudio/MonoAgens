@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "format": "int64",
+      "type": "integer"
+    },
+    {
+      "type": "string"
+    }
+  ],
+  "description": "JSON-RPC 2.0 request/response correlation identifier.",
+  "title": "RpcId"
+}

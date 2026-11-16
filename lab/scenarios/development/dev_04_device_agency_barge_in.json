@@ -1,0 +1,269 @@
+{
+  "id": "dev-04-agency-barge-in",
+  "name": "Dev 04 Self-Echo Agency, Non-Uptake & Barge-In Preemption",
+  "set": "development",
+  "start_time_ms": 0,
+  "model_latency_ms": 10,
+  "model_id": "scripted",
+  "embedder_id": "none",
+  "bodies": [
+    {
+      "body_id": "device-body",
+      "places": [
+        "room:device"
+      ],
+      "capabilities": [
+        {
+          "id": "device.speak",
+          "description": "Capability device.speak",
+          "places": [
+            "room:device"
+          ],
+          "flags": {
+            "communicative": true,
+            "identity_changing": false,
+            "irreversible": false
+          },
+          "typical_latency_ms": 10,
+          "capability_schema_hash": "sha256:cap-device.speak",
+          "sensed_effect": null
+        }
+      ],
+      "action_scripts": [
+        {
+          "capability_id": "device.speak",
+          "place": "room:device",
+          "payload_contains": "hello",
+          "outcome": "done",
+          "receipt_delay_ms": 50,
+          "termination_reason": "normal",
+          "progress": 1.0,
+          "delivered_units": 1,
+          "follow_up_percepts": [
+            {
+              "delay_ms": 100,
+              "actor": "soul",
+              "place": "room:device",
+              "audience": [
+                "alice",
+                "soul"
+              ],
+              "payload": [
+                101,
+                99,
+                104,
+                111,
+                58,
+                104,
+                101,
+                108,
+                108,
+                111
+              ]
+            }
+          ]
+        },
+        {
+          "capability_id": "device.speak",
+          "place": "room:device",
+          "payload_contains": "long speech",
+          "outcome": "done",
+          "receipt_delay_ms": 500,
+          "termination_reason": "normal",
+          "progress": 1.0,
+          "delivered_units": 1,
+          "follow_up_percepts": []
+        }
+      ]
+    }
+  ],
+  "events": [
+    {
+      "at_ms": 1000,
+      "body_id": "device-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:device",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 1000,
+        "payload": [
+          115,
+          97,
+          121,
+          32,
+          104,
+          101,
+          108,
+          108,
+          111
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 2000,
+      "body_id": "device-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:device",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 2000,
+        "payload": [
+          115,
+          97,
+          121,
+          32,
+          108,
+          111,
+          110,
+          103,
+          32,
+          115,
+          112,
+          101,
+          101,
+          99,
+          104
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 2020,
+      "body_id": null,
+      "event": {
+        "kind": "cancel_action",
+        "action_id": "act-2",
+        "termination_reason": "preempted_external",
+        "reason_code": "USER_BARGE_IN",
+        "detail": "barge-in interrupt"
+      }
+    }
+  ],
+  "scripted_model": [
+    {
+      "wake_index": 0,
+      "acts": [
+        {
+          "act": "act",
+          "capability_id": "device.speak",
+          "places": [
+            "room:device"
+          ],
+          "people": [
+            "alice"
+          ],
+          "payload": [
+            104,
+            101,
+            108,
+            108,
+            111,
+            32,
+            119,
+            111,
+            114,
+            108,
+            100
+          ],
+          "motivation": 4,
+          "confidence_0_20": 18,
+          "used_ids": [],
+          "expected": null,
+          "domain": null
+        }
+      ],
+      "tokens_in": 40,
+      "tokens_out": 15
+    },
+    {
+      "wake_index": 1,
+      "acts": [
+        {
+          "act": "act",
+          "capability_id": "device.speak",
+          "places": [
+            "room:device"
+          ],
+          "people": [
+            "alice"
+          ],
+          "payload": [
+            108,
+            111,
+            110,
+            103,
+            32,
+            115,
+            112,
+            101,
+            101,
+            99,
+            104,
+            32,
+            105,
+            110,
+            116,
+            101,
+            114,
+            114,
+            117,
+            112,
+            116,
+            105,
+            98,
+            108,
+            101
+          ],
+          "motivation": 4,
+          "confidence_0_20": 18,
+          "used_ids": [],
+          "expected": null,
+          "domain": null
+        }
+      ],
+      "tokens_in": 40,
+      "tokens_out": 15
+    }
+  ],
+  "checks": [
+    {
+      "check": "payload_contains",
+      "name": "echo_recorded",
+      "kind": "structural",
+      "place": "room:device",
+      "event_kind": "percept",
+      "text": "echo:hello",
+      "expected_present": true
+    }
+  ],
+  "annotations": {
+    "event_annotations": {
+      "0": {
+        "non_uptake_expected_repair": false
+      }
+    }
+  }
+}

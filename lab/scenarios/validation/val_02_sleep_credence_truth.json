@@ -1,0 +1,1248 @@
+{
+  "id": "val-02-sleep-credence",
+  "name": "Validation 02 Sleep, Boundaries & Credence",
+  "set": "validation",
+  "start_time_ms": 0,
+  "model_latency_ms": 10,
+  "model_id": "scripted",
+  "embedder_id": "none",
+  "bodies": [
+    {
+      "body_id": "chat-body",
+      "places": [
+        "room:study"
+      ],
+      "capabilities": [
+        {
+          "id": "chat.speak",
+          "description": "Capability chat.speak",
+          "places": [
+            "room:study"
+          ],
+          "flags": {
+            "communicative": true,
+            "identity_changing": false,
+            "irreversible": false
+          },
+          "typical_latency_ms": 10,
+          "capability_schema_hash": "sha256:cap-chat.speak",
+          "sensed_effect": null
+        }
+      ],
+      "action_scripts": []
+    }
+  ],
+  "events": [
+    {
+      "at_ms": 1000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 1000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          48
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 2000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 2000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          49
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 3000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 3000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          50
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 4000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 4000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          51
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 5000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 5000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          52
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 6000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 6000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          53
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 7000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 7000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          54
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 8000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 8000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          55
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 9000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 9000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          56
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 10000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 10000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          57
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 11000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 11000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          49,
+          48
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 12000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 12000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          49,
+          49
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 13000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 13000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          49,
+          50
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 14000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 14000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          49,
+          51
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 15000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 15000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          49,
+          52
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 16000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 16000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          49,
+          53
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 17000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 17000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          49,
+          54
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 18000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 18000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          49,
+          55
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 19000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 19000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          49,
+          56
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 20000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 20000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          49,
+          57
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 21000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 21000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          50,
+          48
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 22000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 22000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          50,
+          49
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 23000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 23000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          50,
+          50
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 24000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 24000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          50,
+          51
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 25000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 25000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          50,
+          52
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 26000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 26000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          50,
+          53
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 27000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 27000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          50,
+          54
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 28000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 28000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          50,
+          55
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 29000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 29000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          50,
+          56
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 30000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 30000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          50,
+          57
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 31000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 31000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          51,
+          48
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 32000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:study",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 32000,
+        "payload": [
+          116,
+          111,
+          112,
+          105,
+          99,
+          32,
+          65,
+          32,
+          112,
+          97,
+          114,
+          116,
+          32,
+          51,
+          49
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 40000,
+      "body_id": null,
+      "event": {
+        "kind": "record_calibration",
+        "conf_0_20": 18,
+        "correct": true
+      }
+    },
+    {
+      "at_ms": 40100,
+      "body_id": null,
+      "event": {
+        "kind": "record_calibration",
+        "conf_0_20": 2,
+        "correct": false
+      }
+    },
+    {
+      "at_ms": 40200,
+      "body_id": null,
+      "event": {
+        "kind": "record_calibration",
+        "conf_0_20": 16,
+        "correct": true
+      }
+    },
+    {
+      "at_ms": 40300,
+      "body_id": null,
+      "event": {
+        "kind": "record_calibration",
+        "conf_0_20": 4,
+        "correct": false
+      }
+    }
+  ],
+  "scripted_model": [
+    {
+      "wake_index": 0,
+      "acts": [
+        {
+          "act": "act",
+          "capability_id": "chat.speak",
+          "places": [
+            "room:study"
+          ],
+          "people": [],
+          "payload": [
+            85,
+            110,
+            100,
+            101,
+            114,
+            115,
+            116,
+            111,
+            111,
+            100,
+            32,
+            116,
+            111,
+            112,
+            105,
+            99,
+            32,
+            65
+          ],
+          "motivation": 4,
+          "confidence_0_20": 17,
+          "used_ids": [],
+          "expected": null,
+          "domain": null
+        }
+      ],
+      "tokens_in": 50,
+      "tokens_out": 15
+    },
+    {
+      "wake_index": 1,
+      "acts": [
+        {
+          "act": "consolidate",
+          "output": {
+            "consolidate_kind": "gist",
+            "summary": "Topic A covered",
+            "about_ids": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23,
+              24,
+              25,
+              26,
+              27,
+              28,
+              29,
+              30,
+              31,
+              32
+            ],
+            "places": [
+              "room:study"
+            ],
+            "people": [
+              "alice"
+            ],
+            "domain": null
+          }
+        }
+      ],
+      "tokens_in": 90,
+      "tokens_out": 30
+    }
+  ],
+  "checks": [],
+  "annotations": {
+    "episode_boundaries_ms": [
+      532000,
+      532010
+    ],
+    "boundary_tolerance_ms": 100000,
+    "report_control_probes": [
+      {
+        "wrong_volunteered": false,
+        "withheld": false,
+        "coarse": false
+      },
+      {
+        "wrong_volunteered": false,
+        "withheld": true,
+        "coarse": false
+      }
+    ],
+    "false_belief_probes": [
+      {
+        "question_id": "fb-1",
+        "answered_correctly": true
+      }
+    ]
+  }
+}

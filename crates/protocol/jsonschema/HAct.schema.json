@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Canonical action digest `H_act` (`R-42`) binding approvals to exact action parameters.",
+  "title": "HAct",
+  "type": "string"
+}

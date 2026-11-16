@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Deterministic hash of a capability's input/output schema (`R-38`).",
+  "title": "CapabilitySchemaHash",
+  "type": "string"
+}

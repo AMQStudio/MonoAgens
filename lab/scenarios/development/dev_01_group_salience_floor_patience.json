@@ -1,0 +1,557 @@
+{
+  "id": "dev-01-group-salience",
+  "name": "Dev 01 Group Salience, Floor, Habituation, Familiarity, Patience",
+  "set": "development",
+  "start_time_ms": 0,
+  "model_latency_ms": 50,
+  "model_id": "scripted",
+  "embedder_id": "none",
+  "bodies": [
+    {
+      "body_id": "chat-body",
+      "places": [
+        "room:group",
+        "room:new_channel"
+      ],
+      "capabilities": [
+        {
+          "id": "chat.speak",
+          "description": "Capability chat.speak",
+          "places": [
+            "room:group",
+            "room:new_channel"
+          ],
+          "flags": {
+            "communicative": true,
+            "identity_changing": false,
+            "irreversible": false
+          },
+          "typical_latency_ms": 10,
+          "capability_schema_hash": "sha256:cap-chat.speak",
+          "sensed_effect": null
+        }
+      ],
+      "action_scripts": []
+    }
+  ],
+  "events": [
+    {
+      "at_ms": 1000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:group",
+        "audience": [
+          "alice",
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 1000,
+        "payload": [
+          115,
+          111,
+          117,
+          108,
+          32,
+          112,
+          108,
+          101,
+          97,
+          115,
+          101,
+          32,
+          115,
+          117,
+          109,
+          109,
+          97,
+          114,
+          105,
+          122,
+          101
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 2000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:group",
+        "audience": [
+          "alice",
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 2000,
+        "payload": [
+          98,
+          111,
+          98,
+          32,
+          119,
+          104,
+          97,
+          116,
+          32,
+          100,
+          111,
+          32,
+          121,
+          111,
+          117,
+          32,
+          116,
+          104,
+          105,
+          110,
+          107
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "bob"
+        ],
+        "named": [
+          "bob"
+        ]
+      }
+    },
+    {
+      "at_ms": 3000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:group",
+        "audience": [
+          "alice",
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 3000,
+        "payload": [
+          98,
+          111,
+          98,
+          32,
+          115,
+          116,
+          105,
+          108,
+          108,
+          32,
+          108,
+          105,
+          115,
+          116,
+          101,
+          110,
+          105,
+          110,
+          103
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "bob"
+        ]
+      }
+    },
+    {
+      "at_ms": 4000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "bob",
+        "origin_actor": "bob",
+        "place": "room:new_channel",
+        "audience": [
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 4000,
+        "payload": [
+          114,
+          97,
+          110,
+          100,
+          111,
+          109,
+          32,
+          112,
+          105,
+          110,
+          103,
+          32,
+          105,
+          110,
+          32,
+          110,
+          101,
+          119,
+          32,
+          114,
+          111,
+          111,
+          109
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 5000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "bob",
+        "origin_actor": "bob",
+        "place": "room:group",
+        "audience": [
+          "alice",
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 5000,
+        "payload": [
+          115,
+          111,
+          117,
+          108,
+          32,
+          97,
+          110,
+          121,
+          32,
+          117,
+          112,
+          100,
+          97,
+          116,
+          101
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 6000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:group",
+        "audience": [
+          "alice",
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 6000,
+        "payload": [
+          98,
+          111,
+          98,
+          32,
+          97,
+          108,
+          114,
+          101,
+          97,
+          100,
+          121,
+          32,
+          97,
+          110,
+          115,
+          119,
+          101,
+          114,
+          101,
+          100
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "bob"
+        ]
+      }
+    },
+    {
+      "at_ms": 7000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:group",
+        "audience": [
+          "alice",
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 7000,
+        "payload": [
+          115,
+          111,
+          117,
+          108,
+          32,
+          99,
+          111,
+          110,
+          102,
+          105,
+          114,
+          109,
+          32,
+          114,
+          101,
+          99,
+          101,
+          105,
+          112,
+          116
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 8000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "bob",
+        "origin_actor": "bob",
+        "place": "room:group",
+        "audience": [
+          "alice",
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 8000,
+        "payload": [
+          114,
+          111,
+          117,
+          116,
+          105,
+          110,
+          101,
+          32,
+          111,
+          107
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 9000,
+      "body_id": null,
+      "event": {
+        "kind": "set_daily_budget",
+        "used": 120.0,
+        "limit": 1000.0
+      }
+    }
+  ],
+  "scripted_model": [
+    {
+      "wake_index": 0,
+      "acts": [
+        {
+          "act": "act",
+          "capability_id": "chat.speak",
+          "places": [
+            "room:group"
+          ],
+          "people": [],
+          "payload": [
+            72,
+            101,
+            114,
+            101,
+            32,
+            105,
+            115,
+            32,
+            116,
+            104,
+            101,
+            32,
+            115,
+            117,
+            109,
+            109,
+            97,
+            114,
+            121
+          ],
+          "motivation": 4,
+          "confidence_0_20": 17,
+          "used_ids": [],
+          "expected": null,
+          "domain": null
+        }
+      ],
+      "tokens_in": 80,
+      "tokens_out": 20
+    },
+    {
+      "wake_index": 1,
+      "acts": [
+        {
+          "act": "act",
+          "capability_id": "chat.speak",
+          "places": [
+            "room:group"
+          ],
+          "people": [],
+          "payload": [
+            83,
+            116,
+            97,
+            116,
+            117,
+            115,
+            32,
+            105,
+            115,
+            32,
+            111,
+            110,
+            32,
+            116,
+            114,
+            97,
+            99,
+            107
+          ],
+          "motivation": 4,
+          "confidence_0_20": 17,
+          "used_ids": [],
+          "expected": null,
+          "domain": null
+        }
+      ],
+      "tokens_in": 80,
+      "tokens_out": 20
+    },
+    {
+      "wake_index": 2,
+      "acts": [
+        {
+          "act": "act",
+          "capability_id": "chat.speak",
+          "places": [
+            "room:group"
+          ],
+          "people": [],
+          "payload": [
+            67,
+            111,
+            110,
+            102,
+            105,
+            114,
+            109,
+            101,
+            100
+          ],
+          "motivation": 4,
+          "confidence_0_20": 17,
+          "used_ids": [],
+          "expected": null,
+          "domain": null
+        }
+      ],
+      "tokens_in": 80,
+      "tokens_out": 15
+    }
+  ],
+  "checks": [
+    {
+      "check": "action_in_place",
+      "name": "spoke_on_addressed",
+      "kind": "structural",
+      "place": "room:group",
+      "capability_id": "chat.speak",
+      "after_ms": 1000,
+      "before_ms": 8000,
+      "expected_present": true
+    },
+    {
+      "check": "action_in_place",
+      "name": "silent_in_unfamiliar",
+      "kind": "structural",
+      "place": "room:new_channel",
+      "capability_id": null,
+      "after_ms": 0,
+      "before_ms": 10000,
+      "expected_present": false
+    }
+  ],
+  "annotations": {
+    "event_annotations": {
+      "0": {
+        "warranted": "speak",
+        "addressed_to_soul": true
+      },
+      "1": {
+        "warranted": "silent",
+        "sel_other": true
+      },
+      "2": {
+        "warranted": "silent",
+        "double_answer_eligible": true
+      },
+      "3": {
+        "warranted": "silent",
+        "unfamiliar_place": true
+      },
+      "4": {
+        "warranted": "speak",
+        "addressed_to_soul": true
+      },
+      "5": {
+        "warranted": "silent",
+        "answered": true
+      },
+      "6": {
+        "warranted": "speak",
+        "addressed_to_soul": true
+      },
+      "7": {
+        "warranted": "silent",
+        "low_value_if_spoken": true
+      }
+    },
+    "participant_count": 4,
+    "daily_budget_tokens": 1000,
+    "human_reply_delays_ms": [
+      40,
+      50,
+      70
+    ]
+  }
+}

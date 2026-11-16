@@ -1,0 +1,16 @@
+[project]
+name = "monoagens-body-sdk"
+version = "0.1.0"
+description = "Thin Waist-2 (monoagens.body.v1) Python body SDK shim"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=9.0"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

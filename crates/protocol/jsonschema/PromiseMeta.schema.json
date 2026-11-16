@@ -1,0 +1,61 @@
+{
+  "$defs": {
+    "ActorId": {
+      "description": "Opaque identifier of an actor (person, soul, or external participant).",
+      "type": "string"
+    },
+    "EventId": {
+      "description": "Opaque monotonic event sequence identifier in the core log.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "Time": {
+      "description": "Millisecond timestamp from an injected clock (`u64` ms since epoch).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Commitment metadata attached to a `promise` expectation (`R-49`).",
+  "properties": {
+    "conflict_key": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "depends_on": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EventId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "hard_deadline_ms": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Time"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "promisee_ids": {
+      "items": {
+        "$ref": "#/$defs/ActorId"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "promisee_ids"
+  ],
+  "title": "PromiseMeta",
+  "type": "object"
+}

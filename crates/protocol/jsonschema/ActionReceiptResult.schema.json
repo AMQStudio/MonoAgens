@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Result for `action/receipt`.",
+  "properties": {
+    "recorded": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "recorded"
+  ],
+  "title": "ActionReceiptResult",
+  "type": "object"
+}

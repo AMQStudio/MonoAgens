@@ -1,0 +1,13 @@
+[project]
+name = "monoagens-lab-adapters"
+version = "0.1.0"
+description = "Out-of-process stdio NDJSON baseline adapters for MonoAgens Lab (pinned to Context7 latest stable SDK contracts)"
+requires-python = ">=3.11"
+dependencies = [
+    "mem0ai>=2.2.1",
+    "letta-client>=0.1.0",
+    "langgraph>=0.3.0",
+    "langmem>=0.0.1",
+    "graphiti-core>=0.29.3",
+    "hermes-agent>=0.1.0",
+]

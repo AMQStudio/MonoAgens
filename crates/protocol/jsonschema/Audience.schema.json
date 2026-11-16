@@ -1,0 +1,16 @@
+{
+  "$defs": {
+    "ActorId": {
+      "description": "Opaque identifier of an actor (person, soul, or external participant).",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Set of actors that could perceive an event.",
+  "items": {
+    "$ref": "#/$defs/ActorId"
+  },
+  "title": "Audience",
+  "type": "array",
+  "uniqueItems": true
+}

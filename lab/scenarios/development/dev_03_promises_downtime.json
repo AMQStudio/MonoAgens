@@ -1,0 +1,598 @@
+{
+  "id": "dev-03-promises-downtime",
+  "name": "Dev 03 Promises Kept, KeptLate, Repaired, Broken & Downtime Burst",
+  "set": "development",
+  "start_time_ms": 0,
+  "model_latency_ms": 10,
+  "model_id": "scripted",
+  "embedder_id": "none",
+  "bodies": [
+    {
+      "body_id": "chat-body",
+      "places": [
+        "room:ops"
+      ],
+      "capabilities": [
+        {
+          "id": "chat.speak",
+          "description": "Capability chat.speak",
+          "places": [
+            "room:ops"
+          ],
+          "flags": {
+            "communicative": true,
+            "identity_changing": false,
+            "irreversible": false
+          },
+          "typical_latency_ms": 10,
+          "capability_schema_hash": "sha256:cap-chat.speak",
+          "sensed_effect": null
+        }
+      ],
+      "action_scripts": []
+    }
+  ],
+  "events": [
+    {
+      "at_ms": 1000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:ops",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 1000,
+        "payload": [
+          112,
+          108,
+          101,
+          97,
+          115,
+          101,
+          32,
+          116,
+          114,
+          97,
+          99,
+          107,
+          32,
+          102,
+          111,
+          117,
+          114,
+          32,
+          116,
+          97,
+          115,
+          107,
+          115
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 2000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:ops",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 2000,
+        "payload": [
+          114,
+          101,
+          115,
+          111,
+          108,
+          118,
+          101,
+          32,
+          116,
+          97,
+          115,
+          107,
+          32,
+          49,
+          32,
+          111,
+          110,
+          32,
+          116,
+          105,
+          109,
+          101
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 6000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:ops",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 6000,
+        "payload": [
+          114,
+          101,
+          115,
+          111,
+          108,
+          118,
+          101,
+          32,
+          116,
+          97,
+          115,
+          107,
+          32,
+          50,
+          32,
+          108,
+          97,
+          116,
+          101
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 7000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:ops",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 7000,
+        "payload": [
+          114,
+          101,
+          110,
+          101,
+          103,
+          111,
+          116,
+          105,
+          97,
+          116,
+          101,
+          32,
+          116,
+          97,
+          115,
+          107,
+          32,
+          51
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 8000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:ops",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 8000,
+        "payload": [
+          116,
+          97,
+          115,
+          107,
+          32,
+          52,
+          32,
+          102,
+          97,
+          105,
+          108,
+          101,
+          100
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 50000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "bob",
+        "origin_actor": "bob",
+        "place": "room:ops",
+        "audience": [
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 50000,
+        "payload": [
+          98,
+          97,
+          99,
+          107,
+          108,
+          111,
+          103,
+          32,
+          49,
+          32,
+          100,
+          117,
+          114,
+          105,
+          110,
+          103,
+          32,
+          100,
+          111,
+          119,
+          110,
+          116,
+          105,
+          109,
+          101
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 50100,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "bob",
+        "origin_actor": "bob",
+        "place": "room:ops",
+        "audience": [
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 50100,
+        "payload": [
+          98,
+          97,
+          99,
+          107,
+          108,
+          111,
+          103,
+          32,
+          50,
+          32,
+          100,
+          117,
+          114,
+          105,
+          110,
+          103,
+          32,
+          100,
+          111,
+          119,
+          110,
+          116,
+          105,
+          109,
+          101
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 50200,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "bob",
+        "origin_actor": "bob",
+        "place": "room:ops",
+        "audience": [
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 50200,
+        "payload": [
+          98,
+          97,
+          99,
+          107,
+          108,
+          111,
+          103,
+          32,
+          51,
+          32,
+          100,
+          117,
+          114,
+          105,
+          110,
+          103,
+          32,
+          100,
+          111,
+          119,
+          110,
+          116,
+          105,
+          109,
+          101
+        ],
+        "taint": "untrusted"
+      }
+    }
+  ],
+  "scripted_model": [
+    {
+      "wake_index": 0,
+      "acts": [
+        {
+          "act": "expect",
+          "expect_kind": "promise",
+          "about_ids": [
+            1
+          ],
+          "places": [
+            "room:ops"
+          ],
+          "people": [
+            "alice"
+          ],
+          "condition": "task 1",
+          "due_ms": 3000,
+          "expiry_ms": 10000,
+          "recurrence": null,
+          "promise_meta": null,
+          "domain": null
+        },
+        {
+          "act": "expect",
+          "expect_kind": "promise",
+          "about_ids": [
+            1
+          ],
+          "places": [
+            "room:ops"
+          ],
+          "people": [
+            "alice"
+          ],
+          "condition": "task 2",
+          "due_ms": 4000,
+          "expiry_ms": 10000,
+          "recurrence": null,
+          "promise_meta": null,
+          "domain": null
+        },
+        {
+          "act": "expect",
+          "expect_kind": "promise",
+          "about_ids": [
+            1
+          ],
+          "places": [
+            "room:ops"
+          ],
+          "people": [
+            "alice"
+          ],
+          "condition": "task 3",
+          "due_ms": 15000,
+          "expiry_ms": 20000,
+          "recurrence": null,
+          "promise_meta": null,
+          "domain": null
+        },
+        {
+          "act": "expect",
+          "expect_kind": "promise",
+          "about_ids": [
+            1
+          ],
+          "places": [
+            "room:ops"
+          ],
+          "people": [
+            "alice"
+          ],
+          "condition": "task 4",
+          "due_ms": 15000,
+          "expiry_ms": 20000,
+          "recurrence": null,
+          "promise_meta": null,
+          "domain": null
+        }
+      ],
+      "tokens_in": 60,
+      "tokens_out": 40
+    },
+    {
+      "wake_index": 1,
+      "acts": [
+        {
+          "act": "resolve",
+          "expectation_id": 6,
+          "outcome": "kept",
+          "note": null,
+          "places": [
+            "room:ops"
+          ],
+          "people": [
+            "alice"
+          ],
+          "domain": null
+        }
+      ],
+      "tokens_in": 30,
+      "tokens_out": 10
+    },
+    {
+      "wake_index": 2,
+      "acts": [
+        {
+          "act": "resolve",
+          "expectation_id": 7,
+          "outcome": "kept_late",
+          "note": null,
+          "places": [
+            "room:ops"
+          ],
+          "people": [
+            "alice"
+          ],
+          "domain": null
+        }
+      ],
+      "tokens_in": 30,
+      "tokens_out": 10
+    },
+    {
+      "wake_index": 3,
+      "acts": [
+        {
+          "act": "resolve",
+          "expectation_id": 8,
+          "outcome": "renegotiated",
+          "note": null,
+          "places": [
+            "room:ops"
+          ],
+          "people": [
+            "alice"
+          ],
+          "domain": null
+        }
+      ],
+      "tokens_in": 30,
+      "tokens_out": 10
+    },
+    {
+      "wake_index": 4,
+      "acts": [
+        {
+          "act": "resolve",
+          "expectation_id": 9,
+          "outcome": "failed",
+          "note": null,
+          "places": [
+            "room:ops"
+          ],
+          "people": [
+            "alice"
+          ],
+          "domain": null
+        }
+      ],
+      "tokens_in": 30,
+      "tokens_out": 10
+    }
+  ],
+  "checks": [
+    {
+      "check": "decision_is",
+      "name": "addressed_task_request_go_commitment",
+      "kind": "structural",
+      "target_event_id": 1,
+      "expected_outcome": "go",
+      "expected_reason": "commitment"
+    },
+    {
+      "check": "decision_is",
+      "name": "addressed_resolve_go_commitment",
+      "kind": "structural",
+      "target_event_id": 10,
+      "expected_outcome": "go",
+      "expected_reason": "commitment"
+    },
+    {
+      "check": "decision_is",
+      "name": "unaddressed_downtime_silent",
+      "kind": "structural",
+      "target_event_id": 46,
+      "expected_outcome": "silent",
+      "expected_reason": "below_note_band"
+    },
+    {
+      "check": "context_contains",
+      "name": "ops_context_includes_request",
+      "kind": "structural",
+      "item_event_id": 1,
+      "label": "room:ops",
+      "expected_present": true
+    },
+    {
+      "check": "action_in_place",
+      "name": "no_unsolicited_actions_ops",
+      "kind": "structural",
+      "place": "room:ops",
+      "capability_id": null,
+      "after_ms": 0,
+      "before_ms": 60000,
+      "expected_present": false
+    }
+  ],
+  "annotations": {
+    "downtime_windows_ms": [
+      [
+        49900,
+        51000
+      ]
+    ]
+  }
+}

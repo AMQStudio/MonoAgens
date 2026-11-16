@@ -1,0 +1,58 @@
+{
+  "$defs": {
+    "ProtocolVersion": {
+      "description": "Semantic major/minor protocol version carried by every message.",
+      "properties": {
+        "major": {
+          "format": "uint16",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "maximum": 0,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Verdict returned by a `Classify` model call (e.g., judged-silence or learning outcome evaluation).",
+  "properties": {
+    "label": {
+      "type": "string"
+    },
+    "protocol_version": {
+      "$ref": "#/$defs/ProtocolVersion",
+      "default": {
+        "major": 1,
+        "minor": 0
+      }
+    },
+    "rationale": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "score": {
+      "format": "float",
+      "type": [
+        "number",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "label"
+  ],
+  "title": "ClassificationVerdict",
+  "type": "object"
+}

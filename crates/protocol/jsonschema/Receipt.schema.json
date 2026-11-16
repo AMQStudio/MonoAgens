@@ -1,0 +1,116 @@
+{
+  "$defs": {
+    "ActionId": {
+      "description": "Opaque identifier of a dispatched action.",
+      "type": "string"
+    },
+    "CapabilityId": {
+      "description": "Opaque identifier of a declared body capability.",
+      "type": "string"
+    },
+    "HAct": {
+      "description": "Canonical action digest `H_act` (`R-42`) binding approvals to exact action parameters.",
+      "type": "string"
+    },
+    "ReceiptOutcome": {
+      "description": "Five canonical outcomes of an action (`ARCHITECTURE.md` L198).",
+      "enum": [
+        "done",
+        "refused",
+        "held",
+        "failed",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "TerminationReason": {
+      "description": "Option A additive termination reason (`R-36`, `R-37`).",
+      "enum": [
+        "normal",
+        "canceled_by_core",
+        "preempted_external",
+        "timed_out"
+      ],
+      "type": "string"
+    },
+    "Time": {
+      "description": "Millisecond timestamp from an injected clock (`u64` ms since epoch).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Terminal or held receipt produced for an action.",
+  "properties": {
+    "action_id": {
+      "$ref": "#/$defs/ActionId"
+    },
+    "capability_id": {
+      "$ref": "#/$defs/CapabilityId"
+    },
+    "delivered_units": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "detail": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "h_act": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HAct"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "outcome": {
+      "$ref": "#/$defs/ReceiptOutcome"
+    },
+    "progress": {
+      "format": "float",
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "reason_code": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "termination_reason": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TerminationReason"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "timestamp_ms": {
+      "$ref": "#/$defs/Time"
+    }
+  },
+  "required": [
+    "action_id",
+    "capability_id",
+    "outcome",
+    "timestamp_ms"
+  ],
+  "title": "Receipt",
+  "type": "object"
+}

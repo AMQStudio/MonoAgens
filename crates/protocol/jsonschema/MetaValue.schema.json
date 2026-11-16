@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "type": "null"
+    },
+    {
+      "type": "boolean"
+    },
+    {
+      "format": "int64",
+      "type": "integer"
+    },
+    {
+      "format": "double",
+      "type": "number"
+    },
+    {
+      "type": "string"
+    },
+    {
+      "items": {
+        "$ref": "#"
+      },
+      "type": "array"
+    },
+    {
+      "additionalProperties": {
+        "$ref": "#"
+      },
+      "type": "object"
+    }
+  ],
+  "description": "JSON value subset for reverse-DNS `_meta` extensions without tying `protocol` to `serde_json`.",
+  "title": "MetaValue"
+}

@@ -1,0 +1,16 @@
+[package]
+name = "monoagens-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+tck-hooks = []
+
+[dependencies]
+monoagens-protocol = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

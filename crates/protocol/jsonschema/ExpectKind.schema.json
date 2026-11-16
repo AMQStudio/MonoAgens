@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Expectation kinds supported by `expect` acts and Core's expectation book.",
+  "enum": [
+    "effect",
+    "response",
+    "wait",
+    "promise",
+    "goal",
+    "monitor",
+    "pending_approval"
+  ],
+  "title": "ExpectKind",
+  "type": "string"
+}

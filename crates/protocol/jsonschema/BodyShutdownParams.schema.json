@@ -1,0 +1,114 @@
+{
+  "$defs": {
+    "BodyId": {
+      "description": "Opaque identifier of a connected body adapter.",
+      "type": "string"
+    },
+    "MetaValue": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "format": "int64",
+          "type": "integer"
+        },
+        {
+          "format": "double",
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/MetaValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/MetaValue"
+          },
+          "type": "object"
+        }
+      ],
+      "description": "JSON value subset for reverse-DNS `_meta` extensions without tying `protocol` to `serde_json`."
+    },
+    "ProtocolVersion": {
+      "description": "Semantic major/minor protocol version carried by every message.",
+      "properties": {
+        "major": {
+          "format": "uint16",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "maximum": 0,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    },
+    "Waist2Headers": {
+      "description": "Transport-level Waist 2 headers separated from domain facts.",
+      "properties": {
+        "_meta": {
+          "additionalProperties": {
+            "$ref": "#/$defs/MetaValue"
+          },
+          "type": "object"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "protocol_version": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "traceparent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "idempotency_key",
+        "protocol_version"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Parameters for `body/shutdown`.",
+  "properties": {
+    "body_id": {
+      "$ref": "#/$defs/BodyId"
+    },
+    "headers": {
+      "$ref": "#/$defs/Waist2Headers"
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "headers",
+    "body_id"
+  ],
+  "title": "BodyShutdownParams",
+  "type": "object"
+}

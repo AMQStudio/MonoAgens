@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Five canonical outcomes of an action (`ARCHITECTURE.md` L198).",
+  "enum": [
+    "done",
+    "refused",
+    "held",
+    "failed",
+    "unknown"
+  ],
+  "title": "ReceiptOutcome",
+  "type": "string"
+}

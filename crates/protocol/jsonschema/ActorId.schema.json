@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Opaque identifier of an actor (person, soul, or external participant).",
+  "title": "ActorId",
+  "type": "string"
+}

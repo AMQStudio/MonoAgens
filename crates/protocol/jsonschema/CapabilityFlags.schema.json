@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Capability behavioral flags declared by a body.",
+  "properties": {
+    "communicative": {
+      "type": "boolean"
+    },
+    "identity_changing": {
+      "type": "boolean"
+    },
+    "irreversible": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "communicative",
+    "identity_changing",
+    "irreversible"
+  ],
+  "title": "CapabilityFlags",
+  "type": "object"
+}

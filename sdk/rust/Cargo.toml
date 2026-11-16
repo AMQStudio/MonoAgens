@@ -1,0 +1,13 @@
+[workspace]
+
+[package]
+name = "monoagens-body-sdk"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+monoagens-protocol = { path = "../../crates/protocol" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"

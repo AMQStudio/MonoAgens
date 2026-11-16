@@ -1,0 +1,23 @@
+[package]
+name = "monoagens-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["usearch"]
+usearch = ["dep:usearch"]
+
+[dependencies]
+blake3 = { workspace = true }
+hnsw_rs = { workspace = true }
+monoagens-core = { workspace = true }
+monoagens-protocol = { workspace = true }
+postcard = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+usearch = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = { workspace = true }

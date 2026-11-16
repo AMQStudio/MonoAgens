@@ -1,0 +1,157 @@
+{
+  "$defs": {
+    "ActorId": {
+      "description": "Opaque identifier of an actor (person, soul, or external participant).",
+      "type": "string"
+    },
+    "Audience": {
+      "description": "Set of actors that could perceive an event.",
+      "items": {
+        "$ref": "#/$defs/ActorId"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "MetaValue": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "format": "int64",
+          "type": "integer"
+        },
+        {
+          "format": "double",
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/MetaValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/MetaValue"
+          },
+          "type": "object"
+        }
+      ],
+      "description": "JSON value subset for reverse-DNS `_meta` extensions without tying `protocol` to `serde_json`."
+    },
+    "OpaquePayload": {
+      "description": "Opaque payload bytes carried unchanged through Core without interpretation.",
+      "items": {
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "array"
+    },
+    "PlaceId": {
+      "description": "Opaque identifier of a place where percepts originate or actions land.",
+      "type": "string"
+    },
+    "ProtocolVersion": {
+      "description": "Semantic major/minor protocol version carried by every message.",
+      "properties": {
+        "major": {
+          "format": "uint16",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "maximum": 0,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    },
+    "Time": {
+      "description": "Millisecond timestamp from an injected clock (`u64` ms since epoch).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "Waist2Headers": {
+      "description": "Transport-level Waist 2 headers separated from domain facts.",
+      "properties": {
+        "_meta": {
+          "additionalProperties": {
+            "$ref": "#/$defs/MetaValue"
+          },
+          "type": "object"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "protocol_version": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "traceparent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "idempotency_key",
+        "protocol_version"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Parameters for `question/answer`.",
+  "properties": {
+    "actor": {
+      "$ref": "#/$defs/ActorId"
+    },
+    "answer": {
+      "$ref": "#/$defs/OpaquePayload"
+    },
+    "audience": {
+      "$ref": "#/$defs/Audience",
+      "minItems": 1
+    },
+    "headers": {
+      "$ref": "#/$defs/Waist2Headers"
+    },
+    "place": {
+      "$ref": "#/$defs/PlaceId"
+    },
+    "question_id": {
+      "type": "string"
+    },
+    "timestamp_ms": {
+      "$ref": "#/$defs/Time"
+    }
+  },
+  "required": [
+    "headers",
+    "question_id",
+    "actor",
+    "place",
+    "audience",
+    "answer",
+    "timestamp_ms"
+  ],
+  "title": "QuestionAnswerParams",
+  "type": "object"
+}

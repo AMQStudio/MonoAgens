@@ -1,0 +1,22 @@
+{
+  "$defs": {
+    "Time": {
+      "description": "Millisecond timestamp from an injected clock (`u64` ms since epoch).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Result for `body/heartbeat`.",
+  "properties": {
+    "acknowledged_at_ms": {
+      "$ref": "#/$defs/Time"
+    }
+  },
+  "required": [
+    "acknowledged_at_ms"
+  ],
+  "title": "BodyHeartbeatResult",
+  "type": "object"
+}

@@ -1,0 +1,494 @@
+//! Secret and endpoint loading with strict isolation from scenario/soul files.
+//!
+//! Provider keys and endpoints are loaded exclusively from environment variables or
+//! a dedicated secrets file (`ARCHITECTURE.md`, "Configuration and secrets"). Any key
+//! or credential discovered inside a scenario or soul file fails loudly with a
+//! diagnostic explaining where secrets belong.
+
+use core::fmt;
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use serde_json::Value;
+
+/// Redacted secret string wrapper whose `Debug` and `Display` never print secret material.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SecretString(String);
+
+impl SecretString {
+    /// Wraps a secret string.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Exposes the underlying secret solely for constructing outbound auth headers.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+
+    /// Returns `true` if the secret is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("[REDACTED]")
+    }
+}
+
+impl fmt::Display for SecretString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("[REDACTED]")
+    }
+}
+
+/// Non-secret configuration source kinds where provider secrets are forbidden.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigSourceKind {
+    Scenario,
+    Soul,
+    Prior,
+}
+
+impl ConfigSourceKind {
+    /// Human-readable label for diagnostics.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Scenario => "scenario",
+            Self::Soul => "soul",
+            Self::Prior => "prior",
+        }
+    }
+}
+
+impl fmt::Display for ConfigSourceKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Typed errors returned when loading or validating provider secrets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SecretError {
+    MissingRequired {
+        name: String,
+        hint: String,
+    },
+    Io {
+        path: String,
+        detail: String,
+    },
+    Parse {
+        detail: String,
+    },
+    SecretInConfigFile {
+        source_kind: ConfigSourceKind,
+        field: String,
+    },
+}
+
+impl fmt::Display for SecretError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingRequired { name, hint } => {
+                write!(f, "missing required provider secret '{name}': {hint}")
+            }
+            Self::Io { path, detail } => {
+                write!(f, "failed to read secrets file '{path}': {detail}")
+            }
+            Self::Parse { detail } => {
+                write!(f, "invalid secrets file format: {detail}")
+            }
+            Self::SecretInConfigFile { source_kind, field } => {
+                write!(
+                    f,
+                    "provider secret found in {source_kind} file at '{field}'; \
+                     secrets belong in environment variables or a separate secrets file, \
+                     never in scenario or soul files"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for SecretError {}
+
+/// Canonical environment variable names for model and embedding providers.
+pub const ENV_MODEL_API_KEY: &str = "MONOAGENS_MODEL_API_KEY";
+pub const ENV_MODEL_ENDPOINT: &str = "MONOAGENS_MODEL_ENDPOINT";
+pub const ENV_EMBED_API_KEY: &str = "MONOAGENS_EMBED_API_KEY";
+pub const ENV_EMBED_ENDPOINT: &str = "MONOAGENS_EMBED_ENDPOINT";
+pub const ENV_OPENAI_API_KEY: &str = "OPENAI_API_KEY";
+pub const ENV_OPENAI_BASE_URL: &str = "OPENAI_BASE_URL";
+
+/// Provider keys and endpoints loaded from environment variables or a dedicated secrets file.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct ProviderSecrets {
+    pub model_api_key: Option<SecretString>,
+    pub model_endpoint: Option<String>,
+    pub embed_api_key: Option<SecretString>,
+    pub embed_endpoint: Option<String>,
+}
+
+impl fmt::Debug for ProviderSecrets {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProviderSecrets")
+            .field(
+                "model_api_key",
+                &self.model_api_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("model_endpoint", &self.model_endpoint)
+            .field(
+                "embed_api_key",
+                &self.embed_api_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("embed_endpoint", &self.embed_endpoint)
+            .finish()
+    }
+}
+
+impl ProviderSecrets {
+    /// Loads secrets and endpoints from process environment variables.
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self::from_lookup(|key| std::env::var(key).ok())
+    }
+
+    /// Loads secrets and endpoints using an injected environment lookup closure (for deterministic tests).
+    #[must_use]
+    pub fn from_lookup<F>(lookup: F) -> Self
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let non_empty = |name: &str| {
+            lookup(name)
+                .map(|v| v.trim().to_owned())
+                .filter(|v| !v.is_empty())
+        };
+
+        let model_api_key = non_empty(ENV_MODEL_API_KEY)
+            .or_else(|| non_empty(ENV_OPENAI_API_KEY))
+            .map(SecretString::new);
+        let model_endpoint =
+            non_empty(ENV_MODEL_ENDPOINT).or_else(|| non_empty(ENV_OPENAI_BASE_URL));
+        let embed_api_key = non_empty(ENV_EMBED_API_KEY)
+            .or_else(|| non_empty(ENV_MODEL_API_KEY))
+            .or_else(|| non_empty(ENV_OPENAI_API_KEY))
+            .map(SecretString::new);
+        let embed_endpoint = non_empty(ENV_EMBED_ENDPOINT)
+            .or_else(|| non_empty(ENV_MODEL_ENDPOINT))
+            .or_else(|| non_empty(ENV_OPENAI_BASE_URL));
+
+        Self {
+            model_api_key,
+            model_endpoint,
+            embed_api_key,
+            embed_endpoint,
+        }
+    }
+
+    /// Loads secrets and endpoints from a separate dedicated secrets file (JSON object or `KEY=VALUE` lines).
+    pub fn from_secrets_file(path: &Path) -> Result<Self, SecretError> {
+        let raw = std::fs::read_to_string(path).map_err(|err| SecretError::Io {
+            path: path.display().to_string(),
+            detail: err.to_string(),
+        })?;
+        Self::parse_secrets_str(&raw)
+    }
+
+    /// Parses a dedicated secrets file body (JSON object or `KEY=VALUE` lines).
+    pub fn parse_secrets_str(raw: &str) -> Result<Self, SecretError> {
+        let trimmed = raw.trim();
+        let mut map: BTreeMap<String, String> = BTreeMap::new();
+
+        if trimmed.starts_with('{') {
+            let val: Value = serde_json::from_str(trimmed).map_err(|err| SecretError::Parse {
+                detail: format!("invalid JSON secrets file: {err}"),
+            })?;
+            let obj = val.as_object().ok_or_else(|| SecretError::Parse {
+                detail: "secrets JSON root must be an object".to_owned(),
+            })?;
+            for (k, v) in obj {
+                if let Some(s) = v.as_str() {
+                    let s = s.trim();
+                    if !s.is_empty() {
+                        map.insert(k.to_owned(), s.to_owned());
+                    }
+                } else if !v.is_null() {
+                    return Err(SecretError::Parse {
+                        detail: format!("secret entry '{k}' must be a string or null"),
+                    });
+                }
+            }
+        } else {
+            for (line_no, line) in raw.lines().enumerate() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                let (k, v) = line.split_once('=').ok_or_else(|| SecretError::Parse {
+                    detail: format!("line {} missing '=' in KEY=VALUE format", line_no + 1),
+                })?;
+                let key = k.trim();
+                let mut val = v.trim();
+                if ((val.starts_with('"') && val.ends_with('"'))
+                    || (val.starts_with('\'') && val.ends_with('\'')))
+                    && val.len() >= 2
+                {
+                    val = &val[1..val.len() - 1];
+                }
+                if !key.is_empty() && !val.is_empty() {
+                    map.insert(key.to_owned(), val.to_owned());
+                }
+            }
+        }
+
+        let pick =
+            |keys: &[&str]| -> Option<String> { keys.iter().find_map(|k| map.get(*k).cloned()) };
+
+        let model_api_key = pick(&[
+            "model_api_key",
+            ENV_MODEL_API_KEY,
+            "openai_api_key",
+            ENV_OPENAI_API_KEY,
+            "api_key",
+        ])
+        .map(SecretString::new);
+        let model_endpoint = pick(&[
+            "model_endpoint",
+            ENV_MODEL_ENDPOINT,
+            "openai_base_url",
+            ENV_OPENAI_BASE_URL,
+            "endpoint",
+        ]);
+        let embed_api_key = pick(&[
+            "embed_api_key",
+            ENV_EMBED_API_KEY,
+            "model_api_key",
+            ENV_MODEL_API_KEY,
+            "openai_api_key",
+            ENV_OPENAI_API_KEY,
+            "api_key",
+        ])
+        .map(SecretString::new);
+        let embed_endpoint = pick(&[
+            "embed_endpoint",
+            ENV_EMBED_ENDPOINT,
+            "model_endpoint",
+            ENV_MODEL_ENDPOINT,
+            "openai_base_url",
+            ENV_OPENAI_BASE_URL,
+            "endpoint",
+        ]);
+
+        Ok(Self {
+            model_api_key,
+            model_endpoint,
+            embed_api_key,
+            embed_endpoint,
+        })
+    }
+
+    /// Returns all contained secrets for output scrubbing.
+    #[must_use]
+    pub fn all_secrets(&self) -> Vec<&SecretString> {
+        let mut out = Vec::new();
+        if let Some(k) = &self.model_api_key {
+            out.push(k);
+        }
+        if let Some(k) = &self.embed_api_key {
+            out.push(k);
+        }
+        out
+    }
+
+    /// Scrubs all loaded secret values and common token shapes from `text`.
+    #[must_use]
+    pub fn redact_text(&self, text: &str) -> String {
+        redact_secrets(text, &self.all_secrets())
+    }
+}
+
+/// Returns `true` if a configuration field name looks like a provider credential/secret key.
+fn is_forbidden_secret_key_name(key: &str) -> bool {
+    let norm = key.trim().to_ascii_lowercase();
+    matches!(
+        norm.as_str(),
+        "api_key"
+            | "apikey"
+            | "provider_key"
+            | "provider_api_key"
+            | "model_api_key"
+            | "embed_api_key"
+            | "openai_api_key"
+            | "secret"
+            | "secret_key"
+            | "client_secret"
+            | "api_secret"
+            | "auth_token"
+            | "bearer_token"
+            | "access_token"
+            | "private_key"
+            | "authorization"
+            | "password"
+            | "monoagens_model_api_key"
+            | "monoagens_embed_api_key"
+    )
+}
+
+fn looks_like_embedded_secret_value(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.starts_with("Bearer ") && trimmed.len() > "Bearer ".len() + 6 {
+        return true;
+    }
+    if (trimmed.starts_with("sk-") || trimmed.starts_with("sk-proj-")) && trimmed.len() >= 16 {
+        return true;
+    }
+    false
+}
+
+/// Validates that a parsed scenario, soul, or prior JSON value contains no provider secrets.
+pub fn validate_no_secrets_in_json(
+    source_kind: ConfigSourceKind,
+    value: &Value,
+) -> Result<(), SecretError> {
+    validate_json_recursive(source_kind, value, "$")
+}
+
+fn validate_json_recursive(
+    source_kind: ConfigSourceKind,
+    value: &Value,
+    path: &str,
+) -> Result<(), SecretError> {
+    match value {
+        Value::Object(map) => {
+            for (k, v) in map {
+                let child_path = format!("{path}.{k}");
+                if is_forbidden_secret_key_name(k) {
+                    let has_value = match v {
+                        Value::Null => false,
+                        Value::String(s) => !s.trim().is_empty(),
+                        _ => true,
+                    };
+                    if has_value {
+                        return Err(SecretError::SecretInConfigFile {
+                            source_kind,
+                            field: child_path,
+                        });
+                    }
+                }
+                validate_json_recursive(source_kind, v, &child_path)?;
+            }
+            Ok(())
+        }
+        Value::Array(items) => {
+            for (idx, item) in items.iter().enumerate() {
+                let child_path = format!("{path}[{idx}]");
+                validate_json_recursive(source_kind, item, &child_path)?;
+            }
+            Ok(())
+        }
+        Value::String(s) => {
+            if looks_like_embedded_secret_value(s) {
+                return Err(SecretError::SecretInConfigFile {
+                    source_kind,
+                    field: path.to_owned(),
+                });
+            }
+            Ok(())
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => Ok(()),
+    }
+}
+
+/// Validates that raw scenario or soul text (JSON or key/value text) contains no provider secrets.
+pub fn validate_no_secrets_in_str(
+    source_kind: ConfigSourceKind,
+    raw: &str,
+) -> Result<(), SecretError> {
+    if let Ok(val) = serde_json::from_str::<Value>(raw) {
+        return validate_no_secrets_in_json(source_kind, &val);
+    }
+
+    for (idx, line) in raw.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some((k, v)) = trimmed.split_once('=').or_else(|| trimmed.split_once(':')) {
+            let key = k.trim().trim_matches('"').trim_matches('\'');
+            let val = v.trim().trim_matches('"').trim_matches('\'');
+            if is_forbidden_secret_key_name(key) && !val.is_empty() && val != "null" {
+                return Err(SecretError::SecretInConfigFile {
+                    source_kind,
+                    field: format!("line {}:{}", idx + 1, key),
+                });
+            }
+            if looks_like_embedded_secret_value(val) {
+                return Err(SecretError::SecretInConfigFile {
+                    source_kind,
+                    field: format!("line {}:{}", idx + 1, key),
+                });
+            }
+        } else if looks_like_embedded_secret_value(trimmed) {
+            return Err(SecretError::SecretInConfigFile {
+                source_kind,
+                field: format!("line {}", idx + 1),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Scrubs any occurrences of explicit `secrets` and `Bearer` / `sk-` token patterns from `text`.
+#[must_use]
+pub fn redact_secrets(text: &str, secrets: &[&SecretString]) -> String {
+    let mut out = text.to_owned();
+    for secret in secrets {
+        let raw = secret.expose();
+        if !raw.is_empty() {
+            out = out.replace(raw, "[REDACTED]");
+        }
+    }
+    scrub_bearer_tokens(&out)
+}
+
+fn scrub_bearer_tokens(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(pos) = rest.find("Bearer ") {
+        out.push_str(&rest[..pos]);
+        out.push_str("Bearer [REDACTED]");
+        let after = &rest[pos + "Bearer ".len()..];
+        let token_len = after
+            .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ',' | '}' | ']'))
+            .unwrap_or(after.len());
+        rest = &after[token_len..];
+    }
+    out.push_str(rest);
+
+    // Also scrub inline `sk-...` tokens of length >= 12.
+    let mut final_out = String::with_capacity(out.len());
+    let mut rem = out.as_str();
+    while let Some(pos) = rem.find("sk-") {
+        final_out.push_str(&rem[..pos]);
+        let after = &rem[pos..];
+        let tok_len = after
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+            .unwrap_or(after.len());
+        if tok_len >= 12 {
+            final_out.push_str("[REDACTED]");
+        } else {
+            final_out.push_str(&after[..tok_len]);
+        }
+        rem = &after[tok_len..];
+    }
+    final_out.push_str(rem);
+    final_out
+}

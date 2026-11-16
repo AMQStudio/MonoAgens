@@ -1,0 +1,60 @@
+{
+  "$defs": {
+    "ActorId": {
+      "description": "Opaque identifier of an actor (person, soul, or external participant).",
+      "type": "string"
+    },
+    "BodyId": {
+      "description": "Opaque identifier of a connected body adapter.",
+      "type": "string"
+    },
+    "PrincipalLinkStatus": {
+      "description": "Status of a cross-body principal identity link (`R-44`).",
+      "enum": [
+        "linked",
+        "unlinked"
+      ],
+      "type": "string"
+    },
+    "Time": {
+      "description": "Millisecond timestamp from an injected clock (`u64` ms since epoch).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Cross-body identity linkage record mapping a body-local actor to a canonical person actor.",
+  "properties": {
+    "body_id": {
+      "$ref": "#/$defs/BodyId"
+    },
+    "canonical_actor": {
+      "$ref": "#/$defs/ActorId"
+    },
+    "challenge_hash": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "platform_actor": {
+      "$ref": "#/$defs/ActorId"
+    },
+    "status": {
+      "$ref": "#/$defs/PrincipalLinkStatus"
+    },
+    "updated_at_ms": {
+      "$ref": "#/$defs/Time"
+    }
+  },
+  "required": [
+    "body_id",
+    "platform_actor",
+    "canonical_actor",
+    "status",
+    "updated_at_ms"
+  ],
+  "title": "PrincipalLink",
+  "type": "object"
+}

@@ -1,0 +1,46 @@
+{
+  "$defs": {
+    "OpaquePayload": {
+      "description": "Opaque payload bytes carried unchanged through Core without interpretation.",
+      "items": {
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "array"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Result for `blob/get`.",
+  "properties": {
+    "blob_ref": {
+      "type": "string"
+    },
+    "byte_len": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "bytes": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OpaquePayload"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sha256": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "blob_ref",
+    "sha256",
+    "byte_len"
+  ],
+  "title": "BlobGetResult",
+  "type": "object"
+}

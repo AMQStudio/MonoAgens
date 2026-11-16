@@ -1,0 +1,30 @@
+[package]
+name = "monoagens-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "monoagens"
+path = "src/main.rs"
+
+[dependencies]
+body-cli = { path = "../../bodies/body-cli" }
+clap = { version = "4.6", features = ["derive"] }
+monoagens-body-kit = { workspace = true }
+monoagens-body-sdk = { path = "../../sdk/rust" }
+monoagens-conformance = { path = "../../crates/conformance" }
+monoagens-core = { workspace = true }
+monoagens-gateway = { workspace = true }
+monoagens-lab = { path = "../../crates/lab" }
+monoagens-protocol = { workspace = true }
+monoagens-reason = { workspace = true }
+monoagens-store = { workspace = true }
+monoagens-valve = { path = "../../crates/valve" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "io-util", "sync", "time"] }
+toml_edit = "0.25.19"
+
+[dev-dependencies]
+tempfile = { workspace = true }

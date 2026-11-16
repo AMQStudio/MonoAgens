@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The twelve stateless JSON-RPC 2.0 methods defining Waist 2 (`monoagens.body.v1`).",
+  "enum": [
+    "body/discover",
+    "body/heartbeat",
+    "body/shutdown",
+    "percept/emit",
+    "action/execute",
+    "action/cancel",
+    "action/receipt",
+    "approval/resolve",
+    "question/answer",
+    "state/query",
+    "blob/put",
+    "blob/get"
+  ],
+  "title": "Waist2Method",
+  "type": "string"
+}

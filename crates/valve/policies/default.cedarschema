@@ -1,0 +1,53 @@
+entity Role;
+entity Actor in [Role];
+entity Place;
+entity Capability {
+    identity_changing: Bool,
+    irreversible: Bool,
+    communicative: Bool,
+};
+entity MemoryItem {
+    is_procedure: Bool,
+    owner_signed: Bool,
+    trusted: Bool,
+};
+
+action "InboundPercept" appliesTo {
+    principal: [Actor],
+    resource: [Place],
+    context: {
+        has_audience: Bool,
+        place_present: Bool,
+        physical_present: Bool,
+    }
+};
+
+action "ContextAssemble" appliesTo {
+    principal: [Actor],
+    resource: [Place],
+    context: {
+        has_scope: Bool,
+    }
+};
+
+action "InvokeCapability" appliesTo {
+    principal: [Actor],
+    resource: [Capability],
+    context: {
+        place_present: Bool,
+        physical_present: Bool,
+    }
+};
+
+action "SelfModify" appliesTo {
+    principal: [Actor],
+    resource: [Capability],
+};
+
+action "WriteMemory" appliesTo {
+    principal: [Actor],
+    resource: [MemoryItem],
+    context: {
+        tainted: Bool,
+    }
+};

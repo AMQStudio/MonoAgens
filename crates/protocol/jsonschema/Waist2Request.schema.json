@@ -1,0 +1,63 @@
+{
+  "$defs": {
+    "RpcId": {
+      "anyOf": [
+        {
+          "format": "int64",
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "JSON-RPC 2.0 request/response correlation identifier."
+    },
+    "Waist2Method": {
+      "description": "The twelve stateless JSON-RPC 2.0 methods defining Waist 2 (`monoagens.body.v1`).",
+      "enum": [
+        "body/discover",
+        "body/heartbeat",
+        "body/shutdown",
+        "percept/emit",
+        "action/execute",
+        "action/cancel",
+        "action/receipt",
+        "approval/resolve",
+        "question/answer",
+        "state/query",
+        "blob/put",
+        "blob/get"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Generic JSON-RPC 2.0 request envelope for Waist 2 calls.",
+  "properties": {
+    "id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RpcId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "jsonrpc": {
+      "const": "2.0",
+      "type": "string"
+    },
+    "method": {
+      "$ref": "#/$defs/Waist2Method"
+    },
+    "params": true
+  },
+  "required": [
+    "jsonrpc",
+    "method",
+    "params"
+  ],
+  "title": "Waist2Request",
+  "type": "object"
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The six canonical domain facts across Waist 1.",
+  "enum": [
+    "actor",
+    "place",
+    "audience",
+    "event",
+    "capability",
+    "receipt"
+  ],
+  "title": "DomainFactKind",
+  "type": "string"
+}

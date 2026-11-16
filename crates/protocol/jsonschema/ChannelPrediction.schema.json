@@ -1,0 +1,34 @@
+{
+  "$defs": {
+    "ChannelId": {
+      "description": "Opaque identifier of a sensed effect channel.",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Channel prediction / observation tuple `(channel, Δ_obs, Δ_pred)` (`R-09`).",
+  "properties": {
+    "channel": {
+      "$ref": "#/$defs/ChannelId"
+    },
+    "delta_obs": {
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "delta_pred": {
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "channel"
+  ],
+  "title": "ChannelPrediction",
+  "type": "object"
+}

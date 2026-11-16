@@ -1,0 +1,20 @@
+[package]
+name = "plugin-ros2-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "plugin-ros2-bridge"
+path = "src/main.rs"
+
+[features]
+default = []
+ros2-rclrs = ["dep:rclrs"]
+
+[dependencies]
+monoagens-body-kit = { workspace = true }
+monoagens-body-sdk = { path = "../../sdk/rust" }
+rclrs = { version = "0.8", optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

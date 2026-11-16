@@ -1,0 +1,30 @@
+{
+  "$defs": {
+    "Time": {
+      "description": "Millisecond timestamp from an injected clock (`u64` ms since epoch).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Result for `blob/put`.",
+  "properties": {
+    "blob_ref": {
+      "type": "string"
+    },
+    "expires_at_ms": {
+      "$ref": "#/$defs/Time"
+    },
+    "sha256": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "blob_ref",
+    "sha256",
+    "expires_at_ms"
+  ],
+  "title": "BlobPutResult",
+  "type": "object"
+}

@@ -1,0 +1,171 @@
+{
+  "$defs": {
+    "BodyId": {
+      "description": "Opaque identifier of a connected body adapter.",
+      "type": "string"
+    },
+    "CapabilityDescriptor": {
+      "description": "Descriptor for one capability advertised by a body.",
+      "properties": {
+        "capability_schema_hash": {
+          "$ref": "#/$defs/CapabilitySchemaHash"
+        },
+        "description": {
+          "type": "string"
+        },
+        "flags": {
+          "$ref": "#/$defs/CapabilityFlags"
+        },
+        "id": {
+          "$ref": "#/$defs/CapabilityId"
+        },
+        "places": {
+          "items": {
+            "$ref": "#/$defs/PlaceId"
+          },
+          "type": "array"
+        },
+        "sensed_effect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SensedEffect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "typical_latency_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "description",
+        "places",
+        "flags",
+        "typical_latency_ms",
+        "capability_schema_hash"
+      ],
+      "type": "object"
+    },
+    "CapabilityFlags": {
+      "description": "Capability behavioral flags declared by a body.",
+      "properties": {
+        "communicative": {
+          "type": "boolean"
+        },
+        "identity_changing": {
+          "type": "boolean"
+        },
+        "irreversible": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "communicative",
+        "identity_changing",
+        "irreversible"
+      ],
+      "type": "object"
+    },
+    "CapabilityId": {
+      "description": "Opaque identifier of a declared body capability.",
+      "type": "string"
+    },
+    "CapabilitySchemaHash": {
+      "description": "Deterministic hash of a capability's input/output schema (`R-38`).",
+      "type": "string"
+    },
+    "ChannelId": {
+      "description": "Opaque identifier of a sensed effect channel.",
+      "type": "string"
+    },
+    "PlaceId": {
+      "description": "Opaque identifier of a place where percepts originate or actions land.",
+      "type": "string"
+    },
+    "ProtocolVersion": {
+      "description": "Semantic major/minor protocol version carried by every message.",
+      "properties": {
+        "major": {
+          "format": "uint16",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "maximum": 0,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    },
+    "SensedEffect": {
+      "description": "Optional expected physical/sensor effect declared for a capability (`R-09`).",
+      "properties": {
+        "channel": {
+          "$ref": "#/$defs/ChannelId"
+        },
+        "delta_pred": {
+          "format": "double",
+          "type": "number"
+        },
+        "noise": {
+          "format": "double",
+          "type": "number"
+        },
+        "window_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "channel",
+        "window_ms",
+        "noise",
+        "delta_pred"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Result for `body/discover`.",
+  "properties": {
+    "body_id": {
+      "$ref": "#/$defs/BodyId"
+    },
+    "capabilities": {
+      "items": {
+        "$ref": "#/$defs/CapabilityDescriptor"
+      },
+      "type": "array"
+    },
+    "places": {
+      "items": {
+        "$ref": "#/$defs/PlaceId"
+      },
+      "type": "array"
+    },
+    "protocol_version": {
+      "$ref": "#/$defs/ProtocolVersion"
+    }
+  },
+  "required": [
+    "body_id",
+    "protocol_version",
+    "capabilities",
+    "places"
+  ],
+  "title": "BodyDiscoverResult",
+  "type": "object"
+}

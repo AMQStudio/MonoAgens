@@ -1,0 +1,28 @@
+[package]
+name = "monoagens-valve"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+bench = false
+
+[dependencies]
+blake3 = { workspace = true }
+cedar-policy = "4.14.1"
+cedar-policy-symcc = "0.8.1"
+jiff = "0.2.46"
+monoagens-core = { workspace = true }
+monoagens-protocol = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { version = "1.54", features = ["rt"] }
+
+[dev-dependencies]
+criterion = "0.8.2"
+proptest = { workspace = true }
+tokio = { version = "1.54", features = ["process"] }
+
+[[bench]]
+name = "door_verdict"
+harness = false

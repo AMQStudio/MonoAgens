@@ -1,0 +1,55 @@
+{
+  "$defs": {
+    "ActorId": {
+      "description": "Opaque identifier of an actor (person, soul, or external participant).",
+      "type": "string"
+    },
+    "CapabilityId": {
+      "description": "Opaque identifier of a declared body capability.",
+      "type": "string"
+    },
+    "PlaceId": {
+      "description": "Opaque identifier of a place where percepts originate or actions land.",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Canonical input material used to derive `H_act = BLAKE3(\"monoagens.act.v1\" || canonical_preimage)`.",
+  "properties": {
+    "actor": {
+      "$ref": "#/$defs/ActorId"
+    },
+    "capability_id": {
+      "$ref": "#/$defs/CapabilityId"
+    },
+    "payload": {
+      "items": {
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "array"
+    },
+    "places": {
+      "items": {
+        "$ref": "#/$defs/PlaceId"
+      },
+      "type": "array"
+    },
+    "state_epoch": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "capability_id",
+    "actor",
+    "places",
+    "state_epoch",
+    "payload"
+  ],
+  "title": "ActionCanonicalInput",
+  "type": "object"
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Terminal or transitional outcomes supported by `resolve`.",
+  "enum": [
+    "kept",
+    "kept_late",
+    "renegotiated",
+    "released",
+    "failed",
+    "cancelled",
+    "answered",
+    "reached"
+  ],
+  "title": "ResolveOutcome",
+  "type": "string"
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Media modality classification for opaque attachment handles (`R-37`).",
+  "enum": [
+    "image",
+    "audio_voice",
+    "video",
+    "sensor_blob"
+  ],
+  "title": "ModalitySlot",
+  "type": "string"
+}

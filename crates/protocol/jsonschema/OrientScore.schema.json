@@ -1,0 +1,25 @@
+{
+  "$defs": {
+    "ActorId": {
+      "description": "Opaque identifier of an actor (person, soul, or external participant).",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Orientation score `orient(e, l)` toward a participant actor (`R-29`).",
+  "properties": {
+    "actor": {
+      "$ref": "#/$defs/ActorId"
+    },
+    "score": {
+      "format": "float",
+      "type": "number"
+    }
+  },
+  "required": [
+    "actor",
+    "score"
+  ],
+  "title": "OrientScore",
+  "type": "object"
+}

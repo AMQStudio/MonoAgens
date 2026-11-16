@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Opaque correlation identifier linking an action and its outcome/reply.",
+  "title": "CorrelationId",
+  "type": "string"
+}

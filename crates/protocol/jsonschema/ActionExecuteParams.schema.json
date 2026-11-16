@@ -1,0 +1,180 @@
+{
+  "$defs": {
+    "ActionId": {
+      "description": "Opaque identifier of a dispatched action.",
+      "type": "string"
+    },
+    "ActorId": {
+      "description": "Opaque identifier of an actor (person, soul, or external participant).",
+      "type": "string"
+    },
+    "Audience": {
+      "description": "Set of actors that could perceive an event.",
+      "items": {
+        "$ref": "#/$defs/ActorId"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "CapabilityId": {
+      "description": "Opaque identifier of a declared body capability.",
+      "type": "string"
+    },
+    "HAct": {
+      "description": "Canonical action digest `H_act` (`R-42`) binding approvals to exact action parameters.",
+      "type": "string"
+    },
+    "MetaValue": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "format": "int64",
+          "type": "integer"
+        },
+        {
+          "format": "double",
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/MetaValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/MetaValue"
+          },
+          "type": "object"
+        }
+      ],
+      "description": "JSON value subset for reverse-DNS `_meta` extensions without tying `protocol` to `serde_json`."
+    },
+    "OpaquePayload": {
+      "description": "Opaque payload bytes carried unchanged through Core without interpretation.",
+      "items": {
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "array"
+    },
+    "PlaceId": {
+      "description": "Opaque identifier of a place where percepts originate or actions land.",
+      "type": "string"
+    },
+    "ProtocolVersion": {
+      "description": "Semantic major/minor protocol version carried by every message.",
+      "properties": {
+        "major": {
+          "format": "uint16",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "maximum": 0,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    },
+    "Waist2Headers": {
+      "description": "Transport-level Waist 2 headers separated from domain facts.",
+      "properties": {
+        "_meta": {
+          "additionalProperties": {
+            "$ref": "#/$defs/MetaValue"
+          },
+          "type": "object"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "protocol_version": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "traceparent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "idempotency_key",
+        "protocol_version"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Parameters for `action/execute`.",
+  "properties": {
+    "action_id": {
+      "$ref": "#/$defs/ActionId"
+    },
+    "audience": {
+      "$ref": "#/$defs/Audience",
+      "minItems": 1
+    },
+    "capability_id": {
+      "$ref": "#/$defs/CapabilityId"
+    },
+    "h_act": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HAct"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "headers": {
+      "$ref": "#/$defs/Waist2Headers"
+    },
+    "payload": {
+      "$ref": "#/$defs/OpaquePayload"
+    },
+    "places": {
+      "items": {
+        "$ref": "#/$defs/PlaceId"
+      },
+      "type": "array"
+    },
+    "timeout_ms": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "headers",
+    "action_id",
+    "capability_id",
+    "places",
+    "audience",
+    "payload"
+  ],
+  "title": "ActionExecuteParams",
+  "type": "object"
+}

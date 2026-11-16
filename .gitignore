@@ -14,3 +14,10 @@ secrets.toml
 # Lab run records, except published reference results
 lab/runs/*
 !lab/runs/reference/
+
+# Python / Node tooling (never commit vendored environments)
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+.pytest_cache/

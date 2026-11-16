@@ -1,0 +1,453 @@
+{
+  "id": "dev-02-recall-fade-truth",
+  "name": "Dev 02 1/7/30-day Recall, Vector Fade, Memory Truth, HardForget",
+  "set": "development",
+  "start_time_ms": 0,
+  "model_latency_ms": 20,
+  "model_id": "scripted",
+  "embedder_id": "none",
+  "bodies": [
+    {
+      "body_id": "chat-body",
+      "places": [
+        "room:recall"
+      ],
+      "capabilities": [
+        {
+          "id": "chat.speak",
+          "description": "Capability chat.speak",
+          "places": [
+            "room:recall"
+          ],
+          "flags": {
+            "communicative": true,
+            "identity_changing": false,
+            "irreversible": false
+          },
+          "typical_latency_ms": 10,
+          "capability_schema_hash": "sha256:cap-chat.speak",
+          "sensed_effect": null
+        }
+      ],
+      "action_scripts": []
+    }
+  ],
+  "events": [
+    {
+      "at_ms": 1000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:recall",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 1000,
+        "payload": [
+          102,
+          97,
+          99,
+          116,
+          58,
+          32,
+          112,
+          114,
+          111,
+          106,
+          101,
+          99,
+          116,
+          32,
+          99,
+          111,
+          100,
+          101,
+          110,
+          97,
+          109,
+          101,
+          32,
+          97,
+          117,
+          114,
+          111,
+          114,
+          97
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 2000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "bob",
+        "origin_actor": "bob",
+        "place": "room:recall",
+        "audience": [
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 2000,
+        "payload": [
+          101,
+          112,
+          104,
+          101,
+          109,
+          101,
+          114,
+          97,
+          108,
+          32,
+          112,
+          114,
+          105,
+          118,
+          97,
+          116,
+          101,
+          32,
+          115,
+          101,
+          99,
+          114,
+          101,
+          116,
+          32,
+          116,
+          111,
+          32,
+          102,
+          111,
+          114,
+          103,
+          101,
+          116
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 86401000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:recall",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 86401000,
+        "payload": [
+          100,
+          97,
+          121,
+          32,
+          49,
+          32,
+          102,
+          111,
+          108,
+          108,
+          111,
+          119,
+          45,
+          117,
+          112
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 604801000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:recall",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 604801000,
+        "payload": [
+          100,
+          97,
+          121,
+          32,
+          55,
+          32,
+          102,
+          111,
+          108,
+          108,
+          111,
+          119,
+          45,
+          117,
+          112
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 2592001000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:recall",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 2592001000,
+        "payload": [
+          100,
+          97,
+          121,
+          32,
+          51,
+          48,
+          32,
+          102,
+          111,
+          108,
+          108,
+          111,
+          119,
+          45,
+          117,
+          112
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 2592002000,
+      "body_id": null,
+      "event": {
+        "kind": "hard_forget",
+        "event_indices": [
+          1
+        ],
+        "actor_ids": [],
+        "reason": "dev_erasure_check"
+      }
+    },
+    {
+      "at_ms": 2592003000,
+      "body_id": null,
+      "event": {
+        "kind": "trigger_sleep"
+      }
+    }
+  ],
+  "scripted_model": [
+    {
+      "wake_index": 0,
+      "acts": [
+        {
+          "act": "act",
+          "capability_id": "chat.speak",
+          "places": [
+            "room:recall"
+          ],
+          "people": [],
+          "payload": [
+            78,
+            111,
+            116,
+            101,
+            100,
+            32,
+            97,
+            117,
+            114,
+            111,
+            114,
+            97
+          ],
+          "motivation": 4,
+          "confidence_0_20": 17,
+          "used_ids": [],
+          "expected": null,
+          "domain": null
+        }
+      ],
+      "tokens_in": 40,
+      "tokens_out": 10
+    },
+    {
+      "wake_index": 1,
+      "acts": [
+        {
+          "act": "act",
+          "capability_id": "chat.speak",
+          "places": [
+            "room:recall"
+          ],
+          "people": [],
+          "payload": [
+            68,
+            97,
+            121,
+            32,
+            49,
+            32,
+            110,
+            111,
+            116,
+            101,
+            100
+          ],
+          "motivation": 4,
+          "confidence_0_20": 17,
+          "used_ids": [],
+          "expected": null,
+          "domain": null
+        }
+      ],
+      "tokens_in": 40,
+      "tokens_out": 10
+    },
+    {
+      "wake_index": 2,
+      "acts": [
+        {
+          "act": "act",
+          "capability_id": "chat.speak",
+          "places": [
+            "room:recall"
+          ],
+          "people": [],
+          "payload": [
+            68,
+            97,
+            121,
+            32,
+            55,
+            32,
+            110,
+            111,
+            116,
+            101,
+            100
+          ],
+          "motivation": 4,
+          "confidence_0_20": 17,
+          "used_ids": [],
+          "expected": null,
+          "domain": null
+        }
+      ],
+      "tokens_in": 40,
+      "tokens_out": 10
+    },
+    {
+      "wake_index": 3,
+      "acts": [
+        {
+          "act": "act",
+          "capability_id": "chat.speak",
+          "places": [
+            "room:recall"
+          ],
+          "people": [],
+          "payload": [
+            68,
+            97,
+            121,
+            32,
+            51,
+            48,
+            32,
+            110,
+            111,
+            116,
+            101,
+            100
+          ],
+          "motivation": 4,
+          "confidence_0_20": 17,
+          "used_ids": [],
+          "expected": null,
+          "domain": null
+        }
+      ],
+      "tokens_in": 40,
+      "tokens_out": 10
+    }
+  ],
+  "checks": [
+    {
+      "check": "payload_contains",
+      "name": "day30_present",
+      "kind": "structural",
+      "place": "room:recall",
+      "event_kind": "percept",
+      "text": "day 30",
+      "expected_present": true
+    }
+  ],
+  "annotations": {
+    "recall_probes": [
+      {
+        "gap_days": 1,
+        "expected_event_indices": [
+          0
+        ],
+        "familiar_only_r0": true,
+        "detail_asserted_without_r": false
+      },
+      {
+        "gap_days": 7,
+        "expected_event_indices": [
+          0
+        ],
+        "familiar_only_r0": false
+      },
+      {
+        "gap_days": 30,
+        "expected_event_indices": [
+          0
+        ],
+        "familiar_only_r0": false
+      }
+    ],
+    "delta_ni_measured": 0.0
+  }
+}

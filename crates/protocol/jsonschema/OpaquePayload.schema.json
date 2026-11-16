@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Opaque payload bytes carried unchanged through Core without interpretation.",
+  "items": {
+    "format": "uint8",
+    "maximum": 255,
+    "minimum": 0,
+    "type": "integer"
+  },
+  "title": "OpaquePayload",
+  "type": "array"
+}

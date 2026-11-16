@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Operational health state reported for a body.",
+  "enum": [
+    "ready",
+    "busy",
+    "degraded",
+    "stopped"
+  ],
+  "title": "BodyStatus",
+  "type": "string"
+}

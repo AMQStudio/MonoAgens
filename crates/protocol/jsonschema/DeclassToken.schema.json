@@ -1,0 +1,77 @@
+{
+  "$defs": {
+    "ActorId": {
+      "description": "Opaque identifier of an actor (person, soul, or external participant).",
+      "type": "string"
+    },
+    "Audience": {
+      "description": "Set of actors that could perceive an event.",
+      "items": {
+        "$ref": "#/$defs/ActorId"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "EventId": {
+      "description": "Opaque monotonic event sequence identifier in the core log.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "PlaceId": {
+      "description": "Opaque identifier of a place where percepts originate or actions land.",
+      "type": "string"
+    },
+    "Time": {
+      "description": "Millisecond timestamp from an injected clock (`u64` ms since epoch).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Explicit declassification token authorizing sharing specific event ids with a target (`R-33`).",
+  "properties": {
+    "expiry": {
+      "$ref": "#/$defs/Time"
+    },
+    "issuer": {
+      "$ref": "#/$defs/ActorId"
+    },
+    "scope": {
+      "items": {
+        "$ref": "#/$defs/EventId"
+      },
+      "type": "array"
+    },
+    "signature": {
+      "type": "string"
+    },
+    "target_audience": {
+      "$ref": "#/$defs/Audience"
+    },
+    "target_place": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PlaceId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "token_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "token_id",
+    "issuer",
+    "scope",
+    "expiry",
+    "target_audience",
+    "signature"
+  ],
+  "title": "DeclassToken",
+  "type": "object"
+}

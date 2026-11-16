@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Monotonic minimum-trust provenance taint label (`Untrusted < Provisional < Trusted`).",
+  "oneOf": [
+    {
+      "const": "untrusted",
+      "description": "Lowest trust: external/unverified source or derived from one.",
+      "type": "string"
+    },
+    {
+      "const": "provisional",
+      "description": "Intermediate trust: corroborated or provisional.",
+      "type": "string"
+    },
+    {
+      "const": "trusted",
+      "description": "Highest trust: verified trusted origin.",
+      "type": "string"
+    }
+  ],
+  "title": "Taint"
+}

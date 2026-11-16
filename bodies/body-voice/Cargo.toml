@@ -1,0 +1,19 @@
+[package]
+name = "body-voice"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "body-voice"
+path = "src/main.rs"
+
+[dependencies]
+monoagens-body-kit = { workspace = true }
+monoagens-body-sdk = { path = "../../sdk/rust" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+webrtc-vad = "0.4"
+
+[dev-dependencies]
+tempfile = { workspace = true }

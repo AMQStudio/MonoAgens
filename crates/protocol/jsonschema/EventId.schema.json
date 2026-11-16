@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Opaque monotonic event sequence identifier in the core log.",
+  "format": "uint64",
+  "minimum": 0,
+  "title": "EventId",
+  "type": "integer"
+}

@@ -1,0 +1,80 @@
+{
+  "$defs": {
+    "DomainFactKind": {
+      "description": "The six canonical domain facts across Waist 1.",
+      "enum": [
+        "actor",
+        "place",
+        "audience",
+        "event",
+        "capability",
+        "receipt"
+      ],
+      "type": "string"
+    },
+    "ProtocolVersion": {
+      "description": "Semantic major/minor protocol version carried by every message.",
+      "properties": {
+        "major": {
+          "format": "uint16",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "maximum": 0,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Optional structured detail payload on a Waist 2 error object.",
+  "properties": {
+    "missing_fact": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DomainFactKind"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "received_version": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "supported_version": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "symbol": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "symbol"
+  ],
+  "title": "Waist2ErrorData",
+  "type": "object"
+}

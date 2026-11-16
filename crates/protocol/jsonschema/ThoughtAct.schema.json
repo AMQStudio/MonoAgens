@@ -1,0 +1,718 @@
+{
+  "$defs": {
+    "ActorId": {
+      "description": "Opaque identifier of an actor (person, soul, or external participant).",
+      "type": "string"
+    },
+    "CapabilityId": {
+      "description": "Opaque identifier of a declared body capability.",
+      "type": "string"
+    },
+    "CapabilitySchemaHash": {
+      "description": "Deterministic hash of a capability's input/output schema (`R-38`).",
+      "type": "string"
+    },
+    "CatchupPolicy": {
+      "description": "Catch-up policy when recurring triggers fell due during downtime (`R-46`).",
+      "enum": [
+        "coalesce_one",
+        "skip_to_next"
+      ],
+      "type": "string"
+    },
+    "ChannelId": {
+      "description": "Opaque identifier of a sensed effect channel.",
+      "type": "string"
+    },
+    "ConsolidateOutput": {
+      "description": "Typed outputs emitted during sleep consolidation (`consolidate`).",
+      "oneOf": [
+        {
+          "properties": {
+            "about_ids": {
+              "items": {
+                "$ref": "#/$defs/EventId"
+              },
+              "type": "array"
+            },
+            "consolidate_kind": {
+              "const": "gist",
+              "type": "string"
+            },
+            "domain": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DomainId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "people": {
+              "items": {
+                "$ref": "#/$defs/ActorId"
+              },
+              "type": "array"
+            },
+            "places": {
+              "items": {
+                "$ref": "#/$defs/PlaceId"
+              },
+              "type": "array"
+            },
+            "summary": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "consolidate_kind",
+            "summary",
+            "about_ids",
+            "places",
+            "people"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "consolidate_kind": {
+              "const": "lesson",
+              "type": "string"
+            },
+            "contrastive_success_ids": {
+              "items": {
+                "$ref": "#/$defs/EventId"
+              },
+              "type": "array"
+            },
+            "domain": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DomainId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "failure_ids": {
+              "items": {
+                "$ref": "#/$defs/EventId"
+              },
+              "type": "array"
+            },
+            "failure_signature": {
+              "type": "string"
+            },
+            "pattern": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "consolidate_kind",
+            "pattern",
+            "failure_signature",
+            "contrastive_success_ids",
+            "failure_ids"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "capability_schema_hash": {
+              "$ref": "#/$defs/CapabilitySchemaHash"
+            },
+            "consolidate_kind": {
+              "const": "procedure",
+              "type": "string"
+            },
+            "domain": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DomainId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "name": {
+              "type": "string"
+            },
+            "required_cap_ids": {
+              "items": {
+                "$ref": "#/$defs/CapabilityId"
+              },
+              "type": "array"
+            },
+            "steps": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "consolidate_kind",
+            "name",
+            "steps",
+            "required_cap_ids",
+            "capability_schema_hash"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DomainId": {
+      "description": "Opaque identifier of a belief/expectation domain.",
+      "type": "string"
+    },
+    "EventId": {
+      "description": "Opaque monotonic event sequence identifier in the core log.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "ExpectKind": {
+      "description": "Expectation kinds supported by `expect` acts and Core's expectation book.",
+      "enum": [
+        "effect",
+        "response",
+        "wait",
+        "promise",
+        "goal",
+        "monitor",
+        "pending_approval"
+      ],
+      "type": "string"
+    },
+    "OpaquePayload": {
+      "description": "Opaque payload bytes carried unchanged through Core without interpretation.",
+      "items": {
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "array"
+    },
+    "PlaceId": {
+      "description": "Opaque identifier of a place where percepts originate or actions land.",
+      "type": "string"
+    },
+    "PromiseMeta": {
+      "description": "Commitment metadata attached to a `promise` expectation (`R-49`).",
+      "properties": {
+        "conflict_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "depends_on": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hard_deadline_ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "promisee_ids": {
+          "items": {
+            "$ref": "#/$defs/ActorId"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "promisee_ids"
+      ],
+      "type": "object"
+    },
+    "RecurrenceSchedule": {
+      "description": "Schedule definition for a recurring monitor expectation (`R-46`).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "interval_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "interval_ms"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "cron": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cron"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RecurrenceSpec": {
+      "description": "Recurrence specification attached to a `monitor` expectation (`R-46`).",
+      "properties": {
+        "catchup": {
+          "$ref": "#/$defs/CatchupPolicy"
+        },
+        "schedule": {
+          "$ref": "#/$defs/RecurrenceSchedule"
+        }
+      },
+      "required": [
+        "schedule",
+        "catchup"
+      ],
+      "type": "object"
+    },
+    "ResolveOutcome": {
+      "description": "Terminal or transitional outcomes supported by `resolve`.",
+      "enum": [
+        "kept",
+        "kept_late",
+        "renegotiated",
+        "released",
+        "failed",
+        "cancelled",
+        "answered",
+        "reached"
+      ],
+      "type": "string"
+    },
+    "SensedEffect": {
+      "description": "Optional expected physical/sensor effect declared for a capability (`R-09`).",
+      "properties": {
+        "channel": {
+          "$ref": "#/$defs/ChannelId"
+        },
+        "delta_pred": {
+          "format": "double",
+          "type": "number"
+        },
+        "noise": {
+          "format": "double",
+          "type": "number"
+        },
+        "window_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "channel",
+        "window_ms",
+        "noise",
+        "delta_pred"
+      ],
+      "type": "object"
+    },
+    "Time": {
+      "description": "Millisecond timestamp from an injected clock (`u64` ms since epoch).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Strict nullable schema contract for reasoning and consolidation acts (`A-10`, `A-11`).\n\nOptional fields intentionally omit `skip_serializing_if` so they serialize explicitly\nas `null` (`R | null`) for strict structured-output JSON schemas.",
+  "oneOf": [
+    {
+      "properties": {
+        "act": {
+          "const": "think",
+          "type": "string"
+        },
+        "basis": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "confidence_0_20": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cost": {
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "domain": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DomainId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "importance": {
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "motivation": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "thought": {
+          "type": "string"
+        },
+        "used_ids": {
+          "items": {
+            "$ref": "#/$defs/EventId"
+          },
+          "type": "array"
+        },
+        "value": {
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "act",
+        "thought",
+        "motivation",
+        "confidence_0_20",
+        "used_ids"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "act": {
+          "const": "act",
+          "type": "string"
+        },
+        "capability_id": {
+          "$ref": "#/$defs/CapabilityId"
+        },
+        "confidence_0_20": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "domain": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DomainId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SensedEffect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "motivation": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "payload": {
+          "$ref": "#/$defs/OpaquePayload"
+        },
+        "people": {
+          "items": {
+            "$ref": "#/$defs/ActorId"
+          },
+          "type": "array"
+        },
+        "places": {
+          "items": {
+            "$ref": "#/$defs/PlaceId"
+          },
+          "type": "array"
+        },
+        "used_ids": {
+          "items": {
+            "$ref": "#/$defs/EventId"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "act",
+        "capability_id",
+        "places",
+        "people",
+        "payload",
+        "motivation",
+        "confidence_0_20",
+        "used_ids"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "about_ids": {
+          "items": {
+            "$ref": "#/$defs/EventId"
+          },
+          "type": "array"
+        },
+        "act": {
+          "const": "expect",
+          "type": "string"
+        },
+        "condition": {
+          "type": "string"
+        },
+        "domain": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DomainId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "due_ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expect_kind": {
+          "$ref": "#/$defs/ExpectKind"
+        },
+        "expiry_ms": {
+          "$ref": "#/$defs/Time"
+        },
+        "people": {
+          "items": {
+            "$ref": "#/$defs/ActorId"
+          },
+          "type": "array"
+        },
+        "places": {
+          "items": {
+            "$ref": "#/$defs/PlaceId"
+          },
+          "type": "array"
+        },
+        "promise_meta": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromiseMeta"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recurrence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RecurrenceSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "act",
+        "expect_kind",
+        "about_ids",
+        "places",
+        "people",
+        "condition",
+        "expiry_ms"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "act": {
+          "const": "resolve",
+          "type": "string"
+        },
+        "domain": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DomainId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expectation_id": {
+          "$ref": "#/$defs/EventId"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "$ref": "#/$defs/ResolveOutcome"
+        },
+        "people": {
+          "items": {
+            "$ref": "#/$defs/ActorId"
+          },
+          "type": "array"
+        },
+        "places": {
+          "items": {
+            "$ref": "#/$defs/PlaceId"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "act",
+        "expectation_id",
+        "outcome",
+        "places",
+        "people"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "act": {
+          "const": "revise",
+          "type": "string"
+        },
+        "condition": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "domain": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DomainId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "due_ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expiry_ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "new_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "people": {
+          "items": {
+            "$ref": "#/$defs/ActorId"
+          },
+          "type": "array"
+        },
+        "places": {
+          "items": {
+            "$ref": "#/$defs/PlaceId"
+          },
+          "type": "array"
+        },
+        "target_id": {
+          "$ref": "#/$defs/EventId"
+        }
+      },
+      "required": [
+        "act",
+        "target_id",
+        "new_version",
+        "places",
+        "people"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "act": {
+          "const": "consolidate",
+          "type": "string"
+        },
+        "output": {
+          "$ref": "#/$defs/ConsolidateOutput"
+        }
+      },
+      "required": [
+        "act",
+        "output"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "ThoughtAct"
+}

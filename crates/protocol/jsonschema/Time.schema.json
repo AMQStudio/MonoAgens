@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Millisecond timestamp from an injected clock (`u64` ms since epoch).",
+  "format": "uint64",
+  "minimum": 0,
+  "title": "Time",
+  "type": "integer"
+}

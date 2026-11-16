@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "10-element structural acoustic/prosody slot `f_modal` (`R-37`, zero emotion labels).",
+  "items": {
+    "format": "float",
+    "type": "number"
+  },
+  "maxItems": 10,
+  "minItems": 10,
+  "title": "FModal",
+  "type": "array"
+}

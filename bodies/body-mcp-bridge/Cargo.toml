@@ -1,0 +1,22 @@
+[package]
+name = "body-mcp-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "body-mcp-bridge"
+path = "src/main.rs"
+
+[[bin]]
+name = "mock-mcp-server"
+path = "tests/fixtures/mock_mcp_server.rs"
+
+[dependencies]
+monoagens-body-kit = { workspace = true }
+monoagens-body-sdk = { path = "../../sdk/rust" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

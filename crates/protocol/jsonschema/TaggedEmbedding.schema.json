@@ -1,0 +1,46 @@
+{
+  "$defs": {
+    "EmbeddingTag": {
+      "description": "Versioned embedding space identifier `(embed_model_ver, dim_d, prompt_regime_id)`.",
+      "properties": {
+        "dim_d": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "embed_model_ver": {
+          "type": "string"
+        },
+        "prompt_regime_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "embed_model_ver",
+        "dim_d",
+        "prompt_regime_id"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Embedding vector tagged with its model version, dimension, and prompt regime.",
+  "properties": {
+    "tag": {
+      "$ref": "#/$defs/EmbeddingTag"
+    },
+    "values": {
+      "items": {
+        "format": "float",
+        "type": "number"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "tag",
+    "values"
+  ],
+  "title": "TaggedEmbedding",
+  "type": "object"
+}
