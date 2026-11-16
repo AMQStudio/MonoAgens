@@ -147,6 +147,16 @@ tokens/calls per event, cache share, and narrower-to-wider leakage (`Delta_NI ==
 - **WHEN** a scenario with three promises (two on time, one recovered after downtime) and pre-sleep idle chatter runs
 - **THEN** the report states two kept on time, one kept late, zero sleep spin loops, and `Delta_NI == 0`
 
+### Requirement: The Lab measures barge-in preemption latency and non-penalty
+When executing scripted or Phase-3 embodied barge-in scenarios, the Lab SHALL measure `barge-in
+latency`—reporting Core Class-A interrupt-to-cancel dispatch latency in scripted runs and end-to-end
+mute cutoff latency (`< 50 ms` target) when coupled with speech or actuator bodies—alongside
+single-receipt `delivered_units` accounting and zero learning/Beta penalty (`R-36`, `R-37`).
+
+#### Scenario: Barge-in metric records Core dispatch, embodied cutoff, and zero failure penalty
+- **WHEN** a scenario injects a Class-A barge-in percept mid-action against `TestBody` or `body-sim-actuator`
+- **THEN** the Lab report records scripted or embodied `barge-in latency`, exact `delivered_units`, one terminal `preempted_external` receipt, and zero capability `(α_c, β_c)` penalty
+
 ### Requirement: External BaselineAdapter benchmarks Mem0, Letta, and peer frameworks under parity
 The Lab SHALL expose an out-of-process `BaselineAdapter` protocol evaluating external agents—such
 as `Stateless ReAct`, `Arm F`, `Mem0`, `Letta/MemGPT`, `LangGraph+LangMem`, `Zep/Graphiti`, and
