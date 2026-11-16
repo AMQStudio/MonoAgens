@@ -19,6 +19,7 @@ use rusqlite::Connection;
 
 pub mod forget;
 pub mod log;
+pub mod prior_file;
 pub mod schema;
 pub mod shards;
 pub mod snapshots;
@@ -26,6 +27,10 @@ pub mod text;
 pub mod vectors;
 
 pub use forget::{ByteScanHit, ForgetReport, ForgetSelector, raw_byte_scan_dir};
+pub use prior_file::{
+    LoadedPrior, PriorLoadError, compute_prior_digest, default_loaded_prior, load_prior_file,
+    load_prior_from_str, load_prior_or_default,
+};
 pub use schema::{
     HOT_DB_FILENAME, SHARDS_DIR_NAME, SNAPSHOTS_DIR_NAME, STORE_SCHEMA_VERSION, StoreConfig,
     SynchronousMode, UsearchQuantization, VectorBackendConfig,

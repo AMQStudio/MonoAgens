@@ -69,12 +69,19 @@ pub(crate) fn open_core<S: Store>(
                     actual: blake3::to_hex(&actual),
                 });
             }
-            let decoded = CoreState::decode_snapshot(&ckpt.bytes)?;
+            let mut decoded = CoreState::decode_snapshot(&ckpt.bytes)?;
+            decoded.map_switches = switches.clone();
+            if let Some(ref recorded) = decoded.recorded_prior.clone() {
+                decoded.sync_prior(recorded, &switches);
+            }
             (decoded, Some(ckpt.cursor))
         }
-        None => (CoreState::new(), None),
+        None => {
+            let mut st = CoreState::new();
+            st.sync_prior(&Prior::default(), &switches);
+            (st, None)
+        }
     };
-    state.sync_prior(&prior, &switches);
 
     let mut cursor = snapshot_cursor;
     let mut replayed_events = 0usize;
@@ -91,7 +98,8 @@ pub(crate) fn open_core<S: Store>(
     }
 
     // Step 3: resume trailing recorded inputs lacking a terminal completion marker
-    // in deterministic timestamp-then-LogSeq order, never calling a model or dispatching.
+    // in deterministic timestamp-then-LogSeq order, never calling a model or dispatching,
+    // and using only the prior recorded in the log so far (never the caller's new prior).
     let mut pending: Vec<EventRecord> = state.unconsumed_inputs.values().cloned().collect();
     pending.sort_by(|a, b| {
         a.timestamp_ms
@@ -143,6 +151,39 @@ pub(crate) fn open_core<S: Store>(
             state.apply_event(&marker);
         }
         resumed_inputs.push(interrupted.id);
+    }
+
+    // Step 4 (Decision 20): record `prior_loaded` before admitting new input whenever the log
+    // holds none yet or the given prior differs from the most recently recorded one.
+    if state.recorded_prior.as_ref() != Some(&prior) {
+        let ts = state
+            .last_timestamp_ms
+            .unwrap_or_else(|| Time::from_millis(0));
+        let mut rec = EventRecord::new_root(
+            EventKind::PriorLoaded,
+            ts,
+            ActorId::new("core"),
+            PlaceId::new("core:prior"),
+            Audience::new([ActorId::new("core")]),
+            OriginActor::new(ActorId::new("core")),
+            Taint::Trusted,
+            NumericFeatures::default(),
+            OpaquePayload::default(),
+            Vec::new(),
+            Some(EventDetail::PriorLoaded {
+                prior: Box::new(prior.clone()),
+            }),
+        );
+        let prior_id = store.append(rec.clone())?;
+        rec.id = prior_id;
+        rec.seq = LogSeq::new(state.last_seq.as_u64().saturating_add(1));
+        if let Some(persisted) = store.get(prior_id)? {
+            state.apply_event(&persisted);
+        } else {
+            state.apply_event(&rec);
+        }
+    } else {
+        state.sync_prior(&prior, &switches);
     }
 
     if !state.expectation_book.expectations.is_empty() {
@@ -688,7 +729,10 @@ pub(crate) fn execute_turn<S: Store>(
                         Some(1.0)
                     } else {
                         let rho = core.prior().silence_sample_rate.clamp(0.0, 1.0);
-                        let draw = SeededRng::draw_unit(core.seed() ^ 0x517C_E001, stored.id);
+                        let draw = SeededRng::draw_unit(
+                            core.seed() ^ 0x517C_E001,
+                            core.state().draw_key(stored.id),
+                        );
                         if rho > 0.0 && draw < rho {
                             Some(rho)
                         } else {
@@ -5542,7 +5586,19 @@ pub(crate) fn execute_hard_forget_in_core<S: Store>(
     reason: String,
     now: Time,
 ) -> Result<EventId, CoreError> {
-    let mut all_erased: BTreeSet<EventId> = target_event_ids.iter().copied().collect();
+    let mut filtered_event_ids = Vec::with_capacity(target_event_ids.len());
+    for eid in target_event_ids {
+        if core
+            .store()
+            .get(eid)?
+            .is_some_and(|rec| rec.kind == EventKind::PriorLoaded)
+        {
+            continue;
+        }
+        filtered_event_ids.push(eid);
+    }
+
+    let mut all_erased: BTreeSet<EventId> = filtered_event_ids.iter().copied().collect();
     for (&eid, entry) in &core.state().memory_entries {
         if target_actor_ids
             .iter()
@@ -5568,7 +5624,7 @@ pub(crate) fn execute_hard_forget_in_core<S: Store>(
         OpaquePayload::default(),
         Vec::new(),
         Some(EventDetail::HardForget {
-            target_event_ids,
+            target_event_ids: filtered_event_ids,
             target_actor_ids,
             epoch: next_epoch,
             reason,
@@ -5742,10 +5798,14 @@ fn maybe_run_sleep_consolidation<S: Store>(
         .collect();
     if !active_vectors.is_empty() {
         let mut next_clusters = core.state().domain_clusters.clone();
+        let sleep_draw_seq = core
+            .state()
+            .draw_key(EventId::new(snapshot_seq.as_u64()))
+            .as_u64();
         let update = next_clusters.update_clusters(
             &active_vectors,
             core.seed(),
-            snapshot_seq.as_u64(),
+            sleep_draw_seq,
             core.prior(),
         );
         if update.changed {

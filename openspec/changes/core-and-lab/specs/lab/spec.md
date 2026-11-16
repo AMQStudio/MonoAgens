@@ -53,6 +53,16 @@ each check as passed or failed.
 - **WHEN** a scenario requires silence in a place and the soul acts there
 - **THEN** the run reports that check as failed with the event that violated it, and the exit status signals failure
 
+### Requirement: Scenario event ids are relative to the scenario's own events
+Event ids written in a scenario SHALL count only the events that follow the soul's opening, as if
+`Core::open` had appended nothing. The Lab SHALL translate them by the number of events
+`Core::open` appended, record that number in the run record, and SHALL NOT require scenario files
+to change when opening records more or fewer events.
+
+#### Scenario: Opening records a prior_loaded event
+- **WHEN** an unchanged scenario that names event id 1 runs on a fresh store where `Core::open` appends `prior_loaded`
+- **THEN** its checks match the scenario's first event, and the run record shows one event appended at opening
+
 ### Requirement: Scripted runs are deterministic
 With the scripted model provider, the scripted embedder and a fixed seed, two runs of the same
 scenario SHALL produce identical logs.
@@ -91,7 +101,12 @@ limits SHALL be adjustable and removable per run.
 The Lab SHALL be able to run any scenario set with any registered mechanism at its neutral
 value. It SHALL run each side with at least five seeds and SHALL report, per metric, the
 difference with a confidence interval, and the cost. A difference within seed noise SHALL be
-reported as no measured effect.
+reported as no measured effect. `monoagens-lab compare` SHALL accept a single scenario or a whole
+scenario set, and, when given an output directory, SHALL write one run record per side and seed.
+
+#### Scenario: A mechanism is ablated across the development set
+- **WHEN** `monoagens-lab compare` runs one mechanism over the development set with five seeds and an output directory
+- **THEN** the report covers every scenario in the set and the directory holds a run record for each side and seed
 
 #### Scenario: Habituation is ablated
 - **WHEN** a scenario with a rapidly repeating source is run with habituation active and neutral
@@ -110,13 +125,23 @@ checks or metrics are expected to differ when that mechanism is neutral.
 - **THEN** the listing marks it as unproven and the coverage command exits with a non-zero status
 
 ### Requirement: Every run records what produced it
-Each run SHALL write a record containing the core version, the prior version, the model and
-embedder, the door rules installed, the mechanism switches, the learning switches, the seed,
-the scenario set, the result of every check, the metrics and the cost by purpose.
+Each run SHALL write a record containing the core version, the prior (format version, content
+version and digest), the model and embedder, the door rules installed, the mechanism switches,
+the learning switches, the seed, the scenario set, the result of every check, the metrics and the
+cost by purpose.
 
 #### Scenario: Comparing two runs
 - **WHEN** two run records are compared
 - **THEN** every difference in core version, prior, model, door rules, switches or seed between them is visible from the records alone
+
+### Requirement: Lab commands take the prior from a file
+Every `monoagens-lab` command that runs the core SHALL accept `--prior <path>`. Without it, the
+command SHALL use the built-in default prior. A scenario that carries its own prior SHALL use it
+instead, and the run record SHALL identify the prior actually used.
+
+#### Scenario: A run uses an edited prior file
+- **WHEN** `monoagens-lab run --prior <edited file>` runs a scenario without its own prior
+- **THEN** the run record carries the edited file's content version and digest, not the built-in default's
 
 ### Requirement: Scenarios are split into three sets
 Scenarios SHALL be grouped into a development set, a validation set and a sealed set. For the

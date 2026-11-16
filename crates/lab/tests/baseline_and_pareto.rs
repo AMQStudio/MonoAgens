@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use monoagens_core::Switches;
+use monoagens_core::{Prior, Switches};
 use monoagens_lab::{
     BaselineKind, PairedComparisonInput, ParetoScorecardInput, PerceptView, Scenario, ScenarioSet,
     ScriptedEvent, ScriptedEventKind, SystemConfigScore, TokenUsage5Tuple, compute_convex_pareto,
@@ -123,6 +123,7 @@ fn adapter_conformance_local_verified_and_offline_unverified_honest() {
             kind,
             &script,
             &scenario,
+            &Prior::default(),
             42,
             true,
             Some(1),
@@ -178,6 +179,7 @@ fn adapter_conformance_local_verified_and_offline_unverified_honest() {
             kind,
             &script,
             &scenario,
+            &Prior::default(),
             42,
             true,
             None,
@@ -214,6 +216,7 @@ fn adapter_sealed_mode_barrier_aborts_on_leak() {
         BaselineKind::StatelessReact,
         &script,
         &scenario,
+        &Prior::default(),
         7,
         true,
         None,
@@ -356,15 +359,16 @@ fn pareto_holm_and_benchmark_suite_semantics() {
     assert!(!small[0].confirmatory_power_met);
 
     // 3. Tool RAG scaling (N_caps=50..200) and Arm-T restart parity check
-    let scaling = run_tool_rag_scaling_eval();
+    let prior = Prior::default();
+    let scaling = run_tool_rag_scaling_eval(&prior);
     assert_eq!(scaling.len(), 4);
     assert!(scaling.last().unwrap().schema_token_savings_ratio > 0.80);
-    assert!(run_arm_t_restart_parity_check().expect("Arm-T restart parity"));
+    assert!(run_arm_t_restart_parity_check(&prior).expect("Arm-T restart parity"));
 
     // 4. In-tree benchmark suite reports 1/n [0.5, 2.0] and excludes MuTual from multi-party claims
     let empty_dir = TempDir::new().expect("temp datasets dir");
-    let in_tree =
-        run_benchmark_suite("in_tree_only", empty_dir.path(), Some(&input)).expect("in_tree suite");
+    let in_tree = run_benchmark_suite("in_tree_only", empty_dir.path(), Some(&input), &prior)
+        .expect("in_tree suite");
     assert_eq!(in_tree.one_over_n_band_check, (0.5, 2.0));
     assert!(
         in_tree
@@ -374,7 +378,7 @@ fn pareto_holm_and_benchmark_suite_semantics() {
     );
 
     // 5. `--suite standard` strictly fails non-zero naming missing external datasets when absent
-    let std_err = run_benchmark_suite("standard", empty_dir.path(), None)
+    let std_err = run_benchmark_suite("standard", empty_dir.path(), None, &prior)
         .expect_err("standard benchmark suite must fail loudly when external datasets are missing");
     let err_str = std_err.to_string();
     assert!(

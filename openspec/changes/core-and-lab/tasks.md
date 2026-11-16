@@ -153,3 +153,14 @@ This checklist implements `monoagens-protocol`, `monoagens-core`, `monoagens-sto
 - [x] 22.1 Verify `openspec validate core-and-lab --strict` and `openspec validate waist-valve-and-bodies --strict` exit `0` with zero errors or warnings.
 - [x] 22.2 After Rust implementation begins, run `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace`.
 - [ ] 22.3 Execute paid live-model Lab benchmarks (`Arm T` vs MonoAgens, `S >= 354–471`, `lab/scenarios/sealed/`) **only upon explicit owner authorization**.
+
+## 23. Reopened — prior loading, `prior_loaded`, and scripted ablation baseline (owner review 2026-11-17, Decision 20)
+
+- [x] 23.1 Add a test that parses `prior/dispositions.json` and fails when it differs from `Prior::default()`; mark `Prior` `#[serde(deny_unknown_fields)]`.
+- [x] 23.2 Add one shared host-side prior loader (outside `monoagens-core`) returning the validated `Prior` plus its digest (`BLAKE3` over canonical JSON of `Prior`); errors name the unknown key, the out-of-range disposition and range, or the unreadable path; no fallback to the default when a path is given.
+- [x] 23.3 Add the `prior_loaded` event kind (30th, additive, versioned, upcast-tested): `Core::open` appends it before new input when the log has none or the given prior differs from the last recorded; never erased by `hard_forget`.
+- [x] 23.4 Make crash recovery, `replay_verify`, `replay_from_checkpoint` and offline replay take the prior from `prior_loaded` events per log position, never from the caller; add a two-prior log replay test.
+- [x] 23.5 Add `--prior <path>` to every `monoagens-lab` command that runs the core (`run`, `suite`, `compare`, `replay`, `baseline`, `benchmark`); record format version, content version and digest of the prior actually used (scenario prior wins) in every run record.
+- [x] 23.6 Extend `monoagens-lab compare` to accept a scenario set (`--set development|validation`) and an output directory writing one run record per side and seed.
+- [ ] 23.7 Run the scripted ablation of all 22 mechanisms over the development set with seeds 1–5 into `lab/runs/<YYYY-MM-DD>-scripted-ablation/`, plus `summary.md` (mechanism × metric delta, interval, verdict, coverage gaps). Scripted model only, no network, never read `lab/scenarios/sealed/`, never write `lab/runs/reference/`.
+- [x] 23.8 Verify `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `openspec validate core-and-lab --strict`.

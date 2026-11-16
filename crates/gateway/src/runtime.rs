@@ -11,7 +11,7 @@ use monoagens_core::{
 };
 use monoagens_protocol::{BodyId, Time};
 use monoagens_reason::ModelProvider;
-use monoagens_store::{SegmentedStore, StoreConfig};
+use monoagens_store::{PriorLoadError, SegmentedStore, StoreConfig};
 use tokio::sync::{Notify, mpsc, oneshot};
 
 use crate::clock::Clock;
@@ -37,6 +37,7 @@ pub enum GatewayError {
     QueueOverflow(QueueOverflow),
     Core(String),
     Store(String),
+    Prior(String),
     OwnerExited,
     ProviderInit(String),
 }
@@ -47,6 +48,7 @@ impl fmt::Display for GatewayError {
             Self::QueueOverflow(ov) => write!(f, "{ov}"),
             Self::Core(msg) => write!(f, "core error: {msg}"),
             Self::Store(msg) => write!(f, "store error: {msg}"),
+            Self::Prior(msg) => write!(f, "prior error: {msg}"),
             Self::OwnerExited => f.write_str("core owner task exited"),
             Self::ProviderInit(msg) => write!(f, "provider init error: {msg}"),
         }
@@ -70,6 +72,12 @@ impl From<CoreError> for GatewayError {
 impl From<StoreError> for GatewayError {
     fn from(err: StoreError) -> Self {
         Self::Store(err.to_string())
+    }
+}
+
+impl From<PriorLoadError> for GatewayError {
+    fn from(err: PriorLoadError) -> Self {
+        Self::Prior(err.to_string())
     }
 }
 
@@ -503,6 +511,60 @@ impl GatewayRuntime {
             secrets,
             move || SegmentedStore::open(StoreConfig::new(store_dir)),
             prior,
+            switches,
+            doors,
+            options,
+        )
+        .await
+    }
+
+    /// Starts the Gateway loading `[soul] prior` (or the built-in default when absent)
+    /// via the shared `monoagens-store` prior loader, failing start-up on invalid/unreadable priors.
+    pub async fn start_with_configured_prior<S, F, D>(
+        config: GatewayConfig,
+        secrets: &monoagens_reason::ProviderSecrets,
+        open_store: F,
+        switches: Switches,
+        doors: D,
+        options: GatewayOptions,
+    ) -> Result<Self, GatewayError>
+    where
+        S: Store + Send + 'static,
+        F: FnOnce() -> Result<S, StoreError> + Send + 'static,
+        D: DoorController + 'static,
+    {
+        let loaded_prior = config.load_prior()?;
+        Self::start(
+            config,
+            secrets,
+            open_store,
+            loaded_prior.prior,
+            switches,
+            doors,
+            options,
+        )
+        .await
+    }
+
+    /// Convenience starter opening a durable [`SegmentedStore`] rooted at `store_dir` and
+    /// loading `[soul] prior` via the shared `monoagens-store` prior loader.
+    pub async fn start_segmented_with_configured_prior<D>(
+        config: GatewayConfig,
+        secrets: &monoagens_reason::ProviderSecrets,
+        store_dir: std::path::PathBuf,
+        switches: Switches,
+        doors: D,
+        options: GatewayOptions,
+    ) -> Result<Self, GatewayError>
+    where
+        D: DoorController + 'static,
+    {
+        let loaded_prior = config.load_prior()?;
+        Self::start_segmented(
+            config,
+            secrets,
+            store_dir,
+            loaded_prior.prior,
             switches,
             doors,
             options,

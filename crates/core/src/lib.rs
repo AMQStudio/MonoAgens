@@ -636,14 +636,7 @@ impl<S: Store> Core<S> {
     /// Runs `Two-Epoch Replay` verification over the underlying store from the latest snapshot.
     pub fn replay_verify(&self, mode: ReplayMode) -> Result<ReplayReport, CoreError> {
         let ckpt = self.store.latest_checkpoint()?;
-        replay::replay_from_checkpoint(
-            &self.store,
-            ckpt.as_ref(),
-            &self.prior,
-            &self.switches,
-            self.seed,
-            mode,
-        )
+        replay::replay_from_checkpoint(&self.store, ckpt.as_ref(), &self.switches, self.seed, mode)
     }
 
     /// Records a belief with basis verification (`Observed` -> `Inferred` downgrade if ungrounded),

@@ -2,6 +2,8 @@
 //! plus offline zero-model log replay and multi-seed paired ablation.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::Path;
 use std::time::Instant;
 
 use monoagens_core::{
@@ -10,12 +12,13 @@ use monoagens_core::{
 };
 use monoagens_protocol::{
     Action, ActionExecuteParams, ActionExecuteResult, ActionId, ActionReceiptParams, ActorId,
-    BodyId, CURRENT_PROTOCOL_VERSION, EventId, PerceptEmitParams, PlaceId, Receipt, ReceiptOutcome,
-    RpcId, TerminationReason, Time, Waist2Headers, Waist2Method, Waist2Request,
+    BodyId, CURRENT_PROTOCOL_VERSION, ConsolidateOutput, EventId, PerceptEmitParams, PlaceId,
+    Receipt, ReceiptOutcome, RpcId, TerminationReason, ThoughtAct, Time, Waist2Headers,
+    Waist2Method, Waist2Request,
 };
 
 use crate::LabError;
-use crate::checks::evaluate_checks;
+use crate::checks::{evaluate_checks, translate_scenario_event_id};
 use crate::clock::VirtualClock;
 use crate::guard::{CostGuard, GuardRefusal};
 use crate::metrics::{
@@ -128,11 +131,16 @@ pub fn run_scenario<S: Store>(
 ) -> Result<SimOutput, LabError> {
     let wall_start = Instant::now();
     let effective_prior = scenario.prior.clone().unwrap_or(prior);
+    let loaded_effective = monoagens_store::LoadedPrior::from_prior(effective_prior)?;
     let switches = scenario.switches.clone().unwrap_or_default();
-    let prior_content_version = effective_prior.content_version.clone();
-    let prior_format_version = effective_prior.version;
+    let prior_content_version = loaded_effective.prior.content_version.clone();
+    let prior_format_version = loaded_effective.prior.version;
+    let prior_digest = loaded_effective.digest;
 
-    let mut core = Core::open(store, effective_prior, switches.clone(), seed)?;
+    let pre_open_event_count = store.read_in_order(None, usize::MAX)?.len() as u64;
+    let mut core = Core::open(store, loaded_effective.prior, switches.clone(), seed)?;
+    let post_open_event_count = core.store().read_in_order(None, usize::MAX)?.len() as u64;
+    let open_offset = post_open_event_count.saturating_sub(pre_open_event_count);
     let mut guard = CostGuard::from_config(scenario.cost_guard.as_ref());
     let door_rules = guard.rule_names();
 
@@ -151,7 +159,10 @@ pub fn run_scenario<S: Store>(
         VirtualClock::new(Time::from_millis(scenario.start_time_ms));
     let mut direct_inputs: Vec<Input> = Vec::new();
     let mut core_ops: Vec<ScheduledCoreOp> = Vec::new();
-    let mut metric_inputs = RunMetricInputs::default();
+    let mut metric_inputs = RunMetricInputs {
+        open_offset,
+        ..RunMetricInputs::default()
+    };
 
     for (idx, ev) in scenario.events.iter().enumerate() {
         let at = Time::from_millis(ev.at_ms);
@@ -425,10 +436,15 @@ pub fn run_scenario<S: Store>(
                     }
                     let req: Waist2Request<PerceptEmitParams> = serde_json::from_str(&json_rpc)
                         .map_err(|e| LabError::Serialization(e.to_string()))?;
-                    let percept = req
+                    let mut percept = req
                         .params
                         .into_percept(CURRENT_PROTOCOL_VERSION)
                         .map_err(|e| LabError::Protocol(e.to_string()))?;
+                    if open_offset != 0 {
+                        percept.reply_to = percept
+                            .reply_to
+                            .map(|id| translate_scenario_event_id(id, open_offset));
+                    }
                     (Input::Percept(Box::new(percept)), scenario_idx, true)
                 }
                 ScheduledItem::WireReceipt { json_rpc } => {
@@ -458,7 +474,7 @@ pub fn run_scenario<S: Store>(
                         (
                             Input::ModelResult {
                                 request_id,
-                                acts: response.acts,
+                                acts: translate_thought_acts(response.acts, open_offset),
                             },
                             None,
                             false,
@@ -524,7 +540,12 @@ pub fn run_scenario<S: Store>(
     let events = core.store().read_in_order(None, usize::MAX)?;
     let wall_elapsed_ms = wall_start.elapsed().as_millis() as u64;
     let end_ms = clock.now().as_millis();
-    let checks = evaluate_checks(&scenario.checks, &events, &guard.captured_plans);
+    let checks = evaluate_checks(
+        &scenario.checks,
+        &events,
+        &guard.captured_plans,
+        open_offset,
+    );
     let passed = checks.iter().all(|c| c.passed);
     let purpose_cost_vec: Vec<PurposeCost> = purpose_costs.into_values().collect();
     let metrics = compute_run_metrics_full(
@@ -544,6 +565,8 @@ pub fn run_scenario<S: Store>(
         core_version: env!("CARGO_PKG_VERSION").to_owned(),
         prior_content_version,
         prior_format_version,
+        prior_digest,
+        open_offset,
         model_id: scenario.model_id.clone(),
         embedder_id: scenario.embedder_id.clone(),
         door_rules,
@@ -568,8 +591,9 @@ pub fn run_scenario<S: Store>(
 }
 
 /// Replays a recorded event log offline with zero model calls and compares every decision bit-for-bit.
+///
+/// Takes the active prior from `prior_loaded` events inside `events`, never from the caller.
 pub fn replay_events_offline(
-    prior: &Prior,
     switches: &Switches,
     seed: u64,
     events: &[EventRecord],
@@ -579,7 +603,7 @@ pub fn replay_events_offline(
     for rec in events {
         mem.append(rec.clone())?;
     }
-    let report = replay_from_checkpoint(&mem, None, prior, switches, seed, mode)?;
+    let report = replay_from_checkpoint(&mem, None, switches, seed, mode)?;
     Ok(report)
 }
 
@@ -592,19 +616,64 @@ pub fn run_ablation_compare(
     neutral_switches: Switches,
     seeds: &[u64],
 ) -> Result<Vec<PairedAblationDelta>, LabError> {
-    let mut enabled_metrics: Vec<RunMetricsSummary> = Vec::with_capacity(seeds.len());
-    let mut neutral_metrics: Vec<RunMetricsSummary> = Vec::with_capacity(seeds.len());
+    run_ablation_compare_scenarios(
+        std::slice::from_ref(scenario),
+        prior,
+        enabled_switches,
+        neutral_switches,
+        seeds,
+        None,
+    )
+}
 
-    for &seed in seeds {
-        let mut sc_en = scenario.clone();
-        sc_en.switches = Some(enabled_switches.clone());
-        let out_en = run_scenario(MemStore::new(), prior.clone(), &sc_en, seed)?;
-        enabled_metrics.push(out_en.run_record.metrics);
+/// Runs paired ablation over `scenarios` across `seeds`, optionally writing one postcard
+/// [`RunRecord`] per `(scenario, side, seed)` into `out_dir`.
+pub fn run_ablation_compare_scenarios(
+    scenarios: &[Scenario],
+    prior: &Prior,
+    enabled_switches: Switches,
+    neutral_switches: Switches,
+    seeds: &[u64],
+    out_dir: Option<&Path>,
+) -> Result<Vec<PairedAblationDelta>, LabError> {
+    if let Some(dir) = out_dir {
+        fs::create_dir_all(dir)?;
+    }
+    let total = scenarios.len().saturating_mul(seeds.len());
+    let mut enabled_metrics: Vec<RunMetricsSummary> = Vec::with_capacity(total);
+    let mut neutral_metrics: Vec<RunMetricsSummary> = Vec::with_capacity(total);
 
-        let mut sc_neu = scenario.clone();
-        sc_neu.switches = Some(neutral_switches.clone());
-        let out_neu = run_scenario(MemStore::new(), prior.clone(), &sc_neu, seed)?;
-        neutral_metrics.push(out_neu.run_record.metrics);
+    for scenario in scenarios {
+        let safe_id: String = scenario
+            .id
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        for &seed in seeds {
+            let mut sc_en = scenario.clone();
+            sc_en.switches = Some(enabled_switches.clone());
+            let out_en = run_scenario(MemStore::new(), prior.clone(), &sc_en, seed)?;
+            if let Some(dir) = out_dir {
+                let path = dir.join(format!("{safe_id}__enabled__seed-{seed}.postcard"));
+                fs::write(path, out_en.run_record.encode_postcard()?)?;
+            }
+            enabled_metrics.push(out_en.run_record.metrics);
+
+            let mut sc_neu = scenario.clone();
+            sc_neu.switches = Some(neutral_switches.clone());
+            let out_neu = run_scenario(MemStore::new(), prior.clone(), &sc_neu, seed)?;
+            if let Some(dir) = out_dir {
+                let path = dir.join(format!("{safe_id}__neutral__seed-{seed}.postcard"));
+                fs::write(path, out_neu.run_record.encode_postcard()?)?;
+            }
+            neutral_metrics.push(out_neu.run_record.metrics);
+        }
     }
 
     Ok(compare_paired_ablation(&enabled_metrics, &neutral_metrics))
@@ -818,4 +887,153 @@ fn dispatch_action_over_waist2(
     }
 
     Ok(())
+}
+
+fn translate_id_vec(ids: Vec<EventId>, open_offset: u64) -> Vec<EventId> {
+    ids.into_iter()
+        .map(|id| translate_scenario_event_id(id, open_offset))
+        .collect()
+}
+
+fn translate_thought_acts(acts: Vec<ThoughtAct>, open_offset: u64) -> Vec<ThoughtAct> {
+    if open_offset == 0 {
+        return acts;
+    }
+    acts.into_iter()
+        .map(|act| match act {
+            ThoughtAct::Think {
+                thought,
+                motivation,
+                confidence_0_20,
+                used_ids,
+                importance,
+                basis,
+                value,
+                cost,
+                domain,
+            } => ThoughtAct::Think {
+                thought,
+                motivation,
+                confidence_0_20,
+                used_ids: translate_id_vec(used_ids, open_offset),
+                importance,
+                basis,
+                value,
+                cost,
+                domain,
+            },
+            ThoughtAct::Act {
+                capability_id,
+                places,
+                people,
+                payload,
+                motivation,
+                confidence_0_20,
+                used_ids,
+                expected,
+                domain,
+            } => ThoughtAct::Act {
+                capability_id,
+                places,
+                people,
+                payload,
+                motivation,
+                confidence_0_20,
+                used_ids: translate_id_vec(used_ids, open_offset),
+                expected,
+                domain,
+            },
+            ThoughtAct::Expect {
+                expect_kind,
+                about_ids,
+                places,
+                people,
+                condition,
+                due_ms,
+                expiry_ms,
+                recurrence,
+                promise_meta,
+                domain,
+            } => ThoughtAct::Expect {
+                expect_kind,
+                about_ids: translate_id_vec(about_ids, open_offset),
+                places,
+                people,
+                condition,
+                due_ms,
+                expiry_ms,
+                recurrence,
+                promise_meta,
+                domain,
+            },
+            ThoughtAct::Resolve {
+                expectation_id,
+                outcome,
+                note,
+                places,
+                people,
+                domain,
+            } => ThoughtAct::Resolve {
+                expectation_id: translate_scenario_event_id(expectation_id, open_offset),
+                outcome,
+                note,
+                places,
+                people,
+                domain,
+            },
+            ThoughtAct::Revise {
+                target_id,
+                new_version,
+                condition,
+                due_ms,
+                expiry_ms,
+                places,
+                people,
+                domain,
+            } => ThoughtAct::Revise {
+                target_id: translate_scenario_event_id(target_id, open_offset),
+                new_version,
+                condition,
+                due_ms,
+                expiry_ms,
+                places,
+                people,
+                domain,
+            },
+            ThoughtAct::Consolidate { output } => ThoughtAct::Consolidate {
+                output: match output {
+                    ConsolidateOutput::Gist {
+                        summary,
+                        about_ids,
+                        places,
+                        people,
+                        domain,
+                    } => ConsolidateOutput::Gist {
+                        summary,
+                        about_ids: translate_id_vec(about_ids, open_offset),
+                        places,
+                        people,
+                        domain,
+                    },
+                    ConsolidateOutput::Lesson {
+                        pattern,
+                        failure_signature,
+                        contrastive_success_ids,
+                        failure_ids,
+                        domain,
+                    } => ConsolidateOutput::Lesson {
+                        pattern,
+                        failure_signature,
+                        contrastive_success_ids: translate_id_vec(
+                            contrastive_success_ids,
+                            open_offset,
+                        ),
+                        failure_ids: translate_id_vec(failure_ids, open_offset),
+                        domain,
+                    },
+                    other @ ConsolidateOutput::Procedure { .. } => other,
+                },
+            },
+        })
+        .collect()
 }

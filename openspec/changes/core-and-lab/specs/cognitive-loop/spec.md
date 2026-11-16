@@ -109,6 +109,15 @@ generator seeded from a configured seed and the event being processed.
 - **WHEN** a recorded sequence of events is processed again at a later wall-clock time with the same injected timestamps and seed
 - **THEN** all decisions are identical to the first run
 
+### Requirement: Recording the prior does not change random draws
+The event key of every seeded draw SHALL be the event's id minus the number of `prior_loaded`
+events recorded before it, so recording a prior never changes which branch a draw takes. Step,
+crash recovery and replay SHALL compute the same key.
+
+#### Scenario: The same inputs with and without a prior_loaded event
+- **WHEN** the same inputs are processed with the same seed once on a store whose opening recorded `prior_loaded` and once on a store whose opening recorded nothing
+- **THEN** every seeded draw takes the same branch and every decision is the same
+
 ### Requirement: Every mechanism has a neutral value
 Each mechanism of the core SHALL be registered with an id, a claim (what gets worse without
 it) and a neutral value at which it has no effect. Switching a mechanism off SHALL mean setting
@@ -130,6 +139,32 @@ prior in use SHALL be identifiable in every recorded run.
 #### Scenario: A prior value is out of range
 - **WHEN** the prior sets a disposition outside its documented range
 - **THEN** start-up fails with an error naming the disposition and its range
+
+### Requirement: One canonical prior file, identified by digest
+The canonical prior SHALL be the file `prior/dispositions.json`. The built-in default prior SHALL
+equal that file, and a test SHALL fail the build when they differ. A prior SHALL be identified by
+its format version, its content version and a digest of its canonical serialization.
+
+#### Scenario: The built-in default drifts from the file
+- **WHEN** a disposition in `Prior::default()` no longer equals the value in `prior/dispositions.json`
+- **THEN** the build's test suite fails naming the disposition
+
+### Requirement: Prior files are read strictly
+A prior file key that names no known disposition SHALL fail start-up. A prior path given
+explicitly that cannot be read SHALL fail start-up; the built-in default SHALL NOT be used in its
+place.
+
+#### Scenario: A prior file contains an unknown key
+- **WHEN** the prior file contains a key that names no disposition, such as a misspelling
+- **THEN** start-up fails with an error naming the key
+
+#### Scenario: The prior file is edited without a new content version
+- **WHEN** a disposition in the prior file changes but its content version does not
+- **THEN** the prior digest differs, and run records made before and after the edit show the difference
+
+#### Scenario: An explicit prior path is missing
+- **WHEN** start-up is given a prior path that does not exist
+- **THEN** start-up fails naming the path, and does not fall back to the built-in default
 
 ### Requirement: Idle time produces ticks
 When no event arrives, the loop SHALL still receive periodic tick events carrying the current

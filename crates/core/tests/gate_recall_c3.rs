@@ -309,6 +309,14 @@ fn patience_yield_timeout_allocated_immediate_and_disabled_zero() {
     );
     let due = core_yield.next_due().expect("wait expectation scheduled");
     assert!(due > Time::from_millis(1_000));
+    let p_open_id = core_yield
+        .store()
+        .read_in_order(None, 200)
+        .unwrap()
+        .into_iter()
+        .find(|r| r.kind == EventKind::Percept)
+        .expect("p_open percept")
+        .id;
 
     // Bob answers 400ms later (inside the patience window).
     let mut p_reply = make_percept(
@@ -317,7 +325,7 @@ fn patience_yield_timeout_allocated_immediate_and_disabled_zero() {
         &["per_alice", "per_bob", "soul"],
         1_400,
     );
-    p_reply.reply_to = Some(EventId::new(1));
+    p_reply.reply_to = Some(p_open_id);
     let eff2 = core_yield
         .step(
             Input::Percept(Box::new(p_reply)),
@@ -340,7 +348,7 @@ fn patience_yield_timeout_allocated_immediate_and_disabled_zero() {
                 outcome: DecisionOutcome::Silent,
                 reason: Some(DecisionReason::Yielded),
                 ..
-            }) if *target_event_id == EventId::new(1)
+            }) if *target_event_id == p_open_id
         )),
         "expected Silent/Yielded decision recorded for yielded event"
     );
@@ -351,7 +359,7 @@ fn patience_yield_timeout_allocated_immediate_and_disabled_zero() {
                 target_event_id,
                 reason,
                 ..
-            }) if *target_event_id == EventId::new(1) && reason == "yielded"
+            }) if *target_event_id == p_open_id && reason == "yielded"
         )),
         "expected Withheld marker for yielded silence"
     );
@@ -453,15 +461,9 @@ fn decision_trace_recomputability_withheld_markers_and_replay() {
         "expected auditable Withheld event on floor-cost silence"
     );
 
-    let report = replay_from_checkpoint(
-        core.store(),
-        None,
-        &prior,
-        &switches,
-        seed,
-        ReplayMode::FullReplay,
-    )
-    .unwrap();
+    let report =
+        replay_from_checkpoint(core.store(), None, &switches, seed, ReplayMode::FullReplay)
+            .unwrap();
     assert!(report.is_bit_identical(), "{:?}", report.first_divergence);
 }
 

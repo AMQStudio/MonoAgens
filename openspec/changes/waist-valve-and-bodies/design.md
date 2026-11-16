@@ -103,6 +103,11 @@ bodies/
 - Splits black-box wire TCK (`B-MUST-01..07`, `B-SHOULD-01..03`, `C-MUST-01..04`, `--level must|should|may`, JSON `compatibility.json`) out of `monoagens-lab`.
 - `OpenRPC 1.4.1` codegen produces thin Rust, TypeScript, and Python SDKs (`< 200 LOC` user body adapter) implementing framing, idempotency cache, crash journal, SHA-256 blob ops, and heartbeats.
 
+### D11. Prior configuration and replay (owner review 2026-11-17)
+
+- `[soul] prior = "<path>"` in `monoagens.toml` selects the prior; absent, the built-in default (equal to `prior/dispositions.json`) is used. Loading, validation and digest use the shared loader of `core-and-lab` Decision 20.
+- The prior is remembered as `prior_loaded` events in the core log, never as gateway process memory or a side file, keeping the "gateway never learns" invariant. `monoagens replay` reads it from the log.
+
 ## Risks / Trade-offs
 
 - [Scope spans Gateway, Cedar Valve, CLI, Bridges, and TCK] -> Phased 0–3 delivery mirrors `core-and-lab` D17 so Phase 0–1 unblocks real CLI & MCP testing without waiting for Phase-3 ROS-2 or simulated robotics.

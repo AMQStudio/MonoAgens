@@ -16,7 +16,7 @@ written to the log before it is handed to a body.
 - **THEN** on the next `Core::open` start the event is discovered in the unconsumed tail and processed
 
 ### Requirement: Structured event catalog including withheld, feedback, and erasure
-The append-only log SHALL record 29 canonical event kinds, including `withheld` silence outcomes, asynchronous `action_feedback` updates, and authorized `hard_forget` erasure tombstones, enabling deterministic replay and causal audit without implicit external state.
+The append-only log SHALL record 30 canonical event kinds, including `withheld` silence outcomes, asynchronous `action_feedback` updates, authorized `hard_forget` erasure tombstones, and `prior_loaded` records of the prior in effect, enabling deterministic replay and causal audit without implicit external state.
 
 #### Scenario: Deliberate silence and late feedback are logged
 - **WHEN** appraisal withholds speech or a body emits delayed delivery `action_feedback`
@@ -97,14 +97,41 @@ Credentials and endpoint secrets SHALL NOT appear in any recorded event or in an
 - **WHEN** a model call fails with an authentication error
 - **THEN** the recorded event states the failure and the provider name and contains no key or token
 
+### Requirement: The prior in effect is recorded in the log
+`Core::open` SHALL append a `prior_loaded` event carrying the full prior content (format version,
+content version and every disposition) before admitting any new input, whenever the log holds no
+`prior_loaded` event yet or the given prior differs from the one most recently recorded. When the
+given prior equals the recorded one, no event SHALL be appended.
+
+#### Scenario: A soul is restarted with an edited prior
+- **WHEN** a soul that ran under prior A is reopened with prior B
+- **THEN** the log gains one `prior_loaded` event carrying B before the first new input, and earlier events stay attributed to A
+
+#### Scenario: A soul is restarted with the same prior
+- **WHEN** a soul is reopened with the prior already recorded in its log
+- **THEN** no `prior_loaded` event is appended
+
+### Requirement: A new prior governs from its event onward
+A new prior SHALL govern decisions from its `prior_loaded` event onward; state learned before it
+SHALL stay as recorded. `prior_loaded` events SHALL never be erased by `hard_forget`.
+
+#### Scenario: Erasure leaves the prior record intact
+- **WHEN** an authorized `hard_forget` erases events recorded under prior B
+- **THEN** the `prior_loaded` event for B remains and post-erasure replay still applies B
+
 ### Requirement: Replay reproduces decisions
-Replaying a recorded log with the same seed, prior and switches SHALL produce the same gate
+Replaying a recorded log with the same seed and switches SHALL produce the same gate
 decisions, the same expectation transitions and the same recall rankings as the original run,
-without calling a model.
+without calling a model. Replay SHALL take the prior from the log's `prior_loaded` events,
+applying each from its position onward, and SHALL NOT take it from the caller.
 
 #### Scenario: A recorded run is replayed
-- **WHEN** a log is replayed with the seed, prior and switches it was recorded with
+- **WHEN** a log is replayed with the seed and switches it was recorded with
 - **THEN** every decision event produced by the replay equals the recorded one
+
+#### Scenario: A log spanning two priors is replayed
+- **WHEN** a log contains decisions under prior A, then a `prior_loaded` event for prior B, then further decisions
+- **THEN** replay applies A before the event and B after it, and every decision equals the recorded one
 
 #### Scenario: A divergence is reported
 - **WHEN** a replay produces a decision that differs from the recorded one

@@ -117,7 +117,6 @@ proptest! {
         prop_assert_eq!(bytes1, bytes2);
 
         let replay = replay_events_offline(
-            &Prior::default(),
             &Switches::all_enabled(),
             seed,
             &run1.events,

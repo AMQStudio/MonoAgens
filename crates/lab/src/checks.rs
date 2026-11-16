@@ -110,16 +110,29 @@ pub struct CheckResult {
     pub violating_event_id: Option<EventId>,
 }
 
-/// Evaluates all `checks` deterministically against recorded `events` and `context_plans`.
+/// Translates a scenario-authored [`EventId`] by `+open_offset`.
+///
+/// Event IDs written in a scenario (`target_event_id`, `item_event_id`, `expectation_id`, and
+/// other scenario-supplied IDs) are relative to the scenario's own events, counted as if
+/// `Core::open` appended nothing; any log comparison or playback translates them by `open_offset`
+/// (the number of events `Core::open` appended before the first scenario input).
+#[must_use]
+pub const fn translate_scenario_event_id(id: EventId, open_offset: u64) -> EventId {
+    EventId::new(id.as_u64().saturating_add(open_offset))
+}
+
+/// Evaluates all `checks` deterministically against recorded `events` and `context_plans`,
+/// translating scenario-authored [`EventId`]s by `open_offset`.
 #[must_use]
 pub fn evaluate_checks(
     checks: &[ExpectationCheck],
     events: &[EventRecord],
     context_plans: &[ContextPlan],
+    open_offset: u64,
 ) -> Vec<CheckResult> {
     checks
         .iter()
-        .map(|check| evaluate_one(check, events, context_plans))
+        .map(|check| evaluate_one(check, events, context_plans, open_offset))
         .collect()
 }
 
@@ -127,6 +140,7 @@ fn evaluate_one(
     check: &ExpectationCheck,
     events: &[EventRecord],
     context_plans: &[ContextPlan],
+    open_offset: u64,
 ) -> CheckResult {
     match check {
         ExpectationCheck::ActionInPlace {
@@ -210,8 +224,10 @@ fn evaluate_one(
             label,
             expected_present,
         } => {
+            let translated_item_id =
+                item_event_id.map(|id| translate_scenario_event_id(id, open_offset));
             let matched = context_plans.iter().any(|plan| {
-                let id_match = item_event_id
+                let id_match = translated_item_id
                     .is_none_or(|id| plan.items.contains(&id) || plan.trigger_event_id == Some(id));
                 let label_match = label.as_ref().is_none_or(|lbl| {
                     plan.place.as_ref().is_some_and(|p| p.as_str() == lbl)
@@ -321,10 +337,11 @@ fn evaluate_one(
                 .collect();
 
             let matched_rec = if let Some(target) = target_event_id {
+                let translated_target = translate_scenario_event_id(*target, open_offset);
                 decisions.into_iter().find(|rec| {
                     matches!(
                         &rec.detail,
-                        Some(EventDetail::Decision { target_event_id: tid, .. }) if tid == target
+                        Some(EventDetail::Decision { target_event_id: tid, .. }) if *tid == translated_target
                     )
                 })
             } else if let Some(idx) = decision_index {

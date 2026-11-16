@@ -22,6 +22,8 @@ use crate::scenario::{Scenario, WarrantedReply};
 pub struct RunMetricInputs {
     /// Mapping from `Scenario.events` index -> assigned `EventId` in the log.
     pub scripted_event_ids: BTreeMap<usize, EventId>,
+    /// Number of events `Core::open` appended before the first scenario input.
+    pub open_offset: u64,
     /// Per-percept appraisal wall-clock durations in milliseconds.
     pub appraisal_latencies_ms: Vec<f64>,
     /// Scripted barge-in interrupt timestamps keyed by `ActionId`.

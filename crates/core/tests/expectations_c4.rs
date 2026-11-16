@@ -1271,7 +1271,7 @@ fn judged_silence_seeded_sample_reproducible_missed_reask_and_sibling_answer() {
     );
 
     // Verify Two-Epoch Replay bit-exactness across the log.
-    let rep = replay_log(core1.store(), &prior, &sw, 42).unwrap();
+    let rep = replay_log(core1.store(), &sw, 42).unwrap();
     assert!(
         rep.is_bit_identical(),
         "replay diverged: {:?}",

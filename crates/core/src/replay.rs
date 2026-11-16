@@ -73,9 +73,11 @@ impl ReplayReport {
 }
 
 /// Replays `store` starting from `store.latest_checkpoint()` (if present) using [`ReplayMode::TwoEpochFrozen`].
+///
+/// The prior in effect is taken strictly from the log's `prior_loaded` events (or `Prior::default()`
+/// prior to the first `prior_loaded` event), never from the caller.
 pub fn replay_log<S: Store>(
     store: &S,
-    prior: &Prior,
     switches: &Switches,
     seed: u64,
 ) -> Result<ReplayReport, CoreError> {
@@ -83,7 +85,6 @@ pub fn replay_log<S: Store>(
     replay_from_checkpoint(
         store,
         ckpt.as_ref(),
-        prior,
         switches,
         seed,
         ReplayMode::TwoEpochFrozen,
@@ -92,17 +93,17 @@ pub fn replay_log<S: Store>(
 
 /// Replays `store` from an explicit `checkpoint` cursor (or full log when `None`) under `mode`,
 /// comparing every replayed `Percept` decision bit-for-bit against the recorded `Decision` event.
+///
+/// The prior in effect at every log position comes strictly from `prior_loaded` events (and
+/// snapshot state for checkpointed prefixes), never from the caller.
 pub fn replay_from_checkpoint<S: Store>(
     store: &S,
     checkpoint: Option<&SnapshotCheckpoint>,
-    prior: &Prior,
     switches: &Switches,
     seed: u64,
     mode: ReplayMode,
 ) -> Result<ReplayReport, CoreError> {
-    prior.validate()?;
-
-    let (mut state, snapshot_cursor) = match checkpoint {
+    let (mut state, snapshot_cursor, mut active_prior) = match checkpoint {
         Some(ckpt) => {
             let actual = blake3::hash(&ckpt.bytes);
             if actual != ckpt.blake3 {
@@ -113,14 +114,24 @@ pub fn replay_from_checkpoint<S: Store>(
                 });
             }
             let mut decoded = CoreState::decode_snapshot(&ckpt.bytes)?;
-            decoded.theta_ex = prior.theta_ex;
-            decoded.m_ex = prior.m_ex;
-            (decoded, Some(ckpt.cursor))
+            decoded.map_switches = switches.clone();
+            let resolved_prior = match decoded.recorded_prior.clone() {
+                Some(p) => p,
+                None => find_latest_prior_up_to(store, ckpt.cursor)?,
+            };
+            resolved_prior.validate()?;
+            decoded.theta_ex = resolved_prior.theta_ex;
+            decoded.m_ex = resolved_prior.m_ex;
+            decoded.habituation_gamma = resolved_prior.habituation_gamma();
+            decoded.patience_decay_rho = resolved_prior.patience_decay_rho;
+            decoded.map_prior = resolved_prior.clone();
+            (decoded, Some(ckpt.cursor), resolved_prior)
         }
         None => {
+            let default_prior = Prior::default();
             let mut st = CoreState::new();
-            st.sync_prior(prior, switches);
-            (st, None)
+            st.sync_prior(&default_prior, switches);
+            (st, None, default_prior)
         }
     };
 
@@ -141,10 +152,20 @@ pub fn replay_from_checkpoint<S: Store>(
             replayed_events += 1;
 
             match rec.kind {
+                EventKind::PriorLoaded => {
+                    if let Some(EventDetail::PriorLoaded {
+                        prior: loaded_prior,
+                    }) = &rec.detail
+                    {
+                        loaded_prior.validate()?;
+                        active_prior = (**loaded_prior).clone();
+                    }
+                    state.apply_event(&rec);
+                }
                 EventKind::Percept => {
                     let expected = state.appraise_percept_record(
                         &rec,
-                        prior,
+                        &active_prior,
                         switches,
                         seed,
                         use_frozen_anchor,
@@ -244,4 +265,27 @@ fn find_first_mismatch(
         return Some("reason");
     }
     None
+}
+
+fn find_latest_prior_up_to<S: Store>(store: &S, max_seq: LogSeq) -> Result<Prior, CoreError> {
+    let mut found: Option<Prior> = None;
+    let mut cursor: Option<LogSeq> = None;
+    loop {
+        let batch = store.read_after_seq(cursor, 256)?;
+        if batch.is_empty() {
+            break;
+        }
+        for rec in batch {
+            if rec.seq > max_seq {
+                return Ok(found.unwrap_or_default());
+            }
+            cursor = Some(rec.seq);
+            if rec.kind == EventKind::PriorLoaded
+                && let Some(EventDetail::PriorLoaded { prior }) = &rec.detail
+            {
+                found = Some((**prior).clone());
+            }
+        }
+    }
+    Ok(found.unwrap_or_default())
 }

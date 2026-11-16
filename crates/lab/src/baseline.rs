@@ -251,6 +251,7 @@ pub fn run_baseline_adapter(
     kind: BaselineKind,
     adapter_script: &Path,
     scenario: &Scenario,
+    prior: &Prior,
     seed: u64,
     sealed_mode: bool,
     restart_at_percept_idx: Option<usize>,
@@ -265,7 +266,7 @@ pub fn run_baseline_adapter(
     }
 
     // Run MonoAgens on the exact same scenario for symmetric NOOP token parity.
-    let mono_out = run_scenario(MemStore::new(), Prior::default(), scenario, seed)?;
+    let mono_out = run_scenario(MemStore::new(), prior.clone(), scenario, seed)?;
     let mono_gate_suppressions = mono_out
         .events
         .iter()

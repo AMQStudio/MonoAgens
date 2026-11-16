@@ -163,9 +163,13 @@ pub fn execute_hard_forget(
     let prior_checkpoint = snapshots::read_latest_snapshot(&snapshots_dir)?;
 
     // 2. Identify all matching hot events + payloads, plus surviving hot payloads for false-positive filtering.
+    //    `prior_loaded` events are never erasable by `hard_forget` (Decision 20).
     let hot_scan = collect_hot_matching_events(hot_conn, &erase_events_seed, &erase_actors)?;
 
-    let mut all_erased_ids: BTreeSet<EventId> = erase_events_seed.clone();
+    let mut all_erased_ids: BTreeSet<EventId> = erase_events_seed
+        .into_iter()
+        .filter(|eid| !hot_scan.protected_prior_ids.contains(eid))
+        .collect();
     let mut erased_payload_candidates: Vec<Vec<u8>> = Vec::new();
     let mut surviving_payload_bytes: Vec<Vec<u8>> = Vec::new();
 
@@ -186,6 +190,9 @@ pub fn execute_hard_forget(
     for shard in &existing_shards {
         let outcome =
             shards::rewrite_shard_without(shard, &shards_dir, &all_erased_ids, &erase_actors)?;
+        for pid in &outcome.protected_prior_ids {
+            all_erased_ids.remove(pid);
+        }
         for (eid, raw) in &outcome.erased_events {
             all_erased_ids.insert(*eid);
             extract_payload_if_distinct(raw, &mut erased_payload_candidates);
@@ -388,6 +395,7 @@ pub fn execute_hard_forget(
 struct HotMatchScan {
     erased: Vec<(EventId, Vec<u8>)>,
     surviving_raw: Vec<Vec<u8>>,
+    protected_prior_ids: BTreeSet<EventId>,
 }
 
 fn collect_hot_matching_events(
@@ -395,17 +403,22 @@ fn collect_hot_matching_events(
     erase_events: &BTreeSet<EventId>,
     erase_actors: &BTreeSet<ActorId>,
 ) -> Result<HotMatchScan, StoreError> {
+    let prior_kind_code = i64::from(EventKind::PriorLoaded.code());
     let mut stmt = hot_conn
-        .prepare("SELECT event_id, actor, origin_actor, raw_bytes FROM events ORDER BY seq ASC")
+        .prepare(
+            "SELECT event_id, kind_code, actor, origin_actor, raw_bytes FROM events ORDER BY seq ASC",
+        )
         .map_err(map_sqlite_err)?;
     let rows = stmt
         .query_map([], |row| {
             let eid: i64 = row.get(0)?;
-            let actor: String = row.get(1)?;
-            let origin: String = row.get(2)?;
-            let raw: Vec<u8> = row.get(3)?;
+            let kind_code: i64 = row.get(1)?;
+            let actor: String = row.get(2)?;
+            let origin: String = row.get(3)?;
+            let raw: Vec<u8> = row.get(4)?;
             Ok((
                 EventId::new(eid as u64),
+                kind_code,
                 ActorId::new(actor),
                 ActorId::new(origin),
                 raw,
@@ -415,8 +428,14 @@ fn collect_hot_matching_events(
 
     let mut erased = Vec::new();
     let mut surviving_raw = Vec::new();
+    let mut protected_prior_ids = BTreeSet::new();
     for item in rows {
-        let (eid, actor, origin, raw) = item.map_err(map_sqlite_err)?;
+        let (eid, kind_code, actor, origin, raw) = item.map_err(map_sqlite_err)?;
+        if kind_code == prior_kind_code {
+            protected_prior_ids.insert(eid);
+            surviving_raw.push(raw);
+            continue;
+        }
         if erase_events.contains(&eid)
             || erase_actors.contains(&actor)
             || erase_actors.contains(&origin)
@@ -429,6 +448,7 @@ fn collect_hot_matching_events(
     Ok(HotMatchScan {
         erased,
         surviving_raw,
+        protected_prior_ids,
     })
 }
 
@@ -508,9 +528,10 @@ fn build_clean_post_forget_state(
     for shard in &all_shards {
         let shard_events = shards::read_shard_after_seq(&shard.path(shards_dir), None, usize::MAX)?;
         for rec in shard_events {
-            if !erased_events.contains(&rec.id)
-                && !erased_actors.contains(&rec.actor)
-                && !erased_actors.contains(rec.origin_actor.actor_id())
+            if rec.kind == EventKind::PriorLoaded
+                || (!erased_events.contains(&rec.id)
+                    && !erased_actors.contains(&rec.actor)
+                    && !erased_actors.contains(rec.origin_actor.actor_id()))
             {
                 state.apply_event(&rec);
             }
@@ -524,9 +545,10 @@ fn build_clean_post_forget_state(
         {
             continue;
         }
-        if !erased_events.contains(&rec.id)
-            && !erased_actors.contains(&rec.actor)
-            && !erased_actors.contains(rec.origin_actor.actor_id())
+        if rec.kind == EventKind::PriorLoaded
+            || (!erased_events.contains(&rec.id)
+                && !erased_actors.contains(&rec.actor)
+                && !erased_actors.contains(rec.origin_actor.actor_id()))
         {
             state.apply_event(&rec);
         }

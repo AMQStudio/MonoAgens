@@ -312,6 +312,7 @@ pub struct ShardRewriteOutcome {
     pub updated_shard: Option<ShardInfo>,
     pub erased_events: Vec<(EventId, Vec<u8>)>,
     pub surviving_raw: Vec<Vec<u8>>,
+    pub protected_prior_ids: Vec<EventId>,
 }
 
 /// Rebuilds a sealed shard without erased events/actors during `hard_forget`, returning `None` if empty.
@@ -350,14 +351,22 @@ pub fn rewrite_shard_without(
         })
         .map_err(map_sqlite_err)?;
 
+    let prior_kind_code = i64::from(monoagens_core::EventKind::PriorLoaded.code());
     let mut surviving_rows = Vec::new();
     let mut erased_events = Vec::new();
     let mut surviving_raw = Vec::new();
+    let mut protected_prior_ids = Vec::new();
     let mut matched_any = false;
 
     for item in rows {
         let row = item.map_err(map_sqlite_err)?;
         let eid = EventId::new(row.event_id as u64);
+        if row.kind_code == prior_kind_code {
+            protected_prior_ids.push(eid);
+            surviving_raw.push(row.raw_bytes.clone());
+            surviving_rows.push(row);
+            continue;
+        }
         let actor = ActorId::new(row.actor.clone());
         let origin = ActorId::new(row.origin_actor.clone());
         if erase_events.contains(&eid)
@@ -377,6 +386,7 @@ pub fn rewrite_shard_without(
             updated_shard: Some(shard.clone()),
             erased_events,
             surviving_raw,
+            protected_prior_ids,
         });
     }
 
@@ -416,6 +426,7 @@ pub fn rewrite_shard_without(
             updated_shard: None,
             erased_events,
             surviving_raw,
+            protected_prior_ids,
         });
     }
 
@@ -456,6 +467,7 @@ pub fn rewrite_shard_without(
         updated_shard: Some(updated),
         erased_events,
         surviving_raw,
+        protected_prior_ids,
     })
 }
 

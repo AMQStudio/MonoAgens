@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use monoagens_protocol::{ActorId, BodyId, CURRENT_PROTOCOL_VERSION, ProtocolVersion};
 use monoagens_reason::{EMBEDDING_GEMMA_2_DIM, EMBEDDING_GEMMA_2_VER, ProviderSecrets};
+use monoagens_store::{LoadedPrior, PriorLoadError, load_prior_or_default};
 use toml_edit::{DocumentMut, Item, Table, TableLike, value};
 
 use crate::cues::{DEFAULT_PROGRESS_NOTE_MS, DEFAULT_WORKING_CUE_MS};
@@ -110,11 +111,12 @@ impl Default for ModelConfig {
     }
 }
 
-/// Soul identity and deterministic PRNG seed settings.
+/// Soul identity, deterministic PRNG seed, and optional prior file path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SoulConfig {
     pub name: String,
     pub seed: u64,
+    pub prior: Option<PathBuf>,
 }
 
 impl Default for SoulConfig {
@@ -122,6 +124,7 @@ impl Default for SoulConfig {
         Self {
             name: "MonoAgens".to_owned(),
             seed: 1,
+            prior: None,
         }
     }
 }
@@ -281,6 +284,14 @@ impl Default for GatewayConfig {
             persons: Vec::new(),
             bodies: Vec::new(),
         }
+    }
+}
+
+impl GatewayConfig {
+    /// Loads and strictly validates `[soul] prior` (or returns the built-in default when absent)
+    /// using the shared `monoagens-store` prior loader.
+    pub fn load_prior(&self) -> Result<LoadedPrior, PriorLoadError> {
+        load_prior_or_default(self.soul.prior.as_deref())
     }
 }
 
@@ -535,6 +546,9 @@ pub fn default_config_document(cfg: &GatewayConfig) -> DocumentMut {
     let mut soul = Table::new();
     soul["name"] = value(cfg.soul.name.clone());
     soul["seed"] = value(cfg.soul.seed as i64);
+    if let Some(prior_path) = &cfg.soul.prior {
+        soul["prior"] = value(prior_path.display().to_string());
+    }
     doc["soul"] = Item::Table(soul);
 
     let mut runtime = Table::new();
@@ -713,6 +727,16 @@ fn parse_config_document(doc: &DocumentMut) -> Result<GatewayConfig, ConfigError
                 value: seed_i64.to_string(),
                 range: "0..=9223372036854775807",
             })?;
+        }
+        if let Some(prior_str) = get_opt_str(soul_tbl, "prior", "soul.prior")? {
+            if prior_str.trim().is_empty() {
+                return Err(ConfigError::InvalidValue {
+                    key: "soul.prior".to_owned(),
+                    value: prior_str,
+                    expected: "non-empty prior file path",
+                });
+            }
+            cfg.soul.prior = Some(PathBuf::from(prior_str));
         }
     }
 

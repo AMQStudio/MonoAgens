@@ -8,6 +8,7 @@ use std::io;
 use monoagens_core::{CoreError, StoreError};
 /// Re-export seam for `monoagens-reason` (real LLM/embedder providers land in later milestones).
 pub use monoagens_reason as reason_seam;
+use monoagens_store::PriorLoadError;
 
 pub mod baseline;
 pub mod benchmark;
@@ -31,9 +32,14 @@ pub use benchmark::{
     run_arm_t_restart_parity_check, run_benchmark_suite, run_tool_rag_scaling_eval,
     standard_benchmark_registry, verify_required_datasets_present,
 };
-pub use checks::{CheckKind, CheckResult, ExpectationCheck, evaluate_checks};
+pub use checks::{
+    CheckKind, CheckResult, ExpectationCheck, evaluate_checks, translate_scenario_event_id,
+};
 pub use clock::VirtualClock;
-pub use driver::{SimOutput, replay_events_offline, run_ablation_compare, run_scenario};
+pub use driver::{
+    SimOutput, replay_events_offline, run_ablation_compare, run_ablation_compare_scenarios,
+    run_scenario,
+};
 pub use guard::{CostGuard, GuardRefusal};
 pub use metrics::{
     DetailedMetricsReport, MetricReportEntry, PairedAblationDelta, RunMetricInputs,
@@ -62,6 +68,7 @@ pub enum LabError {
     Io(io::Error),
     Core(CoreError),
     Store(StoreError),
+    Prior(PriorLoadError),
     Serialization(String),
     Protocol(String),
 }
@@ -72,6 +79,7 @@ impl fmt::Display for LabError {
             Self::Io(err) => write!(f, "I/O error: {err}"),
             Self::Core(err) => write!(f, "core error: {err}"),
             Self::Store(err) => write!(f, "store error: {err}"),
+            Self::Prior(err) => write!(f, "prior error: {err}"),
             Self::Serialization(msg) => write!(f, "serialization error: {msg}"),
             Self::Protocol(msg) => write!(f, "protocol error: {msg}"),
         }
@@ -95,5 +103,11 @@ impl From<CoreError> for LabError {
 impl From<StoreError> for LabError {
     fn from(err: StoreError) -> Self {
         Self::Store(err)
+    }
+}
+
+impl From<PriorLoadError> for LabError {
+    fn from(err: PriorLoadError) -> Self {
+        Self::Prior(err)
     }
 }

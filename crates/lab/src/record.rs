@@ -30,6 +30,9 @@ pub struct RunRecord {
     pub core_version: String,
     pub prior_content_version: String,
     pub prior_format_version: u32,
+    pub prior_digest: String,
+    /// Number of events `Core::open` appended before the first scenario input.
+    pub open_offset: u64,
     pub model_id: String,
     pub embedder_id: String,
     pub door_rules: Vec<String>,
@@ -84,6 +87,8 @@ impl RunRecord {
             "core_version": self.core_version,
             "prior_content_version": self.prior_content_version,
             "prior_format_version": self.prior_format_version,
+            "prior_digest": self.prior_digest,
+            "open_offset": self.open_offset,
             "model_id": self.model_id,
             "embedder_id": self.embedder_id,
             "door_rules": self.door_rules,

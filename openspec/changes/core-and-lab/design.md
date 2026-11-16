@@ -159,11 +159,12 @@ with `blake3` checksums over `hot.db` WAL + read-only sealed temporal shards + `
 | credences | (α, β) counts per belief (`told`-initialized + `k_corrob` taint) and per (source, Hungarian-aligned domain) |
 | dispositions | knobs, weights, per-place/per-source offsets, partitioned `h_{(p, k_src)}` |
 
-Event kinds (29 canonical): `percept`, `decision`, `wake_started`, `model_call`, `thought`,
+Event kinds (30 canonical): `percept`, `decision`, `wake_started`, `model_call`, `thought`,
 `withheld`, `action`, `action_feedback`, `receipt`, `expectation_opened`, `expectation_changed`,
 `verdict`, `memory_used`, `belief_changed`, `evidence`, `episode_closed`, `sleep_run`,
 `domains_updated`, `vector_released`, `timing_updated`, `learning_change`, `rollback`,
-`door_verdict`, `identity_changed`, `body_state`, `actor_facts`, `tick`, `failure`, `hard_forget`.
+`door_verdict`, `identity_changed`, `body_state`, `actor_facts`, `tick`, `failure`, `hard_forget`,
+`prior_loaded` (added by Decision 20).
 
 Every event stores kind, format version, time, actor, place, audience, `origin_actor`, `taint`,
 `caused_by`, numeric features (`f_modal`, `orient`, `deg`, etc.) and an opaque payload (plus
@@ -443,7 +444,33 @@ requiring runtime hardware profiling or empirical Lab sweeps stay explicitly non
 | Indonesian + code-mixed `VAP` (`τ_barge`, `θ_turn_end`) & owner hourly approval cap `B_hr` (`R-37`, `R-42`) | Bounded prior defaults shipped; tuned via Lab calibration (`B_hr` warning-fatigue sweep) |
 | Comparative `S >= 354–471` non-inferiority & 5-domain Pareto scoreboard (`A-16`, `R-39`) | `lab/src/baseline.rs` + `pareto.rs` execute on explicit request once core & bodies are built |
 | Post-`hard_forget` rollback-replay vs freeze for order-dependent adaptive weights (`R-34`) | `Two-Epoch Replay` freezes pre-forget weights at the epoch snapshot unless explicit full-replay flag is selected |
-| Any mechanism whose Run-2 ablation shows no effect beyond seed noise (`R-01`, `A-02`) | Flagged in `lab/runs/reference/` for owner pruning |
+| Any mechanism whose Run-2 ablation shows no effect beyond seed noise (`R-01`, `A-02`) | Scripted ablation records land in git-ignored `lab/runs/<run-id>/`; the owner reviews them and promotes chosen records to `lab/runs/reference/`, where pruning candidates are flagged. A scripted run alone never removes a mechanism (Decision 20) |
+
+### 20. One prior file, recorded in the log (owner review 2026-11-17)
+
+The 2026-11-17 review found that no code read `prior/dispositions.json`: every Lab command and
+the CLI used `Prior::default()`, so run records named a content version the file could no longer
+guarantee, and `monoagens replay` could not reproduce a soul started with another prior. Owner
+rulings:
+
+- **One source.** `prior/dispositions.json` is the canonical prior. `Prior::default()` stays in
+  code (the core does no IO and has no JSON parser) and a test fails the build when it differs
+  from the file.
+- **Loading outside the core.** Hosts (Lab, gateway, CLI) read and parse the file with one shared
+  loader, reject unknown keys and unreadable explicit paths, run `Prior::validate`, and compute
+  the digest: `BLAKE3` over the canonical JSON serialization of `Prior`, so formatting does not
+  change it. The core never computes the digest.
+- **Recorded in the log.** `Core::open` appends `prior_loaded` (full prior content) when the given
+  prior differs from the last recorded one. Replay and crash recovery take the prior from these
+  events, never from the caller. Learned state is not reset by a new prior. `hard_forget` never
+  erases `prior_loaded`, like `Two-Epoch Replay` anchors.
+- **Bookkeeping stays neutral.** `prior_loaded` shifts log ids, so two rules keep behaviour
+  unchanged: seeded draws key on the event id minus the preceding `prior_loaded` count, and Lab
+  scenario event ids are counted from the scenario's own first event (translated by the number of
+  events `Core::open` appended). Scenario files, sealed ones included, never need editing.
+- **Scripted ablation is a first signal, not evidence.** Scripted runs over the development set
+  check the core's side only. Their records go to git-ignored `lab/runs/<run-id>/` with a summary;
+  only the owner promotes records to `lab/runs/reference/` or prunes a mechanism.
 
 ## Risks / Trade-offs
 

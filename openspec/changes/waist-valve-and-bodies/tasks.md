@@ -57,6 +57,12 @@ with [`core-and-lab`](../core-and-lab/tasks.md). Every task group carries its ow
 - [ ] 8.2 Execute full Phase-3 `>= 3` Bodies (`body-cli`, `body-mcp-bridge`, `body-sim-actuator`) × `>= 2` Cores conformance matrix at `100% MUST` (`Delta_NI = 0.0`) with `cargo clippy --workspace -- -D warnings` and `cargo test --workspace` passing within latency budgets (`< 50 μs` Valve p99, `< 50 ms` barge-in, `< 15 s` gateway integration suite).
 - [ ] 8.3 Run live paid LLM + hardware latency calibration only upon explicit owner request (`S_digest`, `max_prompts_per_hour`, `C_daily`, `L_soft`, local ARM `EmbeddingGemma 2` profiling).
 
+## 9. Reopened — prior configuration and replay (owner review 2026-11-17, D11)
+
+- [x] 9.1 Add optional `[soul] prior` to `monoagens.toml` parsing; `monoagens chat` and the gateway load it through the shared `core-and-lab` prior loader (task 23.2) instead of `Prior::default()` (`crates/cli/src/lib.rs` chat boot), failing start-up on unknown key, out-of-range value or unreadable path.
+- [x] 9.2 Make `monoagens replay` take the prior from `prior_loaded` events (task 23.4) and drop its `Prior::default()` use; add an integration test for the two-session prior change scenario.
+- [x] 9.3 Verify `cargo test -p monoagens-cli -p monoagens-gateway`, clippy `-D warnings`, and `openspec validate waist-valve-and-bodies --strict`.
+
 ## Workflow follow-up
 
 - Implement Phases 0–3 in lockstep with `core-and-lab` and archive both changes cleanly into `openspec/specs/` after review and conformance verification.

@@ -587,7 +587,6 @@ fn hard_forget_scrubs_all_files_zero_residue_and_no_resurrection() {
     let replay_rep = replay_from_checkpoint(
         &store,
         store.latest_checkpoint().unwrap().as_ref(),
-        &Prior::default(),
         &Switches::all_enabled(),
         42,
         ReplayMode::TwoEpochFrozen,
@@ -746,4 +745,245 @@ proptest! {
             prop_assert_eq!(rec.id, ids[i]);
         }
     }
+}
+
+#[test]
+fn prior_loader_rejects_unknown_key_out_of_range_missing_path_and_preserves_formatting_digest() {
+    use monoagens_store::{
+        PriorLoadError, default_loaded_prior, load_prior_file, load_prior_or_default,
+    };
+
+    let dir = TempDir::new().unwrap();
+
+    // 1. Canonical digest is invariant to formatting / whitespace / key ordering.
+    let default_loaded = default_loaded_prior().unwrap();
+    let reformatted_path = dir.path().join("reformatted.json");
+    std::fs::write(
+        &reformatted_path,
+        r#"{
+          "speaking_bar": 3,
+          "certainty_bar": 0.5,
+          "boredom_with_repeats": 0.5,
+          "restraint": 0.5,
+          "helpfulness": 0.5,
+          "memory_persistence": 0.5,
+          "spontaneity": 0.5,
+          "talkativeness": 0.5,
+          "content_version": "2026-11-16.1",
+          "version": 1
+        }"#,
+    )
+    .unwrap();
+    let loaded_reformatted = load_prior_file(&reformatted_path).unwrap();
+    assert_eq!(loaded_reformatted.digest, default_loaded.digest);
+
+    // 2. Edited disposition without changing content_version yields a different digest.
+    let edited_path = dir.path().join("edited.json");
+    std::fs::write(
+        &edited_path,
+        r#"{
+          "version": 1,
+          "content_version": "2026-11-16.1",
+          "talkativeness": 0.85,
+          "spontaneity": 0.5,
+          "memory_persistence": 0.5,
+          "helpfulness": 0.5,
+          "restraint": 0.5,
+          "boredom_with_repeats": 0.5,
+          "certainty_bar": 0.5,
+          "speaking_bar": 3
+        }"#,
+    )
+    .unwrap();
+    let loaded_edited = load_prior_file(&edited_path).unwrap();
+    assert_eq!(loaded_edited.prior.content_version, "2026-11-16.1");
+    assert_ne!(loaded_edited.digest, default_loaded.digest);
+
+    // 3. Unknown key fails naming the unknown key.
+    let unknown_path = dir.path().join("unknown_key.json");
+    std::fs::write(
+        &unknown_path,
+        r#"{
+          "version": 1,
+          "content_version": "2026-11-16.1",
+          "talkativeness": 0.5,
+          "spontaneity": 0.5,
+          "memory_persistence": 0.5,
+          "helpfulness": 0.5,
+          "restraint": 0.5,
+          "boredom_with_repeats": 0.5,
+          "certainty_bar": 0.5,
+          "speaking_bar": 3,
+          "bogus_disposition_xyz": 0.1
+        }"#,
+    )
+    .unwrap();
+    let err_unknown = load_prior_file(&unknown_path).expect_err("reject unknown key");
+    assert!(
+        err_unknown.to_string().contains("bogus_disposition_xyz"),
+        "err={err_unknown}"
+    );
+
+    // 4. Out-of-range value fails naming disposition and range.
+    let range_path = dir.path().join("bad_range.json");
+    std::fs::write(
+        &range_path,
+        r#"{
+          "version": 1,
+          "content_version": "2026-11-16.1",
+          "talkativeness": 1.8,
+          "spontaneity": 0.5,
+          "memory_persistence": 0.5,
+          "helpfulness": 0.5,
+          "restraint": 0.5,
+          "boredom_with_repeats": 0.5,
+          "certainty_bar": 0.5,
+          "speaking_bar": 3
+        }"#,
+    )
+    .unwrap();
+    let err_range = load_prior_file(&range_path).expect_err("reject out of range");
+    let range_msg = err_range.to_string();
+    assert!(range_msg.contains("talkativeness"), "msg={range_msg}");
+    assert!(range_msg.contains("[0.0, 1.0]"), "msg={range_msg}");
+
+    // 5. Missing explicit path fails naming path and does not fall back to default.
+    let missing_path = dir.path().join("does_not_exist.json");
+    let err_missing =
+        load_prior_or_default(Some(&missing_path)).expect_err("reject missing explicit path");
+    assert!(matches!(err_missing, PriorLoadError::Read { .. }));
+    assert!(
+        err_missing.to_string().contains("does_not_exist.json"),
+        "err={err_missing}"
+    );
+}
+
+#[test]
+fn hard_forget_never_erases_prior_loaded_and_post_erasure_replay_uses_recorded_prior() {
+    use monoagens_core::{Core, Input, NoopDoors};
+    use monoagens_protocol::{ActorId, Audience, OpaquePayload, Percept, PlaceId};
+    use monoagens_store::ForgetSelector;
+
+    let dir = TempDir::new().unwrap();
+    let store = SegmentedStore::open(
+        StoreConfig::new(dir.path()).with_vector_backend(VectorBackendConfig::BruteForceFlat),
+    )
+    .unwrap();
+
+    let prior_b = Prior {
+        talkativeness: 0.91,
+        own_name_weight: 0.95,
+        reserve_when_unfamiliar: 0.0,
+        ..Prior::default()
+    };
+    let mut switches = Switches::all_enabled();
+    switches.stochastic_go_no_go = false;
+
+    let mut core = Core::open(store, prior_b.clone(), switches.clone(), 42).unwrap();
+    let mut p_secret = Percept::minimal(
+        ActorId::new("alice"),
+        PlaceId::new("room:secret"),
+        Audience::new([ActorId::new("alice"), ActorId::new("soul")]),
+        Time::from_millis(1_000),
+        OpaquePayload::from_bytes(b"SECRET_BEFORE_FORGET_TOKEN"),
+    );
+    p_secret.named = vec![ActorId::new("soul")];
+    core.step(
+        Input::Percept(Box::new(p_secret)),
+        Time::from_millis(1_000),
+        &mut NoopDoors,
+    )
+    .unwrap();
+
+    let events_pre = core.store().read_in_order(None, usize::MAX).unwrap();
+    let prior_ev_id = events_pre
+        .iter()
+        .find(|e| e.kind == EventKind::PriorLoaded)
+        .expect("prior_loaded present")
+        .id;
+    drop(core);
+
+    // Even if someone passes prior_loaded's EventId and actor="core" to hard_forget, it survives!
+    let mut store = SegmentedStore::open(
+        StoreConfig::new(dir.path()).with_vector_backend(VectorBackendConfig::BruteForceFlat),
+    )
+    .unwrap();
+    // Seal up to prior_ev_id so we test sealed shard protection as well as hot.db!
+    store
+        .seal_through_seq(LogSeq::new(1), Time::from_millis(1_500))
+        .unwrap();
+    let mut selector = ForgetSelector::actors(
+        [ActorId::new("alice"), ActorId::new("core")],
+        Time::from_millis(2_000),
+    );
+    selector.event_ids.push(prior_ev_id);
+    let report = store.hard_forget(&selector).unwrap();
+    assert!(!report.erased_event_ids.contains(&prior_ev_id));
+
+    let surviving = store.read_in_order(None, usize::MAX).unwrap();
+    assert!(
+        surviving
+            .iter()
+            .any(|e| e.id == prior_ev_id && e.kind == EventKind::PriorLoaded),
+        "prior_loaded must survive hard_forget"
+    );
+
+    // Record a post-forget percept and verify Core::open and replay apply prior_b!
+    let mut core_post = Core::open(store, prior_b.clone(), switches.clone(), 42).unwrap();
+    assert_eq!(
+        core_post
+            .store()
+            .read_in_order(None, usize::MAX)
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == EventKind::PriorLoaded)
+            .count(),
+        1,
+        "reopening with same prior_b after hard_forget must not append another prior_loaded"
+    );
+
+    let mut p_after = Percept::minimal(
+        ActorId::new("bob"),
+        PlaceId::new("room:public"),
+        Audience::new([ActorId::new("bob"), ActorId::new("soul")]),
+        Time::from_millis(3_000),
+        OpaquePayload::from_bytes(b"post forget under B"),
+    );
+    p_after.named = vec![ActorId::new("soul")];
+    core_post
+        .step(
+            Input::Percept(Box::new(p_after)),
+            Time::from_millis(3_000),
+            &mut NoopDoors,
+        )
+        .unwrap();
+
+    let rep = replay_from_checkpoint(
+        core_post.store(),
+        core_post.store().latest_checkpoint().unwrap().as_ref(),
+        &switches,
+        42,
+        ReplayMode::TwoEpochFrozen,
+    )
+    .unwrap();
+    assert!(
+        rep.is_bit_identical(),
+        "divergence: {:?}",
+        rep.first_divergence
+    );
+    assert_eq!(rep.matched_decisions, 1);
+
+    let full_rep = replay_from_checkpoint(
+        core_post.store(),
+        None,
+        &switches,
+        42,
+        ReplayMode::FullReplay,
+    )
+    .unwrap();
+    assert!(
+        full_rep.is_bit_identical(),
+        "full replay divergence: {:?}",
+        full_rep.first_divergence
+    );
 }

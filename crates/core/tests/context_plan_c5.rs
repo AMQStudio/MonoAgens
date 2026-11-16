@@ -798,6 +798,7 @@ fn report_control_formula_auto_recall_coarser_grain_and_allocated_vs_unallocated
     prior.own_name_weight = 1.0;
     let switches = Switches {
         patience: false,
+        stochastic_go_no_go: false,
         ..Switches::default()
     };
     let mut core = Core::open(MemStore::new(), prior, switches, 23)?;

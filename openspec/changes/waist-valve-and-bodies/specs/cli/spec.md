@@ -35,3 +35,14 @@ active Cedar bundles).
 #### Scenario: Granting a pending approval and validating an external body
 - **WHEN** the owner runs `monoagens approvals grant <approval_id>` and a developer runs `monoagens conformance body --target <cmd> --level must --json-report compatibility.json`
 - **THEN** the gateway verifies `H_act` atomically before child execution and the TCK outputs structured `compatibility.json` results exiting non-zero on failure
+
+### Requirement: The soul starts with the configured prior and replays with the recorded one
+`monoagens.toml` SHALL accept an optional `[soul] prior = "<path>"`. `monoagens chat` and the
+gateway SHALL load that prior through the shared prior loader of `core-and-lab` (Decision 20), or
+the built-in default when the key is absent, and SHALL fail start-up on an unknown key, an
+out-of-range disposition or an unreadable path. `monoagens replay` SHALL take the prior from the
+log's `prior_loaded` events and SHALL NOT accept or apply a prior of its own.
+
+#### Scenario: The owner changes the prior between sessions and replays
+- **WHEN** the owner chats under the default prior, sets `[soul] prior` to an edited file, chats again, then runs `monoagens replay`
+- **THEN** the log holds a `prior_loaded` event for each prior, and replay reproduces every decision of both sessions and exits zero

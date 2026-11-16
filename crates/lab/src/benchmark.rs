@@ -338,8 +338,7 @@ pub fn verify_required_datasets_present(
 
 /// Executes the in-tree `Tool RAG` scaling measurement across `N_caps = 50, 100, 150, 200` (`R-38`).
 #[must_use]
-pub fn run_tool_rag_scaling_eval() -> Vec<ToolRagScalePoint> {
-    let prior = Prior::default();
+pub fn run_tool_rag_scaling_eval(prior: &Prior) -> Vec<ToolRagScalePoint> {
     let place = PlaceId::new("room:tools");
     let soul = ActorId::new("soul");
     let alice = ActorId::new("alice");
@@ -380,7 +379,7 @@ pub fn run_tool_rag_scaling_eval() -> Vec<ToolRagScalePoint> {
                     embedding: None,
                 });
             }
-            let budget = ToolSelectionBudget::from_prior(&prior, n_caps);
+            let budget = ToolSelectionBudget::from_prior(prior, n_caps);
             let selected =
                 select_tools_for_context(&query_terms, &[], &catalog, &[], &scope, now, budget);
             let selected_total = selected.static_core.len() + selected.dynamic_caps.len();
@@ -396,8 +395,8 @@ pub fn run_tool_rag_scaling_eval() -> Vec<ToolRagScalePoint> {
 }
 
 /// Verifies `Arm T` mid-task restart parity on `Core` (decisions and state survive restart cleanly).
-pub fn run_arm_t_restart_parity_check() -> Result<bool, LabError> {
-    let mut mem = MemStore::new();
+pub fn run_arm_t_restart_parity_check(prior: &Prior) -> Result<bool, LabError> {
+    let mem = MemStore::new();
     let place = PlaceId::new("room:restart");
     let alice = ActorId::new("alice");
     let soul = ActorId::new("soul");
@@ -414,7 +413,7 @@ pub fn run_arm_t_restart_parity_check() -> Result<bool, LabError> {
     p1.addressees = vec![soul.clone()];
     p1.named = vec![soul.clone()];
 
-    let mut core1 = Core::open(mem, Prior::default(), Switches::all_enabled(), 17)?;
+    let mut core1 = Core::open(mem, prior.clone(), Switches::all_enabled(), 17)?;
     let _ = core1.step(
         monoagens_core::Input::Percept(Box::new(p1.clone())),
         Time::from_millis(1_000),
@@ -428,7 +427,7 @@ pub fn run_arm_t_restart_parity_check() -> Result<bool, LabError> {
     }
     monoagens_core::Store::snapshot(&mut mem_reopen, ckpt)?;
 
-    let mut core2 = Core::open(mem_reopen, Prior::default(), Switches::all_enabled(), 17)?;
+    let mut core2 = Core::open(mem_reopen, prior.clone(), Switches::all_enabled(), 17)?;
     let mut p2 = Percept::minimal(
         alice,
         place,
@@ -443,8 +442,6 @@ pub fn run_arm_t_restart_parity_check() -> Result<bool, LabError> {
         Time::from_millis(2_000),
         &mut doors,
     )?;
-    mem = core2.store().clone();
-    let _ = mem;
     Ok(!eff2.is_empty())
 }
 
@@ -454,6 +451,7 @@ pub fn run_benchmark_suite(
     suite: &str,
     datasets_dir: &Path,
     pareto_input: Option<&ParetoScorecardInput>,
+    prior: &Prior,
 ) -> Result<BenchmarkSuiteReport, LabError> {
     ensure_not_sealed_path(datasets_dir)?;
     let registry = standard_benchmark_registry();
@@ -465,8 +463,8 @@ pub fn run_benchmark_suite(
         )));
     }
 
-    let tool_rag_scaling = run_tool_rag_scaling_eval();
-    let arm_t_ok = run_arm_t_restart_parity_check()?;
+    let tool_rag_scaling = run_tool_rag_scaling_eval(prior);
+    let arm_t_ok = run_arm_t_restart_parity_check(prior)?;
     let pareto = pareto_input.map(compute_convex_pareto);
 
     let mut caveat_counts: BTreeMap<String, String> = BTreeMap::new();

@@ -16,6 +16,7 @@ use crate::beliefs::{CredenceRebaseRecord, DomainTransitionKind, DomainTransitio
 use crate::gate::{
     DecisionReason, DecisionTrace, GateSignals, RecomputedTrace, SalienceWeights, ThresholdTerms,
 };
+use crate::prior::{Prior, decode_prior, encode_prior};
 use crate::recall::MemoryBasis;
 
 /// Monotonic total-order log position assigned by [`crate::ports::Store::append`].
@@ -48,7 +49,7 @@ impl fmt::Display for LogSeq {
     }
 }
 
-/// All 29 canonical event kinds in `design.md` §4 (`R-12`, `R-34`, `R-40`).
+/// All 30 canonical event kinds in `design.md` §4 (`R-12`, `R-34`, `R-40`, Decision 20).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
@@ -81,11 +82,12 @@ pub enum EventKind {
     Tick,
     Failure,
     HardForget,
+    PriorLoaded,
 }
 
 impl EventKind {
-    /// Exhaustive compile-time list of all 29 canonical event kinds.
-    pub const ALL: [Self; 29] = [
+    /// Exhaustive compile-time list of all 30 canonical event kinds.
+    pub const ALL: [Self; 30] = [
         Self::Percept,
         Self::Decision,
         Self::WakeStarted,
@@ -115,6 +117,7 @@ impl EventKind {
         Self::Tick,
         Self::Failure,
         Self::HardForget,
+        Self::PriorLoaded,
     ];
 
     /// Canonical snake_case format name stored in data.
@@ -150,6 +153,7 @@ impl EventKind {
             Self::Tick => "tick",
             Self::Failure => "failure",
             Self::HardForget => "hard_forget",
+            Self::PriorLoaded => "prior_loaded",
         }
     }
 
@@ -186,6 +190,7 @@ impl EventKind {
             Self::Tick => 27,
             Self::Failure => 28,
             Self::HardForget => 29,
+            Self::PriorLoaded => 30,
         }
     }
 
@@ -222,6 +227,7 @@ impl EventKind {
             27 => Some(Self::Tick),
             28 => Some(Self::Failure),
             29 => Some(Self::HardForget),
+            30 => Some(Self::PriorLoaded),
             _ => None,
         }
     }
@@ -755,6 +761,9 @@ pub enum EventDetail {
     BudgetUpdated {
         used: f64,
         limit: f64,
+    },
+    PriorLoaded {
+        prior: Box<Prior>,
     },
 }
 
@@ -2110,6 +2119,10 @@ fn encode_opt_detail(w: &mut BinWriter, detail: Option<&EventDetail>) {
             w.f64(*used);
             w.f64(*limit);
         }
+        EventDetail::PriorLoaded { prior } => {
+            w.u8(40);
+            encode_prior(w, prior);
+        }
     }
 }
 
@@ -2910,6 +2923,9 @@ fn decode_opt_detail(r: &mut BinReader<'_>) -> Result<Option<EventDetail>, Event
             used: r.f64()?,
             limit: r.f64()?,
         })),
+        40 => Ok(Some(EventDetail::PriorLoaded {
+            prior: Box::new(decode_prior(r)?),
+        })),
         other => Err(EventFormatError::MalformedRecord(format!(
             "invalid detail tag {other}"
         ))),
@@ -3529,7 +3545,7 @@ mod tests {
         Taint, Time,
     };
 
-    /// Exhaustive match over all 29 canonical event kinds (fails compilation if any variant is unhandled).
+    /// Exhaustive match over all 30 canonical event kinds (fails compilation if any variant is unhandled).
     fn kind_index(kind: EventKind) -> usize {
         match kind {
             EventKind::Percept => 0,
@@ -3561,12 +3577,13 @@ mod tests {
             EventKind::Tick => 26,
             EventKind::Failure => 27,
             EventKind::HardForget => 28,
+            EventKind::PriorLoaded => 29,
         }
     }
 
     #[test]
-    fn all_29_canonical_event_kinds_round_trip() {
-        assert_eq!(EventKind::ALL.len(), 29);
+    fn all_30_canonical_event_kinds_round_trip() {
+        assert_eq!(EventKind::ALL.len(), 30);
         for (i, &kind) in EventKind::ALL.iter().enumerate() {
             assert_eq!(kind_index(kind), i);
             let mut rec = EventRecord::new_root(
@@ -3766,6 +3783,14 @@ mod tests {
                 epoch: 1,
                 reason: "erasure".to_owned(),
             },
+            EventDetail::PriorLoaded {
+                prior: Box::new(crate::prior::Prior {
+                    talkativeness: 0.77,
+                    speaking_bar: 4,
+                    content_version: "2026-11-17.2".to_owned(),
+                    ..crate::prior::Prior::default()
+                }),
+            },
         ];
         for detail in details {
             let rec = EventRecord::derived_from(
@@ -3785,5 +3810,41 @@ mod tests {
             let decoded = EventRecord::decode_and_upcast(&encoded).expect("detail round-trip");
             assert_eq!(decoded, rec);
         }
+    }
+
+    #[test]
+    fn prior_loaded_v1_upcasts_and_rejects_future_version() {
+        let v1 = EventRecordV1 {
+            id: EventId::new(9),
+            kind: EventKind::PriorLoaded,
+            format_version: 1,
+            timestamp_ms: Time::from_millis(1_000),
+            actor: ActorId::new("core"),
+            place: PlaceId::new("core:prior"),
+            audience: Audience::new([ActorId::new("core")]),
+            origin_actor: OriginActor::new(ActorId::new("core")),
+            taint: Taint::Trusted,
+            caused_by: None,
+            payload: OpaquePayload::default(),
+        };
+        let raw_v1 = EventRecord::encode_v1_bytes(&v1);
+        let upcasted = EventRecord::decode_and_upcast(&raw_v1).expect("upcast prior_loaded v1");
+        assert_eq!(upcasted.kind, EventKind::PriorLoaded);
+        assert_eq!(
+            upcasted.format_version,
+            EventKind::PriorLoaded.current_version()
+        );
+
+        let future =
+            EventRecord::encode_with_version_for_test(EventKind::PriorLoaded, 99, EventId::new(10));
+        let err = EventRecord::decode_and_upcast(&future)
+            .expect_err("must reject future prior_loaded version");
+        assert!(matches!(
+            err,
+            EventFormatError::UnsupportedFutureVersion { .. }
+        ));
+        let msg = err.to_string();
+        assert!(msg.contains("prior_loaded"), "msg={msg}");
+        assert!(msg.contains("99"), "msg={msg}");
     }
 }

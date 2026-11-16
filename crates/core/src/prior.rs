@@ -575,6 +575,7 @@ const fn default_learn_wake_gate_quantile() -> f64 {
 
 /// Dispositions and prior bounds configuring Core's appraisal, memory, and learning mechanisms.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Prior {
     /// Schema format version of the prior configuration.
     pub version: u32,
@@ -2113,6 +2114,429 @@ impl Prior {
     }
 }
 
+pub(crate) fn encode_prior(w: &mut crate::event::BinWriter, p: &Prior) {
+    w.u32(p.version);
+    w.str(&p.content_version);
+    w.f64(p.talkativeness);
+    w.f64(p.spontaneity);
+    w.f64(p.memory_persistence);
+    w.f64(p.helpfulness);
+    w.f64(p.restraint);
+    w.f64(p.boredom_with_repeats);
+    w.f64(p.certainty_bar);
+    w.u8(p.speaking_bar);
+
+    w.f64(p.own_name_weight);
+    w.f64(p.info_scale);
+    w.f64(p.fok_scale);
+    w.f64(p.relevance_weight);
+    w.f64(p.commitment_weight);
+    w.f64(p.restraint_scale);
+    w.f64(p.asr_conf_threshold);
+    w.f64(p.asr_clarification_boost);
+
+    w.f64(p.w_b);
+    w.f64(p.context_weight);
+    w.f64(p.importance_weight);
+    w.f64(p.fok_threshold);
+    w.f64(p.fok_scale_norm);
+    w.f64(p.fade_threshold);
+
+    w.f64(p.kappa);
+    w.f64(p.a_scale);
+    w.f64(p.budget_weight);
+    w.f64(p.promise_debt_weight);
+    w.f64(p.reserve_when_unfamiliar);
+    w.f64(p.note_band);
+    w.f64(p.talk_rate_window_minutes);
+    w.f64(p.talk_rate_prior_count);
+    w.f64(p.closeness_prior_count);
+    w.u64(p.promise_debt_horizon_ms);
+
+    w.f64(p.lambda_c);
+    w.f64(p.lambda_a);
+    w.f64(p.theta_alloc);
+    w.f64(p.theta_ex);
+    w.f64(p.m_ex);
+    w.f64(p.w_c);
+    w.f64(p.w_o);
+    w.f64(p.gamma_c);
+    w.f64(p.tau_c_s);
+    w.u64(p.w_c_window as u64);
+    w.f64(p.k_c);
+    w.f64(p.beta_fan);
+    w.f64(p.theta_trace);
+
+    w.u64(p.patience_place_ms);
+    w.u64(p.backlog_max_chunks as u64);
+
+    w.f64(p.step_init);
+    w.f64(p.gamma_init);
+    w.f64(p.delta_emit);
+    w.f64(p.delta_ign);
+    w.f64(p.c_base);
+    w.f64(p.beta_bp);
+    w.f64(p.beta_load);
+    w.f64(p.kappa_bp);
+    w.f64(p.tau_win_s);
+    w.f64(p.lambda_sleep_init);
+
+    w.u64(p.n_min_sleep as u64);
+    w.f64(p.alpha_u);
+    w.f64(p.tau_wake_hours);
+    w.f64(p.d_sleep_max);
+    w.f64(p.tau_sw);
+    w.f64(p.w_fail);
+    w.f64(p.lambda_stakes);
+    w.f64(p.theta_sw);
+    w.f64(p.w_sw);
+    w.f64(p.lambda_fok);
+    w.f64(p.lambda_surp);
+    w.f64(p.lambda_voi);
+    w.f64(p.c0);
+    w.f64(p.gamma_opp);
+    w.f64(p.alpha_pow);
+    w.f64(p.tau_k);
+    w.f64(p.w_rec);
+    w.f64(p.eta_sl);
+    w.f64(p.eta_tr);
+    w.f64(p.q_ref);
+    w.u64(p.b_steps as u64);
+    w.u64(p.n_rec_max as u64);
+
+    w.u64(p.patience_t_min_ms);
+    w.u64(p.patience_t_max_ms);
+    w.u64(p.patience_default_ms);
+    w.f64(p.patience_sigma_ln);
+    w.f64(p.patience_prior_n0);
+    w.f64(p.patience_place_n0);
+    w.f64(p.patience_quantile);
+    w.f64(p.patience_decay_rho);
+
+    w.f64(p.map_lambda_decay);
+    w.f64(p.map_eta_co);
+    w.f64(p.map_w_max);
+    w.f64(p.map_gamma_sr);
+    w.f64(p.map_alpha_sr);
+    w.f64(p.map_tau_step_s);
+    w.f64(p.map_ep_gap_s);
+    w.f64(p.map_beta_sr);
+    w.f64(p.map_delta_ppr);
+    w.u64(p.map_hop_budget as u64);
+    w.u64(p.map_k_sr as u64);
+    w.f64(p.map_w_map);
+
+    w.u64(p.recall_vector_top_k as u64);
+    w.u64(p.recall_text_top_k as u64);
+
+    w.u32(p.promise_retry_max);
+    w.u64(p.promise_retry_base_ms);
+    w.f64(p.agency_tolerance_k);
+    w.f64(p.response_expiry_quantile);
+    w.f64(p.response_stakes_factor);
+    w.f64(p.content_miss_z_threshold);
+    w.u64(p.content_miss_min_samples as u64);
+    w.f64(p.silence_sample_rate);
+    w.f64(p.wake_gate_lo);
+    w.f64(p.wake_gate_hi_epsilon);
+    w.f64(p.wake_gate_margin);
+    w.u64(p.default_goal_expiry_ms);
+    w.u64(p.pending_approval_expiry_ms);
+
+    w.u64(p.context_budget_bytes as u64);
+    w.u64(p.working_set_full_obs_limit as u64);
+    w.u64(p.place_tail_limit as u64);
+    w.u64(p.anchor_check_interval_wakes);
+    w.u8(p.auto_recall_max);
+    w.u8(u8::from(p.tool_rag_enabled));
+    w.u64(p.tool_rag_k_cap as u64);
+    w.u64(p.tool_rag_k_proc as u64);
+    w.u64(p.tool_rag_max_static_core as u64);
+
+    w.f64(p.credence_lambda_domain);
+    w.u64(p.credence_period_ms);
+    w.u64(p.k_corrob as u64);
+    w.f64(p.rule_trust_threshold);
+    w.f64(p.conv_alpha_0);
+    w.f64(p.conv_beta_0);
+    w.f64(p.conv_lambda);
+    w.f64(p.conv_vicarious_discount);
+    w.f64(p.conv_peer_floor);
+    w.f64(p.conv_tau);
+    w.f64(p.conv_kappa);
+    w.f64(p.conv_bias_max);
+
+    w.u64(p.t_idle_sleep_ms);
+    w.u8(u8::from(p.provisional_close));
+    w.u64(p.n_ep_min as u64);
+    w.u64(p.n_ep_max as u64);
+    w.f64(p.k_stale_sleep);
+    w.f64(p.em_boundary_gamma);
+    w.u64(p.em_boundary_window as u64);
+    w.u64(p.em_boundary_warmup as u64);
+    w.f64(p.em_boundary_mu0);
+    w.f64(p.em_boundary_sigma0);
+    w.f64(p.em_boundary_m0);
+    w.f64(p.em_boundary_z_max);
+    w.f64(p.em_boundary_sigma_u_floor);
+    w.u64(p.em_fixed_interval as u64);
+    w.f64(p.merge_jaccard_min);
+    w.u64(p.merge_gap_ms);
+
+    w.u64(p.domain_clusters_k as u64);
+    w.u64(p.domain_m_min as u64);
+    w.u64(p.domain_max_iter as u64);
+    w.f64(p.domain_w_hist);
+    w.f64(p.domain_tau_match);
+    w.f64(p.domain_tau_rel);
+    w.f64(p.domain_tau_merge);
+    w.f64(p.domain_gamma_drift);
+    w.f64(p.domain_rho_split);
+
+    w.u64(p.lesson_min_episodes as u64);
+    w.u64(p.lesson_max_contrasts as u64);
+    w.f64(p.proc_gamma_beta);
+    w.u64(p.proc_cusum_n_min_lock as u64);
+    w.f64(p.proc_cusum_k_drift);
+    w.f64(p.proc_cusum_h_warn);
+    w.f64(p.proc_cusum_h_retire);
+    w.f64(p.proc_theta_retire);
+    w.u8(u8::from(p.allow_chat_habit_bypass));
+
+    w.u64(p.ledger_max_items_per_card as u64);
+    w.f64(p.self_card_cap_z);
+    w.u64(p.self_card_cap_min_trials as u64);
+    w.f64(p.self_card_cap_deg_threshold);
+    w.u32(p.self_card_cap_consec_fail);
+    w.f64(p.self_card_kappa_bias);
+    w.f64(p.self_card_cal_n0);
+
+    w.f64(p.learn_rate_w);
+    w.f64(p.learn_rate_theta_ratio);
+    w.f64(p.learn_daily_max_delta);
+    w.f64(p.learn_ips_clip_m);
+    w.f64(p.learn_wake_gate_n0);
+    w.f64(p.learn_wake_gate_quantile);
+}
+
+fn read_usize(
+    r: &mut crate::event::BinReader<'_>,
+) -> Result<usize, crate::event::EventFormatError> {
+    let raw = r.u64()?;
+    usize::try_from(raw).map_err(|_| {
+        crate::event::EventFormatError::MalformedRecord(format!("usize overflow {raw}"))
+    })
+}
+
+pub(crate) fn decode_prior(
+    r: &mut crate::event::BinReader<'_>,
+) -> Result<Prior, crate::event::EventFormatError> {
+    Ok(Prior {
+        version: r.u32()?,
+        content_version: r.string()?,
+        talkativeness: r.f64()?,
+        spontaneity: r.f64()?,
+        memory_persistence: r.f64()?,
+        helpfulness: r.f64()?,
+        restraint: r.f64()?,
+        boredom_with_repeats: r.f64()?,
+        certainty_bar: r.f64()?,
+        speaking_bar: r.u8()?,
+
+        own_name_weight: r.f64()?,
+        info_scale: r.f64()?,
+        fok_scale: r.f64()?,
+        relevance_weight: r.f64()?,
+        commitment_weight: r.f64()?,
+        restraint_scale: r.f64()?,
+        asr_conf_threshold: r.f64()?,
+        asr_clarification_boost: r.f64()?,
+
+        w_b: r.f64()?,
+        context_weight: r.f64()?,
+        importance_weight: r.f64()?,
+        fok_threshold: r.f64()?,
+        fok_scale_norm: r.f64()?,
+        fade_threshold: r.f64()?,
+
+        kappa: r.f64()?,
+        a_scale: r.f64()?,
+        budget_weight: r.f64()?,
+        promise_debt_weight: r.f64()?,
+        reserve_when_unfamiliar: r.f64()?,
+        note_band: r.f64()?,
+        talk_rate_window_minutes: r.f64()?,
+        talk_rate_prior_count: r.f64()?,
+        closeness_prior_count: r.f64()?,
+        promise_debt_horizon_ms: r.u64()?,
+
+        lambda_c: r.f64()?,
+        lambda_a: r.f64()?,
+        theta_alloc: r.f64()?,
+        theta_ex: r.f64()?,
+        m_ex: r.f64()?,
+        w_c: r.f64()?,
+        w_o: r.f64()?,
+        gamma_c: r.f64()?,
+        tau_c_s: r.f64()?,
+        w_c_window: read_usize(r)?,
+        k_c: r.f64()?,
+        beta_fan: r.f64()?,
+        theta_trace: r.f64()?,
+
+        patience_place_ms: r.u64()?,
+        backlog_max_chunks: read_usize(r)?,
+
+        step_init: r.f64()?,
+        gamma_init: r.f64()?,
+        delta_emit: r.f64()?,
+        delta_ign: r.f64()?,
+        c_base: r.f64()?,
+        beta_bp: r.f64()?,
+        beta_load: r.f64()?,
+        kappa_bp: r.f64()?,
+        tau_win_s: r.f64()?,
+        lambda_sleep_init: r.f64()?,
+
+        n_min_sleep: read_usize(r)?,
+        alpha_u: r.f64()?,
+        tau_wake_hours: r.f64()?,
+        d_sleep_max: r.f64()?,
+        tau_sw: r.f64()?,
+        w_fail: r.f64()?,
+        lambda_stakes: r.f64()?,
+        theta_sw: r.f64()?,
+        w_sw: r.f64()?,
+        lambda_fok: r.f64()?,
+        lambda_surp: r.f64()?,
+        lambda_voi: r.f64()?,
+        c0: r.f64()?,
+        gamma_opp: r.f64()?,
+        alpha_pow: r.f64()?,
+        tau_k: r.f64()?,
+        w_rec: r.f64()?,
+        eta_sl: r.f64()?,
+        eta_tr: r.f64()?,
+        q_ref: r.f64()?,
+        b_steps: read_usize(r)?,
+        n_rec_max: read_usize(r)?,
+
+        patience_t_min_ms: r.u64()?,
+        patience_t_max_ms: r.u64()?,
+        patience_default_ms: r.u64()?,
+        patience_sigma_ln: r.f64()?,
+        patience_prior_n0: r.f64()?,
+        patience_place_n0: r.f64()?,
+        patience_quantile: r.f64()?,
+        patience_decay_rho: r.f64()?,
+
+        map_lambda_decay: r.f64()?,
+        map_eta_co: r.f64()?,
+        map_w_max: r.f64()?,
+        map_gamma_sr: r.f64()?,
+        map_alpha_sr: r.f64()?,
+        map_tau_step_s: r.f64()?,
+        map_ep_gap_s: r.f64()?,
+        map_beta_sr: r.f64()?,
+        map_delta_ppr: r.f64()?,
+        map_hop_budget: read_usize(r)?,
+        map_k_sr: read_usize(r)?,
+        map_w_map: r.f64()?,
+
+        recall_vector_top_k: read_usize(r)?,
+        recall_text_top_k: read_usize(r)?,
+
+        promise_retry_max: r.u32()?,
+        promise_retry_base_ms: r.u64()?,
+        agency_tolerance_k: r.f64()?,
+        response_expiry_quantile: r.f64()?,
+        response_stakes_factor: r.f64()?,
+        content_miss_z_threshold: r.f64()?,
+        content_miss_min_samples: read_usize(r)?,
+        silence_sample_rate: r.f64()?,
+        wake_gate_lo: r.f64()?,
+        wake_gate_hi_epsilon: r.f64()?,
+        wake_gate_margin: r.f64()?,
+        default_goal_expiry_ms: r.u64()?,
+        pending_approval_expiry_ms: r.u64()?,
+
+        context_budget_bytes: read_usize(r)?,
+        working_set_full_obs_limit: read_usize(r)?,
+        place_tail_limit: read_usize(r)?,
+        anchor_check_interval_wakes: r.u64()?,
+        auto_recall_max: r.u8()?,
+        tool_rag_enabled: r.u8()? != 0,
+        tool_rag_k_cap: read_usize(r)?,
+        tool_rag_k_proc: read_usize(r)?,
+        tool_rag_max_static_core: read_usize(r)?,
+
+        credence_lambda_domain: r.f64()?,
+        credence_period_ms: r.u64()?,
+        k_corrob: read_usize(r)?,
+        rule_trust_threshold: r.f64()?,
+        conv_alpha_0: r.f64()?,
+        conv_beta_0: r.f64()?,
+        conv_lambda: r.f64()?,
+        conv_vicarious_discount: r.f64()?,
+        conv_peer_floor: r.f64()?,
+        conv_tau: r.f64()?,
+        conv_kappa: r.f64()?,
+        conv_bias_max: r.f64()?,
+
+        t_idle_sleep_ms: r.u64()?,
+        provisional_close: r.u8()? != 0,
+        n_ep_min: read_usize(r)?,
+        n_ep_max: read_usize(r)?,
+        k_stale_sleep: r.f64()?,
+        em_boundary_gamma: r.f64()?,
+        em_boundary_window: read_usize(r)?,
+        em_boundary_warmup: read_usize(r)?,
+        em_boundary_mu0: r.f64()?,
+        em_boundary_sigma0: r.f64()?,
+        em_boundary_m0: r.f64()?,
+        em_boundary_z_max: r.f64()?,
+        em_boundary_sigma_u_floor: r.f64()?,
+        em_fixed_interval: read_usize(r)?,
+        merge_jaccard_min: r.f64()?,
+        merge_gap_ms: r.u64()?,
+
+        domain_clusters_k: read_usize(r)?,
+        domain_m_min: read_usize(r)?,
+        domain_max_iter: read_usize(r)?,
+        domain_w_hist: r.f64()?,
+        domain_tau_match: r.f64()?,
+        domain_tau_rel: r.f64()?,
+        domain_tau_merge: r.f64()?,
+        domain_gamma_drift: r.f64()?,
+        domain_rho_split: r.f64()?,
+
+        lesson_min_episodes: read_usize(r)?,
+        lesson_max_contrasts: read_usize(r)?,
+        proc_gamma_beta: r.f64()?,
+        proc_cusum_n_min_lock: read_usize(r)?,
+        proc_cusum_k_drift: r.f64()?,
+        proc_cusum_h_warn: r.f64()?,
+        proc_cusum_h_retire: r.f64()?,
+        proc_theta_retire: r.f64()?,
+        allow_chat_habit_bypass: r.u8()? != 0,
+
+        ledger_max_items_per_card: read_usize(r)?,
+        self_card_cap_z: r.f64()?,
+        self_card_cap_min_trials: read_usize(r)?,
+        self_card_cap_deg_threshold: r.f64()?,
+        self_card_cap_consec_fail: r.u32()?,
+        self_card_kappa_bias: r.f64()?,
+        self_card_cal_n0: r.f64()?,
+
+        learn_rate_w: r.f64()?,
+        learn_rate_theta_ratio: r.f64()?,
+        learn_daily_max_delta: r.f64()?,
+        learn_ips_clip_m: r.f64()?,
+        learn_wake_gate_n0: r.f64()?,
+        learn_wake_gate_quantile: r.f64()?,
+    })
+}
+
 fn check_unit(disposition: &'static str, value: f64) -> Result<(), PriorError> {
     check_range(disposition, value, 0.0, 1.0, "[0.0, 1.0]")
 }
@@ -2248,5 +2672,54 @@ mod tests {
         let err3 = bad_chunks.validate().expect_err("reject >6 chunks");
         assert!(err3.to_string().contains("backlog_max_chunks"));
         assert!(err3.to_string().contains("[1, 6]"));
+    }
+
+    #[test]
+    fn canonical_dispositions_json_matches_prior_default() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../prior/dispositions.json");
+        let raw = std::fs::read_to_string(&path).expect("read prior/dispositions.json");
+        let parsed: Prior =
+            serde_json::from_str(&raw).expect("parse prior/dispositions.json cleanly");
+        parsed.validate().expect("prior/dispositions.json valid");
+        let default = Prior::default();
+        if parsed != default {
+            let parsed_map = serde_json::to_value(&parsed).expect("serialize parsed");
+            let default_map = serde_json::to_value(&default).expect("serialize default");
+            let mut diffs = Vec::new();
+            if let (Some(pm), Some(dm)) = (parsed_map.as_object(), default_map.as_object()) {
+                for (k, pv) in pm {
+                    if dm.get(k) != Some(pv) {
+                        diffs.push(format!("{k}: file={pv} default={:?}", dm.get(k)));
+                    }
+                }
+            }
+            panic!(
+                "Prior::default() differs from prior/dispositions.json on disposition(s): {}",
+                diffs.join(", ")
+            );
+        }
+    }
+
+    #[test]
+    fn prior_rejects_unknown_field_naming_it() {
+        let json = r#"{
+            "version": 1,
+            "content_version": "2026-11-16.1",
+            "talkativeness": 0.5,
+            "spontaneity": 0.5,
+            "memory_persistence": 0.5,
+            "helpfulness": 0.5,
+            "restraint": 0.5,
+            "boredom_with_repeats": 0.5,
+            "certainty_bar": 0.5,
+            "speaking_bar": 3,
+            "tattletale_typo": 0.2
+        }"#;
+        let err = serde_json::from_str::<Prior>(json).expect_err("must reject unknown field");
+        assert!(
+            err.to_string().contains("tattletale_typo"),
+            "error must name unknown key: {err}"
+        );
     }
 }

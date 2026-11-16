@@ -43,13 +43,13 @@ use crate::gate::{
 use crate::learn::BoundedLearner;
 use crate::ledger::PerceptionLedger;
 use crate::map::{CoOccurrenceEdge, CognitiveMap, MapVertex};
-use crate::prior::Prior;
+use crate::prior::{Prior, decode_prior, encode_prior};
 use crate::privacy::build_visible_scope;
 use crate::recall::{ImportanceInputs, MemoryBasis, MemoryEntry};
 use crate::registry::Switches;
 
 const SNAPSHOT_MAGIC: &[u8; 4] = b"MGSN";
-const SNAPSHOT_VERSION: u16 = 7;
+const SNAPSHOT_VERSION: u16 = 9;
 
 const MAX_PLACE_HISTORY_ENTRIES: usize = 64;
 const MAX_TALK_TURNS_PER_PLACE: usize = 512;
@@ -304,6 +304,12 @@ pub struct CoreState {
     pub procedure_links: BTreeMap<ActionId, EventId>,
     /// Flag raised when capability/budget/contradiction changes warrant deterministic recalibration (`15.3`).
     pub recalibration_pending: bool,
+
+    // --- Decision 20: Recorded prior in effect from `prior_loaded` events ---
+    /// Most recently recorded [`Prior`] from `EventKind::PriorLoaded`, if any.
+    pub recorded_prior: Option<Prior>,
+    /// Number of `EventKind::PriorLoaded` events applied so far (for `draw_key` offsetting).
+    pub prior_loaded_count: u64,
 }
 
 /// Snapshot of what was visible and disclosed on a reasoning wake (`7.3`, `7.4`, `7.5`).
@@ -405,7 +411,18 @@ impl CoreState {
             learner: BoundedLearner::new(),
             procedure_links: BTreeMap::new(),
             recalibration_pending: false,
+            recorded_prior: None,
+            prior_loaded_count: 0,
         }
+    }
+
+    /// Maps a log [`EventId`] to the key used for all `(seed, event_id)` seeded draws.
+    ///
+    /// Subtracts [`Self::prior_loaded_count`] so that bookkeeping `prior_loaded` events never
+    /// shift or perturb any stochastic branch.
+    #[must_use]
+    pub const fn draw_key(&self, rec_id: EventId) -> EventId {
+        EventId::new(rec_id.as_u64().saturating_sub(self.prior_loaded_count))
     }
 
     /// Registers or replaces an owner-signed behavioral [`PrincipleDescriptor`].
@@ -919,7 +936,7 @@ impl CoreState {
         );
 
         decide_gate(
-            percept.id,
+            self.draw_key(percept.id),
             seed,
             signals,
             salience,
@@ -2130,6 +2147,14 @@ impl CoreState {
                         .rollback_to_epoch(&mut self.adaptive_weights, *restored_epoch_id);
                 }
             }
+            EventKind::PriorLoaded => {
+                self.prior_loaded_count = self.prior_loaded_count.saturating_add(1);
+                if let Some(EventDetail::PriorLoaded { prior }) = &record.detail {
+                    self.recorded_prior = Some((**prior).clone());
+                    let switches = self.map_switches.clone();
+                    self.sync_prior(prior, &switches);
+                }
+            }
             _ => {}
         }
     }
@@ -2558,6 +2583,18 @@ impl CoreState {
         // C7 snapshot fields (v7)
         encode_c7_state(&mut w, self);
 
+        // C8 snapshot fields (v8): Decision 20 recorded prior
+        match &self.recorded_prior {
+            Some(prior) => {
+                w.u8(1);
+                encode_prior(&mut w, prior);
+            }
+            None => w.u8(0),
+        }
+
+        // C9 snapshot fields (v9): prior_loaded_count for invariant seeded draws
+        w.u64(self.prior_loaded_count);
+
         w.finish()
     }
 
@@ -2971,6 +3008,21 @@ impl CoreState {
         } else {
             DecodedC7State::default()
         };
+        let recorded_prior = if version >= 8 {
+            match r.u8()? {
+                0 => None,
+                1 => Some(decode_prior(&mut r)?),
+                tag => {
+                    return Err(EventFormatError::MalformedRecord(format!(
+                        "invalid snapshot recorded_prior tag {tag}"
+                    )));
+                }
+            }
+        } else {
+            None
+        };
+        let map_prior = recorded_prior.clone().unwrap_or_default();
+        let prior_loaded_count = if version >= 9 { r.u64()? } else { 0 };
 
         Ok(Self {
             last_seq,
@@ -3014,7 +3066,7 @@ impl CoreState {
             cognitive_map,
             memory_entries,
             logged_declass_tokens,
-            map_prior: Prior::default(),
+            map_prior,
             expectation_book,
             capability_descriptors,
             startup_recovery_pending: false,
@@ -3050,6 +3102,8 @@ impl CoreState {
             learner: c7.learner,
             procedure_links: c7.procedure_links,
             recalibration_pending: c7.recalibration_pending,
+            recorded_prior,
+            prior_loaded_count,
         })
     }
 }

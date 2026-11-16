@@ -934,7 +934,6 @@ fn decision_recomputability_and_two_epoch_replay_with_anchor_and_divergence() {
     let div_report = replay_from_checkpoint(
         &tampered_store,
         Some(&ckpt),
-        &prior,
         &switches,
         seed,
         ReplayMode::TwoEpochFrozen,

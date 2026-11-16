@@ -15,8 +15,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use monoagens_body_kit::{EmittedCue, PersistentBodyRuntime};
 use monoagens_conformance::{ConformanceLevel, run_body_conformance, run_core_conformance};
 use monoagens_core::{
-    DecisionOutcome, DecisionTrace, EventDetail, EventKind, EventRecord, Input, Prior, ReplayMode,
-    Store, Switches,
+    DecisionOutcome, DecisionTrace, EventDetail, EventKind, EventRecord, Input, ReplayMode, Store,
+    Switches,
 };
 use monoagens_gateway::{
     Clock, CueRecorder, DiagnosticSink, DoorsAdapter, GatewayConfig, GatewayOptions,
@@ -386,11 +386,10 @@ fn cmd_chat(
         let cues = CueRecorder::new();
         let mut cue_rx = cues.subscribe();
 
-        let runtime = GatewayRuntime::start_segmented(
+        let runtime = GatewayRuntime::start_segmented_with_configured_prior(
             cfg,
             &loaded.secrets,
             store_dir,
-            Prior::default(),
             Switches::default(),
             DoorsAdapter(valve),
             GatewayOptions {
@@ -830,9 +829,8 @@ fn cmd_replay(
         ReplayModeArg::Full => ReplayMode::FullReplay,
     };
 
-    let report =
-        replay_events_offline(&Prior::default(), &Switches::default(), seed, &events, mode)
-            .map_err(|e| format!("offline replay failed: {e}"))?;
+    let report = replay_events_offline(&Switches::default(), seed, &events, mode)
+        .map_err(|e| format!("offline replay failed: {e}"))?;
 
     if report.is_bit_identical() {
         if json_mode {

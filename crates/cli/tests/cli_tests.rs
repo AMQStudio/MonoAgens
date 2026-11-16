@@ -526,3 +526,182 @@ fn cli_conformance_inspector_and_link_work_end_to_end() {
     let list_json: Value = serde_json::from_slice(&list_out.stdout).expect("JSON");
     assert_eq!(list_json["active_links"].as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn cli_two_session_prior_change_and_offline_replay_reproduces_both_sessions() {
+    let tmp = TempDir::new().expect("tempdir");
+    let cfg_path = write_scripted_config(tmp.path());
+    let data_dir = tmp.path().join("data");
+
+    let act_reply_1 = json!({
+        "protocol_version": { "major": 1, "minor": 0 },
+        "acts": [
+            {
+                "act": "act",
+                "capability_id": "chat.speak",
+                "places": ["cli:terminal"],
+                "people": ["per_owner"],
+                "payload": b"Session 1 reply".to_vec(),
+                "motivation": 4,
+                "confidence_0_20": 16,
+                "used_ids": [],
+                "expected": null,
+                "domain": null
+            }
+        ]
+    })
+    .to_string();
+
+    // Session 1 under built-in default prior (no [soul] prior in monoagens.toml).
+    let mut stdout1 = Vec::new();
+    let mut stderr1 = Vec::new();
+    let code1 = run_chat_with_provider(
+        Some(&cfg_path),
+        false,
+        ChatArgs {
+            messages: vec!["session 1 message".to_owned()],
+            data_dir: None,
+        },
+        Some(Arc::new(ScriptedModelProvider::from_replies([
+            ScriptedReply::text(act_reply_1),
+        ]))),
+        &mut stdout1,
+        &mut stderr1,
+    )
+    .expect("session 1 chat");
+    assert_eq!(code1, 0, "stderr1={}", String::from_utf8_lossy(&stderr1));
+
+    // Edit [soul] prior in monoagens.toml to an edited prior file.
+    let edited_prior_path = tmp.path().join("edited_prior.json");
+    fs::write(
+        &edited_prior_path,
+        r#"{
+          "version": 1,
+          "content_version": "2026-11-17.session2",
+          "talkativeness": 0.95,
+          "spontaneity": 0.5,
+          "memory_persistence": 0.5,
+          "helpfulness": 0.5,
+          "restraint": 0.1,
+          "boredom_with_repeats": 0.5,
+          "certainty_bar": 0.5,
+          "speaking_bar": 3
+        }"#,
+    )
+    .unwrap();
+    let cfg_toml = format!(
+        "version = 1\ndata_dir = \"{}\"\n\n[soul]\nname = \"MonoTest\"\nseed = 1\nprior = \"{}\"\n\n[model]\nprovider = \"scripted\"\nmodel = \"scripted-test\"\ndaily_token_budget = 10000\n\n[valve]\nmode = \"enforcing\"\nmax_chain_wakes = 8\n",
+        data_dir.display(),
+        edited_prior_path.display()
+    );
+    fs::write(&cfg_path, cfg_toml).expect("update config with edited prior");
+
+    let act_reply_2 = json!({
+        "protocol_version": { "major": 1, "minor": 0 },
+        "acts": [
+            {
+                "act": "act",
+                "capability_id": "chat.speak",
+                "places": ["cli:terminal"],
+                "people": ["per_owner"],
+                "payload": b"Session 2 reply".to_vec(),
+                "motivation": 4,
+                "confidence_0_20": 16,
+                "used_ids": [],
+                "expected": null,
+                "domain": null
+            }
+        ]
+    })
+    .to_string();
+
+    // Session 2 under edited prior.
+    let mut stdout2 = Vec::new();
+    let mut stderr2 = Vec::new();
+    let code2 = run_chat_with_provider(
+        Some(&cfg_path),
+        false,
+        ChatArgs {
+            messages: vec!["session 2 message".to_owned()],
+            data_dir: None,
+        },
+        Some(Arc::new(ScriptedModelProvider::from_replies([
+            ScriptedReply::text(act_reply_2),
+        ]))),
+        &mut stdout2,
+        &mut stderr2,
+    )
+    .expect("session 2 chat");
+    assert_eq!(code2, 0, "stderr2={}", String::from_utf8_lossy(&stderr2));
+
+    // Verify log holds two prior_loaded events (default, then edited).
+    let store = SegmentedStore::open(StoreConfig::new(data_dir)).expect("open store");
+    let events = store.read_in_order(None, usize::MAX).expect("read events");
+    let prior_events: Vec<_> = events
+        .iter()
+        .filter(|e| e.kind == EventKind::PriorLoaded)
+        .collect();
+    assert_eq!(prior_events.len(), 2, "expected 2 prior_loaded events");
+    match &prior_events[0].detail {
+        Some(EventDetail::PriorLoaded { prior }) => {
+            assert_eq!(prior.as_ref(), &Prior::default());
+        }
+        other => panic!("unexpected first prior detail: {other:?}"),
+    }
+    match &prior_events[1].detail {
+        Some(EventDetail::PriorLoaded { prior }) => {
+            assert_eq!(prior.content_version, "2026-11-17.session2");
+            assert!((prior.talkativeness - 0.95).abs() < 1e-12);
+        }
+        other => panic!("unexpected second prior detail: {other:?}"),
+    }
+
+    // Run `monoagens replay` against the store and verify both sessions reproduce cleanly.
+    let replay_out = Command::new(monoagens_bin())
+        .args(["--config", cfg_path.to_str().unwrap(), "--json", "replay"])
+        .output()
+        .expect("run monoagens replay");
+    assert!(
+        replay_out.status.success(),
+        "replay failed: {}",
+        String::from_utf8_lossy(&replay_out.stderr)
+    );
+    let rep_json: Value = serde_json::from_slice(&replay_out.stdout).expect("parse replay JSON");
+    assert_eq!(rep_json["status"], "ok");
+    assert!(
+        rep_json["matched_decisions"].as_u64().unwrap_or(0) >= 2,
+        "expected >= 2 matched decisions across both sessions: {rep_json}"
+    );
+}
+
+#[test]
+fn cli_chat_fails_startup_when_soul_prior_is_missing_or_invalid() {
+    let tmp = TempDir::new().expect("tempdir");
+    let cfg_path = tmp.path().join("monoagens.toml");
+    let data_dir = tmp.path().join("data");
+    fs::create_dir_all(&data_dir).unwrap();
+    let missing_prior = tmp.path().join("nonexistent_prior.json");
+
+    let cfg_toml = format!(
+        "version = 1\ndata_dir = \"{}\"\n\n[soul]\nname = \"MonoTest\"\nseed = 1\nprior = \"{}\"\n\n[model]\nprovider = \"scripted\"\nmodel = \"scripted-test\"\ndaily_token_budget = 10000\n",
+        data_dir.display(),
+        missing_prior.display()
+    );
+    fs::write(&cfg_path, cfg_toml).unwrap();
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let err = run_chat_with_provider(
+        Some(&cfg_path),
+        false,
+        ChatArgs {
+            messages: vec!["hi".to_owned()],
+            data_dir: None,
+        },
+        Some(Arc::new(ScriptedModelProvider::new())),
+        &mut stdout,
+        &mut stderr,
+    )
+    .expect_err("chat must fail when [soul] prior path is missing");
+    assert!(err.contains("nonexistent_prior.json"), "err={err}");
+}

@@ -48,7 +48,7 @@ fn make_percept(actor: &str, place: &str, ts_ms: u64, payload: &[u8]) -> Percept
     )
 }
 
-/// Compile-time exhaustive match over all 29 canonical event kinds.
+/// Compile-time exhaustive match over all 30 canonical event kinds.
 fn assert_exhaustive_kind(kind: EventKind) -> &'static str {
     match kind {
         EventKind::Percept => "percept",
@@ -80,19 +80,20 @@ fn assert_exhaustive_kind(kind: EventKind) -> &'static str {
         EventKind::Tick => "tick",
         EventKind::Failure => "failure",
         EventKind::HardForget => "hard_forget",
+        EventKind::PriorLoaded => "prior_loaded",
     }
 }
 
 #[test]
-fn twenty_nine_canonical_kinds_exhaustive() {
-    assert_eq!(EventKind::ALL.len(), 29);
+fn thirty_canonical_kinds_exhaustive() {
+    assert_eq!(EventKind::ALL.len(), 30);
     let mut seen = BTreeSet::new();
     for kind in EventKind::ALL {
         let label = assert_exhaustive_kind(kind);
         assert_eq!(label, kind.as_str());
         assert!(seen.insert(label), "duplicate kind {label}");
     }
-    assert_eq!(seen.len(), 29);
+    assert_eq!(seen.len(), 30);
 }
 
 #[test]
@@ -222,9 +223,11 @@ fn log_seq_total_order_across_interleaved_bodies() {
 
 #[test]
 fn record_first_failed_append_emits_zero_effects_and_zero_dispatches() {
-    let mut store = MemStore::new();
-    store.fail_next_append("simulated disk error");
-    let mut core = Core::open(store, Prior::default(), Switches::default(), 99).expect("open");
+    let mut core =
+        Core::open(MemStore::new(), Prior::default(), Switches::default(), 99).expect("open");
+    let seq_before = core.state().last_seq;
+    let len_before = core.store().len();
+    core.store_mut().fail_next_append("simulated disk error");
     let mut doors = CountingDoors::default();
 
     let err = core
@@ -238,8 +241,8 @@ fn record_first_failed_append_emits_zero_effects_and_zero_dispatches() {
     assert_eq!(doors.inbound_calls, 0);
     assert_eq!(doors.context_calls, 0);
     assert_eq!(doors.action_calls, 0);
-    assert_eq!(core.store().len(), 0);
-    assert_eq!(core.state().last_seq, LogSeq::ZERO);
+    assert_eq!(core.store().len(), len_before);
+    assert_eq!(core.state().last_seq, seq_before);
 
     // Also verify record-first for outbound Action append failure: zero Dispatches emitted!
     core.step(
@@ -248,6 +251,14 @@ fn record_first_failed_append_emits_zero_effects_and_zero_dispatches() {
         &mut doors,
     )
     .expect("cause percept");
+    let percept_id = core
+        .store()
+        .read_in_order(None, 100)
+        .unwrap()
+        .into_iter()
+        .find(|e| e.kind == EventKind::Percept)
+        .expect("percept event")
+        .id;
     let log_len_before = core.store().len();
     core.store_mut()
         .fail_next_append_for_kind(EventKind::Action, "action log full");
@@ -255,7 +266,7 @@ fn record_first_failed_append_emits_zero_effects_and_zero_dispatches() {
     let action_err = core
         .step(
             Input::ModelResult {
-                request_id: EventId::new(1),
+                request_id: percept_id,
                 acts: vec![ThoughtAct::Act {
                     capability_id: CapabilityId::new("chat.speak"),
                     places: vec![PlaceId::new("cli:0")],
@@ -263,7 +274,7 @@ fn record_first_failed_append_emits_zero_effects_and_zero_dispatches() {
                     payload: OpaquePayload::from_bytes(b"reply".as_slice()),
                     motivation: 4,
                     confidence_0_20: 15,
-                    used_ids: vec![EventId::new(1)],
+                    used_ids: vec![percept_id],
                     expected: None,
                     domain: None,
                 }],
@@ -644,12 +655,20 @@ fn model_result_inherits_origin_actor_and_min_taint_monotonically() {
         &mut doors,
     )
     .unwrap();
+    let percept_id = core
+        .store()
+        .read_in_order(None, 100)
+        .unwrap()
+        .into_iter()
+        .find(|e| e.kind == EventKind::Percept)
+        .expect("percept event")
+        .id;
 
     // Model attempts to act while claiming a different actor/people list in ThoughtAct::Act.
     let effects = core
         .step(
             Input::ModelResult {
-                request_id: EventId::new(1),
+                request_id: percept_id,
                 acts: vec![ThoughtAct::Act {
                     capability_id: CapabilityId::new("chat.speak"),
                     places: vec![PlaceId::new("chat:group")],
@@ -657,7 +676,7 @@ fn model_result_inherits_origin_actor_and_min_taint_monotonically() {
                     payload: OpaquePayload::from_bytes(b"hi".as_slice()),
                     motivation: 4,
                     confidence_0_20: 15,
-                    used_ids: vec![EventId::new(1)],
+                    used_ids: vec![percept_id],
                     expected: None,
                     domain: None,
                 }],

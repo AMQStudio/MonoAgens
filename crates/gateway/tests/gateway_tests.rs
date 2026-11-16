@@ -522,13 +522,16 @@ async fn next_due_timer_fires_tick_and_noop_tick_records_nothing() {
 
     let handle = rt.handle();
 
-    // No-op tick when nothing is due appends zero events.
+    // No-op tick when nothing is due appends zero events (only initial prior_loaded exists).
     handle
         .submit_and_wait(Input::Tick)
         .await
         .expect("noop tick");
     let before = handle.read_events().await.expect("read events");
-    assert!(before.is_empty(), "no-op tick must append nothing");
+    assert!(
+        before.iter().all(|e| e.kind == EventKind::PriorLoaded),
+        "no-op tick must append nothing: {before:?}"
+    );
 
     // Percept wakes model -> opens expectation with due_ms = t0 + 500.
     let p = make_percept(
@@ -1613,4 +1616,184 @@ async fn hanging_hook_times_out_under_hook_timeout_ms_without_stalling_loop() {
     .await;
 
     rt.shutdown().await;
+}
+
+#[tokio::test]
+async fn soul_prior_config_loads_and_rejects_unknown_key_out_of_range_and_missing_path() {
+    let dir = TempDir::new().expect("tempdir");
+    let valid_prior_path = dir.path().join("custom_prior.json");
+    std::fs::write(
+        &valid_prior_path,
+        r#"{
+          "version": 1,
+          "content_version": "2026-11-17.gw",
+          "talkativeness": 0.91,
+          "spontaneity": 0.5,
+          "memory_persistence": 0.5,
+          "helpfulness": 0.5,
+          "restraint": 0.5,
+          "boredom_with_repeats": 0.5,
+          "certainty_bar": 0.5,
+          "speaking_bar": 3
+        }"#,
+    )
+    .unwrap();
+
+    let cfg_path = dir.path().join("monoagens.toml");
+    let secrets_path = dir.path().join("secrets.toml");
+    let toml = format!(
+        "version = 1\n\n[soul]\nname = \"MonoTest\"\nseed = 1\nprior = \"{}\"\n\n[model]\nprovider = \"scripted\"\nmodel = \"scripted-test\"\ndaily_token_budget = 10000\n",
+        valid_prior_path.display()
+    );
+    let parsed_cfg = monoagens_gateway::parse_config_str(&toml, &cfg_path, &secrets_path)
+        .expect("parse [soul] prior");
+    assert_eq!(parsed_cfg.soul.prior, Some(valid_prior_path));
+
+    let rt = GatewayRuntime::start_with_configured_prior(
+        parsed_cfg,
+        &ProviderSecrets::default(),
+        || Ok(MemStore::new()),
+        Switches::all_enabled(),
+        NoopDoors,
+        GatewayOptions {
+            clock: Arc::new(VirtualClock::new(Time::from_millis(1_000))),
+            provider: Some(Arc::new(ScriptedModelProvider::new())),
+            diagnostics: DiagnosticSink::new(&ProviderSecrets::default()),
+            cues: CueRecorder::new(),
+            seams: GatewaySeams::default(),
+        },
+    )
+    .await
+    .expect("start gateway with configured prior");
+
+    let events = rt.handle().read_events().await.expect("read events");
+    let loaded_ev = events
+        .iter()
+        .find(|e| e.kind == EventKind::PriorLoaded)
+        .expect("prior_loaded event recorded");
+    match &loaded_ev.detail {
+        Some(monoagens_core::EventDetail::PriorLoaded { prior }) => {
+            assert_eq!(prior.content_version, "2026-11-17.gw");
+            assert!((prior.talkativeness - 0.91).abs() < 1e-12);
+        }
+        other => panic!("unexpected detail {other:?}"),
+    }
+    rt.shutdown().await;
+
+    // Missing path fails start-up naming the path.
+    let mut bad_cfg = default_test_config(ModelProviderKind::Scripted);
+    let missing_path = dir.path().join("missing_prior.json");
+    bad_cfg.soul.prior = Some(missing_path);
+    let err_missing = match GatewayRuntime::start_with_configured_prior(
+        bad_cfg,
+        &ProviderSecrets::default(),
+        || Ok(MemStore::new()),
+        Switches::all_enabled(),
+        NoopDoors,
+        GatewayOptions {
+            clock: Arc::new(VirtualClock::new(Time::from_millis(1_000))),
+            provider: Some(Arc::new(ScriptedModelProvider::new())),
+            diagnostics: DiagnosticSink::new(&ProviderSecrets::default()),
+            cues: CueRecorder::new(),
+            seams: GatewaySeams::default(),
+        },
+    )
+    .await
+    {
+        Ok(_) => panic!("missing prior path must fail"),
+        Err(e) => e,
+    };
+    assert!(
+        err_missing.to_string().contains("missing_prior.json"),
+        "err={err_missing}"
+    );
+
+    // Unknown key fails start-up naming the unknown key.
+    let unknown_path = dir.path().join("unknown_prior.json");
+    std::fs::write(
+        &unknown_path,
+        r#"{
+          "version": 1,
+          "content_version": "2026-11-16.1",
+          "talkativeness": 0.5,
+          "spontaneity": 0.5,
+          "memory_persistence": 0.5,
+          "helpfulness": 0.5,
+          "restraint": 0.5,
+          "boredom_with_repeats": 0.5,
+          "certainty_bar": 0.5,
+          "speaking_bar": 3,
+          "unknown_gw_key": 0.4
+        }"#,
+    )
+    .unwrap();
+    let mut unknown_cfg = default_test_config(ModelProviderKind::Scripted);
+    unknown_cfg.soul.prior = Some(unknown_path);
+    let err_unknown = match GatewayRuntime::start_with_configured_prior(
+        unknown_cfg,
+        &ProviderSecrets::default(),
+        || Ok(MemStore::new()),
+        Switches::all_enabled(),
+        NoopDoors,
+        GatewayOptions {
+            clock: Arc::new(VirtualClock::new(Time::from_millis(1_000))),
+            provider: Some(Arc::new(ScriptedModelProvider::new())),
+            diagnostics: DiagnosticSink::new(&ProviderSecrets::default()),
+            cues: CueRecorder::new(),
+            seams: GatewaySeams::default(),
+        },
+    )
+    .await
+    {
+        Ok(_) => panic!("unknown key must fail"),
+        Err(e) => e,
+    };
+    assert!(
+        err_unknown.to_string().contains("unknown_gw_key"),
+        "err={err_unknown}"
+    );
+
+    // Out-of-range value fails start-up naming disposition and range.
+    let range_path = dir.path().join("range_prior.json");
+    std::fs::write(
+        &range_path,
+        r#"{
+          "version": 1,
+          "content_version": "2026-11-16.1",
+          "talkativeness": 0.5,
+          "spontaneity": 0.5,
+          "memory_persistence": 0.5,
+          "helpfulness": 0.5,
+          "restraint": 0.5,
+          "boredom_with_repeats": 0.5,
+          "certainty_bar": 0.5,
+          "speaking_bar": 9
+        }"#,
+    )
+    .unwrap();
+    let mut range_cfg = default_test_config(ModelProviderKind::Scripted);
+    range_cfg.soul.prior = Some(range_path);
+    let err_range = match GatewayRuntime::start_with_configured_prior(
+        range_cfg,
+        &ProviderSecrets::default(),
+        || Ok(MemStore::new()),
+        Switches::all_enabled(),
+        NoopDoors,
+        GatewayOptions {
+            clock: Arc::new(VirtualClock::new(Time::from_millis(1_000))),
+            provider: Some(Arc::new(ScriptedModelProvider::new())),
+            diagnostics: DiagnosticSink::new(&ProviderSecrets::default()),
+            cues: CueRecorder::new(),
+            seams: GatewaySeams::default(),
+        },
+    )
+    .await
+    {
+        Ok(_) => panic!("out of range must fail"),
+        Err(e) => e,
+    };
+    assert!(
+        err_range.to_string().contains("speaking_bar") && err_range.to_string().contains("[1, 5]"),
+        "err={err_range}"
+    );
 }
