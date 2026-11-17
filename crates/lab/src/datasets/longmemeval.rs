@@ -4,9 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use monoagens_core::ModelPurpose;
 use monoagens_protocol::{ActorId, Audience, EventId, PlaceId, VisibleScope};
-use monoagens_reason::model::{ModelOutput, ModelRequest};
 use serde::Deserialize;
 
 use crate::LabError;
@@ -16,7 +14,9 @@ use crate::datasets::framework::{
     make_text_percept,
 };
 use crate::datasets::manifest::DatasetManifestEntry;
-use crate::datasets::scoring_utils::{metric_with_cluster_ci, not_scored_metric};
+use crate::datasets::scoring_utils::{
+    invoke_judge_resilient, metric_with_cluster_ci, not_scored_metric,
+};
 
 pub struct LongMemEvalConverter;
 
@@ -217,6 +217,7 @@ impl Scorer for LongMemEvalScorer {
 
         let mut overall_obs = Vec::new();
         let mut abs_obs = Vec::new();
+        let mut by_qtype: BTreeMap<String, Vec<f64>> = BTreeMap::new();
 
         for (idx, pred) in predictions.iter().enumerate() {
             let entry = gold.find(&pred.item_id, &pred.probe_id).ok_or_else(|| {
@@ -236,24 +237,39 @@ impl Scorer for LongMemEvalScorer {
                 )
             };
 
-            let req = ModelRequest::text(
+            let Some(correct) = invoke_judge_resilient(
+                judge,
+                jp,
                 EventId::new((idx + 1) as u64),
-                ModelPurpose::Classify,
                 judge_model,
                 "LongMemEval official judge",
-                user_prompt,
-            );
-            let verdict = jp
-                .invoke(&req)
-                .map_err(|e| LabError::Protocol(e.to_string()))?;
-            let correct = match verdict.output {
-                ModelOutput::Verdict(v) => v.label.eq_ignore_ascii_case("yes"),
-                _ => false,
+                &user_prompt,
+                &pred.item_id,
+                &pred.probe_id,
+                &pred.cluster_id,
+                entry,
+                if is_abs {
+                    "abstention_acc"
+                } else {
+                    "overall_acc"
+                },
+            )?
+            else {
+                continue;
             };
             let val = if correct { 1.0 } else { 0.0 };
             overall_obs.push((pred.cluster_id.clone(), val));
             if is_abs {
                 abs_obs.push((pred.cluster_id.clone(), val));
+            }
+            if let Some(qt) = entry.category.as_ref() {
+                by_qtype.entry(qt.clone()).or_default().push(val);
+            }
+        }
+        for (qt, vals) in by_qtype {
+            if !vals.is_empty() {
+                let mean = vals.iter().sum::<f64>() / vals.len() as f64;
+                judge.record_category_metric(qt, "acc", mean);
             }
         }
 

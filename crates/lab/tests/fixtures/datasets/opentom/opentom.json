@@ -1,38 +1,54 @@
 [
   {
-    "story_id": "ot_synth_01",
-    "split": "test",
-    "character_trait": "observant",
-    "narrative": "Liam placed the compass on the wooden desk in the study. While Liam stepped outside to fetch tea, Elena moved the compass into the cedar chest and shut the lid. Liam then came back inside.",
-    "questions": [
-      {
-        "qid": "ot_q1",
-        "question": "Where does Liam think the compass is right now?",
-        "options": ["wooden desk", "cedar chest"],
-        "answer": "wooden desk",
-        "question_type": "location-coarse"
-      },
-      {
-        "qid": "ot_q2",
-        "question": "Specifically where on the desk does Liam expect the compass?",
-        "options": ["top of the wooden desk", "inside cedar chest"],
-        "answer": "top of the wooden desk",
-        "question_type": "location-fine"
-      },
-      {
-        "qid": "ot_q3",
-        "question": "How does Liam feel toward the cedar chest search?",
-        "options": ["neutral", "surprised"],
-        "answer": "neutral",
-        "question_type": "attitude"
-      },
-      {
-        "qid": "ot_q4",
-        "question": "What happens if Elena asks Liam to hand over the compass?",
-        "options": ["Liam checks the wooden desk", "Liam opens the cedar chest"],
-        "answer": "Liam checks the wooden desk",
-        "question_type": "multihop"
-      }
-    ]
+    "narrative": "Noah and Priya entered the conservatory. The brass astrolabe rested inside the cedar drawer. While Priya stepped out, Noah transferred the brass astrolabe to the top of the wooden desk.",
+    "personality": "thoughtful",
+    "plot_info": {
+      "original_place": "cedar drawer",
+      "move_to_place": "top of the wooden desk"
+    },
+    "question": {
+      "question": "From Priya's perspective, is the brass astrolabe in its initial location by the end of the story?",
+      "answer": "Yes",
+      "type": "location-fo"
+    }
+  },
+  {
+    "narrative": "Noah and Priya entered the conservatory. The brass astrolabe rested inside the cedar drawer. While Priya stepped out, Noah transferred the brass astrolabe to the top of the wooden desk.",
+    "personality": "thoughtful",
+    "plot_info": {
+      "original_place": "cedar drawer",
+      "move_to_place": "top of the wooden desk"
+    },
+    "question": {
+      "question": "Where does Noah think the brass astrolabe is located by the end of the story?",
+      "answer": "top of the wooden desk",
+      "type": "location-fo"
+    }
+  },
+  {
+    "narrative": "Noah and Priya entered the conservatory. The brass astrolabe rested inside the cedar drawer. While Priya stepped out, Noah transferred the brass astrolabe to the top of the wooden desk.",
+    "personality": "thoughtful",
+    "plot_info": {
+      "original_place": "cedar drawer",
+      "move_to_place": "top of the wooden desk"
+    },
+    "question": {
+      "question": "As Priya, what is your attitude toward Noah's action?",
+      "answer": "neutral",
+      "type": "attitude"
+    }
+  },
+  {
+    "narrative": "Noah and Priya entered the conservatory. The brass astrolabe rested inside the cedar drawer. While Priya stepped out, Noah transferred the brass astrolabe to the top of the wooden desk.",
+    "personality": "thoughtful",
+    "plot_info": {
+      "original_place": "cedar drawer",
+      "move_to_place": "top of the wooden desk"
+    },
+    "question": {
+      "question": "From Noah's perspective, how does the cedar drawer's fullness change by the end of the story?",
+      "answer": "less full",
+      "type": "multihop-fo"
+    }
   }
 ]

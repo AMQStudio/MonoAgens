@@ -4,13 +4,16 @@
 
 use std::env;
 use std::fs;
-use std::io::{self, BufWriter};
+use std::io::{self, BufRead, BufReader, BufWriter};
 use std::path::PathBuf;
-use std::process::ExitCode;
+use std::process::{Child, Command, ExitCode, Stdio};
 use std::time::Duration;
 
 use monoagens_core::{MechanismId, MemStore, ReplayMode, Switches, brain_map_registry};
-use monoagens_lab::reason_seam::model::{OpenAiModelConfig, OpenAiModelProvider};
+use monoagens_lab::reason_seam::embed::{
+    EmbedInput, Embedder, EmbeddingGemma2Config, EmbeddingGemma2Embedder,
+};
+use monoagens_lab::reason_seam::model::{OpenAiModelConfig, OpenAiModelProvider, ReasoningEffort};
 use monoagens_lab::reason_seam::secrets::SecretString;
 use monoagens_lab::{
     BaselineKind, ParetoScorecardInput, Scenario, ScenarioSet, ScriptedActionRule, TestBody,
@@ -74,6 +77,7 @@ fn run_cli(args: Vec<String>) -> Result<ExitCode, String> {
         "replay" => run_replay_cmd(&args[1..]),
         "baseline" => run_baseline_cmd(&args[1..]),
         "benchmark" => run_benchmark_cmd(&args[1..]),
+        "report" => run_report_cmd(&args[1..]),
         "datasets" => run_datasets_cmd(&args[1..]),
         "pareto" => run_pareto_cmd(&args[1..]),
         "test-body" => run_test_body_stdio(&args[1..]),
@@ -688,6 +692,16 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
     let mut judge_api_key_env: Option<String> = None;
     let mut judge_prompt_version = "v1".to_owned();
     let mut judge_sub_policy = datasets::JudgeSubstitutionPolicy::RenameMetric;
+    let mut reasoning_effort: Option<ReasoningEffort> = None;
+    let mut judge_reasoning_effort: Option<ReasoningEffort> = None;
+    let mut extra_headers_spec: Vec<String> = Vec::new();
+    let mut embed_endpoint: Option<String> = None;
+    let mut embed_model_path: Option<PathBuf> = None;
+    let mut allow_no_embedder = false;
+    let mut preflight_only = false;
+    let mut pilot_items: Option<usize> = None;
+    let mut report_flag = false;
+    let mut report_notes: Vec<String> = Vec::new();
     let mut secrets_path: Option<PathBuf> = None;
     let mut json = false;
 
@@ -824,6 +838,58 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
                     args.get(i).ok_or("--secrets requires a path")?,
                 ));
             }
+            "--reasoning-effort" => {
+                i += 1;
+                let val = args
+                    .get(i)
+                    .ok_or("--reasoning-effort requires low|medium|high|max")?;
+                reasoning_effort = Some(val.parse::<ReasoningEffort>()?);
+            }
+            "--judge-reasoning-effort" => {
+                i += 1;
+                let val = args
+                    .get(i)
+                    .ok_or("--judge-reasoning-effort requires low|medium|high|max")?;
+                judge_reasoning_effort = Some(val.parse::<ReasoningEffort>()?);
+            }
+            "--extra-header" => {
+                i += 1;
+                let val = args.get(i).ok_or("--extra-header requires NAME=ENV_VAR")?;
+                extra_headers_spec.push(val.clone());
+            }
+            "--embed-endpoint" => {
+                i += 1;
+                embed_endpoint = Some(
+                    args.get(i)
+                        .ok_or("--embed-endpoint requires a URL")?
+                        .clone(),
+                );
+            }
+            "--embed-model-path" => {
+                i += 1;
+                embed_model_path = Some(PathBuf::from(
+                    args.get(i).ok_or("--embed-model-path requires a path")?,
+                ));
+            }
+            "--allow-no-embedder" => allow_no_embedder = true,
+            "--preflight-only" => preflight_only = true,
+            "--pilot-items" => {
+                i += 1;
+                let val = args.get(i).ok_or("--pilot-items requires an integer")?;
+                pilot_items = Some(
+                    val.parse::<usize>()
+                        .map_err(|e| format!("invalid --pilot-items '{val}': {e}"))?,
+                );
+            }
+            "--report" => report_flag = true,
+            "--report-note" => {
+                i += 1;
+                report_notes.push(
+                    args.get(i)
+                        .ok_or("--report-note requires a string")?
+                        .clone(),
+                );
+            }
             "--json" => json = true,
             other => return Err(format!("unknown argument '{other}' for benchmark")),
         }
@@ -853,6 +919,38 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
         .clone()
         .or_else(|| provider_secrets.model_endpoint.clone());
 
+    let mut extra_headers: Vec<(String, SecretString)> = Vec::new();
+    let mut extra_header_names: Vec<String> = Vec::new();
+    for spec in &extra_headers_spec {
+        let Some((hdr_name, env_var)) = spec.split_once('=') else {
+            return Err(format!(
+                "invalid --extra-header '{spec}': expected NAME=ENV_VAR"
+            ));
+        };
+        let hdr_name = hdr_name.trim();
+        let env_var = env_var.trim();
+        if hdr_name.is_empty() || env_var.is_empty() {
+            return Err(format!(
+                "invalid --extra-header '{spec}': NAME and ENV_VAR must be non-empty"
+            ));
+        }
+        let hdr_val = env::var(env_var).map_err(|_| {
+            format!("--extra-header '{hdr_name}': environment variable '{env_var}' is not set")
+        })?;
+        if hdr_val.trim().is_empty() {
+            return Err(format!(
+                "--extra-header '{hdr_name}': environment variable '{env_var}' is empty"
+            ));
+        }
+        extra_header_names.push(hdr_name.to_owned());
+        extra_headers.push((hdr_name.to_owned(), SecretString::new(hdr_val)));
+    }
+
+    let lab_ua = format!("monoagens-lab/{}", env!("CARGO_PKG_VERSION"));
+    let provider_endpoint_host = resolved_model_endpoint
+        .as_deref()
+        .and_then(extract_endpoint_host);
+
     let live_probe_provider: Option<OpenAiModelProvider> = if live {
         if let Some(ep) = &resolved_model_endpoint {
             let key = model_api_key_env
@@ -860,7 +958,13 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
                 .and_then(|v| env::var(v).ok())
                 .map(SecretString::new)
                 .or_else(|| provider_secrets.model_api_key.clone());
-            Some(OpenAiModelProvider::new(OpenAiModelConfig::new(ep, key))?)
+            let mut cfg = OpenAiModelConfig::new(ep, key);
+            cfg.reasoning_effort = reasoning_effort;
+            cfg.extra_headers = extra_headers.clone();
+            cfg.user_agent = Some(lab_ua.clone());
+            cfg.max_retries = 5;
+            cfg.default_timeout_ms = 300_000;
+            Some(OpenAiModelProvider::new(cfg)?)
         } else {
             None
         }
@@ -874,7 +978,13 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
                 .and_then(|v| env::var(v).ok())
                 .map(SecretString::new)
                 .or_else(|| provider_secrets.model_api_key.clone());
-            Some(OpenAiModelProvider::new(OpenAiModelConfig::new(ep, key))?)
+            let mut cfg = OpenAiModelConfig::new(ep, key);
+            cfg.reasoning_effort = judge_reasoning_effort;
+            cfg.extra_headers = extra_headers;
+            cfg.user_agent = Some(lab_ua);
+            cfg.max_retries = 5;
+            cfg.default_timeout_ms = 300_000;
+            Some(OpenAiModelProvider::new(cfg)?)
         } else {
             None
         }
@@ -888,14 +998,85 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
         substitution_policy: judge_sub_policy,
     });
 
+    // Configure EmbeddingGemma 2 semantic embedder for standard runs (`task 10.5`).
+    let mut sidecar_guard: Option<SidecarProcessGuard> = None;
+    let mut embedder_backend: Option<String> = None;
+    let mut embedder_revision: Option<String> = None;
+    let configured_embedder: Option<EmbeddingGemma2Embedder> = if suite == "standard"
+        && !allow_no_embedder
+        && !preflight_only
+    {
+        if let Some(ep) = &embed_endpoint {
+            let mpath = embed_model_path
+                .clone()
+                .unwrap_or_else(|| datasets_dir.join("embedder_models/embeddinggemma-2"));
+            embedder_backend = Some(format!("SidecarHttp ({ep})"));
+            let emb = EmbeddingGemma2Embedder::new(EmbeddingGemma2Config::local_http(
+                ep,
+                Some(mpath),
+                60_000,
+            ))
+            .map_err(|e| {
+                format!(
+                    "failed to configure EmbeddingGemma 2 embedder at '{ep}': {e}. Run `monoagens-lab datasets pin embeddinggemma-2 && monoagens-lab datasets fetch --record-checksums embeddinggemma-2`"
+                )
+            })?;
+            Some(emb)
+        } else {
+            let resolved_manifest =
+                datasets::resolve_manifest_path(manifest_path.as_deref(), &datasets_dir);
+            let registry = standard_benchmark_registry();
+            let (manifest, _) = datasets::verify_required_datasets_with_manifest(
+                &resolved_manifest,
+                &datasets_dir,
+                &registry,
+                only_ids.as_deref(),
+            )
+            .map_err(|e| e.to_string())?;
+            let emb_entry = manifest.get("embeddinggemma-2").ok_or_else(|| {
+                "manifest is missing 'embeddinggemma-2' embedder_model entry; run `monoagens-lab datasets init` or update manifest".to_owned()
+            })?;
+            let verify = datasets::verify_manifest_entry(emb_entry, &datasets_dir)
+                .map_err(|e| e.to_string())?;
+            if !verify.verified {
+                return Err(format!(
+                    "standard benchmark requires verified EmbeddingGemma 2 weights under '{}' ({}). Run `monoagens-lab datasets pin embeddinggemma-2 && monoagens-lab datasets fetch --record-checksums embeddinggemma-2`",
+                    datasets_dir.join(&emb_entry.relative_dir).display(),
+                    verify.failures.join("; ")
+                ));
+            }
+            embedder_revision = emb_entry.sources.first().map(|s| s.revision.clone());
+            let model_dir = embed_model_path
+                .clone()
+                .unwrap_or_else(|| datasets_dir.join(&emb_entry.relative_dir));
+            let (guard, sidecar_url, device_info) = start_embeddinggemma2_sidecar(&model_dir)?;
+            sidecar_guard = Some(guard);
+            embedder_backend = Some(format!("SidecarHttp (uv offline, {device_info})"));
+            let emb = EmbeddingGemma2Embedder::new(EmbeddingGemma2Config::local_http(
+                sidecar_url,
+                Some(model_dir),
+                60_000,
+            ))
+            .map_err(|e| format!("failed to connect to EmbeddingGemma 2 sidecar: {e}"))?;
+            emb.embed(&EmbedInput::query("semantic embedder readiness check"))
+                .map_err(|e| format!("EmbeddingGemma 2 readiness check failed: {e}"))?;
+            Some(emb)
+        }
+    } else {
+        None
+    };
+
     let opts = datasets::BenchmarkExecutionOptions {
-        manifest_path,
+        manifest_path: manifest_path.clone(),
         only_ids,
         seed,
         live,
         live_full_history,
         max_cost_usd,
-        out_dir,
+        out_dir: out_dir.clone(),
+        pilot_prefix_n: pilot_items,
+        preflight_only,
+        require_semantic_embedder: suite == "standard" && !allow_no_embedder && !preflight_only,
         probe_model_name: model_name,
         probe_provider: live_probe_provider
             .as_ref()
@@ -904,6 +1085,15 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
         judge_provider: live_judge_provider
             .as_ref()
             .map(|p| p as &dyn monoagens_lab::reason_seam::model::ModelProvider),
+        embedder: configured_embedder
+            .as_ref()
+            .map(|e| e as &dyn monoagens_lab::reason_seam::embed::Embedder),
+        reasoning_effort: reasoning_effort.map(|e| e.to_string()),
+        judge_reasoning_effort: judge_reasoning_effort.map(|e| e.to_string()),
+        extra_header_names,
+        provider_endpoint_host,
+        embedder_backend,
+        embedder_revision,
         ..datasets::BenchmarkExecutionOptions::default()
     };
 
@@ -916,6 +1106,30 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
         &opts,
     )
     .map_err(|e| e.to_string())?;
+
+    if live && let Some(dir) = out_dir.as_deref() {
+        let telem = serde_json::json!({
+            "soul": live_probe_provider.as_ref().map(|p| p.telemetry_snapshot()),
+            "judge": live_judge_provider.as_ref().map(|p| p.telemetry_snapshot()),
+        });
+        if let Ok(bytes) = serde_json::to_vec_pretty(&telem) {
+            let _ = fs::write(dir.join("provider_telemetry.json"), bytes);
+        }
+    }
+    drop(sidecar_guard);
+
+    if report_flag && let Some(dir) = out_dir.as_deref() {
+        datasets::generate_benchmark_report(&datasets::ReportOptions {
+            run_dir: dir.to_path_buf(),
+            out_dir: None,
+            manifest_path,
+            extra_notes: report_notes,
+            skip_python_charts: false,
+            label: None,
+            appendix_markdown: None,
+        })
+        .map_err(|e| e.to_string())?;
+    }
     if json {
         println!(
             "{}",
@@ -1301,6 +1515,190 @@ fn run_pareto_cmd(args: &[String]) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn run_report_cmd(args: &[String]) -> Result<ExitCode, String> {
+    let mut run_dir: Option<PathBuf> = None;
+    let mut out_dir: Option<PathBuf> = None;
+    let mut manifest_path: Option<PathBuf> = None;
+    let mut notes: Vec<String> = Vec::new();
+    let mut label: Option<String> = None;
+    let mut appendix_path: Option<PathBuf> = None;
+    let mut skip_python_charts = false;
+    let mut json = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--run" => {
+                i += 1;
+                run_dir = Some(PathBuf::from(
+                    args.get(i).ok_or("--run requires a directory path")?,
+                ));
+            }
+            "--out" => {
+                i += 1;
+                out_dir = Some(PathBuf::from(
+                    args.get(i).ok_or("--out requires a directory path")?,
+                ));
+            }
+            "--manifest" => {
+                i += 1;
+                manifest_path = Some(PathBuf::from(
+                    args.get(i).ok_or("--manifest requires a path")?,
+                ));
+            }
+            "--note" => {
+                i += 1;
+                notes.push(args.get(i).ok_or("--note requires text")?.clone());
+            }
+            "--label" => {
+                i += 1;
+                label = Some(args.get(i).ok_or("--label requires text")?.clone());
+            }
+            "--appendix" => {
+                i += 1;
+                appendix_path = Some(PathBuf::from(
+                    args.get(i).ok_or("--appendix requires a path")?,
+                ));
+            }
+            "--no-python-charts" => skip_python_charts = true,
+            "--json" => json = true,
+            other => return Err(format!("unknown argument '{other}' for report")),
+        }
+        i += 1;
+    }
+
+    let run_dir = run_dir.ok_or("report requires --run <dir>")?;
+    let appendix_markdown = match appendix_path {
+        Some(path) => Some(
+            fs::read_to_string(&path)
+                .map_err(|e| format!("failed to read --appendix '{}': {e}", path.display()))?,
+        ),
+        None => None,
+    };
+    let summary = datasets::generate_benchmark_report(&datasets::ReportOptions {
+        run_dir,
+        out_dir,
+        manifest_path,
+        extra_notes: notes,
+        skip_python_charts,
+        label,
+        appendix_markdown,
+    })
+    .map_err(|e| e.to_string())?;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&summary).map_err(|e| e.to_string())?
+        );
+    } else {
+        println!(
+            "report generated at {} (records={}, csvs={}, charts={})",
+            summary.report_dir,
+            summary.run_records_loaded,
+            summary.csv_files.len(),
+            summary.chart_files.len()
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+struct SidecarProcessGuard {
+    child: Child,
+}
+
+impl Drop for SidecarProcessGuard {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn start_embeddinggemma2_sidecar(
+    model_dir: &std::path::Path,
+) -> Result<(SidecarProcessGuard, String, String), String> {
+    let ws_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script = ws_root.join("lab/adapters/eval_helpers/embeddinggemma2_sidecar.py");
+    if !script.is_file() {
+        return Err(format!(
+            "EmbeddingGemma 2 sidecar script not found at '{}'",
+            script.display()
+        ));
+    }
+    let py = env::var("MONOAGENS_ADAPTER_PYTHON").unwrap_or_else(|_| {
+        let venv_py = ws_root.join("lab/adapters/.venv/bin/python");
+        if venv_py.is_file() {
+            venv_py.to_string_lossy().into_owned()
+        } else {
+            "python3".to_owned()
+        }
+    });
+
+    let mut child = Command::new(&py)
+        .arg(&script)
+        .arg("--model-path")
+        .arg(model_dir)
+        .arg("--port")
+        .arg("0")
+        .env("HF_HUB_OFFLINE", "1")
+        .env("TRANSFORMERS_OFFLINE", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to spawn EmbeddingGemma 2 sidecar via '{py}': {e}"))?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "sidecar stdout unavailable".to_owned())?;
+    let mut reader = BufReader::new(stdout);
+    let mut first_line = String::new();
+    reader
+        .read_line(&mut first_line)
+        .map_err(|e| format!("failed reading EmbeddingGemma 2 sidecar startup line: {e}"))?;
+
+    if !first_line.starts_with("READY ") {
+        let _ = child.kill();
+        let out = child.wait_with_output().ok();
+        let stderr = out
+            .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+            .unwrap_or_default();
+        return Err(format!(
+            "EmbeddingGemma 2 sidecar failed to start (stdout='{}', stderr='{}')",
+            first_line.trim(),
+            stderr.trim()
+        ));
+    }
+
+    let rest = first_line.trim().strip_prefix("READY ").unwrap_or("");
+    let mut parts = rest.splitn(2, ' ');
+    let url = parts.next().unwrap_or("").to_owned();
+    let device_info = parts.next().unwrap_or("unknown").to_owned();
+    if url.is_empty() {
+        let _ = child.kill();
+        return Err("EmbeddingGemma 2 sidecar returned empty URL".to_owned());
+    }
+    Ok((SidecarProcessGuard { child }, url, device_info))
+}
+
+fn extract_endpoint_host(endpoint: &str) -> Option<String> {
+    let trimmed = endpoint.trim();
+    let after_scheme = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))?;
+    let scheme = if trimmed.starts_with("https://") {
+        "https://"
+    } else {
+        "http://"
+    };
+    let host = after_scheme.split('/').next()?.trim();
+    if host.is_empty() {
+        None
+    } else {
+        Some(format!("{scheme}{host}"))
+    }
+}
+
 fn usage() -> String {
-    "Usage:\n  monoagens-lab run --scenario <path> [--prior <path>] [--seed <u64>] [--json] [--record-out <path>]\n  monoagens-lab suite [--root <dir>] [--set development|validation] [--prior <path>] [--seeds 1,2] [--json]\n  monoagens-lab compare (--scenario <path> | --set development|validation [--root <dir>]) --mechanism <id> [--prior <path>] [--seeds 1,2,3,4,5] [--out-dir <dir>] [--json]\n  monoagens-lab replay --scenario <path> [--prior <path>] [--seed <u64>] [--json]\n  monoagens-lab baseline --adapter <slug> --scenario <path> [--prior <path>] [--seed <u64>] [--sealed] [--timeout-s <u64>] [--json]\n  monoagens-lab benchmark --suite <standard|in_tree_only> [--datasets-dir <path>] [--prior <path>] [--pareto] [--pareto-input <path>] [--json]\n  monoagens-lab datasets <init|list|pin|fetch|verify> [ids...] [--manifest <path>] [--datasets-dir <path>] [--record-checksums] [--json]\n  monoagens-lab pareto --input <scorecard.json> [--json]\n  monoagens-lab mechanisms [--json]\n  monoagens-lab test-body [--state-dir <path>]".to_owned()
+    "Usage:\n  monoagens-lab run --scenario <path> [--prior <path>] [--seed <u64>] [--json] [--record-out <path>]\n  monoagens-lab suite [--root <dir>] [--set development|validation] [--prior <path>] [--seeds 1,2] [--json]\n  monoagens-lab compare (--scenario <path> | --set development|validation [--root <dir>]) --mechanism <id> [--prior <path>] [--seeds 1,2,3,4,5] [--out-dir <dir>] [--json]\n  monoagens-lab replay --scenario <path> [--prior <path>] [--seed <u64>] [--json]\n  monoagens-lab baseline --adapter <slug> --scenario <path> [--prior <path>] [--seed <u64>] [--sealed] [--timeout-s <u64>] [--json]\n  monoagens-lab benchmark --suite <standard|in_tree_only> [--datasets-dir <path>] [--prior <path>] [--pareto] [--pareto-input <path>] [--report] [--json]\n  monoagens-lab report --run <dir> [--out <dir>] [--manifest <path>] [--note <text>] [--json]\n  monoagens-lab datasets <init|list|pin|fetch|verify> [ids...] [--manifest <path>] [--datasets-dir <path>] [--record-checksums] [--json]\n  monoagens-lab pareto --input <scorecard.json> [--json]\n  monoagens-lab mechanisms [--json]\n  monoagens-lab test-body [--state-dir <path>]".to_owned()
 }

@@ -1,0 +1,69 @@
+[
+  {
+    "set_id": "0-0-0",
+    "part_id": "0-0",
+    "conv_id": 0,
+    "full_context": "Maya: The spare battery is in the canvas pouch.\nOmar: Good, I will label it.\nLena: I stepped out for a call.",
+    "short_context": "Maya: The spare battery is in the canvas pouch.\nOmar: Good, I will label it.\nMaya: Please keep the pouch on the top shelf.\nLena: I stepped out for a call.",
+    "missed_info": "Lena left before the pouch location was confirmed.",
+    "joining_speaker": "Lena",
+    "factQA": {
+      "question": "Who confirmed the spare battery location?",
+      "question_type": "fact",
+      "correct_answer": "Maya confirmed the spare battery location.",
+      "wrong_answer": "Lena confirmed the spare battery location."
+    },
+    "beliefQAs": [
+      {
+        "question": "What does Lena believe about who confirmed the spare battery location?",
+        "question_type": "tom:belief:inaccessible",
+        "tom_type": "first-order",
+        "correct_answer": "Lena knows that Maya confirmed the spare battery location.",
+        "wrong_answer": "Lena believes that Omar confirmed the spare battery location.",
+        "missed_info_accessibility": "inaccessible"
+      }
+    ],
+    "infoAccessibilityQA_list": {
+      "question": "List all the characters who know this information.",
+      "question_type": "tom:info_accessibility:list",
+      "correct_answer": ["Maya", "Omar"],
+      "wrong_answer": ["Lena"],
+      "missed_info_accessibility": "inaccessible"
+    },
+    "infoAccessibilityQAs_binary": [
+      {
+        "question": "Does Maya know this information?",
+        "question_type": "tom:info_accessibility:binary",
+        "correct_answer": "yes",
+        "missed_info_accessibility": "inaccessible"
+      },
+      {
+        "question": "Does Lena know this information?",
+        "question_type": "tom:info_accessibility:binary",
+        "correct_answer": "no",
+        "missed_info_accessibility": "inaccessible"
+      }
+    ],
+    "answerabilityQA_list": {
+      "question": "List all the characters who know the precise correct answer to this question.",
+      "question_type": "tom:answerability:list",
+      "correct_answer": ["Maya", "Omar"],
+      "wrong_answer": ["Lena"],
+      "missed_info_accessibility": "inaccessible"
+    },
+    "answerabilityQAs_binary": [
+      {
+        "question": "Does Maya know the precise correct answer to this question?",
+        "question_type": "tom:answerability:binary",
+        "correct_answer": "yes",
+        "missed_info_accessibility": "inaccessible"
+      },
+      {
+        "question": "Does Lena know the precise correct answer to this question?",
+        "question_type": "tom:answerability:binary",
+        "correct_answer": "no:long",
+        "missed_info_accessibility": "inaccessible"
+      }
+    ]
+  }
+]

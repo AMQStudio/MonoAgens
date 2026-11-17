@@ -37,6 +37,15 @@ pub struct MetricScoreInterval {
     pub not_scored_reason: Option<String>,
 }
 
+/// Item-level failure recorded explicitly (never silently dropped).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailedItemRecord {
+    pub item_id: String,
+    pub probe_id: String,
+    pub stage: String,
+    pub reason: String,
+}
+
 /// Provenance and sampling metadata attached to external dataset runs (`benchmark-evaluation/spec.md`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DatasetRunProvenance {
@@ -52,10 +61,39 @@ pub struct DatasetRunProvenance {
     pub judge_model: Option<String>,
     #[serde(default)]
     pub judge_prompt_version: Option<String>,
+    /// Judge calls actually issued by scorers (excludes Gate/classifier wakes).
+    #[serde(default)]
+    pub judge_calls: u64,
+    #[serde(default)]
+    pub judge_tokens_in: u64,
+    #[serde(default)]
+    pub judge_tokens_out: u64,
     #[serde(default)]
     pub history_gate_wakes: u64,
     #[serde(default)]
     pub partial_run: bool,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub judge_reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub extra_header_names: Vec<String>,
+    #[serde(default)]
+    pub provider_endpoint_host: Option<String>,
+    #[serde(default)]
+    pub embedder_backend: Option<String>,
+    #[serde(default)]
+    pub embedder_revision: Option<String>,
+    #[serde(default)]
+    pub category_metrics: BTreeMap<String, BTreeMap<String, f64>>,
+    #[serde(default)]
+    pub failed_items: Vec<FailedItemRecord>,
+    #[serde(default)]
+    pub model_latencies_ms: Vec<u64>,
+    #[serde(default)]
+    pub started_at_utc: Option<String>,
+    #[serde(default)]
+    pub finished_at_utc: Option<String>,
 }
 
 /// Complete provenance and outcome record for one Lab run (`specs/lab/spec.md`).

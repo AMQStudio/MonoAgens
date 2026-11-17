@@ -5,9 +5,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use monoagens_core::ModelPurpose;
 use monoagens_protocol::{ActorId, Audience, EventId, PlaceId, VisibleScope};
-use monoagens_reason::model::{ModelOutput, ModelRequest};
 use serde::Deserialize;
 
 use crate::LabError;
@@ -17,25 +15,37 @@ use crate::datasets::framework::{
     make_text_percept,
 };
 use crate::datasets::manifest::DatasetManifestEntry;
-use crate::datasets::scoring_utils::{metric_with_cluster_ci, not_scored_metric};
+use crate::datasets::scoring_utils::{
+    invoke_judge_resilient, metric_with_cluster_ci, not_scored_metric,
+};
 
 pub struct StaleConverter;
 
 #[derive(Deserialize)]
 struct RawStaleScenario {
     #[serde(default)]
-    scenario_id: Option<String>,
-    #[serde(default)]
+    uid: Option<String>,
+    #[serde(rename = "type", default)]
     conflict_type: Option<String>,
-    sessions: Vec<Vec<RawStaleTurn>>,
-    sr_query: String,
-    sr_answer: String,
-    pr_query: String,
-    pr_answer: String,
-    ipa_query: String,
-    ipa_answer: String,
+    haystack_session: Vec<Vec<RawStaleTurn>>,
     #[serde(default)]
-    evidence_turns: Vec<usize>,
+    timestamps: Vec<String>,
+    #[serde(default)]
+    relevant_session_index: Vec<usize>,
+    #[serde(rename = "M_old")]
+    m_old: String,
+    #[serde(rename = "M_new")]
+    m_new: String,
+    #[serde(default)]
+    explanation: String,
+    probing_queries: RawStaleQueries,
+}
+
+#[derive(Deserialize)]
+struct RawStaleQueries {
+    dim1_query: String,
+    dim2_query: String,
+    dim3_query: String,
 }
 
 #[derive(Deserialize)]
@@ -44,13 +54,42 @@ struct RawStaleTurn {
     content: String,
 }
 
+fn parse_stale_timestamp_ms(raw: &str, fallback_ms: u64) -> u64 {
+    let trimmed = raw.trim();
+    let Some((date_part, time_part)) = trimmed.split_once(' ') else {
+        return fallback_ms;
+    };
+    let d: Vec<i64> = date_part
+        .split('-')
+        .filter_map(|p| p.parse().ok())
+        .collect();
+    let t: Vec<u64> = time_part
+        .split(':')
+        .filter_map(|p| p.parse().ok())
+        .collect();
+    if d.len() != 3 || t.len() < 2 {
+        return fallback_ms;
+    }
+    let (mut y, m, day) = (d[0], d[1], d[2]);
+    y -= if m <= 2 { 1 } else { 0 };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u64;
+    let doy = (153 * ((m + if m > 2 { -3 } else { 9 }) as u64) + 2) / 5 + (day as u64) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + (doe as i64) - 719_468;
+    if days < 0 {
+        return fallback_ms;
+    }
+    ((days as u64) * 86_400 + t[0] * 3600 + t[1] * 60) * 1_000
+}
+
 impl Converter for StaleConverter {
     fn dataset_id(&self) -> &str {
         "stale"
     }
 
     fn converter_version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
 
     fn convert(
@@ -72,31 +111,46 @@ impl Converter for StaleConverter {
         let mut gold_entries = Vec::new();
 
         for (idx, sc) in scenarios.into_iter().enumerate() {
-            let item_id = sc.scenario_id.unwrap_or_else(|| format!("stale_{idx:04}"));
+            let item_id = sc.uid.unwrap_or_else(|| format!("stale_{idx:04}"));
             let place = PlaceId::new(format!("stale_{idx:04}"));
-            let conflict_type = sc.conflict_type.unwrap_or_else(|| "TypeI".to_owned());
+            let conflict_type = sc.conflict_type.unwrap_or_else(|| "T1".to_owned());
             let base_ms: u64 = 1_700_000_000_000;
 
+            let rel_set: std::collections::BTreeSet<usize> =
+                sc.relevant_session_index.iter().copied().collect();
             let mut history = Vec::new();
-            for (s_idx, sess) in sc.sessions.into_iter().enumerate() {
-                let s_ms = base_ms + (s_idx as u64) * 86_400_000;
+            let mut ev_turns = Vec::new();
+            let mut max_ts = base_ms;
+
+            for (s_idx, sess) in sc.haystack_session.into_iter().enumerate() {
+                let fallback = base_ms + (s_idx as u64) * 86_400_000;
+                let s_ms = sc
+                    .timestamps
+                    .get(s_idx)
+                    .map_or(fallback, |ts| parse_stale_timestamp_ms(ts, fallback));
+                let is_rel = rel_set.contains(&s_idx);
                 for (t_idx, turn) in sess.into_iter().enumerate() {
                     let actor = if turn.role == "assistant" {
                         "prior_assistant"
                     } else {
                         "user"
                     };
+                    let turn_ts = s_ms + (t_idx as u64) * 1_000;
+                    max_ts = max_ts.max(turn_ts);
+                    if is_rel {
+                        ev_turns.push(history.len());
+                    }
                     history.push(make_text_percept(
                         actor,
                         place.as_str(),
                         hist_aud.members.iter().cloned(),
-                        s_ms + (t_idx as u64) * 1_000,
+                        turn_ts,
                         turn.content,
                     ));
                 }
             }
 
-            let gold_evidence: Vec<GoldEvidenceRef> = if sc.evidence_turns.is_empty() {
+            let gold_evidence: Vec<GoldEvidenceRef> = if ev_turns.is_empty() {
                 if history.is_empty() {
                     Vec::new()
                 } else {
@@ -107,9 +161,8 @@ impl Converter for StaleConverter {
                     }]
                 }
             } else {
-                sc.evidence_turns
+                ev_turns
                     .into_iter()
-                    .filter(|&ti| ti < history.len())
                     .map(|ti| GoldEvidenceRef {
                         turn_index: ti,
                         audience: hist_aud.clone(),
@@ -118,11 +171,23 @@ impl Converter for StaleConverter {
                     .collect()
             };
 
-            let probe_ts = base_ms + 1_000_000_000;
+            let probe_ts = max_ts + 86_400_000;
+            let sr_gold = format!(
+                "Updated current state: {} ({}). Superseded prior state: {}",
+                sc.m_new, sc.explanation, sc.m_old
+            );
+            let pr_gold = format!(
+                "Reject false stale premise ({}) and state updated truth: {} ({}).",
+                sc.m_old, sc.m_new, sc.explanation
+            );
+            let ipa_gold = format!(
+                "Adapt recommendation/policy implicitly to updated state ({}; {}) rather than stale state ({}).",
+                sc.m_new, sc.explanation, sc.m_old
+            );
             let specs = [
-                ("sr", sc.sr_query, sc.sr_answer),
-                ("pr", sc.pr_query, sc.pr_answer),
-                ("ipa", sc.ipa_query, sc.ipa_answer),
+                ("sr", sc.probing_queries.dim1_query, sr_gold),
+                ("pr", sc.probing_queries.dim2_query, pr_gold),
+                ("ipa", sc.probing_queries.dim3_query, ipa_gold),
             ];
             let mut probes = Vec::with_capacity(3);
             for (p_idx, (dim, q_text, a_text)) in specs.into_iter().enumerate() {
@@ -240,25 +305,33 @@ impl Scorer for StaleScorer {
                 ))
             })?;
             let resp = pred.response_text.as_deref().unwrap_or("");
-            let req = ModelRequest::text(
+            let prompt = format!(
+                "Dimension: {}\nRubric/Gold: {}\nResponse: {}\nPassed? yes or no.",
+                pred.probe_id, entry.gold_answer, resp
+            );
+            let metric_lbl = match pred.probe_id.as_str() {
+                "sr" => "state_resolution",
+                "pr" => "premise_resistance",
+                "ipa" => "implicit_policy_adaptation",
+                other => other,
+            };
+            let Some(ok) = invoke_judge_resilient(
+                judge,
+                jp,
                 EventId::new((idx + 1) as u64),
-                ModelPurpose::Classify,
                 judge_model,
                 "STALE judge",
-                format!(
-                    "Dimension: {}\nRubric/Gold: {}\nResponse: {}\nPassed? yes or no.",
-                    pred.probe_id, entry.gold_answer, resp
-                ),
-            );
-            let res = jp
-                .invoke(&req)
-                .map_err(|e| LabError::Protocol(e.to_string()))?;
-            let val = if matches!(res.output, ModelOutput::Verdict(v) if v.label.eq_ignore_ascii_case("yes"))
-            {
-                1.0
-            } else {
-                0.0
+                &prompt,
+                &pred.item_id,
+                &pred.probe_id,
+                &pred.cluster_id,
+                entry,
+                metric_lbl,
+            )?
+            else {
+                continue;
             };
+            let val = if ok { 1.0 } else { 0.0 };
             match pred.probe_id.as_str() {
                 "sr" => sr_obs.push((pred.cluster_id.clone(), val)),
                 "pr" => pr_obs.push((pred.cluster_id.clone(), val)),

@@ -43,7 +43,7 @@ impl Converter for ExploreTomConverter {
     }
 
     fn converter_version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
 
     fn convert(
@@ -51,9 +51,76 @@ impl Converter for ExploreTomConverter {
         dataset_dir: &Path,
         manifest_entry: &DatasetManifestEntry,
     ) -> Result<ConvertedDataset, LabError> {
+        let csv_p = dataset_dir.join("ExploreToM-data-sample.csv");
         let json_p = dataset_dir.join("train.json");
         let jsonl_p = dataset_dir.join("train.jsonl");
-        let rows: Vec<RawExploreTomRow> = if json_p.is_file() {
+        let rows: Vec<RawExploreTomRow> = if csv_p.is_file() {
+            let mut rdr = csv::ReaderBuilder::new()
+                .has_headers(true)
+                .from_path(&csv_p)
+                .map_err(|e| LabError::Serialization(format!("exploretom CSV open: {e}")))?;
+            let headers = rdr
+                .headers()
+                .map_err(|e| LabError::Serialization(format!("exploretom CSV headers: {e}")))?
+                .clone();
+            let col_idx = |name: &str| headers.iter().position(|h| h == name);
+            let idx_story = col_idx("story_structure");
+            let idx_infilled = col_idx("infilled_story");
+            let idx_q = col_idx("question").ok_or_else(|| {
+                LabError::Serialization("exploretom CSV missing 'question'".to_owned())
+            })?;
+            let idx_ans = col_idx("expected_answer").ok_or_else(|| {
+                LabError::Serialization("exploretom CSV missing 'expected_answer'".to_owned())
+            })?;
+            let idx_order = col_idx("qprop=nth_order");
+            let idx_gid = col_idx("sprop=global_idx");
+            let idx_fb = col_idx("sprop=is_false_belief_story_1st");
+
+            let mut out = Vec::new();
+            for (r_i, rec_res) in rdr.records().enumerate() {
+                let rec = rec_res.map_err(|e| {
+                    LabError::Serialization(format!("exploretom CSV row {r_i}: {e}"))
+                })?;
+                let story_text = idx_story
+                    .and_then(|i| rec.get(i))
+                    .filter(|s| !s.trim().is_empty())
+                    .or_else(|| idx_infilled.and_then(|i| rec.get(i)))
+                    .unwrap_or("");
+                let story_steps: Vec<String> = story_text
+                    .split('\n')
+                    .flat_map(|line| line.split(". "))
+                    .map(|s| s.trim().trim_end_matches('.').trim())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| format!("{s}."))
+                    .collect();
+                let nth_order = idx_order
+                    .and_then(|i| rec.get(i))
+                    .and_then(|s| s.trim().parse::<u8>().ok());
+                let row_id = idx_gid
+                    .and_then(|i| rec.get(i))
+                    .filter(|s| !s.trim().is_empty())
+                    .map(|g| format!("etom_{g}_{r_i}"))
+                    .or_else(|| Some(format!("etom_{r_i:05}")));
+                let is_fb = idx_fb
+                    .and_then(|i| rec.get(i))
+                    .is_some_and(|s| s.eq_ignore_ascii_case("true"));
+                out.push(RawExploreTomRow {
+                    row_id,
+                    story_steps,
+                    actors: Vec::new(),
+                    question: rec.get(idx_q).unwrap_or("").to_owned(),
+                    expected_answer: rec.get(idx_ans).unwrap_or("").to_owned(),
+                    nth_order,
+                    accessibility: Some(if is_fb {
+                        "false_belief".to_owned()
+                    } else {
+                        "accessible".to_owned()
+                    }),
+                    human_state: None,
+                });
+            }
+            out
+        } else if json_p.is_file() {
             serde_json::from_str(&fs::read_to_string(&json_p)?)
                 .map_err(|e| LabError::Serialization(format!("exploretom JSON: {e}")))?
         } else if jsonl_p.is_file() {
@@ -68,7 +135,7 @@ impl Converter for ExploreTomConverter {
             return Err(LabError::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 format!(
-                    "no train.json/train.jsonl under '{}'",
+                    "no ExploreToM-data-sample.csv/train.json/train.jsonl under '{}'",
                     dataset_dir.display()
                 ),
             )));

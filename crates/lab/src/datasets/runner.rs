@@ -5,7 +5,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use monoagens_core::{ModelPurpose, Prior, Switches};
 use monoagens_reason::embed::Embedder;
@@ -26,9 +27,10 @@ use crate::datasets::dyntom::{DynTomConverter, DynTomScorer};
 use crate::datasets::exploretom::{ExploreTomConverter, ExploreTomScorer};
 use crate::datasets::fantom::{FantomConverter, FantomScorer};
 use crate::datasets::framework::{
-    Converter, EmbedderProbe, EmbedderProbeOutcome, ExternalItem, HistoryMode,
-    JudgeExecutionConfig, SILENT_THINK_JSON, Scorer, execute_external_item, load_or_convert_cached,
-    sample_items_stratified,
+    CachingEmbedder, Converter, EmbedderProbe, EmbedderProbeOutcome, ExternalItem, HistoryMode,
+    JudgeExecutionConfig, SILENT_THINK_JSON, Scorer, ScorerDetailRecorder, ScorerItemOutcome,
+    TranscriptRecord, execute_external_item, execute_external_item_with_embedder,
+    load_or_convert_cached, sample_items_stratified,
 };
 use crate::datasets::group_mem_bench::{GroupMemBenchConverter, GroupMemBenchScorer};
 use crate::datasets::hi_tom::{HiTomConverter, HiTomScorer};
@@ -43,7 +45,7 @@ use crate::datasets::memory_agent_bench::{MemoryAgentBenchConverter, MemoryAgent
 use crate::datasets::molweni::{MolweniConverter, MolweniScorer};
 use crate::datasets::multilexnorm::MultiLexNormProbe;
 use crate::datasets::opentom::{OpenTomConverter, OpenTomScorer};
-use crate::datasets::ops::verify_manifest_entry;
+use crate::datasets::ops::{DatasetVerifyResult, verify_manifest_entry};
 use crate::datasets::pitch::{PitchConverter, PitchScorer};
 use crate::datasets::pm_bench::{PmBenchConverter, PmBenchScorer};
 use crate::datasets::proactive_bench::{ProactiveBenchConverter, ProactiveBenchScorer};
@@ -301,12 +303,21 @@ pub struct BenchmarkExecutionOptions<'a> {
     pub max_cost_usd: Option<f64>,
     pub out_dir: Option<PathBuf>,
     pub target_items_per_dataset: Option<usize>,
+    pub pilot_prefix_n: Option<usize>,
+    pub preflight_only: bool,
     pub allow_test_embedders: bool,
+    pub require_semantic_embedder: bool,
     pub probe_model_name: String,
     pub probe_provider: Option<&'a dyn ModelProvider>,
     pub judge_config: Option<JudgeConfig>,
     pub judge_provider: Option<&'a dyn ModelProvider>,
     pub embedder: Option<&'a dyn Embedder>,
+    pub reasoning_effort: Option<String>,
+    pub judge_reasoning_effort: Option<String>,
+    pub extra_header_names: Vec<String>,
+    pub provider_endpoint_host: Option<String>,
+    pub embedder_backend: Option<String>,
+    pub embedder_revision: Option<String>,
     pub handlers: DatasetHandlerRegistry,
 }
 
@@ -321,12 +332,21 @@ impl Default for BenchmarkExecutionOptions<'_> {
             max_cost_usd: None,
             out_dir: None,
             target_items_per_dataset: None,
+            pilot_prefix_n: None,
+            preflight_only: false,
             allow_test_embedders: false,
+            require_semantic_embedder: false,
             probe_model_name: "scripted".to_owned(),
             probe_provider: None,
             judge_config: None,
             judge_provider: None,
             embedder: None,
+            reasoning_effort: None,
+            judge_reasoning_effort: None,
+            extra_header_names: Vec::new(),
+            provider_endpoint_host: None,
+            embedder_backend: None,
+            embedder_revision: None,
             handlers: DatasetHandlerRegistry::standard(),
         }
     }
@@ -350,6 +370,14 @@ pub fn resolve_manifest_path(explicit: Option<&Path>, datasets_dir: &Path) -> Pa
 }
 
 /// Verifies required datasets against the manifest (`--suite standard` or `--only`).
+/// A stale converted cache is regenerable by `load_or_convert_cached`; it never blocks a run.
+fn only_regenerable_cache_failures(v: &DatasetVerifyResult) -> bool {
+    !v.failures.is_empty()
+        && v.failures
+            .iter()
+            .all(|f| f.contains("stale converted cache"))
+}
+
 pub fn verify_required_datasets_with_manifest(
     manifest_path: &Path,
     datasets_dir: &Path,
@@ -389,7 +417,7 @@ pub fn verify_required_datasets_with_manifest(
             continue;
         }
         let v = verify_manifest_entry(entry, datasets_dir)?;
-        if v.verified {
+        if v.verified || only_regenerable_cache_failures(&v) {
             present.push(datasets_dir.join(&entry.relative_dir));
         } else {
             bad.push(format!(
@@ -439,6 +467,29 @@ pub fn execute_external_datasets(
             "--live benchmark run requires --max-cost-usd <cap>".to_owned(),
         ));
     }
+    if suite == "standard" && opts.require_semantic_embedder {
+        let valid = match opts.embedder {
+            Some(emb) => {
+                let backend = emb.backend_name().to_ascii_lowercase();
+                let is_non_semantic = backend == "hash"
+                    || backend == "none"
+                    || backend == "scripted"
+                    || emb.model_ver().is_none();
+                !is_non_semantic || opts.allow_test_embedders
+            }
+            None => false,
+        };
+        if !valid {
+            return Err(LabError::Protocol(
+                "refusing to start standard benchmark without a configured semantic embedder (EmbeddingGemma 2); run `monoagens-lab datasets pin embeddinggemma-2 && monoagens-lab datasets fetch --record-checksums embeddinggemma-2` or pass --embed-endpoint"
+                    .to_owned(),
+            ));
+        }
+    }
+
+    let caching_embedder = opts.embedder.map(CachingEmbedder::new);
+    let active_embedder: Option<&dyn Embedder> =
+        caching_embedder.as_ref().map(|c| c as &dyn Embedder);
 
     let manifest_raw = fs::read(manifest_path).unwrap_or_default();
     let manifest_digest = format!("sha256:{}", sha256_hex(&manifest_raw));
@@ -487,7 +538,7 @@ pub fn execute_external_datasets(
             continue;
         }
         let verify_res = verify_manifest_entry(entry, datasets_dir)?;
-        if !verify_res.verified {
+        if !verify_res.verified && !only_regenerable_cache_failures(&verify_res) {
             continue;
         }
         if let Some(converter) = opts.handlers.converters.get(&spec.id) {
@@ -501,22 +552,24 @@ pub fn execute_external_datasets(
             let sampled = sample_items_stratified(&converted.items, &sampling_rule);
             let chosen_set: BTreeSet<&str> =
                 sampled.chosen_item_ids.iter().map(String::as_str).collect();
-            let chosen_items: Vec<ExternalItem> = converted
+            let mut chosen_items: Vec<ExternalItem> = converted
                 .items
                 .iter()
                 .filter(|it| chosen_set.contains(it.item_id.as_str()))
                 .cloned()
                 .collect();
+            let mut rule_name = sampling_rule.rule_name;
+            if let Some(pilot_n) = opts.pilot_prefix_n {
+                chosen_items = take_pilot_prefix(&spec.id, chosen_items, pilot_n);
+                rule_name = format!("{rule_name}__pilot_prefix_{}", chosen_items.len());
+            }
             preflight_inputs.push((spec.id.clone(), chosen_items.clone()));
-            converted_cache.insert(
-                spec.id.clone(),
-                (converted, chosen_items, sampling_rule.rule_name),
-            );
+            converted_cache.insert(spec.id.clone(), (converted, chosen_items, rule_name));
         }
     }
 
-    let preflight_estimate = if opts.live {
-        let cap = opts.max_cost_usd.expect("checked above");
+    let preflight_estimate = if opts.live || opts.preflight_only {
+        let cap = opts.max_cost_usd.unwrap_or(1_000_000.0);
         let est = estimate_live_preflight(
             &preflight_inputs,
             prior,
@@ -525,7 +578,15 @@ pub fn execute_external_datasets(
             cap,
             opts.live_full_history,
         )?;
-        if !est.within_budget {
+        if let Some(dir) = &opts.out_dir {
+            fs::create_dir_all(dir)?;
+            fs::write(
+                dir.join("preflight.json"),
+                serde_json::to_vec_pretty(&est)
+                    .map_err(|e| LabError::Serialization(e.to_string()))?,
+            )?;
+        }
+        if opts.live && !est.within_budget {
             return Err(LabError::Protocol(format!(
                 "preflight estimated worst-case USD ${:.4} exceeds --max-cost-usd ${:.4}; aborting before any paid call",
                 est.total_worst_case_usd, cap
@@ -535,6 +596,16 @@ pub fn execute_external_datasets(
     } else {
         None
     };
+
+    if opts.preflight_only {
+        return Ok((
+            Vec::new(),
+            Vec::new(),
+            is_partial,
+            left_out,
+            preflight_estimate,
+        ));
+    }
 
     let mut guard = match opts.max_cost_usd {
         Some(cap) => CostGuard::with_max_cost_usd(cap),
@@ -600,7 +671,10 @@ pub fn execute_external_datasets(
         }
 
         let verify_res = verify_manifest_entry(entry, datasets_dir)?;
-        if !verify_res.verified && suite != "standard" {
+        if !verify_res.verified
+            && !only_regenerable_cache_failures(&verify_res)
+            && suite != "standard"
+        {
             rows.push(ScorecardRow {
                 dataset_id: spec.id.clone(),
                 domain: spec.domain,
@@ -638,7 +712,7 @@ pub fn execute_external_datasets(
             let ds_dir = datasets_dir.join(&entry.relative_dir);
             let outcome = probe.run_probe(
                 &ds_dir,
-                opts.embedder,
+                active_embedder,
                 opts.allow_test_embedders,
                 opts.target_items_per_dataset,
                 opts.seed,
@@ -658,7 +732,7 @@ pub fn execute_external_datasets(
                             not_scored_reason: Some(reason.clone()),
                         })
                         .collect();
-                    let rec = build_external_run_record(
+                    let mut rec = build_external_run_record(
                         &spec.id,
                         entry,
                         &manifest_digest,
@@ -679,6 +753,13 @@ pub fn execute_external_datasets(
                         None,
                         Vec::new(),
                     );
+                    if let Some(prov) = rec.dataset_provenance.as_mut() {
+                        prov.embedder_backend = opts
+                            .embedder_backend
+                            .clone()
+                            .or_else(|| active_embedder.map(|e| e.backend_name().to_owned()));
+                        prov.embedder_revision = opts.embedder_revision.clone();
+                    }
                     write_run_record_if_dir(opts.out_dir.as_deref(), &rec)?;
                     run_records.push(rec);
 
@@ -717,7 +798,7 @@ pub fn execute_external_datasets(
                             }
                         })
                         .collect();
-                    let rec = build_external_run_record(
+                    let mut rec = build_external_run_record(
                         &spec.id,
                         entry,
                         &manifest_digest,
@@ -736,6 +817,13 @@ pub fn execute_external_datasets(
                         None,
                         Vec::new(),
                     );
+                    if let Some(prov) = rec.dataset_provenance.as_mut() {
+                        prov.embedder_backend = opts
+                            .embedder_backend
+                            .clone()
+                            .or_else(|| active_embedder.map(|e| e.backend_name().to_owned()));
+                        prov.embedder_revision = opts.embedder_revision.clone();
+                    }
                     write_run_record_if_dir(opts.out_dir.as_deref(), &rec)?;
                     run_records.push(rec);
 
@@ -814,12 +902,23 @@ pub fn execute_external_datasets(
         };
 
         let switches = Switches::all_enabled();
+        let ds_start = Instant::now();
+        let started_at_utc = utc_iso_now();
         let mut predictions = Vec::new();
         let mut total_hist_wakes = 0_u64;
         let mut history_mode_recorded: Option<String> = None;
         let mut total_tokens_in = 0_u64;
         let mut total_tokens_out = 0_u64;
         let mut combined_costs: BTreeMap<u8, PurposeCost> = BTreeMap::new();
+        let mut total_decisions_go = 0usize;
+        let mut total_decisions_note = 0usize;
+        let mut total_decisions_silent = 0usize;
+        let mut total_decisions_door_blocked = 0usize;
+        let mut total_actions_dispatched = 0usize;
+        let mut total_percepts_count = 0usize;
+        let mut model_latencies_ms = Vec::new();
+        let mut failed_items = Vec::new();
+        let mut transcripts_by_item: BTreeMap<String, Vec<TranscriptRecord>> = BTreeMap::new();
 
         for item in &chosen_items {
             if guard.budget_exhausted() {
@@ -828,7 +927,7 @@ pub fn execute_external_datasets(
                     opts.max_cost_usd.unwrap_or(0.0)
                 )));
             }
-            let exec = execute_external_item(
+            let exec = execute_external_item_with_embedder(
                 item,
                 prior,
                 &switches,
@@ -837,11 +936,22 @@ pub fn execute_external_datasets(
                 &opts.probe_model_name,
                 opts.live_full_history,
                 &mut guard,
+                active_embedder,
             )?;
             if history_mode_recorded.is_none() && item.history_mode == HistoryMode::StaticSilent {
                 history_mode_recorded = Some(exec.history_reasoning_mode);
             }
             total_hist_wakes = total_hist_wakes.saturating_add(exec.total_history_gate_wakes);
+            total_decisions_go += exec.decisions_go;
+            total_decisions_note += exec.decisions_note;
+            total_decisions_silent += exec.decisions_silent;
+            total_decisions_door_blocked += exec.decisions_door_blocked;
+            total_actions_dispatched += exec.actions_dispatched;
+            total_percepts_count += exec.percepts_count;
+            model_latencies_ms.extend(exec.model_latencies_ms);
+            failed_items.extend(exec.failed_items);
+            transcripts_by_item.insert(item.item_id.clone(), exec.transcript_events);
+
             for pc in exec.cost_by_purpose {
                 total_tokens_in = total_tokens_in.saturating_add(pc.tokens_in);
                 total_tokens_out = total_tokens_out.saturating_add(pc.tokens_out);
@@ -868,6 +978,7 @@ pub fn execute_external_datasets(
         let guarded_judge = opts
             .judge_provider
             .map(|inner| CostGuardedJudgeProvider::new(inner, &mut guard));
+        let detail_recorder = Arc::new(Mutex::new(ScorerDetailRecorder::default()));
         let judge_exec = JudgeExecutionConfig {
             live: opts.live,
             judge_model: opts.judge_config.as_ref().map(|j| j.model.as_str()),
@@ -878,10 +989,17 @@ pub fn execute_external_datasets(
             provider: guarded_judge.as_ref().map(|g| g as &dyn ModelProvider),
             datasets_dir: Some(datasets_dir),
             manifest: Some(manifest),
+            recorder: Some(Arc::clone(&detail_recorder)),
         };
         let scored = scorer.score(&predictions, &converted.gold_book, &judge_exec, opts.seed)?;
+        let mut judge_calls_total = 0_u64;
+        let mut judge_tokens_in_total = 0_u64;
+        let mut judge_tokens_out_total = 0_u64;
         if let Some(gj) = guarded_judge {
             let judge_cost = gj.into_purpose_cost();
+            judge_calls_total = judge_cost.calls;
+            judge_tokens_in_total = judge_cost.tokens_in;
+            judge_tokens_out_total = judge_cost.tokens_out;
             if judge_cost.calls > 0 {
                 total_tokens_in = total_tokens_in.saturating_add(judge_cost.tokens_in);
                 total_tokens_out = total_tokens_out.saturating_add(judge_cost.tokens_out);
@@ -898,6 +1016,19 @@ pub fn execute_external_datasets(
                 agg.cost_usd += judge_cost.cost_usd;
             }
         }
+
+        let detail = detail_recorder
+            .lock()
+            .map(|d| {
+                (
+                    d.outcomes.clone(),
+                    d.category_metrics.clone(),
+                    d.failed_items.clone(),
+                )
+            })
+            .unwrap_or_default();
+        let (scorer_outcomes, category_metrics, scorer_failures) = detail;
+        failed_items.extend(scorer_failures);
 
         let mut metric_map = base_metrics;
         let mut intervals = Vec::new();
@@ -943,15 +1074,19 @@ pub fn execute_external_datasets(
         let chosen_ids: Vec<String> = chosen_items.iter().map(|i| i.item_id.clone()).collect();
         let e_tok = (total_tokens_in + total_tokens_out) as f64;
         let cost_usd = guard.cost_usd_used;
+        let finished_at_utc = utc_iso_now();
+        let wall_elapsed_ms = ds_start.elapsed().as_millis() as u64;
 
-        let rec = build_external_run_record(
+        let mut rec = build_external_run_record(
             &spec.id,
             entry,
             &manifest_digest,
             loaded_prior_ref(&loaded_prior),
             opts.seed,
             &opts.probe_model_name,
-            opts.embedder.and_then(|e| e.model_ver()).unwrap_or("none"),
+            active_embedder
+                .and_then(|e| e.model_ver())
+                .unwrap_or("none"),
             guard.rule_names(),
             &sampling_rule,
             chosen_ids,
@@ -963,7 +1098,48 @@ pub fn execute_external_datasets(
             history_mode_recorded,
             combined_costs.into_values().collect(),
         );
+        rec.metrics.percepts = total_percepts_count;
+        rec.metrics.decisions_go = total_decisions_go;
+        rec.metrics.decisions_note = total_decisions_note;
+        rec.metrics.decisions_silent = total_decisions_silent;
+        rec.metrics.decisions_door_blocked = total_decisions_door_blocked;
+        rec.metrics.actions_dispatched = total_actions_dispatched;
+        rec.metrics.wakes_per_event = if total_percepts_count > 0 {
+            total_decisions_go as f64 / total_percepts_count as f64
+        } else {
+            0.0
+        };
+        rec.metrics.wall_elapsed_ms = wall_elapsed_ms;
+        if let Some(prov) = rec.dataset_provenance.as_mut() {
+            prov.reasoning_effort = opts.reasoning_effort.clone();
+            prov.judge_reasoning_effort = opts.judge_reasoning_effort.clone();
+            prov.extra_header_names = opts.extra_header_names.clone();
+            prov.provider_endpoint_host = opts.provider_endpoint_host.clone();
+            prov.embedder_backend = opts
+                .embedder_backend
+                .clone()
+                .or_else(|| active_embedder.map(|e| e.backend_name().to_owned()));
+            prov.embedder_revision = opts.embedder_revision.clone();
+            prov.judge_calls = judge_calls_total;
+            prov.judge_tokens_in = judge_tokens_in_total;
+            prov.judge_tokens_out = judge_tokens_out_total;
+            prov.category_metrics = category_metrics;
+            prov.failed_items = failed_items;
+            prov.model_latencies_ms = model_latencies_ms;
+            prov.started_at_utc = Some(started_at_utc);
+            prov.finished_at_utc = Some(finished_at_utc);
+        }
         write_run_record_if_dir(opts.out_dir.as_deref(), &rec)?;
+        write_item_transcripts_and_outcomes(
+            opts.out_dir.as_deref(),
+            &spec.id,
+            opts.seed,
+            &chosen_items,
+            &predictions,
+            &converted.gold_book,
+            &scorer_outcomes,
+            &transcripts_by_item,
+        )?;
         run_records.push(rec);
 
         rows.push(ScorecardRow {
@@ -1298,10 +1474,280 @@ fn build_external_run_record(
             metric_scores,
             judge_model,
             judge_prompt_version,
+            judge_calls: 0,
+            judge_tokens_in: 0,
+            judge_tokens_out: 0,
             history_gate_wakes,
             partial_run,
+            reasoning_effort: None,
+            judge_reasoning_effort: None,
+            extra_header_names: Vec::new(),
+            provider_endpoint_host: None,
+            embedder_backend: None,
+            embedder_revision: None,
+            category_metrics: BTreeMap::new(),
+            failed_items: Vec::new(),
+            model_latencies_ms: Vec::new(),
+            started_at_utc: None,
+            finished_at_utc: None,
         }),
     }
+}
+
+/// Per-item outcome summary persisted alongside the RunRecord for failure analysis & reporting.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ItemOutcomeSummary {
+    pub dataset_id: String,
+    pub item_id: String,
+    pub probe_id: String,
+    pub cluster_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    pub question: String,
+    pub gold_answer: String,
+    pub soul_answer: String,
+    pub spoke: bool,
+    pub metric_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judge_verdict: Option<String>,
+    #[serde(default)]
+    pub failed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+    pub transcript_rel_path: String,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_item_transcripts_and_outcomes(
+    out_dir: Option<&Path>,
+    dataset_id: &str,
+    seed: u64,
+    items: &[ExternalItem],
+    predictions: &[crate::datasets::ExternalPrediction],
+    gold: &crate::datasets::GoldBook,
+    scorer_outcomes: &[ScorerItemOutcome],
+    transcripts_by_item: &BTreeMap<String, Vec<TranscriptRecord>>,
+) -> Result<(), LabError> {
+    let Some(dir) = out_dir else {
+        return Ok(());
+    };
+    let safe_ds: String = dataset_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let tx_dir = dir.join("transcripts").join(&safe_ds);
+    fs::create_dir_all(&tx_dir)?;
+
+    let mut outcome_map: BTreeMap<(&str, &str), &ScorerItemOutcome> = BTreeMap::new();
+    for out in scorer_outcomes {
+        outcome_map.insert((out.item_id.as_str(), out.probe_id.as_str()), out);
+    }
+    let mut pred_map: BTreeMap<(&str, &str), &crate::datasets::ExternalPrediction> =
+        BTreeMap::new();
+    for p in predictions {
+        pred_map.insert((p.item_id.as_str(), p.probe_id.as_str()), p);
+    }
+
+    let mut summaries = Vec::new();
+    for item in items {
+        let safe_item: String = item
+            .item_id
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let tx_rel = format!("transcripts/{safe_ds}/{safe_item}.jsonl");
+        let tx_path = dir.join(&tx_rel);
+        let mut lines = Vec::new();
+        if let Some(evts) = transcripts_by_item.get(&item.item_id) {
+            for ev in evts {
+                if let Ok(line) = serde_json::to_string(ev) {
+                    lines.push(line);
+                }
+            }
+        }
+        // Clearly separated post-scoring GoldBook + Judge verdict entries.
+        for probe in &item.probes {
+            let question = String::from_utf8_lossy(probe.percept.payload.as_bytes()).into_owned();
+            let pred_opt = pred_map
+                .get(&(item.item_id.as_str(), probe.probe_id.as_str()))
+                .copied();
+            let soul_ans = pred_opt
+                .and_then(|p| p.response_text.clone())
+                .unwrap_or_default();
+            let spoke = pred_opt.is_some_and(|p| p.spoke);
+            let gold_opt = gold.find(&item.item_id, &probe.probe_id);
+            let out_opt = outcome_map
+                .get(&(item.item_id.as_str(), probe.probe_id.as_str()))
+                .copied();
+
+            if let Some(g) = gold_opt {
+                lines.push(
+                    serde_json::json!({
+                        "record_type": "gold_after_scoring",
+                        "probe_id": probe.probe_id,
+                        "gold_answer": g.gold_answer,
+                        "accepted_answers": g.accepted_answers,
+                        "category": g.category,
+                        "privacy_conflict": g.privacy_conflict,
+                    })
+                    .to_string(),
+                );
+            }
+            if let Some(o) = out_opt {
+                lines.push(
+                    serde_json::json!({
+                        "record_type": "score_verdict",
+                        "probe_id": probe.probe_id,
+                        "metric_name": o.metric_name,
+                        "score": o.score,
+                        "passed": o.passed,
+                        "judge_prompt": o.judge_prompt,
+                        "judge_verdict": o.judge_verdict,
+                        "failed": o.failed,
+                        "failure_reason": o.failure_reason,
+                    })
+                    .to_string(),
+                );
+            }
+
+            let gold_ans = gold_opt.map(|g| g.gold_answer.clone()).unwrap_or_default();
+            let category = out_opt
+                .and_then(|o| o.category.clone())
+                .or_else(|| gold_opt.and_then(|g| g.category.clone()));
+            let (metric_name, score, passed, judge_verdict, failed, failure_reason) =
+                if let Some(o) = out_opt {
+                    (
+                        o.metric_name.clone(),
+                        o.score,
+                        o.passed,
+                        o.judge_verdict.clone(),
+                        o.failed,
+                        o.failure_reason.clone(),
+                    )
+                } else {
+                    let norm_match = if let Some(g) = gold_opt {
+                        let s_low = soul_ans.to_ascii_lowercase();
+                        let g_low = g.gold_answer.to_ascii_lowercase();
+                        !g_low.is_empty() && (s_low == g_low || s_low.contains(&g_low))
+                    } else {
+                        false
+                    };
+                    (
+                        "heuristic_match".to_owned(),
+                        Some(if norm_match { 1.0 } else { 0.0 }),
+                        Some(norm_match),
+                        None,
+                        false,
+                        None,
+                    )
+                };
+
+            summaries.push(ItemOutcomeSummary {
+                dataset_id: dataset_id.to_owned(),
+                item_id: item.item_id.clone(),
+                probe_id: probe.probe_id.clone(),
+                cluster_id: item.cluster_id.clone(),
+                category,
+                question,
+                gold_answer: gold_ans,
+                soul_answer: soul_ans,
+                spoke,
+                metric_name,
+                score,
+                passed,
+                judge_verdict,
+                failed,
+                failure_reason,
+                transcript_rel_path: tx_rel.clone(),
+            });
+        }
+
+        fs::write(&tx_path, lines.join("\n") + "\n")?;
+    }
+
+    fs::write(
+        dir.join(format!("{safe_ds}__seed-{seed}.outcomes.json")),
+        serde_json::to_vec_pretty(&summaries)
+            .map_err(|e| LabError::Serialization(e.to_string()))?,
+    )?;
+    Ok(())
+}
+
+/// Selects a deterministic pilot prefix from the already-sampled R-54 items.
+/// For story/conversation-unit datasets (`hi_tom`, `fantom`, `opentom`, `dyntom`, `tomi`,
+/// `locomo`, `capa`), keeps whole `cluster_id` units (stopping once `max_items` is reached,
+/// always keeping at least 1 complete cluster).
+fn take_pilot_prefix(
+    dataset_id: &str,
+    items: Vec<ExternalItem>,
+    max_items: usize,
+) -> Vec<ExternalItem> {
+    if items.len() <= max_items || max_items == 0 {
+        return items;
+    }
+    let whole_cluster_unit = matches!(
+        dataset_id,
+        "hi_tom" | "fantom" | "opentom" | "dyntom" | "tomi" | "locomo" | "capa"
+    );
+    if !whole_cluster_unit {
+        return items.into_iter().take(max_items).collect();
+    }
+    let mut allowed_clusters: BTreeSet<String> = BTreeSet::new();
+    let mut count = 0usize;
+    for it in &items {
+        if allowed_clusters.contains(&it.cluster_id) {
+            count += 1;
+            continue;
+        }
+        if !allowed_clusters.is_empty() && count >= max_items {
+            break;
+        }
+        allowed_clusters.insert(it.cluster_id.clone());
+        count += 1;
+    }
+    items
+        .into_iter()
+        .filter(|it| allowed_clusters.contains(&it.cluster_id))
+        .collect()
+}
+
+fn utc_iso_now() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let h = rem / 3600;
+    let m = (rem % 3600) / 60;
+    let s = rem % 60;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = (yoe as i64) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = y + if mo <= 2 { 1 } else { 0 };
+    format!("{year:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
 }
 
 fn write_run_record_if_dir(out_dir: Option<&Path>, rec: &RunRecord) -> Result<(), LabError> {

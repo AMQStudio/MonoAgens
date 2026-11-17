@@ -5,6 +5,8 @@
 pub mod framework;
 pub mod manifest;
 pub mod ops;
+pub mod parquet_utils;
+pub mod report;
 pub mod runner;
 pub mod scoring_utils;
 
@@ -37,12 +39,14 @@ pub use dyntom::{DynTomConverter, DynTomScorer};
 pub use exploretom::{ExploreTomConverter, ExploreTomScorer};
 pub use fantom::{FantomConverter, FantomScorer};
 pub use framework::{
-    ClusterBootstrapCi, ConvertedDataset, Converter, EmbedderProbe, EmbedderProbeOutcome,
-    EmbedderReadiness, ExternalItem, ExternalItemExecution, ExternalPrediction, ExternalProbe,
-    GoldBook, GoldEntry, GoldEvidenceRef, HistoryMode, JudgeExecutionConfig, SILENT_THINK_JSON,
-    SamplingResult, SamplingRule, Scorer, ScorerMetric, ScorerReport, SplitMix64,
-    assert_visiblescope_gold_evidence, cluster_bootstrap_ci, execute_external_item,
-    load_or_convert_cached, make_text_percept, sample_items_stratified, validate_semantic_embedder,
+    CachingEmbedder, ClusterBootstrapCi, ConvertedDataset, Converter, EmbedderProbe,
+    EmbedderProbeOutcome, EmbedderReadiness, ExternalItem, ExternalItemExecution,
+    ExternalPrediction, ExternalProbe, GoldBook, GoldEntry, GoldEvidenceRef, HistoryMode,
+    JudgeExecutionConfig, SILENT_THINK_JSON, SamplingResult, SamplingRule, Scorer,
+    ScorerDetailRecorder, ScorerItemOutcome, ScorerMetric, ScorerReport, SplitMix64,
+    TranscriptRecord, assert_visiblescope_gold_evidence, cluster_bootstrap_ci,
+    execute_external_item, execute_external_item_with_embedder, load_or_convert_cached,
+    make_text_percept, sample_items_stratified, validate_semantic_embedder,
 };
 pub use group_mem_bench::{GroupMemBenchConverter, GroupMemBenchScorer};
 pub use hi_tom::{HiTomConverter, HiTomScorer};
@@ -71,6 +75,7 @@ pub use ops::{
 pub use pitch::{PitchConverter, PitchScorer};
 pub use pm_bench::{PmBenchConverter, PmBenchScorer};
 pub use proactive_bench::{ProactiveBenchConverter, ProactiveBenchScorer};
+pub use report::{GeneratedReportSummary, ReportOptions, generate_benchmark_report};
 pub use runner::{
     BenchmarkExecutionOptions, DatasetHandlerRegistry, JudgeConfig, JudgeSubstitutionPolicy,
     PreflightDatasetEstimate, PreflightEstimate, estimate_live_preflight,

@@ -30,6 +30,8 @@ pub enum ManifestEntryKind {
     Dataset,
     /// Non-corpus scorer model weights used locally by `lab/adapters/eval_helpers`.
     ScorerModel,
+    /// Non-corpus semantic embedder model weights (e.g. `google/embeddinggemma-2`).
+    EmbedderModel,
 }
 
 impl ManifestEntryKind {
@@ -38,6 +40,12 @@ impl ManifestEntryKind {
     pub fn is_dataset(&self) -> bool {
         matches!(self, Self::Dataset)
     }
+
+    /// Returns `true` for non-corpus model weight entries (`scorer_model` or `embedder_model`).
+    #[must_use]
+    pub fn is_model_asset(&self) -> bool {
+        matches!(self, Self::ScorerModel | Self::EmbedderModel)
+    }
 }
 
 impl fmt::Display for ManifestEntryKind {
@@ -45,6 +53,7 @@ impl fmt::Display for ManifestEntryKind {
         let s = match self {
             Self::Dataset => "dataset",
             Self::ScorerModel => "scorer_model",
+            Self::EmbedderModel => "embedder_model",
         };
         f.write_str(s)
     }
@@ -582,22 +591,23 @@ pub fn check_registry_manifest_consistency(
             ManifestEntryKind::Dataset => {
                 man_dataset_ids.insert(entry.id.as_str());
             }
-            ManifestEntryKind::ScorerModel => {
+            ManifestEntryKind::ScorerModel | ManifestEntryKind::EmbedderModel => {
+                let kind_lbl = entry.kind;
                 if reg_ids.contains(entry.id.as_str()) {
                     scorer_model_errors.push(format!(
-                        "'{}' has kind=scorer_model but collides with registry dataset id",
+                        "'{}' has kind={kind_lbl} but collides with registry dataset id",
                         entry.id
                     ));
                 }
                 if entry.core_applicability != CoreApplicability::NotMappable {
                     scorer_model_errors.push(format!(
-                        "'{}' has kind=scorer_model and must set core_applicability='not_mappable'",
+                        "'{}' has kind={kind_lbl} and must set core_applicability='not_mappable'",
                         entry.id
                     ));
                 }
                 if entry.sources.is_empty() {
                     scorer_model_errors.push(format!(
-                        "'{}' has kind=scorer_model but declares zero sources",
+                        "'{}' has kind={kind_lbl} but declares zero sources",
                         entry.id
                     ));
                 }

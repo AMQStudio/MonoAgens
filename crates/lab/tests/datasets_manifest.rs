@@ -70,6 +70,21 @@ fn manifest_skeleton_parses_strictly_and_matches_registry() {
         .collect();
     assert_eq!(dataset_entries.len(), 23);
     assert_eq!(scorer_models.len(), 2);
+    let embedder_models: Vec<_> = manifest
+        .datasets
+        .iter()
+        .filter(|d| d.kind == ManifestEntryKind::EmbedderModel)
+        .collect();
+    assert_eq!(embedder_models.len(), 1);
+    let eg2 = manifest
+        .get("embeddinggemma-2")
+        .expect("embeddinggemma-2 entry present");
+    assert_eq!(eg2.kind, ManifestEntryKind::EmbedderModel);
+    assert_eq!(eg2.availability, DatasetAvailability::Available);
+    assert_eq!(eg2.core_applicability, CoreApplicability::NotMappable);
+    assert_eq!(eg2.license.status, LicenseStatus::Pending);
+    assert_eq!(eg2.sources[0].kind, SourceKind::Huggingface);
+    assert_eq!(eg2.sources[0].location, "google/embeddinggemma-2");
     for sm_id in ["fantom_scorer_all_roberta_large_v1", "proactive_agent_rm"] {
         let sm = manifest.get(sm_id).expect("scorer model present");
         assert_eq!(sm.kind, ManifestEntryKind::ScorerModel);

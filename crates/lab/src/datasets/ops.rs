@@ -6,16 +6,20 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use flate2::read::GzDecoder;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use tar::Archive;
+use zip::ZipArchive;
 
 use crate::benchmark::BenchmarkDatasetSpec;
 use crate::datasets::manifest::{
-    ChecksumsRecorded, DatasetAvailability, DatasetManifestEntry, DatasetSource, DatasetsManifest,
-    LicenseStatus, ManifestEntryKind, ManifestFile, PENDING_PIN, PinnedSha256, PinnedSize,
+    ArchiveKind, ChecksumsRecorded, DatasetAvailability, DatasetManifestEntry, DatasetSource,
+    DatasetsManifest, LicenseStatus, ManifestFile, PENDING_PIN, PinnedSha256, PinnedSize,
     SourceKind, load_and_validate_manifest, save_manifest_to_path,
 };
 use crate::scenario::ensure_not_sealed_path;
@@ -67,7 +71,7 @@ impl Default for FetchEndpointOverrides {
             hf_raw_base: std::env::var("MONOAGENS_HF_RAW_BASE")
                 .unwrap_or_else(|_| "https://huggingface.co".to_owned()),
             fetch_date: std::env::var("MONOAGENS_FETCH_DATE").ok(),
-            timeout_secs: 120,
+            timeout_secs: 1800,
         }
     }
 }
@@ -170,9 +174,10 @@ pub fn pin_datasets(
     overrides: &PinEndpointOverrides,
 ) -> Result<Vec<PinDatasetResult>, LabError> {
     let mut manifest = load_and_validate_manifest(manifest_path, registry)?;
-    let target_ids = resolve_target_ids(&manifest, ids, false)?;
+    let target_ids = resolve_target_ids(&manifest, ids, true)?;
 
     let client = Client::builder()
+        .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(overrides.timeout_secs.max(1)))
         .user_agent("monoagens-lab/0.1")
         .build()
@@ -221,7 +226,7 @@ pub fn pin_datasets(
                 }
                 SourceKind::Huggingface => {
                     let repo_id = parse_hf_repo_id(&src.location);
-                    let is_model = entry.kind == ManifestEntryKind::ScorerModel;
+                    let is_model = entry.kind.is_model_asset();
                     let (sha, files) =
                         pin_hf_repo(&client, &overrides.hf_api_base, &repo_id, is_model)?;
                     src.revision = sha;
@@ -256,13 +261,20 @@ pub fn pin_datasets(
             }
         }
 
-        if entry.kind == ManifestEntryKind::ScorerModel {
+        if entry.kind.is_model_asset() {
             let mut seen_paths: BTreeSet<String> =
                 entry.files.iter().map(|f| f.path.clone()).collect();
             let role_opt = entry.sources.first().and_then(|s| s.role.clone());
             if let Some(tree_map) = file_meta_by_role.get(&default_role_map) {
+                let has_safetensors = tree_map.contains_key("model.safetensors")
+                    || tree_map.contains_key("model.safetensors.index.json");
                 for (path, (size, lfs_sha)) in tree_map {
-                    if path.starts_with('.') || seen_paths.contains(path) {
+                    let is_redundant_export = path.starts_with("onnx/")
+                        || path.starts_with("openvino/")
+                        || path == "flax_model.msgpack"
+                        || path == "tf_model.h5"
+                        || (has_safetensors && path == "pytorch_model.bin");
+                    if path.starts_with('.') || is_redundant_export || seen_paths.contains(path) {
                         continue;
                     }
                     seen_paths.insert(path.clone());
@@ -320,6 +332,7 @@ pub fn fetch_datasets(
     let target_ids = resolve_target_ids(&manifest, ids, true)?;
 
     let client = Client::builder()
+        .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(overrides.timeout_secs.max(1)))
         .user_agent("monoagens-lab/0.1")
         .build()
@@ -386,31 +399,13 @@ pub fn fetch_datasets(
         }
         fs::create_dir_all(&partial_dir)?;
 
-        let fetch_outcome = (|| -> Result<Vec<(String, String, u64)>, LabError> {
+        type StagedFetch = (Vec<(String, String, u64)>, Vec<String>);
+        let fetch_outcome = (|| -> Result<StagedFetch, LabError> {
             let mut staged_records = Vec::with_capacity(entry.files.len());
+            let mut extra_extracted_paths = Vec::new();
             for file in &entry.files {
                 let url = resolve_file_download_url(entry, file, overrides)?;
-                let resp = client.get(&url).send().map_err(|e| {
-                    LabError::Io(std::io::Error::other(format!(
-                        "download failed for '{}' ({}): {e}",
-                        entry.id, file.path
-                    )))
-                })?;
-                if !resp.status().is_success() {
-                    return Err(LabError::Io(std::io::Error::other(format!(
-                        "HTTP {} downloading '{}' ({}) from {}",
-                        resp.status(),
-                        entry.id,
-                        file.path,
-                        url
-                    ))));
-                }
-                let bytes = resp.bytes().map_err(|e| {
-                    LabError::Io(std::io::Error::other(format!(
-                        "interrupted download reading '{}' ({}): {e}",
-                        entry.id, file.path
-                    )))
-                })?;
+                let bytes = download_bytes_with_retries(&client, &url, &entry.id, &file.path)?;
 
                 let actual_size = bytes.len() as u64;
                 let actual_sha = sha256_hex(&bytes);
@@ -438,11 +433,18 @@ pub fn fetch_datasets(
                 }
                 fs::write(&partial_file_path, &bytes)?;
                 staged_records.push((file.path.clone(), actual_sha, actual_size));
+
+                if let Some(extract_kind) = file.extract
+                    && extract_kind != ArchiveKind::None
+                {
+                    let extracted = extract_archive_bytes(&partial_dir, &bytes, extract_kind)?;
+                    extra_extracted_paths.extend(extracted);
+                }
             }
-            Ok(staged_records)
+            Ok((staged_records, extra_extracted_paths))
         })();
 
-        let staged_records = match fetch_outcome {
+        let (staged_records, extra_extracted_paths) = match fetch_outcome {
             Ok(recs) => recs,
             Err(err) => {
                 let _ = fs::remove_dir_all(&partial_dir);
@@ -456,6 +458,17 @@ pub fn fetch_datasets(
         // Atomically promote staged files out of `.partial/`.
         for (rel_path, _, _) in &staged_records {
             let src = safe_join_relative(&partial_dir, rel_path)?;
+            let dst = safe_join_relative(&target_dir, rel_path)?;
+            if let Some(parent) = dst.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::rename(&src, &dst)?;
+        }
+        for rel_path in &extra_extracted_paths {
+            let src = safe_join_relative(&partial_dir, rel_path)?;
+            if !src.exists() {
+                continue;
+            }
             let dst = safe_join_relative(&target_dir, rel_path)?;
             if let Some(parent) = dst.parent() {
                 fs::create_dir_all(parent)?;
@@ -760,7 +773,7 @@ fn resolve_file_download_url(
         SourceKind::Huggingface => {
             let repo_id = parse_hf_repo_id(&source.location);
             let base = overrides.hf_raw_base.trim_end_matches('/');
-            if entry.kind == ManifestEntryKind::ScorerModel {
+            if entry.kind.is_model_asset() {
                 Ok(format!(
                     "{base}/{repo_id}/resolve/{}/{}",
                     source.revision, rel
@@ -807,6 +820,27 @@ fn resolve_file_download_url(
 
 type PinnedAssetTree = (String, BTreeMap<String, (u64, Option<String>)>);
 
+fn github_token_from_env() -> Option<String> {
+    std::env::var("GITHUB_TOKEN")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            std::env::var("GH_TOKEN")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
+}
+
+fn github_get(client: &Client, url: &str) -> reqwest::blocking::RequestBuilder {
+    let req = client.get(url);
+    if url.starts_with("https://api.github.com/")
+        && let Some(token) = github_token_from_env()
+    {
+        return req.bearer_auth(token);
+    }
+    req
+}
+
 fn pin_github_repo(
     client: &Client,
     api_base: &str,
@@ -815,8 +849,7 @@ fn pin_github_repo(
 ) -> Result<PinnedAssetTree, LabError> {
     let base = api_base.trim_end_matches('/');
     let commit_url = format!("{base}/repos/{owner}/{repo}/commits/HEAD");
-    let commit: GhCommitResp = client
-        .get(&commit_url)
+    let commit: GhCommitResp = github_get(client, &commit_url)
         .send()
         .and_then(|r| r.error_for_status())
         .map_err(|e| {
@@ -831,8 +864,7 @@ fn pin_github_repo(
         "{base}/repos/{owner}/{repo}/git/trees/{}?recursive=1",
         commit.sha
     );
-    let tree: GhTreeResp = client
-        .get(&tree_url)
+    let tree: GhTreeResp = github_get(client, &tree_url)
         .send()
         .and_then(|r| r.error_for_status())
         .map_err(|e| {
@@ -982,6 +1014,124 @@ fn source_revisions_map(sources: &[DatasetSource]) -> BTreeMap<String, String> {
             (key, s.revision.clone())
         })
         .collect()
+}
+
+fn download_bytes_with_retries(
+    client: &Client,
+    url: &str,
+    entry_id: &str,
+    file_path: &str,
+) -> Result<Vec<u8>, LabError> {
+    let mut last_err = None;
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(500 * (1 << (attempt - 1))));
+        }
+        let resp = match client.get(url).send() {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = Some(LabError::Io(std::io::Error::other(format!(
+                    "download failed for '{entry_id}' ({file_path}): {e}"
+                ))));
+                continue;
+            }
+        };
+        let status = resp.status();
+        if !status.is_success() {
+            let err = LabError::Io(std::io::Error::other(format!(
+                "HTTP {status} downloading '{entry_id}' ({file_path}) from {url}"
+            )));
+            if status.as_u16() == 429 || status.is_server_error() {
+                last_err = Some(err);
+                continue;
+            }
+            return Err(err);
+        }
+        match resp.bytes() {
+            Ok(b) => return Ok(b.to_vec()),
+            Err(e) => {
+                last_err = Some(LabError::Io(std::io::Error::other(format!(
+                    "interrupted download reading '{entry_id}' ({file_path}): {e}"
+                ))));
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| {
+        LabError::Io(std::io::Error::other(format!(
+            "download failed for '{entry_id}' ({file_path})"
+        )))
+    }))
+}
+
+fn extract_archive_bytes(
+    partial_dir: &Path,
+    bytes: &[u8],
+    kind: ArchiveKind,
+) -> Result<Vec<String>, LabError> {
+    use std::io::Read as _;
+    let mut extracted = Vec::new();
+    match kind {
+        ArchiveKind::None => {}
+        ArchiveKind::TarGz => {
+            let mut archive = Archive::new(GzDecoder::new(Cursor::new(bytes)));
+            for entry_res in archive
+                .entries()
+                .map_err(|e| LabError::Io(std::io::Error::other(format!("tar.gz read: {e}"))))?
+            {
+                let mut item = entry_res
+                    .map_err(|e| LabError::Io(std::io::Error::other(format!("tar entry: {e}"))))?;
+                if !item.header().entry_type().is_file() {
+                    continue;
+                }
+                let raw_path = item
+                    .path()
+                    .map_err(|e| LabError::Io(std::io::Error::other(format!("tar path: {e}"))))?;
+                let rel = raw_path
+                    .to_string_lossy()
+                    .trim_start_matches("./")
+                    .to_owned();
+                if rel.is_empty() {
+                    continue;
+                }
+                let out_path = safe_join_relative(partial_dir, &rel)?;
+                if let Some(parent) = out_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let mut buf = Vec::new();
+                item.read_to_end(&mut buf)?;
+                fs::write(&out_path, &buf)?;
+                extracted.push(rel);
+            }
+        }
+        ArchiveKind::Zip => {
+            let mut zip = ZipArchive::new(Cursor::new(bytes))
+                .map_err(|e| LabError::Io(std::io::Error::other(format!("zip read: {e}"))))?;
+            for i in 0..zip.len() {
+                let mut item = zip
+                    .by_index(i)
+                    .map_err(|e| LabError::Io(std::io::Error::other(format!("zip entry: {e}"))))?;
+                if item.is_dir() {
+                    continue;
+                }
+                let Some(enclosed) = item.enclosed_name() else {
+                    continue;
+                };
+                let rel = enclosed.to_string_lossy().into_owned();
+                if rel.is_empty() {
+                    continue;
+                }
+                let out_path = safe_join_relative(partial_dir, &rel)?;
+                if let Some(parent) = out_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let mut buf = Vec::new();
+                item.read_to_end(&mut buf)?;
+                fs::write(&out_path, &buf)?;
+                extracted.push(rel);
+            }
+        }
+    }
+    Ok(extracted)
 }
 
 fn safe_join_relative(base: &Path, rel: &str) -> Result<PathBuf, LabError> {

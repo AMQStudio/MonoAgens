@@ -7,14 +7,15 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use monoagens_protocol::{ActorId, Audience, Percept, PlaceId};
+use monoagens_protocol::{ActorId, Audience, EventId, Percept, PlaceId};
 use monoagens_reason::embed::{EmbedInput, Embedder, partitioned_cosine};
+use monoagens_reason::model::{ModelOutput, ModelProvider, ModelRequest, ProviderFailureClass};
 use serde_json::Value;
 
 use crate::LabError;
 use crate::datasets::framework::{
-    GoldEvidenceRef, JudgeExecutionConfig, SamplingRule, ScorerMetric, cluster_bootstrap_ci,
-    make_text_percept,
+    GoldEntry, GoldEvidenceRef, JudgeExecutionConfig, SamplingRule, ScorerItemOutcome,
+    ScorerMetric, cluster_bootstrap_ci, make_text_percept,
 };
 use crate::datasets::manifest::ManifestEntryKind;
 use crate::datasets::ops::verify_manifest_entry;
@@ -484,7 +485,14 @@ pub fn run_optional_python_helper(
     if !script.is_file() {
         return Ok(None);
     }
-    let py = std::env::var("MONOAGENS_ADAPTER_PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let py = std::env::var("MONOAGENS_ADAPTER_PYTHON").unwrap_or_else(|_| {
+        let venv_py = workspace_root.join("lab/adapters/.venv/bin/python");
+        if venv_py.is_file() {
+            venv_py.to_string_lossy().into_owned()
+        } else {
+            "python3".to_owned()
+        }
+    });
     let Ok(mut child) = Command::new(&py)
         .arg(&script)
         .env("HF_HUB_OFFLINE", "1")
@@ -517,4 +525,74 @@ pub fn run_optional_python_helper(
     let parsed: Value = serde_json::from_slice(&out.stdout)
         .map_err(|e| LabError::Serialization(format!("invalid helper JSON: {e}")))?;
     Ok(Some(parsed))
+}
+
+/// Invokes an LLM judge for a single item, recording per-item outcome/prompt/verdict into
+/// `judge.recorder`, propagating CostGuard/auth halts immediately, and recording transient/output
+/// failures on the item rather than aborting or dropping silently.
+#[allow(clippy::too_many_arguments)]
+pub fn invoke_judge_resilient(
+    judge: &JudgeExecutionConfig<'_>,
+    provider: &dyn ModelProvider,
+    req_id: EventId,
+    judge_model: &str,
+    system_prompt: &str,
+    user_prompt: &str,
+    item_id: &str,
+    probe_id: &str,
+    cluster_id: &str,
+    entry: &GoldEntry,
+    metric_name: &str,
+) -> Result<Option<bool>, LabError> {
+    let req = ModelRequest::text(
+        req_id,
+        monoagens_core::ModelPurpose::Classify,
+        judge_model,
+        system_prompt,
+        user_prompt.to_owned(),
+    );
+    match provider.invoke(&req) {
+        Ok(res) => {
+            let verdict_str = res.raw_text.clone();
+            let ok = matches!(
+                res.output,
+                ModelOutput::Verdict(v) if v.label.eq_ignore_ascii_case("yes")
+            );
+            judge.record_outcome(ScorerItemOutcome {
+                item_id: item_id.to_owned(),
+                probe_id: probe_id.to_owned(),
+                cluster_id: cluster_id.to_owned(),
+                category: entry.category.clone(),
+                metric_name: metric_name.to_owned(),
+                score: Some(if ok { 1.0 } else { 0.0 }),
+                passed: Some(ok),
+                judge_prompt: Some(user_prompt.to_owned()),
+                judge_verdict: Some(verdict_str),
+                failed: false,
+                failure_reason: None,
+            });
+            Ok(Some(ok))
+        }
+        Err(fail) => {
+            if fail.detail.contains("CostGuard")
+                || fail.class == ProviderFailureClass::Authentication
+            {
+                return Err(LabError::Protocol(fail.to_string()));
+            }
+            judge.record_outcome(ScorerItemOutcome {
+                item_id: item_id.to_owned(),
+                probe_id: probe_id.to_owned(),
+                cluster_id: cluster_id.to_owned(),
+                category: entry.category.clone(),
+                metric_name: metric_name.to_owned(),
+                score: None,
+                passed: None,
+                judge_prompt: Some(user_prompt.to_owned()),
+                judge_verdict: None,
+                failed: true,
+                failure_reason: Some(fail.to_string()),
+            });
+            Ok(None)
+        }
+    }
 }

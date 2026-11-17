@@ -9,17 +9,22 @@ name = "monoagens-lab"
 path = "src/main.rs"
 
 [dependencies]
+csv = "1.4.0"
+flate2 = "1.1.11"
 monoagens-core = { workspace = true }
 monoagens-protocol = { workspace = true }
 monoagens-reason = { workspace = true }
 monoagens-store = { workspace = true }
+parquet = "60.1.0"
 postcard = { workspace = true }
 reqwest = { version = "0.13", features = ["blocking", "json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.11"
+tar = "0.4.46"
 tempfile = { workspace = true }
 toml = "0.9"
+zip = "9.6.1"
 
 [dev-dependencies]
 criterion = "0.8.2"

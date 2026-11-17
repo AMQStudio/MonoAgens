@@ -4,9 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use monoagens_core::ModelPurpose;
 use monoagens_protocol::{ActorId, Audience, EventId, PlaceId, VisibleScope};
-use monoagens_reason::model::{ModelOutput, ModelRequest};
 use serde::Deserialize;
 
 use crate::LabError;
@@ -16,11 +14,18 @@ use crate::datasets::framework::{
     make_text_percept,
 };
 use crate::datasets::manifest::DatasetManifestEntry;
+use crate::datasets::parquet_utils::read_parquet_rows;
 use crate::datasets::scoring_utils::{
-    metric_with_cluster_ci, not_scored_metric, substring_exact_match,
+    invoke_judge_resilient, metric_with_cluster_ci, not_scored_metric, substring_exact_match,
 };
 
 pub struct MemoryAgentBenchConverter;
+
+#[derive(Deserialize)]
+struct RawMabMetadata {
+    #[serde(default)]
+    source: Option<String>,
+}
 
 #[derive(Deserialize)]
 struct RawMabRow {
@@ -35,6 +40,63 @@ struct RawMabRow {
     answers: Vec<serde_json::Value>,
     #[serde(default)]
     evidence_chunk_indices: Vec<Vec<usize>>,
+    #[serde(default)]
+    metadata: Option<RawMabMetadata>,
+}
+
+fn flatten_mab_answers(val: serde_json::Value) -> Vec<String> {
+    match val {
+        serde_json::Value::String(s) => vec![s],
+        serde_json::Value::Array(arr) => {
+            let mut out = Vec::new();
+            for v in arr {
+                out.extend(flatten_mab_answers(v));
+            }
+            out
+        }
+        serde_json::Value::Object(obj) => {
+            if let Some(item) = obj.get("item").or_else(|| obj.get("element")) {
+                flatten_mab_answers(item.clone())
+            } else if let Some(list) = obj.get("list") {
+                flatten_mab_answers(list.clone())
+            } else {
+                Vec::new()
+            }
+        }
+        serde_json::Value::Null => Vec::new(),
+        other => vec![other.to_string()],
+    }
+}
+
+fn split_context_chunks(context: &str) -> Vec<String> {
+    let double_nl: Vec<String> = context
+        .split("\n\n")
+        .map(strip_memorize_wrapper)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if double_nl.len() > 1 || double_nl.first().is_none_or(|c| c.len() <= 4000) {
+        return double_nl;
+    }
+    // Split oversized single-block contexts along newline boundaries to preserve 8K budget.
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for line in double_nl[0].lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !current.is_empty() && current.len() + trimmed.len() + 1 > 2000 {
+            chunks.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push('\n');
+        }
+        current.push_str(trimmed);
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
 }
 
 fn strip_memorize_wrapper(chunk: &str) -> String {
@@ -51,7 +113,7 @@ impl Converter for MemoryAgentBenchConverter {
     }
 
     fn converter_version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
 
     fn convert(
@@ -63,24 +125,43 @@ impl Converter for MemoryAgentBenchConverter {
         for (split_name, candidates) in [
             (
                 "Accurate_Retrieval",
-                ["Accurate_Retrieval.json", "Accurate_Retrieval.jsonl"],
+                [
+                    "data/Accurate_Retrieval-00000-of-00001.parquet",
+                    "Accurate_Retrieval-00000-of-00001.parquet",
+                    "Accurate_Retrieval.parquet",
+                    "Accurate_Retrieval.json",
+                    "Accurate_Retrieval.jsonl",
+                ],
             ),
             (
                 "Conflict_Resolution",
-                ["Conflict_Resolution.json", "Conflict_Resolution.jsonl"],
+                [
+                    "data/Conflict_Resolution-00000-of-00001.parquet",
+                    "Conflict_Resolution-00000-of-00001.parquet",
+                    "Conflict_Resolution.parquet",
+                    "Conflict_Resolution.json",
+                    "Conflict_Resolution.jsonl",
+                ],
             ),
         ] {
             for cand in candidates {
                 let p = dataset_dir.join(cand);
                 if p.is_file() {
-                    let raw = fs::read_to_string(&p)?;
-                    if cand.ends_with(".jsonl") {
+                    if cand.ends_with(".parquet") {
+                        for val in read_parquet_rows(&p)? {
+                            let r: RawMabRow = serde_json::from_value(val)
+                                .map_err(|e| LabError::Serialization(e.to_string()))?;
+                            rows.push((split_name.to_owned(), r));
+                        }
+                    } else if cand.ends_with(".jsonl") {
+                        let raw = fs::read_to_string(&p)?;
                         for line in raw.lines().filter(|l| !l.trim().is_empty()) {
                             let r: RawMabRow = serde_json::from_str(line)
                                 .map_err(|e| LabError::Serialization(e.to_string()))?;
                             rows.push((split_name.to_owned(), r));
                         }
                     } else {
+                        let raw = fs::read_to_string(&p)?;
                         let parsed: Vec<RawMabRow> = serde_json::from_str(&raw)
                             .map_err(|e| LabError::Serialization(e.to_string()))?;
                         for r in parsed {
@@ -96,7 +177,7 @@ impl Converter for MemoryAgentBenchConverter {
             return Err(LabError::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 format!(
-                    "no Accurate_Retrieval/Conflict_Resolution JSON/JSONL files in '{}'",
+                    "no Accurate_Retrieval/Conflict_Resolution Parquet/JSON/JSONL files in '{}'",
                     dataset_dir.display()
                 ),
             )));
@@ -113,7 +194,10 @@ impl Converter for MemoryAgentBenchConverter {
 
         for (r_idx, (default_split, row)) in rows.into_iter().enumerate() {
             let split = row.split.unwrap_or(default_split);
-            let source_name = row.source.unwrap_or_else(|| "unknown".to_owned());
+            let source_name = row
+                .source
+                .or_else(|| row.metadata.and_then(|m| m.source))
+                .unwrap_or_else(|| "unknown".to_owned());
             let is_lme = source_name.to_ascii_lowercase().contains("lme")
                 || source_name.to_ascii_lowercase().contains("longmemeval");
             let item_id = row.row_id.unwrap_or_else(|| format!("mab_{split}_{r_idx}"));
@@ -133,12 +217,7 @@ impl Converter for MemoryAgentBenchConverter {
                 )
             };
 
-            let chunks: Vec<String> = row
-                .context
-                .split("\n\n")
-                .map(strip_memorize_wrapper)
-                .filter(|s| !s.is_empty())
-                .collect();
+            let chunks = split_context_chunks(&row.context);
             let base_ms: u64 = 1_700_000_000_000;
             let mut history = Vec::with_capacity(chunks.len());
             for (c_idx, chunk) in chunks.iter().enumerate() {
@@ -181,15 +260,7 @@ impl Converter for MemoryAgentBenchConverter {
                     .get(q_idx)
                     .cloned()
                     .unwrap_or(serde_json::Value::Null);
-                let accepted: Vec<String> = match ans_val {
-                    serde_json::Value::Array(arr) => arr
-                        .into_iter()
-                        .filter_map(|v| v.as_str().map(str::to_owned))
-                        .collect(),
-                    serde_json::Value::String(s) => vec![s],
-                    serde_json::Value::Null => Vec::new(),
-                    other => vec![other.to_string()],
-                };
+                let accepted = flatten_mab_answers(ans_val);
                 let gold_answer = accepted.first().cloned().unwrap_or_default();
 
                 let ev_indices = row
@@ -295,30 +366,60 @@ impl Scorer for MemoryAgentBenchScorer {
             if split == "Conflict_Resolution" {
                 let hit = substring_exact_match(resp, &entry.accepted_answers);
                 cr_obs.push((pred.cluster_id.clone(), hit));
+                judge.record_outcome(crate::datasets::framework::ScorerItemOutcome {
+                    item_id: pred.item_id.clone(),
+                    probe_id: pred.probe_id.clone(),
+                    cluster_id: pred.cluster_id.clone(),
+                    category: entry.category.clone(),
+                    metric_name: "selective_forgetting_acc".to_owned(),
+                    score: Some(hit),
+                    passed: Some(hit > 0.5),
+                    judge_prompt: None,
+                    judge_verdict: None,
+                    failed: false,
+                    failure_reason: None,
+                });
             } else if is_lme {
                 if !judge.live {
                     lme_needed_offline = true;
                 } else if let Some(jp) = judge.provider {
                     used_judge = true;
-                    let req = ModelRequest::text(
+                    let prompt = format!(
+                        "Gold: {}\nResponse: {}\nCorrect? yes or no.",
+                        entry.gold_answer, resp
+                    );
+                    if let Some(ok) = invoke_judge_resilient(
+                        judge,
+                        jp,
                         EventId::new((idx + 1) as u64),
-                        ModelPurpose::Classify,
                         judge_model,
                         "MemoryAgentBench LME(S*) judge",
-                        format!(
-                            "Gold: {}\nResponse: {}\nCorrect? yes or no.",
-                            entry.gold_answer, resp
-                        ),
-                    );
-                    let res = jp
-                        .invoke(&req)
-                        .map_err(|e| LabError::Protocol(e.to_string()))?;
-                    let ok = matches!(res.output, ModelOutput::Verdict(v) if v.label.eq_ignore_ascii_case("yes"));
-                    ar_obs.push((pred.cluster_id.clone(), if ok { 1.0 } else { 0.0 }));
+                        &prompt,
+                        &pred.item_id,
+                        &pred.probe_id,
+                        &pred.cluster_id,
+                        entry,
+                        "ar_acc",
+                    )? {
+                        ar_obs.push((pred.cluster_id.clone(), if ok { 1.0 } else { 0.0 }));
+                    }
                 }
             } else {
                 let hit = substring_exact_match(resp, &entry.accepted_answers);
                 ar_obs.push((pred.cluster_id.clone(), hit));
+                judge.record_outcome(crate::datasets::framework::ScorerItemOutcome {
+                    item_id: pred.item_id.clone(),
+                    probe_id: pred.probe_id.clone(),
+                    cluster_id: pred.cluster_id.clone(),
+                    category: entry.category.clone(),
+                    metric_name: "ar_acc".to_owned(),
+                    score: Some(hit),
+                    passed: Some(hit > 0.5),
+                    judge_prompt: None,
+                    judge_verdict: None,
+                    failed: false,
+                    failure_reason: None,
+                });
             }
         }
 

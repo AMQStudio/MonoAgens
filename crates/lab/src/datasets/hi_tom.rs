@@ -20,16 +20,19 @@ use crate::datasets::scoring_utils::{
 pub struct HiTomConverter;
 
 #[derive(Deserialize)]
+struct RawHiTomRoot {
+    data: Vec<RawHiTomItem>,
+}
+
+#[derive(Deserialize)]
 struct RawHiTomItem {
     #[serde(default)]
-    story_id: Option<String>,
-    story: Vec<String>,
-    #[serde(default)]
-    actors: Vec<String>,
+    sample_id: Option<u64>,
+    story: String,
     question: String,
-    choices: Vec<String>,
+    choices: String,
     answer: String,
-    order: u8,
+    question_order: u8,
     #[serde(default)]
     deception: bool,
 }
@@ -40,7 +43,7 @@ impl Converter for HiTomConverter {
     }
 
     fn converter_version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
 
     fn convert(
@@ -49,44 +52,48 @@ impl Converter for HiTomConverter {
         manifest_entry: &DatasetManifestEntry,
     ) -> Result<ConvertedDataset, LabError> {
         let raw = fs::read_to_string(dataset_dir.join("Hi-ToM_data/Hi-ToM_data.json"))?;
-        let rows: Vec<RawHiTomItem> = serde_json::from_str(&raw)
+        let parsed: RawHiTomRoot = serde_json::from_str(&raw)
             .map_err(|e| LabError::Serialization(format!("hi_tom JSON: {e}")))?;
 
         let soul = ActorId::new("soul");
         let proctor = ActorId::new("lab_proctor");
         let probe_aud = Audience::new([proctor, soul]);
 
-        // Group QA items by `story_id` (whole-story clusters for Joint Accuracy).
-        let mut by_story: BTreeMap<String, Vec<RawHiTomItem>> = BTreeMap::new();
-        for (idx, r) in rows.into_iter().enumerate() {
-            let sid = r
-                .story_id
-                .clone()
-                .unwrap_or_else(|| format!("hitom_story_{}", idx / 5));
-            by_story.entry(sid).or_default().push(r);
+        // Group QA items by exact `story` text (whole-story clusters for Joint Accuracy).
+        let mut story_idx_map: BTreeMap<String, usize> = BTreeMap::new();
+        let mut grouped: Vec<(String, Vec<RawHiTomItem>)> = Vec::new();
+        for r in parsed.data {
+            if let Some(&pos) = story_idx_map.get(&r.story) {
+                grouped[pos].1.push(r);
+            } else {
+                let pos = grouped.len();
+                story_idx_map.insert(r.story.clone(), pos);
+                grouped.push((r.story.clone(), vec![r]));
+            }
         }
 
-        let mut items = Vec::with_capacity(by_story.len());
+        let mut items = Vec::with_capacity(grouped.len());
         let mut gold_entries = Vec::new();
 
-        for (sid, mut qas) in by_story {
-            qas.sort_by_key(|q| q.order);
-            let first = &qas[0];
-            let (history, ev_refs) = build_mode1_tom_history(
-                &first.story,
-                &sid,
-                &first.actors,
-                1_700_000_000_000,
-                1_000,
-            );
+        for (cluster_idx, (story_text, mut qas)) in grouped.into_iter().enumerate() {
+            qas.sort_by_key(|q| (q.question_order, q.sample_id.unwrap_or(0)));
+            let sid = format!("hitom_story_{cluster_idx:04}");
+            let lines: Vec<String> = story_text
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(str::to_owned)
+                .collect();
+            let (history, ev_refs) =
+                build_mode1_tom_history(&lines, &sid, &[], 1_700_000_000_000, 1_000);
             let place = PlaceId::new(format!("{sid}_main"));
             let probe_base = 1_700_000_000_000 + (history.len() as u64 + 1) * 1_000;
             let deception = qas.iter().any(|q| q.deception);
 
             let mut probes = Vec::with_capacity(qas.len());
             for (q_idx, qa) in qas.into_iter().enumerate() {
-                let probe_id = format!("order_{}", qa.order);
-                let prompt = format!("{}\nChoices: {}", qa.question, qa.choices.join(" | "));
+                let probe_id = format!("order_{}_{q_idx}", qa.question_order);
+                let prompt = format!("{}\nChoices: {}", qa.question, qa.choices);
                 probes.push(ExternalProbe {
                     probe_id: probe_id.clone(),
                     percept: make_text_percept(
@@ -102,7 +109,7 @@ impl Converter for HiTomConverter {
                 });
 
                 let mut metadata = BTreeMap::new();
-                metadata.insert("order".to_owned(), qa.order.to_string());
+                metadata.insert("order".to_owned(), qa.question_order.to_string());
                 metadata.insert("deception".to_owned(), qa.deception.to_string());
 
                 gold_entries.push(GoldEntry {
@@ -113,7 +120,7 @@ impl Converter for HiTomConverter {
                     accepted_answers: vec![qa.answer],
                     gold_evidence: ev_refs.clone(),
                     privacy_conflict: false,
-                    category: Some(format!("order_{}", qa.order)),
+                    category: Some(format!("order_{}", qa.question_order)),
                     metadata,
                 });
             }
@@ -161,11 +168,12 @@ impl Scorer for HiTomScorer {
         &self,
         predictions: &[ExternalPrediction],
         gold: &GoldBook,
-        _judge: &JudgeExecutionConfig<'_>,
+        judge: &JudgeExecutionConfig<'_>,
         seed: u64,
     ) -> Result<ScorerReport, LabError> {
         let mut std_obs = Vec::new();
         let mut by_story: BTreeMap<&str, Vec<(u8, bool, bool)>> = BTreeMap::new();
+        let mut by_order: BTreeMap<u8, Vec<f64>> = BTreeMap::new();
 
         for pred in predictions {
             let entry = gold.find(&pred.item_id, &pred.probe_id).ok_or_else(|| {
@@ -182,11 +190,32 @@ impl Scorer for HiTomScorer {
             let deception = entry.metadata.get("deception").map(String::as_str) == Some("true");
             let resp = pred.response_text.as_deref().unwrap_or("");
             let hit = exact_match_normalized(resp, &entry.accepted_answers) > 0.5;
-            std_obs.push((pred.cluster_id.clone(), if hit { 1.0 } else { 0.0 }));
+            let val = if hit { 1.0 } else { 0.0 };
+            std_obs.push((pred.cluster_id.clone(), val));
+            by_order.entry(order).or_default().push(val);
+            judge.record_outcome(crate::datasets::framework::ScorerItemOutcome {
+                item_id: pred.item_id.clone(),
+                probe_id: pred.probe_id.clone(),
+                cluster_id: pred.cluster_id.clone(),
+                category: Some(format!("order_{order}")),
+                metric_name: "standard_acc".to_owned(),
+                score: Some(val),
+                passed: Some(hit),
+                judge_prompt: None,
+                judge_verdict: None,
+                failed: false,
+                failure_reason: None,
+            });
             by_story
                 .entry(pred.cluster_id.as_str())
                 .or_default()
                 .push((order, deception, hit));
+        }
+        for (order, vals) in by_order {
+            if !vals.is_empty() {
+                let mean = vals.iter().sum::<f64>() / vals.len() as f64;
+                judge.record_category_metric(format!("order_{order}"), "standard_acc", mean);
+            }
         }
 
         let mut joint_obs = Vec::new();

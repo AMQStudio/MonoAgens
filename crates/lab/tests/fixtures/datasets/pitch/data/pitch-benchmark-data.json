@@ -1,28 +1,36 @@
-{
-  "conversations": [
-    {
-      "conv_id": "pitch_synth_01",
-      "task_domain": "travel",
-      "turns": [
-        { "speaker": "Alex", "text": "Which train reaches Utrecht before 5pm?", "timestamp_ms": 1700000000000 },
-        { "speaker": "Sam", "text": "Maybe the 15:40 sprinter.", "timestamp_ms": 1700000020000 },
-        { "speaker": "Alex", "text": "Wait, let us check direct intercity fares too.", "timestamp_ms": 1700000040000 }
-      ],
-      "candidates": [
-        {
-          "candidate_id": "cand_good",
-          "content": "Direct intercity departs at 15:52 and arrives at 16:28.",
-          "ideal_turn": 2,
-          "window_start": 1,
-          "window_end": 2,
-          "do_not_surface": false
-        },
-        {
-          "candidate_id": "cand_dns",
-          "content": "Unrelated hotel coupon expires next month.",
-          "do_not_surface": true
-        }
-      ]
+[
+  {
+    "knowledge_item_id": "ki_syn_01",
+    "conversation_id": "conv_syn_01",
+    "scenario": "planning",
+    "turns": [
+      {"turn_number": 1, "speaker": "speaker 1", "text": "Let us pick a meeting day next week."},
+      {"turn_number": 2, "speaker": "speaker 2", "text": "Does Wednesday afternoon work for everyone?"},
+      {"turn_number": 3, "speaker": "speaker 1", "text": "Yes, after the lunch break."}
+    ],
+    "neutralized_ideal_response": "Room 4B is free on Wednesday afternoon after 1 PM.",
+    "ground_truth": {
+      "do_not_surface": false,
+      "accepted_best_turns": [2],
+      "acceptable_windows": [[2, 3]],
+      "consensus_best_turn": 2,
+      "union_window_start": 2,
+      "union_window_end": 3
     }
-  ]
-}
+  },
+  {
+    "knowledge_item_id": "ki_syn_02",
+    "conversation_id": "conv_syn_01",
+    "scenario": "planning",
+    "turns": [
+      {"turn_number": 1, "speaker": "speaker 1", "text": "Should we postpone the review?"},
+      {"turn_number": 2, "speaker": "speaker 2", "text": "Actually we finished reviewing the slides earlier today."}
+    ],
+    "neutralized_ideal_response": "Check whether the review deck has been finalized.",
+    "ground_truth": {
+      "do_not_surface": true,
+      "accepted_best_turns": [],
+      "acceptable_windows": []
+    }
+  }
+]

@@ -1,0 +1,37 @@
+{
+  "scenario_name": "synthetic_fixture",
+  "time_visible_by_default": false,
+  "state_visibility": {"clock": false},
+  "state_channels": {"clock": {"mode": "snapshot"}},
+  "days": [
+    {
+      "name": "Monday",
+      "start_instructions": ["Keep the synthetic week simple."],
+      "tasks": [
+        {"id": "task_mail_renewal", "label": "Mail the library renewal", "type": "event", "cue_id": "morning", "regular": true, "encoding": "start", "action_text": "Mail the library renewal."},
+        {"id": "task_water_fern", "label": "Water the fern", "type": "time", "target_time": "18:00", "regular": true, "encoding": "start", "action_text": "Water the fern."}
+      ],
+      "lures": [{"id": "lure_call_dentist", "action_text": "Call the dentist."}],
+      "steps": [
+        {
+          "id": "d1_s1",
+          "time": "08:00",
+          "text": "Morning light fills the room while a kettle warms up.",
+          "options": ["A) Pour tea", "B) Open a note", "C) Check the window"],
+          "cues": ["morning"],
+          "updates": [],
+          "groundtruth": {"status": "due", "actions": [{"id": "task_mail_renewal", "task_handle": "task_1"}]}
+        },
+        {
+          "id": "d1_s2",
+          "time": "18:05",
+          "text": "The evening air is dry and the leaves look tired.",
+          "options": ["A) Fill a can", "B) Look around", "C) Keep moving"],
+          "cues": ["dinner"],
+          "updates": [],
+          "groundtruth": {"status": "due", "actions": [{"id": "task_water_fern", "task_handle": "task_2"}]}
+        }
+      ]
+    }
+  ]
+}

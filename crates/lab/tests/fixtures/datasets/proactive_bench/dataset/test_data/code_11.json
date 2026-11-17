@@ -1,0 +1,37 @@
+[
+  {
+    "observation": {
+      "time": "1717377997.0",
+      "event": "The user opens a synthetic scratch file named qz_alpha.txt in a text editor."
+    },
+    "agent_response": {
+      "candidate_task": [
+        "Offer to run a linter on qz_alpha.txt.",
+        "Suggest a save-as template for plain text notes."
+      ]
+    },
+    "task_status": true
+  },
+  {
+    "observation": {
+      "time": "1717378005.25",
+      "event": "The user scrolls a local help page about keyboard shortcuts."
+    },
+    "agent_response": {
+      "candidate_task": []
+    },
+    "task_status": false
+  },
+  {
+    "observation": {
+      "time": "1717378033.5",
+      "event": "The user pastes a malformed JSON snippet into the scratch file."
+    },
+    "agent_response": {
+      "candidate_task": [
+        "Point out the missing closing brace in the pasted snippet."
+      ]
+    },
+    "task_status": true
+  }
+]

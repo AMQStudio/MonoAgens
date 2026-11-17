@@ -4,9 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-use monoagens_core::ModelPurpose;
 use monoagens_protocol::{ActorId, Audience, EventId, PlaceId, VisibleScope};
-use monoagens_reason::model::{ModelOutput, ModelRequest};
 use serde::Deserialize;
 
 use crate::LabError;
@@ -17,7 +15,7 @@ use crate::datasets::framework::{
 };
 use crate::datasets::manifest::DatasetManifestEntry;
 use crate::datasets::scoring_utils::{
-    metric_with_cluster_ci, not_scored_metric, run_optional_python_helper,
+    invoke_judge_resilient, metric_with_cluster_ci, not_scored_metric, run_optional_python_helper,
 };
 use crate::sha256_hex;
 
@@ -268,22 +266,39 @@ impl Scorer for CapaScorer {
 
         let mut recovery_obs = Vec::with_capacity(predictions.len());
         for (idx, (pred, req_spec)) in predictions.iter().zip(built.requests.iter()).enumerate() {
+            let entry = gold.find(&pred.item_id, &pred.probe_id).expect("checked");
             if !pred.spoke || req_spec.skip {
                 recovery_obs.push((pred.cluster_id.clone(), 0.0));
+                judge.record_outcome(crate::datasets::framework::ScorerItemOutcome {
+                    item_id: pred.item_id.clone(),
+                    probe_id: pred.probe_id.clone(),
+                    cluster_id: pred.cluster_id.clone(),
+                    category: entry.category.clone(),
+                    metric_name: "credited_recovery".to_owned(),
+                    score: Some(0.0),
+                    passed: Some(false),
+                    judge_prompt: None,
+                    judge_verdict: Some("skipped (soul stayed silent)".to_owned()),
+                    failed: false,
+                    failure_reason: None,
+                });
                 continue;
             }
-            let req = ModelRequest::text(
+            if let Some(ok) = invoke_judge_resilient(
+                judge,
+                jp,
                 EventId::new((idx + 1) as u64),
-                ModelPurpose::Classify,
                 judge_model,
                 &req_spec.system_prompt,
                 &req_spec.user_prompt,
-            );
-            let res = jp
-                .invoke(&req)
-                .map_err(|e| LabError::Protocol(e.to_string()))?;
-            let ok = matches!(res.output, ModelOutput::Verdict(v) if v.label.eq_ignore_ascii_case("yes"));
-            recovery_obs.push((pred.cluster_id.clone(), if ok { 1.0 } else { 0.0 }));
+                &pred.item_id,
+                &pred.probe_id,
+                &pred.cluster_id,
+                entry,
+                "credited_recovery",
+            )? {
+                recovery_obs.push((pred.cluster_id.clone(), if ok { 1.0 } else { 0.0 }));
+            }
         }
 
         Ok(ScorerReport {

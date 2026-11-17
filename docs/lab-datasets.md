@@ -91,3 +91,36 @@ Notes:
 - Substituting a non-official judge model for `gpt-4o`, `gpt-5`, or `Gemini-3.1-flash-lite` either renames metrics to `<metric>_non_official_judge` (`--judge-substitution rename`) or fails (`--judge-substitution fail`).
 - `ScenarioSet::External` is strictly rejected by all calibration paths (`external` results never tune the prior).
 - Never read `lab/scenarios/sealed/` and never write to `lab/runs/reference/`.
+
+## 3. Live provider options and the standard report (owner request `2026-11-17`)
+
+`benchmark --live` accepts the OpenAI-compatible provider options below. Values are recorded in run records; header **names** are recorded, never values.
+
+| Flag | Effect |
+|---|---|
+| `--reasoning-effort low\|medium\|high\|max` | Sent as `reasoning_effort` on every soul request. OpenCode Go's `deepseek-v4.1-flash` advertises `low`, `high`, `max`. |
+| `--judge-reasoning-effort low\|medium\|high\|max` | Same, for every judge request. |
+| `--extra-header NAME=ENV_VAR` (repeatable) | Reads the value from the environment and sends it on every soul/judge request (e.g. `--extra-header x-opencode-session=OPENCODE_SESSION_ID`). |
+| `--embed-endpoint URL` | Uses an already-running EmbeddingGemma 2 sidecar instead of spawning the pinned one. |
+| `--embed-model-path PATH` | Overrides the manifest-resolved embedder weights directory. |
+| `--allow-no-embedder` | Offline-only escape hatch; a `--suite standard` run without a semantic embedder otherwise refuses to start. |
+| `--preflight-only` | Runs conversion + scripted cost preflight and writes `preflight.json`, without any paid call. |
+| `--pilot-items N` | Truncates the seeded R-54 sample to its first N items (pilot gate). |
+| `--report` | Generates the standard report into `<out-dir>/report` after the run. |
+| `--report-note TEXT` (repeatable) | Adds an operator note to the report's caveats section. |
+
+OpenCode Go (official docs: <https://opencode.ai/docs/console/go> and <https://opencode.ai/docs/console/harnesses>):
+
+- Base URL `https://opencode.ai/inference/go`, OpenAI Chat Completions path `/openai/v1/chat/completions`.
+- Model ID `deepseek-v4.1-flash` (live list: `GET https://opencode.ai/inference/go/v1/models`).
+- Go **requires** a stable `x-opencode-session` header per conversation and a client-specific `User-Agent` (the Lab sends `monoagens-lab/<version>`).
+- Usage reports `opencode.list_cost` and `opencode.allowance` per response.
+
+### Report generation
+
+```sh
+# after a run (or any time later)
+monoagens-lab report --run lab/runs/<run-id> [--out <dir>] [--note "..."] [--no-python-charts] [--json]
+```
+
+Every value is derived from the persisted run records and `*.outcomes.json` files: `REPORT.md`, self-contained `index.html`, `tables/*.csv`, `charts/*`, `transcripts/<dataset>/<item_id>.{jsonl,md}` for failure examples, and the reproducibility block (commit, prior digest, manifest digest, provider host, efforts, judge substitution, seeds/splits, embedder, `history_reasoning_mode`).

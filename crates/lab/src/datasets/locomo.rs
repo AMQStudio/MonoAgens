@@ -242,11 +242,12 @@ impl Scorer for LocomoScorer {
         &self,
         predictions: &[ExternalPrediction],
         gold: &GoldBook,
-        _judge: &JudgeExecutionConfig<'_>,
+        judge: &JudgeExecutionConfig<'_>,
         seed: u64,
     ) -> Result<ScorerReport, LabError> {
         let mut qa_obs = Vec::new();
         let mut cat5_obs = Vec::new();
+        let mut by_cat: BTreeMap<u8, Vec<f64>> = BTreeMap::new();
 
         for pred in predictions {
             let entry = gold.find(&pred.item_id, &pred.probe_id).ok_or_else(|| {
@@ -265,7 +266,22 @@ impl Scorer for LocomoScorer {
                 let lower = resp.to_ascii_lowercase();
                 let refused =
                     lower.contains("no information available") || lower.contains("not mentioned");
-                cat5_obs.push((pred.cluster_id.clone(), if refused { 1.0 } else { 0.0 }));
+                let score = if refused { 1.0 } else { 0.0 };
+                cat5_obs.push((pred.cluster_id.clone(), score));
+                by_cat.entry(5).or_default().push(score);
+                judge.record_outcome(crate::datasets::framework::ScorerItemOutcome {
+                    item_id: pred.item_id.clone(),
+                    probe_id: pred.probe_id.clone(),
+                    cluster_id: pred.cluster_id.clone(),
+                    category: Some("cat_5".to_owned()),
+                    metric_name: "cat5_adversarial_acc".to_owned(),
+                    score: Some(score),
+                    passed: Some(refused),
+                    judge_prompt: None,
+                    judge_verdict: None,
+                    failed: false,
+                    failure_reason: None,
+                });
             } else if cat == 1 {
                 // Multi-hop: comma-separated sub-answers averaged per evaluation.py.
                 let gold_parts: Vec<&str> = entry
@@ -294,11 +310,43 @@ impl Scorer for LocomoScorer {
                     sum / gold_parts.len() as f64
                 };
                 qa_obs.push((pred.cluster_id.clone(), score));
+                by_cat.entry(1).or_default().push(score);
+                judge.record_outcome(crate::datasets::framework::ScorerItemOutcome {
+                    item_id: pred.item_id.clone(),
+                    probe_id: pred.probe_id.clone(),
+                    cluster_id: pred.cluster_id.clone(),
+                    category: Some("cat_1".to_owned()),
+                    metric_name: "qa_f1".to_owned(),
+                    score: Some(score),
+                    passed: Some(score >= 0.5),
+                    judge_prompt: None,
+                    judge_verdict: None,
+                    failed: false,
+                    failure_reason: None,
+                });
             } else {
-                qa_obs.push((
-                    pred.cluster_id.clone(),
-                    token_f1(resp, &entry.gold_answer, true),
-                ));
+                let score = token_f1(resp, &entry.gold_answer, true);
+                qa_obs.push((pred.cluster_id.clone(), score));
+                by_cat.entry(cat).or_default().push(score);
+                judge.record_outcome(crate::datasets::framework::ScorerItemOutcome {
+                    item_id: pred.item_id.clone(),
+                    probe_id: pred.probe_id.clone(),
+                    cluster_id: pred.cluster_id.clone(),
+                    category: Some(format!("cat_{cat}")),
+                    metric_name: "qa_f1".to_owned(),
+                    score: Some(score),
+                    passed: Some(score >= 0.5),
+                    judge_prompt: None,
+                    judge_verdict: None,
+                    failed: false,
+                    failure_reason: None,
+                });
+            }
+        }
+        for (cat, vals) in by_cat {
+            if !vals.is_empty() {
+                let mean = vals.iter().sum::<f64>() / vals.len() as f64;
+                judge.record_category_metric(format!("cat_{cat}"), "score", mean);
             }
         }
 

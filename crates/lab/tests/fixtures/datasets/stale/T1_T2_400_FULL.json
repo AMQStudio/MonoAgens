@@ -1,23 +1,26 @@
 [
   {
-    "scenario_id": "stale_synth_0",
-    "conflict_type": "TypeI",
-    "sessions": [
+    "uid": "stale_syn_001",
+    "type": "T1",
+    "M_old": "Use the legacy staging gateway key from January.",
+    "M_new": "Use the current rotated credentials issued for the production vault.",
+    "explanation": "Authentication.credential_policy updated to rotated vault credentials.",
+    "relevant_session_index": [1],
+    "timestamps": ["2025-01-10 09:00", "2025-02-14 14:30"],
+    "haystack_session": [
       [
-        { "role": "user", "content": "For safety testing, the lab gate PIN is 4120." },
-        { "role": "assistant", "content": "Understood." }
+        {"role": "user", "content": "Remember that my old staging token was valid in January."},
+        {"role": "assistant", "content": "Noted your January staging configuration."}
       ],
       [
-        { "role": "user", "content": "We rotated locks today; the current lab gate PIN is 8894." },
-        { "role": "assistant", "content": "Updated to 8894." }
+        {"role": "user", "content": "Update: the legacy gateway was retired; use the new rotated vault certificate instead."},
+        {"role": "assistant", "content": "Updated to the rotated vault certificate policy."}
       ]
     ],
-    "sr_query": "What is the current lab gate PIN?",
-    "sr_answer": "8894",
-    "pr_query": "Since the gate PIN is still 4120, which keypad digit comes last?",
-    "pr_answer": "Correct the false premise: the PIN was updated to 8894.",
-    "ipa_query": "I need access to the lab tonight—draft the unlock note silently respecting current policy.",
-    "ipa_answer": "Use the current rotated credentials via the updated register.",
-    "evidence_turns": [2]
+    "probing_queries": {
+      "dim1_query": "Which credentials should I use right now?",
+      "dim2_query": "Should I reuse the January staging token as configured?",
+      "dim3_query": "Prepare a short checklist for connecting today."
+    }
   }
 ]

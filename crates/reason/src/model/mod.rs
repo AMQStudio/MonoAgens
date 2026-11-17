@@ -16,7 +16,7 @@ use crate::parse::{
 pub mod openai;
 pub mod scripted;
 
-pub use openai::{OpenAiModelConfig, OpenAiModelProvider};
+pub use openai::{OpenAiModelConfig, OpenAiModelProvider, ReasoningEffort};
 pub use scripted::{ScriptedModelProvider, ScriptedReply};
 
 /// Message role inside a [`ModelRequest`].
@@ -141,12 +141,14 @@ impl ModelRequest {
     }
 }
 
-/// Token accounting reported for every provider call (including cached tokens when stated).
+/// Token accounting reported for every provider call (including cached/reasoning tokens when stated).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct TokenUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cached_tokens: Option<u64>,
+    #[serde(default)]
+    pub reasoning_tokens: Option<u64>,
     pub total_tokens: u64,
 }
 

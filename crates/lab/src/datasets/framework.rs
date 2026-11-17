@@ -3,19 +3,26 @@
 //! `ScriptedModelProvider` silent-`think` history loading, `reason::EmbedderProbe`, converted cache,
 //! seeded stratified sampling, and cluster-bootstrap confidence intervals (`R-52`–`R-54`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
-use monoagens_core::{Core, Effect, Input, MemStore, ModelPurpose, Prior, Store, Switches};
-use monoagens_protocol::{
-    ActorId, Audience, CURRENT_PROTOCOL_VERSION, CapabilityDescriptor, CapabilityId, OpaquePayload,
-    Percept, PerceptEmitParams, PlaceId, Time, VisibleScope, Waist2Headers, Waist2Method,
-    Waist2Request,
+use monoagens_core::{
+    Core, DecisionOutcome, Effect, EventDetail, EventKind, Input, LogSeq, MemStore, ModelPurpose,
+    Prior, Store, Switches,
 };
-use monoagens_reason::embed::{EmbedError, EmbedInput, Embedder};
+use monoagens_protocol::{
+    ActorId, Audience, CURRENT_PROTOCOL_VERSION, CapabilityDescriptor, CapabilityId, EmbeddingTag,
+    OpaquePayload, Percept, PerceptEmitParams, PlaceId, TaggedEmbedding, ThoughtAct, Time,
+    VisibleScope, Waist2Headers, Waist2Method, Waist2Request,
+};
+use monoagens_reason::embed::{
+    EmbedContent, EmbedError, EmbedInput, EmbedModality, Embedder, TaskPrefix,
+};
 use monoagens_reason::model::{
-    ModelOutput, ModelProvider, ModelRequest, ScriptedModelProvider, ScriptedReply,
+    ModelOutput, ModelProvider, ModelRequest, ResponseSchemaMode, ScriptedModelProvider,
+    ScriptedReply,
 };
 use serde::{Deserialize, Serialize};
 
@@ -23,7 +30,7 @@ use crate::LabError;
 use crate::datasets::manifest::{DatasetManifestEntry, DatasetsManifest};
 use crate::datasets::ops::{CONVERTER_CACHE_FILE, ConvertedCacheMetadata};
 use crate::guard::CostGuard;
-use crate::record::{MetricScoreInterval, PurposeCost};
+use crate::record::{FailedItemRecord, MetricScoreInterval, PurposeCost};
 use crate::scenario::ensure_not_sealed_path;
 
 /// Silent `ThoughtBatch` JSON emitted by Lab's `ScriptedModelProvider` during static history loading.
@@ -196,6 +203,39 @@ impl ScorerReport {
     }
 }
 
+/// Per-item scoring outcome recorded by scorers for failure analysis and transcripts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScorerItemOutcome {
+    pub item_id: String,
+    pub probe_id: String,
+    pub cluster_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    pub metric_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judge_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judge_verdict: Option<String>,
+    #[serde(default)]
+    pub failed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+}
+
+/// Thread-safe side-channel collector passed via [`JudgeExecutionConfig::recorder`] so scorers
+/// can emit per-item outcomes, judge prompts/verdicts, category breakdowns, and failures without
+/// breaking `Scorer::score` signatures.
+#[derive(Debug, Default)]
+pub struct ScorerDetailRecorder {
+    pub outcomes: Vec<ScorerItemOutcome>,
+    pub category_metrics: BTreeMap<String, BTreeMap<String, f64>>,
+    pub failed_items: Vec<FailedItemRecord>,
+}
+
 /// Optional judge and local dataset/scorer-model configuration passed to [`Scorer::score`].
 #[derive(Clone, Default)]
 pub struct JudgeExecutionConfig<'a> {
@@ -205,6 +245,47 @@ pub struct JudgeExecutionConfig<'a> {
     pub provider: Option<&'a dyn ModelProvider>,
     pub datasets_dir: Option<&'a Path>,
     pub manifest: Option<&'a DatasetsManifest>,
+    pub recorder: Option<Arc<Mutex<ScorerDetailRecorder>>>,
+}
+
+impl JudgeExecutionConfig<'_> {
+    /// Records one scored (or failed) item outcome for transcript & failure-analysis emission.
+    pub fn record_outcome(&self, outcome: ScorerItemOutcome) {
+        if let Some(rec) = &self.recorder
+            && let Ok(mut guard) = rec.lock()
+        {
+            if outcome.failed {
+                guard.failed_items.push(FailedItemRecord {
+                    item_id: outcome.item_id.clone(),
+                    probe_id: outcome.probe_id.clone(),
+                    stage: "judge".to_owned(),
+                    reason: outcome
+                        .failure_reason
+                        .clone()
+                        .unwrap_or_else(|| "judge call failed".to_owned()),
+                });
+            }
+            guard.outcomes.push(outcome);
+        }
+    }
+
+    /// Records a per-category breakdown metric for reporting.
+    pub fn record_category_metric(
+        &self,
+        category: impl Into<String>,
+        metric: impl Into<String>,
+        val: f64,
+    ) {
+        if let Some(rec) = &self.recorder
+            && let Ok(mut guard) = rec.lock()
+        {
+            guard
+                .category_metrics
+                .entry(category.into())
+                .or_default()
+                .insert(metric.into(), val);
+        }
+    }
 }
 
 impl std::fmt::Debug for JudgeExecutionConfig<'_> {
@@ -216,6 +297,7 @@ impl std::fmt::Debug for JudgeExecutionConfig<'_> {
             .field("provider", &self.provider.map(|p| p.provider_name()))
             .field("datasets_dir", &self.datasets_dir)
             .field("manifest_present", &self.manifest.is_some())
+            .field("recorder_present", &self.recorder.is_some())
             .finish()
     }
 }
@@ -376,6 +458,115 @@ pub fn load_or_convert_cached(
     Ok((converted, false))
 }
 
+/// Memoizing [`Embedder`] wrapper for deterministic reuse of identical `(regime_id, text)`
+/// embeddings across clustered benchmark items sharing conversation histories.
+pub struct CachingEmbedder<'a> {
+    inner: &'a dyn Embedder,
+    cache: Mutex<HashMap<(String, String), TaggedEmbedding>>,
+}
+
+impl<'a> CachingEmbedder<'a> {
+    /// Wraps `inner` with an in-memory `(prompt_regime_id, text)` memoization table.
+    #[must_use]
+    pub fn new(inner: &'a dyn Embedder) -> Self {
+        Self {
+            inner,
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl Embedder for CachingEmbedder<'_> {
+    fn backend_name(&self) -> &str {
+        self.inner.backend_name()
+    }
+
+    fn model_ver(&self) -> Option<&str> {
+        self.inner.model_ver()
+    }
+
+    fn dim_d(&self) -> Option<u32> {
+        self.inner.dim_d()
+    }
+
+    fn max_context_tokens(&self) -> Option<usize> {
+        self.inner.max_context_tokens()
+    }
+
+    fn supported_modalities(&self) -> &'static [EmbedModality] {
+        self.inner.supported_modalities()
+    }
+
+    fn tag_for(&self, task: TaskPrefix) -> Option<EmbeddingTag> {
+        self.inner.tag_for(task)
+    }
+
+    fn embed(&self, input: &EmbedInput<'_>) -> Result<Option<TaggedEmbedding>, EmbedError> {
+        if let EmbedContent::Text(txt) = input.content {
+            let key = (input.task.regime_id().to_owned(), txt.to_owned());
+            if let Ok(guard) = self.cache.lock()
+                && let Some(hit) = guard.get(&key)
+            {
+                return Ok(Some(hit.clone()));
+            }
+            let res = self.inner.embed(input)?;
+            if let Some(ref emb) = res
+                && let Ok(mut guard) = self.cache.lock()
+            {
+                guard.insert(key, emb.clone());
+            }
+            return Ok(res);
+        }
+        self.inner.embed(input)
+    }
+}
+
+/// One event line written into `transcripts/<dataset>/<item_id>.jsonl`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "record_type", rename_all = "snake_case")]
+pub enum TranscriptRecord {
+    Percept {
+        phase: String,
+        turn_or_probe_id: String,
+        actor: String,
+        place: String,
+        audience: Vec<String>,
+        timestamp_ms: u64,
+        text: String,
+        embedding_dim: Option<u32>,
+        embedding_tag: Option<String>,
+    },
+    GateDecision {
+        phase: String,
+        turn_or_probe_id: String,
+        target_event_id: u64,
+        outcome: String,
+    },
+    ModelCall {
+        phase: String,
+        turn_or_probe_id: String,
+        purpose: String,
+        model: String,
+        system_prompt: String,
+        user_prompt: String,
+        raw_response: Option<String>,
+        tokens_in: u64,
+        tokens_out: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_tokens: Option<u64>,
+        latency_ms: u64,
+        outcome: String,
+        error_detail: Option<String>,
+    },
+    Action {
+        probe_id: String,
+        capability_id: String,
+        places: Vec<String>,
+        people: Vec<String>,
+        payload_text: String,
+    },
+}
+
 /// Execution outcome of running an [`ExternalItem`] through Core's unmodified loop.
 #[derive(Debug, Clone)]
 pub struct ExternalItemExecution {
@@ -383,14 +574,18 @@ pub struct ExternalItemExecution {
     pub history_reasoning_mode: String,
     pub total_history_gate_wakes: u64,
     pub cost_by_purpose: Vec<PurposeCost>,
+    pub transcript_events: Vec<TranscriptRecord>,
+    pub failed_items: Vec<FailedItemRecord>,
+    pub decisions_go: usize,
+    pub decisions_note: usize,
+    pub decisions_silent: usize,
+    pub decisions_door_blocked: usize,
+    pub actions_dispatched: usize,
+    pub percepts_count: usize,
+    pub model_latencies_ms: Vec<u64>,
 }
 
 /// Executes one [`ExternalItem`] against Core's unmodified `Core::open` + `Core::step` loop.
-///
-/// - During static history ingestion (`HistoryMode::StaticSilent` unless `live_full_history` is true),
-///   Lab supplies a `ScriptedModelProvider` returning silent `think` (`$0` API cost) and counts
-///   Gate wakes without touching `crates/core`.
-/// - Captures a post-ingestion `SnapshotCheckpoint` and clones it for each isolated probe.
 #[allow(clippy::too_many_arguments)]
 pub fn execute_external_item(
     item: &ExternalItem,
@@ -401,6 +596,33 @@ pub fn execute_external_item(
     probe_model_name: &str,
     live_full_history: bool,
     guard: &mut CostGuard,
+) -> Result<ExternalItemExecution, LabError> {
+    execute_external_item_with_embedder(
+        item,
+        prior,
+        switches,
+        seed,
+        probe_provider,
+        probe_model_name,
+        live_full_history,
+        guard,
+        None,
+    )
+}
+
+/// Executes one [`ExternalItem`] against Core's unmodified loop, embedding every percept and
+/// probe with `embedder` before Core sees it (Gateway pre-queue role) and recording transcripts.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_external_item_with_embedder(
+    item: &ExternalItem,
+    prior: &Prior,
+    switches: &Switches,
+    seed: u64,
+    probe_provider: &dyn ModelProvider,
+    probe_model_name: &str,
+    live_full_history: bool,
+    guard: &mut CostGuard,
+    embedder: Option<&dyn Embedder>,
 ) -> Result<ExternalItemExecution, LabError> {
     let mut core = Core::open(MemStore::new(), prior.clone(), switches.clone(), seed)?;
     let silent_provider = {
@@ -421,10 +643,49 @@ pub fn execute_external_item(
     let mut history_gate_wakes = 0_u64;
     let mut purpose_costs: BTreeMap<u8, PurposeCost> = BTreeMap::new();
     let mut last_time = Time::from_millis(0);
+    let mut transcript_events = Vec::new();
+    let mut failed_items = Vec::new();
+    let mut decisions_go = 0usize;
+    let mut decisions_note = 0usize;
+    let mut decisions_silent = 0usize;
+    let mut decisions_door_blocked = 0usize;
+    let mut actions_dispatched = 0usize;
+    let mut percepts_count = 0usize;
+    let mut model_latencies_ms = Vec::new();
+    let mut hist_last_seq: Option<LogSeq> = None;
 
     for (idx, percept) in item.history.iter().enumerate() {
         let mut p = percept.clone();
         p.protocol_version = CURRENT_PROTOCOL_VERSION;
+        embed_percept_if_configured(&mut p, embedder)?;
+        let p_text = String::from_utf8_lossy(p.payload.as_bytes()).into_owned();
+        let emb_meta = p.embeddings.first().map(|e| {
+            (
+                e.tag.dim_d,
+                format!(
+                    "{}:{}:{}",
+                    e.tag.embed_model_ver, e.tag.dim_d, e.tag.prompt_regime_id
+                ),
+            )
+        });
+        transcript_events.push(TranscriptRecord::Percept {
+            phase: "history".to_owned(),
+            turn_or_probe_id: format!("hist_{idx}"),
+            actor: p.actor.as_str().to_owned(),
+            place: p.place.as_str().to_owned(),
+            audience: p
+                .audience
+                .members
+                .iter()
+                .map(|a| a.as_str().to_owned())
+                .collect(),
+            timestamp_ms: p.timestamp_ms.as_millis(),
+            text: p_text,
+            embedding_dim: emb_meta.as_ref().map(|m| m.0),
+            embedding_tag: emb_meta.map(|m| m.1),
+        });
+        percepts_count += 1;
+
         let req = Waist2Request::new(
             None,
             Waist2Method::PerceptEmit,
@@ -439,10 +700,37 @@ pub fn execute_external_item(
             .map_err(|e| LabError::Protocol(e.to_string()))?;
         last_time = parsed_percept.timestamp_ms;
         let effects = core.step(Input::Percept(Box::new(parsed_percept)), last_time, guard)?;
+        collect_new_store_events(
+            &mut core,
+            &mut hist_last_seq,
+            "history",
+            &format!("hist_{idx}"),
+            &mut decisions_go,
+            &mut decisions_note,
+            &mut decisions_silent,
+            &mut decisions_door_blocked,
+            &mut transcript_events,
+        )?;
         let history_provider: &dyn ModelProvider = if use_silent_history {
             &silent_provider
         } else {
             probe_provider
+        };
+        let phase_id = format!("hist_{idx}");
+        let mut drive_ctx = DriveEffectsContext {
+            phase: "history",
+            turn_or_probe_id: &phase_id,
+            item_id: &item.item_id,
+            probe_id: &phase_id,
+            is_silent_history: use_silent_history,
+            transcript_events: &mut transcript_events,
+            failed_items: &mut failed_items,
+            actions_dispatched: &mut actions_dispatched,
+            model_latencies_ms: &mut model_latencies_ms,
+            soul_prompt: None,
+            soul_system_prompt: None,
+            soul_place: None,
+            soul_asker: None,
         };
         let (wakes, _tok_in, _tok_out, _reply) = drive_model_effects(
             &mut core,
@@ -456,7 +744,18 @@ pub fn execute_external_item(
                 probe_model_name
             },
             &mut purpose_costs,
-            use_silent_history,
+            &mut drive_ctx,
+        )?;
+        collect_new_store_events(
+            &mut core,
+            &mut hist_last_seq,
+            "history",
+            &phase_id,
+            &mut decisions_go,
+            &mut decisions_note,
+            &mut decisions_silent,
+            &mut decisions_door_blocked,
+            &mut transcript_events,
         )?;
         history_gate_wakes = history_gate_wakes.saturating_add(wakes);
     }
@@ -467,14 +766,64 @@ pub fn execute_external_item(
 
     for (p_idx, probe) in item.probes.iter().enumerate() {
         let mut cloned_store = MemStore::new();
+        let mut cloned_last_seq: Option<LogSeq> = None;
         for rec in &base_events {
-            cloned_store.append(rec.clone())?;
+            let eid = cloned_store.append(rec.clone())?;
+            cloned_last_seq = Some(rec.seq);
+            if let Some(EventDetail::PerceptMeta { embeddings, .. }) = &rec.detail {
+                for emb in embeddings {
+                    cloned_store.insert_vector(eid, emb.clone());
+                }
+            }
+        }
+        if let Some(last_rec) = base_events.last() {
+            cloned_last_seq = Some(last_rec.seq);
         }
         cloned_store.snapshot(checkpoint.clone())?;
         let mut probe_core = Core::open(cloned_store, prior.clone(), switches.clone(), seed)?;
+        // Advance cursor past any PriorLoaded/Open events appended by Core::open
+        let open_tail = probe_core
+            .store()
+            .read_after_seq(cloned_last_seq, usize::MAX)?;
+        if let Some(last_open) = open_tail.last() {
+            cloned_last_seq = Some(last_open.seq);
+        }
 
         let mut p = probe.percept.clone();
         p.protocol_version = CURRENT_PROTOCOL_VERSION;
+        // Evaluation probes are addressed to the Soul by definition: without an addressee the
+        // Gate legitimately holds silence and no answer would ever be produced.
+        p.addressees = vec![ActorId::new("soul")];
+        embed_percept_if_configured(&mut p, embedder)?;
+        let p_text = String::from_utf8_lossy(p.payload.as_bytes()).into_owned();
+        let soul_prompt = build_probe_soul_prompt(item, probe, &p_text);
+        let emb_meta = p.embeddings.first().map(|e| {
+            (
+                e.tag.dim_d,
+                format!(
+                    "{}:{}:{}",
+                    e.tag.embed_model_ver, e.tag.dim_d, e.tag.prompt_regime_id
+                ),
+            )
+        });
+        transcript_events.push(TranscriptRecord::Percept {
+            phase: "probe".to_owned(),
+            turn_or_probe_id: probe.probe_id.clone(),
+            actor: p.actor.as_str().to_owned(),
+            place: p.place.as_str().to_owned(),
+            audience: p
+                .audience
+                .members
+                .iter()
+                .map(|a| a.as_str().to_owned())
+                .collect(),
+            timestamp_ms: p.timestamp_ms.as_millis(),
+            text: p_text,
+            embedding_dim: emb_meta.as_ref().map(|m| m.0),
+            embedding_tag: emb_meta.map(|m| m.1),
+        });
+        percepts_count += 1;
+
         let req = Waist2Request::new(
             None,
             Waist2Method::PerceptEmit,
@@ -489,7 +838,38 @@ pub fn execute_external_item(
             .map_err(|e| LabError::Protocol(e.to_string()))?;
         let probe_ts = parsed_probe.timestamp_ms.max(last_time);
         let effects = probe_core.step(Input::Percept(Box::new(parsed_probe)), probe_ts, guard)?;
+        collect_new_store_events(
+            &mut probe_core,
+            &mut cloned_last_seq,
+            "probe",
+            &probe.probe_id,
+            &mut decisions_go,
+            &mut decisions_note,
+            &mut decisions_silent,
+            &mut decisions_door_blocked,
+            &mut transcript_events,
+        )?;
 
+        let soul_system_prompt = "You are the soul in the MonoAgens evaluation harness. Answer the evaluator's \
+             question using only the transcript provided. Reply with only the shortest correct \
+             answer phrase (a name, date, number or short quote), with no sentence frame, no \
+             explanation and no JSON. When the correct behavior is to stay silent or not \
+             intervene, reply exactly SILENT.";
+        let mut drive_ctx = DriveEffectsContext {
+            phase: "probe",
+            turn_or_probe_id: &probe.probe_id,
+            item_id: &item.item_id,
+            probe_id: &probe.probe_id,
+            is_silent_history: false,
+            transcript_events: &mut transcript_events,
+            failed_items: &mut failed_items,
+            actions_dispatched: &mut actions_dispatched,
+            model_latencies_ms: &mut model_latencies_ms,
+            soul_prompt: Some(&soul_prompt),
+            soul_system_prompt: Some(soul_system_prompt),
+            soul_place: Some(probe.percept.place.as_str()),
+            soul_asker: Some(probe.percept.actor.as_str()),
+        };
         let (probe_wakes, tok_in, tok_out, reply_text) = drive_model_effects(
             &mut probe_core,
             effects,
@@ -498,7 +878,18 @@ pub fn execute_external_item(
             probe_provider,
             probe_model_name,
             &mut purpose_costs,
-            false,
+            &mut drive_ctx,
+        )?;
+        collect_new_store_events(
+            &mut probe_core,
+            &mut cloned_last_seq,
+            "probe",
+            &probe.probe_id,
+            &mut decisions_go,
+            &mut decisions_note,
+            &mut decisions_silent,
+            &mut decisions_door_blocked,
+            &mut transcript_events,
         )?;
 
         predictions.push(ExternalPrediction {
@@ -521,7 +912,182 @@ pub fn execute_external_item(
         history_reasoning_mode: history_mode_label.to_owned(),
         total_history_gate_wakes: history_gate_wakes,
         cost_by_purpose: purpose_costs.into_values().collect(),
+        transcript_events,
+        failed_items,
+        decisions_go,
+        decisions_note,
+        decisions_silent,
+        decisions_door_blocked,
+        actions_dispatched,
+        percepts_count,
+        model_latencies_ms,
     })
+}
+
+fn embed_percept_if_configured(
+    percept: &mut Percept,
+    embedder: Option<&dyn Embedder>,
+) -> Result<(), LabError> {
+    let Some(emb) = embedder else {
+        return Ok(());
+    };
+    if !percept.embeddings.is_empty() || percept.payload.is_empty() {
+        return Ok(());
+    }
+    let Ok(text) = std::str::from_utf8(percept.payload.as_bytes()) else {
+        return Ok(());
+    };
+    if text.trim().is_empty() {
+        return Ok(());
+    }
+    match emb.embed(&EmbedInput::document(text)) {
+        Ok(Some(tagged)) => {
+            percept.embeddings.push(tagged);
+            Ok(())
+        }
+        Ok(None) => Ok(()),
+        Err(EmbedError::ContextLimitExceeded { .. }) => {
+            // Truncate safely on byte boundary below 8K-token budget (~24KB) if a mega-chunk exceeds window.
+            let mut end = text.len().min(20_000);
+            while end > 0 && !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            let truncated = &text[..end];
+            let tagged = emb
+                .embed(&EmbedInput::document(truncated))
+                .map_err(|e| LabError::Protocol(format!("semantic embedder failed: {e}")))?;
+            if let Some(t) = tagged {
+                percept.embeddings.push(t);
+            }
+            Ok(())
+        }
+        Err(err) => Err(LabError::Protocol(format!(
+            "semantic embedder failed: {err}"
+        ))),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_new_store_events(
+    core: &mut Core<MemStore>,
+    last_seq: &mut Option<LogSeq>,
+    phase: &str,
+    turn_or_probe_id: &str,
+    decisions_go: &mut usize,
+    decisions_note: &mut usize,
+    decisions_silent: &mut usize,
+    decisions_door_blocked: &mut usize,
+    transcript_events: &mut Vec<TranscriptRecord>,
+) -> Result<(), LabError> {
+    let events = core.store().read_after_seq(*last_seq, usize::MAX)?;
+    let mut to_index: Vec<(monoagens_protocol::EventId, TaggedEmbedding)> = Vec::new();
+    for rec in &events {
+        *last_seq = Some(rec.seq);
+        match (&rec.kind, &rec.detail) {
+            (EventKind::Percept, Some(EventDetail::PerceptMeta { embeddings, .. })) => {
+                for emb in embeddings {
+                    to_index.push((rec.id, emb.clone()));
+                }
+            }
+            (
+                EventKind::Decision,
+                Some(EventDetail::Decision {
+                    target_event_id,
+                    outcome,
+                    ..
+                }),
+            ) => {
+                let outcome_lbl = match outcome {
+                    DecisionOutcome::Go => {
+                        *decisions_go += 1;
+                        "go"
+                    }
+                    DecisionOutcome::Note => {
+                        *decisions_note += 1;
+                        "note"
+                    }
+                    DecisionOutcome::Silent => {
+                        *decisions_silent += 1;
+                        "silent"
+                    }
+                    DecisionOutcome::DoorBlocked => {
+                        *decisions_door_blocked += 1;
+                        "door_blocked"
+                    }
+                    DecisionOutcome::Processed => "processed",
+                };
+                transcript_events.push(TranscriptRecord::GateDecision {
+                    phase: phase.to_owned(),
+                    turn_or_probe_id: turn_or_probe_id.to_owned(),
+                    target_event_id: target_event_id.as_u64(),
+                    outcome: outcome_lbl.to_owned(),
+                });
+            }
+            _ => {}
+        }
+    }
+    for (eid, emb) in to_index {
+        core.store_mut().insert_vector(eid, emb);
+    }
+    Ok(())
+}
+
+/// Builds the probe soul prompt: every visible history turn plus the evaluator question.
+fn build_probe_soul_prompt(item: &ExternalItem, probe: &ExternalProbe, probe_text: &str) -> String {
+    let mut out = String::new();
+    out.push_str("Conversation transcript visible to you:\n");
+    for (idx, p) in item.history.iter().enumerate() {
+        let text = String::from_utf8_lossy(p.payload.as_bytes());
+        out.push_str(&format!(
+            "[{idx}] t={}ms {} @ {}: {}\n",
+            p.timestamp_ms.as_millis(),
+            p.actor.as_str(),
+            p.place.as_str(),
+            text
+        ));
+    }
+    out.push_str("\nEvaluator question:\n");
+    out.push_str(probe_text);
+    out.push_str(&format!(
+        "\n\n(Answer as {} to the audience in {}.)",
+        probe.percept.actor.as_str(),
+        probe.percept.place.as_str()
+    ));
+    out
+}
+
+/// Strips code fences and accidental JSON wrappers from a probe completion.
+fn normalize_soul_answer(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let unfenced = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .unwrap_or(trimmed)
+        .trim_end_matches("```")
+        .trim();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(unfenced)
+        && let Some(s) = v.get("answer").and_then(|x| x.as_str())
+    {
+        return s.trim().to_owned();
+    }
+    unfenced.to_owned()
+}
+
+struct DriveEffectsContext<'a> {
+    phase: &'a str,
+    turn_or_probe_id: &'a str,
+    item_id: &'a str,
+    probe_id: &'a str,
+    is_silent_history: bool,
+    transcript_events: &'a mut Vec<TranscriptRecord>,
+    failed_items: &'a mut Vec<FailedItemRecord>,
+    actions_dispatched: &'a mut usize,
+    model_latencies_ms: &'a mut Vec<u64>,
+    /// Probe-phase soul prompt (visible history text + question). `None` for history phases.
+    soul_prompt: Option<&'a str>,
+    soul_system_prompt: Option<&'a str>,
+    soul_place: Option<&'a str>,
+    soul_asker: Option<&'a str>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -533,7 +1099,7 @@ fn drive_model_effects(
     provider: &dyn ModelProvider,
     model_name: &str,
     purpose_costs: &mut BTreeMap<u8, PurposeCost>,
-    is_silent_history: bool,
+    ctx: &mut DriveEffectsContext<'_>,
 ) -> Result<(u64, u64, u64, Option<String>), LabError> {
     let mut queue = initial_effects;
     let mut wakes = 0_u64;
@@ -546,53 +1112,180 @@ fn drive_model_effects(
         for effect in queue {
             match effect {
                 Effect::Dispatch(action) => {
+                    *ctx.actions_dispatched += 1;
+                    let text = String::from_utf8_lossy(action.payload.as_bytes()).into_owned();
                     if !action.payload.is_empty() {
-                        spoken_text =
-                            Some(String::from_utf8_lossy(action.payload.as_bytes()).into_owned());
+                        spoken_text = Some(text.clone());
                     }
+                    ctx.transcript_events.push(TranscriptRecord::Action {
+                        probe_id: ctx.probe_id.to_owned(),
+                        capability_id: action.capability_id.as_str().to_owned(),
+                        places: action
+                            .places
+                            .iter()
+                            .map(|p| p.as_str().to_owned())
+                            .collect(),
+                        people: action
+                            .audience
+                            .members
+                            .iter()
+                            .map(|p| p.as_str().to_owned())
+                            .collect(),
+                        payload_text: text,
+                    });
                 }
                 Effect::Model { purpose, plan } => {
                     wakes = wakes.saturating_add(1);
                     let request_id = plan
                         .trigger_event_id
                         .unwrap_or(monoagens_protocol::EventId::new(0));
-                    let prompt = serde_json::to_string(&plan.sections)
-                        .unwrap_or_else(|_| format!("items={}", plan.items.len()));
-                    let req = ModelRequest::text(
+                    let use_soul_prompt =
+                        ctx.soul_prompt.is_some() && provider.provider_name() != "scripted";
+                    let prompt = if use_soul_prompt {
+                        ctx.soul_prompt.unwrap_or_default().to_owned()
+                    } else {
+                        serde_json::to_string(&plan.sections)
+                            .unwrap_or_else(|_| format!("items={}", plan.items.len()))
+                    };
+                    let system_prompt = if use_soul_prompt {
+                        ctx.soul_system_prompt
+                            .unwrap_or("MonoAgens external evaluation")
+                    } else {
+                        "MonoAgens external evaluation"
+                    };
+                    let mut req = ModelRequest::text(
                         request_id,
                         purpose,
                         model_name,
-                        "MonoAgens external evaluation",
-                        prompt,
+                        system_prompt,
+                        prompt.clone(),
                     );
+                    if use_soul_prompt {
+                        // Probe answers are plain text, not the Waist-2 ThoughtBatch schema.
+                        req.response_schema = ResponseSchemaMode::None;
+                    }
+                    let purpose_lbl = match purpose {
+                        ModelPurpose::Reason => "reason",
+                        ModelPurpose::Classify => "classify",
+                        ModelPurpose::Consolidate => "consolidate",
+                    };
                     let (inp, call_in, call_out) = match provider.invoke(&req) {
                         Ok(ok) => {
-                            let (tin, tout) = if is_silent_history {
-                                (0, 0)
+                            let (tin, tout, treas) = if ctx.is_silent_history {
+                                (0, 0, None)
                             } else {
-                                ok.record
-                                    .usage
-                                    .map_or((0, 0), |u| (u.input_tokens, u.output_tokens))
+                                ok.record.usage.map_or((0, 0, None), |u| {
+                                    (u.input_tokens, u.output_tokens, u.reasoning_tokens)
+                                })
                             };
-                            let inp = match ok.output {
-                                ModelOutput::ThoughtActs(parsed) => Input::ModelResult {
-                                    request_id,
-                                    acts: parsed.acts,
-                                },
-                                ModelOutput::Verdict(_) => Input::ModelFailure {
-                                    request_id,
-                                    reason: "unexpected classification verdict".to_owned(),
-                                },
+                            if !ctx.is_silent_history {
+                                ctx.model_latencies_ms.push(ok.record.latency_ms);
+                            }
+                            ctx.transcript_events.push(TranscriptRecord::ModelCall {
+                                phase: ctx.phase.to_owned(),
+                                turn_or_probe_id: ctx.turn_or_probe_id.to_owned(),
+                                purpose: purpose_lbl.to_owned(),
+                                model: ok.record.model.clone(),
+                                system_prompt: system_prompt.to_owned(),
+                                user_prompt: prompt,
+                                raw_response: Some(ok.raw_text.clone()),
+                                tokens_in: tin,
+                                tokens_out: tout,
+                                reasoning_tokens: treas,
+                                latency_ms: ok.record.latency_ms,
+                                outcome: "success".to_owned(),
+                                error_detail: None,
+                            });
+                            let inp = if use_soul_prompt {
+                                // Probe answers are free-form text: synthesize the reply Action
+                                // from the raw completion (Core's reasoning plan carries no text).
+                                let answer = normalize_soul_answer(&ok.raw_text);
+                                if answer.eq_ignore_ascii_case("silent")
+                                    || answer.eq_ignore_ascii_case("noop")
+                                    || answer.is_empty()
+                                {
+                                    Input::ModelResult {
+                                        request_id,
+                                        acts: vec![ThoughtAct::Think {
+                                            thought: "SILENT".to_owned(),
+                                            motivation: 3,
+                                            confidence_0_20: 15,
+                                            used_ids: Vec::new(),
+                                            importance: None,
+                                            basis: None,
+                                            value: None,
+                                            cost: None,
+                                            domain: None,
+                                        }],
+                                    }
+                                } else {
+                                    let act = ThoughtAct::Act {
+                                        capability_id: CapabilityId::new("a.speak"),
+                                        places: vec![PlaceId::new(
+                                            ctx.soul_place.unwrap_or("external_probe"),
+                                        )],
+                                        people: vec![ActorId::new(
+                                            ctx.soul_asker.unwrap_or("lab_proctor"),
+                                        )],
+                                        payload: OpaquePayload::from_bytes(answer.into_bytes()),
+                                        motivation: 4,
+                                        confidence_0_20: 16,
+                                        used_ids: Vec::new(),
+                                        expected: None,
+                                        domain: None,
+                                    };
+                                    Input::ModelResult {
+                                        request_id,
+                                        acts: vec![act],
+                                    }
+                                }
+                            } else {
+                                match ok.output {
+                                    ModelOutput::ThoughtActs(parsed) => Input::ModelResult {
+                                        request_id,
+                                        acts: parsed.acts,
+                                    },
+                                    ModelOutput::Verdict(_) => Input::ModelFailure {
+                                        request_id,
+                                        reason: "unexpected classification verdict".to_owned(),
+                                    },
+                                }
                             };
                             (inp, tin, tout)
                         }
-                        Err(fail) => (fail.to_core_input(), 0, 0),
+                        Err(fail) => {
+                            if !ctx.is_silent_history {
+                                ctx.model_latencies_ms.push(fail.record.latency_ms);
+                                ctx.failed_items.push(FailedItemRecord {
+                                    item_id: ctx.item_id.to_owned(),
+                                    probe_id: ctx.probe_id.to_owned(),
+                                    stage: "soul_model".to_owned(),
+                                    reason: fail.to_string(),
+                                });
+                            }
+                            ctx.transcript_events.push(TranscriptRecord::ModelCall {
+                                phase: ctx.phase.to_owned(),
+                                turn_or_probe_id: ctx.turn_or_probe_id.to_owned(),
+                                purpose: purpose_lbl.to_owned(),
+                                model: fail.record.model.clone(),
+                                system_prompt: system_prompt.to_owned(),
+                                user_prompt: prompt,
+                                raw_response: None,
+                                tokens_in: 0,
+                                tokens_out: 0,
+                                reasoning_tokens: None,
+                                latency_ms: fail.record.latency_ms,
+                                outcome: format!("failed:{}", fail.class),
+                                error_detail: Some(fail.detail.clone()),
+                            });
+                            (fail.to_core_input(), 0, 0)
+                        }
                     };
                     tokens_in = tokens_in.saturating_add(call_in);
                     tokens_out = tokens_out.saturating_add(call_out);
                     let call_toks = call_in.saturating_add(call_out);
                     guard.record_tokens(call_toks);
-                    let call_cost_usd = if is_silent_history || call_toks == 0 {
+                    let call_cost_usd = if ctx.is_silent_history || call_toks == 0 {
                         0.0
                     } else {
                         (call_toks as f64 / 1_000.0) * 0.01
@@ -603,17 +1296,19 @@ fn drive_model_effects(
                         ModelPurpose::Classify => 1,
                         ModelPurpose::Consolidate => 2,
                     };
-                    let entry = purpose_costs.entry(key).or_insert(PurposeCost {
-                        purpose,
-                        calls: 0,
-                        tokens_in: 0,
-                        tokens_out: 0,
-                        cost_usd: 0.0,
-                    });
-                    entry.calls += 1;
-                    entry.tokens_in += call_in;
-                    entry.tokens_out += call_out;
-                    entry.cost_usd += call_cost_usd;
+                    if !ctx.is_silent_history {
+                        let entry = purpose_costs.entry(key).or_insert(PurposeCost {
+                            purpose,
+                            calls: 0,
+                            tokens_in: 0,
+                            tokens_out: 0,
+                            cost_usd: 0.0,
+                        });
+                        entry.calls += 1;
+                        entry.tokens_in += call_in;
+                        entry.tokens_out += call_out;
+                        entry.cost_usd += call_cost_usd;
+                    }
 
                     let follow = core.step(inp, now, guard)?;
                     next_queue.extend(follow);

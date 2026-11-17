@@ -1,5 +1,3 @@
-# Committed template for the external dataset manifest (every license status is "pending").
-# Run `monoagens-lab datasets init` to create the local, git-ignored `lab/datasets.manifest.toml` from this file.
 schema_version = "1.0"
 
 [[datasets]]
@@ -33,6 +31,7 @@ path = "data/locomo10.json"
 sha256 = "pending_pin"
 size = "pending_pin"
 
+
 [[datasets]]
 id = "longmemeval"
 domain = "memory"
@@ -45,7 +44,6 @@ contamination_note = "Published Oct 2024; mitigated by 115K-1.5M token haystacks
 reason = "Primary split longmemeval_s_cleaned.json (500 independent items; gpt-4o judge)."
 split = "LongMemEval_S"
 checksums_recorded = "source"
-checksums_recorded_date = "2026-11-17"
 converter_version = "1.0.0"
 scorer_version = "1.0.0"
 
@@ -78,6 +76,7 @@ source_role = "data"
 sha256 = "821a2034d219ab45846873dd14c14f12cfe7776e73527a483f9dac095d38620c"
 size = 15388478
 
+
 [[datasets]]
 id = "memory_agent_bench"
 domain = "memory"
@@ -90,7 +89,7 @@ contamination_note = "Mixed: older RULER/LME/InfBench subsets vs Jul 2025 EventQ
 reason = "Accurate_Retrieval + Conflict_Resolution stream_source T_0+i*60s + lab_proctor (user/prior_assistant on LME(S*))."
 split = "Accurate_Retrieval+Conflict_Resolution"
 checksums_recorded = "pending"
-converter_version = "1.0.0"
+converter_version = "2.0.0"
 scorer_version = "1.0.0"
 
 [[datasets.sources]]
@@ -111,16 +110,17 @@ terms = "MIT wrapper over third-party sub-corpora; verify downstream terms if re
 status = "pending"
 
 [[datasets.files]]
-path = "Accurate_Retrieval.parquet"
+path = "data/Accurate_Retrieval-00000-of-00001.parquet"
 source_role = "data"
 sha256 = "pending_pin"
-size = "pending_pin"
+size = 20024386
 
 [[datasets.files]]
-path = "Conflict_Resolution.parquet"
+path = "data/Conflict_Resolution-00000-of-00001.parquet"
 source_role = "data"
 sha256 = "pending_pin"
-size = "pending_pin"
+size = 1491588
+
 
 [[datasets]]
 id = "group_mem_bench"
@@ -134,7 +134,7 @@ contamination_note = "May 2026 synthetic multi-party enterprise chats."
 reason = "Multi-source: HF conversations + GitHub questions/eval; real channel audiences + privacy_conflict refusal."
 split = "4_domains_745_qas"
 checksums_recorded = "pending"
-converter_version = "1.0.0"
+converter_version = "1.1.0"
 scorer_version = "1.0.0"
 
 [[datasets.sources]]
@@ -178,6 +178,151 @@ source_role = "conversations"
 sha256 = "pending_pin"
 size = "pending_pin"
 
+[[datasets.files]]
+path = "questions/Finance/abstention.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 7498
+
+[[datasets.files]]
+path = "questions/Finance/knowledge_update.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 12564
+
+[[datasets.files]]
+path = "questions/Finance/multi_hop.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 10101
+
+[[datasets.files]]
+path = "questions/Finance/temporal.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 9077
+
+[[datasets.files]]
+path = "questions/Finance/term_ambiguity.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 9697
+
+[[datasets.files]]
+path = "questions/Finance/user_implicit.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 3890
+
+[[datasets.files]]
+path = "questions/Healthcare/abstention.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 4971
+
+[[datasets.files]]
+path = "questions/Healthcare/knowledge_update.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 5945
+
+[[datasets.files]]
+path = "questions/Healthcare/multi_hop.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 10623
+
+[[datasets.files]]
+path = "questions/Healthcare/temporal.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 7082
+
+[[datasets.files]]
+path = "questions/Healthcare/term_ambiguity.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 1511
+
+[[datasets.files]]
+path = "questions/Healthcare/user_implicit.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 439
+
+[[datasets.files]]
+path = "questions/Manufacturing/abstention.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 8613
+
+[[datasets.files]]
+path = "questions/Manufacturing/knowledge_update.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 8178
+
+[[datasets.files]]
+path = "questions/Manufacturing/multi_hop.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 10249
+
+[[datasets.files]]
+path = "questions/Manufacturing/temporal.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 8022
+
+[[datasets.files]]
+path = "questions/Manufacturing/term_ambiguity.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 2621
+
+[[datasets.files]]
+path = "questions/Manufacturing/user_implicit.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 833
+
+[[datasets.files]]
+path = "questions/Technology/abstention.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 7477
+
+[[datasets.files]]
+path = "questions/Technology/knowledge_update.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 14612
+
+[[datasets.files]]
+path = "questions/Technology/multi_hop.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 9998
+
+[[datasets.files]]
+path = "questions/Technology/temporal.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 7643
+
+[[datasets.files]]
+path = "questions/Technology/term_ambiguity.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 8637
+
+[[datasets.files]]
+path = "questions/Technology/user_implicit.jsonl"
+source_role = "questions_and_eval"
+sha256 = "pending_pin"
+size = 7348
+
+
 [[datasets]]
 id = "stale"
 domain = "memory"
@@ -190,7 +335,7 @@ contamination_note = "May 2026 scenarios; LongMemEval distractors from 2024."
 reason = "T1_T2_400_FULL.json (400 scenarios across SR, PR, IPA with Gemini-3.1-flash-lite judge)."
 split = "T1_T2_400_FULL"
 checksums_recorded = "pending"
-converter_version = "1.0.0"
+converter_version = "2.0.0"
 scorer_version = "1.0.0"
 
 [[datasets.sources]]
@@ -216,6 +361,7 @@ source_role = "data"
 sha256 = "pending_pin"
 size = "pending_pin"
 
+
 [[datasets]]
 id = "pm_bench"
 domain = "prospective"
@@ -228,7 +374,7 @@ contamination_note = "Published Jul 2026 (COLM 2026); Virtual Week paradigm."
 reason = "80-step 7-day Virtual Week prospective memory simulation (Set-F1 + False-Alarm Rate)."
 split = "80_steps_full"
 checksums_recorded = "pending"
-converter_version = "1.0.0"
+converter_version = "1.2.0"
 scorer_version = "1.0.0"
 
 [[datasets.sources]]
@@ -243,9 +389,10 @@ terms = "Missing root LICENSE file in genglinliu/PMBench (paper CC-BY-4.0); requ
 status = "pending"
 
 [[datasets.files]]
-path = "data/virtual_week.json"
+path = "data/synthetic_week_v9.json"
 sha256 = "pending_pin"
-size = "pending_pin"
+size = 98168
+
 
 [[datasets]]
 id = "pis"
@@ -257,7 +404,7 @@ lane = "core_behavioral"
 contamination_risk = "low"
 contamination_note = "Method-only paper (arXiv:2609.01272) evaluated on pm_bench."
 reason = "Method-only paper (arXiv:2609.01272) evaluated on pm_bench; no independent public dataset."
-checksums_recorded = "na"
+checksums_recorded = "pending"
 converter_version = "1.0.0"
 scorer_version = "1.0.0"
 
@@ -272,6 +419,7 @@ spdx = "N/A"
 terms = "Method-only paper; no dataset release."
 status = "pending"
 
+
 [[datasets]]
 id = "pitch"
 domain = "proactivity_timing"
@@ -284,7 +432,7 @@ contamination_note = "Released Oct 2026 (arXiv:2610.25896)."
 reason = "35 conversations, 384 candidate messages, causal turn-by-turn timing."
 split = "384_candidates"
 checksums_recorded = "pending"
-converter_version = "1.0.0"
+converter_version = "2.2.0"
 scorer_version = "1.0.0"
 
 [[datasets.sources]]
@@ -303,6 +451,7 @@ path = "data/pitch-benchmark-data.json"
 sha256 = "pending_pin"
 size = "pending_pin"
 
+
 [[datasets]]
 id = "proact"
 domain = "proactivity_timing"
@@ -313,7 +462,7 @@ lane = "core_behavioral"
 contamination_risk = "moderate"
 contamination_note = "Paper arXiv:2607.03730 dataset has no public GitHub/HF release."
 reason = "ProACT 3,244-example dataset unreleased (collides with bosonai/proactbench)."
-checksums_recorded = "na"
+checksums_recorded = "pending"
 converter_version = "1.0.0"
 scorer_version = "1.0.0"
 
@@ -328,6 +477,7 @@ spdx = "N/A"
 terms = "Paper on arXiv; dataset files not publicly released."
 status = "pending"
 
+
 [[datasets]]
 id = "proactive_bench"
 domain = "proactivity_timing"
@@ -340,7 +490,7 @@ contamination_note = "Public GitHub release since Oct 2024 (ICLR 2025)."
 reason = "THUNLP ProactiveAgent test_data (233 events; NOT ECCV26 tdemin16/proactivebench; optional RM weights in scorer_model entry proactive_agent_rm)."
 split = "test_233"
 checksums_recorded = "pending"
-converter_version = "1.0.0"
+converter_version = "1.3.0"
 scorer_version = "1.0.0"
 
 [[datasets.sources]]
@@ -355,21 +505,94 @@ terms = "Apache-2.0 in thunlp/ProactiveAgent; local, commercial & derived allowe
 status = "pending"
 
 [[datasets.files]]
-path = "dataset/test_data/test_data.jsonl"
+path = "dataset/test_data/code_11.json"
 source_role = "primary"
 sha256 = "pending_pin"
-size = "pending_pin"
+size = 8229
+
+[[datasets.files]]
+path = "dataset/test_data/code_12.json"
+source_role = "primary"
+sha256 = "pending_pin"
+size = 8635
+
+[[datasets.files]]
+path = "dataset/test_data/code_13.json"
+source_role = "primary"
+sha256 = "pending_pin"
+size = 9216
+
+[[datasets.files]]
+path = "dataset/test_data/code_14.json"
+source_role = "primary"
+sha256 = "pending_pin"
+size = 11536
+
+[[datasets.files]]
+path = "dataset/test_data/code_15.json"
+source_role = "primary"
+sha256 = "pending_pin"
+size = 12636
+
+[[datasets.files]]
+path = "dataset/test_data/code_16.json"
+source_role = "primary"
+sha256 = "pending_pin"
+size = 12351
+
+[[datasets.files]]
+path = "dataset/test_data/splits.json"
+source_role = "primary"
+sha256 = "pending_pin"
+size = 959
+
+[[datasets.files]]
+path = "dataset/test_data/writing_11.json"
+source_role = "primary"
+sha256 = "pending_pin"
+size = 10271
+
+[[datasets.files]]
+path = "dataset/test_data/writing_12.json"
+source_role = "primary"
+sha256 = "pending_pin"
+size = 11381
+
+[[datasets.files]]
+path = "dataset/test_data/writing_13.json"
+source_role = "primary"
+sha256 = "pending_pin"
+size = 12189
+
+[[datasets.files]]
+path = "dataset/test_data/writing_14.json"
+source_role = "primary"
+sha256 = "pending_pin"
+size = 10670
+
+[[datasets.files]]
+path = "dataset/test_data/writing_15.json"
+source_role = "primary"
+sha256 = "pending_pin"
+size = 11454
+
+[[datasets.files]]
+path = "dataset/test_data/writing_16.json"
+source_role = "primary"
+sha256 = "pending_pin"
+size = 11218
+
 
 [[datasets]]
 id = "capa"
 domain = "prospective"
 relative_dir = "capa"
 availability = "available"
-core_applicability = "core_behavioral"
+core_applicability = "not_mappable"
 lane = "core_behavioral"
 contamination_risk = "high"
 contamination_note = "High for raw AMI/QMSum transcripts; low for Sept 2026 CAPA cues/briefings."
-reason = "20 QMSum AMI test meetings default (of 137 meetings); GPT-4o schema judge."
+reason = "Upstream ships parsed AMI transcripts + selection manifests only; CAPA episode masks, cue/anchor windows, briefings and target propositions are generated at evaluation time by its LLM pipeline (src/capa/cue_selector_llm.py, episode_generator.py), so no released episode labels exist to score credited_recovery/silence_rate."
 split = "20_test_meetings"
 checksums_recorded = "pending"
 converter_version = "1.0.0"
@@ -387,9 +610,110 @@ terms = "MIT code/prompts; CC-BY-4.0 AMI data via QMSum; offline research caveat
 status = "pending"
 
 [[datasets.files]]
-path = "data/ami/test.json"
+path = "data/ami/manifests/ami_manifest_test.json"
 sha256 = "pending_pin"
-size = "pending_pin"
+size = 7485
+
+[[datasets.files]]
+path = "data/ami/test/Meeting15test_parsed.json"
+sha256 = "pending_pin"
+size = 50577
+
+[[datasets.files]]
+path = "data/ami/test/Meeting16test_parsed.json"
+sha256 = "pending_pin"
+size = 63220
+
+[[datasets.files]]
+path = "data/ami/test/Meeting17test_parsed.json"
+sha256 = "pending_pin"
+size = 66900
+
+[[datasets.files]]
+path = "data/ami/test/Meeting18test_parsed.json"
+sha256 = "pending_pin"
+size = 77664
+
+[[datasets.files]]
+path = "data/ami/test/Meeting19test_parsed.json"
+sha256 = "pending_pin"
+size = 45845
+
+[[datasets.files]]
+path = "data/ami/test/Meeting20test_parsed.json"
+sha256 = "pending_pin"
+size = 67180
+
+[[datasets.files]]
+path = "data/ami/test/Meeting21test_parsed.json"
+sha256 = "pending_pin"
+size = 72788
+
+[[datasets.files]]
+path = "data/ami/test/Meeting22test_parsed.json"
+sha256 = "pending_pin"
+size = 78934
+
+[[datasets.files]]
+path = "data/ami/test/Meeting23test_parsed.json"
+sha256 = "pending_pin"
+size = 43158
+
+[[datasets.files]]
+path = "data/ami/test/Meeting24test_parsed.json"
+sha256 = "pending_pin"
+size = 67075
+
+[[datasets.files]]
+path = "data/ami/test/Meeting25test_parsed.json"
+sha256 = "pending_pin"
+size = 75915
+
+[[datasets.files]]
+path = "data/ami/test/Meeting26test_parsed.json"
+sha256 = "pending_pin"
+size = 84747
+
+[[datasets.files]]
+path = "data/ami/test/Meeting27test_parsed.json"
+sha256 = "pending_pin"
+size = 65481
+
+[[datasets.files]]
+path = "data/ami/test/Meeting28test_parsed.json"
+sha256 = "pending_pin"
+size = 71592
+
+[[datasets.files]]
+path = "data/ami/test/Meeting29test_parsed.json"
+sha256 = "pending_pin"
+size = 77185
+
+[[datasets.files]]
+path = "data/ami/test/Meeting30test_parsed.json"
+sha256 = "pending_pin"
+size = 81159
+
+[[datasets.files]]
+path = "data/ami/test/Meeting31test_parsed.json"
+sha256 = "pending_pin"
+size = 53844
+
+[[datasets.files]]
+path = "data/ami/test/Meeting32test_parsed.json"
+sha256 = "pending_pin"
+size = 70948
+
+[[datasets.files]]
+path = "data/ami/test/Meeting33test_parsed.json"
+sha256 = "pending_pin"
+size = 70856
+
+[[datasets.files]]
+path = "data/ami/test/Meeting34test_parsed.json"
+sha256 = "pending_pin"
+size = 79136
+
 
 [[datasets]]
 id = "when2speak"
@@ -403,7 +727,7 @@ contamination_note = "May 2026 synthetic 8-turn windows."
 reason = "finetune_test_token.jsonl (21,687 test items; default S=1,000 stratified)."
 split = "finetune_test_token@1000"
 checksums_recorded = "pending"
-converter_version = "1.0.0"
+converter_version = "1.2.0"
 scorer_version = "1.0.0"
 
 [[datasets.sources]]
@@ -422,6 +746,7 @@ path = "finetune_test_token.jsonl"
 sha256 = "pending_pin"
 size = "pending_pin"
 
+
 [[datasets]]
 id = "ubuntu_irc"
 domain = "group_chat"
@@ -434,7 +759,7 @@ contamination_note = "Public 2019 #ubuntu IRC disentanglement logs."
 reason = "Bound solely to jkkummerfeld/irc-disentanglement (5,000 test messages; thread_f1 + derived parent_speaker_p1)."
 split = "test_5000"
 checksums_recorded = "pending"
-converter_version = "1.0.0"
+converter_version = "1.1.0"
 scorer_version = "1.0.0"
 
 [[datasets.sources]]
@@ -449,14 +774,105 @@ terms = "CC-BY-4.0 data; ISC evaluation tools."
 status = "pending"
 
 [[datasets.files]]
-path = "data/test/test.raw.txt"
+path = "data/test/2005-07-06_14.annotation.txt"
 sha256 = "pending_pin"
-size = "pending_pin"
+size = 6069
 
 [[datasets.files]]
-path = "data/test/test.annotation.txt"
+path = "data/test/2005-07-06_14.raw.txt"
 sha256 = "pending_pin"
-size = "pending_pin"
+size = 102671
+
+[[datasets.files]]
+path = "data/test/2007-01-11_12.annotation.txt"
+sha256 = "pending_pin"
+size = 6235
+
+[[datasets.files]]
+path = "data/test/2007-01-11_12.raw.txt"
+sha256 = "pending_pin"
+size = 112902
+
+[[datasets.files]]
+path = "data/test/2007-12-01_03.annotation.txt"
+sha256 = "pending_pin"
+size = 6185
+
+[[datasets.files]]
+path = "data/test/2007-12-01_03.raw.txt"
+sha256 = "pending_pin"
+size = 112344
+
+[[datasets.files]]
+path = "data/test/2008-07-14_18.annotation.txt"
+sha256 = "pending_pin"
+size = 6329
+
+[[datasets.files]]
+path = "data/test/2008-07-14_18.raw.txt"
+sha256 = "pending_pin"
+size = 113250
+
+[[datasets.files]]
+path = "data/test/2010-08-17_18.annotation.txt"
+sha256 = "pending_pin"
+size = 6257
+
+[[datasets.files]]
+path = "data/test/2010-08-17_18.raw.txt"
+sha256 = "pending_pin"
+size = 137991
+
+[[datasets.files]]
+path = "data/test/2013-09-01_02.annotation.txt"
+sha256 = "pending_pin"
+size = 6376
+
+[[datasets.files]]
+path = "data/test/2013-09-01_02.raw.txt"
+sha256 = "pending_pin"
+size = 123538
+
+[[datasets.files]]
+path = "data/test/2014-06-18_13.annotation.txt"
+sha256 = "pending_pin"
+size = 6203
+
+[[datasets.files]]
+path = "data/test/2014-06-18_13.raw.txt"
+sha256 = "pending_pin"
+size = 120064
+
+[[datasets.files]]
+path = "data/test/2015-03-18_05.annotation.txt"
+sha256 = "pending_pin"
+size = 6201
+
+[[datasets.files]]
+path = "data/test/2015-03-18_05.raw.txt"
+sha256 = "pending_pin"
+size = 120729
+
+[[datasets.files]]
+path = "data/test/2016-02-22_17.annotation.txt"
+sha256 = "pending_pin"
+size = 6215
+
+[[datasets.files]]
+path = "data/test/2016-02-22_17.raw.txt"
+sha256 = "pending_pin"
+size = 115751
+
+[[datasets.files]]
+path = "data/test/2016-06-08_07.annotation.txt"
+sha256 = "pending_pin"
+size = 6129
+
+[[datasets.files]]
+path = "data/test/2016-06-08_07.raw.txt"
+sha256 = "pending_pin"
+size = 121762
+
 
 [[datasets]]
 id = "molweni"
@@ -470,7 +886,7 @@ contamination_note = "Public since 2020 from Ubuntu IRC logs on GitHub."
 reason = "MRC (qa_f1) and DP (sdrt_link_f1); MuTual strictly excluded."
 split = "MRC_test+DP_test"
 checksums_recorded = "pending"
-converter_version = "1.0.0"
+converter_version = "1.2.0"
 scorer_version = "1.0.0"
 
 [[datasets.sources]]
@@ -485,14 +901,15 @@ terms = "No LICENSE file in GitHub repo (COLING 2020 paper is CC-BY-4.0); requir
 status = "pending"
 
 [[datasets.files]]
-path = "MRC/test.json"
+path = "MRC(withDiscourse)/test.json"
 sha256 = "pending_pin"
-size = "pending_pin"
+size = 1712923
 
 [[datasets.files]]
 path = "DP/test.json"
 sha256 = "pending_pin"
-size = "pending_pin"
+size = 1184410
+
 
 [[datasets]]
 id = "fantom"
@@ -506,14 +923,20 @@ contamination_note = "Public since Oct 2023; All* formulation resists surface sh
 reason = "256 dialogues (short setting default; All* via lab/adapters local SentenceTransformer)."
 split = "short"
 checksums_recorded = "pending"
-converter_version = "1.0.0"
-scorer_version = "1.0.0"
+converter_version = "2.0.0"
+scorer_version = "2.0.0"
 
 [[datasets.sources]]
 kind = "git"
 location = "https://github.com/skywalker023/fantom"
 revision = "pending_pin"
-role = "primary"
+role = "repository"
+
+[[datasets.sources]]
+kind = "url"
+location = "https://storage.googleapis.com/ai2-mosaic-public/projects/fantom/fantom.tar.gz"
+revision = "1d08dfa0ea474c7f83b9bc7e3a7b466eab25194043489dd618b4c5223e1253a4"
+role = "data"
 
 [datasets.license]
 spdx = "MIT"
@@ -521,9 +944,13 @@ terms = "MIT on GitHub repo; dynamic data archive notice to be verified on fetch
 status = "pending"
 
 [[datasets.files]]
-path = "data/fantom.json"
-sha256 = "pending_pin"
-size = "pending_pin"
+path = "fantom.tar.gz"
+source_role = "data"
+sha256 = "1d08dfa0ea474c7f83b9bc7e3a7b466eab25194043489dd618b4c5223e1253a4"
+size = 1040898
+download_url = "https://storage.googleapis.com/ai2-mosaic-public/projects/fantom/fantom.tar.gz"
+extract = "tar_gz"
+
 
 [[datasets]]
 id = "opentom"
@@ -537,7 +964,7 @@ contamination_note = "Zero train split; public since Feb 2024."
 reason = "696 narratives (Long + ExtraLong) with Loc_c, Loc_f, Att, and MHop."
 split = "Long+ExtraLong"
 checksums_recorded = "pending"
-converter_version = "1.0.0"
+converter_version = "2.0.0"
 scorer_version = "1.0.0"
 
 [[datasets.sources]]
@@ -563,6 +990,7 @@ source_role = "data"
 sha256 = "pending_pin"
 size = "pending_pin"
 
+
 [[datasets]]
 id = "hi_tom"
 domain = "theory_of_mind"
@@ -575,7 +1003,7 @@ contamination_note = "Moderate on orders 0-2; higher-order deceptive Tell chains
 reason = "1,200 MCQs across 0th-4th order ToM with Mode 1 private Tell audiences."
 split = "Hi-ToM_data"
 checksums_recorded = "pending"
-converter_version = "1.0.0"
+converter_version = "2.0.0"
 scorer_version = "1.0.0"
 
 [[datasets.sources]]
@@ -594,6 +1022,7 @@ path = "Hi-ToM_data/Hi-ToM_data.json"
 sha256 = "pending_pin"
 size = "pending_pin"
 
+
 [[datasets]]
 id = "exploretom"
 domain = "theory_of_mind"
@@ -606,7 +1035,7 @@ contamination_note = "Combinatorial A* DSL space."
 reason = "ExploreToM exact_match_acc (separate from DynToM)."
 split = "train_stratified_471"
 checksums_recorded = "pending"
-converter_version = "1.0.0"
+converter_version = "2.0.0"
 scorer_version = "1.0.0"
 
 [[datasets.sources]]
@@ -627,10 +1056,11 @@ terms = "Non-commercial research only."
 status = "pending"
 
 [[datasets.files]]
-path = "train.parquet"
+path = "ExploreToM-data-sample.csv"
 source_role = "data"
 sha256 = "pending_pin"
-size = "pending_pin"
+size = 31848634
+
 
 [[datasets]]
 id = "dyntom"
@@ -644,7 +1074,7 @@ contamination_note = "ACL 2025 multi-stage temporal ToM transitions."
 reason = "GAIR-NLP/DynToM (1,100 contexts / 5 stages @ +60s / 78,100 MCQs; HF combined 375,836,020 B)."
 split = "stratified_471_contexts"
 checksums_recorded = "pending"
-converter_version = "1.0.0"
+converter_version = "1.1.0"
 scorer_version = "1.0.0"
 
 [[datasets.sources]]
@@ -665,16 +1095,11 @@ terms = "Apache-2.0; local, commercial & derived redistribution allowed."
 status = "pending"
 
 [[datasets.files]]
-path = "story.json"
+path = "DynToM.json"
 source_role = "data"
 sha256 = "pending_pin"
-size = "pending_pin"
+size = 375836020
 
-[[datasets.files]]
-path = "question_new.json"
-source_role = "data"
-sha256 = "pending_pin"
-size = "pending_pin"
 
 [[datasets]]
 id = "tomi"
@@ -688,7 +1113,7 @@ contamination_note = "Public 2019 templates; 20-50+ pp collapse under Ullman/Sha
 reason = "Optional shortcut-perturbation sanity check only (strip .trace completely)."
 split = "test_471"
 checksums_recorded = "pending"
-converter_version = "1.0.0"
+converter_version = "1.1.0"
 scorer_version = "1.0.0"
 
 [[datasets.sources]]
@@ -703,9 +1128,12 @@ terms = "Non-commercial research only."
 status = "pending"
 
 [[datasets.files]]
-path = "test.txt"
+path = "tomi_balanced_story_types.zip"
 sha256 = "pending_pin"
-size = "pending_pin"
+size = 403507
+download_url = "https://raw.githubusercontent.com/facebookresearch/ToMi/pending_pin/tomi_balanced_story_types.zip"
+extract = "zip"
+
 
 [[datasets]]
 id = "multilexnorm"
@@ -719,7 +1147,6 @@ contamination_note = "ind_eng public since 2019/2021; ind merged 2026."
 reason = "Non-conversational tweet pairs (ind + ind_eng); executed via reason::EmbedderProbe."
 split = "ind_test+ind_eng_test"
 checksums_recorded = "source"
-checksums_recorded_date = "2026-11-17"
 converter_version = "1.0.0"
 scorer_version = "1.0.0"
 
@@ -751,6 +1178,7 @@ path = "ind_eng/test-00000-of-00001.parquet"
 source_role = "parquet"
 sha256 = "dd5c99e4959a8e1eabab22eb25605bbb2e1fe5a8b9270c2fcd397713871349e1"
 size = 43422
+
 
 [[datasets]]
 id = "indocollex"
@@ -798,6 +1226,7 @@ path = "dict/inforformal-formal-Indonesian-dictionary.tsv"
 sha256 = "pending_pin"
 size = 39167
 
+
 [[datasets]]
 id = "mpbench"
 domain = "security"
@@ -808,7 +1237,7 @@ lane = "core_behavioral"
 contamination_risk = "very_low"
 contamination_note = "Synthesized in 2026; never publicly released."
 reason = "HF pritamdash/mp-bench is an empty .gitattributes-only placeholder; zero data files published."
-checksums_recorded = "na"
+checksums_recorded = "pending"
 converter_version = "1.0.0"
 scorer_version = "1.0.0"
 
@@ -822,6 +1251,7 @@ role = "empty_placeholder"
 spdx = "N/A"
 terms = "Paper arXiv:2606.04329v2 is CC-BY-4.0; no dataset license published."
 status = "pending"
+
 
 [[datasets]]
 id = "fantom_scorer_all_roberta_large_v1"
@@ -855,6 +1285,7 @@ source_role = "scorer_model"
 sha256 = "pending_pin"
 size = "pending_pin"
 
+
 [[datasets]]
 id = "proactive_agent_rm"
 kind = "scorer_model"
@@ -886,3 +1317,114 @@ path = "config.json"
 source_role = "scorer_model"
 sha256 = "pending_pin"
 size = "pending_pin"
+
+
+[[datasets]]
+id = "embeddinggemma-2"
+kind = "embedder_model"
+domain = "indonesian_register"
+relative_dir = "embedder_models/embeddinggemma-2"
+availability = "available"
+core_applicability = "not_mappable"
+lane = "core_behavioral"
+contamination_risk = "very_low"
+contamination_note = "Non-corpus semantic embedder weights; no benchmark content."
+reason = "Local EmbeddingGemma 2 (256d) semantic embedder for every external behavioral run and the Indonesian embedder probes."
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "huggingface"
+location = "google/embeddinggemma-2"
+revision = "f9972ac22e696a105c482202646979e33e4b5a1e"
+role = "embedder_model"
+
+[datasets.license]
+spdx = "Apache-2.0"
+terms = "Apache-2.0 declared on the Hugging Face model card; weights fetched locally for offline 256d embedding."
+status = "pending"
+
+[[datasets.files]]
+path = "1_Pooling/config.json"
+source_role = "embedder_model"
+sha256 = "pending_pin"
+size = 90
+
+[[datasets.files]]
+path = "2_Normalize/config.json"
+source_role = "embedder_model"
+sha256 = "pending_pin"
+size = 97
+
+[[datasets.files]]
+path = "README.md"
+source_role = "embedder_model"
+sha256 = "pending_pin"
+size = 22234
+
+[[datasets.files]]
+path = "chat_template.jinja"
+source_role = "embedder_model"
+sha256 = "pending_pin"
+size = 1016
+
+[[datasets.files]]
+path = "config.json"
+source_role = "embedder_model"
+sha256 = "pending_pin"
+size = 4455
+
+[[datasets.files]]
+path = "config_sentence_transformers.json"
+source_role = "embedder_model"
+sha256 = "pending_pin"
+size = 1565
+
+[[datasets.files]]
+path = "model.safetensors"
+source_role = "embedder_model"
+sha256 = "pending_pin"
+size = 1488915288
+
+[[datasets.files]]
+path = "modules.json"
+source_role = "embedder_model"
+sha256 = "pending_pin"
+size = 413
+
+[[datasets.files]]
+path = "preprocessor_config.json"
+source_role = "embedder_model"
+sha256 = "pending_pin"
+size = 511
+
+[[datasets.files]]
+path = "processor_config.json"
+source_role = "embedder_model"
+sha256 = "pending_pin"
+size = 1788
+
+[[datasets.files]]
+path = "sentence_bert_config.json"
+source_role = "embedder_model"
+sha256 = "pending_pin"
+size = 747
+
+[[datasets.files]]
+path = "tokenizer.json"
+source_role = "embedder_model"
+sha256 = "pending_pin"
+size = 32170510
+
+[[datasets.files]]
+path = "tokenizer.model"
+source_role = "embedder_model"
+sha256 = "pending_pin"
+size = 4689013
+
+[[datasets.files]]
+path = "tokenizer_config.json"
+source_role = "embedder_model"
+sha256 = "pending_pin"
+size = 1599

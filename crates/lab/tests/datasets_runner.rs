@@ -89,6 +89,7 @@ fn seed_verified_dataset_file(
 
 struct StubBehavioralConverter {
     id: String,
+    version: String,
 }
 
 impl Converter for StubBehavioralConverter {
@@ -96,7 +97,7 @@ impl Converter for StubBehavioralConverter {
         &self.id
     }
     fn converter_version(&self) -> &str {
-        "1.0.0"
+        &self.version
     }
     fn convert(
         &self,
@@ -164,7 +165,7 @@ impl Converter for StubBehavioralConverter {
                 .sources
                 .first()
                 .map_or_else(|| "rev".to_owned(), |s| s.revision.clone()),
-            converter_version: "1.0.0".to_owned(),
+            converter_version: self.version.clone(),
             items: vec![item],
             gold_book: gold,
         })
@@ -378,7 +379,8 @@ fn cli_benchmark_only_produces_partial_report_and_run_records() {
     );
     save_manifest_to_path(&manifest, &manifest_path).unwrap();
 
-    // Run `--only locomo` even though the other 21 datasets are absent.
+    // Run `--only locomo` even though the other 21 datasets are absent (passing --allow-no-embedder
+    // in this offline test without EmbeddingGemma 2 weights).
     let out = Command::new(lab_bin())
         .args([
             "benchmark",
@@ -392,6 +394,7 @@ fn cli_benchmark_only_produces_partial_report_and_run_records() {
             "locomo",
             "--out-dir",
             out_dir.to_str().unwrap(),
+            "--allow-no-embedder",
             "--pareto",
             "--json",
         ])
@@ -477,6 +480,7 @@ fn scorecard_covers_all_statuses_lanes_and_pareto_gaps_without_imputation() {
     handlers.register_behavioral(
         Box::new(StubBehavioralConverter {
             id: "locomo".to_owned(),
+            version: "1.0.0".to_owned(),
         }),
         Box::new(StubScorer {
             id: "locomo".to_owned(),
@@ -487,6 +491,7 @@ fn scorecard_covers_all_statuses_lanes_and_pareto_gaps_without_imputation() {
     handlers.register_behavioral(
         Box::new(StubBehavioralConverter {
             id: "longmemeval".to_owned(),
+            version: "1.0.0".to_owned(),
         }),
         Box::new(StubScorer {
             id: "longmemeval".to_owned(),
@@ -539,6 +544,7 @@ fn scorecard_covers_all_statuses_lanes_and_pareto_gaps_without_imputation() {
     handlers.register_behavioral(
         Box::new(StubBehavioralConverter {
             id: "stale".to_owned(),
+            version: "2.0.0".to_owned(),
         }),
         Box::new(PartialStubScorer),
     );
@@ -664,6 +670,7 @@ fn live_preflight_budget_cap_silent_history_and_judge_substitution_policy() {
         h.register_behavioral(
             Box::new(StubBehavioralConverter {
                 id: "longmemeval".to_owned(),
+                version: "1.0.0".to_owned(),
             }),
             Box::new(StubScorer {
                 id: "longmemeval".to_owned(),
@@ -986,12 +993,19 @@ fn capa_live_judge_uses_rust_openai_provider_secrets_cost_guard_and_substitution
         }
     ])
     .to_string();
-    seed_verified_dataset_file(
-        manifest.get_mut("capa").unwrap(),
-        &datasets_dir,
-        "data/ami/test.json",
-        capa_json.as_bytes(),
-    );
+    {
+        // The real `capa` release ships transcripts only (manifest marks it not_mappable); this
+        // generic live-execution test seeds the legacy synthetic episode fixture, so it restores
+        // the behavioral lane for the fixture manifest only.
+        let capa = manifest.get_mut("capa").unwrap();
+        capa.core_applicability = CoreApplicability::CoreBehavioral;
+        seed_verified_dataset_file(
+            capa,
+            &datasets_dir,
+            "data/ami/test.json",
+            capa_json.as_bytes(),
+        );
+    }
     save_manifest_to_path(&manifest, &manifest_path).unwrap();
 
     let probe_provider = {
@@ -1137,4 +1151,320 @@ fn capa_live_judge_uses_rust_openai_provider_secrets_cost_guard_and_substitution
     stop.store(true, Ordering::Relaxed);
     let _ = std::net::TcpStream::connect(addr);
     let _ = handle.join();
+}
+
+#[test]
+fn task_10_2_and_10_3_and_10_5_live_options_embedder_and_report_parity() {
+    use monoagens_lab::datasets::{ReportOptions, generate_benchmark_report};
+    use monoagens_reason::model::ReasoningEffort;
+    use monoagens_reason::secrets::SecretString;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    let tmp = TempDir::new().unwrap();
+    let manifest_path = tmp.path().join("datasets.manifest.toml");
+    let datasets_dir = tmp.path().join("datasets");
+    let out_dir = tmp.path().join("run_out");
+    fs::create_dir_all(&datasets_dir).unwrap();
+
+    let registry = standard_benchmark_registry();
+    let mut manifest = load_and_validate_manifest(
+        &workspace_root().join("lab/datasets.manifest.example.toml"),
+        &registry,
+    )
+    .unwrap();
+    let capa_json = serde_json::json!([
+        {
+            "meeting_id": "ami_synth_10",
+            "split": "test",
+            "absent_role": "Industrial Designer",
+            "briefing": "Track enclosure material changes.",
+            "transcript": [
+                {"speaker": "PM", "content": "Switch chassis to brushed titanium."}
+            ],
+            "episodes": [
+                {
+                    "episode_id": "ep_ok",
+                    "cue_turn": 0,
+                    "anchor_turn": 0,
+                    "window_k": 2,
+                    "target_proposition": "Chassis enclosure changed to brushed titanium."
+                }
+            ]
+        }
+    ])
+    .to_string();
+    {
+        // The real `capa` release ships transcripts only (manifest marks it not_mappable); this
+        // generic live-execution test seeds the legacy synthetic episode fixture, so it restores
+        // the behavioral lane for the fixture manifest only.
+        let capa = manifest.get_mut("capa").unwrap();
+        capa.core_applicability = CoreApplicability::CoreBehavioral;
+        seed_verified_dataset_file(
+            capa,
+            &datasets_dir,
+            "data/ami/test.json",
+            capa_json.as_bytes(),
+        );
+    }
+    save_manifest_to_path(&manifest, &manifest_path).unwrap();
+
+    // Task 10.5: standard run refuses without semantic embedder when require_semantic_embedder=true.
+    let err_no_emb = run_benchmark_suite_with_options(
+        "standard",
+        &datasets_dir,
+        None,
+        false,
+        &Prior::default(),
+        &BenchmarkExecutionOptions {
+            manifest_path: Some(manifest_path.clone()),
+            only_ids: Some(vec!["capa".to_owned()]),
+            require_semantic_embedder: true,
+            ..BenchmarkExecutionOptions::default()
+        },
+    )
+    .expect_err("standard run without semantic embedder must refuse");
+    assert!(
+        err_no_emb.to_string().contains("embeddinggemma-2"),
+        "err={err_no_emb}"
+    );
+
+    // Mock loopback OpenAI-compatible server capturing request body + headers for soul & judge.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let endpoint_url = format!("http://{addr}/v1/chat/completions");
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_srv = Arc::clone(&stop);
+    let captured: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let cap_srv = Arc::clone(&captured);
+    let secret_session = "ses_secret_test_session_value_999";
+
+    let handle = std::thread::spawn(move || {
+        while !stop_srv.load(Ordering::Relaxed) {
+            let Ok((mut stream, _)) = listener.accept() else {
+                break;
+            };
+            if stop_srv.load(Ordering::Relaxed) {
+                break;
+            }
+            let mut buf = vec![0u8; 32768];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let req_text = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let (hdr_part, body_part) = req_text.split_once("\r\n\r\n").unwrap_or((&req_text, ""));
+            if let Ok(mut g) = cap_srv.lock() {
+                g.push((hdr_part.to_owned(), body_part.to_owned()));
+            }
+            let is_judge = body_part.contains("CAPA") || body_part.contains("Evaluate CAPA");
+            let content = if is_judge {
+                r#"{"label":"no","score":0.0,"rationale":"mismatch in mock test"}"#.to_owned()
+            } else {
+                serde_json::json!({
+                    "acts": [{
+                        "act": "act",
+                        "capability_id": "a.speak",
+                        "places": ["meeting:ami_synth_10"],
+                        "people": ["lab_proctor"],
+                        "payload": b"Wrong material answer.".to_vec(),
+                        "motivation": 5,
+                        "confidence_0_20": 19,
+                        "used_ids": []
+                    }]
+                })
+                .to_string()
+            };
+            let body = serde_json::json!({
+                "model": "mock-ds",
+                "choices": [{"message": {"content": content}}],
+                "usage": {"prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150}
+            })
+            .to_string();
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+        }
+    });
+
+    struct TestAddressedCapaConverter;
+    impl Converter for TestAddressedCapaConverter {
+        fn dataset_id(&self) -> &str {
+            "capa"
+        }
+        fn converter_version(&self) -> &str {
+            "1.0.0"
+        }
+        fn convert(
+            &self,
+            dataset_dir: &Path,
+            entry: &DatasetManifestEntry,
+        ) -> Result<ConvertedDataset, LabError> {
+            let mut conv = monoagens_lab::datasets::CapaConverter.convert(dataset_dir, entry)?;
+            let soul = ActorId::new("soul");
+            for item in &mut conv.items {
+                item.history_mode = HistoryMode::StaticSilent;
+                for probe in &mut item.probes {
+                    probe.percept.addressees = vec![soul.clone()];
+                }
+            }
+            Ok(conv)
+        }
+    }
+    let mut handlers = DatasetHandlerRegistry::default();
+    handlers.register_behavioral(
+        Box::new(TestAddressedCapaConverter),
+        Box::new(monoagens_lab::datasets::CapaScorer),
+    );
+
+    let mut soul_cfg = OpenAiModelConfig::new(&endpoint_url, Some(SecretString::new("k-soul")));
+    soul_cfg.reasoning_effort = Some(ReasoningEffort::Medium);
+    soul_cfg.extra_headers = vec![(
+        "x-opencode-session".to_owned(),
+        SecretString::new(secret_session),
+    )];
+    soul_cfg.user_agent = Some("monoagens-lab/0.1.0".to_owned());
+    let soul_prov = OpenAiModelProvider::new(soul_cfg).unwrap();
+
+    let mut judge_cfg = OpenAiModelConfig::new(&endpoint_url, Some(SecretString::new("k-judge")));
+    judge_cfg.reasoning_effort = Some(ReasoningEffort::High);
+    judge_cfg.extra_headers = vec![(
+        "x-opencode-session".to_owned(),
+        SecretString::new(secret_session),
+    )];
+    judge_cfg.user_agent = Some("monoagens-lab/0.1.0".to_owned());
+    let judge_prov = OpenAiModelProvider::new(judge_cfg).unwrap();
+
+    let mut scripted_emb = ScriptedEmbedder::new("egemma2-256", 256);
+    scripted_emb.set_fallback(Ok(vec![1.0; 256]));
+
+    let opts = BenchmarkExecutionOptions {
+        manifest_path: Some(manifest_path.clone()),
+        only_ids: Some(vec!["capa".to_owned()]),
+        out_dir: Some(out_dir.clone()),
+        live: true,
+        max_cost_usd: Some(5.0),
+        allow_test_embedders: true,
+        require_semantic_embedder: true,
+        probe_model_name: "deepseek-v4.1-flash".to_owned(),
+        probe_provider: Some(&soul_prov as &dyn ModelProvider),
+        judge_provider: Some(&judge_prov as &dyn ModelProvider),
+        judge_config: Some(JudgeConfig {
+            endpoint_url,
+            model: "deepseek-v4.1-flash".to_owned(),
+            prompt_version: "capa-judge-v1".to_owned(),
+            substitution_policy: JudgeSubstitutionPolicy::RenameMetric,
+        }),
+        embedder: Some(&scripted_emb as &dyn Embedder),
+        reasoning_effort: Some("medium".to_owned()),
+        judge_reasoning_effort: Some("high".to_owned()),
+        extra_header_names: vec!["x-opencode-session".to_owned()],
+        provider_endpoint_host: Some(format!("http://{addr}")),
+        embedder_backend: Some("Scripted256d".to_owned()),
+        embedder_revision: Some("test-rev".to_owned()),
+        handlers,
+        ..BenchmarkExecutionOptions::default()
+    };
+
+    let rep = run_benchmark_suite_with_options(
+        "standard",
+        &datasets_dir,
+        None,
+        false,
+        &Prior::default(),
+        &opts,
+    )
+    .expect("live run with provider options and 256d embedder must succeed");
+
+    stop.store(true, Ordering::Relaxed);
+    let _ = std::net::TcpStream::connect(addr);
+    let _ = handle.join();
+
+    // 10.2 checks: HTTP requests carried reasoning_effort + extra header; RunRecord holds names only (no secret value).
+    let reqs = captured.lock().unwrap();
+    assert!(
+        reqs.len() >= 2,
+        "expected soul + judge HTTP calls, got {}",
+        reqs.len()
+    );
+    assert!(
+        reqs.iter().all(|(h, _)| h
+            .to_ascii_lowercase()
+            .contains(&format!("x-opencode-session: {secret_session}"))),
+        "every HTTP call must carry x-opencode-session"
+    );
+    assert!(
+        reqs.iter()
+            .any(|(_, b)| b.contains(r#""reasoning_effort":"medium""#)),
+        "soul call must carry reasoning_effort medium"
+    );
+    assert!(
+        reqs.iter()
+            .any(|(_, b)| b.contains(r#""reasoning_effort":"high""#)),
+        "judge call must carry reasoning_effort high"
+    );
+
+    let rr_json = fs::read_to_string(out_dir.join("capa__seed-1.json")).unwrap();
+    assert!(
+        !rr_json.contains(secret_session),
+        "RunRecord must never leak extra header value"
+    );
+    let rr: RunRecord = serde_json::from_str(&rr_json).unwrap();
+    assert_eq!(rr.embedder_id, "egemma2-256");
+    let prov = rr.dataset_provenance.as_ref().unwrap();
+    assert_eq!(prov.reasoning_effort.as_deref(), Some("medium"));
+    assert_eq!(prov.judge_reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(
+        prov.extra_header_names,
+        vec!["x-opencode-session".to_owned()]
+    );
+
+    // 10.5 check: transcript JSONL records 256d vectors on percepts and probes.
+    let tx_path = out_dir.join("transcripts/capa/ami_synth_10_ep_ok.jsonl");
+    assert!(
+        tx_path.is_file(),
+        "transcript missing at {}",
+        tx_path.display()
+    );
+    let tx_raw = fs::read_to_string(&tx_path).unwrap();
+    assert!(tx_raw.contains(r#""embedding_dim":256"#), "tx={tx_raw}");
+    assert!(tx_raw.contains("egemma2-256:256:t_d"), "tx={tx_raw}");
+
+    // 10.3 check: report generator produces Markdown, HTML, CSVs, charts, and failure .md matching RunRecord.
+    let rep_summary = generate_benchmark_report(&ReportOptions {
+        run_dir: out_dir.clone(),
+        out_dir: None,
+        manifest_path: Some(manifest_path),
+        extra_notes: vec!["unit test note".to_owned()],
+        skip_python_charts: true,
+        label: None,
+        appendix_markdown: None,
+    })
+    .expect("generate report");
+
+    let report_dir = PathBuf::from(&rep_summary.report_dir);
+    assert!(report_dir.join("REPORT.md").is_file());
+    assert!(report_dir.join("index.html").is_file());
+    assert!(report_dir.join("tables/overall.csv").is_file());
+    assert!(report_dir.join("tables/status.csv").is_file());
+    assert!(report_dir.join("tables/cost.csv").is_file());
+    assert!(report_dir.join("tables/prospective.csv").is_file());
+    assert!(!rep_summary.chart_files.is_empty());
+    assert!(!rep_summary.failure_markdown_files.is_empty());
+
+    let overall_csv = fs::read_to_string(report_dir.join("tables/overall.csv")).unwrap();
+    let rec_metric_val = prov.metric_scores[0].value.unwrap();
+    assert!(
+        overall_csv.contains(&format!("{rec_metric_val:.6}")),
+        "overall.csv must match RunRecord metric value {rec_metric_val:.6}, got:\n{overall_csv}"
+    );
+    let md = fs::read_to_string(report_dir.join("REPORT.md")).unwrap();
+    assert!(md.contains("deepseek-v4.1-flash"));
+    assert!(md.contains("x-opencode-session"));
+    assert!(!md.contains(secret_session));
+    let _ = rep;
 }

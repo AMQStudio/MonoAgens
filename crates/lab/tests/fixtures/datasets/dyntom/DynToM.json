@@ -1,0 +1,62 @@
+{
+  "trial_fixture_01": {
+    "stage": {
+      "social setting": "synthetic workshop",
+      "social setting type": "Workshop",
+      "main character": "Clara Voss",
+      "scenario numbers": 2,
+      "characters information": "**Main Character**: Clara Voss, woman, is a Cartographer. **Supporting Characters**:- **1**: Jonas Reed, man, is a Porter.",
+      "sketch": {
+        "relationships among characters": {
+          "main character with supporting character 1": "Clara and Jonas share a supply run at a synthetic workshop."
+        },
+        "mental states analysis in every scenario": {
+          "scenario 1": {
+            "belief": "Clara believes the lantern is inside the canvas pack.",
+            "emotion": "Calm focus",
+            "intention": "To finish the route before dusk",
+            "action": "Clara packs the lantern herself.",
+            "influence": {
+              "belief->emotion": "Certainty keeps her calm.",
+              "belief&emotion->intention": "Focus drives the route plan.",
+              "intention->action": "She packs the lantern."
+            }
+          },
+          "scenario 2": {
+            "belief": "Clara now believes the lantern is in the metal locker.",
+            "emotion": "Mild surprise",
+            "intention": "To confirm the locker inventory",
+            "action": "Clara opens the metal locker.",
+            "influence": {
+              "belief->emotion": "The moved item surprises her.",
+              "belief&emotion->intention": "Surprise prompts a check.",
+              "intention->action": "She opens the locker."
+            }
+          }
+        }
+      }
+    },
+    "question": {
+      "type_a_what_1": {
+        "question": "What is the belief of Clara Voss in scenario 1?",
+        "true answer": "a",
+        "options": [
+          "a. The lantern is inside the canvas pack",
+          "b. The lantern is inside the metal locker",
+          "c. The lantern was left behind"
+        ],
+        "question type": "type_a"
+      },
+      "type_d_how_1": {
+        "question": "How does the belief of Clara Voss change across the 2 scenarios?",
+        "true answer": "b",
+        "options": [
+          "a. The lantern is inside the metal locker -> The lantern is inside the canvas pack",
+          "b. The lantern is inside the canvas pack -> The lantern is inside the metal locker",
+          "c. The lantern was left behind -> The lantern is inside the canvas pack"
+        ],
+        "question type": "type_d"
+      }
+    }
+  }
+}

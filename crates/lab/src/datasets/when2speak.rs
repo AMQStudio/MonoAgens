@@ -39,7 +39,7 @@ impl Converter for When2SpeakConverter {
     }
 
     fn converter_version(&self) -> &str {
-        "1.0.0"
+        "1.2.0"
     }
 
     fn convert(
@@ -119,7 +119,7 @@ impl Converter for When2SpeakConverter {
                     place.as_str(),
                     probe_aud.members.iter().cloned(),
                     base_ms + (prefix_len as u64 + 1) * 1_000,
-                    "End of 8-turn window: respond or stay silent.",
+                    "Will the next turn be a SPEAK turn? Answer SPEAK or SILENT.",
                 ),
                 isolated_checkpoint: true,
                 probe_scope: VisibleScope::new(probe_aud, Some(place)),
@@ -155,7 +155,7 @@ impl Converter for When2SpeakConverter {
                 history,
                 checkpoint_group: None,
                 probes: vec![probe],
-                history_mode: HistoryMode::Interactive,
+                history_mode: HistoryMode::StaticSilent,
                 capabilities: Vec::new(),
             });
         }

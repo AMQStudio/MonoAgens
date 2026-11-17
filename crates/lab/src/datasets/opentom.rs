@@ -19,26 +19,84 @@ use crate::datasets::scoring_utils::{macro_f1_labels, normalize_qa_tokens};
 pub struct OpenTomConverter;
 
 #[derive(Deserialize)]
-struct RawOpenTomStory {
-    #[serde(default)]
-    story_id: Option<String>,
-    #[serde(default)]
-    split: Option<String>,
-    #[serde(default)]
-    character_trait: Option<String>,
+struct RawOpenTomRow {
     narrative: String,
-    questions: Vec<RawOpenTomQuestion>,
+    #[serde(default)]
+    personality: Option<String>,
+    #[serde(default)]
+    plot_info: Option<RawOpenTomPlotInfo>,
+    question: RawOpenTomQuestion,
+}
+
+#[derive(Deserialize)]
+struct RawOpenTomPlotInfo {
+    #[serde(default)]
+    original_place: Option<String>,
+    #[serde(default)]
+    move_to_place: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct RawOpenTomQuestion {
-    #[serde(default)]
-    qid: Option<String>,
     question: String,
-    #[serde(default)]
-    options: Vec<String>,
     answer: String,
+    #[serde(rename = "type")]
     question_type: String,
+}
+
+fn canonical_opentom_type(raw_type: &str, answer: &str) -> &'static str {
+    match raw_type {
+        "attitude" | "Att" => "Att",
+        "multihop-fo" | "multihop-so" | "multihop" | "MHop" => "MHop",
+        "location-coarse" | "Loc_c" => "Loc_c",
+        "location-fine" | "Loc_f" => "Loc_f",
+        "location-fo" | "location-so" => {
+            let trimmed = answer.trim();
+            if trimmed.eq_ignore_ascii_case("yes") || trimmed.eq_ignore_ascii_case("no") {
+                "Loc_c"
+            } else {
+                "Loc_f"
+            }
+        }
+        _ => "Loc_c",
+    }
+}
+
+fn options_for_opentom(qtype: &str, plot_info: Option<&RawOpenTomPlotInfo>) -> Vec<String> {
+    match qtype {
+        "Loc_c" => vec!["Yes".to_owned(), "No".to_owned()],
+        "Att" => vec![
+            "positive".to_owned(),
+            "negative".to_owned(),
+            "neutral".to_owned(),
+        ],
+        "MHop" => vec![
+            "equally accessible".to_owned(),
+            "less accessible".to_owned(),
+            "more accessible".to_owned(),
+            "equally full".to_owned(),
+            "less full".to_owned(),
+            "more full".to_owned(),
+        ],
+        "Loc_f" => {
+            let mut opts = Vec::new();
+            if let Some(pi) = plot_info {
+                if let Some(orig) = pi.original_place.as_deref()
+                    && !orig.trim().is_empty()
+                {
+                    opts.push(orig.trim().to_owned());
+                }
+                if let Some(mv) = pi.move_to_place.as_deref()
+                    && !mv.trim().is_empty()
+                    && !opts.iter().any(|x| x == mv.trim())
+                {
+                    opts.push(mv.trim().to_owned());
+                }
+            }
+            opts
+        }
+        _ => Vec::new(),
+    }
 }
 
 impl Converter for OpenTomConverter {
@@ -47,7 +105,7 @@ impl Converter for OpenTomConverter {
     }
 
     fn converter_version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
 
     fn convert(
@@ -55,21 +113,36 @@ impl Converter for OpenTomConverter {
         dataset_dir: &Path,
         manifest_entry: &DatasetManifestEntry,
     ) -> Result<ConvertedDataset, LabError> {
-        let mut stories: Vec<RawOpenTomStory> = Vec::new();
-        for fname in ["opentom.json", "opentom_long.json"] {
+        let mut raw_rows: Vec<(String, RawOpenTomRow)> = Vec::new();
+        for (split_name, fname) in [("Long", "opentom.json"), ("ExtraLong", "opentom_long.json")] {
             let p = dataset_dir.join(fname);
             if p.is_file() {
                 let raw = fs::read_to_string(&p)?;
-                let mut part: Vec<RawOpenTomStory> = serde_json::from_str(&raw)
+                let part: Vec<RawOpenTomRow> = serde_json::from_str(&raw)
                     .map_err(|e| LabError::Serialization(format!("opentom {fname}: {e}")))?;
-                stories.append(&mut part);
+                for r in part {
+                    raw_rows.push((split_name.to_owned(), r));
+                }
             }
         }
-        if stories.is_empty() {
+        if raw_rows.is_empty() {
             return Err(LabError::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 format!("no opentom.json under '{}'", dataset_dir.display()),
             )));
+        }
+
+        // Group QA rows by exact narrative preserving insertion order.
+        let mut story_idx_map: BTreeMap<String, usize> = BTreeMap::new();
+        let mut stories: Vec<(String, String, Vec<RawOpenTomRow>)> = Vec::new();
+        for (split, row) in raw_rows {
+            if let Some(&pos) = story_idx_map.get(&row.narrative) {
+                stories[pos].2.push(row);
+            } else {
+                let pos = stories.len();
+                story_idx_map.insert(row.narrative.clone(), pos);
+                stories.push((split, row.narrative.clone(), vec![row]));
+            }
         }
 
         let soul = ActorId::new("soul");
@@ -82,14 +155,12 @@ impl Converter for OpenTomConverter {
         let mut items = Vec::with_capacity(stories.len());
         let mut gold_entries = Vec::new();
 
-        for (s_idx, story) in stories.into_iter().enumerate() {
-            let story_id = story
-                .story_id
-                .unwrap_or_else(|| format!("opentom_{s_idx:04}"));
+        for (s_idx, (split, narrative, rows)) in stories.into_iter().enumerate() {
+            let story_id = format!("opentom_{s_idx:04}");
             let place = PlaceId::new(story_id.clone());
-            let split = story.split.unwrap_or_else(|| "Long".to_owned());
-            let trait_tag = story
-                .character_trait
+            let trait_tag = rows
+                .first()
+                .and_then(|r| r.personality.clone())
                 .unwrap_or_else(|| "neutral".to_owned());
 
             let history = vec![make_text_percept(
@@ -97,7 +168,7 @@ impl Converter for OpenTomConverter {
                 place.as_str(),
                 hist_aud.members.iter().cloned(),
                 base_ms,
-                &story.narrative,
+                &narrative,
             )];
             let ev_refs = vec![GoldEvidenceRef {
                 turn_index: 0,
@@ -105,13 +176,16 @@ impl Converter for OpenTomConverter {
                 place: place.clone(),
             }];
 
-            let mut probes = Vec::with_capacity(story.questions.len());
-            for (q_idx, q) in story.questions.into_iter().enumerate() {
-                let probe_id = q.qid.unwrap_or_else(|| format!("q_{q_idx}"));
-                let prompt = if q.options.is_empty() {
+            let mut probes = Vec::with_capacity(rows.len());
+            for (q_idx, row) in rows.into_iter().enumerate() {
+                let q = row.question;
+                let probe_id = format!("q_{q_idx}");
+                let qtype = canonical_opentom_type(&q.question_type, &q.answer);
+                let opts = options_for_opentom(qtype, row.plot_info.as_ref());
+                let prompt = if opts.is_empty() {
                     q.question.clone()
                 } else {
-                    format!("{}\nOptions: {}", q.question, q.options.join(" | "))
+                    format!("{}\nOptions: {}", q.question, opts.join(" | "))
                 };
                 probes.push(ExternalProbe {
                     probe_id: probe_id.clone(),
@@ -128,8 +202,9 @@ impl Converter for OpenTomConverter {
                 });
 
                 let mut metadata = BTreeMap::new();
-                metadata.insert("question_type".to_owned(), q.question_type.clone());
-                metadata.insert("options".to_owned(), q.options.join("||"));
+                metadata.insert("question_type".to_owned(), qtype.to_owned());
+                metadata.insert("raw_question_type".to_owned(), q.question_type);
+                metadata.insert("options".to_owned(), opts.join("||"));
 
                 gold_entries.push(GoldEntry {
                     item_id: story_id.clone(),
@@ -139,7 +214,7 @@ impl Converter for OpenTomConverter {
                     accepted_answers: vec![q.answer],
                     gold_evidence: ev_refs.clone(),
                     privacy_conflict: false,
-                    category: Some(q.question_type),
+                    category: Some(qtype.to_owned()),
                     metadata,
                 });
             }
@@ -213,7 +288,7 @@ impl Scorer for OpenTomScorer {
         &self,
         predictions: &[ExternalPrediction],
         gold: &GoldBook,
-        _judge: &JudgeExecutionConfig<'_>,
+        judge: &JudgeExecutionConfig<'_>,
         _seed: u64,
     ) -> Result<ScorerReport, LabError> {
         let mut by_type: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
@@ -242,8 +317,30 @@ impl Scorer for OpenTomScorer {
                 .map(|s| s.split("||").filter(|o| !o.is_empty()).collect())
                 .unwrap_or_default();
             let resp = pred.response_text.as_deref().unwrap_or("");
-            let pred_lbl = argmax_lexical_choice(resp, &opts);
-            let gold_lbl = entry.gold_answer.trim().to_ascii_lowercase();
+            let pred_lbl = if opts.is_empty() {
+                normalize_qa_tokens(resp, false).join(" ")
+            } else {
+                argmax_lexical_choice(resp, &opts)
+            };
+            let gold_lbl = if opts.is_empty() {
+                normalize_qa_tokens(&entry.gold_answer, false).join(" ")
+            } else {
+                entry.gold_answer.trim().to_ascii_lowercase()
+            };
+            let hit = pred_lbl == gold_lbl;
+            judge.record_outcome(crate::datasets::framework::ScorerItemOutcome {
+                item_id: pred.item_id.clone(),
+                probe_id: pred.probe_id.clone(),
+                cluster_id: pred.cluster_id.clone(),
+                category: Some(qtype.to_owned()),
+                metric_name: qtype.to_owned(),
+                score: Some(if hit { 1.0 } else { 0.0 }),
+                passed: Some(hit),
+                judge_prompt: None,
+                judge_verdict: None,
+                failed: false,
+                failure_reason: None,
+            });
             by_type.entry(qtype).or_default().push((gold_lbl, pred_lbl));
         }
 

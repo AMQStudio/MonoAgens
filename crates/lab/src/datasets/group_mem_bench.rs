@@ -5,9 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-use monoagens_core::ModelPurpose;
 use monoagens_protocol::{ActorId, Audience, EventId, PlaceId, VisibleScope};
-use monoagens_reason::model::{ModelOutput, ModelRequest};
 use serde::Deserialize;
 
 use crate::LabError;
@@ -17,7 +15,9 @@ use crate::datasets::framework::{
     ScorerReport, make_text_percept,
 };
 use crate::datasets::manifest::DatasetManifestEntry;
-use crate::datasets::scoring_utils::{metric_with_cluster_ci, not_scored_metric};
+use crate::datasets::scoring_utils::{
+    invoke_judge_resilient, metric_with_cluster_ci, not_scored_metric,
+};
 
 pub struct GroupMemBenchConverter;
 
@@ -40,18 +40,13 @@ struct RawGmbMessage {
     phase_name: Option<String>,
 }
 
+/// Real upstream `questions/<Domain>/<category>.jsonl` record (four fields only).
 #[derive(Deserialize)]
 struct RawGmbQuestion {
-    #[serde(default)]
-    qid: Option<String>,
+    id: String,
     question: String,
     answer: String,
-    asker: String,
-    channel: String,
-    #[serde(default)]
-    category: Option<String>,
-    #[serde(default)]
-    evidence_nodes: Vec<String>,
+    asking_user_id: String,
 }
 
 /// Parses simplified ISO 8601 UTC timestamp `YYYY-MM-DDTHH:MM:SSZ` into epoch ms deterministically.
@@ -90,7 +85,7 @@ impl Converter for GroupMemBenchConverter {
     }
 
     fn converter_version(&self) -> &str {
-        "1.0.0"
+        "1.1.0"
     }
 
     fn convert(
@@ -115,53 +110,64 @@ impl Converter for GroupMemBenchConverter {
             let channels: BTreeMap<String, Vec<RawGmbMessage>> = serde_json::from_str(&conv_raw)
                 .map_err(|e| LabError::Serialization(format!("group_mem_bench {domain}: {e}")))?;
 
-            let mut channel_audiences: BTreeMap<String, Audience> = BTreeMap::new();
-            let mut channel_places: BTreeMap<String, PlaceId> = BTreeMap::new();
-            let mut msg_to_info: BTreeMap<String, (usize, String, Audience, PlaceId)> =
-                BTreeMap::new();
-            let mut all_msgs: Vec<(u64, String, RawGmbMessage)> = Vec::new();
-
+            // Per-channel ordered history with real channel audiences (`participants + soul`).
+            struct ChannelData {
+                aud: Audience,
+                place: PlaceId,
+                history: Vec<monoagens_protocol::Percept>,
+                contents: Vec<String>,
+                last_ts: u64,
+            }
+            let mut data: BTreeMap<String, ChannelData> = BTreeMap::new();
             for (chan, msgs) in &channels {
                 let mut speakers: BTreeSet<ActorId> =
                     msgs.iter().map(|m| ActorId::new(&m.author)).collect();
                 speakers.insert(soul.clone());
                 let aud = Audience::new(speakers);
                 let place = PlaceId::new(format!("gmb_{domain}_{chan}"));
-                channel_audiences.insert(chan.clone(), aud);
-                channel_places.insert(chan.clone(), place);
-            }
-
-            for (chan, msgs) in channels {
-                for m in msgs {
-                    let ts = parse_iso8601_utc_ms(&m.timestamp);
-                    all_msgs.push((ts, chan.clone(), m));
+                let mut ordered: Vec<&RawGmbMessage> = msgs.iter().collect();
+                ordered.sort_by(|a, b| {
+                    parse_iso8601_utc_ms(&a.timestamp)
+                        .cmp(&parse_iso8601_utc_ms(&b.timestamp))
+                        .then_with(|| a.msg_node.cmp(&b.msg_node))
+                });
+                let mut node_idx: BTreeMap<&str, usize> = BTreeMap::new();
+                let mut history = Vec::with_capacity(ordered.len());
+                let mut contents = Vec::with_capacity(ordered.len());
+                let mut last_ts = 1_700_000_000_000_u64;
+                for (idx, msg) in ordered.iter().enumerate() {
+                    let ts = parse_iso8601_utc_ms(&msg.timestamp);
+                    last_ts = last_ts.max(ts);
+                    let mut p = make_text_percept(
+                        &msg.author,
+                        place.as_str(),
+                        aud.members.iter().cloned(),
+                        ts,
+                        &msg.content,
+                    );
+                    if let Some(ref parent_node) = msg.reply_to
+                        && let Some(parent_idx) = node_idx.get(parent_node.as_str())
+                    {
+                        p.reply_to = Some(EventId::new((*parent_idx + 1) as u64));
+                    }
+                    node_idx.insert(msg.msg_node.as_str(), idx);
+                    history.push(p);
+                    contents.push(msg.content.clone());
                 }
-            }
-            all_msgs.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.2.msg_node.cmp(&b.2.msg_node)));
-
-            let mut history = Vec::with_capacity(all_msgs.len());
-            let mut last_ts = 1_700_000_000_000_u64;
-            for (idx, (ts, chan, msg)) in all_msgs.into_iter().enumerate() {
-                last_ts = last_ts.max(ts);
-                let aud = channel_audiences[&chan].clone();
-                let place = channel_places[&chan].clone();
-                let mut p = make_text_percept(
-                    &msg.author,
-                    place.as_str(),
-                    aud.members.iter().cloned(),
-                    ts,
-                    msg.content,
+                data.insert(
+                    chan.clone(),
+                    ChannelData {
+                        aud,
+                        place,
+                        history,
+                        contents,
+                        last_ts,
+                    },
                 );
-                if let Some(ref parent_node) = msg.reply_to
-                    && let Some((parent_idx, _, _, _)) = msg_to_info.get(parent_node)
-                {
-                    p.reply_to = Some(EventId::new((*parent_idx + 1) as u64));
-                }
-                msg_to_info.insert(msg.msg_node, (idx, chan, aud, place));
-                history.push(p);
             }
 
-            // Load questions/*.jsonl for this domain.
+            // Questions carry only `(id, question, answer, asking_user_id)`; the target channel is
+            // derived deterministically from gold-answer evidence, preferring the asker's own channels.
             let q_dir = dataset_dir.join(format!("questions/{domain}"));
             let mut q_files = Vec::new();
             if q_dir.is_dir() {
@@ -174,8 +180,11 @@ impl Converter for GroupMemBenchConverter {
                 q_files.sort();
             }
 
+            let mut bucket_probes: BTreeMap<String, Vec<ExternalProbe>> = BTreeMap::new();
+            let mut bucket_gold: BTreeMap<String, Vec<GoldEntry>> = BTreeMap::new();
+
             for q_file in q_files {
-                let default_cat = q_file
+                let cat = q_file
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("general")
@@ -184,75 +193,122 @@ impl Converter for GroupMemBenchConverter {
                 for (q_idx, line) in raw_q.lines().filter(|l| !l.trim().is_empty()).enumerate() {
                     let q: RawGmbQuestion = serde_json::from_str(line)
                         .map_err(|e| LabError::Serialization(e.to_string()))?;
-                    let cat = q.category.unwrap_or_else(|| default_cat.clone());
-                    let item_id = q
-                        .qid
-                        .unwrap_or_else(|| format!("gmb_{domain}_{cat}_{q_idx}"));
-                    let asker = ActorId::new(&q.asker);
-                    let probe_aud = Audience::new([asker.clone(), soul.clone()]);
-                    let target_place = channel_places
-                        .get(&q.channel)
-                        .cloned()
-                        .unwrap_or_else(|| PlaceId::new(format!("gmb_{domain}_{}", q.channel)));
+                    let asker = ActorId::new(&q.asking_user_id);
+                    let answer_norm = q.answer.trim().to_ascii_lowercase();
+                    let is_abstention = answer_norm.starts_with("there is no information")
+                        || answer_norm.starts_with("no information");
+                    let searchable = !is_abstention && answer_norm.chars().count() >= 3;
 
-                    let mut gold_evidence = Vec::new();
-                    let mut privacy_conflict = false;
-                    for ev_node in &q.evidence_nodes {
-                        if let Some((turn_idx, _ev_chan, ev_aud, ev_place)) =
-                            msg_to_info.get(ev_node)
-                        {
-                            if !probe_aud.is_subset_of(ev_aud) {
-                                privacy_conflict = true;
+                    let mut matching: Vec<(&String, usize)> = Vec::new();
+                    if searchable {
+                        for (chan, cd) in &data {
+                            let hits = cd
+                                .contents
+                                .iter()
+                                .filter(|c| c.to_ascii_lowercase().contains(&answer_norm))
+                                .count();
+                            if hits > 0 {
+                                matching.push((chan, hits));
                             }
-                            gold_evidence.push(GoldEvidenceRef {
-                                turn_index: *turn_idx,
-                                audience: ev_aud.clone(),
-                                place: ev_place.clone(),
-                            });
                         }
                     }
-
-                    let probe = ExternalProbe {
-                        probe_id: "q0".to_owned(),
-                        percept: make_text_percept(
-                            &q.asker,
-                            target_place.as_str(),
-                            probe_aud.members.iter().cloned(),
-                            last_ts + ((q_idx + 1) as u64) * 1_000,
-                            &q.question,
-                        ),
-                        isolated_checkpoint: true,
-                        probe_scope: VisibleScope::new(probe_aud, Some(target_place)),
-                        expected_capability: None,
+                    let channel = matching
+                        .iter()
+                        .filter(|(chan, _)| data[*chan].aud.contains(&asker))
+                        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(a.0)))
+                        .map(|(chan, _)| (*chan).clone())
+                        .or_else(|| {
+                            matching
+                                .iter()
+                                .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(a.0)))
+                                .map(|(chan, _)| (*chan).clone())
+                        })
+                        .or_else(|| {
+                            data.iter()
+                                .find(|(_, cd)| cd.aud.contains(&asker))
+                                .map(|(chan, _)| chan.clone())
+                        })
+                        .or_else(|| data.keys().next().cloned());
+                    let Some(channel) = channel else {
+                        continue;
                     };
+                    let cd = &data[&channel];
+                    let privacy_conflict = !cd.aud.contains(&asker);
+
+                    let gold_evidence: Vec<GoldEvidenceRef> = if searchable {
+                        cd.contents
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, c)| c.to_ascii_lowercase().contains(&answer_norm))
+                            .map(|(turn_index, _)| GoldEvidenceRef {
+                                turn_index,
+                                audience: cd.aud.clone(),
+                                place: cd.place.clone(),
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+
+                    let item_id = format!("gmb_{domain}_{channel}");
+                    let probe_id = format!("{cat}_{}_{q_idx}", q.id);
+                    let probe_aud = Audience::new([asker.clone(), soul.clone()]);
+                    bucket_probes
+                        .entry(channel.clone())
+                        .or_default()
+                        .push(ExternalProbe {
+                            probe_id: probe_id.clone(),
+                            percept: make_text_percept(
+                                &q.asking_user_id,
+                                cd.place.as_str(),
+                                probe_aud.members.iter().cloned(),
+                                cd.last_ts + ((q_idx + 1) as u64) * 1_000,
+                                &q.question,
+                            ),
+                            isolated_checkpoint: true,
+                            probe_scope: VisibleScope::new(probe_aud, Some(cd.place.clone())),
+                            expected_capability: None,
+                        });
 
                     let mut metadata = BTreeMap::new();
                     metadata.insert("category".to_owned(), cat.clone());
                     metadata.insert("domain".to_owned(), domain.to_owned());
+                    metadata.insert("channel".to_owned(), channel.clone());
+                    metadata.insert("asker".to_owned(), q.asking_user_id.clone());
 
-                    gold_entries.push(GoldEntry {
-                        item_id: item_id.clone(),
-                        probe_id: "q0".to_owned(),
-                        cluster_id: format!("{domain}:{}", q.channel),
-                        gold_answer: q.answer.clone(),
-                        accepted_answers: vec![q.answer],
-                        gold_evidence,
-                        privacy_conflict,
-                        category: Some(cat.clone()),
-                        metadata,
-                    });
-
-                    items.push(ExternalItem {
-                        item_id,
-                        cluster_id: format!("{domain}:{}", q.channel),
-                        strata_key: format!("{domain}:{cat}"),
-                        history: history.clone(),
-                        checkpoint_group: Some(format!("gmb_{domain}")),
-                        probes: vec![probe],
-                        history_mode: HistoryMode::StaticSilent,
-                        capabilities: Vec::new(),
-                    });
+                    bucket_gold
+                        .entry(channel.clone())
+                        .or_default()
+                        .push(GoldEntry {
+                            item_id,
+                            probe_id,
+                            cluster_id: format!("{domain}:{channel}"),
+                            gold_answer: q.answer.clone(),
+                            accepted_answers: vec![q.answer],
+                            gold_evidence,
+                            privacy_conflict,
+                            category: Some(cat.clone()),
+                            metadata,
+                        });
                 }
+            }
+
+            for (channel, probes) in bucket_probes {
+                let cd = &data[&channel];
+                let item_id = format!("gmb_{domain}_{channel}");
+                if let Some(mut gold) = bucket_gold.remove(&channel) {
+                    gold_entries.append(&mut gold);
+                }
+                items.push(ExternalItem {
+                    item_id,
+                    cluster_id: format!("{domain}:{channel}"),
+                    strata_key: format!("{domain}:{channel}"),
+                    history: cd.history.clone(),
+                    checkpoint_group: Some(format!("gmb_{domain}")),
+                    probes,
+                    history_mode: HistoryMode::StaticSilent,
+                    capabilities: Vec::new(),
+                });
             }
         }
 
@@ -359,33 +415,49 @@ impl Scorer for GroupMemBenchScorer {
         let mut non_conflict_obs = Vec::new();
         let mut ku_obs = Vec::new();
         let mut ta_obs = Vec::new();
+        let mut by_cat: BTreeMap<String, Vec<f64>> = BTreeMap::new();
 
         for (idx, pred) in predictions.iter().enumerate() {
             let entry = gold.find(&pred.item_id, &pred.probe_id).expect("checked");
             let resp = pred.response_text.as_deref().unwrap_or("");
-            let req = ModelRequest::text(
+            let prompt = format!(
+                "Gold: {}\nResponse: {}\nCorrect? yes or no.",
+                entry.gold_answer, resp
+            );
+            let Some(ok) = invoke_judge_resilient(
+                judge,
+                jp,
                 EventId::new((idx + 1) as u64),
-                ModelPurpose::Classify,
                 judge_model,
                 "GroupMemBench GPT-5 judge",
-                format!(
-                    "Gold: {}\nResponse: {}\nCorrect? yes or no.",
-                    entry.gold_answer, resp
-                ),
-            );
-            let res = jp
-                .invoke(&req)
-                .map_err(|e| LabError::Protocol(e.to_string()))?;
-            let ok = matches!(res.output, ModelOutput::Verdict(v) if v.label.eq_ignore_ascii_case("yes"));
+                &prompt,
+                &pred.item_id,
+                &pred.probe_id,
+                &pred.cluster_id,
+                entry,
+                "acc",
+            )?
+            else {
+                continue;
+            };
             let val = if ok { 1.0 } else { 0.0 };
             all_obs.push((pred.cluster_id.clone(), val));
             if !entry.privacy_conflict {
                 non_conflict_obs.push((pred.cluster_id.clone(), val));
             }
+            if let Some(cat) = entry.category.as_deref() {
+                by_cat.entry(cat.to_owned()).or_default().push(val);
+            }
             match entry.category.as_deref() {
                 Some("knowledge_update") => ku_obs.push((pred.cluster_id.clone(), val)),
                 Some("term_ambiguity") => ta_obs.push((pred.cluster_id.clone(), val)),
                 _ => {}
+            }
+        }
+        for (cat, vals) in by_cat {
+            if !vals.is_empty() {
+                let mean = vals.iter().sum::<f64>() / vals.len() as f64;
+                judge.record_category_metric(cat, "acc", mean);
             }
         }
 

@@ -1,11 +1,15 @@
 //! OpenAI-compatible stateless HTTP (`store: false`) model provider.
 
 use core::fmt;
+use std::str::FromStr;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use monoagens_protocol::ModalitySlot;
 use reqwest::blocking::Client;
-use serde::Deserialize;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::model::{
@@ -15,20 +19,74 @@ use crate::model::{
 use crate::parse::{strict_classification_verdict_schema, strict_thought_batch_schema};
 use crate::secrets::{SecretString, redact_secrets};
 
+/// Reasoning effort level sent as `reasoning_effort` on OpenAI-compatible requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    Low,
+    Medium,
+    High,
+    Max,
+}
+
+impl ReasoningEffort {
+    /// Canonical lowercase wire value for OpenAI-compatible `reasoning_effort`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Max => "max",
+        }
+    }
+}
+
+impl fmt::Display for ReasoningEffort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ReasoningEffort {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "low" => Ok(Self::Low),
+            "medium" => Ok(Self::Medium),
+            "high" => Ok(Self::High),
+            "max" => Ok(Self::Max),
+            other => Err(format!(
+                "invalid reasoning effort '{other}' (expected low|medium|high|max)"
+            )),
+        }
+    }
+}
+
 /// Configuration for [`OpenAiModelProvider`].
 #[derive(Clone)]
 pub struct OpenAiModelConfig {
     pub endpoint_url: String,
     pub api_key: Option<SecretString>,
     pub default_timeout_ms: u64,
+    pub reasoning_effort: Option<ReasoningEffort>,
+    pub extra_headers: Vec<(String, SecretString)>,
+    pub user_agent: Option<String>,
+    pub max_retries: u32,
 }
 
 impl fmt::Debug for OpenAiModelConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let header_names: Vec<&str> = self.extra_headers.iter().map(|(k, _)| k.as_str()).collect();
         f.debug_struct("OpenAiModelConfig")
             .field("endpoint_url", &self.endpoint_url)
             .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
             .field("default_timeout_ms", &self.default_timeout_ms)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .field("extra_header_names", &header_names)
+            .field("user_agent", &self.user_agent)
+            .field("max_retries", &self.max_retries)
             .finish()
     }
 }
@@ -41,6 +99,10 @@ impl OpenAiModelConfig {
             endpoint_url: endpoint_url.into(),
             api_key,
             default_timeout_ms: 30_000,
+            reasoning_effort: None,
+            extra_headers: Vec::new(),
+            user_agent: None,
+            max_retries: 0,
         }
     }
 }
@@ -69,6 +131,9 @@ struct ChatUsage {
     completion_tokens: Option<u64>,
     total_tokens: Option<u64>,
     prompt_tokens_details: Option<PromptTokensDetails>,
+    completion_tokens_details: Option<CompletionTokensDetails>,
+    cost: Option<f64>,
+    opencode: Option<OpenCodeUsageMeta>,
 }
 
 #[derive(Deserialize)]
@@ -76,11 +141,54 @@ struct PromptTokensDetails {
     cached_tokens: Option<u64>,
 }
 
+#[derive(Deserialize)]
+struct CompletionTokensDetails {
+    reasoning_tokens: Option<u64>,
+}
+
+#[derive(Deserialize, Clone)]
+struct OpenCodeUsageMeta {
+    billing_source: Option<String>,
+    list_cost: Option<f64>,
+    allowance: Option<f64>,
+    tokens: Option<OpenCodeTokenDetails>,
+}
+
+#[derive(Deserialize, Clone)]
+struct OpenCodeTokenDetails {
+    reasoning: Option<u64>,
+}
+
+/// Cumulative HTTP retry and provider-reported quota telemetry from [`OpenAiModelProvider`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OpenAiTelemetrySnapshot {
+    pub retries_total: u64,
+    pub rate_limit_hits: u64,
+    pub last_billing_source: Option<String>,
+    pub cumulative_cost_usd: f64,
+    pub cumulative_list_cost_usd: f64,
+    pub cumulative_allowance_usd: f64,
+    pub quota_headers_seen: Vec<String>,
+    /// Per-call usage captured for the report's mean/p95 token and latency figures.
+    pub call_count: u64,
+    pub cumulative_tokens_in: u64,
+    pub cumulative_tokens_out: u64,
+    pub cumulative_reasoning_tokens: u64,
+    pub call_tokens_in: Vec<u64>,
+    pub call_tokens_out: Vec<u64>,
+    pub call_reasoning_tokens: Vec<u64>,
+    pub call_latencies_ms: Vec<u64>,
+}
+
 /// Stateless OpenAI-compatible HTTP [`ModelProvider`] sending `store: false` and strict schemas.
 #[derive(Debug)]
 pub struct OpenAiModelProvider {
     config: OpenAiModelConfig,
     client: Client,
+    parsed_headers: HeaderMap,
+    retries_total: AtomicU64,
+    rate_limit_hits: AtomicU64,
+    telemetry: Mutex<OpenAiTelemetrySnapshot>,
 }
 
 impl OpenAiModelProvider {
@@ -89,18 +197,59 @@ impl OpenAiModelProvider {
         if config.endpoint_url.trim().is_empty() {
             return Err("OpenAI-compatible endpoint_url must not be empty".to_owned());
         }
-        let client = Client::builder()
-            .timeout(Duration::from_millis(config.default_timeout_ms.max(1)))
+        let mut parsed_headers = HeaderMap::new();
+        for (name, val) in &config.extra_headers {
+            let trimmed = name.trim();
+            if trimmed.is_empty() {
+                return Err("extra header name must not be empty".to_owned());
+            }
+            let h_name = HeaderName::from_bytes(trimmed.as_bytes())
+                .map_err(|e| format!("invalid extra header name '{trimmed}': {e}"))?;
+            let h_val = HeaderValue::from_str(val.expose())
+                .map_err(|e| format!("invalid extra header value for '{trimmed}': {e}"))?;
+            parsed_headers.insert(h_name, h_val);
+        }
+        let mut builder =
+            Client::builder().timeout(Duration::from_millis(config.default_timeout_ms.max(1)));
+        if let Some(ua) = config
+            .user_agent
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            builder = builder.user_agent(ua);
+        }
+        let client = builder
             .build()
             .map_err(|err| format!("failed to build HTTP client: {err}"))?;
-        Ok(Self { config, client })
+        Ok(Self {
+            config,
+            client,
+            parsed_headers,
+            retries_total: AtomicU64::new(0),
+            rate_limit_hits: AtomicU64::new(0),
+            telemetry: Mutex::new(OpenAiTelemetrySnapshot::default()),
+        })
+    }
+
+    /// Returns cumulative retries, rate-limit hits, and OpenCode usage/quota telemetry.
+    #[must_use]
+    pub fn telemetry_snapshot(&self) -> OpenAiTelemetrySnapshot {
+        let mut snap = self.telemetry.lock().map(|g| g.clone()).unwrap_or_default();
+        snap.retries_total = self.retries_total.load(Ordering::Relaxed);
+        snap.rate_limit_hits = self.rate_limit_hits.load(Ordering::Relaxed);
+        snap
     }
 
     fn scrub(&self, text: &str) -> String {
-        match &self.config.api_key {
-            Some(key) => redact_secrets(text, &[key]),
-            None => redact_secrets(text, &[]),
+        let mut secrets: Vec<&SecretString> = Vec::new();
+        if let Some(key) = &self.config.api_key {
+            secrets.push(key);
         }
+        for (_, val) in &self.config.extra_headers {
+            secrets.push(val);
+        }
+        redact_secrets(text, &secrets)
     }
 
     fn make_failure(
@@ -248,49 +397,119 @@ impl ModelProvider for OpenAiModelProvider {
             if let Some(temp) = request.temperature {
                 obj.insert("temperature".to_owned(), json!(temp));
             }
+            if let Some(effort) = self.config.reasoning_effort {
+                obj.insert("reasoning_effort".to_owned(), json!(effort.as_str()));
+            }
         }
 
-        let mut req = self
-            .client
-            .post(&self.config.endpoint_url)
-            .timeout(Duration::from_millis(timeout_ms))
-            .json(&payload);
-        if let Some(key) = &self.config.api_key {
-            req = req.bearer_auth(key.expose());
-        }
+        let mut attempt: u32 = 0;
+        let (status, raw_body) = loop {
+            let mut req = self
+                .client
+                .post(&self.config.endpoint_url)
+                .timeout(Duration::from_millis(timeout_ms))
+                .headers(self.parsed_headers.clone())
+                .json(&payload);
+            if let Some(key) = &self.config.api_key {
+                req = req.bearer_auth(key.expose());
+            }
 
-        let resp = req.send().map_err(|err| {
-            let latency_ms = start.elapsed().as_millis() as u64;
-            let class = if err.is_timeout() {
-                ProviderFailureClass::Timeout
-            } else {
-                ProviderFailureClass::Server
-            };
-            self.make_failure(
-                request,
-                class,
-                err.status().map(|s| s.as_u16()),
-                latency_ms,
-                &err.to_string(),
-            )
-        })?;
-
-        let status = resp.status();
-        let raw_body = resp.text().map_err(|err| {
-            let latency_ms = start.elapsed().as_millis() as u64;
-            let class = if err.is_timeout() {
-                ProviderFailureClass::Timeout
-            } else {
-                ProviderFailureClass::Server
-            };
-            self.make_failure(
-                request,
-                class,
-                Some(status.as_u16()),
-                latency_ms,
-                &err.to_string(),
-            )
-        })?;
+            match req.send() {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let retry_after_secs = resp
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| s.trim().parse::<u64>().ok());
+                    if let Ok(mut t) = self.telemetry.lock() {
+                        for (hk, hv) in resp.headers() {
+                            let hks = hk.as_str().to_ascii_lowercase();
+                            if (hks.contains("ratelimit")
+                                || hks.contains("quota")
+                                || hks.contains("allowance"))
+                                && let Ok(vs) = hv.to_str()
+                            {
+                                let entry = format!("{hks}={vs}");
+                                if !t.quota_headers_seen.contains(&entry)
+                                    && t.quota_headers_seen.len() < 16
+                                {
+                                    t.quota_headers_seen.push(entry);
+                                }
+                            }
+                        }
+                    }
+                    if status.as_u16() == 429 {
+                        self.rate_limit_hits.fetch_add(1, Ordering::Relaxed);
+                    }
+                    match resp.text() {
+                        Ok(body) => {
+                            let code = status.as_u16();
+                            let transient =
+                                code == 429 || code == 408 || (500..=599).contains(&code);
+                            if !status.is_success()
+                                && transient
+                                && attempt < self.config.max_retries
+                            {
+                                attempt += 1;
+                                self.retries_total.fetch_add(1, Ordering::Relaxed);
+                                let delay_ms = retry_after_secs
+                                    .map(|s| s.saturating_mul(1_000))
+                                    .unwrap_or_else(|| (1_000_u64 << (attempt - 1)).min(30_000));
+                                std::thread::sleep(Duration::from_millis(delay_ms));
+                                continue;
+                            }
+                            break (status, body);
+                        }
+                        Err(err) => {
+                            if attempt < self.config.max_retries {
+                                attempt += 1;
+                                self.retries_total.fetch_add(1, Ordering::Relaxed);
+                                let delay_ms = (1_000_u64 << (attempt - 1)).min(30_000);
+                                std::thread::sleep(Duration::from_millis(delay_ms));
+                                continue;
+                            }
+                            let latency_ms = start.elapsed().as_millis() as u64;
+                            let class = if err.is_timeout() {
+                                ProviderFailureClass::Timeout
+                            } else {
+                                ProviderFailureClass::Server
+                            };
+                            return Err(self.make_failure(
+                                request,
+                                class,
+                                Some(status.as_u16()),
+                                latency_ms,
+                                &err.to_string(),
+                            ));
+                        }
+                    }
+                }
+                Err(err) => {
+                    let transient = err.is_timeout() || err.is_connect() || err.is_request();
+                    if transient && attempt < self.config.max_retries {
+                        attempt += 1;
+                        self.retries_total.fetch_add(1, Ordering::Relaxed);
+                        let delay_ms = (1_000_u64 << (attempt - 1)).min(30_000);
+                        std::thread::sleep(Duration::from_millis(delay_ms));
+                        continue;
+                    }
+                    let latency_ms = start.elapsed().as_millis() as u64;
+                    let class = if err.is_timeout() {
+                        ProviderFailureClass::Timeout
+                    } else {
+                        ProviderFailureClass::Server
+                    };
+                    return Err(self.make_failure(
+                        request,
+                        class,
+                        err.status().map(|s| s.as_u16()),
+                        latency_ms,
+                        &err.to_string(),
+                    ));
+                }
+            }
+        };
         let latency_ms = start.elapsed().as_millis() as u64;
 
         if !status.is_success() {
@@ -330,11 +549,43 @@ impl ModelProvider for OpenAiModelProvider {
             let input_tokens = u.prompt_tokens.unwrap_or(0);
             let output_tokens = u.completion_tokens.unwrap_or(0);
             let cached_tokens = u.prompt_tokens_details.and_then(|d| d.cached_tokens);
+            let reasoning_tokens = u
+                .opencode
+                .as_ref()
+                .and_then(|oc| oc.tokens.as_ref().and_then(|t| t.reasoning))
+                .or_else(|| u.completion_tokens_details.and_then(|d| d.reasoning_tokens));
+            if let Ok(mut t) = self.telemetry.lock() {
+                t.call_count = t.call_count.saturating_add(1);
+                t.cumulative_tokens_in = t.cumulative_tokens_in.saturating_add(input_tokens);
+                t.cumulative_tokens_out = t.cumulative_tokens_out.saturating_add(output_tokens);
+                t.cumulative_reasoning_tokens = t
+                    .cumulative_reasoning_tokens
+                    .saturating_add(reasoning_tokens.unwrap_or(0));
+                t.call_tokens_in.push(input_tokens);
+                t.call_tokens_out.push(output_tokens);
+                t.call_reasoning_tokens.push(reasoning_tokens.unwrap_or(0));
+                t.call_latencies_ms.push(latency_ms);
+                if let Some(c) = u.cost {
+                    t.cumulative_cost_usd += c;
+                }
+                if let Some(oc) = u.opencode {
+                    if let Some(bs) = oc.billing_source {
+                        t.last_billing_source = Some(bs);
+                    }
+                    if let Some(lc) = oc.list_cost {
+                        t.cumulative_list_cost_usd += lc;
+                    }
+                    if let Some(al) = oc.allowance {
+                        t.cumulative_allowance_usd += al;
+                    }
+                }
+            }
             let total_tokens = u.total_tokens.unwrap_or(input_tokens + output_tokens);
             TokenUsage {
                 input_tokens,
                 output_tokens,
                 cached_tokens,
+                reasoning_tokens,
                 total_tokens,
             }
         });

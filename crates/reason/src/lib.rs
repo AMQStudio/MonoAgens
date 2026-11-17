@@ -30,7 +30,8 @@ pub use info_gap_clf::{InfoGapClassifier, InfoGapError, InfoGapEvaluation};
 pub use model::{
     CallOutcome, MessagePart, MessageRole, ModelCallFailure, ModelCallRecord, ModelCallSuccess,
     ModelMessage, ModelOutput, ModelProvider, ModelRequest, OpenAiModelConfig, OpenAiModelProvider,
-    ProviderFailureClass, ResponseSchemaMode, ScriptedModelProvider, ScriptedReply, TokenUsage,
+    ProviderFailureClass, ReasoningEffort, ResponseSchemaMode, ScriptedModelProvider,
+    ScriptedReply, TokenUsage,
 };
 pub use parse::{
     DecodedRubric, FailedWake, MotivationLevel, ParseOptions, ParsedModelActs, decode_rubric,

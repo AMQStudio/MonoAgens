@@ -69,7 +69,7 @@ impl Converter for TomiConverter {
     }
 
     fn converter_version(&self) -> &str {
-        "1.0.0"
+        "1.1.0"
     }
 
     fn convert(
@@ -77,9 +77,20 @@ impl Converter for TomiConverter {
         dataset_dir: &Path,
         manifest_entry: &DatasetManifestEntry,
     ) -> Result<ConvertedDataset, LabError> {
-        let raw = fs::read_to_string(dataset_dir.join("test.txt"))?;
+        let (txt_path, trace_path) = if dataset_dir
+            .join("tomi_balanced_story_types/fb_all_test.txt")
+            .is_file()
+        {
+            (
+                dataset_dir.join("tomi_balanced_story_types/fb_all_test.txt"),
+                dataset_dir.join("tomi_balanced_story_types/fb_all_test.trace"),
+            )
+        } else {
+            (dataset_dir.join("test.txt"), dataset_dir.join("test.trace"))
+        };
+        let raw = fs::read_to_string(&txt_path)?;
         let stories = parse_babi_stories(&raw);
-        let trace_lines: Vec<String> = fs::read_to_string(dataset_dir.join("test.trace"))
+        let trace_lines: Vec<String> = fs::read_to_string(&trace_path)
             .map(|s| s.lines().map(str::to_owned).collect())
             .unwrap_or_default();
 
@@ -99,6 +110,12 @@ impl Converter for TomiConverter {
                 .get(s_idx)
                 .cloned()
                 .unwrap_or_else(|| "false_belief".to_owned());
+            let story_narrative_key = story
+                .lines
+                .iter()
+                .map(|l| l.trim())
+                .collect::<Vec<_>>()
+                .join("\n");
 
             let probe_base = 1_700_000_000_000 + (history.len() as u64 + 1) * 1_000;
             let mut probes = Vec::with_capacity(story.questions.len());
@@ -124,7 +141,10 @@ impl Converter for TomiConverter {
                 gold_entries.push(GoldEntry {
                     item_id: item_id.clone(),
                     probe_id,
-                    cluster_id: item_id.clone(),
+                    cluster_id: format!(
+                        "tomi_story_{}",
+                        &crate::sha256_hex(story_narrative_key.as_bytes())[..12]
+                    ),
                     gold_answer: ans.clone(),
                     accepted_answers: vec![ans],
                     gold_evidence: ev_refs.clone(),
@@ -136,7 +156,12 @@ impl Converter for TomiConverter {
 
             items.push(ExternalItem {
                 item_id: item_id.clone(),
-                cluster_id: item_id,
+                // Base-story cluster: `fb_all_test.txt` repeats each narrative once per
+                // question variant, so cluster bootstrap must group those duplicates.
+                cluster_id: format!(
+                    "tomi_story_{}",
+                    &crate::sha256_hex(story_narrative_key.as_bytes())[..12]
+                ),
                 strata_key: "tomi_story".to_owned(),
                 history,
                 checkpoint_group: None,

@@ -1,32 +1,34 @@
-[
-  {
-    "story_id": "hitom_synth_01",
-    "actors": ["Ava", "Ben", "Chloe"],
-    "story": [
-      "Ava entered the hall.",
-      "Ben entered the hall.",
-      "Chloe entered the hall.",
-      "Ava privately told Ben that the bronze key is in the cabinet.",
-      "Chloe exited the hall."
-    ],
-    "question": "Where does Ben believe Ava thinks the bronze key is located?",
-    "choices": ["cabinet", "drawer", "envelope"],
-    "answer": "cabinet",
-    "order": 2,
-    "deception": false
-  },
-  {
-    "story_id": "hitom_synth_02",
-    "actors": ["Ava", "Ben"],
-    "story": [
-      "Ava entered the garden.",
-      "Ben entered the garden.",
-      "Ava moved the watering can to the shed."
-    ],
-    "question": "Where does Ben think the watering can is?",
-    "choices": ["shed", "bench"],
-    "answer": "shed",
-    "order": 1,
-    "deception": false
-  }
-]
+{
+  "data": [
+    {
+      "sample_id": 0,
+      "deception": true,
+      "story_length": 1,
+      "question_order": 0,
+      "story": "1 Ava and Ben and Chloe entered the workshop.\n2 The compass is in the brass_box.\n3 Ava moved the compass to the canvas_satchel.\n4 Ava told Ben in private that the compass is in the canvas_satchel.\n5 Chloe exited the workshop.",
+      "question": "Where is the compass really?",
+      "choices": "A. brass_box, B. canvas_satchel, C. oak_cabinet",
+      "answer": "canvas_satchel"
+    },
+    {
+      "sample_id": 1,
+      "deception": true,
+      "story_length": 1,
+      "question_order": 1,
+      "story": "1 Ava and Ben and Chloe entered the workshop.\n2 The compass is in the brass_box.\n3 Ava moved the compass to the canvas_satchel.\n4 Ava told Ben in private that the compass is in the canvas_satchel.\n5 Chloe exited the workshop.",
+      "question": "Where does Chloe think the compass is?",
+      "choices": "A. brass_box, B. canvas_satchel, C. oak_cabinet",
+      "answer": "canvas_satchel"
+    },
+    {
+      "sample_id": 2,
+      "deception": true,
+      "story_length": 1,
+      "question_order": 2,
+      "story": "1 Ava and Ben and Chloe entered the workshop.\n2 The compass is in the brass_box.\n3 Ava moved the compass to the canvas_satchel.\n4 Ava told Ben in private that the compass is in the canvas_satchel.\n5 Chloe exited the workshop.",
+      "question": "Where does Ben think Ava thinks the compass is?",
+      "choices": "A. brass_box, B. canvas_satchel, C. oak_cabinet",
+      "answer": "canvas_satchel"
+    }
+  ]
+}

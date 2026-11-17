@@ -318,6 +318,9 @@ fn datasets_fetch_license_gate_atomic_multisource_record_checksums_and_verify() 
         tomi.sources[0].location = format!("{}/seed-artifacts", srv.base_url);
         tomi.sources[0].revision = "seed-v1".to_owned();
         tomi.files[0].path = "tomi_seed.json".to_owned();
+        // The real entry pins an explicit archive URL; the loopback fixture uses its own.
+        tomi.files[0].download_url = None;
+        tomi.files[0].extract = None;
         tomi.files[0].sha256 = PinnedSha256::Sha256(sha256_hex(&url_bytes));
         tomi.files[0].size = PinnedSize::Bytes(url_bytes.len() as u64);
         tomi.checksums_recorded = ChecksumsRecorded::Source;
@@ -750,4 +753,74 @@ fn scorer_model_entries_pin_fetch_and_verify_via_hf_models_api() {
     )
     .unwrap();
     assert!(v.all_verified, "expected verified scorer_model: {v:?}");
+}
+
+#[test]
+fn bare_pin_skips_unavailable_and_explicit_unavailable_still_fails() {
+    let tmp = TempDir::new().expect("tempdir");
+    let manifest_path = tmp.path().join("datasets.manifest.toml");
+    let registry = standard_benchmark_registry();
+    let mut manifest = load_and_validate_manifest(
+        &workspace_root().join("lab/datasets.manifest.example.toml"),
+        &registry,
+    )
+    .unwrap();
+    // Point all non-unavailable entries at non-existent routes except locomo, or keep one test:
+    // Actually restrict sources on other entries to Url/PaperOnly so bare pin exercises skipping
+    // `pis`/`proact`/`mpbench` cleanly against a single loopback mock route.
+    for entry in &mut manifest.datasets {
+        if entry.id != "locomo"
+            && entry.availability != monoagens_lab::datasets::DatasetAvailability::Unavailable
+        {
+            for src in &mut entry.sources {
+                src.kind = monoagens_lab::datasets::SourceKind::Url;
+                src.revision = "pinned-url".to_owned();
+            }
+        }
+    }
+    save_manifest_to_path(&manifest, &manifest_path).unwrap();
+
+    let gh_sha = "1111222233334444555566667777888899990000";
+    let mut routes = BTreeMap::new();
+    routes.insert(
+        "/repos/snap-research/locomo/commits/HEAD".to_owned(),
+        MockRoute {
+            status: 200,
+            content_type: "application/json",
+            body: format!(r#"{{"sha":"{gh_sha}"}}"#).into_bytes(),
+        },
+    );
+    routes.insert(
+        format!("/repos/snap-research/locomo/git/trees/{gh_sha}?recursive=1"),
+        MockRoute {
+            status: 200,
+            content_type: "application/json",
+            body: r#"{"tree":[{"path":"data/locomo10.json","type":"blob","size":4321}]}"#
+                .as_bytes()
+                .to_vec(),
+        },
+    );
+    let srv = MockHttpServer::start(routes);
+    let overrides = PinEndpointOverrides {
+        github_api_base: srv.base_url.clone(),
+        hf_api_base: srv.base_url.clone(),
+        bitbucket_api_base: srv.base_url.clone(),
+        timeout_secs: 5,
+    };
+
+    // Bare pin (`ids = []`) skips `pis`, `proact`, `mpbench` and succeeds!
+    let res = pin_datasets(&manifest_path, &registry, &[], &overrides)
+        .expect("bare pin with no ids must skip unavailable entries");
+    assert!(
+        !res.iter()
+            .any(|r| r.id == "pis" || r.id == "proact" || r.id == "mpbench"),
+        "unavailable entries must be skipped on bare pin: {res:?}"
+    );
+    let updated = load_and_validate_manifest(&manifest_path, &registry).unwrap();
+    assert_eq!(updated.get("locomo").unwrap().sources[0].revision, gh_sha);
+
+    // Explicit `ids = ["pis"]` still refuses.
+    let err = pin_datasets(&manifest_path, &registry, &["pis".to_owned()], &overrides)
+        .expect_err("explicit unavailable id must still fail");
+    assert!(err.to_string().contains("unavailable"), "err={err}");
 }

@@ -480,7 +480,15 @@ fn visiblescope_pm_bench() {
 #[test]
 fn gold_leak_and_scorer_pm_bench() {
     let conv = convert_twice_byte_identical(&PmBenchConverter);
-    assert_items_contain_no_literal_gold_answers(&conv, &["due_task_ids", "lure_task_ids"]);
+    let items_json = serialize_items_json(&conv.items);
+    assert!(!items_json.contains("due_task_ids"));
+    assert!(!items_json.contains("groundtruth"));
+    for item in &conv.items {
+        for probe in &item.probes {
+            let text = serde_json::to_string(&probe.percept).unwrap();
+            assert!(!text.contains("\"status\":\"due\""));
+        }
+    }
     let preds = gold_predictions_exact(&conv);
     let rep = PmBenchScorer
         .score(&preds, &conv.gold_book, &JudgeExecutionConfig::default(), 1)
@@ -654,13 +662,16 @@ fn gold_leak_and_scorer_molweni() {
 fn visiblescope_fantom() {
     let conv = convert_twice_byte_identical(&FantomConverter);
     assert_visiblescope_gold_evidence(&conv.items, &conv.gold_book).unwrap();
-    assert_eq!(conv.items[0].probes.len(), 6);
+    // Real FANToM info set: fact + belief(dist+mc) + 2 lists + shipped binaries (one `no:long` skipped).
+    assert_eq!(conv.items[0].probes.len(), 8);
 }
 
 #[test]
 fn gold_leak_and_scorer_fantom() {
     let conv = convert_twice_byte_identical(&FantomConverter);
-    assert_items_contain_no_literal_gold_answers(&conv, &["wrong_belief_answer"]);
+    let items_json = serialize_items_json(&conv.items);
+    assert!(!items_json.contains("wrong_belief_answer"));
+    assert!(!items_json.contains("\"correct_answer\""));
     let preds = gold_predictions_exact(&conv);
     let rep = FantomScorer
         .score(&preds, &conv.gold_book, &JudgeExecutionConfig::default(), 5)

@@ -16,6 +16,7 @@ use crate::datasets::framework::{
     EmbedderProbe, EmbedderProbeOutcome, EmbedderReadiness, ScorerMetric, SplitMix64,
     validate_semantic_embedder,
 };
+use crate::datasets::parquet_utils::read_parquet_rows;
 use crate::datasets::scoring_utils::{default_sampling_rule, evaluate_twin_retrieval_r1};
 
 /// `multilexnorm` component embedder probe.
@@ -36,7 +37,7 @@ impl EmbedderProbe for MultiLexNormProbe {
     }
 
     fn probe_version(&self) -> &str {
-        "multilexnorm-embed-v1"
+        "multilexnorm-embed-v2"
     }
 
     fn run_probe(
@@ -95,6 +96,33 @@ impl EmbedderProbe for MultiLexNormProbe {
     }
 }
 
+fn join_parquet_tokens(val: Option<&Value>) -> Option<String> {
+    let v = val?;
+    match v {
+        Value::String(s) => Some(s.trim().to_owned()),
+        Value::Array(arr) => {
+            let parts: Vec<&str> = arr
+                .iter()
+                .filter_map(|elem| {
+                    elem.as_str()
+                        .or_else(|| elem.get("item").and_then(Value::as_str))
+                        .or_else(|| elem.get("element").and_then(Value::as_str))
+                })
+                .collect();
+            (!parts.is_empty()).then(|| parts.join(" "))
+        }
+        Value::Object(obj) => obj
+            .get("list")
+            .and_then(|l| join_parquet_tokens(Some(l)))
+            .or_else(|| {
+                obj.get("item")
+                    .and_then(Value::as_str)
+                    .map(|s| s.trim().to_owned())
+            }),
+        _ => None,
+    }
+}
+
 fn load_multilexnorm_twins(dataset_dir: &Path) -> Result<Vec<TwinSample>, LabError> {
     let mut out = Vec::new();
     for lang in ["ind", "ind_eng"] {
@@ -108,6 +136,65 @@ fn load_multilexnorm_twins(dataset_dir: &Path) -> Result<Vec<TwinSample>, LabErr
         if let Some(path) = candidates.into_iter().find(|p| p.is_file()) {
             let text = fs::read_to_string(&path)?;
             parse_norm_file(lang, &text, &mut out);
+        }
+    }
+
+    if out.is_empty() {
+        for lang in ["ind", "ind_eng"] {
+            let parquet_candidates = [
+                dataset_dir.join(lang).join("test-00000-of-00001.parquet"),
+                dataset_dir
+                    .join("data")
+                    .join(lang)
+                    .join("test-00000-of-00001.parquet"),
+                dataset_dir.join(format!("{lang}_test.parquet")),
+            ];
+            let mut found = parquet_candidates.into_iter().find(|p| p.is_file());
+            if found.is_none() {
+                let dir = dataset_dir.join(lang);
+                if dir.is_dir()
+                    && let Ok(entries) = fs::read_dir(&dir)
+                {
+                    let mut parquets: Vec<PathBuf> = entries
+                        .filter_map(Result::ok)
+                        .map(|e| e.path())
+                        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("parquet"))
+                        .collect();
+                    parquets.sort();
+                    found = parquets.into_iter().next();
+                }
+            }
+            if let Some(path) = found {
+                let rows = read_parquet_rows(&path)?;
+                let mut all_rows = Vec::new();
+                let mut changed_rows = Vec::new();
+                for (idx, row) in rows.iter().enumerate() {
+                    let Some(orig) = join_parquet_tokens(row.get("orig")) else {
+                        continue;
+                    };
+                    let Some(norm) = join_parquet_tokens(row.get("norm")) else {
+                        continue;
+                    };
+                    if orig.is_empty() || norm.is_empty() {
+                        continue;
+                    }
+                    let sample = TwinSample {
+                        id: format!("{lang}::p{idx}"),
+                        stratum: lang.to_owned(),
+                        orig: orig.clone(),
+                        norm: norm.clone(),
+                    };
+                    if orig != norm {
+                        changed_rows.push(sample.clone());
+                    }
+                    all_rows.push(sample);
+                }
+                if !changed_rows.is_empty() {
+                    out.extend(changed_rows);
+                } else {
+                    out.extend(all_rows);
+                }
+            }
         }
     }
 

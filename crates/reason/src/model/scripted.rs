@@ -37,6 +37,7 @@ impl ScriptedReply {
                 input_tokens: 32,
                 output_tokens: out_tokens,
                 cached_tokens: Some(16),
+                reasoning_tokens: None,
                 total_tokens: 32 + out_tokens,
             },
             latency_ms: 1,

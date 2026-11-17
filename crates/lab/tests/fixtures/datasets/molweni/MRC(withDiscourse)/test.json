@@ -1,0 +1,49 @@
+{
+  "data": {
+    "title": "test",
+    "dialogues": [
+      {
+        "edus": [
+          {
+            "speaker": "rina",
+            "text": "I uploaded the kernel build log to folder beta."
+          },
+          {
+            "speaker": "omar",
+            "text": "Got it, did the checksum match?"
+          },
+          {
+            "speaker": "rina",
+            "text": "Yes, sha256 passed cleanly."
+          }
+        ],
+        "context": "rina: I uploaded the kernel build log to folder beta. omar: Got it, did the checksum match? rina: Yes, sha256 passed cleanly.",
+        "qas": [
+          {
+            "id": "mrc_q1",
+            "question": "Which folder holds the kernel build log?",
+            "answers": [
+              {
+                "text": "folder beta",
+                "answer_start": 33
+              }
+            ],
+            "is_impossible": false
+          },
+          {
+            "id": "mrc_q2",
+            "question": "What GPU driver version was installed?",
+            "plausible_answers": [
+              {
+                "text": "470",
+                "answer_start": 0
+              }
+            ],
+            "answers": [],
+            "is_impossible": true
+          }
+        ]
+      }
+    ]
+  }
+}

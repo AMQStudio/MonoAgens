@@ -18,22 +18,64 @@ use crate::datasets::scoring_utils::{exact_match_normalized, metric_with_cluster
 
 pub struct DynTomConverter;
 
+/// Real upstream `DynToM.json`: `{ "<trial_id>": { "stage": {...}, "question": { "<qid>": {...} } } }`.
 #[derive(Deserialize)]
-struct RawDynTomStory {
-    context_id: String,
-    stages: Vec<String>,
+struct RawDynTomTrial {
+    stage: serde_json::Value,
+    question: BTreeMap<String, RawDynTomQuestion>,
 }
 
 #[derive(Deserialize)]
 struct RawDynTomQuestion {
-    qid: String,
-    context_id: String,
-    stage: usize,
-    task_type: String,
-    dimension: String,
     question: String,
-    choices: Vec<String>,
+    #[serde(rename = "true answer")]
     answer: String,
+    #[serde(default)]
+    options: Vec<String>,
+    #[serde(rename = "question type", default)]
+    question_type: String,
+}
+
+fn build_stage_text(stage: &serde_json::Value, scenario_no: usize) -> String {
+    let setting = stage
+        .get("social setting")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown setting");
+    let characters = stage
+        .get("characters information")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let sketch = stage.get("sketch");
+    let relationships = sketch
+        .and_then(|s| s.get("relationships among characters"))
+        .map(std::string::ToString::to_string)
+        .unwrap_or_default();
+    let mental = sketch
+        .and_then(|s| s.get("mental states analysis in every scenario"))
+        .and_then(|m| {
+            m.get(format!("scenario {scenario_no}"))
+                .or_else(|| m.get(scenario_no.to_string()))
+        });
+    let state = mental
+        .map(|m| {
+            let get = |k: &str| m.get(k).and_then(|v| v.as_str()).unwrap_or("");
+            let influence = m
+                .get("influence")
+                .map(std::string::ToString::to_string)
+                .unwrap_or_default();
+            format!(
+                "belief: {}\nemotion: {}\nintention: {}\naction: {}\ninfluence: {}",
+                get("belief"),
+                get("emotion"),
+                get("intention"),
+                get("action"),
+                influence
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        "Scenario {scenario_no} in {setting}.\nCharacters: {characters}\nRelationships: {relationships}\nMental state: {state}"
+    )
 }
 
 impl Converter for DynTomConverter {
@@ -42,7 +84,7 @@ impl Converter for DynTomConverter {
     }
 
     fn converter_version(&self) -> &str {
-        "1.0.0"
+        "1.1.0"
     }
 
     fn convert(
@@ -50,17 +92,9 @@ impl Converter for DynTomConverter {
         dataset_dir: &Path,
         manifest_entry: &DatasetManifestEntry,
     ) -> Result<ConvertedDataset, LabError> {
-        let stories_raw = fs::read_to_string(dataset_dir.join("story.json"))?;
-        let qs_raw = fs::read_to_string(dataset_dir.join("question_new.json"))?;
-        let stories: Vec<RawDynTomStory> = serde_json::from_str(&stories_raw)
-            .map_err(|e| LabError::Serialization(format!("dyntom story.json: {e}")))?;
-        let questions: Vec<RawDynTomQuestion> = serde_json::from_str(&qs_raw)
-            .map_err(|e| LabError::Serialization(format!("dyntom question_new.json: {e}")))?;
-
-        let mut qs_by_ctx: BTreeMap<String, Vec<RawDynTomQuestion>> = BTreeMap::new();
-        for q in questions {
-            qs_by_ctx.entry(q.context_id.clone()).or_default().push(q);
-        }
+        let raw = fs::read_to_string(dataset_dir.join("DynToM.json"))?;
+        let trials: BTreeMap<String, RawDynTomTrial> = serde_json::from_str(&raw)
+            .map_err(|e| LabError::Serialization(format!("dyntom DynToM.json: {e}")))?;
 
         let soul = ActorId::new("soul");
         let narrator = ActorId::new("narrator");
@@ -69,42 +103,69 @@ impl Converter for DynTomConverter {
         let probe_aud = Audience::new([proctor, soul]);
         let base_ms: u64 = 1_700_000_000_000;
 
-        let mut items = Vec::with_capacity(stories.len());
+        let mut items = Vec::new();
         let mut gold_entries = Vec::new();
 
-        for story in stories {
-            let place = PlaceId::new(format!("dyntom_{}", story.context_id));
-            let mut history = Vec::with_capacity(story.stages.len());
-            let mut ev_refs = Vec::with_capacity(story.stages.len());
-            for (s_idx, text) in story.stages.iter().enumerate() {
+        for (context_id, trial) in trials {
+            let place = PlaceId::new(format!("dyntom_{context_id}"));
+            let scenario_count = trial
+                .stage
+                .get("scenario numbers")
+                .and_then(serde_json::Value::as_u64)
+                .map_or(5, |n| n as usize);
+            let mut history = Vec::with_capacity(scenario_count);
+            let mut ev_refs = Vec::with_capacity(scenario_count);
+            for scenario_no in 1..=scenario_count {
+                let text = build_stage_text(&trial.stage, scenario_no);
                 history.push(make_text_percept(
                     "narrator",
                     place.as_str(),
                     hist_aud.members.iter().cloned(),
-                    base_ms + (s_idx as u64) * 60_000,
+                    base_ms + ((scenario_no - 1) as u64) * 60_000,
                     text,
                 ));
                 ev_refs.push(GoldEvidenceRef {
-                    turn_index: s_idx,
+                    turn_index: scenario_no - 1,
                     audience: hist_aud.clone(),
                     place: place.clone(),
                 });
             }
 
-            let qs = qs_by_ctx.remove(&story.context_id).unwrap_or_default();
-            let mut probes = Vec::with_capacity(qs.len());
-            let mut strata = "U:Belief".to_owned();
-            for (q_idx, q) in qs.into_iter().enumerate() {
-                strata = format!("{}:{}", q.task_type, q.dimension);
-                let prompt = format!("{}\nChoices: {}", q.question, q.choices.join(" | "));
-                let stage_ts = base_ms + (q.stage as u64) * 60_000 + ((q_idx + 1) as u64) * 1_000;
+            let mut probes = Vec::with_capacity(trial.question.len());
+            for (q_idx, (qid, q)) in trial.question.into_iter().enumerate() {
+                if q.options.is_empty() || q.answer.len() != 1 {
+                    continue;
+                }
+                let answer_letter = q.answer.trim().to_ascii_lowercase();
+                let accepted_option = q
+                    .options
+                    .iter()
+                    .find(|o| {
+                        o.trim()
+                            .to_ascii_lowercase()
+                            .starts_with(&format!("{answer_letter}."))
+                    })
+                    .map(|o| o.trim().to_owned());
+                let mut accepted = vec![q.answer.trim().to_owned()];
+                if let Some(opt) = accepted_option {
+                    accepted.push(opt);
+                }
+                let mut strata = q.question_type.clone();
+                if strata.is_empty() {
+                    strata = "untyped".to_owned();
+                }
+                let prompt = format!(
+                    "{}\nOptions:\n{}\nAnswer with the option letter only.",
+                    q.question,
+                    q.options.join("\n")
+                );
                 probes.push(ExternalProbe {
-                    probe_id: q.qid.clone(),
+                    probe_id: qid.clone(),
                     percept: make_text_percept(
                         "lab_proctor",
                         place.as_str(),
                         probe_aud.members.iter().cloned(),
-                        stage_ts,
+                        base_ms + (scenario_count as u64 + 1) * 60_000 + (q_idx as u64) * 1_000,
                         prompt,
                     ),
                     isolated_checkpoint: true,
@@ -112,28 +173,26 @@ impl Converter for DynTomConverter {
                     expected_capability: None,
                 });
 
-                let max_ev = (q.stage + 1).min(ev_refs.len());
                 let mut metadata = BTreeMap::new();
-                metadata.insert("task_type".to_owned(), q.task_type);
-                metadata.insert("dimension".to_owned(), q.dimension);
+                metadata.insert("question_type".to_owned(), strata.clone());
 
                 gold_entries.push(GoldEntry {
-                    item_id: story.context_id.clone(),
-                    probe_id: q.qid,
-                    cluster_id: story.context_id.clone(),
-                    gold_answer: q.answer.clone(),
-                    accepted_answers: vec![q.answer],
-                    gold_evidence: ev_refs[..max_ev].to_vec(),
+                    item_id: context_id.clone(),
+                    probe_id: qid,
+                    cluster_id: context_id.clone(),
+                    gold_answer: q.answer.trim().to_owned(),
+                    accepted_answers: accepted,
+                    gold_evidence: ev_refs.clone(),
                     privacy_conflict: false,
-                    category: Some(strata.clone()),
+                    category: Some(strata),
                     metadata,
                 });
             }
 
             items.push(ExternalItem {
-                item_id: story.context_id.clone(),
-                cluster_id: story.context_id,
-                strata_key: strata,
+                item_id: context_id.clone(),
+                cluster_id: context_id,
+                strata_key: "dyntom_context".to_owned(),
                 history,
                 checkpoint_group: None,
                 probes,

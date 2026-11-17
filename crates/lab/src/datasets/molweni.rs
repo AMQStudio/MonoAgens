@@ -19,21 +19,27 @@ use crate::datasets::scoring_utils::{binary_prf1, metric_with_cluster_ci, token_
 
 pub struct MolweniConverter;
 
+/// Real upstream layout (`MRC(withDiscourse)/test.json`): `{ "data": { "title": ..., "dialogues": [...] } }`.
 #[derive(Deserialize)]
 struct RawMolweniMrcRoot {
-    data: Vec<RawMolweniMrcDoc>,
+    data: RawMolweniMrcData,
 }
 
 #[derive(Deserialize)]
-struct RawMolweniMrcDoc {
-    paragraphs: Vec<RawMolweniMrcPara>,
-}
-
-#[derive(Deserialize)]
-struct RawMolweniMrcPara {
+struct RawMolweniMrcData {
+    #[allow(dead_code)]
     #[serde(default)]
-    id: Option<String>,
-    context: Vec<RawMolweniEdu>,
+    title: Option<String>,
+    #[serde(default)]
+    dialogues: Vec<RawMolweniMrcDialogue>,
+}
+
+#[derive(Deserialize)]
+struct RawMolweniMrcDialogue {
+    edus: Vec<RawMolweniEdu>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    context: Option<String>,
     qas: Vec<RawMolweniQa>,
 }
 
@@ -81,7 +87,7 @@ impl Converter for MolweniConverter {
     }
 
     fn converter_version(&self) -> &str {
-        "1.0.0"
+        "1.2.0"
     }
 
     fn convert(
@@ -96,92 +102,89 @@ impl Converter for MolweniConverter {
         let mut items = Vec::new();
         let mut gold_entries = Vec::new();
 
-        // 1. MRC/test.json
-        let mrc_path = dataset_dir.join("MRC/test.json");
+        // 1. `MRC(withDiscourse)/test.json` (real upstream path).
+        let mrc_path = dataset_dir.join("MRC(withDiscourse)/test.json");
         if mrc_path.is_file() {
             let raw = fs::read_to_string(&mrc_path)?;
             let parsed: RawMolweniMrcRoot = serde_json::from_str(&raw)
                 .map_err(|e| LabError::Serialization(format!("molweni MRC JSON: {e}")))?;
 
-            for (d_idx, doc) in parsed.data.into_iter().enumerate() {
-                for (p_idx, para) in doc.paragraphs.into_iter().enumerate() {
-                    let dlg_id = para.id.unwrap_or_else(|| format!("mrc_{d_idx}_{p_idx}"));
-                    let place = PlaceId::new(dlg_id.clone());
-                    let mut speakers: BTreeSet<ActorId> = para
-                        .context
-                        .iter()
-                        .map(|e| ActorId::new(&e.speaker))
-                        .collect();
-                    speakers.insert(proctor.clone());
-                    speakers.insert(soul.clone());
-                    let hist_aud = Audience::new(speakers);
-                    let probe_aud = Audience::new([proctor.clone(), soul.clone()]);
+            for (d_idx, dialogue) in parsed.data.dialogues.into_iter().enumerate() {
+                let dlg_id = format!("mrc_{d_idx:04}");
+                let place = PlaceId::new(dlg_id.clone());
+                let mut speakers: BTreeSet<ActorId> = dialogue
+                    .edus
+                    .iter()
+                    .map(|e| ActorId::new(&e.speaker))
+                    .collect();
+                speakers.insert(proctor.clone());
+                speakers.insert(soul.clone());
+                let hist_aud = Audience::new(speakers);
+                let probe_aud = Audience::new([proctor.clone(), soul.clone()]);
 
-                    let mut history = Vec::with_capacity(para.context.len());
-                    let mut ev_refs = Vec::with_capacity(para.context.len());
-                    for (e_idx, edu) in para.context.iter().enumerate() {
-                        history.push(make_text_percept(
-                            &edu.speaker,
-                            place.as_str(),
-                            hist_aud.members.iter().cloned(),
-                            base_ms + (e_idx as u64) * 1_000,
-                            &edu.text,
-                        ));
-                        ev_refs.push(GoldEvidenceRef {
-                            turn_index: e_idx,
-                            audience: hist_aud.clone(),
-                            place: place.clone(),
-                        });
-                    }
-
-                    let mut probes = Vec::with_capacity(para.qas.len());
-                    for (q_idx, qa) in para.qas.into_iter().enumerate() {
-                        let probe_id = qa.id.clone();
-                        probes.push(ExternalProbe {
-                            probe_id: probe_id.clone(),
-                            percept: make_text_percept(
-                                "lab_proctor",
-                                place.as_str(),
-                                probe_aud.members.iter().cloned(),
-                                base_ms + ((history.len() + q_idx + 1) as u64) * 1_000,
-                                &qa.question,
-                            ),
-                            isolated_checkpoint: true,
-                            probe_scope: VisibleScope::new(probe_aud.clone(), Some(place.clone())),
-                            expected_capability: None,
-                        });
-
-                        let accepted: Vec<String> =
-                            qa.answers.into_iter().map(|a| a.text).collect();
-                        let gold_answer = accepted.first().cloned().unwrap_or_default();
-                        let mut metadata = BTreeMap::new();
-                        metadata.insert("task".to_owned(), "mrc".to_owned());
-                        metadata.insert("is_impossible".to_owned(), qa.is_impossible.to_string());
-
-                        gold_entries.push(GoldEntry {
-                            item_id: dlg_id.clone(),
-                            probe_id,
-                            cluster_id: dlg_id.clone(),
-                            gold_answer,
-                            accepted_answers: accepted,
-                            gold_evidence: ev_refs.clone(),
-                            privacy_conflict: false,
-                            category: Some("mrc".to_owned()),
-                            metadata,
-                        });
-                    }
-
-                    items.push(ExternalItem {
-                        item_id: dlg_id.clone(),
-                        cluster_id: dlg_id,
-                        strata_key: "mrc".to_owned(),
-                        history,
-                        checkpoint_group: None,
-                        probes,
-                        history_mode: HistoryMode::StaticSilent,
-                        capabilities: Vec::new(),
+                let mut history = Vec::with_capacity(dialogue.edus.len());
+                let mut ev_refs = Vec::with_capacity(dialogue.edus.len());
+                for (e_idx, edu) in dialogue.edus.iter().enumerate() {
+                    history.push(make_text_percept(
+                        &edu.speaker,
+                        place.as_str(),
+                        hist_aud.members.iter().cloned(),
+                        base_ms + (e_idx as u64) * 1_000,
+                        &edu.text,
+                    ));
+                    ev_refs.push(GoldEvidenceRef {
+                        turn_index: e_idx,
+                        audience: hist_aud.clone(),
+                        place: place.clone(),
                     });
                 }
+
+                let mut probes = Vec::with_capacity(dialogue.qas.len());
+                for (q_idx, qa) in dialogue.qas.into_iter().enumerate() {
+                    let probe_id = qa.id.clone();
+                    probes.push(ExternalProbe {
+                        probe_id: probe_id.clone(),
+                        percept: make_text_percept(
+                            "lab_proctor",
+                            place.as_str(),
+                            probe_aud.members.iter().cloned(),
+                            base_ms + ((history.len() + q_idx + 1) as u64) * 1_000,
+                            &qa.question,
+                        ),
+                        isolated_checkpoint: true,
+                        probe_scope: VisibleScope::new(probe_aud.clone(), Some(place.clone())),
+                        expected_capability: None,
+                    });
+
+                    let accepted: Vec<String> = qa.answers.into_iter().map(|a| a.text).collect();
+                    let gold_answer = accepted.first().cloned().unwrap_or_default();
+                    let mut metadata = BTreeMap::new();
+                    metadata.insert("task".to_owned(), "mrc".to_owned());
+                    metadata.insert("is_impossible".to_owned(), qa.is_impossible.to_string());
+
+                    gold_entries.push(GoldEntry {
+                        item_id: dlg_id.clone(),
+                        probe_id,
+                        cluster_id: dlg_id.clone(),
+                        gold_answer,
+                        accepted_answers: accepted,
+                        gold_evidence: ev_refs.clone(),
+                        privacy_conflict: false,
+                        category: Some("mrc".to_owned()),
+                        metadata,
+                    });
+                }
+
+                items.push(ExternalItem {
+                    item_id: dlg_id.clone(),
+                    cluster_id: dlg_id,
+                    strata_key: "mrc".to_owned(),
+                    history,
+                    checkpoint_group: None,
+                    probes,
+                    history_mode: HistoryMode::StaticSilent,
+                    capabilities: Vec::new(),
+                });
             }
         }
 

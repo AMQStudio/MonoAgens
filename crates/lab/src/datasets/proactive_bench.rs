@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use monoagens_protocol::{ActorId, Audience, PlaceId, VisibleScope};
 use serde::Deserialize;
@@ -24,18 +24,23 @@ pub const PROACTIVE_RM_MODEL_ID: &str = "proactive_agent_rm";
 pub struct ProactiveBenchConverter;
 
 #[derive(Deserialize)]
-struct RawProactiveEvent {
-    #[serde(default)]
-    event_id: Option<String>,
-    domain: String,
-    scenario_id: String,
-    #[serde(default)]
-    timestamp_ms: Option<u64>,
-    observation: String,
+struct RawProactiveObservation {
+    time: String,
     event: String,
-    need: bool,
+}
+
+#[derive(Deserialize)]
+struct RawProactiveAgentResponse {
     #[serde(default)]
-    reference_task: Option<String>,
+    candidate_task: Vec<String>,
+}
+
+/// Real upstream `dataset/test_data/{code,writing}_NN.json` event record.
+#[derive(Deserialize)]
+struct RawProactiveEvent {
+    observation: RawProactiveObservation,
+    agent_response: RawProactiveAgentResponse,
+    task_status: bool,
 }
 
 impl Converter for ProactiveBenchConverter {
@@ -44,7 +49,7 @@ impl Converter for ProactiveBenchConverter {
     }
 
     fn converter_version(&self) -> &str {
-        "1.0.0"
+        "1.3.0"
     }
 
     fn convert(
@@ -52,87 +57,136 @@ impl Converter for ProactiveBenchConverter {
         dataset_dir: &Path,
         manifest_entry: &DatasetManifestEntry,
     ) -> Result<ConvertedDataset, LabError> {
-        let raw = fs::read_to_string(dataset_dir.join("dataset/test_data/test_data.jsonl"))?;
+        let test_dir = dataset_dir.join("dataset/test_data");
+        let mut files: Vec<PathBuf> = Vec::new();
+        if test_dir.is_dir() {
+            for entry in fs::read_dir(&test_dir)? {
+                let path = entry?.path();
+                let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                if name.ends_with(".json") && name != "splits.json" {
+                    files.push(path);
+                }
+            }
+        }
+        files.sort();
+
         let soul = ActorId::new("soul");
         let user = ActorId::new("user:primary");
-        let aud = Audience::new([user, soul]);
+        let aud = Audience::new([user.clone(), soul.clone()]);
+        let base_ms: u64 = 1_700_000_000_000;
 
         let mut items = Vec::new();
         let mut gold_entries = Vec::new();
-        let mut scenario_histories: BTreeMap<
-            String,
-            (Vec<monoagens_protocol::Percept>, Vec<GoldEvidenceRef>),
-        > = BTreeMap::new();
 
-        for (idx, line) in raw.lines().filter(|l| !l.trim().is_empty()).enumerate() {
-            let ev: RawProactiveEvent = serde_json::from_str(line)
-                .map_err(|e| LabError::Serialization(format!("proactive_bench JSONL: {e}")))?;
-            let item_id = ev.event_id.unwrap_or_else(|| format!("pb_{idx:04}"));
-            let cluster_id = format!("{}:{}", ev.domain, ev.scenario_id);
-            let place = PlaceId::new(format!("place:{cluster_id}"));
-            let ts = ev
-                .timestamp_ms
-                .unwrap_or(1_700_000_000_000 + (idx as u64) * 5_000);
-            let payload = format!("Observation: {}\nEvent: {}", ev.observation, ev.event);
+        for file in files {
+            let stem = file
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("scenario")
+                .to_owned();
+            let domain = stem
+                .split_once('_')
+                .map_or_else(|| stem.clone(), |(d, _)| d.to_owned());
+            let place = PlaceId::new(format!("place:{stem}"));
+            let raw = fs::read_to_string(&file)?;
+            let events: Vec<RawProactiveEvent> = serde_json::from_str(&raw)
+                .map_err(|e| LabError::Serialization(format!("proactive_bench {stem}: {e}")))?;
 
-            let (hist, ev_refs) = scenario_histories.entry(cluster_id.clone()).or_default();
-            let probe = ExternalProbe {
-                probe_id: "trigger".to_owned(),
-                percept: make_text_percept(
+            let mut history = Vec::with_capacity(events.len());
+            let mut ev_refs = Vec::with_capacity(events.len());
+            for (idx, ev) in events.into_iter().enumerate() {
+                let ts = ev
+                    .observation
+                    .time
+                    .trim()
+                    .parse::<f64>()
+                    .ok()
+                    .and_then(|secs| {
+                        (secs.is_finite() && secs >= 0.0).then_some((secs * 1000.0) as u64)
+                    })
+                    .unwrap_or(base_ms + (idx as u64) * 5_000);
+                let item_id = format!("pb_{stem}_{idx:03}");
+                let payload = format!(
+                    "Observation: {}\n\nShould you proactively intervene and offer assistance? If yes, state the assistance you would offer; if not, answer SILENT.",
+                    ev.observation.event
+                );
+                let reference_task = ev
+                    .agent_response
+                    .candidate_task
+                    .first()
+                    .cloned()
+                    .unwrap_or_default();
+
+                let probe = ExternalProbe {
+                    probe_id: "trigger".to_owned(),
+                    percept: make_text_percept(
+                        "user:primary",
+                        place.as_str(),
+                        aud.members.iter().cloned(),
+                        ts,
+                        &payload,
+                    ),
+                    isolated_checkpoint: true,
+                    probe_scope: VisibleScope::new(aud.clone(), Some(place.clone())),
+                    expected_capability: None,
+                };
+
+                let mut metadata = BTreeMap::new();
+                metadata.insert("need".to_owned(), ev.task_status.to_string());
+                metadata.insert("domain".to_owned(), domain.clone());
+                metadata.insert("scenario_id".to_owned(), stem.clone());
+
+                gold_entries.push(GoldEntry {
+                    item_id: item_id.clone(),
+                    probe_id: "trigger".to_owned(),
+                    cluster_id: stem.clone(),
+                    gold_answer: reference_task.clone(),
+                    accepted_answers: if reference_task.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![reference_task]
+                    },
+                    gold_evidence: ev_refs.clone(),
+                    privacy_conflict: false,
+                    category: Some(domain.clone()),
+                    metadata,
+                });
+
+                items.push(ExternalItem {
+                    item_id,
+                    cluster_id: stem.clone(),
+                    strata_key: format!("{domain}:need={}", ev.task_status),
+                    history: history.clone(),
+                    checkpoint_group: None,
+                    probes: vec![probe],
+                    history_mode: HistoryMode::StaticSilent,
+                    capabilities: Vec::new(),
+                });
+
+                let turn_idx = history.len();
+                history.push(make_text_percept(
                     "user:primary",
                     place.as_str(),
                     aud.members.iter().cloned(),
                     ts,
-                    &payload,
+                    payload,
+                ));
+                ev_refs.push(GoldEvidenceRef {
+                    turn_index: turn_idx,
+                    audience: aud.clone(),
+                    place: place.clone(),
+                });
+            }
+        }
+
+        if items.is_empty() {
+            return Err(LabError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!(
+                    "no `dataset/test_data/*.json` ProactiveAgent events under '{}'",
+                    dataset_dir.display()
                 ),
-                isolated_checkpoint: true,
-                probe_scope: VisibleScope::new(aud.clone(), Some(place.clone())),
-                expected_capability: None,
-            };
-
-            let mut metadata = BTreeMap::new();
-            metadata.insert("need".to_owned(), ev.need.to_string());
-            metadata.insert("domain".to_owned(), ev.domain.clone());
-
-            gold_entries.push(GoldEntry {
-                item_id: item_id.clone(),
-                probe_id: "trigger".to_owned(),
-                cluster_id: cluster_id.clone(),
-                gold_answer: ev
-                    .reference_task
-                    .clone()
-                    .unwrap_or_else(|| if ev.need { "SPEAK" } else { "SILENT" }.to_owned()),
-                accepted_answers: ev.reference_task.into_iter().collect(),
-                gold_evidence: ev_refs.clone(),
-                privacy_conflict: false,
-                category: Some(ev.domain.clone()),
-                metadata,
-            });
-
-            items.push(ExternalItem {
-                item_id,
-                cluster_id,
-                strata_key: format!("{}:need={}", ev.domain, ev.need),
-                history: hist.clone(),
-                checkpoint_group: None,
-                probes: vec![probe],
-                history_mode: HistoryMode::Interactive,
-                capabilities: Vec::new(),
-            });
-
-            let turn_idx = hist.len();
-            hist.push(make_text_percept(
-                "user:primary",
-                place.as_str(),
-                aud.members.iter().cloned(),
-                ts,
-                payload,
-            ));
-            ev_refs.push(GoldEvidenceRef {
-                turn_index: turn_idx,
-                audience: aud.clone(),
-                place,
-            });
+            )));
         }
 
         Ok(ConvertedDataset {
