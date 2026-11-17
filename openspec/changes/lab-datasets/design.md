@@ -211,13 +211,32 @@ apply across all clustered sets (`locomo`, `memory_agent_bench`, `group_mem_benc
     **scripted preflight simulation** over the selected sample to print estimated history percepts,
     simulated Gate wake count, probe calls, judge calls, and worst-case USD cost, requiring an
     explicit `--max-cost-usd` (`CostGuard`) budget cap that stops the run cleanly if exceeded.
-  - Static history ingestion for memory and ToM QA datasets runs Core's **single unmodified loop**
-    while the **Lab driver** supplies a `ScriptedModelProvider` returning silent `think` (zero
-    outbound replies, `$0` API cost) on historical turns and logs simulated Gate wakes plus
-    `history_reasoning_mode = "scripted_silent"` in `RunRecord`, switching to the live `ModelProvider`
-    only on evaluation probes (or an optional future `--live-full-history` override). Interactive and
-    timing benchmarks (`pitch`, `when2speak`, `capa`, `proactive_bench`, `pm_bench`) run normal
-    evaluation at their decision points.
+  - *Superseded by Decision 8 (owner, 2026-11-18):* static history used to load through a
+    Lab-side `ScriptedModelProvider` (`scripted_silent`). Live runs now load history through the
+    full MonoAgens with the live model; the scripted provider remains only for the preflight
+    estimate and offline tests.
+
+### 8. Owner revision 2026-11-18: full MonoAgens, per-category suites, cache telemetry
+
+The first live pilot showed two faults: the Lab replaced the soul's prompt with the whole history
+plus the question (`framework.rs` `build_probe_soul_prompt`, and a JSON dump of `plan.sections`
+instead of the production renderer), and history loaded through a scripted silent model. Both
+mean the pilot measured the model reading a transcript, not MonoAgens. Owner rulings:
+
+- **Full MonoAgens only.** Live runs drive every percept, history included, through the core's
+  loop with the live model; prompts are rendered with `monoagens_reason::render_context_plan_with`
+  and outputs parsed with `parse_thought_output` under the strict ThoughtBatch schema, as in
+  production; answers are the core's dispatched `Act` payloads. All mechanisms on, production
+  prior, EmbeddingGemma 2, real store. `RunRecord.monoagens_mode = "full"`; any deviation marks
+  the run invalid. `--live-full-history` and `scripted_silent` are removed from live runs.
+- **One category per suite.** `--suite memory|prospective|timing|group|tom|indonesian|security`,
+  each with its own run directory and report; `--suite standard` only indexes the latest
+  per-category results.
+- **Cache telemetry.** Record cached input tokens per call and use a stable
+  `x-opencode-session` value per run and item so repeated prefixes can hit the provider cache.
+
+The memory comparison against Mem0, Letta, Zep/Graphiti and LangMem is its own change,
+`lab-memory-comparison`.
 
 ## Migration Plan
 

@@ -9,13 +9,13 @@ scorecard with contamination metadata.
 
 ## ADDED Requirements
 
-### Requirement: The standard suite runs only on verified datasets
-`monoagens-lab benchmark --suite standard` SHALL run only when every required dataset not marked
-`unavailable` verifies. It SHALL fail before any run, naming each dataset that is missing or
-unverified.
+### Requirement: A suite runs only on verified datasets
+`monoagens-lab benchmark --suite <category>` SHALL run only when every required dataset of that
+category not marked `unavailable` verifies. It SHALL fail before any run, naming each dataset
+that is missing or unverified.
 
 #### Scenario: One required dataset fails verification
-- **WHEN** the standard suite starts and one required dataset has a checksum mismatch
+- **WHEN** a suite starts and one of its required datasets has a checksum mismatch
 - **THEN** no dataset is run, the command names that dataset and exits non-zero
 
 ### Requirement: A subset run is marked partial
@@ -92,10 +92,10 @@ When a run uses fewer items than a dataset holds, it SHALL select them via a see
 - **THEN** both arms receive the exact same item ids, and both run records report cluster-bootstrap confidence intervals
 
 ### Requirement: The scorecard feeds the Pareto report
-The standard suite SHALL emit **exactly one row per registered dataset** in `ParetoScorecardInput` form carrying metrics, cost, `lane` (`core_behavioral` vs `embedder_probe`), `status` (`run`, `partial`, `not_scored`, `unavailable`, `not_mappable`, or `unverified`), and `contamination_risk`. Datasets without scores SHALL remain gaps and NEVER be imputed.
+The standard index SHALL emit **exactly one row per registered dataset**, taken from the latest per-category runs, in `ParetoScorecardInput` form carrying metrics, cost, `lane` (`core_behavioral` vs `embedder_probe`), `status` (`run`, `partial`, `not_scored`, `unavailable`, `not_mappable`, or `unverified`), and `contamination_risk`. Datasets without scores SHALL remain gaps and NEVER be imputed.
 
-#### Scenario: The standard suite finishes
-- **WHEN** `monoagens-lab benchmark --suite standard --pareto` completes
+#### Scenario: The standard index is built
+- **WHEN** `monoagens-lab benchmark --suite standard --pareto` runs after the category suites
 - **THEN** the output holds strictly one row per registered dataset (with `multilexnorm` and `indocollex` in `embedder_probe`), explicit status and `contamination_risk`, and a Pareto frontier computed from scored rows only
 
 ### Requirement: Default tests use committed fixtures only
@@ -108,37 +108,55 @@ copied from a real dataset. Default tests SHALL open no network connection and c
 - **THEN** every converter, probe, and scorer test passes using only committed fixtures
 
 ### Requirement: Live benchmark runs need the owner's authorization and cost caps
-Paid `--live` runs SHALL start only with `--live` plus an explicit `--max-cost-usd` cap after emitting a scripted preflight wake/cost estimate. Without altering `monoagens-core`'s single cognitive loop, static memory and ToM histories SHALL load through Lab-side `ScriptedModelProvider` silent `think` reasoning (recording `history_reasoning_mode = "scripted_silent"` in `RunRecord`), and runs without `--live` SHALL report paid-model metrics as `not_scored`.
+Paid `--live` runs SHALL start only with `--live` plus an explicit `--max-cost-usd` cap after emitting a scripted preflight wake/cost estimate (the scripted provider is used only to estimate, never to produce reported results). Runs without `--live` SHALL report paid-model metrics as `not_scored`.
 
-#### Scenario: Running the standard suite without --live or above budget
-- **WHEN** the standard suite runs without `--live`, or a `--live` preflight exceeds `--max-cost-usd`
+#### Scenario: Running a suite without --live or above budget
+- **WHEN** a suite runs without `--live`, or a `--live` preflight exceeds `--max-cost-usd`
 - **THEN** without `--live` model-dependent metrics report `not_scored`, and over-budget `--live` runs halt cleanly at `CostGuard` before exceeding the cap
 
+### Requirement: Live benchmark runs exercise the full MonoAgens
+A `--live` run reported as MonoAgens SHALL run the full MonoAgens: every percept, history included, goes through the core's own loop with the live model; prompts are rendered and model output parsed exactly as in production; answers are the core's dispatched actions; all mechanisms are on with the production prior, the semantic embedder and the real store. The Lab SHALL NOT replace or extend the soul's prompt. Run records SHALL carry `monoagens_mode = "full"`.
+
+#### Scenario: A question is asked after a long history
+- **WHEN** a live probe asks about a turn far back in the history
+- **THEN** the soul's model call contains only what the core rendered, including the memories it recalled, and never the raw history transcript
+
+#### Scenario: A run deviates from the full MonoAgens
+- **WHEN** any history percept is loaded with a scripted model, a mechanism is switched off, or the Lab alters a prompt
+- **THEN** the run record is marked invalid and its scores are not reported as MonoAgens results
+
+### Requirement: Suites are run and reported per category
+`monoagens-lab benchmark` SHALL run one category per suite (`memory`, `prospective`, `timing`, `group`, `tom`, `indonesian`, `security`), each in its own run directory with its own report containing only that category. `--suite standard` SHALL only index the latest per-category results and SHALL NOT mix categories in one results table.
+
+#### Scenario: Running the memory suite
+- **WHEN** the owner runs `benchmark --suite memory --live`
+- **THEN** only memory datasets run, and the report contains no other category
+
 ### Requirement: Live runs pass and record provider options
-`--live` runs SHALL accept a reasoning effort for the soul's model and for the judge (`--reasoning-effort`, `--judge-reasoning-effort`) and optional extra request headers, send them on every model call, and record the effort values and header names (never header values or keys) in every run record and report.
+`--live` runs SHALL accept a reasoning effort for the soul's model and for the judge (`--reasoning-effort`, `--judge-reasoning-effort`) and optional extra request headers, send them on every model call, and record the effort values and header names (never header values or keys) in every run record and report. Every model call SHALL record input, cached input, output and reasoning tokens, and use a stable session header value per run and item.
 
 #### Scenario: A live run with medium soul effort and high judge effort
 - **WHEN** the owner runs `--live --reasoning-effort medium --judge-reasoning-effort high`
 - **THEN** every soul call carries effort `medium`, every judge call carries `high`, and the run records and report show both values without any secret
 
 ### Requirement: A full benchmark run produces a standard report
-A standard-suite run SHALL write a report into its `lab/runs/<run-id>/` directory: a reproducibility block, per-domain results with confidence intervals, a status and gap table, cost and wake statistics, charts, failure examples and per-item transcripts. Every table and chart SHALL be generated from the run records, never typed by hand.
+A suite run SHALL write a report into its `lab/runs/<run-id>/` directory: a reproducibility block, per-domain results with confidence intervals, a status and gap table, cost and wake statistics, charts, failure examples and per-item transcripts. Every table and chart SHALL be generated from the run records, never typed by hand.
 
 #### Scenario: Reproducibility and results sections
 - **WHEN** the report is written
 - **THEN** it names the commit, prior digest, manifest digest, model, reasoning effort, judge, seeds and dates, and shows each dataset's official or renamed metrics with intervals and per-category breakdowns
 
 #### Scenario: Reading the report of a full live run
-- **WHEN** a full `--live` standard-suite run completes
+- **WHEN** a full `--live` suite run completes
 - **THEN** its run directory holds the report (Markdown and HTML), CSV tables, chart images, and one transcript file per scored item, and every number in them traces to a run record
 
 ### Requirement: Behavioral runs use the soul's semantic embedder
-External behavioral runs SHALL embed every percept and probe with the configured semantic embedder (EmbeddingGemma 2, `256d`, with the task prefixes and `(embed_model_ver, dim_d, prompt_regime_id)` tags of `core-and-lab`) before the core sees it, and the run record SHALL name the embedder. A run without a semantic embedder SHALL be labelled `embedder = none` in every row, and SHALL NOT be reported as a standard run.
+External behavioral runs SHALL embed every percept and probe with the configured semantic embedder (EmbeddingGemma 2, `256d`, with the task prefixes and `(embed_model_ver, dim_d, prompt_regime_id)` tags of `core-and-lab`) before the core sees it, and the run record SHALL name the embedder. A run without a semantic embedder SHALL be labelled `embedder = none` in every row, and SHALL NOT be reported as a MonoAgens result.
 
 #### Scenario: A memory dataset runs with the semantic embedder
 - **WHEN** `locomo` runs with EmbeddingGemma 2 configured
 - **THEN** every ingested turn and probe carries a `256d` vector, recall can use vector candidates, and the run record names the embedder and its version
 
 #### Scenario: The embedder is missing
-- **WHEN** a standard-suite run starts and no semantic embedder is configured
-- **THEN** the run refuses to start as a standard run and tells the owner how to fetch and configure the embedder
+- **WHEN** a live suite run starts and no semantic embedder is configured
+- **THEN** the run refuses to start and tells the owner how to fetch and configure the embedder
