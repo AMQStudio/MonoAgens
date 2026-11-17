@@ -86,9 +86,18 @@ stay untouched. Only the owner authorizes `--live` runs and license clearances.
 
 ## Decisions
 
-### 1. One committed TOML manifest, synchronized with the aligned registry
+### 1. One local TOML manifest from a committed template, synchronized with the aligned registry
 
-`lab/datasets.manifest.toml` holds one table per external dataset: `id`, `domain`, `sources` (`kind`,
+Owner ruling (2026-11-17): the project is internal for now, so license clearances and recorded
+checksums must not be published. The working manifest `lab/datasets.manifest.toml` is git-ignored;
+the repository tracks `lab/datasets.manifest.example.toml` (same entries, every license `pending`,
+no owner checksums). `monoagens-lab datasets init` copies the template to the local path and never
+overwrites. Default tests and the registry↔manifest check run against the template, so a fresh
+clone builds and tests cleanly. Trade-off: checksums are not shared through git; reproducibility
+rests on the manifest digest written into every run record and on the owner backing up the local
+manifest. Revisit before any public release.
+
+The manifest holds one table per external dataset: `id`, `domain`, `sources` (`kind`,
 `location`, `revision`, `role` — supporting multi-source `group_mem_bench`), `license.spdx`,
 `license.terms`, `license.status` (`pending` | `cleared` | `refused`), `availability` (`available` |
 `unavailable` | `not_mappable`), `core_applicability`, `contamination_risk` (`very_low` | `low` |

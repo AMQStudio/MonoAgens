@@ -1,0 +1,32 @@
+[
+  {
+    "story_id": "hitom_synth_01",
+    "actors": ["Ava", "Ben", "Chloe"],
+    "story": [
+      "Ava entered the hall.",
+      "Ben entered the hall.",
+      "Chloe entered the hall.",
+      "Ava privately told Ben that the bronze key is in the cabinet.",
+      "Chloe exited the hall."
+    ],
+    "question": "Where does Ben believe Ava thinks the bronze key is located?",
+    "choices": ["cabinet", "drawer", "envelope"],
+    "answer": "cabinet",
+    "order": 2,
+    "deception": false
+  },
+  {
+    "story_id": "hitom_synth_02",
+    "actors": ["Ava", "Ben"],
+    "story": [
+      "Ava entered the garden.",
+      "Ben entered the garden.",
+      "Ava moved the watering can to the shed."
+    ],
+    "question": "Where does Ben think the watering can is?",
+    "choices": ["shed", "bench"],
+    "answer": "shed",
+    "order": 1,
+    "deception": false
+  }
+]

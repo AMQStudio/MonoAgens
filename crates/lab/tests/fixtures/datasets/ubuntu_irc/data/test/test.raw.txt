@@ -1,0 +1,4 @@
+[14:01] <dev_a> How do I reload the systemd daemon after editing units?
+[14:02] <dev_b> Run systemctl daemon-reload as root.
+[14:03] <dev_c> By the way did anyone check the mirror status?
+[14:04] <dev_a> Thanks dev_b, daemon-reload fixed the stale unit warning.

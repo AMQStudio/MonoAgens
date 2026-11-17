@@ -15,6 +15,10 @@ secrets.toml
 lab/runs/*
 !lab/runs/reference/
 
+# External benchmark datasets (fetched outside git)
+lab/datasets/
+lab/datasets.manifest.toml
+
 # Python / Node tooling (never commit vendored environments)
 .venv/
 __pycache__/

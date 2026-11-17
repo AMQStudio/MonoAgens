@@ -27,7 +27,9 @@ execution, aligned registry metrics, and per-dataset scoring.
 
 ## What Changes
 
-- Add a committed dataset manifest (`lab/datasets.manifest.toml`) recording per dataset: source(s),
+- Add a local, git-ignored dataset manifest (`lab/datasets.manifest.toml`, created by
+  `monoagens-lab datasets init` from the committed template `lab/datasets.manifest.example.toml`,
+  whose licenses all stay `pending`) recording per dataset: source(s),
   pinned revision, availability, contamination risk, license and redistribution terms, license
   status, file list with SHA-256 and size, and converter/probe and scorer versions (`R-51`).
   - Add `monoagens-lab datasets pin [ids]` (owner-run, querying GitHub/HF APIs directly) so commit
@@ -89,7 +91,8 @@ embedder probes consistent across both open changes.
   `verify_required_datasets_present`, and `run_benchmark_suite`; `crates/lab/src/main.rs` gains
   `datasets`; `lab/adapters/` hosts local Python helpers (`fantom` `SentenceTransformer`, `capa` judge,
   optional `proactive_bench` RM).
-- **Files**: `lab/datasets.manifest.toml`, git-ignored `lab/datasets/`, committed fixtures under
+- **Files**: committed template `lab/datasets.manifest.example.toml`, git-ignored local
+  `lab/datasets.manifest.toml` and `lab/datasets/`, committed fixtures under
   `crates/lab/tests/fixtures/datasets/`, `docs/lab-datasets.md`, updated `core-and-lab/specs/lab/spec.md`,
   and completed Run 3 findings at `research/findings/2026-11-17-run-3.md` + `run-3-notes/`.
 - **Dependencies**: `sha2` (already in `lab`), blocking `reqwest` (already in workspace via `reason`)

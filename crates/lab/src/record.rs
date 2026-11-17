@@ -22,6 +22,42 @@ pub struct PurposeCost {
     pub cost_usd: f64,
 }
 
+/// Confidence interval recorded per metric in external dataset run records.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetricScoreInterval {
+    pub metric: String,
+    pub value: Option<f64>,
+    #[serde(default)]
+    pub ci95_low: Option<f64>,
+    #[serde(default)]
+    pub ci95_high: Option<f64>,
+    #[serde(default)]
+    pub n_clusters: Option<usize>,
+    #[serde(default)]
+    pub not_scored_reason: Option<String>,
+}
+
+/// Provenance and sampling metadata attached to external dataset runs (`benchmark-evaluation/spec.md`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DatasetRunProvenance {
+    pub dataset_id: String,
+    pub pinned_revision: String,
+    pub manifest_digest: String,
+    pub converter_version: String,
+    pub scorer_version: String,
+    pub sampling_rule: String,
+    pub chosen_item_ids: Vec<String>,
+    pub metric_scores: Vec<MetricScoreInterval>,
+    #[serde(default)]
+    pub judge_model: Option<String>,
+    #[serde(default)]
+    pub judge_prompt_version: Option<String>,
+    #[serde(default)]
+    pub history_gate_wakes: u64,
+    #[serde(default)]
+    pub partial_run: bool,
+}
+
 /// Complete provenance and outcome record for one Lab run (`specs/lab/spec.md`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunRecord {
@@ -46,6 +82,10 @@ pub struct RunRecord {
     pub passed: bool,
     pub metrics: RunMetricsSummary,
     pub cost_by_purpose: Vec<PurposeCost>,
+    #[serde(default)]
+    pub history_reasoning_mode: Option<String>,
+    #[serde(default)]
+    pub dataset_provenance: Option<DatasetRunProvenance>,
 }
 
 impl RunRecord {

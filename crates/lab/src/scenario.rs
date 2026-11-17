@@ -16,13 +16,14 @@ use serde::{Deserialize, Serialize};
 use crate::LabError;
 use crate::checks::ExpectationCheck;
 
-/// Scenario partition set (`specs/lab/spec.md`).
+/// Scenario partition set (`specs/lab/spec.md`, `benchmark-evaluation/spec.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScenarioSet {
     Development,
     Validation,
     Sealed,
+    External,
 }
 
 /// Warranted reply ground-truth annotation (`specs/lab/spec.md` L131).
@@ -315,6 +316,11 @@ pub fn load_scenarios_from_set(
         ScenarioSet::Sealed => {
             return Err(LabError::Protocol(
                 "refusing to enumerate or read lab/scenarios/sealed/".to_owned(),
+            ));
+        }
+        ScenarioSet::External => {
+            return Err(LabError::Protocol(
+                "external benchmark datasets are loaded via lab/datasets.manifest.toml, not lab/scenarios/".to_owned(),
             ));
         }
     };

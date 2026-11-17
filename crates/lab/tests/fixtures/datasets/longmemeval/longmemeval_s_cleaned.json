@@ -1,0 +1,62 @@
+[
+  {
+    "question_id": "lme_synth_001",
+    "question_type": "knowledge-update",
+    "question": "Which transit pass tier do I currently hold?",
+    "question_date": "2024/06/10 (Mon) 11:00",
+    "answer": "monthly regional pass",
+    "haystack_dates": [
+      "2024/05/01 (Wed) 09:00",
+      "2024/06/01 (Sat) 14:30"
+    ],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "Right now I only buy a weekend zone ticket for trains.",
+          "has_answer": false
+        },
+        {
+          "role": "assistant",
+          "content": "Got it, weekend zone ticket noted."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "I upgraded today to the monthly regional pass for commuting.",
+          "has_answer": true
+        },
+        {
+          "role": "assistant",
+          "content": "Noted that you switched to the monthly regional pass."
+        }
+      ]
+    ],
+    "answer_session_ids": ["s2"]
+  },
+  {
+    "question_id": "lme_synth_002_abs",
+    "question_type": "abstention",
+    "question": "What serial number is printed on my bicycle lock?",
+    "question_date": "2024/06/11 (Tue) 10:00",
+    "answer": "I do not have that information.",
+    "haystack_dates": [
+      "2024/05/12 (Sun) 16:00"
+    ],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "I bought a folding bicycle tire pump this morning.",
+          "has_answer": false
+        },
+        {
+          "role": "assistant",
+          "content": "Nice choice for compact roadside repairs."
+        }
+      ]
+    ],
+    "answer_session_ids": []
+  }
+]

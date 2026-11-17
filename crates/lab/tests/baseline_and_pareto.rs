@@ -1,6 +1,7 @@
 //! Adapter conformance, baseline parity, Tool RAG scaling, `1/n` band,
 //! Holm-Bonferroni, and Convex Pareto scorecard tests (Core 11.3, 11.4).
 
+use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
@@ -277,6 +278,9 @@ fn pareto_holm_and_benchmark_suite_semantics() {
                 delta_ni: 0.0,
                 asr: 0.0,
                 raw_5tuples: raw_mono,
+                lane: None,
+                contamination_risk: None,
+                status: None,
             },
             SystemConfigScore {
                 name: "StatelessReAct".to_owned(),
@@ -287,6 +291,9 @@ fn pareto_holm_and_benchmark_suite_semantics() {
                 delta_ni: 0.0,
                 asr: 0.15,
                 raw_5tuples: raw_react,
+                lane: None,
+                contamination_risk: None,
+                status: None,
             },
             SystemConfigScore {
                 name: "FullContextNaive".to_owned(),
@@ -297,6 +304,9 @@ fn pareto_holm_and_benchmark_suite_semantics() {
                 delta_ni: 0.14,
                 asr: 0.18,
                 raw_5tuples: raw_full,
+                lane: None,
+                contamination_risk: None,
+                status: None,
             },
         ],
         paired_comparisons: vec![
@@ -317,6 +327,7 @@ fn pareto_holm_and_benchmark_suite_semantics() {
                 is_quality_ni_endpoint: false,
             },
         ],
+        scorecard_rows: Vec::new(),
     };
 
     let report = compute_convex_pareto(&input);
@@ -366,8 +377,17 @@ fn pareto_holm_and_benchmark_suite_semantics() {
     assert!(run_arm_t_restart_parity_check(&prior).expect("Arm-T restart parity"));
 
     // 4. In-tree benchmark suite reports 1/n [0.5, 2.0] and excludes MuTual from multi-party claims
-    let empty_dir = TempDir::new().expect("temp datasets dir");
-    let in_tree = run_benchmark_suite("in_tree_only", empty_dir.path(), Some(&input), &prior)
+    let empty_root = TempDir::new().expect("temp datasets root");
+    let empty_dir = empty_root.path().join("datasets");
+    fs::create_dir_all(&empty_dir).unwrap();
+    let template_manifest =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lab/datasets.manifest.example.toml");
+    fs::copy(
+        &template_manifest,
+        empty_root.path().join("datasets.manifest.toml"),
+    )
+    .expect("copy template manifest");
+    let in_tree = run_benchmark_suite("in_tree_only", &empty_dir, Some(&input), &prior)
         .expect("in_tree suite");
     assert_eq!(in_tree.one_over_n_band_check, (0.5, 2.0));
     assert!(
@@ -377,26 +397,32 @@ fn pareto_holm_and_benchmark_suite_semantics() {
             .any(|s| s.contains("MuTual"))
     );
 
-    // 5. `--suite standard` strictly fails non-zero naming missing external datasets when absent
-    let std_err = run_benchmark_suite("standard", empty_dir.path(), None, &prior)
+    // 5. `--suite standard` strictly fails non-zero naming missing/unverified required external datasets
+    let std_err = run_benchmark_suite("standard", &empty_dir, None, &prior)
         .expect_err("standard benchmark suite must fail loudly when external datasets are missing");
     let err_str = std_err.to_string();
     assert!(
-        err_str.contains("locomo") && err_str.contains("mpbench"),
-        "missing dataset error must name missing datasets, got: {err_str}"
+        err_str.contains("locomo") && err_str.contains("longmemeval"),
+        "missing dataset error must name missing required datasets, got: {err_str}"
     );
 }
 
 #[test]
 fn cli_benchmark_standard_exits_nonzero_when_datasets_missing() {
-    let empty_dir = TempDir::new().expect("temp datasets");
+    let empty_root = TempDir::new().expect("temp datasets root");
+    let empty_dir = empty_root.path().join("datasets");
+    fs::create_dir_all(&empty_dir).unwrap();
+    let template_manifest =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lab/datasets.manifest.example.toml");
     let out = Command::new(env!("CARGO_BIN_EXE_monoagens-lab"))
         .args([
             "benchmark",
             "--suite",
             "standard",
+            "--manifest",
+            template_manifest.to_str().unwrap(),
             "--datasets-dir",
-            empty_dir.path().to_str().unwrap(),
+            empty_dir.to_str().unwrap(),
         ])
         .output()
         .expect("spawn monoagens-lab binary");

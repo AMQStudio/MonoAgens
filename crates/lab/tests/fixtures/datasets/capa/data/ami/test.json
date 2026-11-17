@@ -1,0 +1,23 @@
+[
+  {
+    "meeting_id": "ami_synth_01",
+    "split": "test",
+    "absent_role": "Industrial Designer",
+    "briefing": "Keep track of enclosure material changes for the Industrial Designer while they are away.",
+    "transcript": [
+      { "speaker": "PM", "content": "Let us settle on anodized aluminum for the chassis." },
+      { "speaker": "EE", "content": "Agreed, aluminum also helps passive heat dissipation." },
+      { "speaker": "ID_delegate", "content": "Does anyone need updates on exterior finish?" },
+      { "speaker": "PM", "content": "Yes, note the switch from plastic to matte aluminum." }
+    ],
+    "episodes": [
+      {
+        "episode_id": "ep1",
+        "cue_turn": 2,
+        "anchor_turn": 3,
+        "window_k": 3,
+        "target_proposition": "Chassis enclosure changed to matte anodized aluminum."
+      }
+    ]
+  }
+]

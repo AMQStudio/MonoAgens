@@ -14,6 +14,7 @@ pub mod baseline;
 pub mod benchmark;
 pub mod checks;
 pub mod clock;
+pub mod datasets;
 pub mod driver;
 pub mod guard;
 pub mod metrics;
@@ -29,16 +30,17 @@ pub use baseline::{
 };
 pub use benchmark::{
     BenchmarkDatasetSpec, BenchmarkDomain, BenchmarkSuiteReport, ToolRagScalePoint,
-    run_arm_t_restart_parity_check, run_benchmark_suite, run_tool_rag_scaling_eval,
-    standard_benchmark_registry, verify_required_datasets_present,
+    run_arm_t_restart_parity_check, run_benchmark_suite, run_benchmark_suite_with_options,
+    run_tool_rag_scaling_eval, standard_benchmark_registry, verify_required_datasets_present,
 };
 pub use checks::{
     CheckKind, CheckResult, ExpectationCheck, evaluate_checks, translate_scenario_event_id,
 };
 pub use clock::VirtualClock;
 pub use driver::{
-    SimOutput, replay_events_offline, run_ablation_compare, run_ablation_compare_scenarios,
-    run_scenario,
+    CalibrationReport, SimOutput, calibrate_from_run_records, calibrate_from_scenarios,
+    ensure_calibration_set_allowed, replay_events_offline, run_ablation_compare,
+    run_ablation_compare_scenarios, run_scenario,
 };
 pub use guard::{CostGuard, GuardRefusal};
 pub use metrics::{
@@ -49,10 +51,10 @@ pub use metrics::{
 pub use pareto::{
     CONFIRMATORY_SCENARIO_MIN, CONFIRMATORY_SCENARIO_TARGET, ConvexParetoReport,
     DEFAULT_FWER_ALPHA, DEFAULT_NI_MARGIN_DELTA, HolmComparisonResult, PairedComparisonInput,
-    ParetoScorecardInput, SystemConfigScore, compute_convex_pareto, evaluate_holm_bonferroni,
-    kerby_rank_biserial,
+    ParetoScorecardInput, ScorecardRow, ScorecardStatus, SystemConfigScore, compute_convex_pareto,
+    evaluate_holm_bonferroni, kerby_rank_biserial, scorecard_rows_to_pareto_input,
 };
-pub use record::{PurposeCost, RunRecord};
+pub use record::{DatasetRunProvenance, MetricScoreInterval, PurposeCost, RunRecord};
 pub use scenario::{
     CostGuardConfig, EventAnnotation, FalseBeliefProbe, RecallProbeAnnotation, ReportControlProbe,
     Scenario, ScenarioAnnotations, ScenarioSet, ScriptedActionRule, ScriptedEvent,

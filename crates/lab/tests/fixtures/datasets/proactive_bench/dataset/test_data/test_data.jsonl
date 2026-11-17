@@ -1,0 +1,2 @@
+{"event_id":"pa_1","domain":"coding","scenario_id":"scen_1","timestamp_ms":1700000100000,"observation":"User edited config.toml leaving port unquoted","event":"Syntax check warns missing quotes on line 4","need":true,"reference_task":"Point out the missing quotes around the port string."}
+{"event_id":"pa_2","domain":"reading","scenario_id":"scen_2","timestamp_ms":1700000200000,"observation":"User is reading an offline encyclopedia entry","event":"Background ambient clock ticks noon","need":false,"reference_task":""}

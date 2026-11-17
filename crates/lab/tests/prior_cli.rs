@@ -309,18 +309,29 @@ fn lab_suite_replay_baseline_and_benchmark_support_prior_flag() {
     assert!(replay_out.status.success());
 
     // benchmark --suite in_tree_only --prior
+    let template_manifest = workspace_root().join("lab/datasets.manifest.example.toml");
+    let bench_datasets_dir = tmp.path().join("datasets");
+    fs::create_dir_all(&bench_datasets_dir).unwrap();
     let bench_out = Command::new(lab_bin())
         .args([
             "benchmark",
             "--suite",
             "in_tree_only",
+            "--manifest",
+            template_manifest.to_str().unwrap(),
+            "--datasets-dir",
+            bench_datasets_dir.to_str().unwrap(),
             "--prior",
             prior_path.to_str().unwrap(),
             "--json",
         ])
         .output()
         .unwrap();
-    assert!(bench_out.status.success());
+    assert!(
+        bench_out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&bench_out.stderr)
+    );
 
     // baseline rejects missing --prior path
     let missing = tmp.path().join("no_such_prior.json");

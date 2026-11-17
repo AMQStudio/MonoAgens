@@ -1,0 +1,51 @@
+{
+  "treasury": [
+    {
+      "msg_node": "m_t1",
+      "content": "Quarterly reserve allocation targets 18 percent short bills.",
+      "author": "User_1",
+      "timestamp": "2024-07-01T09:00:00Z",
+      "reply_to": null,
+      "is_noise": false,
+      "is_decision_point": false
+    },
+    {
+      "msg_node": "m_t2",
+      "content": "Confirmed, revise target allocation to 22 percent short bills.",
+      "author": "User_2",
+      "timestamp": "2024-07-01T09:05:00Z",
+      "reply_to": "m_t1",
+      "is_noise": false,
+      "is_decision_point": true
+    },
+    {
+      "msg_node": "m_t3",
+      "content": "Coffee machine filter arrives Friday.",
+      "author": "User_1",
+      "timestamp": "2024-07-01T09:10:00Z",
+      "reply_to": null,
+      "is_noise": true,
+      "is_decision_point": false
+    }
+  ],
+  "legal": [
+    {
+      "msg_node": "m_l1",
+      "content": "Restricted settlement memo code is VERMILION-9.",
+      "author": "User_3",
+      "timestamp": "2024-07-01T10:00:00Z",
+      "reply_to": null,
+      "is_noise": false,
+      "is_decision_point": true
+    },
+    {
+      "msg_node": "m_l2",
+      "content": "Keep VERMILION-9 strictly inside legal counsel review.",
+      "author": "User_4",
+      "timestamp": "2024-07-01T10:02:00Z",
+      "reply_to": "m_l1",
+      "is_noise": false,
+      "is_decision_point": false
+    }
+  ]
+}

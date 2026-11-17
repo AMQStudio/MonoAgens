@@ -16,7 +16,15 @@ use monoagens_protocol::{
 use serde::{Deserialize, Serialize};
 
 use crate::LabError;
-use crate::pareto::{ConvexParetoReport, ParetoScorecardInput, compute_convex_pareto};
+use crate::datasets::{
+    BenchmarkExecutionOptions, PreflightEstimate, execute_external_datasets,
+    load_and_validate_manifest, resolve_manifest_path, verify_required_datasets_with_manifest,
+};
+use crate::pareto::{
+    ConvexParetoReport, ParetoScorecardInput, ScorecardRow, compute_convex_pareto,
+    scorecard_rows_to_pareto_input,
+};
+use crate::record::RunRecord;
 use crate::scenario::ensure_not_sealed_path;
 
 /// Five cognitive domains plus Indonesian, Tool RAG, and Security benchmark suites (`R-39`, `A-15`).
@@ -58,13 +66,21 @@ pub struct ToolRagScalePoint {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkSuiteReport {
     pub suite: String,
+    pub partial: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub left_out_datasets: Vec<String>,
     pub datasets_dir: String,
     pub dataset_specs: Vec<BenchmarkDatasetSpec>,
+    pub scorecard: Vec<ScorecardRow>,
+    pub run_records: Vec<RunRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preflight_estimate: Option<PreflightEstimate>,
     pub excluded_from_multiparty_claims: Vec<String>,
     pub restricted_to_shortcut_checks: Vec<String>,
     pub tool_rag_scaling: Vec<ToolRagScalePoint>,
     pub arm_t_restart_parity_ok: bool,
     pub one_over_n_band_check: (f64, f64),
+    pub scorecard_pareto_input: ParetoScorecardInput,
     pub pareto: Option<ConvexParetoReport>,
 }
 
@@ -86,8 +102,8 @@ pub fn standard_benchmark_registry() -> Vec<BenchmarkDatasetSpec> {
             "longmemeval",
             BenchmarkDomain::Memory,
             "longmemeval",
-            &["acc", "abstention_f1"],
-            "1-on-1 longitudinal recall, KU + ABS",
+            &["overall_acc", "abstention_acc"],
+            "1-on-1 longitudinal recall, KU + ABS (LongMemEval_S default)",
             true,
         ),
         ds(
@@ -110,8 +126,12 @@ pub fn standard_benchmark_registry() -> Vec<BenchmarkDatasetSpec> {
             "stale",
             BenchmarkDomain::Memory,
             "stale",
-            &["state_resolution", "premise_resistance"],
-            "Tests valid_to superseding and Premise Resistance (PR)",
+            &[
+                "state_resolution",
+                "premise_resistance",
+                "implicit_policy_adaptation",
+            ],
+            "Tests valid_to superseding, Premise Resistance (PR), and Implicit Policy Adaptation (IPA)",
             true,
         ),
         // Domain 2: Prospective Memory
@@ -119,7 +139,7 @@ pub fn standard_benchmark_registry() -> Vec<BenchmarkDatasetSpec> {
             "pm_bench",
             BenchmarkDomain::Prospective,
             "pm_bench",
-            &["set_f1", "commission_error_rate"],
+            &["set_f1", "false_alarm_rate"],
             "7-day Virtual Week with lures & updates",
             true,
         ),
@@ -177,15 +197,15 @@ pub fn standard_benchmark_registry() -> Vec<BenchmarkDatasetSpec> {
             "ubuntu_irc",
             BenchmarkDomain::GroupChat,
             "ubuntu_irc",
-            &["thread_f1", "addressee_p1"],
-            "Chat-only disentanglement & reply structure",
+            &["thread_f1", "parent_speaker_p1"],
+            "Bound solely to jkkummerfeld/irc-disentanglement (derived parent_speaker_p1)",
             true,
         ),
         ds(
             "molweni",
             BenchmarkDomain::GroupChat,
             "molweni",
-            &["qa_f1", "sdrt_link_acc"],
+            &["qa_f1", "sdrt_link_f1"],
             "Multi-party discourse; MuTual strictly excluded from multi-party claims",
             true,
         ),
@@ -202,8 +222,8 @@ pub fn standard_benchmark_registry() -> Vec<BenchmarkDatasetSpec> {
             "opentom",
             BenchmarkDomain::TheoryOfMind,
             "opentom",
-            &["macro_f1_coarse", "macro_f1_fine", "attitude_f1"],
-            "Zero train split; location + psychological attitude",
+            &["macro_f1_coarse", "macro_f1_fine", "attitude_f1", "mhop_f1"],
+            "Zero train split; location + psychological attitude + multi-hop",
             true,
         ),
         ds(
@@ -218,8 +238,16 @@ pub fn standard_benchmark_registry() -> Vec<BenchmarkDatasetSpec> {
             "exploretom",
             BenchmarkDomain::TheoryOfMind,
             "exploretom",
-            &["action_acc", "dyntom_acc"],
-            "Dynamic asymmetric world belief tracking",
+            &["exact_match_acc"],
+            "ExploreToM dynamic asymmetric world belief tracking (separate from DynToM)",
+            true,
+        ),
+        ds(
+            "dyntom",
+            BenchmarkDomain::TheoryOfMind,
+            "dyntom",
+            &["dyntom_acc"],
+            "DynToM multi-stage temporal ToM transitions (GAIR-NLP/DynToM)",
             true,
         ),
         ds(
@@ -230,21 +258,21 @@ pub fn standard_benchmark_registry() -> Vec<BenchmarkDatasetSpec> {
             "Restricted strictly to shortcut-perturbation sanity checks",
             false,
         ),
-        // Indonesian informal register (A-15, 256d)
+        // Indonesian informal register (A-15, 256d, reason Embedder probe lane)
         ds(
             "multilexnorm",
             BenchmarkDomain::IndonesianRegister,
             "indonesian/multilexnorm",
-            &["retrieval_256d_acc"],
-            "Indonesian/Gaul informal register normalization retrieval (256d)",
+            &["twin_retrieval_r1_256d"],
+            "Indonesian/Gaul informal register normalization retrieval via reason::Embedder (256d)",
             true,
         ),
         ds(
             "indocollex",
             BenchmarkDomain::IndonesianRegister,
             "indonesian/indocollex",
-            &["retrieval_256d_acc"],
-            "Indonesian colloquial word transformation retrieval (256d)",
+            &["twin_retrieval_r1_256d"],
+            "Indonesian colloquial word transformation retrieval via reason::Embedder (256d)",
             true,
         ),
         // Tool RAG & Security (in-tree runnable components)
@@ -303,36 +331,17 @@ fn ds_local(
     }
 }
 
-/// Validates that `datasets_dir` contains every required dataset directory for `suite`.
-/// Fails loudly with `Err(LabError::Io)` naming all missing directories — never silently succeeds.
+/// Validates that `datasets_dir` verifies every required available dataset against the
+/// committed manifest (`SHA-256`, byte size, extraction marker, converter cache).
+/// Fails loudly naming missing/unverified datasets and the `datasets fetch` command.
 pub fn verify_required_datasets_present(
     datasets_dir: &Path,
     registry: &[BenchmarkDatasetSpec],
 ) -> Result<Vec<PathBuf>, LabError> {
     ensure_not_sealed_path(datasets_dir)?;
-    let mut missing = Vec::new();
-    let mut present = Vec::new();
-    for spec in registry {
-        if !spec.requires_external_corpus || !spec.required_in_standard_suite {
-            continue;
-        }
-        let path = datasets_dir.join(&spec.relative_dir);
-        if path.is_dir() {
-            present.push(path);
-        } else {
-            missing.push(format!("{} ({})", spec.id, path.display()));
-        }
-    }
-    if !missing.is_empty() {
-        return Err(LabError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!(
-                "missing required benchmark dataset directories under '{}': {}",
-                datasets_dir.display(),
-                missing.join(", ")
-            ),
-        )));
-    }
+    let manifest_path = resolve_manifest_path(None, datasets_dir);
+    let (_manifest, present) =
+        verify_required_datasets_with_manifest(&manifest_path, datasets_dir, registry, None)?;
     Ok(present)
 }
 
@@ -446,26 +455,83 @@ pub fn run_arm_t_restart_parity_check(prior: &Prior) -> Result<bool, LabError> {
 }
 
 /// Runs `monoagens-lab benchmark` for `suite` (`standard` or `in_tree_only`),
-/// strictly failing non-zero when external datasets are absent for `standard`.
+/// strictly failing non-zero when external datasets are absent or unverified for `standard`.
 pub fn run_benchmark_suite(
     suite: &str,
     datasets_dir: &Path,
     pareto_input: Option<&ParetoScorecardInput>,
     prior: &Prior,
 ) -> Result<BenchmarkSuiteReport, LabError> {
+    run_benchmark_suite_with_options(
+        suite,
+        datasets_dir,
+        pareto_input,
+        false,
+        prior,
+        &BenchmarkExecutionOptions::default(),
+    )
+}
+
+/// Runs `monoagens-lab benchmark` with full manifest, `--only`, `--live --max-cost-usd`,
+/// judge routing, and scorecard Pareto support.
+pub fn run_benchmark_suite_with_options(
+    suite: &str,
+    datasets_dir: &Path,
+    pareto_input: Option<&ParetoScorecardInput>,
+    compute_pareto_from_scorecard: bool,
+    prior: &Prior,
+    opts: &BenchmarkExecutionOptions<'_>,
+) -> Result<BenchmarkSuiteReport, LabError> {
     ensure_not_sealed_path(datasets_dir)?;
     let registry = standard_benchmark_registry();
-    if suite == "standard" {
-        let _present = verify_required_datasets_present(datasets_dir, &registry)?;
-    } else if suite != "in_tree_only" {
+    let manifest_path = resolve_manifest_path(opts.manifest_path.as_deref(), datasets_dir);
+
+    let manifest = if suite == "standard" {
+        let (m, _present) = verify_required_datasets_with_manifest(
+            &manifest_path,
+            datasets_dir,
+            &registry,
+            opts.only_ids.as_deref(),
+        )?;
+        m
+    } else if suite == "in_tree_only" {
+        load_and_validate_manifest(&manifest_path, &registry)?
+    } else {
         return Err(LabError::Protocol(format!(
             "unknown benchmark suite '{suite}' (expected 'standard' or 'in_tree_only')"
         )));
-    }
+    };
+
+    let (scorecard, run_records, partial, left_out_datasets, preflight_estimate) =
+        execute_external_datasets(
+            suite,
+            &manifest,
+            &manifest_path,
+            datasets_dir,
+            &registry,
+            prior,
+            opts,
+        )?;
 
     let tool_rag_scaling = run_tool_rag_scaling_eval(prior);
     let arm_t_ok = run_arm_t_restart_parity_check(prior)?;
-    let pareto = pareto_input.map(compute_convex_pareto);
+    let scorecard_pareto_input = scorecard_rows_to_pareto_input(
+        &scorecard,
+        pareto_input
+            .map(|p| p.paired_comparisons.clone())
+            .unwrap_or_default(),
+    );
+    let pareto = if let Some(explicit) = pareto_input {
+        let mut merged = explicit.clone();
+        if merged.scorecard_rows.is_empty() {
+            merged.scorecard_rows = scorecard.clone();
+        }
+        Some(compute_convex_pareto(&merged))
+    } else if compute_pareto_from_scorecard {
+        Some(compute_convex_pareto(&scorecard_pareto_input))
+    } else {
+        None
+    };
 
     let mut caveat_counts: BTreeMap<String, String> = BTreeMap::new();
     caveat_counts.insert(
@@ -475,13 +541,19 @@ pub fn run_benchmark_suite(
 
     Ok(BenchmarkSuiteReport {
         suite: suite.to_owned(),
+        partial,
+        left_out_datasets,
         datasets_dir: datasets_dir.to_string_lossy().into_owned(),
         dataset_specs: registry,
+        scorecard,
+        run_records,
+        preflight_estimate,
         excluded_from_multiparty_claims: vec!["MuTual".to_owned()],
         restricted_to_shortcut_checks: vec!["ToMi".to_owned()],
         tool_rag_scaling,
         arm_t_restart_parity_ok: arm_t_ok,
         one_over_n_band_check: (0.5, 2.0),
+        scorecard_pareto_input,
         pareto,
     })
 }

@@ -1,0 +1,888 @@
+# Committed template for the external dataset manifest (every license status is "pending").
+# Run `monoagens-lab datasets init` to create the local, git-ignored `lab/datasets.manifest.toml` from this file.
+schema_version = "1.0"
+
+[[datasets]]
+id = "locomo"
+domain = "memory"
+relative_dir = "locomo"
+availability = "available"
+core_applicability = "core_behavioral"
+lane = "core_behavioral"
+contamination_risk = "high"
+contamination_note = "Public GitHub release since Feb 2024; widely cited in memory benchmarks."
+reason = "10 public conversations (1,986 QAs including Category 5 adversarial; official evaluation.py)."
+split = "all_10_convs"
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "git"
+location = "https://github.com/snap-research/locomo"
+revision = "pending_pin"
+role = "primary"
+
+[datasets.license]
+spdx = "CC-BY-NC-4.0"
+terms = "Local copy & adapt allowed; non-commercial only."
+status = "pending"
+
+[[datasets.files]]
+path = "data/locomo10.json"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets]]
+id = "longmemeval"
+domain = "memory"
+relative_dir = "longmemeval"
+availability = "available"
+core_applicability = "core_behavioral"
+lane = "core_behavioral"
+contamination_risk = "moderate"
+contamination_note = "Published Oct 2024; mitigated by 115K-1.5M token haystacks."
+reason = "Primary split longmemeval_s_cleaned.json (500 independent items; gpt-4o judge)."
+split = "LongMemEval_S"
+checksums_recorded = "source"
+checksums_recorded_date = "2026-11-17"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "huggingface"
+location = "xiaowu0162/longmemeval-cleaned"
+revision = "pending_pin"
+role = "data"
+
+[[datasets.sources]]
+kind = "git"
+location = "https://github.com/xiaowu0162/LongMemEval"
+revision = "pending_pin"
+role = "eval_scripts"
+
+[datasets.license]
+spdx = "MIT"
+terms = "Local copy, commercial & derived redistribution allowed with notice."
+status = "pending"
+
+[[datasets.files]]
+path = "longmemeval_s_cleaned.json"
+source_role = "data"
+sha256 = "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442"
+size = 277383467
+
+[[datasets.files]]
+path = "longmemeval_oracle.json"
+source_role = "data"
+sha256 = "821a2034d219ab45846873dd14c14f12cfe7776e73527a483f9dac095d38620c"
+size = 15388478
+
+[[datasets]]
+id = "memory_agent_bench"
+domain = "memory"
+relative_dir = "memory_agent_bench"
+availability = "available"
+core_applicability = "core_behavioral"
+lane = "core_behavioral"
+contamination_risk = "moderate"
+contamination_note = "Mixed: older RULER/LME/InfBench subsets vs Jul 2025 EventQA/FactConsolidation."
+reason = "Accurate_Retrieval + Conflict_Resolution stream_source T_0+i*60s + lab_proctor (user/prior_assistant on LME(S*))."
+split = "Accurate_Retrieval+Conflict_Resolution"
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "huggingface"
+location = "ai-hyz/MemoryAgentBench"
+revision = "pending_pin"
+role = "data"
+
+[[datasets.sources]]
+kind = "git"
+location = "https://github.com/HUST-AI-HYZ/MemoryAgentBench"
+revision = "pending_pin"
+role = "eval_scripts"
+
+[datasets.license]
+spdx = "MIT"
+terms = "MIT wrapper over third-party sub-corpora; verify downstream terms if redistributing."
+status = "pending"
+
+[[datasets.files]]
+path = "Accurate_Retrieval.parquet"
+source_role = "data"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets.files]]
+path = "Conflict_Resolution.parquet"
+source_role = "data"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets]]
+id = "group_mem_bench"
+domain = "memory"
+relative_dir = "group_mem_bench"
+availability = "available"
+core_applicability = "core_behavioral"
+lane = "core_behavioral"
+contamination_risk = "low"
+contamination_note = "May 2026 synthetic multi-party enterprise chats."
+reason = "Multi-source: HF conversations + GitHub questions/eval; real channel audiences + privacy_conflict refusal."
+split = "4_domains_745_qas"
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "huggingface"
+location = "kimperyang/GroupMemBench"
+revision = "pending_pin"
+role = "conversations"
+
+[[datasets.sources]]
+kind = "git"
+location = "https://github.com/UCSB-NLP-Chang/GroupMemBench"
+revision = "pending_pin"
+role = "questions_and_eval"
+
+[datasets.license]
+spdx = "CC-BY-4.0 AND MIT"
+terms = "CC-BY-4.0 on HF conversations; MIT on GitHub repo (verify questions/*.jsonl notice)."
+status = "pending"
+
+[[datasets.files]]
+path = "data/final/Finance/synthetic_domain_channels_rolevariants_Finance.json"
+source_role = "conversations"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets.files]]
+path = "data/final/Technology/synthetic_domain_channels_rolevariants_Technology.json"
+source_role = "conversations"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets.files]]
+path = "data/final/Healthcare/synthetic_domain_channels_rolevariants_Healthcare.json"
+source_role = "conversations"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets.files]]
+path = "data/final/Manufacturing/synthetic_domain_channels_rolevariants_Manufacturing.json"
+source_role = "conversations"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets]]
+id = "stale"
+domain = "memory"
+relative_dir = "stale"
+availability = "available"
+core_applicability = "core_behavioral"
+lane = "core_behavioral"
+contamination_risk = "low"
+contamination_note = "May 2026 scenarios; LongMemEval distractors from 2024."
+reason = "T1_T2_400_FULL.json (400 scenarios across SR, PR, IPA with Gemini-3.1-flash-lite judge)."
+split = "T1_T2_400_FULL"
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "huggingface"
+location = "STALEproj/STALE"
+revision = "pending_pin"
+role = "data"
+
+[[datasets.sources]]
+kind = "git"
+location = "https://github.com/icedreamc/STALE"
+revision = "pending_pin"
+role = "eval_scripts"
+
+[datasets.license]
+spdx = "CC-BY-4.0 AND MIT"
+terms = "CC-BY-4.0 (STALE) + MIT (LongMemEval distractors); commercial & derived allowed."
+status = "pending"
+
+[[datasets.files]]
+path = "T1_T2_400_FULL.json"
+source_role = "data"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets]]
+id = "pm_bench"
+domain = "prospective"
+relative_dir = "pm_bench"
+availability = "available"
+core_applicability = "core_behavioral"
+lane = "core_behavioral"
+contamination_risk = "low"
+contamination_note = "Published Jul 2026 (COLM 2026); Virtual Week paradigm."
+reason = "80-step 7-day Virtual Week prospective memory simulation (Set-F1 + False-Alarm Rate)."
+split = "80_steps_full"
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "git"
+location = "https://github.com/genglinliu/PMBench"
+revision = "pending_pin"
+role = "primary"
+
+[datasets.license]
+spdx = "UNSPECIFIED"
+terms = "Missing root LICENSE file in genglinliu/PMBench (paper CC-BY-4.0); requires author/owner clearance."
+status = "pending"
+
+[[datasets.files]]
+path = "data/virtual_week.json"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets]]
+id = "pis"
+domain = "prospective"
+relative_dir = "pis"
+availability = "unavailable"
+core_applicability = "unavailable"
+lane = "core_behavioral"
+contamination_risk = "low"
+contamination_note = "Method-only paper (arXiv:2609.01272) evaluated on pm_bench."
+reason = "Method-only paper (arXiv:2609.01272) evaluated on pm_bench; no independent public dataset."
+checksums_recorded = "na"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "paper_only"
+location = "https://arxiv.org/abs/2609.01272"
+revision = "N/A"
+role = "paper"
+
+[datasets.license]
+spdx = "N/A"
+terms = "Method-only paper; no dataset release."
+status = "pending"
+
+[[datasets]]
+id = "pitch"
+domain = "proactivity_timing"
+relative_dir = "pitch"
+availability = "available"
+core_applicability = "core_behavioral"
+lane = "core_behavioral"
+contamination_risk = "low"
+contamination_note = "Released Oct 2026 (arXiv:2610.25896)."
+reason = "35 conversations, 384 candidate messages, causal turn-by-turn timing."
+split = "384_candidates"
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "git"
+location = "https://github.com/Social-Futures-Lab/pitch"
+revision = "pending_pin"
+role = "primary"
+
+[datasets.license]
+spdx = "MIT"
+terms = "MIT in Social-Futures-Lab/pitch; local copy, commercial & derived allowed with notice."
+status = "pending"
+
+[[datasets.files]]
+path = "data/pitch-benchmark-data.json"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets]]
+id = "proact"
+domain = "proactivity_timing"
+relative_dir = "proact"
+availability = "unavailable"
+core_applicability = "unavailable"
+lane = "core_behavioral"
+contamination_risk = "moderate"
+contamination_note = "Paper arXiv:2607.03730 dataset has no public GitHub/HF release."
+reason = "ProACT 3,244-example dataset unreleased (collides with bosonai/proactbench)."
+checksums_recorded = "na"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "paper_only"
+location = "https://arxiv.org/abs/2607.03730"
+revision = "N/A"
+role = "paper"
+
+[datasets.license]
+spdx = "N/A"
+terms = "Paper on arXiv; dataset files not publicly released."
+status = "pending"
+
+[[datasets]]
+id = "proactive_bench"
+domain = "proactivity_timing"
+relative_dir = "proactive_bench"
+availability = "available"
+core_applicability = "core_behavioral"
+lane = "core_behavioral"
+contamination_risk = "high"
+contamination_note = "Public GitHub release since Oct 2024 (ICLR 2025)."
+reason = "THUNLP ProactiveAgent test_data (233 events; NOT ECCV26 tdemin16/proactivebench; optional RM weights in scorer_model entry proactive_agent_rm)."
+split = "test_233"
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "git"
+location = "https://github.com/thunlp/ProactiveAgent"
+revision = "pending_pin"
+role = "primary"
+
+[datasets.license]
+spdx = "Apache-2.0"
+terms = "Apache-2.0 in thunlp/ProactiveAgent; local, commercial & derived allowed with notice."
+status = "pending"
+
+[[datasets.files]]
+path = "dataset/test_data/test_data.jsonl"
+source_role = "primary"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets]]
+id = "capa"
+domain = "prospective"
+relative_dir = "capa"
+availability = "available"
+core_applicability = "core_behavioral"
+lane = "core_behavioral"
+contamination_risk = "high"
+contamination_note = "High for raw AMI/QMSum transcripts; low for Sept 2026 CAPA cues/briefings."
+reason = "20 QMSum AMI test meetings default (of 137 meetings); GPT-4o schema judge."
+split = "20_test_meetings"
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "git"
+location = "https://github.com/FKIRSTE/emnlp2026-meeting-delegation"
+revision = "pending_pin"
+role = "primary"
+
+[datasets.license]
+spdx = "MIT AND CC-BY-4.0"
+terms = "MIT code/prompts; CC-BY-4.0 AMI data via QMSum; offline research caveat."
+status = "pending"
+
+[[datasets.files]]
+path = "data/ami/test.json"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets]]
+id = "when2speak"
+domain = "proactivity_timing"
+relative_dir = "when2speak"
+availability = "available"
+core_applicability = "core_behavioral"
+lane = "core_behavioral"
+contamination_risk = "low"
+contamination_note = "May 2026 synthetic 8-turn windows."
+reason = "finetune_test_token.jsonl (21,687 test items; default S=1,000 stratified)."
+split = "finetune_test_token@1000"
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "huggingface"
+location = "duke-trust-lab/When2Speak"
+revision = "pending_pin"
+role = "primary"
+
+[datasets.license]
+spdx = "CC-BY-4.0"
+terms = "CC-BY-4.0 on HF card (arXiv page lists CC-BY-SA-4.0)."
+status = "pending"
+
+[[datasets.files]]
+path = "finetune_test_token.jsonl"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets]]
+id = "ubuntu_irc"
+domain = "group_chat"
+relative_dir = "ubuntu_irc"
+availability = "available"
+core_applicability = "core_behavioral"
+lane = "core_behavioral"
+contamination_risk = "high"
+contamination_note = "Public 2019 #ubuntu IRC disentanglement logs."
+reason = "Bound solely to jkkummerfeld/irc-disentanglement (5,000 test messages; thread_f1 + derived parent_speaker_p1)."
+split = "test_5000"
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "git"
+location = "https://github.com/jkkummerfeld/irc-disentanglement"
+revision = "pending_pin"
+role = "primary"
+
+[datasets.license]
+spdx = "CC-BY-4.0 AND ISC"
+terms = "CC-BY-4.0 data; ISC evaluation tools."
+status = "pending"
+
+[[datasets.files]]
+path = "data/test/test.raw.txt"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets.files]]
+path = "data/test/test.annotation.txt"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets]]
+id = "molweni"
+domain = "group_chat"
+relative_dir = "molweni"
+availability = "available"
+core_applicability = "core_behavioral"
+lane = "core_behavioral"
+contamination_risk = "high"
+contamination_note = "Public since 2020 from Ubuntu IRC logs on GitHub."
+reason = "MRC (qa_f1) and DP (sdrt_link_f1); MuTual strictly excluded."
+split = "MRC_test+DP_test"
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "git"
+location = "https://github.com/HIT-SCIR/Molweni"
+revision = "pending_pin"
+role = "primary"
+
+[datasets.license]
+spdx = "UNSPECIFIED"
+terms = "No LICENSE file in GitHub repo (COLING 2020 paper is CC-BY-4.0); requires owner clearance."
+status = "pending"
+
+[[datasets.files]]
+path = "MRC/test.json"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets.files]]
+path = "DP/test.json"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets]]
+id = "fantom"
+domain = "theory_of_mind"
+relative_dir = "fantom"
+availability = "available"
+core_applicability = "core_behavioral"
+lane = "core_behavioral"
+contamination_risk = "low"
+contamination_note = "Public since Oct 2023; All* formulation resists surface shortcuts."
+reason = "256 dialogues (short setting default; All* via lab/adapters local SentenceTransformer)."
+split = "short"
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "git"
+location = "https://github.com/skywalker023/fantom"
+revision = "pending_pin"
+role = "primary"
+
+[datasets.license]
+spdx = "MIT"
+terms = "MIT on GitHub repo; dynamic data archive notice to be verified on fetch."
+status = "pending"
+
+[[datasets.files]]
+path = "data/fantom.json"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets]]
+id = "opentom"
+domain = "theory_of_mind"
+relative_dir = "opentom"
+availability = "available"
+core_applicability = "core_behavioral"
+lane = "core_behavioral"
+contamination_risk = "low"
+contamination_note = "Zero train split; public since Feb 2024."
+reason = "696 narratives (Long + ExtraLong) with Loc_c, Loc_f, Att, and MHop."
+split = "Long+ExtraLong"
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "git"
+location = "https://github.com/SeacowX/OpenToM"
+revision = "pending_pin"
+role = "code_and_data"
+
+[[datasets.sources]]
+kind = "huggingface"
+location = "SeacowX/OpenToM"
+revision = "pending_pin"
+role = "data"
+
+[datasets.license]
+spdx = "CC-BY-NC-4.0"
+terms = "Non-commercial only; forbids LLM training/fine-tuning & public playground submission."
+status = "pending"
+
+[[datasets.files]]
+path = "opentom.json"
+source_role = "data"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets]]
+id = "hi_tom"
+domain = "theory_of_mind"
+relative_dir = "hi_tom"
+availability = "available"
+core_applicability = "core_behavioral"
+lane = "core_behavioral"
+contamination_risk = "moderate"
+contamination_note = "Moderate on orders 0-2; higher-order deceptive Tell chains remain hard."
+reason = "1,200 MCQs across 0th-4th order ToM with Mode 1 private Tell audiences."
+split = "Hi-ToM_data"
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "git"
+location = "https://github.com/ying-hui-he/Hi-ToM_dataset"
+revision = "pending_pin"
+role = "primary"
+
+[datasets.license]
+spdx = "Apache-2.0"
+terms = "Apache-2.0 repo (paper CC-BY-SA-4.0)."
+status = "pending"
+
+[[datasets.files]]
+path = "Hi-ToM_data/Hi-ToM_data.json"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets]]
+id = "exploretom"
+domain = "theory_of_mind"
+relative_dir = "exploretom"
+availability = "available"
+core_applicability = "core_behavioral"
+lane = "core_behavioral"
+contamination_risk = "low"
+contamination_note = "Combinatorial A* DSL space."
+reason = "ExploreToM exact_match_acc (separate from DynToM)."
+split = "train_stratified_471"
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "huggingface"
+location = "facebook/ExploreToM"
+revision = "pending_pin"
+role = "data"
+
+[[datasets.sources]]
+kind = "git"
+location = "https://github.com/facebookresearch/ExploreToM"
+revision = "pending_pin"
+role = "generator_and_eval"
+
+[datasets.license]
+spdx = "CC-BY-NC-4.0"
+terms = "Non-commercial research only."
+status = "pending"
+
+[[datasets.files]]
+path = "train.parquet"
+source_role = "data"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets]]
+id = "dyntom"
+domain = "theory_of_mind"
+relative_dir = "dyntom"
+availability = "available"
+core_applicability = "core_behavioral"
+lane = "core_behavioral"
+contamination_risk = "low"
+contamination_note = "ACL 2025 multi-stage temporal ToM transitions."
+reason = "GAIR-NLP/DynToM (1,100 contexts / 5 stages @ +60s / 78,100 MCQs; HF combined 375,836,020 B)."
+split = "stratified_471_contexts"
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "huggingface"
+location = "YangXiao-nlp/DynToM"
+revision = "pending_pin"
+role = "data"
+
+[[datasets.sources]]
+kind = "git"
+location = "https://github.com/GAIR-NLP/DynToM"
+revision = "pending_pin"
+role = "eval_and_release"
+
+[datasets.license]
+spdx = "Apache-2.0"
+terms = "Apache-2.0; local, commercial & derived redistribution allowed."
+status = "pending"
+
+[[datasets.files]]
+path = "story.json"
+source_role = "data"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets.files]]
+path = "question_new.json"
+source_role = "data"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets]]
+id = "tomi"
+domain = "theory_of_mind"
+relative_dir = "tomi"
+availability = "available"
+core_applicability = "core_behavioral"
+lane = "core_behavioral"
+contamination_risk = "severe"
+contamination_note = "Public 2019 templates; 20-50+ pp collapse under Ullman/Shapira perturbations."
+reason = "Optional shortcut-perturbation sanity check only (strip .trace completely)."
+split = "test_471"
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "git"
+location = "https://github.com/facebookresearch/ToMi"
+revision = "pending_pin"
+role = "generator"
+
+[datasets.license]
+spdx = "CC-BY-NC-4.0"
+terms = "Non-commercial research only."
+status = "pending"
+
+[[datasets.files]]
+path = "test.txt"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets]]
+id = "multilexnorm"
+domain = "indonesian_register"
+relative_dir = "indonesian/multilexnorm"
+availability = "available"
+core_applicability = "not_mappable"
+lane = "embedder_probe"
+contamination_risk = "high"
+contamination_note = "ind_eng public since 2019/2021; ind merged 2026."
+reason = "Non-conversational tweet pairs (ind + ind_eng); executed via reason::EmbedderProbe."
+split = "ind_test+ind_eng_test"
+checksums_recorded = "source"
+checksums_recorded_date = "2026-11-17"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "huggingface"
+location = "robvanderg/MultiLexNorm"
+revision = "3490e1402a6616dd40ca1c01aae26f9067e6e359"
+role = "parquet"
+
+[[datasets.sources]]
+kind = "git"
+location = "https://bitbucket.org/robvanderg/multilexnorm"
+revision = "e58e946375299a04355fa2d7fa9e1c769234e68a"
+role = "raw_norm_and_eval"
+
+[datasets.license]
+spdx = "UNSPECIFIED"
+terms = "No LICENSE file in repo; W-NUT 2021 paper states CC-BY-SA, SEACrowd tags CC-BY-NC-SA-4.0."
+status = "pending"
+
+[[datasets.files]]
+path = "ind/test-00000-of-00001.parquet"
+source_role = "parquet"
+sha256 = "df40d6ae5730d64402b72b684ed0de8357cb6df11e570a7eaed5595adf16bc82"
+size = 89750
+
+[[datasets.files]]
+path = "ind_eng/test-00000-of-00001.parquet"
+source_role = "parquet"
+sha256 = "dd5c99e4959a8e1eabab22eb25605bbb2e1fe5a8b9270c2fcd397713871349e1"
+size = 43422
+
+[[datasets]]
+id = "indocollex"
+domain = "indonesian_register"
+relative_dir = "indonesian/indocollex"
+availability = "available"
+core_applicability = "not_mappable"
+lane = "embedder_probe"
+contamination_risk = "moderate"
+contamination_note = "Public on GitHub and ACL Anthology since Aug 2021."
+reason = "Isolated colloquial word pairs (haryoa/indo-collex); executed via reason::EmbedderProbe."
+split = "full.csv"
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "git"
+location = "https://github.com/haryoa/indo-collex"
+revision = "df626e812cd5924794fabf40003368a69f4e953c"
+role = "primary"
+
+[datasets.license]
+spdx = "MIT"
+terms = "MIT verified in haryoa/indo-collex/LICENSE (SEACrowd mislabels CC-BY-SA-4.0)."
+status = "pending"
+
+[[datasets.files]]
+path = "data/full.csv"
+sha256 = "pending_pin"
+size = 63999
+
+[[datasets.files]]
+path = "data/informal_to_formal/test.csv"
+sha256 = "pending_pin"
+size = 6116
+
+[[datasets.files]]
+path = "data/formal_to_informal/test.csv"
+sha256 = "pending_pin"
+size = 5612
+
+[[datasets.files]]
+path = "dict/inforformal-formal-Indonesian-dictionary.tsv"
+sha256 = "pending_pin"
+size = 39167
+
+[[datasets]]
+id = "mpbench"
+domain = "security"
+relative_dir = "mpbench"
+availability = "unavailable"
+core_applicability = "unavailable"
+lane = "core_behavioral"
+contamination_risk = "very_low"
+contamination_note = "Synthesized in 2026; never publicly released."
+reason = "HF pritamdash/mp-bench is an empty .gitattributes-only placeholder; zero data files published."
+checksums_recorded = "na"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "huggingface"
+location = "pritamdash/mp-bench"
+revision = "b0065dfd4f51b748a63420242f5ebb4f8be51d8f"
+role = "empty_placeholder"
+
+[datasets.license]
+spdx = "N/A"
+terms = "Paper arXiv:2606.04329v2 is CC-BY-4.0; no dataset license published."
+status = "pending"
+
+[[datasets]]
+id = "fantom_scorer_all_roberta_large_v1"
+kind = "scorer_model"
+domain = "theory_of_mind"
+relative_dir = "scorer_models/all-roberta-large-v1"
+availability = "available"
+core_applicability = "not_mappable"
+lane = "core_behavioral"
+contamination_risk = "very_low"
+contamination_note = "Scorer model weights only (not a benchmark evaluation corpus)."
+reason = "Scorer model (not a corpus): sentence-transformers/all-roberta-large-v1 weights for fantom All* (fantom_eval.py)."
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "huggingface"
+location = "sentence-transformers/all-roberta-large-v1"
+revision = "pending_pin"
+role = "scorer_model"
+
+[datasets.license]
+spdx = "Apache-2.0"
+terms = "Scorer model weights (not a corpus): Apache-2.0; requires owner clearance before fetch."
+status = "pending"
+
+[[datasets.files]]
+path = "config.json"
+source_role = "scorer_model"
+sha256 = "pending_pin"
+size = "pending_pin"
+
+[[datasets]]
+id = "proactive_agent_rm"
+kind = "scorer_model"
+domain = "proactivity_timing"
+relative_dir = "scorer_models/proactive-agent-rm"
+availability = "available"
+core_applicability = "not_mappable"
+lane = "core_behavioral"
+contamination_risk = "very_low"
+contamination_note = "Scorer model weights only (not a benchmark evaluation corpus)."
+reason = "Scorer model (not a corpus): YancyLee/ProactiveAgent reward model weights for proactive_bench rm_f1 (proactive_rm.py)."
+checksums_recorded = "pending"
+converter_version = "1.0.0"
+scorer_version = "1.0.0"
+
+[[datasets.sources]]
+kind = "huggingface"
+location = "YancyLee/ProactiveAgent"
+revision = "pending_pin"
+role = "scorer_model"
+
+[datasets.license]
+spdx = "Apache-2.0"
+terms = "Scorer model weights (not a corpus): Apache-2.0 (thunlp/ProactiveAgent); requires owner clearance before fetch."
+status = "pending"
+
+[[datasets.files]]
+path = "config.json"
+source_role = "scorer_model"
+sha256 = "pending_pin"
+size = "pending_pin"

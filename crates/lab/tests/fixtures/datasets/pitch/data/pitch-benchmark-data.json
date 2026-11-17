@@ -1,0 +1,28 @@
+{
+  "conversations": [
+    {
+      "conv_id": "pitch_synth_01",
+      "task_domain": "travel",
+      "turns": [
+        { "speaker": "Alex", "text": "Which train reaches Utrecht before 5pm?", "timestamp_ms": 1700000000000 },
+        { "speaker": "Sam", "text": "Maybe the 15:40 sprinter.", "timestamp_ms": 1700000020000 },
+        { "speaker": "Alex", "text": "Wait, let us check direct intercity fares too.", "timestamp_ms": 1700000040000 }
+      ],
+      "candidates": [
+        {
+          "candidate_id": "cand_good",
+          "content": "Direct intercity departs at 15:52 and arrives at 16:28.",
+          "ideal_turn": 2,
+          "window_start": 1,
+          "window_end": 2,
+          "do_not_surface": false
+        },
+        {
+          "candidate_id": "cand_dns",
+          "content": "Unrelated hotel coupon expires next month.",
+          "do_not_surface": true
+        }
+      ]
+    }
+  ]
+}

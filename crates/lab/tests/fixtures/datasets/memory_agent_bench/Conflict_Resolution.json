@@ -1,0 +1,17 @@
+[
+  {
+    "row_id": "cr_0",
+    "split": "Conflict_Resolution",
+    "source": "SyntheticFactUpdate",
+    "context": "Please memorize it: Fact 1: Greenhouse bay 4 holds 120 liters of rainwater.\n\nFact 2: After expansion, Greenhouse bay 4 now holds 240 liters of rainwater.",
+    "questions": [
+      "How many liters of rainwater does Greenhouse bay 4 currently hold?"
+    ],
+    "answers": [
+      "240 liters"
+    ],
+    "evidence_chunk_indices": [
+      [1]
+    ]
+  }
+]

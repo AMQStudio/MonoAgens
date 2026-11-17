@@ -1,0 +1,73 @@
+[
+  {
+    "sample_id": "conv_alpha",
+    "conversation": {
+      "speaker_a": "maya",
+      "speaker_b": "noah",
+      "session_1_date_time": "10:15 am on 12 May, 2024",
+      "session_1": [
+        {
+          "speaker": "maya",
+          "dia_id": "D1:1",
+          "text": "I adopted a small ceramic kiln for my studio yesterday."
+        },
+        {
+          "speaker": "noah",
+          "dia_id": "D1:2",
+          "text": "Nice! What temperature does it fire up to?"
+        },
+        {
+          "speaker": "maya",
+          "dia_id": "D1:3",
+          "text": "It reaches cone six safely and sits by the north window."
+        }
+      ],
+      "session_2_date_time": "3:00 pm on 18 May, 2024",
+      "session_2": [
+        {
+          "speaker": "noah",
+          "dia_id": "D2:1",
+          "text": "I started evening cycling along the river trail."
+        }
+      ]
+    },
+    "qa": [
+      {
+        "question": "What studio equipment did maya adopt?",
+        "answer": "ceramic kiln",
+        "evidence": ["D1:1"],
+        "category": 1
+      },
+      {
+        "question": "Did maya adopt a printing press in May?",
+        "answer": "No information available.",
+        "adversarial_answer": "She never got a printing press; she adopted a ceramic kiln.",
+        "evidence": ["D1:1"],
+        "category": 5
+      }
+    ]
+  },
+  {
+    "sample_id": "conv_beta",
+    "conversation": {
+      "speaker_a": "tariq",
+      "speaker_b": "lin",
+      "session_1_date_time": "9:00 am on 4 June, 2024",
+      "session_1": [
+        {
+          "speaker": "tariq",
+          "dia_id": "D1:1",
+          "text": "We moved our weekly chess meetup to Thursdays at the library."
+        }
+      ]
+    },
+    "qa": [
+      {
+        "question": "Where is tariq's weekly chess meetup held?",
+        "answer": "the library",
+        "evidence": ["D1:1"],
+        "category": 1
+      }
+    ]
+  }
+]

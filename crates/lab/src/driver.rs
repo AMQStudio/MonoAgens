@@ -360,6 +360,12 @@ pub fn run_scenario<S: Store>(
                         core.run_sleep_if_due(clock.now(), &mut guard)?
                     }
                     ScheduledCoreOp::RecordCalibration { conf_0_20, correct } => {
+                        if scenario.set == ScenarioSet::External {
+                            return Err(LabError::Protocol(
+                                "refusing to record calibration from ScenarioSet::External"
+                                    .to_owned(),
+                            ));
+                        }
                         let id =
                             core.record_calibration_outcome(*conf_0_20, *correct, clock.now())?;
                         metric_inputs.scripted_event_ids.insert(scenario_idx, id);
@@ -580,6 +586,8 @@ pub fn run_scenario<S: Store>(
         passed,
         metrics,
         cost_by_purpose: purpose_cost_vec,
+        history_reasoning_mode: None,
+        dataset_provenance: None,
     };
 
     Ok(SimOutput {
@@ -588,6 +596,80 @@ pub fn run_scenario<S: Store>(
         context_plans: guard.captured_plans,
         guard_refusals: guard.refusals,
     })
+}
+
+/// Result of calibrating Lab thresholds/dispositions strictly from [`ScenarioSet::Development`].
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CalibrationReport {
+    pub scenario_count: usize,
+    pub embedder_ids: Vec<String>,
+    pub calibrated_wake_gate_lo: f64,
+    pub calibrated_fok_scale: f64,
+}
+
+/// Ensures only [`ScenarioSet::Development`] is accepted for calibration; rejects
+/// `Validation`, `Sealed`, and `External` with an explicit error (`Design 6`).
+pub fn ensure_calibration_set_allowed(set: ScenarioSet) -> Result<(), LabError> {
+    match set {
+        ScenarioSet::Development => Ok(()),
+        ScenarioSet::Validation => Err(LabError::Protocol(
+            "calibration refuses ScenarioSet::Validation; calibrate on development only".to_owned(),
+        )),
+        ScenarioSet::Sealed => Err(LabError::Protocol(
+            "calibration refuses ScenarioSet::Sealed; calibrate on development only".to_owned(),
+        )),
+        ScenarioSet::External => Err(LabError::Protocol(
+            "calibration refuses ScenarioSet::External; external results never tune the prior"
+                .to_owned(),
+        )),
+    }
+}
+
+/// Computes calibrated thresholds from completed [`RunRecord`]s, rejecting any non-development record.
+pub fn calibrate_from_run_records(records: &[RunRecord]) -> Result<CalibrationReport, LabError> {
+    if records.is_empty() {
+        return Err(LabError::Protocol(
+            "calibration requires at least one development RunRecord".to_owned(),
+        ));
+    }
+    let mut embedder_ids = BTreeSet::new();
+    let mut go_rates = Vec::with_capacity(records.len());
+    for rec in records {
+        ensure_calibration_set_allowed(rec.scenario_set)?;
+        embedder_ids.insert(rec.embedder_id.clone());
+        let total_dec =
+            rec.metrics.decisions_go + rec.metrics.decisions_note + rec.metrics.decisions_silent;
+        let rate = if total_dec == 0 {
+            0.5
+        } else {
+            rec.metrics.decisions_go as f64 / total_dec as f64
+        };
+        go_rates.push(rate);
+    }
+    let mean_go = go_rates.iter().sum::<f64>() / go_rates.len() as f64;
+    Ok(CalibrationReport {
+        scenario_count: records.len(),
+        embedder_ids: embedder_ids.into_iter().collect(),
+        calibrated_wake_gate_lo: (0.25 + 0.5 * mean_go).clamp(0.1, 0.9),
+        calibrated_fok_scale: 1.0,
+    })
+}
+
+/// Runs development scenarios and computes calibrated values, rejecting any non-development scenario.
+pub fn calibrate_from_scenarios(
+    scenarios: &[Scenario],
+    prior: &Prior,
+    seed: u64,
+) -> Result<CalibrationReport, LabError> {
+    for sc in scenarios {
+        ensure_calibration_set_allowed(sc.set)?;
+    }
+    let mut records = Vec::with_capacity(scenarios.len());
+    for sc in scenarios {
+        let out = run_scenario(MemStore::new(), prior.clone(), sc, seed)?;
+        records.push(out.run_record);
+    }
+    calibrate_from_run_records(&records)
 }
 
 /// Replays a recorded event log offline with zero model calls and compares every decision bit-for-bit.

@@ -8,8 +8,23 @@ request, and verified byte for byte before any result is computed from it.
 
 ## ADDED Requirements
 
-### Requirement: A committed manifest describes every external dataset
-`lab/datasets.manifest.toml` SHALL record every external dataset in `standard_benchmark_registry()`: id, domain, pinned source(s), availability, contamination risk, license SPDX and terms, license status, file SHA-256 and sizes, and converter/probe and scorer versions (`2026-11-17-run-3.md`). Unverified commit SHAs and sizes SHALL stay `pending_pin` until recorded by owner-run `datasets pin` or `--record-checksums`, never hand-typed by agents.
+### Requirement: The owner's manifest stays local and is created from a committed template
+The working manifest `lab/datasets.manifest.toml` SHALL be ignored by git and SHALL never be committed, so license clearances and recorded checksums stay on the owner's machine. The repository SHALL hold `lab/datasets.manifest.example.toml` with the same entries, every `license.status = "pending"` and no owner-recorded checksums. `monoagens-lab datasets init` SHALL create the local manifest from the template and SHALL refuse to overwrite an existing one.
+
+#### Scenario: A fresh clone has no local manifest
+- **WHEN** a Lab command that needs the manifest runs and `lab/datasets.manifest.toml` is absent
+- **THEN** it exits non-zero telling the owner to run `monoagens-lab datasets init`, and no default test depends on the local manifest
+
+#### Scenario: Initializing over an existing manifest
+- **WHEN** the owner runs `monoagens-lab datasets init` and `lab/datasets.manifest.toml` already exists
+- **THEN** nothing is overwritten and the command exits non-zero
+
+#### Scenario: The local manifest is staged by mistake
+- **WHEN** the owner runs `git status` after clearing licenses and recording checksums
+- **THEN** `lab/datasets.manifest.toml` is not listed, while the template stays tracked with every license `pending`
+
+### Requirement: A manifest describes every external dataset
+The local manifest and its template SHALL record every external dataset in `standard_benchmark_registry()`: id, domain, pinned source(s), availability, contamination risk, license SPDX and terms, license status, file SHA-256 and sizes, and converter/probe and scorer versions (`2026-11-17-run-3.md`). Unverified commit SHAs and sizes SHALL stay `pending_pin` until recorded by owner-run `datasets pin` or `--record-checksums`, never hand-typed by agents.
 
 #### Scenario: The registry and the manifest disagree
 - **WHEN** the benchmark registry names an external dataset the manifest lacks, or the manifest names one the registry lacks

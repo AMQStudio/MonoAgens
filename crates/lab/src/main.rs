@@ -10,11 +10,14 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use monoagens_core::{MechanismId, MemStore, ReplayMode, Switches, brain_map_registry};
+use monoagens_lab::reason_seam::model::{OpenAiModelConfig, OpenAiModelProvider};
+use monoagens_lab::reason_seam::secrets::SecretString;
 use monoagens_lab::{
     BaselineKind, ParetoScorecardInput, Scenario, ScenarioSet, ScriptedActionRule, TestBody,
-    TestBodySpec, aggregate_metrics_across_seeds, compute_convex_pareto, ensure_not_sealed_path,
-    format_metrics_table, load_scenarios_from_set, replay_events_offline,
-    run_ablation_compare_scenarios, run_baseline_adapter, run_benchmark_suite, run_scenario,
+    TestBodySpec, aggregate_metrics_across_seeds, compute_convex_pareto, datasets,
+    ensure_not_sealed_path, format_metrics_table, load_scenarios_from_set, replay_events_offline,
+    run_ablation_compare_scenarios, run_baseline_adapter, run_benchmark_suite_with_options,
+    run_scenario, standard_benchmark_registry,
 };
 use monoagens_protocol::{
     BodyId, CapabilityDescriptor, CapabilityFlags, CapabilityId, CapabilitySchemaHash, PlaceId,
@@ -71,6 +74,7 @@ fn run_cli(args: Vec<String>) -> Result<ExitCode, String> {
         "replay" => run_replay_cmd(&args[1..]),
         "baseline" => run_baseline_cmd(&args[1..]),
         "benchmark" => run_benchmark_cmd(&args[1..]),
+        "datasets" => run_datasets_cmd(&args[1..]),
         "pareto" => run_pareto_cmd(&args[1..]),
         "test-body" => run_test_body_stdio(&args[1..]),
         other => Err(format!("unknown subcommand '{other}'\n\n{}", usage())),
@@ -666,8 +670,25 @@ fn run_baseline_cmd(args: &[String]) -> Result<ExitCode, String> {
 fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
     let mut suite = "standard".to_owned();
     let mut datasets_dir = PathBuf::from("lab/datasets");
+    let mut manifest_path: Option<PathBuf> = None;
     let mut prior_path: Option<PathBuf> = None;
+    let mut pareto_flag = false;
     let mut pareto_input_path: Option<PathBuf> = None;
+    let mut only_ids: Option<Vec<String>> = None;
+    let mut out_dir: Option<PathBuf> = None;
+    let mut seed: u64 = 1;
+    let mut live = false;
+    let mut live_full_history = false;
+    let mut max_cost_usd: Option<f64> = None;
+    let mut model_endpoint: Option<String> = None;
+    let mut model_name = "scripted".to_owned();
+    let mut model_api_key_env: Option<String> = None;
+    let mut judge_endpoint: Option<String> = None;
+    let mut judge_model: Option<String> = None;
+    let mut judge_api_key_env: Option<String> = None;
+    let mut judge_prompt_version = "v1".to_owned();
+    let mut judge_sub_policy = datasets::JudgeSubstitutionPolicy::RenameMetric;
+    let mut secrets_path: Option<PathBuf> = None;
     let mut json = false;
 
     let mut i = 0;
@@ -684,17 +705,123 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
                 i += 1;
                 datasets_dir = PathBuf::from(args.get(i).ok_or("--datasets-dir requires a path")?);
             }
+            "--manifest" => {
+                i += 1;
+                manifest_path = Some(PathBuf::from(
+                    args.get(i).ok_or("--manifest requires a path")?,
+                ));
+            }
             "--prior" => {
                 i += 1;
                 prior_path = Some(PathBuf::from(args.get(i).ok_or("--prior requires a path")?));
             }
+            "--only" => {
+                i += 1;
+                let val = args
+                    .get(i)
+                    .ok_or("--only requires comma-separated dataset ids")?;
+                let mut list = only_ids.take().unwrap_or_default();
+                push_dataset_ids(&mut list, val);
+                only_ids = Some(list);
+            }
+            "--out-dir" => {
+                i += 1;
+                out_dir = Some(PathBuf::from(
+                    args.get(i).ok_or("--out-dir requires a directory path")?,
+                ));
+            }
+            "--seed" => {
+                i += 1;
+                let val = args.get(i).ok_or("--seed requires an integer")?;
+                seed = val
+                    .parse::<u64>()
+                    .map_err(|e| format!("invalid --seed '{val}': {e}"))?;
+            }
+            "--live" => live = true,
+            "--live-full-history" => live_full_history = true,
+            "--max-cost-usd" => {
+                i += 1;
+                let val = args.get(i).ok_or("--max-cost-usd requires a float")?;
+                max_cost_usd = Some(
+                    val.parse::<f64>()
+                        .map_err(|e| format!("invalid --max-cost-usd '{val}': {e}"))?,
+                );
+            }
+            "--model-endpoint" => {
+                i += 1;
+                model_endpoint = Some(
+                    args.get(i)
+                        .ok_or("--model-endpoint requires a URL")?
+                        .clone(),
+                );
+            }
+            "--model" => {
+                i += 1;
+                model_name = args.get(i).ok_or("--model requires a model id")?.clone();
+            }
+            "--model-api-key-env" => {
+                i += 1;
+                model_api_key_env = Some(
+                    args.get(i)
+                        .ok_or("--model-api-key-env requires an env var")?
+                        .clone(),
+                );
+            }
+            "--judge-endpoint" => {
+                i += 1;
+                judge_endpoint = Some(
+                    args.get(i)
+                        .ok_or("--judge-endpoint requires a URL")?
+                        .clone(),
+                );
+            }
+            "--judge-model" => {
+                i += 1;
+                judge_model = Some(
+                    args.get(i)
+                        .ok_or("--judge-model requires a model id")?
+                        .clone(),
+                );
+            }
+            "--judge-api-key-env" => {
+                i += 1;
+                judge_api_key_env = Some(
+                    args.get(i)
+                        .ok_or("--judge-api-key-env requires an env var")?
+                        .clone(),
+                );
+            }
+            "--judge-prompt-version" => {
+                i += 1;
+                judge_prompt_version = args
+                    .get(i)
+                    .ok_or("--judge-prompt-version requires a version string")?
+                    .clone();
+            }
+            "--judge-substitution" => {
+                i += 1;
+                let val = args
+                    .get(i)
+                    .ok_or("--judge-substitution requires 'rename' or 'fail'")?;
+                judge_sub_policy = match val.as_str() {
+                    "rename" => datasets::JudgeSubstitutionPolicy::RenameMetric,
+                    "fail" => datasets::JudgeSubstitutionPolicy::StrictFail,
+                    other => return Err(format!("unknown --judge-substitution '{other}'")),
+                };
+            }
             "--pareto" => {
-                // Use --pareto-input <path> if provided; otherwise compute only suite checks.
+                pareto_flag = true;
             }
             "--pareto-input" => {
                 i += 1;
                 pareto_input_path = Some(PathBuf::from(
                     args.get(i).ok_or("--pareto-input requires a path")?,
+                ));
+            }
+            "--secrets" => {
+                i += 1;
+                secrets_path = Some(PathBuf::from(
+                    args.get(i).ok_or("--secrets requires a path")?,
                 ));
             }
             "--json" => json = true,
@@ -713,11 +840,80 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
         None => None,
     };
 
-    let report = run_benchmark_suite(
+    let provider_secrets = if live || secrets_path.is_some() {
+        datasets::load_lab_provider_secrets(secrets_path.as_deref()).map_err(|e| e.to_string())?
+    } else {
+        monoagens_lab::reason_seam::secrets::ProviderSecrets::default()
+    };
+
+    let resolved_model_endpoint = model_endpoint
+        .clone()
+        .or_else(|| provider_secrets.model_endpoint.clone());
+    let resolved_judge_endpoint = judge_endpoint
+        .clone()
+        .or_else(|| provider_secrets.model_endpoint.clone());
+
+    let live_probe_provider: Option<OpenAiModelProvider> = if live {
+        if let Some(ep) = &resolved_model_endpoint {
+            let key = model_api_key_env
+                .as_deref()
+                .and_then(|v| env::var(v).ok())
+                .map(SecretString::new)
+                .or_else(|| provider_secrets.model_api_key.clone());
+            Some(OpenAiModelProvider::new(OpenAiModelConfig::new(ep, key))?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let live_judge_provider: Option<OpenAiModelProvider> = if live {
+        if let Some(ep) = &resolved_judge_endpoint {
+            let key = judge_api_key_env
+                .as_deref()
+                .and_then(|v| env::var(v).ok())
+                .map(SecretString::new)
+                .or_else(|| provider_secrets.model_api_key.clone());
+            Some(OpenAiModelProvider::new(OpenAiModelConfig::new(ep, key))?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let judge_config = judge_model.map(|jm| datasets::JudgeConfig {
+        endpoint_url: resolved_judge_endpoint.unwrap_or_default(),
+        model: jm,
+        prompt_version: judge_prompt_version,
+        substitution_policy: judge_sub_policy,
+    });
+
+    let opts = datasets::BenchmarkExecutionOptions {
+        manifest_path,
+        only_ids,
+        seed,
+        live,
+        live_full_history,
+        max_cost_usd,
+        out_dir,
+        probe_model_name: model_name,
+        probe_provider: live_probe_provider
+            .as_ref()
+            .map(|p| p as &dyn monoagens_lab::reason_seam::model::ModelProvider),
+        judge_config,
+        judge_provider: live_judge_provider
+            .as_ref()
+            .map(|p| p as &dyn monoagens_lab::reason_seam::model::ModelProvider),
+        ..datasets::BenchmarkExecutionOptions::default()
+    };
+
+    let report = run_benchmark_suite_with_options(
         &suite,
         &datasets_dir,
         pareto_input.as_ref(),
+        pareto_flag,
         &loaded_prior.prior,
+        &opts,
     )
     .map_err(|e| e.to_string())?;
     if json {
@@ -727,12 +923,337 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
         );
     } else {
         println!(
-            "benchmark suite={} datasets_registered={} tool_rag_points={} arm_t_restart_ok={}",
+            "benchmark suite={} partial={} scorecard_rows={} tool_rag_points={} arm_t_restart_ok={}",
             report.suite,
-            report.dataset_specs.len(),
+            report.partial,
+            report.scorecard.len(),
             report.tool_rag_scaling.len(),
             report.arm_t_restart_parity_ok
         );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_datasets_cmd(args: &[String]) -> Result<ExitCode, String> {
+    let Some(sub) = args.first().map(String::as_str) else {
+        return Err(
+            "datasets requires a subcommand: init | list | pin | fetch | verify".to_owned(),
+        );
+    };
+    match sub {
+        "init" => run_datasets_init_cmd(&args[1..]),
+        "list" => run_datasets_list_cmd(&args[1..]),
+        "pin" => run_datasets_pin_cmd(&args[1..]),
+        "fetch" => run_datasets_fetch_cmd(&args[1..]),
+        "verify" => run_datasets_verify_cmd(&args[1..]),
+        other => Err(format!("unknown datasets subcommand '{other}'")),
+    }
+}
+
+fn run_datasets_init_cmd(args: &[String]) -> Result<ExitCode, String> {
+    let mut manifest_path = PathBuf::from(datasets::DEFAULT_LOCAL_MANIFEST_PATH);
+    let mut template_path: Option<PathBuf> = None;
+    let mut json = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--manifest" => {
+                i += 1;
+                manifest_path = PathBuf::from(args.get(i).ok_or("--manifest requires a path")?);
+            }
+            "--template" => {
+                i += 1;
+                template_path = Some(PathBuf::from(
+                    args.get(i).ok_or("--template requires a path")?,
+                ));
+            }
+            "--json" => json = true,
+            "--force" | "-f" => {
+                return Err(
+                    "--force is not allowed for datasets init; refusing to overwrite an existing local manifest"
+                        .to_owned(),
+                );
+            }
+            other => return Err(format!("unknown argument '{other}' for datasets init")),
+        }
+        i += 1;
+    }
+
+    let resolved_template = datasets::resolve_template_manifest_path(template_path.as_deref());
+    let entry_count =
+        datasets::init_local_manifest_from_template(&resolved_template, &manifest_path)
+            .map_err(|e| e.to_string())?;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "initialized": true,
+                "manifest_path": manifest_path.to_string_lossy(),
+                "template_path": resolved_template.to_string_lossy(),
+                "entries": entry_count,
+            }))
+            .map_err(|e| e.to_string())?
+        );
+    } else {
+        println!(
+            "initialized {} from {} ({} entries); edit license.status locally when cleared (never commit)",
+            manifest_path.display(),
+            resolved_template.display(),
+            entry_count
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn push_dataset_ids(out: &mut Vec<String>, arg: &str) {
+    for part in arg.split(',') {
+        let trimmed = part.trim();
+        if !trimmed.is_empty() {
+            out.push(trimmed.to_owned());
+        }
+    }
+}
+
+fn run_datasets_pin_cmd(args: &[String]) -> Result<ExitCode, String> {
+    let mut manifest_path = PathBuf::from("lab/datasets.manifest.toml");
+    let mut json = false;
+    let mut ids = Vec::new();
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--manifest" => {
+                i += 1;
+                manifest_path = PathBuf::from(args.get(i).ok_or("--manifest requires a path")?);
+            }
+            "--json" => json = true,
+            other if other.starts_with('-') => {
+                return Err(format!("unknown argument '{other}' for datasets pin"));
+            }
+            id => push_dataset_ids(&mut ids, id),
+        }
+        i += 1;
+    }
+
+    let registry = standard_benchmark_registry();
+    let results = datasets::pin_datasets(
+        &manifest_path,
+        &registry,
+        &ids,
+        &datasets::PinEndpointOverrides::default(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "pinned": results }))
+                .map_err(|e| e.to_string())?
+        );
+    } else {
+        for r in &results {
+            println!(
+                "pinned {} | sources_updated={} | files_updated={} | license_status={}",
+                r.id, r.updated_sources, r.updated_files, r.license_status
+            );
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_datasets_fetch_cmd(args: &[String]) -> Result<ExitCode, String> {
+    let mut manifest_path = PathBuf::from("lab/datasets.manifest.toml");
+    let mut datasets_dir = PathBuf::from("lab/datasets");
+    let mut record_checksums = false;
+    let mut json = false;
+    let mut ids = Vec::new();
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--manifest" => {
+                i += 1;
+                manifest_path = PathBuf::from(args.get(i).ok_or("--manifest requires a path")?);
+            }
+            "--datasets-dir" => {
+                i += 1;
+                datasets_dir = PathBuf::from(args.get(i).ok_or("--datasets-dir requires a path")?);
+            }
+            "--record-checksums" => record_checksums = true,
+            "--json" => json = true,
+            other if other.starts_with('-') => {
+                return Err(format!("unknown argument '{other}' for datasets fetch"));
+            }
+            id => push_dataset_ids(&mut ids, id),
+        }
+        i += 1;
+    }
+
+    let registry = standard_benchmark_registry();
+    let results = datasets::fetch_datasets(
+        &manifest_path,
+        &datasets_dir,
+        &registry,
+        &ids,
+        record_checksums,
+        &datasets::FetchEndpointOverrides::default(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "fetched": results }))
+                .map_err(|e| e.to_string())?
+        );
+    } else {
+        for r in &results {
+            println!(
+                "fetched {} -> {} ({} files, owner_checksums_recorded={})",
+                r.id, r.target_dir, r.files_fetched, r.recorded_owner_checksums
+            );
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_datasets_verify_cmd(args: &[String]) -> Result<ExitCode, String> {
+    let mut manifest_path = PathBuf::from("lab/datasets.manifest.toml");
+    let mut datasets_dir = PathBuf::from("lab/datasets");
+    let mut json = false;
+    let mut ids = Vec::new();
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--manifest" => {
+                i += 1;
+                manifest_path = PathBuf::from(args.get(i).ok_or("--manifest requires a path")?);
+            }
+            "--datasets-dir" => {
+                i += 1;
+                datasets_dir = PathBuf::from(args.get(i).ok_or("--datasets-dir requires a path")?);
+            }
+            "--json" => json = true,
+            other if other.starts_with('-') => {
+                return Err(format!("unknown argument '{other}' for datasets verify"));
+            }
+            id => push_dataset_ids(&mut ids, id),
+        }
+        i += 1;
+    }
+
+    let registry = standard_benchmark_registry();
+    let report = datasets::verify_datasets(&manifest_path, &datasets_dir, &registry, &ids)
+        .map_err(|e| e.to_string())?;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+        );
+    } else {
+        for r in &report.results {
+            if r.failures.is_empty() {
+                println!("{} | {}", r.id, r.status);
+            } else {
+                println!("{} | {} | {}", r.id, r.status, r.failures.join("; "));
+            }
+        }
+    }
+
+    if report.all_verified {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        for r in &report.results {
+            if !r.verified && r.status != "unavailable" {
+                eprintln!("unverified dataset '{}': {}", r.id, r.failures.join("; "));
+            }
+        }
+        Ok(ExitCode::from(1))
+    }
+}
+
+fn run_datasets_list_cmd(args: &[String]) -> Result<ExitCode, String> {
+    let mut manifest_path = PathBuf::from("lab/datasets.manifest.toml");
+    let mut datasets_dir = PathBuf::from("lab/datasets");
+    let mut json = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--manifest" => {
+                i += 1;
+                manifest_path = PathBuf::from(args.get(i).ok_or("--manifest requires a path")?);
+            }
+            "--datasets-dir" => {
+                i += 1;
+                datasets_dir = PathBuf::from(args.get(i).ok_or("--datasets-dir requires a path")?);
+            }
+            "--json" => json = true,
+            other => return Err(format!("unknown argument '{other}' for datasets list")),
+        }
+        i += 1;
+    }
+
+    let registry = standard_benchmark_registry();
+    let manifest = datasets::load_and_validate_manifest(&manifest_path, &registry)
+        .map_err(|e| e.to_string())?;
+    let rows =
+        datasets::describe_datasets_status(&manifest, &datasets_dir).map_err(|e| e.to_string())?;
+
+    if json {
+        let payload = serde_json::json!({
+            "schema_version": manifest.schema_version,
+            "manifest_path": manifest_path.to_string_lossy(),
+            "datasets": rows,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?
+        );
+    } else {
+        for row in &rows {
+            let sources_str = if row.sources.is_empty() {
+                "none".to_owned()
+            } else {
+                row.sources
+                    .iter()
+                    .map(|s| {
+                        let role = s.role.as_deref().unwrap_or("primary");
+                        format!("{role}:{}:{}@{}", s.kind, s.location, s.revision)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            };
+            let pin_flag = if row.has_pending_pin {
+                format!(" pending_pin=[{}]", row.pending_pin_items.join(","))
+            } else {
+                String::new()
+            };
+            let csum_flag = if row.missing_owner_checksums {
+                " missing_owner_checksums"
+            } else {
+                ""
+            };
+            println!(
+                "{} | kind={} | domain={:?} | lane={} | avail={} | lic={} ({}) | contam={} | verify={}{}{} | sources=[{}]",
+                row.id,
+                row.kind,
+                row.domain,
+                row.lane,
+                row.availability,
+                row.license_spdx,
+                row.license_status,
+                row.contamination_risk,
+                row.verification_state,
+                pin_flag,
+                csum_flag,
+                sources_str,
+            );
+        }
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -781,5 +1302,5 @@ fn run_pareto_cmd(args: &[String]) -> Result<ExitCode, String> {
 }
 
 fn usage() -> String {
-    "Usage:\n  monoagens-lab run --scenario <path> [--prior <path>] [--seed <u64>] [--json] [--record-out <path>]\n  monoagens-lab suite [--root <dir>] [--set development|validation] [--prior <path>] [--seeds 1,2] [--json]\n  monoagens-lab compare (--scenario <path> | --set development|validation [--root <dir>]) --mechanism <id> [--prior <path>] [--seeds 1,2,3,4,5] [--out-dir <dir>] [--json]\n  monoagens-lab replay --scenario <path> [--prior <path>] [--seed <u64>] [--json]\n  monoagens-lab baseline --adapter <slug> --scenario <path> [--prior <path>] [--seed <u64>] [--sealed] [--timeout-s <u64>] [--json]\n  monoagens-lab benchmark --suite <standard|in_tree_only> [--datasets-dir <path>] [--prior <path>] [--pareto] [--pareto-input <path>] [--json]\n  monoagens-lab pareto --input <scorecard.json> [--json]\n  monoagens-lab mechanisms [--json]\n  monoagens-lab test-body [--state-dir <path>]".to_owned()
+    "Usage:\n  monoagens-lab run --scenario <path> [--prior <path>] [--seed <u64>] [--json] [--record-out <path>]\n  monoagens-lab suite [--root <dir>] [--set development|validation] [--prior <path>] [--seeds 1,2] [--json]\n  monoagens-lab compare (--scenario <path> | --set development|validation [--root <dir>]) --mechanism <id> [--prior <path>] [--seeds 1,2,3,4,5] [--out-dir <dir>] [--json]\n  monoagens-lab replay --scenario <path> [--prior <path>] [--seed <u64>] [--json]\n  monoagens-lab baseline --adapter <slug> --scenario <path> [--prior <path>] [--seed <u64>] [--sealed] [--timeout-s <u64>] [--json]\n  monoagens-lab benchmark --suite <standard|in_tree_only> [--datasets-dir <path>] [--prior <path>] [--pareto] [--pareto-input <path>] [--json]\n  monoagens-lab datasets <init|list|pin|fetch|verify> [ids...] [--manifest <path>] [--datasets-dir <path>] [--record-checksums] [--json]\n  monoagens-lab pareto --input <scorecard.json> [--json]\n  monoagens-lab mechanisms [--json]\n  monoagens-lab test-body [--state-dir <path>]".to_owned()
 }

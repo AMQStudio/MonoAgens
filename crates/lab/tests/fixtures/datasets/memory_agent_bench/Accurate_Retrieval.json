@@ -1,0 +1,32 @@
+[
+  {
+    "row_id": "ar_lme_0",
+    "split": "Accurate_Retrieval",
+    "source": "LongMemEval_S*",
+    "context": "Please memorize it: Session 1 discusses baking sourdough loaves every Sunday.\n\nSession 2 clarifies the starter flour ratio is 50 percent whole rye.",
+    "questions": [
+      "What whole rye ratio is used in the starter?"
+    ],
+    "answers": [
+      "50 percent"
+    ],
+    "evidence_chunk_indices": [
+      [1]
+    ]
+  },
+  {
+    "row_id": "ar_doc_1",
+    "split": "Accurate_Retrieval",
+    "source": "SyntheticDocs",
+    "context": "Please memorize it and I will ask some questions: Observatory dome B tracks southern binaries.\n\nCalibration log: mirror alignment tolerance stays 0.4 arcsec.",
+    "questions": [
+      "What mirror alignment tolerance is logged?"
+    ],
+    "answers": [
+      ["0.4 arcsec", "0.4"]
+    ],
+    "evidence_chunk_indices": [
+      [1]
+    ]
+  }
+]

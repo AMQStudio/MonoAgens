@@ -2,9 +2,14 @@
 //! `A-16` confirmatory sizing `S >= 354–471`) and undominated **Convex Pareto** frontier
 //! computation (`Kapoor et al. 2025`, `R-39`).
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::baseline::TokenUsage5Tuple;
+use crate::benchmark::BenchmarkDomain;
+use crate::datasets::{ContaminationRisk, CoreApplicability, DatasetLane};
+use crate::record::MetricScoreInterval;
 
 /// Recommended confirmatory cluster-paired minimum scenario count (`A-16`, `R-39`).
 pub const CONFIRMATORY_SCENARIO_MIN: usize = 354;
@@ -14,6 +19,36 @@ pub const CONFIRMATORY_SCENARIO_TARGET: usize = 471;
 pub const DEFAULT_NI_MARGIN_DELTA: f64 = 0.05;
 /// Family-wise error rate alpha for Holm-Bonferroni (`R-39`).
 pub const DEFAULT_FWER_ALPHA: f64 = 0.05;
+
+/// Six-value scorecard row status (`benchmark-evaluation/spec.md`, Design 8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScorecardStatus {
+    Run,
+    Partial,
+    NotScored,
+    Unavailable,
+    NotMappable,
+    Unverified,
+}
+
+/// Strictly one row per registered external dataset in the benchmark scorecard.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScorecardRow {
+    pub dataset_id: String,
+    pub domain: BenchmarkDomain,
+    pub lane: DatasetLane,
+    pub status: ScorecardStatus,
+    pub core_applicability: CoreApplicability,
+    pub contamination_risk: ContaminationRisk,
+    pub metrics: BTreeMap<String, Option<f64>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub metric_intervals: Vec<MetricScoreInterval>,
+    pub cost_usd: f64,
+    pub e_tok: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
 
 /// Raw scorecard point for one evaluated system configuration.
 ///
@@ -35,6 +70,12 @@ pub struct SystemConfigScore {
     pub asr: f64,
     /// Raw 5-tuple logs preserved alongside normalized `E_tok`.
     pub raw_5tuples: Vec<TokenUsage5Tuple>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<DatasetLane>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contamination_risk: Option<ContaminationRisk>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<ScorecardStatus>,
 }
 
 impl SystemConfigScore {
@@ -94,6 +135,8 @@ pub struct ConvexParetoReport {
     pub holm_results: Vec<HolmComparisonResult>,
     pub co_primary_ni_and_cost_passed: bool,
     pub hypervolume_2d_quality_etok: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gaps: Vec<ScorecardRow>,
 }
 
 /// Input scorecard file schema for `monoagens-lab pareto --input <path>`.
@@ -102,6 +145,8 @@ pub struct ParetoScorecardInput {
     pub systems: Vec<SystemConfigScore>,
     #[serde(default)]
     pub paired_comparisons: Vec<PairedComparisonInput>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scorecard_rows: Vec<ScorecardRow>,
 }
 
 /// Evaluates paired hypotheses with Cohen's `d_z`, Kerby rank-biserial `r_rb`,
@@ -308,7 +353,18 @@ pub fn compute_convex_pareto(input: &ParetoScorecardInput) -> ConvexParetoReport
         holm_results.iter().all(|h| h.non_inferiority_passed)
     };
 
-    let pts = &input.systems;
+    // Only scored rows enter Pareto frontier computation; gap rows stay in `gaps` without imputation.
+    let pts: Vec<SystemConfigScore> = input
+        .systems
+        .iter()
+        .filter(|s| {
+            matches!(
+                s.status,
+                None | Some(ScorecardStatus::Run | ScorecardStatus::Partial)
+            )
+        })
+        .cloned()
+        .collect();
     let n = pts.len();
     let mut is_dominated = vec![false; n];
 
@@ -367,7 +423,13 @@ pub fn compute_convex_pareto(input: &ParetoScorecardInput) -> ConvexParetoReport
             .then_with(|| a.verified_e_tok().total_cmp(&b.verified_e_tok()))
     });
 
-    let hv = compute_2d_hypervolume(&undominated, pts);
+    let hv = compute_2d_hypervolume(&undominated, &pts);
+    let gaps: Vec<ScorecardRow> = input
+        .scorecard_rows
+        .iter()
+        .filter(|r| !matches!(r.status, ScorecardStatus::Run | ScorecardStatus::Partial))
+        .cloned()
+        .collect();
 
     ConvexParetoReport {
         schema_version: "1.0".to_owned(),
@@ -376,6 +438,44 @@ pub fn compute_convex_pareto(input: &ParetoScorecardInput) -> ConvexParetoReport
         holm_results,
         co_primary_ni_and_cost_passed: co_primary_ok,
         hypervolume_2d_quality_etok: hv,
+        gaps,
+    }
+}
+
+/// Builds a [`ParetoScorecardInput`] from per-dataset [`ScorecardRow`]s without imputing gaps.
+#[must_use]
+pub fn scorecard_rows_to_pareto_input(
+    rows: &[ScorecardRow],
+    paired_comparisons: Vec<PairedComparisonInput>,
+) -> ParetoScorecardInput {
+    let mut systems = Vec::new();
+    for row in rows {
+        if !matches!(row.status, ScorecardStatus::Run | ScorecardStatus::Partial) {
+            continue;
+        }
+        let scored_vals: Vec<f64> = row.metrics.values().copied().flatten().collect();
+        if scored_vals.is_empty() {
+            continue;
+        }
+        let mean_q = (scored_vals.iter().sum::<f64>() / scored_vals.len() as f64).clamp(0.0, 1.0);
+        systems.push(SystemConfigScore {
+            name: row.dataset_id.clone(),
+            quality: mean_q,
+            e_tok: row.e_tok,
+            p95_latency_ms: 1.0,
+            fir: 0.0,
+            delta_ni: 0.0,
+            asr: 0.0,
+            raw_5tuples: Vec::new(),
+            lane: Some(row.lane),
+            contamination_risk: Some(row.contamination_risk),
+            status: Some(row.status),
+        });
+    }
+    ParetoScorecardInput {
+        systems,
+        paired_comparisons,
+        scorecard_rows: rows.to_vec(),
     }
 }
 

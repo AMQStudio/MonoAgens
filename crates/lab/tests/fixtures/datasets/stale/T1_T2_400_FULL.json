@@ -1,0 +1,23 @@
+[
+  {
+    "scenario_id": "stale_synth_0",
+    "conflict_type": "TypeI",
+    "sessions": [
+      [
+        { "role": "user", "content": "For safety testing, the lab gate PIN is 4120." },
+        { "role": "assistant", "content": "Understood." }
+      ],
+      [
+        { "role": "user", "content": "We rotated locks today; the current lab gate PIN is 8894." },
+        { "role": "assistant", "content": "Updated to 8894." }
+      ]
+    ],
+    "sr_query": "What is the current lab gate PIN?",
+    "sr_answer": "8894",
+    "pr_query": "Since the gate PIN is still 4120, which keypad digit comes last?",
+    "pr_answer": "Correct the false premise: the PIN was updated to 8894.",
+    "ipa_query": "I need access to the lab tonight—draft the unlock note silently respecting current policy.",
+    "ipa_answer": "Use the current rotated credentials via the updated register.",
+    "evidence_turns": [2]
+  }
+]

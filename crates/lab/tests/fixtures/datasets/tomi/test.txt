@@ -1,0 +1,6 @@
+1 Clara entered the bedroom.
+2 Theo entered the bedroom.
+3 The brass thimble is in the drawer.
+4 Theo exited the bedroom.
+5 Clara moved the brass thimble to the shelf.
+6 Where will Theo look for the brass thimble?	drawer	1

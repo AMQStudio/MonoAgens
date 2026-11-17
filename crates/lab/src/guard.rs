@@ -17,12 +17,14 @@ pub struct GuardRefusal {
     pub trigger_event_id: Option<EventId>,
 }
 
-/// Door wrapper enforcing token and per-chain wake ceilings at `Doors::context`.
+/// Door wrapper enforcing token, USD budget, and per-chain wake ceilings at `Doors::context`.
 #[derive(Debug, Clone, Default)]
 pub struct CostGuard {
     pub max_tokens: Option<u64>,
     pub max_chain_wakes: Option<u64>,
+    pub max_cost_usd: Option<f64>,
     pub tokens_used: u64,
+    pub cost_usd_used: f64,
     pub chain_wakes: BTreeMap<EventId, u64>,
     pub refusals: Vec<GuardRefusal>,
     pub captured_plans: Vec<ContextPlan>,
@@ -39,6 +41,15 @@ impl CostGuard {
         }
     }
 
+    /// Builds a [`CostGuard`] with an explicit `--max-cost-usd` cap.
+    #[must_use]
+    pub fn with_max_cost_usd(max_cost_usd: f64) -> Self {
+        Self {
+            max_cost_usd: Some(max_cost_usd),
+            ..Self::default()
+        }
+    }
+
     /// Returns active door rule descriptors for the run record.
     #[must_use]
     pub fn rule_names(&self) -> Vec<String> {
@@ -49,12 +60,29 @@ impl CostGuard {
         if let Some(limit) = self.max_chain_wakes {
             rules.push(format!("cost_guard.max_chain_wakes={limit}"));
         }
+        if let Some(limit) = self.max_cost_usd {
+            rules.push(format!("cost_guard.max_cost_usd={limit:.4}"));
+        }
         rules
     }
 
     /// Charges token usage after a model call completes.
     pub fn record_tokens(&mut self, tokens: u64) {
         self.tokens_used = self.tokens_used.saturating_add(tokens);
+    }
+
+    /// Charges USD spend after a paid model/judge call completes.
+    pub fn record_cost_usd(&mut self, usd: f64) {
+        if usd.is_finite() && usd > 0.0 {
+            self.cost_usd_used += usd;
+        }
+    }
+
+    /// Returns `true` when `max_cost_usd` has been reached or exceeded.
+    #[must_use]
+    pub fn budget_exhausted(&self) -> bool {
+        self.max_cost_usd
+            .is_some_and(|cap| self.cost_usd_used >= cap)
     }
 }
 
@@ -64,6 +92,24 @@ impl Doors for CostGuard {
     }
 
     fn context(&mut self, plan: &mut ContextPlan) -> DoorDecision {
+        if let Some(cap) = self.max_cost_usd
+            && self.cost_usd_used >= cap
+        {
+            let reason = format!(
+                "run USD budget cap reached (${:.4} / ${cap:.4})",
+                self.cost_usd_used
+            );
+            self.refusals.push(GuardRefusal {
+                rule: "cost_guard.max_cost_usd".to_owned(),
+                reason: reason.clone(),
+                trigger_event_id: plan.trigger_event_id,
+            });
+            return DoorDecision::Refuse {
+                rule: "cost_guard.max_cost_usd".to_owned(),
+                reason,
+            };
+        }
+
         if let Some(limit) = self.max_tokens
             && self.tokens_used >= limit
         {
