@@ -208,17 +208,19 @@ abstentions, `R-39`).
 
 ### Requirement: The Lab benchmarks 5 cognitive domains, Indonesian suites, Tool RAG, and security
 `monoagens-lab benchmark` SHALL run standardized evaluation suites covering all five cognitive
-domains (Memory, Prospective, Proactivity/Timing, Group Chat, and Theory of Mind), Indonesian informal
-register retrieval (`256d`), `Tool RAG` capability scaling (`N_caps = 50..200`), and security/privacy
-suites (`R-38`, `R-39`, `R-43`, `A-15`), while reporting Black-Box `Core TCK` checks (`R-50`).
+domains (Memory, Prospective, Proactivity/Timing, Group Chat, and Theory of Mind), Indonesian
+informal register `reason` embedder probes (`256d`), `Tool RAG` capability scaling (`N_caps =
+50..200`), and in-tree security/privacy suites (`R-38`, `R-39`, `R-43`, `A-15`), while reporting
+Black-Box `Core TCK` checks (`R-50`) and honestly listing unreleased external corpora as
+`unavailable` gaps.
 
-#### Scenario: Five-domain benchmark suite enforces dataset caveats and Cat-5 coverage
-- **WHEN** `monoagens-lab benchmark --suite standard --pareto` executes across `LoCoMo` (including Category-5 adversarial), `LongMemEval`, `MemoryAgentBench`, `GroupMemBench`, `STALE`, `PM-Bench`, `PIS`, `PITCH`, `ProACT`, `ProactiveBench`, `CAPA`, synthetic `When2Speak`, `Ubuntu IRC`, `Molweni`, `FANToM` (`ALL*`), `OpenToM`, `HI-TOM`, and `ExploreToM`
-- **THEN** the Lab emits domain-specific scorecards (`ALL*`, `PR`, `FIR`/`MIR`, `Delta_NI`), restricts `ToMi` to shortcut-perturbation checks, and excludes dyadic `MuTual` from multi-party addressee claims
+#### Scenario: Five-domain benchmark suite enforces dataset caveats, gaps, and Cat-5 coverage
+- **WHEN** `monoagens-lab benchmark --suite standard --pareto` executes across `LoCoMo` (retaining Category-5 adversarial), `LongMemEval`, `MemoryAgentBench`, `GroupMemBench`, `STALE`, `PM-Bench`, `PITCH`, `ProactiveBench`, `CAPA`, synthetic `When2Speak`, `Ubuntu IRC`, `Molweni`, `FANToM` (`ALL*`), `OpenToM`, `HI-TOM`, `ExploreToM`, and `DynToM`
+- **THEN** the Lab emits domain scorecards with cluster-adjusted CIs and contamination metadata, keeps `PIS` and `ProACT` visibly marked `unavailable` without silent substitution, restricts `ToMi` to shortcut-perturbation checks, and excludes dyadic `MuTual` from multi-party addressee claims
 
-#### Scenario: Security, Indonesian register, and Tool RAG suites report dedicated metrics
-- **WHEN** `MPBench`, `VisibleScope`, `MultiLexNorm`/`IndoCollex`, and `Tool RAG` (`N_caps = 50..200`) suites execute
-- **THEN** the Lab reports compaction poisoning ASR, `Delta_NI`, `256d` retrieval accuracy, `Core TCK` verdicts, and schema token savings across connected capabilities
+#### Scenario: Security, Indonesian register probes, and Tool RAG suites report dedicated metrics
+- **WHEN** `VisibleScope` in-tree privacy/poisoning checks, `MultiLexNorm`/`IndoCollex` `reason` embedder probes, and `Tool RAG` (`N_caps = 50..200`) execute alongside external `MPBench` tracking
+- **THEN** the Lab reports `Delta_NI`, `Core TCK` verdicts, `twin_retrieval_r1_256d` (via a semantic `reason` embedder, never `hash`/`none`), schema token savings, and marks external `MPBench` `unavailable` until its corpus is publicly released
 
 ### Requirement: Self-guide ablation tests held truthfulness, memory humility, and non-verbosity
 When comparing `self_mechanics_guide = true` against its neutral `false` baseline across `>= 5`

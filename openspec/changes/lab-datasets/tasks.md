@@ -1,0 +1,69 @@
+# Tasks — `lab-datasets`
+
+Run 3 (`research/findings/2026-11-17-run-3.md` and `run-3-notes/`) plus the 2026-11-17 `/grill-me`
+reviews resolved `R-51`–`R-54`, `VisibleScope` subset rules, `reason::EmbedderProbe` boundaries,
+`datasets pin`, `--live` cost/judge governance, and `core-and-lab` sync. Groups 1–7 are ready for
+workers; Group 8 remains owner-only. Default tests stay offline throughout; never read
+`lab/scenarios/sealed/`.
+
+## 1. Manifest and registry consistency (`benchmark-datasets`)
+
+- [ ] 1.1 Add `lab/datasets.manifest.toml` schema and initial skeleton with one entry per registered external dataset (Design 1), supporting multi-source entries (`[[datasets.sources]]`), `contamination_risk`, `license.status = "pending"`, `availability`, and `pending_pin` file placeholders. Add `lab/datasets/` to `.gitignore`. Verify `git check-ignore lab/datasets/x` succeeds.
+- [ ] 1.2 Add a manifest loader with strict parsing (unknown keys fail). Add a registry↔manifest id-set check that fails every manifest-reading command, naming mismatched ids. Verify with unit tests for a missing id, an extra id and an unknown key.
+- [ ] 1.3 Add `monoagens-lab datasets list [--json]` showing per dataset its source(s), license status, availability, `contamination_risk`, verification state, and any `pending_pin` or missing owner checksums. Verify with a CLI test against a fixture manifest.
+
+## 2. Machine pinning, fetch, license gate and verification (`benchmark-datasets`)
+
+- [ ] 2.1 Add owner-run `monoagens-lab datasets pin [ids]` (blocking `reqwest`) querying GitHub/HF APIs read-only to write resolved commit SHAs, file sizes, and available upstream LFS SHA-256 pointers into `lab/datasets.manifest.toml` without downloading corpus data or touching `license.status`. Verify with tests against a local loopback mock API server.
+- [ ] 2.2 Add `monoagens-lab datasets fetch [ids]` (blocking `reqwest`; `git`, `huggingface` and `url` sources pinned by revision, supporting multi-source `group_mem_bench` and deterministic seed artifacts where pinned). Downloads into `.partial/`, renames atomically, removes partial files on failure, and refuses any dataset whose license is not `cleared`. Verify against a local loopback HTTP fixture server (no external network).
+- [ ] 2.3 Add `--record-checksums` (trust on first use, with fetch date, refused when checksums already exist). Verify with tests for first record and refused re-record.
+- [ ] 2.4 Add `monoagens-lab datasets verify [ids]`, checking SHA-256 and size of every file, the extraction marker and the cached converter version. Verify with tests: one-byte change reported with both hashes and non-zero exit, missing file, and stale converter cache.
+- [ ] 2.5 Prove that no Lab command except `datasets pin` and `datasets fetch` opens a network connection. Verify with a test running `benchmark`, `datasets list`, and `datasets verify` with HTTP disabled / deny-all proxy env.
+
+## 3. Evaluation framework (`benchmark-evaluation`)
+
+- [ ] 3.1 Add `ScenarioSet::External` and make every calibration path reject external inputs with an error (Design 6). Verify with a test feeding an external result to calibration.
+- [ ] 3.2 Add the `Converter` / `Scorer` traits, `ExternalItem` (with isolated cloned post-ingestion checkpoint support and Lab-side `ScriptedModelProvider` silent-`think` history loading without modifying Core's single loop), a `VisibleScope` evidence-visibility test helper verifying `scope.allows(...) == true` on non-conflict evidence and `false` on `privacy_conflict` cross-channel evidence, `GoldBook` (with `privacy_conflict` flag support), and converted cache keyed by converter version. Verify compile-level isolation and cache rebuild.
+- [ ] 3.3 Add `EmbedderProbe` trait wired directly to `monoagens-reason::Embedder` (no `gateway` crate dependency, no Waist-2 naming). Enforce that non-fixture runs reject `HashEmbedder`, `NoneEmbedder`, and `ScriptedEmbedder`, and return `not_scored` (`embedder_unconfigured`) when local semantic weights (`EmbeddingGemma 2` or configured provider) are absent.
+- [ ] 3.4 Add a reference converter and scorer for a synthetic, test-only fixture dataset under `crates/lab/tests/fixtures/datasets/`, verifying byte-identical conversion, zero gold leakage, `VisibleScope` gold-evidence allowance, and metric + CI output.
+- [ ] 3.5 Add the seeded stratified item-sampling interface and cluster-bootstrap CI helper (Design 6, `R-54`), recording rule, chosen item ids, and cluster CIs in run records. Verify identical item ids for same-seed arms.
+
+## 4. Benchmark runner, statuses, `--live` preflight and scorecard (`benchmark-evaluation`)
+
+- [ ] 4.1 Replace `is_dir()` in `verify_required_datasets_present` with manifest verification. `--suite standard` fails before any run when a required available dataset is missing or unverified, naming it and the fetch command. Verify with tests for missing and checksum-mismatch (`unverified`) cases.
+- [ ] 4.2 Add `--only <ids>`, producing a report and run records marked `partial` listing left-out datasets. Verify with a CLI test on the fixture dataset.
+- [ ] 4.3 Make `run_benchmark_suite` route behavioral datasets through `Converter -> run_scenario -> Scorer`, component register datasets through `reason::EmbedderProbe`, and emit **strictly one scorecard row per dataset** with `lane` (`core_behavioral` | `embedder_probe`), `status` (`run`, `partial`, `not_scored`, `unavailable`, `not_mappable`, `unverified`), and `contamination_risk`. Write per-dataset run records and test every status & lane on fixtures.
+- [ ] 4.4 Emit the per-domain scorecard in `ParetoScorecardInput` form carrying `lane`, `contamination_risk`, and explicit gaps without imputation, and feed `--pareto`. Verify gap rows remain gaps and frontier uses scored rows only.
+- [ ] 4.5 Add `--live` + `--max-cost-usd` (`CostGuard`) with a **scripted preflight cost/wake estimate** (estimated history wakes, probe calls, judge calls, worst-case USD) run prior to any paid call, Lab-side `ScriptedModelProvider` silent `think` reasoning during static memory/ToM history loading (logged as `history_reasoning_mode = "scripted_silent"` in `RunRecord`, with zero Core modifications and optional future `--live-full-history`), and configurable OpenAI-compatible judge routing that renames metrics (`<metric>_non_official_judge`) or fails if an official judge id (`gpt-4o`, `gpt-5`, `Gemini-3.1-flash-lite`) is substituted. Verify both paths with scripted providers.
+
+## 5. Documentation and research sync
+
+- [ ] 5.1 Document the dataset workflow (`list` → `pin` → owner reviews license & NC/playground terms → `fetch` → `verify` → scripted preflight → `--live --max-cost-usd` only on authorization; `core_behavioral` vs `reason::EmbedderProbe`; `unavailable` gaps) in `docs/lab-datasets.md`. Verify documented CLI usage against fixture manifest.
+- [ ] 5.2 Update `research/backlog.md` so `R-51`–`R-54` link to `research/findings/2026-11-17-run-3.md` and `run-3-notes/`. Verify links resolve.
+
+## 6. Registry alignment & initial manifest skeleton (zero guessed SHAs)
+
+- [ ] 6.1 Update `standard_benchmark_registry()` in `crates/lab/src/benchmark.rs` (23 external datasets + 1 local `tool_rag_scaling`) per Design 1 & `R-52`: split `dyntom` (`GAIR-NLP/DynToM`, `dyntom_acc`) from `exploretom` (`exact_match_acc`); bind `ubuntu_irc` to `jkkummerfeld/irc-disentanglement` (`thread_f1`, derived `parent_speaker_p1`); align `longmemeval` (`overall_acc`, `abstention_acc`), `stale` (`state_resolution`, `premise_resistance`, `implicit_policy_adaptation`), `pm_bench` (`set_f1`, `false_alarm_rate`), `molweni` (`qa_f1`, `sdrt_link_f1`), `opentom` (`macro_f1_coarse`, `macro_f1_fine`, `attitude_f1`, `mhop_f1`), and `reason` probe metric `twin_retrieval_r1_256d` (`multilexnorm`, `indocollex`). Verify unit tests pass and manifest id-set matches.
+- [ ] 6.2 Populate `lab/datasets.manifest.toml` from `research/findings/2026-11-17-run-3.md` (`R-51`) with verified URLs, license terms, `contamination_risk`, and known hashes/sizes (`longmemeval`, `multilexnorm`, `indocollex`, `dyntom`), leaving unprinted commit SHAs/sizes explicitly `pending_pin` (resolved only when owner runs `datasets pin` / `fetch --record-checksums`) and keeping `license.status = "pending"`. Verify with `monoagens-lab datasets list`.
+- [ ] 6.3 Mark `pis`, `proact`, and `mpbench` as `availability = "unavailable"`, and set `multilexnorm` + `indocollex` `core_applicability = "not_mappable"` (with `embedder_probe` lane enabled). Verify standard suite scorecard reports those exact statuses and reasons.
+
+## 7. Converters, `reason` embedder probes, and scorers per dataset
+
+Each task implements the module under `crates/lab/src/datasets/` (plus pinned `lab/adapters` Python helper where required) and a committed synthetic fixture in real schema with zero copied text, verifying: (a) byte-identical conversion, (b) zero gold leakage (`_abs`, `.trace`, `is_noise`), (c) **mandatory `VisibleScope` test proving all gold evidence turns are visible to the probe audience**, and (d) scorer parity.
+
+- [ ] 7.1 **Memory (`5`):** `locomo` (`[speaker_a, soul]` probe, Cat 5 retained, official `evaluation.py`), `longmemeval` (`LongMemEval_S` default, `[user, prior_assistant, soul]` history, `[user, soul]` probe, strip `_abs`, `gpt-4o` + `abstention_acc`), `memory_agent_bench` (`stream_source` `T_0 + i*60s` + `lab_proctor` on non-LME, `[user, soul]` on `LME(S*)`, `Conflict_Resolution`/`AR`, `gpt-4o` on `LME(S*)`), `group_mem_bench` (HF+GitHub, ISO 8601 + `reply_to`, channel audiences + real `User_<n>` askers, cross-channel `privacy_conflict` scored separately for refusal vs non-conflict/raw accuracy, `gpt-5` judge), `stale` (`[user, prior_assistant, soul]` history, `[user, soul]` probe, cloned checkpoints, `SR`/`PR`/`IPA`, `Gemini-3.1-flash-lite`).
+- [ ] 7.2 **Prospective & timing (`5` active; `pis`/`proact` `unavailable`):** `pm_bench` (80-step interactive Virtual Week, `set_f1`/`false_alarm_rate`), `capa` (`20` test meetings default, synthetic turn clock, `capa/judge.py`), `proactive_bench` (`thunlp/ProactiveAgent` `233` test events, binary `TGL` parity + optional local RM), `pitch` (`384` candidates, causal turn staging), `when2speak` (`finetune_test_token.jsonl` @ `S=1,000` stratified).
+- [ ] 7.3 **Group chat (`2`):** `ubuntu_irc` (`jkkummerfeld/irc-disentanglement` `.raw.txt` `[HH:MM]`, `lab_proctor` observer + `[lab_proctor, soul]` probe -> `thread_f1` + derived `parent_speaker_p1`), `molweni` (MRC `qa_f1` + DP `sdrt_link_f1`, `lab_proctor` observer + `[lab_proctor, soul]` probe, `MuTual` excluded).
+- [ ] 7.4 **Theory of Mind (`6` incl. `dyntom` + optional `tomi`):** `fantom` (Mode 1 `short` default, `{occupants..., lab_proctor, soul}` history, `[lab_proctor, soul]` probe, `lab/adapters` local `SentenceTransformer` for `All*`/`All`), `opentom` (Mode 2 `[narrator, lab_proctor, soul]`, `[lab_proctor, soul]` probe, `Loc_c`/`Loc_f`/`Att`/`MHop`), `hi_tom` (Mode 1 + private `Tell` + `lab_proctor` probe, `standard_acc`/`joint_acc`), `exploretom` (Mode 1 DSL `E1`/`E2` + `lab_proctor` probe, `exact_match_acc`), `dyntom` (Mode 2 `+60s`/stage + `lab_proctor` probe, `dyntom_acc`), and optional `tomi` (Mode 1 + `lab_proctor` probe + `shortcut_perturbation_acc`).
+- [ ] 7.5 **Indonesian `reason::EmbedderProbe` (`2` active; `mpbench` `unavailable`):** Implement `EmbedderProbe` modules for `multilexnorm` (`ind` + `ind_eng`) and `indocollex` (`haryoa/indo-collex`, `MIT`) calling `monoagens-reason::Embedder` (`twin_retrieval_r1_256d`), verifying `Hash`/`None`/`Scripted` rejection outside tests and `not_scored` when semantic weights are absent.
+- [ ] 7.6 **Sampling & cluster-bootstrap verification (`R-54`):** Wire Run 3 default splits, seeded stratification (`S = 471` / `1,000`), and cluster-bootstrap CIs across clustered benchmarks.
+
+## 8. Owner gates
+
+- [ ] 8.1 The owner runs `monoagens-lab datasets pin` to lock exact upstream SHAs/sizes cleanly without agent guessing, reviews each license (`CC-BY-NC-4.0`, `opentom` public playground/training ban when routing through paid APIs, and missing repo `LICENSE` files on `pm_bench`, `molweni`, `multilexnorm`), and sets `license.status` to `cleared` or `refused`. Agents never set this field.
+- [ ] 8.2 The owner runs `monoagens-lab datasets fetch` (with `--record-checksums` where sources publish none) and commits the manifest checksums. Verify with `monoagens-lab datasets verify`.
+- [ ] 8.3 Owner configures local `EmbeddingGemma 2` weights (if running Indonesian semantic probes), runs scripted preflight cost estimation + `benchmark --suite standard`, and runs `--live --max-cost-usd <cap>` only upon explicit authorization. Verify run records and scorecard land in `lab/runs/<run-id>/`, never `lab/runs/reference/`.
+
+## Workflow follow-up
+
+- Archive `lab-datasets` after `core-and-lab` is archived, so its `lab` capability exists in `openspec/specs/`.
