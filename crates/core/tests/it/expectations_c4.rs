@@ -1847,11 +1847,23 @@ fn classify_plans_carry_trigger_and_condition_across_silence_reask_goal_and_cond
         })
         .expect("expected SilenceReask Classify effect");
     assert!(reask_plan.sections.trigger.is_some());
-    assert_eq!(reask_plan.sections.commitments.len(), 1);
-    assert_eq!(
-        reask_plan.sections.commitments[0].condition,
-        "judged_silence"
-    );
+    // The re-ask question carries the earlier message itself, not an internal condition tag.
+    assert!(reask_plan.sections.commitments.is_empty());
+    match &reask_plan.sections.task {
+        Some(monoagens_core::ModelTask::SilenceReask { earlier }) => {
+            assert_ne!(earlier.event_id, reask_plan.trigger_event_id);
+            assert!(earlier.event_id.is_some());
+        }
+        other => panic!("re-ask classify must carry the earlier message, got {other:?}"),
+    }
+    assert!(matches!(
+        goal_plan.sections.task,
+        Some(monoagens_core::ModelTask::GoalProgress { ref condition }) if condition == "finish quarterly audit"
+    ));
+    assert!(matches!(
+        cond_plan.sections.task,
+        Some(monoagens_core::ModelTask::ConditionMet { ref condition }) if condition == "alice confirms the delivery"
+    ));
 }
 
 #[test]

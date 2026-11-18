@@ -2,6 +2,7 @@
 //! behavioral `Converter`/`Scorer` framework, `reason::Embedder` probe lane, and per-dataset
 //! adapters/scorers.
 
+pub mod dates;
 pub mod framework;
 pub mod manifest;
 pub mod ops;

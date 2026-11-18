@@ -125,6 +125,7 @@ pub enum ContextSlotKind {
     WorkingSet,
     Recalled,
     PlaceTail,
+    Task,
     Temporal,
     Trigger,
 }
@@ -715,6 +716,39 @@ pub fn self_guide_template_table() -> [SelfGuideTemplateEntry; 22] {
     ]
 }
 
+/// The question a `classify` or `consolidate` call answers, with the material it judges.
+///
+/// Core carries only structured data; `reason` renders each variant from a fixed template, so the
+/// wording and the accepted labels never come from Core prose.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "task", rename_all = "snake_case")]
+pub enum ModelTask {
+    /// Does the trigger show that the condition (by its own wording) is now met?
+    ConditionMet { condition: String },
+    /// Does the trigger reach or advance the goal described by `condition`?
+    GoalProgress { condition: String },
+    /// Is the trigger, from the same sender, raising again the matter of `earlier`, the message
+    /// the soul stayed silent on?
+    SilenceReask { earlier: ContextSegment },
+    /// Is the summary in the trigger faithful to `sources`?
+    GistFaithful { sources: Vec<ContextSegment> },
+    /// Summarize the episode `events` (in order) into one gist.
+    ConsolidateEpisode { events: Vec<ContextSegment> },
+}
+
+impl ModelTask {
+    /// Segments whose payloads must be resolved for rendering.
+    #[must_use]
+    pub fn segments(&self) -> &[ContextSegment] {
+        match self {
+            Self::ConditionMet { .. } | Self::GoalProgress { .. } => &[],
+            Self::SilenceReask { earlier } => std::slice::from_ref(earlier),
+            Self::GistFaithful { sources } => sources,
+            Self::ConsolidateEpisode { events } => events,
+        }
+    }
+}
+
 /// Ordered, budgeted sections of [`crate::ports::ContextPlan`].
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ContextSections {
@@ -741,6 +775,10 @@ pub struct ContextSections {
     pub knowledge_cutoff: Option<String>,
     pub anchor_check_due: bool,
     pub trigger: Option<ContextSegment>,
+    /// What a non-reasoning call (`classify`, `consolidate`) is asked to judge or produce, with
+    /// the material it needs. `None` for ordinary reasoning wakes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<ModelTask>,
 
     // --- Budget accounting ---
     pub budget_bytes: usize,

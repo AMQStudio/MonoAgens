@@ -115,6 +115,7 @@ fn neutralize_control_tags(input: &str) -> String {
         "RECALLED",
         "PLACE_TAIL",
         "TEMPORAL",
+        "TASK",
         "TRIGGER",
     ];
 
@@ -302,6 +303,12 @@ impl RenderExtras {
             .chain(plan.sections.recalled.iter())
             .chain(plan.sections.place_tail.iter())
             .chain(plan.sections.trigger.iter())
+            .chain(
+                plan.sections
+                    .task
+                    .iter()
+                    .flat_map(monoagens_core::ModelTask::segments),
+            )
         {
             if !seg.is_reference_only
                 && let Some(eid) = seg.event_id
@@ -504,6 +511,13 @@ pub fn render_context_plan_with(plan: &ContextPlan, extras: &RenderExtras) -> Re
     slots_in_order.push(ContextSlotKind::PlaceTail);
     dynamic_context.push('\n');
     dynamic_context.push_str(&render_place_tail(sections, extras));
+
+    // Task of a classify / consolidate call (absent on reasoning wakes)
+    if let Some(task) = &sections.task {
+        slots_in_order.push(ContextSlotKind::Task);
+        dynamic_context.push('\n');
+        dynamic_context.push_str(&render_task(task, extras));
+    }
 
     // Temporal (<now> + knowledge cutoff)
     slots_in_order.push(ContextSlotKind::Temporal);
@@ -981,6 +995,69 @@ fn render_place_tail(sections: &ContextSections, extras: &RenderExtras) -> Strin
         }
     }
     out.push_str("[/PLACE_TAIL]");
+    out
+}
+
+/// Renders the `[TASK]` block of a classify / consolidate call from fixed templates.
+///
+/// The wording and the accepted labels live here, never in Core; labels match what Core reads
+/// (`is_positive_verdict_label` and the gist verdict labels).
+fn render_task(task: &monoagens_core::ModelTask, extras: &RenderExtras) -> String {
+    use monoagens_core::ModelTask;
+    let mut out = String::new();
+    out.push_str("[TASK]\n");
+    let quoted = |text: &str| escape_spotlight_payload(TrustSegmentKind::UntrustedQuoted, text);
+    match task {
+        ModelTask::ConditionMet { condition } => {
+            out.push_str(
+                "Classify the triggering message. Question: does it show that the condition below is now met?\n",
+            );
+            out.push_str("condition:\n");
+            out.push_str(&quoted(condition));
+            out.push_str("\nlabel: \"met\" if it does, otherwise \"not_met\".\n");
+        }
+        ModelTask::GoalProgress { condition } => {
+            out.push_str(
+                "Classify the triggering message. Question: does it reach or advance the goal below?\n",
+            );
+            out.push_str("goal:\n");
+            out.push_str(&quoted(condition));
+            out.push_str("\nlabel: \"met\" if it does, otherwise \"not_met\".\n");
+        }
+        ModelTask::SilenceReask { earlier } => {
+            out.push_str(
+                "Classify the triggering message. You stayed silent on the earlier message below from the same sender. Question: is the triggering message raising that same matter again, because it went unanswered?\n",
+            );
+            out.push_str("earlier:\n");
+            out.push_str(&render_segment(earlier, extras, None));
+            out.push_str("\nlabel: \"yes\" if it is, otherwise \"no\".\n");
+        }
+        ModelTask::GistFaithful { sources } => {
+            out.push_str(
+                "Classify the summary in the triggering message. Question: is it faithful to the source messages below (nothing added, nothing contradicted)?\n",
+            );
+            out.push_str("sources:\n");
+            for seg in sources {
+                out.push_str(&render_segment(seg, extras, None));
+                out.push('\n');
+            }
+            out.push_str("label: \"faithful\" if it is, otherwise \"conflict\".\n");
+        }
+        ModelTask::ConsolidateEpisode { events } => {
+            out.push_str(
+                "Consolidate this finished episode into memory. Reply with exactly one `consolidate` act whose output has consolidate_kind \"gist\": a self-contained summary of what happened and what was said (who, what, when as absolute dates, where), about_ids listing the ids of the events it covers, and the places and people involved.\n",
+            );
+            out.push_str("events:\n");
+            if events.is_empty() {
+                out.push_str("- none\n");
+            }
+            for seg in events {
+                out.push_str(&render_segment(seg, extras, None));
+                out.push('\n');
+            }
+        }
+    }
+    out.push_str("[/TASK]");
     out
 }
 

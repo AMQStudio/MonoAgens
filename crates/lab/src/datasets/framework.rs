@@ -441,8 +441,20 @@ pub fn load_or_convert_cached(
         revisions: expected_revs,
     };
     fs::create_dir_all(dataset_dir)?;
-    let tmp_payload = dataset_dir.join(".monoagens_converted_payload.json.tmp");
-    let tmp_meta = dataset_dir.join(".monoagens_converted_cache.json.tmp");
+    // Unique temporary names per writer: parallel runs (or tests) converting the same dataset
+    // must not rename each other's half-written files. The final renames are atomic, so the
+    // last complete writer wins and readers never see a partial cache.
+    let unique = format!(
+        "{}.{:?}.{}",
+        std::process::id(),
+        std::thread::current().id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    )
+    .replace(|c: char| !c.is_ascii_alphanumeric() && c != '.', "_");
+    let tmp_payload = dataset_dir.join(format!(".monoagens_converted_payload.{unique}.tmp"));
+    let tmp_meta = dataset_dir.join(format!(".monoagens_converted_cache.{unique}.tmp"));
     fs::write(
         &tmp_payload,
         serde_json::to_vec(&converted).map_err(|e| LabError::Serialization(e.to_string()))?,
@@ -677,6 +689,83 @@ pub fn execute_external_item_with_embedder(
     let mut model_latencies_ms = Vec::new();
     let mut hist_last_seq: Option<LogSeq> = None;
 
+    // Production Gateway steps `Input::Tick` whenever `Core::next_due()` passes (open waits,
+    // expectation expiry, silence windows, sleep consolidation). Under virtual time the Lab
+    // fires the same Ticks at their due times before the next input, so the time-driven parts
+    // of MonoAgens run as they do in production.
+    macro_rules! fire_due_ticks {
+        ($until:expr, $phase_id:expr, $provider:expr, $model:expr) => {{
+            let until: Time = $until;
+            let mut fired = 0_u32;
+            while let Some(due) = core.next_due() {
+                if due > until {
+                    break;
+                }
+                fired += 1;
+                if fired > 100_000 {
+                    return Err(LabError::Protocol(format!(
+                        "item {}: more than 100000 due Ticks before {}",
+                        item.item_id,
+                        until.as_millis()
+                    )));
+                }
+                let tick_effects = core.step(Input::Tick, due, guard)?;
+                collect_new_store_events(
+                    &mut core,
+                    &mut hist_last_seq,
+                    "history",
+                    $phase_id,
+                    &mut decisions_go,
+                    &mut decisions_note,
+                    &mut decisions_silent,
+                    &mut decisions_door_blocked,
+                    &mut transcript_events,
+                )?;
+                let mut tick_ctx = DriveEffectsContext {
+                    phase: "history",
+                    turn_or_probe_id: $phase_id,
+                    item_id: &item.item_id,
+                    probe_id: $phase_id,
+                    is_silent_history: use_silent_history,
+                    session_id: &session_id,
+                    attribution,
+                    request_timeout_ms,
+                    max_output_tokens,
+                    transcript_events: &mut transcript_events,
+                    failed_items: &mut failed_items,
+                    actions_dispatched: &mut actions_dispatched,
+                    model_latencies_ms: &mut model_latencies_ms,
+                };
+                let (tick_wakes, _, _, _) = drive_model_effects(
+                    &mut core,
+                    tick_effects,
+                    due,
+                    guard,
+                    $provider,
+                    $model,
+                    &mut purpose_costs,
+                    &mut tick_ctx,
+                )?;
+                collect_new_store_events(
+                    &mut core,
+                    &mut hist_last_seq,
+                    "history",
+                    $phase_id,
+                    &mut decisions_go,
+                    &mut decisions_note,
+                    &mut decisions_silent,
+                    &mut decisions_door_blocked,
+                    &mut transcript_events,
+                )?;
+                history_gate_wakes = history_gate_wakes.saturating_add(tick_wakes);
+                if core.next_due() == Some(due) {
+                    // The Tick changed nothing that moves the schedule; stop rather than spin.
+                    break;
+                }
+            }
+        }};
+    }
+
     for (idx, percept) in item.history.iter().enumerate() {
         let mut p = percept.clone();
         p.protocol_version = CURRENT_PROTOCOL_VERSION;
@@ -722,6 +811,15 @@ pub fn execute_external_item_with_embedder(
             .into_percept(CURRENT_PROTOCOL_VERSION)
             .map_err(|e| LabError::Protocol(e.to_string()))?;
         last_time = parsed_percept.timestamp_ms;
+        {
+            let tick_phase = format!("hist_{idx}");
+            let (tick_provider, tick_model): (&dyn ModelProvider, &str) = if use_silent_history {
+                (&silent_provider, "scripted_silent")
+            } else {
+                (probe_provider, probe_model_name)
+            };
+            fire_due_ticks!(last_time, &tick_phase, tick_provider, tick_model);
+        }
         let effects = core.step(Input::Percept(Box::new(parsed_percept)), last_time, guard)?;
         collect_new_store_events(
             &mut core,
@@ -781,6 +879,26 @@ pub fn execute_external_item_with_embedder(
             &mut transcript_events,
         )?;
         history_gate_wakes = history_gate_wakes.saturating_add(wakes);
+    }
+
+    // Time passes between the end of the history and the questions; due Ticks (sleep after the
+    // last session, expiries) run before the checkpoint every probe starts from.
+    if let Some(first_probe_ms) = item
+        .probes
+        .iter()
+        .map(|p| p.percept.timestamp_ms)
+        .min()
+        .filter(|t| *t > last_time)
+    {
+        let (tick_provider, tick_model): (&dyn ModelProvider, &str) = if use_silent_history {
+            (&silent_provider, "scripted_silent")
+        } else {
+            (probe_provider, probe_model_name)
+        };
+        // Strictly before the first question, so it is not preceded by a same-instant Tick.
+        let until = Time::from_millis(first_probe_ms.as_millis().saturating_sub(1));
+        fire_due_ticks!(until, "pre_probe", tick_provider, tick_model);
+        last_time = last_time.max(until);
     }
 
     let checkpoint = core.take_snapshot(format!("post-ingestion-{}", item.item_id))?;
@@ -1063,12 +1181,17 @@ fn register_item_capabilities(core: &mut Core<MemStore>, item: &ExternalItem) {
     if item.capabilities.is_empty() {
         return;
     }
-    let audience = item
+    let members: Vec<monoagens_protocol::ActorId> = item
         .probes
-        .first()
-        .map(|p| p.percept.audience.clone())
-        .or_else(|| item.history.first().map(|p| p.audience.clone()))
-        .unwrap_or_default();
+        .iter()
+        .flat_map(|p| p.percept.audience.members.iter().cloned())
+        .chain(
+            item.history
+                .iter()
+                .flat_map(|p| p.audience.members.iter().cloned()),
+        )
+        .collect();
+    let audience = monoagens_protocol::Audience::new(members);
     for descriptor in &item.capabilities {
         core.register_capability_item(CapabilityCatalogEntry {
             descriptor: descriptor.clone(),

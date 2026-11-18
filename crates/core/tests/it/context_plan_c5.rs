@@ -1341,3 +1341,79 @@ fn self_mechanics_guide_neutral_omits_slot_valve_slot_attaches_and_table_covers_
     );
     Ok(())
 }
+
+#[test]
+fn place_tail_holds_only_conversation_never_core_bookkeeping() {
+    let mut core = Core::open(
+        MemStore::new(),
+        Prior::default(),
+        Switches::all_enabled(),
+        7,
+    )
+    .unwrap();
+    let mut doors = NoopDoors;
+    let aud = ["alice", "bob", "soul"];
+    // Two turns between alice and bob that the soul observes (decisions, withholds and
+    // expectation records are appended for them), then a question addressed to the soul.
+    for (i, (actor, to)) in [("alice", "bob"), ("bob", "alice")].iter().enumerate() {
+        let p = basic_percept(
+            actor,
+            "room:main",
+            &aud,
+            &[to],
+            format!("turn {i} from {actor}").as_bytes(),
+            1_000 + i as u64 * 1_000,
+            Vec::new(),
+        );
+        let _ = core
+            .step(
+                Input::Percept(Box::new(p)),
+                t(1_000 + i as u64 * 1_000),
+                &mut doors,
+            )
+            .unwrap();
+    }
+    let q = basic_percept(
+        "alice",
+        "room:main",
+        &aud,
+        &["soul"],
+        b"soul, what did bob say?",
+        5_000,
+        Vec::new(),
+    );
+    let effects = core
+        .step(Input::Percept(Box::new(q)), t(5_000), &mut doors)
+        .unwrap();
+    let plan = effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::Model {
+                purpose: ModelPurpose::Reason,
+                plan,
+            } => Some(plan),
+            _ => None,
+        })
+        .expect("addressed question wakes reasoning");
+    assert!(
+        plan.sections.task.is_none(),
+        "reasoning wakes carry no task"
+    );
+    // Earlier turns reach the prompt (recalled or in the tail); bookkeeping never does.
+    assert!(!plan.sections.place_tail.is_empty() || !plan.sections.recalled.is_empty());
+    for seg in plan
+        .sections
+        .place_tail
+        .iter()
+        .chain(plan.sections.recalled.iter())
+    {
+        let id = seg.event_id.expect("tail segment has an event");
+        let rec = core.store().get(id).unwrap().expect("tail event stored");
+        assert!(
+            matches!(rec.kind, EventKind::Percept | EventKind::Action),
+            "place tail must not contain {:?}",
+            rec.kind
+        );
+        assert!(!rec.payload.is_empty());
+    }
+}

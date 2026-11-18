@@ -22,6 +22,6 @@ pub use report::{GeneratedMemoryReport, generate_memory_report};
 pub use scoring::{MemoryItemScore, MemoryScore, ScoreContext, score_locomo, score_longmemeval};
 pub use suite::{
     DatasetArtifact, MemoryPhase, MemoryRunFile, MemorySuiteOptions, MemorySuiteOutcome,
-    PilotSummary, run_memory_suite, run_render_dry_run_gate, select_pilot_locomo_ids,
-    select_pilot_longmemeval_ids, validate_rendered_dry_run_request,
+    PilotSummary, run_memory_suite, run_render_dry_run_gate, run_render_dry_run_gate_with_embedder,
+    select_pilot_locomo_ids, select_pilot_longmemeval_ids, validate_rendered_dry_run_request,
 };

@@ -125,6 +125,28 @@ A `--live` run reported as MonoAgens SHALL run the full MonoAgens: every percept
 - **WHEN** any history percept is loaded with a scripted model, a mechanism is switched off, or the Lab alters a prompt
 - **THEN** the run record is marked invalid and its scores are not reported as MonoAgens results
 
+#### Scenario: Time passes during a history
+- **WHEN** `Core::next_due()` falls before the next history percept or before the first question
+- **THEN** the Lab steps `Input::Tick` at that due time, as the production Gateway does, so waits, expiries, silence windows and sleep consolidation run, and the resulting model calls are metered as ingest calls
+
+### Requirement: Converted items keep the dataset's own dates and addressing
+Converters SHALL take percept times from the dataset's own dates (LoCoMo `session_<n>_date_time`;
+LongMemEval-S `haystack_dates` in chronological order, the question at `question_date`), +1 s per
+turn inside a session and strictly increasing; an unparsable date SHALL fail the conversion. In a
+two-party conversation each turn SHALL be addressed to the other party.
+
+#### Scenario: A temporal question
+- **WHEN** LoCoMo asks when something happened
+- **THEN** the history percepts carry the session's real date and the soul's `<now>` is after the last real session date
+
+#### Scenario: A question dated before its last session
+- **WHEN** a LongMemEval-S `question_date` precedes the last history turn
+- **THEN** the question is asked just after that turn and the move is recorded in the item's gold metadata
+
+#### Scenario: Two runs convert the same dataset at once
+- **WHEN** two processes write the converted cache of one dataset in parallel
+- **THEN** neither fails and the cache holds one complete conversion
+
 ### Requirement: Suites are run and reported per category
 `monoagens-lab benchmark` SHALL run one category per suite (`memory`, `prospective`, `timing`, `group`, `tom`, `indonesian`, `security`), each in its own run directory with its own report containing only that category. `--suite standard` SHALL only index the latest per-category results and SHALL NOT mix categories in one results table.
 

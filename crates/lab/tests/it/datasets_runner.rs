@@ -375,7 +375,7 @@ fn cli_benchmark_only_produces_partial_report_and_run_records() {
         manifest.get_mut("locomo").unwrap(),
         &datasets_dir,
         "data/locomo10.json",
-        br#"[{"sample_id":"s0","conversation":{"speaker_a":"alice","speaker_b":"bob","session_1":[{"speaker":"alice","dia_id":"D1:1","text":"hi"}]},"qa":[{"question":"Who greeted?","answer":"alice","evidence":["D1:1"],"category":1}]}]"#,
+        br#"[{"sample_id":"s0","conversation":{"speaker_a":"alice","speaker_b":"bob","session_1":[{"speaker":"alice","dia_id":"D1:1","text":"hi"}],"session_1_date_time":"1:56 pm on 8 May, 2023"},"qa":[{"question":"Who greeted?","answer":"alice","evidence":["D1:1"],"category":1}]}]"#,
     );
     save_manifest_to_path(&manifest, &manifest_path).unwrap();
 
@@ -1662,7 +1662,7 @@ fn cli_memory_suite_runs_only_memory_and_report_has_no_other_category() {
         manifest.get_mut("locomo").unwrap(),
         &datasets_dir,
         "data/locomo10.json",
-        br#"[{"sample_id":"s0","conversation":{"speaker_a":"alice","speaker_b":"bob","session_1":[{"speaker":"alice","dia_id":"D1:1","text":"hi"}]},"qa":[{"question":"Who greeted?","answer":"alice","evidence":["D1:1"],"category":1}]}]"#,
+        br#"[{"sample_id":"s0","conversation":{"speaker_a":"alice","speaker_b":"bob","session_1":[{"speaker":"alice","dia_id":"D1:1","text":"hi"}],"session_1_date_time":"1:56 pm on 8 May, 2023"},"qa":[{"question":"Who greeted?","answer":"alice","evidence":["D1:1"],"category":1}]}]"#,
     );
     save_manifest_to_path(&manifest, &manifest_path).unwrap();
 

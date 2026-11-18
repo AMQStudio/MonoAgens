@@ -8,6 +8,7 @@ use monoagens_protocol::{ActorId, Audience, EventId, PlaceId, VisibleScope};
 use serde::Deserialize;
 
 use crate::LabError;
+use crate::datasets::dates::parse_longmemeval_datetime;
 use crate::datasets::framework::{
     ConvertedDataset, Converter, ExternalItem, ExternalPrediction, ExternalProbe, GoldBook,
     GoldEntry, GoldEvidenceRef, HistoryMode, JudgeExecutionConfig, Scorer, ScorerReport,
@@ -49,7 +50,7 @@ impl Converter for LongMemEvalConverter {
     }
 
     fn converter_version(&self) -> &str {
-        "1.0.0"
+        "1.1.0"
     }
 
     fn convert(
@@ -78,27 +79,54 @@ impl Converter for LongMemEvalConverter {
             let opaque_id = format!("lme_{idx:04}");
             let place = PlaceId::new(opaque_id.clone());
             let is_abs = raw_item.question_id.ends_with("_abs");
-            let base_ms: u64 = 1_700_000_000_000 + (idx as u64) * 100_000_000;
+            // Real dates: sessions in chronological order (the file does not keep them sorted),
+            // turns +1 s apart within a session, strictly increasing overall, and the question
+            // asked at `question_date` (moved just after the last turn when the file dates a
+            // session after its question).
+            if raw_item.haystack_dates.len() != raw_item.haystack_sessions.len() {
+                return Err(LabError::Serialization(format!(
+                    "longmemeval {}: {} sessions but {} haystack_dates",
+                    raw_item.question_id,
+                    raw_item.haystack_sessions.len(),
+                    raw_item.haystack_dates.len()
+                )));
+            }
+            let mut sessions: Vec<(u64, usize, Vec<RawLmeTurn>)> = Vec::new();
+            for (s_idx, (session, date)) in raw_item
+                .haystack_sessions
+                .into_iter()
+                .zip(raw_item.haystack_dates.iter())
+                .enumerate()
+            {
+                sessions.push((parse_longmemeval_datetime(date)?, s_idx, session));
+            }
+            sessions.sort_by_key(|(ms, s_idx, _)| (*ms, *s_idx));
 
             let mut history = Vec::new();
             let mut gold_evidence = Vec::new();
+            let mut last_ts: Option<u64> = None;
 
-            for (s_idx, session) in raw_item.haystack_sessions.into_iter().enumerate() {
-                let session_ms = base_ms + (s_idx as u64) * 86_400_000;
+            for (session_ms, _, session) in sessions {
                 for (t_idx, turn) in session.into_iter().enumerate() {
                     let turn_idx = history.len();
-                    let actor = if turn.role == "assistant" {
-                        "prior_assistant"
+                    let (actor, addressee) = if turn.role == "assistant" {
+                        (&prior_assistant, &user)
                     } else {
-                        "user"
+                        (&user, &prior_assistant)
                     };
-                    history.push(make_text_percept(
-                        actor,
+                    let ts =
+                        (session_ms + (t_idx as u64) * 1_000).max(last_ts.map_or(0, |t| t + 1_000));
+                    last_ts = Some(ts);
+                    let mut percept = make_text_percept(
+                        actor.as_str(),
                         place.as_str(),
                         hist_aud.members.iter().cloned(),
-                        session_ms + (t_idx as u64) * 1_000,
+                        ts,
                         turn.content,
-                    ));
+                    );
+                    // A two-party chat: each turn is addressed to the other party.
+                    percept.addressees = vec![addressee.clone()];
+                    history.push(percept);
                     if turn.has_answer == Some(true) {
                         gold_evidence.push(GoldEvidenceRef {
                             turn_index: turn_idx,
@@ -109,7 +137,13 @@ impl Converter for LongMemEvalConverter {
                 }
             }
 
-            let probe_ts = base_ms + (raw_item.haystack_dates.len().max(1) as u64 + 1) * 86_400_000;
+            let after_history = last_ts.map_or(0, |t| t + 1_000);
+            let question_ms = match raw_item.question_date.as_deref() {
+                Some(qd) => parse_longmemeval_datetime(qd)?,
+                None => after_history,
+            };
+            let probe_ts = question_ms.max(after_history);
+            let probe_time_moved = probe_ts != question_ms;
             let probe = ExternalProbe {
                 probe_id: "q0".to_owned(),
                 percept: make_text_percept(
@@ -135,6 +169,10 @@ impl Converter for LongMemEvalConverter {
             if let Some(qd) = raw_item.question_date {
                 metadata.insert("question_date".to_owned(), qd);
             }
+            metadata.insert(
+                "probe_time_moved_after_history".to_owned(),
+                probe_time_moved.to_string(),
+            );
             if !raw_item.answer_session_ids.is_empty() {
                 metadata.insert(
                     "answer_session_ids".to_owned(),

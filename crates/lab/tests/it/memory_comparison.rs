@@ -524,6 +524,7 @@ fn suite_options(tmp: &TempDir, proxy_url: String, phase: MemoryPhase) -> Memory
         seed: 1,
         phase,
         live: true,
+        render_dry_run: false,
         profile: Some(neutral_test_profile(&proxy_url)),
         max_cost_usd: Some(100.0),
         provider_endpoint: Some(proxy_url.clone()),
@@ -1053,7 +1054,7 @@ fn synthetic_item(id: &str, qtype: &str, is_abs: bool) -> ExternalItem {
     let soul = ActorId::new("soul");
     let user = ActorId::new("user");
     let place = PlaceId::new("p");
-    let aud = Audience::new([user, soul]);
+    let aud = Audience::new([user, soul.clone()]);
     ExternalItem {
         item_id: id.to_owned(),
         cluster_id: id.to_owned(),
@@ -1960,4 +1961,162 @@ reasoning_tokens = "custom_usage.reasoning"
         serde_json::from_str(ledger_raw.lines().next().expect("line")).expect("parse ledger");
     assert_eq!(entry.cached_input_tokens, Some(60));
     assert_eq!(entry.reasoning_tokens, Some(10));
+}
+
+#[test]
+fn standalone_render_dry_run_makes_no_network_calls_and_writes_summary_and_jsonl() {
+    use monoagens_lab::reason_seam::{Embedder, ScriptedEmbedder};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let mut embedder = ScriptedEmbedder::new("test-fixed", 4);
+    embedder.set_fallback(Ok(vec![1.0, 0.0, 0.0, 0.0]));
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind sentinel");
+    listener.set_nonblocking(true).expect("nonblocking");
+    let addr = listener.local_addr().expect("addr");
+    let hit = Arc::new(AtomicBool::new(false));
+    let hit_clone = Arc::clone(&hit);
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_clone = Arc::clone(&stop);
+    let monitor = std::thread::spawn(move || {
+        while !stop_clone.load(Ordering::SeqCst) {
+            if listener.accept().is_ok() {
+                hit_clone.store(true, Ordering::SeqCst);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    });
+
+    let tmp = TempDir::new().unwrap();
+    let mut opts = suite_options(&tmp, format!("http://{addr}/v1"), MemoryPhase::Pilot);
+    opts.live = false;
+    opts.render_dry_run = true;
+    opts.max_cost_usd = None;
+    opts.provider_endpoint = None;
+    opts.judge_endpoint = None;
+    opts.embedder = Some(Arc::new(embedder) as Arc<dyn Embedder>);
+
+    let outcome = monoagens_lab::memory::run_memory_suite(&opts).expect("dry run succeeds");
+    stop.store(true, Ordering::SeqCst);
+    monitor.join().expect("monitor");
+
+    assert!(
+        !hit.load(Ordering::SeqCst),
+        "standalone render dry run must not make any network call to model endpoint"
+    );
+    let jsonl = outcome.run_dir.join("dry_run/locomo__dry_run.jsonl");
+    let summary = outcome.run_dir.join("dry_run/summary.md");
+    assert!(jsonl.exists(), "expected {}", jsonl.display());
+    assert!(summary.exists(), "expected {}", summary.display());
+    let summary_text = fs::read_to_string(&summary).expect("read summary.md");
+    assert!(summary_text.contains("| locomo |"));
+    assert!(summary_text.contains("### Purpose: `classify`"));
+    assert!(summary_text.contains("### Purpose: `reason`"));
+}
+
+#[test]
+fn render_dry_run_renders_classify_with_event_and_condition_text() {
+    use monoagens_lab::memory::run_render_dry_run_gate_with_embedder;
+    use monoagens_lab::reason_seam::ScriptedEmbedder;
+    use monoagens_protocol::{
+        CapabilityDescriptor, CapabilityFlags, CapabilityId, CapabilitySchemaHash,
+    };
+
+    let mut embedder = ScriptedEmbedder::new("test-fixed", 4);
+    embedder.set_fallback(Ok(vec![1.0, 0.0, 0.0, 0.0]));
+
+    let soul = ActorId::new("soul");
+    let user = ActorId::new("user");
+    let place = PlaceId::new("p-clf");
+    let aud = Audience::new([user, soul.clone()]);
+    let cond_text = "First turn condition marker alpha-99";
+    let event_text = "Second turn follow-up event beta-42";
+    let mut p0 = make_text_percept(
+        "user",
+        "p-clf",
+        aud.members.iter().cloned(),
+        1_000,
+        cond_text,
+    );
+    p0.addressees = vec![soul];
+    let history = vec![
+        p0,
+        make_text_percept(
+            "user",
+            "p-clf",
+            aud.members.iter().cloned(),
+            2_000,
+            event_text,
+        ),
+    ];
+    let item = ExternalItem {
+        item_id: "clf_item".to_owned(),
+        cluster_id: "clf_item".to_owned(),
+        strata_key: "test".to_owned(),
+        history,
+        checkpoint_group: None,
+        probes: vec![monoagens_lab::datasets::ExternalProbe {
+            probe_id: "q1".to_owned(),
+            percept: make_text_percept(
+                "user",
+                "p-clf",
+                aud.members.iter().cloned(),
+                50_000_000,
+                "What happened?",
+            ),
+            isolated_checkpoint: true,
+            probe_scope: VisibleScope::new(aud, Some(place.clone())),
+            expected_capability: None,
+        }],
+        history_mode: HistoryMode::StaticSilent,
+        capabilities: vec![CapabilityDescriptor {
+            id: CapabilityId::new("a.speak"),
+            description: "Speak".to_owned(),
+            places: vec![place],
+            flags: CapabilityFlags {
+                communicative: true,
+                identity_changing: false,
+                irreversible: false,
+            },
+            typical_latency_ms: 1,
+            capability_schema_hash: CapabilitySchemaHash::new("h-clf"),
+            sensed_effect: None,
+        }],
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let prior = monoagens_store::load_prior_or_default(None).unwrap().prior;
+    let written = run_render_dry_run_gate_with_embedder(
+        &[("locomo".to_owned(), &item)],
+        dir.path(),
+        &prior,
+        1,
+        Some(&embedder),
+    )
+    .expect("dry run with embedder should render classify");
+    assert_eq!(written.len(), 1);
+    let raw = fs::read_to_string(&written[0]).expect("read dry_run jsonl");
+    let classify_lines: Vec<serde_json::Value> = raw
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("json line"))
+        .filter(|v: &serde_json::Value| v["purpose"] == "classify")
+        .collect();
+    assert!(
+        !classify_lines.is_empty(),
+        "expected at least one classify request in {}",
+        written[0].display()
+    );
+    let user_prompt = classify_lines[0]["user_prompt"]
+        .as_str()
+        .expect("user_prompt string");
+    assert!(
+        user_prompt.contains(cond_text),
+        "classify prompt must contain condition text: {user_prompt}"
+    );
+    assert!(
+        user_prompt.contains(event_text),
+        "classify prompt must contain event text: {user_prompt}"
+    );
 }

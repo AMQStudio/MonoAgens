@@ -18,9 +18,9 @@ use crate::consolidation::{
 };
 use crate::context::{
     AutoRecallTriggerState, CommitmentSlotItem, ContextSections, ContextSegment, ContextSlotKind,
-    CoreSelfSnapshot, PrincipleSeverity, ProcedureEntry, SelectedToolSet, ToolSelectionBudget,
-    calibrate_confidence_0_20, compute_report_threshold, enforce_context_budget,
-    segment_from_event, segment_from_recalled, select_tools_for_context,
+    CoreSelfSnapshot, ModelTask, PrincipleSeverity, ProcedureEntry, SelectedToolSet,
+    ToolSelectionBudget, calibrate_confidence_0_20, compute_report_threshold,
+    enforce_context_budget, segment_from_event, segment_from_recalled, select_tools_for_context,
 };
 use crate::event::{
     DecisionOutcome, DoorKind, EventDetail, EventKind, EventRecord, ExpectationLifecycleState,
@@ -1705,33 +1705,63 @@ pub(crate) fn execute_turn<S: Store>(
                             }
 
                             // Trigger post-sleep `consolidate` verbatim-vs-gist verification (`10.2`).
+                            // The verdict is a classification (faithful / conflict) over the
+                            // gist and its sources, so it is requested as `Classify`; a
+                            // `Consolidate` request would be answered with a new gist instead.
                             if !about_ids.is_empty() {
-                                core.state_mut().expectation_book.pending_classify.insert(
-                                    stored_thought.id,
-                                    PendingClassifyKind::GistVerification {
-                                        gist_id: stored_thought.id,
-                                        source_ids: about_ids.clone(),
-                                    },
-                                );
-                                let mut items = vec![stored_thought.id];
-                                items.extend(about_ids.iter().copied());
                                 let scope = core.state().visible_scope_for(
                                     stored_thought.audience.clone(),
-                                    Some(place.clone()),
+                                    Some(stored_thought.place.clone()),
                                     now,
                                 );
-                                let plan = build_consolidate_plan(
-                                    core,
-                                    &stored_thought,
-                                    place,
-                                    scope,
-                                    now,
-                                    items,
-                                );
-                                effects.push(Effect::Model {
-                                    purpose: ModelPurpose::Consolidate,
-                                    plan,
-                                });
+                                let mut sources = Vec::new();
+                                let mut material_err = None;
+                                for &sid in &about_ids {
+                                    match task_segment_for(core, sid, &scope, now) {
+                                        Ok(Some(seg)) => sources.push(seg),
+                                        Ok(None) => {}
+                                        Err(e) => material_err = Some(e),
+                                    }
+                                }
+                                let mut items = vec![stored_thought.id];
+                                items.extend(about_ids.iter().copied());
+                                let planned = match material_err {
+                                    Some(e) => Err(e),
+                                    None if sources.is_empty() => {
+                                        Err("no source message of the gist is available".to_owned())
+                                    }
+                                    None => build_task_plan(
+                                        core,
+                                        &stored_thought,
+                                        ModelTask::GistFaithful { sources },
+                                        None,
+                                        now,
+                                        items,
+                                    ),
+                                };
+                                match planned {
+                                    Ok(plan) => {
+                                        core.state_mut().expectation_book.pending_classify.insert(
+                                            stored_thought.id,
+                                            PendingClassifyKind::GistVerification {
+                                                gist_id: stored_thought.id,
+                                                source_ids: about_ids.clone(),
+                                            },
+                                        );
+                                        effects.push(Effect::Model {
+                                            purpose: ModelPurpose::Classify,
+                                            plan,
+                                        });
+                                    }
+                                    Err(reason) => {
+                                        record_classify_refusal(
+                                            core,
+                                            &stored_thought,
+                                            now,
+                                            &reason,
+                                        )?;
+                                    }
+                                }
                             }
 
                             // Update active PendingSleepRun and finalize SleepRun if all episodes finished.
@@ -2957,7 +2987,14 @@ fn assemble_full_context_plan<S: Store>(
             obs_candidates.push(rec);
         }
 
-        if &rec.place == place && !recalled_set.contains(&rec.id) {
+        // The place tail is what was said and done at the place: percepts and the soul's own
+        // actions. Core bookkeeping (decisions, withholds, expectation records, model calls,
+        // receipts) is never conversation and must not displace it or leak gate internals.
+        if &rec.place == place
+            && !recalled_set.contains(&rec.id)
+            && matches!(rec.kind, EventKind::Percept | EventKind::Action)
+            && !rec.payload.is_empty()
+        {
             place_tail_candidates.push(rec);
         }
     }
@@ -3034,6 +3071,7 @@ fn assemble_full_context_plan<S: Store>(
         knowledge_cutoff: core.state().knowledge_cutoff.clone(),
         anchor_check_due,
         trigger: trigger_seg,
+        task: None,
         budget_bytes: core.prior().context_budget_bytes,
         total_estimated_bytes: 0,
     };
@@ -4842,6 +4880,84 @@ fn select_caps_for_scope<S: Store>(
     select_tools_for_context(&[], &[], &catalog, &procs, scope, now, tool_budget)
 }
 
+/// Segment for task material (an earlier message, a gist source, an episode event), or `None`
+/// when the record is not conversation (bookkeeping, empty payload) or is outside `scope`.
+fn task_segment_for<S: Store>(
+    core: &Core<S>,
+    id: EventId,
+    scope: &VisibleScope,
+    now: Time,
+) -> Result<Option<ContextSegment>, String> {
+    let rec = core
+        .store()
+        .get(id)
+        .map_err(|e| format!("task material {id} unreadable: {e}"))?;
+    let Some(rec) = rec else {
+        return Ok(None);
+    };
+    let erased = core
+        .state()
+        .memory_entries
+        .get(&rec.id)
+        .is_some_and(|m| m.erased);
+    if erased
+        || rec.payload.is_empty()
+        || !matches!(
+            rec.kind,
+            EventKind::Percept | EventKind::Action | EventKind::Thought
+        )
+        || !scope.allows(&rec.audience, Some(rec.id), now)
+    {
+        return Ok(None);
+    }
+    let soul_id = core.state().soul_actor_id.clone();
+    let basis = core.state().memory_entries.get(&rec.id).map(|m| m.basis);
+    Ok(Some(segment_from_event(
+        ContextSlotKind::Task,
+        &rec,
+        &soul_id,
+        basis,
+        false,
+        "task_material",
+    )))
+}
+
+/// Builds the classify task for an expectation and its triggering event.
+fn classify_task_for<S: Store>(
+    core: &Core<S>,
+    trigger: &EventRecord,
+    exp: &ExpectationRecord,
+    now: Time,
+) -> Result<ModelTask, String> {
+    let is_silence = exp
+        .response_spec
+        .as_ref()
+        .is_some_and(|s| s.is_judged_silence);
+    if is_silence {
+        let scope = core.state().visible_scope_for(
+            trigger.audience.clone(),
+            Some(trigger.place.clone()),
+            now,
+        );
+        return match task_segment_for(core, exp.target_event_id, &scope, now)? {
+            Some(earlier) => Ok(ModelTask::SilenceReask { earlier }),
+            None => Err("the message the soul stayed silent on is not available".to_owned()),
+        };
+    }
+    if exp.condition.trim().is_empty() {
+        return Err("classification condition text is empty".to_owned());
+    }
+    if exp.kind == ExpectKind::Goal {
+        Ok(ModelTask::GoalProgress {
+            condition: exp.condition.clone(),
+        })
+    } else {
+        Ok(ModelTask::ConditionMet {
+            condition: exp.condition.clone(),
+        })
+    }
+}
+
 fn build_classify_plan<S: Store>(
     core: &Core<S>,
     trigger: &EventRecord,
@@ -4849,9 +4965,20 @@ fn build_classify_plan<S: Store>(
     now: Time,
     items: Vec<EventId>,
 ) -> Result<ContextPlan, String> {
-    if exp.condition.trim().is_empty() {
-        return Err("classification condition text is empty".to_owned());
-    }
+    let task = classify_task_for(core, trigger, exp, now)?;
+    let commitment = (!matches!(task, ModelTask::SilenceReask { .. })).then_some(exp);
+    build_task_plan(core, trigger, task, commitment, now, items)
+}
+
+/// Builds a non-reasoning plan carrying `task`, the trigger and (optionally) one commitment.
+fn build_task_plan<S: Store>(
+    core: &Core<S>,
+    trigger: &EventRecord,
+    task: ModelTask,
+    commitment: Option<&ExpectationRecord>,
+    now: Time,
+    items: Vec<EventId>,
+) -> Result<ContextPlan, String> {
     if trigger.payload.as_bytes().is_empty() {
         return Err("classification trigger event has empty content".to_owned());
     }
@@ -4874,17 +5001,20 @@ fn build_classify_plan<S: Store>(
         false,
         "trigger",
     ));
-    let commitments = vec![CommitmentSlotItem {
-        expectation_id: exp.expectation_id,
-        kind: exp.kind,
-        due_ms: exp.due_ms,
-        expiry_ms: exp.expiry_ms,
-        places: exp.places.clone(),
-        people: exp.people.clone(),
-        is_fired_or_overdue: exp.due_ms <= now || exp.is_overdue || exp.due_woken,
-        condition: exp.condition.clone(),
-        estimated_bytes: 96 + exp.condition.len(),
-    }];
+    let commitments = commitment
+        .map(|exp| CommitmentSlotItem {
+            expectation_id: exp.expectation_id,
+            kind: exp.kind,
+            due_ms: exp.due_ms,
+            expiry_ms: exp.expiry_ms,
+            places: exp.places.clone(),
+            people: exp.people.clone(),
+            is_fired_or_overdue: exp.due_ms <= now || exp.is_overdue || exp.due_woken,
+            condition: exp.condition.clone(),
+            estimated_bytes: 96 + exp.condition.len(),
+        })
+        .into_iter()
+        .collect();
     let sections = ContextSections {
         slot_0_anchor: core.state().identity_anchor.clone(),
         slot_0_principles: core.state().principles.clone(),
@@ -4894,6 +5024,7 @@ fn build_classify_plan<S: Store>(
         now_ms: now,
         knowledge_cutoff: core.state().knowledge_cutoff.clone(),
         trigger: trigger_seg,
+        task: Some(task),
         budget_bytes: core.prior().context_budget_bytes,
         ..ContextSections::default()
     };
@@ -6125,6 +6256,12 @@ fn emit_consolidate_effects_for_episodes<S: Store>(
                     .first()
                     .and_then(|id| core.store().get(*id).ok().flatten())
             }) {
+            let mut events = Vec::new();
+            for &eid in &ep.event_ids {
+                if let Ok(Some(seg)) = task_segment_for(core, eid, &scope, now) {
+                    events.push(seg);
+                }
+            }
             let mut p = build_consolidate_plan(
                 core,
                 &trigger_rec,
@@ -6133,6 +6270,7 @@ fn emit_consolidate_effects_for_episodes<S: Store>(
                 now,
                 ep.event_ids.clone(),
             );
+            p.sections.task = Some(ModelTask::ConsolidateEpisode { events });
             p.trigger_event_id = Some(ep.episode_id);
             p
         } else {

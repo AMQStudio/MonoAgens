@@ -8,6 +8,7 @@ use monoagens_protocol::{ActorId, Audience, PlaceId, VisibleScope};
 use serde::Deserialize;
 
 use crate::LabError;
+use crate::datasets::dates::parse_locomo_datetime;
 use crate::datasets::framework::{
     ConvertedDataset, Converter, ExternalItem, ExternalPrediction, ExternalProbe, GoldBook,
     GoldEntry, GoldEvidenceRef, HistoryMode, JudgeExecutionConfig, Scorer, ScorerReport,
@@ -55,7 +56,7 @@ impl Converter for LocomoConverter {
     }
 
     fn converter_version(&self) -> &str {
-        "1.0.0"
+        "1.1.0"
     }
 
     fn convert(
@@ -91,7 +92,7 @@ impl Converter for LocomoConverter {
 
             let speaker_a = ActorId::new(&speaker_a_str);
             let speaker_b = ActorId::new(&speaker_b_str);
-            let hist_aud = Audience::new([speaker_a.clone(), speaker_b, soul.clone()]);
+            let hist_aud = Audience::new([speaker_a.clone(), speaker_b.clone(), soul.clone()]);
             let probe_aud = Audience::new([speaker_a.clone(), soul.clone()]);
 
             // Collect ordered session_1, session_2, ... keys deterministically.
@@ -108,16 +109,29 @@ impl Converter for LocomoConverter {
 
             let mut history = Vec::new();
             let mut dia_to_turn_idx: BTreeMap<String, usize> = BTreeMap::new();
-            let base_ms: u64 = 1_700_000_000_000;
+            // Real session dates (`session_<n>_date_time`): temporal questions are about them.
+            // Turns get a deterministic +1 s offset (the dataset dates sessions, not turns), kept
+            // strictly increasing across sessions.
+            let mut last_ts: Option<u64> = None;
 
-            for (s_pos, s_num) in session_nums.iter().enumerate() {
+            for s_num in &session_nums {
                 let key = format!("session_{s_num}");
                 let Some(turns_val) = sample.conversation.get(&key) else {
                     continue;
                 };
                 let turns: Vec<RawLocomoTurn> =
-                    serde_json::from_value(turns_val.clone()).unwrap_or_default();
-                let session_base_ms = base_ms + (s_pos as u64) * 86_400_000;
+                    serde_json::from_value(turns_val.clone()).map_err(|e| {
+                        LabError::Serialization(format!("locomo {conv_id} {key} turns: {e}"))
+                    })?;
+                let date_key = format!("session_{s_num}_date_time");
+                let date_raw = sample
+                    .conversation
+                    .get(&date_key)
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        LabError::Serialization(format!("locomo {conv_id} lacks {date_key}"))
+                    })?;
+                let session_base_ms = parse_locomo_datetime(date_raw)?;
 
                 for (t_idx, turn) in turns.into_iter().enumerate() {
                     let global_turn = history.len();
@@ -130,17 +144,28 @@ impl Converter for LocomoConverter {
                         }
                         _ => turn.text,
                     };
-                    history.push(make_text_percept(
+                    let ts = (session_base_ms + (t_idx as u64) * 1_000)
+                        .max(last_ts.map_or(0, |t| t + 1_000));
+                    last_ts = Some(ts);
+                    let mut percept = make_text_percept(
                         &turn.speaker,
                         place.as_str(),
                         hist_aud.members.iter().cloned(),
-                        session_base_ms + (t_idx as u64) * 1_000,
+                        ts,
                         payload_text,
-                    ));
+                    );
+                    // A two-person conversation: each turn is addressed to the other speaker.
+                    if turn.speaker == speaker_a_str {
+                        percept.addressees = vec![speaker_b.clone()];
+                    } else if turn.speaker == speaker_b_str {
+                        percept.addressees = vec![speaker_a.clone()];
+                    }
+                    history.push(percept);
                 }
             }
 
-            let probe_base_ms = base_ms + (session_nums.len() as u64 + 1) * 86_400_000;
+            // LoCoMo has no question date: questions are asked one day after the last session.
+            let probe_base_ms = last_ts.unwrap_or(0) + 86_400_000;
             let mut probes = Vec::with_capacity(sample.qa.len());
             let mut cats_seen = BTreeSet::new();
 

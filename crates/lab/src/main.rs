@@ -683,6 +683,7 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
     let mut runs_root: Option<PathBuf> = None;
     let mut seed: u64 = 1;
     let mut live = false;
+    let mut render_dry_run = false;
     let mut max_cost_usd: Option<f64> = None;
     let mut model_endpoint: Option<String> = None;
     let mut model_name = "scripted".to_owned();
@@ -762,6 +763,7 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
                     .map_err(|e| format!("invalid --seed '{val}': {e}"))?;
             }
             "--live" => live = true,
+            "--render-dry-run" => render_dry_run = true,
             "--runs-root" => {
                 i += 1;
                 runs_root = Some(PathBuf::from(
@@ -1137,8 +1139,8 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
     };
 
     if memory_suite {
-        if !live {
-            return Err("memory-comparison requires --live".to_owned());
+        if !live && !render_dry_run {
+            return Err("memory-comparison requires --live or --render-dry-run".to_owned());
         }
         let phase = if memory_pilot {
             monoagens_lab::memory::MemoryPhase::Pilot
@@ -1148,6 +1150,53 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
         let run_dir = out_dir
             .clone()
             .ok_or_else(|| "memory-comparison requires an output directory".to_owned())?;
+        let profile = loaded_profile.as_ref().ok_or_else(|| {
+            if live {
+                "--live memory-comparison requires --profile <path>".to_owned()
+            } else {
+                "--render-dry-run memory-comparison requires --profile <path>".to_owned()
+            }
+        })?;
+        let embedder: Option<std::sync::Arc<dyn Embedder>> =
+            configured_embedder.map(|e| std::sync::Arc::new(e) as std::sync::Arc<dyn Embedder>);
+        if render_dry_run && !live {
+            if embedder.is_none() {
+                return Err(
+                    "render dry run requires EmbeddingGemma 2 embedder (cannot run with --allow-no-embedder)"
+                        .to_owned(),
+                );
+            }
+            let memory_opts = monoagens_lab::memory::MemorySuiteOptions {
+                datasets_dir: datasets_dir.clone(),
+                manifest_path: manifest_path.clone(),
+                run_dir: run_dir.clone(),
+                prior: loaded_prior.prior.clone(),
+                seed,
+                phase,
+                live: false,
+                render_dry_run: true,
+                profile: Some(profile.clone()),
+                max_cost_usd: None,
+                provider_endpoint: None,
+                judge_endpoint: None,
+                probe_provider: None,
+                judge: None,
+                embedder,
+                write_report: false,
+                only_datasets: only_ids.clone(),
+                max_items_per_dataset: None,
+                reuse_from: Vec::new(),
+            };
+            let outcome =
+                monoagens_lab::memory::run_memory_suite(&memory_opts).map_err(|e| e.to_string())?;
+            println!(
+                "memory render-dry-run run_dir={} summary={}",
+                outcome.run_dir.display(),
+                outcome.run_dir.join("dry_run/summary.md").display()
+            );
+            drop(sidecar_guard);
+            return Ok(ExitCode::SUCCESS);
+        }
         let proxy_api_key = model_api_key_env
             .as_deref()
             .and_then(|name| env::var(name).ok())
@@ -1160,9 +1209,6 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
                     .to_owned(),
             );
         }
-        let profile = loaded_profile
-            .as_ref()
-            .ok_or_else(|| "--live memory-comparison requires --profile <path>".to_owned())?;
         let proxy_cfg = monoagens_lab::memory::MeteringProxyConfig::from_profile(
             profile,
             proxy_api_key,
@@ -1171,8 +1217,6 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
         .map_err(|e| e.to_string())?;
         let proxy =
             monoagens_lab::memory::MeteringProxy::start(proxy_cfg).map_err(|e| e.to_string())?;
-        let embedder: Option<std::sync::Arc<dyn Embedder>> =
-            configured_embedder.map(|e| std::sync::Arc::new(e) as std::sync::Arc<dyn Embedder>);
         let memory_opts = monoagens_lab::memory::MemorySuiteOptions {
             datasets_dir: datasets_dir.clone(),
             manifest_path: manifest_path.clone(),
@@ -1181,6 +1225,7 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
             seed,
             phase,
             live,
+            render_dry_run,
             profile: Some(profile.clone()),
             max_cost_usd,
             provider_endpoint: Some(proxy.chat_completions_url()),

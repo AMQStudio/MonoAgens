@@ -63,7 +63,7 @@ pub use consolidation::{
 pub use context::{
     AutoRecallTriggerState, CapabilityCatalogEntry, CommitmentSlotItem, ContextSections,
     ContextSegment, ContextSlotKind, CoreSelfCard, CoreSelfSnapshot, DroppedContextItem,
-    IdentityAnchor, MechanismSwitchState, PrincipleAuditVerdict, PrincipleDescriptor,
+    IdentityAnchor, MechanismSwitchState, ModelTask, PrincipleAuditVerdict, PrincipleDescriptor,
     PrincipleSeverity, ProcedureEntry, SelectedToolSet, SelfGuideTemplateEntry, SourceLedgerCard,
     ToolSelectionBudget, TrustSegmentKind, ValveSelfSnapshot, VisibleScopeSummary,
     calibrate_confidence_0_20, classify_trust_segment, compute_report_threshold,

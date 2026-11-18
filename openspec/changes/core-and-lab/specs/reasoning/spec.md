@@ -51,6 +51,10 @@ slot 0, sorted static core capabilities + schema hashes (and `[SELF_GUIDE]` when
 4-pillar `self_card`, commitments, working set, recalled items, place tail, `<now>`, cutoff, and
 Spotlighting trigger (`R-11`, `R-43`).
 
+#### Scenario: The place tail shows conversation only
+- **WHEN** a wake renders the place tail
+- **THEN** it holds only percepts and the soul's actions at the place, never Core bookkeeping (decisions, withholds, expectation records, model calls), so gate internals and embedding vectors never reach the prompt
+
 #### Scenario: Two consecutive wakes
 - **WHEN** two wakes happen with the same identity anchor, runtime self-guide snapshot, and capabilities
 - **THEN** rendered contexts share an identical static cacheable prefix covering slot-0 anchor, `[SELF_GUIDE]` (when active), and sorted capabilities

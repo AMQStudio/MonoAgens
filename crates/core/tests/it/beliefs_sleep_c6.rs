@@ -590,17 +590,37 @@ fn verbatim_vs_gist_supersession_and_min_trust_taint() {
         )
         .unwrap();
 
-    // Verify `Consolidate` post-sleep verification effect was emitted.
-    let gist_id = cons_effects
+    // Verify the post-sleep gist verification is a `Classify` call carrying its sources.
+    let verify_plan = cons_effects
         .iter()
         .find_map(|e| match e {
             Effect::Model {
-                purpose: ModelPurpose::Consolidate,
+                purpose: ModelPurpose::Classify,
                 plan,
-            } => plan.trigger_event_id,
+            } => Some(plan),
             _ => None,
         })
-        .expect("post-sleep consolidate gist verification effect");
+        .expect("post-sleep gist verification classify effect");
+    let gist_id = verify_plan.trigger_event_id.expect("gist trigger");
+    match &verify_plan.sections.task {
+        Some(monoagens_core::ModelTask::GistFaithful { sources }) => {
+            assert_eq!(
+                sources.iter().map(|s| s.event_id).collect::<Vec<_>>(),
+                vec![Some(wake_id)]
+            );
+        }
+        other => panic!("gist verification must carry GistFaithful sources, got {other:?}"),
+    }
+    assert!(
+        !cons_effects.iter().any(|e| matches!(
+            e,
+            Effect::Model {
+                purpose: ModelPurpose::Consolidate,
+                ..
+            }
+        )),
+        "gist verification must not be requested as a new consolidation"
+    );
 
     // Gist must inherit `min(trust)` = Untrusted (`13.2`).
     assert_eq!(

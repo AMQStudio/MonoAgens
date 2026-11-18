@@ -12,7 +12,7 @@ contamination_note = "Public GitHub release since Feb 2024; widely cited in memo
 reason = "10 public conversations (1,986 QAs including Category 5 adversarial; official evaluation.py)."
 split = "all_10_convs"
 checksums_recorded = "pending"
-converter_version = "1.0.0"
+converter_version = "1.1.0"
 scorer_version = "1.0.0"
 
 [[datasets.sources]]
@@ -44,7 +44,7 @@ contamination_note = "Published Oct 2024; mitigated by 115K-1.5M token haystacks
 reason = "Primary split longmemeval_s_cleaned.json (500 independent items; gpt-4o judge)."
 split = "LongMemEval_S"
 checksums_recorded = "source"
-converter_version = "1.0.0"
+converter_version = "1.1.0"
 scorer_version = "1.0.0"
 
 [[datasets.sources]]

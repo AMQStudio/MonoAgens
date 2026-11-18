@@ -218,3 +218,22 @@ expectation or goal it is judged against. A classification plan without both SHA
 #### Scenario: A classification plan is missing its inputs
 - **WHEN** the event or the condition text cannot be rendered for a classification
 - **THEN** no model call is made and the failure is recorded with its reason
+
+#### Scenario: Classifying a possible re-ask after a chosen silence
+- **WHEN** the sender of a message the soul stayed silent on posts again and a classification is requested
+- **THEN** the rendered request contains the earlier message itself (speaker, time, content), the question whether the new message raises that matter again, and the labels; no internal condition tag stands in for it
+
+### Requirement: Every non-reasoning call states its task
+Every classification and consolidation call SHALL carry a task (`ContextSections.task`) that
+`reason` renders as a `[TASK]` block from fixed templates: the question, the material it is
+judged on and the labels Core reads (`met`/`not_met`, `yes`/`no`, `faithful`/`conflict`), or for
+consolidation the episode's events in order and the gist to produce. Reasoning wakes SHALL carry no
+task. Wording and labels live in `reason`, never in Core prose.
+
+#### Scenario: Verifying a new gist
+- **WHEN** sleep produces a gist over source events
+- **THEN** its verification is a classification call whose task lists the source events, never a new consolidation call
+
+#### Scenario: Consolidating an episode
+- **WHEN** sleep consolidates an episode
+- **THEN** the rendered request lists every conversational event of the episode, not only its first

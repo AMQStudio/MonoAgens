@@ -83,6 +83,8 @@ pub struct MemorySuiteOptions {
     pub seed: u64,
     pub phase: MemoryPhase,
     pub live: bool,
+    /// When true, run only the render dry-run gate and exit without live model calls.
+    pub render_dry_run: bool,
     pub profile: Option<RunProfile>,
     pub max_cost_usd: Option<f64>,
     /// Chat-completions endpoint of the metering proxy for MonoAgens.
@@ -655,9 +657,21 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
             "--live run requires --profile <path> (no provider defaults exist in code)".to_owned(),
         ));
     }
+    if opts.render_dry_run && opts.profile.is_none() {
+        return Err(LabError::Protocol(
+            "--render-dry-run requires --profile <path> (no provider defaults exist in code)"
+                .to_owned(),
+        ));
+    }
     if opts.live && opts.max_cost_usd.is_none() {
         return Err(LabError::Protocol(
             "--live memory run requires --max-cost-usd <cap>".to_owned(),
+        ));
+    }
+    if opts.render_dry_run && opts.embedder.is_none() {
+        return Err(LabError::Protocol(
+            "render dry run requires a configured EmbeddingGemma 2 embedder (no hash embedder)"
+                .to_owned(),
         ));
     }
     let profile_model = opts
@@ -753,12 +767,7 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
 
     let mut pilot_ids_by_dataset: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
-    let Some(provider) = live_provider else {
-        return Err(LabError::Protocol(
-            "memory suite requires a live provider (proxy endpoint) or a test provider".to_owned(),
-        ));
-    };
-    if opts.live {
+    if opts.live || opts.render_dry_run {
         let dry_prior = monoagens_store::load_prior_or_default(None)?.prior;
         let mut dry_samples: Vec<(String, crate::datasets::ExternalItem)> = Vec::new();
         for (dataset_id, converter, instruction) in &datasets {
@@ -782,7 +791,7 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
             }
             converted.items.sort_by(|a, b| a.item_id.cmp(&b.item_id));
             let mut sample = converted.items.remove(0);
-            sample.history.truncate(2);
+            sample.history.truncate(60);
             sample.probes.truncate(1);
             dry_samples.push(((*dataset_id).to_owned(), sample));
         }
@@ -790,7 +799,13 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
             .iter()
             .map(|(ds, it)| (ds.clone(), it))
             .collect();
-        let dry_paths = run_render_dry_run_gate(&dry_refs, &opts.run_dir, &dry_prior, opts.seed)?;
+        let dry_paths = run_render_dry_run_gate_with_embedder(
+            &dry_refs,
+            &opts.run_dir,
+            &dry_prior,
+            opts.seed,
+            opts.embedder.as_deref(),
+        )?;
         notes.push(format!(
             "Render dry run passed ({} files) with profile limits classify={}, reason={}, consolidate={}.",
             dry_paths.len(),
@@ -798,7 +813,22 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
             profile_limits.reason,
             profile_limits.consolidate
         ));
+        if opts.render_dry_run && !opts.live {
+            return Ok(MemorySuiteOutcome {
+                run_dir: opts.run_dir.clone(),
+                datasets: Vec::new(),
+                pilot: None,
+                stopped_reason: None,
+                report_md: None,
+                report_html: None,
+            });
+        }
     }
+    let Some(provider) = live_provider else {
+        return Err(LabError::Protocol(
+            "memory suite requires a live provider (proxy endpoint) or a test provider".to_owned(),
+        ));
+    };
     let judge_config = JudgeExecutionConfig {
         live: opts.live,
         judge_model: Some(&profile_model),
@@ -1413,6 +1443,45 @@ pub fn validate_rendered_dry_run_request(
             "render dry run blocked live run: empty trigger ('trigger: none') for purpose '{purpose}', item '{item_id}', turn '{turn_or_probe_id}'"
         )));
     }
+    if user_prompt.contains("\"detail_kind\"") || system_prompt.contains("\"detail_kind\"") {
+        return Err(LabError::Protocol(format!(
+            "render dry run blocked live run: Core bookkeeping records (detail_kind) leaked into the prompt for purpose '{purpose}', item '{item_id}', turn '{turn_or_probe_id}'"
+        )));
+    }
+    let task_block = user_prompt
+        .split_once("[TASK]\n")
+        .and_then(|(_, rest)| rest.split_once("[/TASK]"))
+        .map(|(block, _)| block);
+    match (purpose, task_block) {
+        ("reason", Some(_)) => {
+            return Err(LabError::Protocol(format!(
+                "render dry run blocked live run: a reasoning request carries a [TASK] block, item '{item_id}', turn '{turn_or_probe_id}'"
+            )));
+        }
+        ("classify" | "consolidate", None) => {
+            return Err(LabError::Protocol(format!(
+                "render dry run blocked live run: {purpose} request has no [TASK] block (the model would not know what to judge), item '{item_id}', turn '{turn_or_probe_id}'"
+            )));
+        }
+        ("classify", Some(block)) => {
+            let has_material = ["condition:\n> ", "goal:\n> "]
+                .iter()
+                .any(|m| block.contains(m) && !block.contains(&format!("{m}\n")))
+                || block.contains("earlier:\n[")
+                || block.contains("sources:\n[");
+            if !has_material || !block.contains("label:") {
+                return Err(LabError::Protocol(format!(
+                    "render dry run blocked live run: classify [TASK] lacks the material it judges or its labels, item '{item_id}', turn '{turn_or_probe_id}'"
+                )));
+            }
+        }
+        ("consolidate", Some(block)) if !block.contains("events:\n[") => {
+            return Err(LabError::Protocol(format!(
+                "render dry run blocked live run: consolidate [TASK] lists no episode events, item '{item_id}', turn '{turn_or_probe_id}'"
+            )));
+        }
+        _ => {}
+    }
     let no_static =
         system_prompt.contains("[STATIC_CORE_CAPABILITIES]\n- none\n[/STATIC_CORE_CAPABILITIES]");
     let no_dynamic =
@@ -1432,18 +1501,96 @@ pub fn run_render_dry_run_gate(
     prior: &monoagens_core::Prior,
     seed: u64,
 ) -> Result<Vec<PathBuf>, LabError> {
-    use crate::datasets::framework::{TranscriptRecord, execute_external_item_with_embedder};
-    use crate::reason_seam::model::{ScriptedModelProvider, ScriptedReply, TokenUsage};
+    run_render_dry_run_gate_with_embedder(samples, run_dir, prior, seed, None)
+}
 
-    let dry_dir = run_dir.join("dry_run");
-    fs::create_dir_all(&dry_dir)?;
-    let mut written = Vec::new();
-    let switches = monoagens_core::Switches::all_enabled();
+struct DryRunScriptedProvider {
+    condition_text: String,
+    opened_expectation: std::sync::atomic::AtomicBool,
+}
 
-    for (dataset_id, item) in samples {
-        let mut provider = ScriptedModelProvider::new();
-        provider.set_fallback(ScriptedReply::RawText {
-            text: serde_json::json!({
+impl ModelProvider for DryRunScriptedProvider {
+    fn provider_name(&self) -> &str {
+        "dry-run-scripted"
+    }
+
+    fn invoke(
+        &self,
+        request: &crate::reason_seam::model::ModelRequest,
+    ) -> Result<
+        crate::reason_seam::model::ModelCallSuccess,
+        crate::reason_seam::model::ModelCallFailure,
+    > {
+        use std::sync::atomic::Ordering;
+
+        let raw = if request.purpose == monoagens_core::ModelPurpose::Classify {
+            serde_json::json!({
+                "protocol_version": {"major": 1, "minor": 0},
+                "label": "note",
+                "rationale": "dry-run scripted classify",
+                "score": 0.0
+            })
+            .to_string()
+        } else if request.purpose == monoagens_core::ModelPurpose::Consolidate {
+            // A gist over the episode events listed in [TASK], so gist verification runs too.
+            let user = request
+                .messages
+                .iter()
+                .filter(|m| m.role == crate::reason_seam::model::MessageRole::User)
+                .flat_map(|m| m.parts.iter())
+                .filter_map(|part| match part {
+                    crate::reason_seam::model::MessagePart::Text(t) => Some(t.as_str()),
+                    crate::reason_seam::model::MessagePart::Attachment(_) => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let task = user
+                .split_once("[TASK]\n")
+                .and_then(|(_, rest)| rest.split_once("[/TASK]"))
+                .map_or("", |(block, _)| block);
+            let about_ids: Vec<u64> = task
+                .lines()
+                .filter_map(|l| l.strip_prefix("id="))
+                .filter_map(|l| l.split_whitespace().next())
+                .filter_map(|id| id.parse().ok())
+                .collect();
+            serde_json::json!({
+                "protocol_version": {"major": 1, "minor": 0},
+                "acts": [{
+                    "act": "consolidate",
+                    "output": {
+                        "consolidate_kind": "gist",
+                        "summary": "dry-run scripted gist of the episode",
+                        "about_ids": about_ids,
+                        "places": [],
+                        "people": [],
+                        "domain": null
+                    }
+                }]
+            })
+            .to_string()
+        } else if request.purpose == monoagens_core::ModelPurpose::Reason
+            && !self.opened_expectation.swap(true, Ordering::SeqCst)
+        {
+            serde_json::json!({
+                "protocol_version": {"major": 1, "minor": 0},
+                "acts": [{
+                    "act": "expect",
+                    "expect_kind": "goal",
+                    "about_ids": [request.request_id.as_u64()],
+                    "places": [],
+                    "people": [],
+                    "condition": self.condition_text,
+                    "due_ms": null,
+                    "expiry_ms": 9_999_999_999_999_i64,
+                    "recurrence": null,
+                    "promise_meta": null,
+                    "domain": null
+                }]
+            })
+            .to_string()
+        } else {
+            serde_json::json!({
                 "protocol_version": {"major": 1, "minor": 0},
                 "acts": [{
                     "act": "think",
@@ -1453,10 +1600,109 @@ pub fn run_render_dry_run_gate(
                     "used_ids": []
                 }]
             })
-            .to_string(),
-            usage: TokenUsage::default(),
-            latency_ms: 1,
-        });
+            .to_string()
+        };
+
+        let output = if request.purpose == monoagens_core::ModelPurpose::Classify {
+            let verdict = crate::reason_seam::parse_classification_verdict(&raw).map_err(|fw| {
+                crate::reason_seam::model::ModelCallFailure {
+                    class: crate::reason_seam::model::ProviderFailureClass::InvalidOutput,
+                    record: Box::new(crate::reason_seam::model::ModelCallRecord {
+                        request_id: request.request_id,
+                        purpose: request.purpose,
+                        provider: self.provider_name().to_owned(),
+                        model: request.model.clone(),
+                        usage: None,
+                        latency_ms: 1,
+                        outcome: crate::reason_seam::model::CallOutcome::Failed(
+                            crate::reason_seam::model::ProviderFailureClass::InvalidOutput,
+                        ),
+                        strict_schema: true,
+                    }),
+                    status_code: Some(200),
+                    failed_wake: Some(Box::new(fw.clone())),
+                    detail: fw.to_string(),
+                }
+            })?;
+            crate::reason_seam::model::ModelOutput::Verdict(verdict)
+        } else {
+            let acts = crate::reason_seam::parse_thought_output(&raw).map_err(|fw| {
+                crate::reason_seam::model::ModelCallFailure {
+                    class: crate::reason_seam::model::ProviderFailureClass::InvalidOutput,
+                    record: Box::new(crate::reason_seam::model::ModelCallRecord {
+                        request_id: request.request_id,
+                        purpose: request.purpose,
+                        provider: self.provider_name().to_owned(),
+                        model: request.model.clone(),
+                        usage: None,
+                        latency_ms: 1,
+                        outcome: crate::reason_seam::model::CallOutcome::Failed(
+                            crate::reason_seam::model::ProviderFailureClass::InvalidOutput,
+                        ),
+                        strict_schema: true,
+                    }),
+                    status_code: Some(200),
+                    failed_wake: Some(Box::new(fw.clone())),
+                    detail: fw.to_string(),
+                }
+            })?;
+            crate::reason_seam::model::ModelOutput::ThoughtActs(acts)
+        };
+
+        Ok(crate::reason_seam::model::ModelCallSuccess {
+            record: crate::reason_seam::model::ModelCallRecord {
+                request_id: request.request_id,
+                purpose: request.purpose,
+                provider: self.provider_name().to_owned(),
+                model: request.model.clone(),
+                usage: Some(crate::reason_seam::model::TokenUsage::default()),
+                latency_ms: 1,
+                outcome: crate::reason_seam::model::CallOutcome::Success,
+                strict_schema: true,
+            },
+            output,
+            raw_text: raw,
+        })
+    }
+}
+
+struct DryRunExample {
+    dataset_id: String,
+    turn_or_probe_id: String,
+    system_prompt: String,
+    user_prompt: String,
+}
+
+/// Renders a no-network scripted dry run over sample items with an optional semantic embedder,
+/// writing `dry_run/<dataset>__dry_run.jsonl` and `dry_run/summary.md`.
+pub fn run_render_dry_run_gate_with_embedder(
+    samples: &[(String, &crate::datasets::ExternalItem)],
+    run_dir: &Path,
+    prior: &monoagens_core::Prior,
+    seed: u64,
+    embedder: Option<&dyn Embedder>,
+) -> Result<Vec<PathBuf>, LabError> {
+    use crate::datasets::framework::{TranscriptRecord, execute_external_item_with_embedder};
+    use std::sync::atomic::AtomicBool;
+
+    let dry_dir = run_dir.join("dry_run");
+    fs::create_dir_all(&dry_dir)?;
+    let mut written = Vec::new();
+    let switches = monoagens_core::Switches::all_enabled();
+    let mut counts_by_dataset: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
+    let mut examples_by_purpose: BTreeMap<String, DryRunExample> = BTreeMap::new();
+
+    for (dataset_id, item) in samples {
+        let condition_text = item
+            .history
+            .iter()
+            .map(|p| String::from_utf8_lossy(p.payload.as_bytes()).into_owned())
+            .find(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "user follows up on the conversation".to_owned());
+        let provider = DryRunScriptedProvider {
+            condition_text,
+            opened_expectation: AtomicBool::new(false),
+        };
         let mut guard = crate::CostGuard::default();
         let exec = execute_external_item_with_embedder(
             item,
@@ -1465,15 +1711,16 @@ pub fn run_render_dry_run_gate(
             seed,
             &provider,
             "dry-run-scripted",
-            false,
+            true,
             &mut guard,
-            None,
+            embedder,
             None,
             Some(30_000),
             Some(1_024),
         )?;
         let out_path = dry_dir.join(format!("{dataset_id}__dry_run.jsonl"));
         let mut lines = String::new();
+        let ds_counts = counts_by_dataset.entry(dataset_id.clone()).or_default();
         for rec in &exec.transcript_events {
             if let TranscriptRecord::ModelCall {
                 purpose,
@@ -1490,6 +1737,15 @@ pub fn run_render_dry_run_gate(
                     system_prompt,
                     user_prompt,
                 )?;
+                *ds_counts.entry(purpose.clone()).or_insert(0) += 1;
+                examples_by_purpose
+                    .entry(purpose.clone())
+                    .or_insert_with(|| DryRunExample {
+                        dataset_id: dataset_id.clone(),
+                        turn_or_probe_id: turn_or_probe_id.clone(),
+                        system_prompt: system_prompt.clone(),
+                        user_prompt: user_prompt.clone(),
+                    });
                 let line = serde_json::to_string(rec)
                     .map_err(|e| LabError::Serialization(e.to_string()))?;
                 lines.push_str(&line);
@@ -1498,6 +1754,43 @@ pub fn run_render_dry_run_gate(
         }
         fs::write(&out_path, lines)?;
         written.push(out_path);
+
+        if embedder.is_some() && ds_counts.get("classify").copied().unwrap_or(0) == 0 {
+            return Err(LabError::Protocol(format!(
+                "render dry run failed for dataset '{dataset_id}' (item '{}'): no 'classify' request was rendered after {} history turns and {} probes (reason: free-text expectation did not trigger Classify; check embedder embeddings or wake_gate_lo)",
+                item.item_id,
+                item.history.len(),
+                item.probes.len()
+            )));
+        }
     }
+
+    let mut summary =
+        String::from("# Render Dry-Run Summary\n\n## Counts by Purpose and Dataset\n\n");
+    summary.push_str("| Dataset | reason | classify | consolidate | Total |\n");
+    summary.push_str("| --- | ---: | ---: | ---: | ---: |\n");
+    for (dataset_id, counts) in &counts_by_dataset {
+        let reason_n = counts.get("reason").copied().unwrap_or(0);
+        let classify_n = counts.get("classify").copied().unwrap_or(0);
+        let consolidate_n = counts.get("consolidate").copied().unwrap_or(0);
+        let total = reason_n + classify_n + consolidate_n;
+        summary.push_str(&format!(
+            "| {dataset_id} | {reason_n} | {classify_n} | {consolidate_n} | {total} |\n"
+        ));
+    }
+    summary.push_str("\n## Example Requests (One Per Purpose)\n");
+    for (purpose, ex) in &examples_by_purpose {
+        summary.push_str(&format!(
+            "\n### Purpose: `{purpose}` (dataset: `{}`, turn/probe: `{}`)\n\n",
+            ex.dataset_id, ex.turn_or_probe_id
+        ));
+        summary.push_str("**System Prompt**\n\n```text\n");
+        summary.push_str(&ex.system_prompt);
+        summary.push_str("\n```\n\n**User Prompt**\n\n```text\n");
+        summary.push_str(&ex.user_prompt);
+        summary.push_str("\n```\n");
+    }
+    fs::write(dry_dir.join("summary.md"), summary)?;
+
     Ok(written)
 }

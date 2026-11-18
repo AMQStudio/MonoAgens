@@ -38,6 +38,18 @@ the owner's approval and with an explicit `--max-cost-usd`.
 - **WHEN** the phase 0 pilot completes
 - **THEN** the run stops and reports measured tokens, cached share and the projected cost of the remaining nine conversations and 480 questions
 
+### Requirement: The render dry run checks what each call is asked
+Before any live run, the render dry run SHALL fail when any rendered request contains Core
+bookkeeping (`detail_kind`), when a classification or consolidation request has no `[TASK]` block
+or its task lacks the material it judges (condition, earlier message, gist sources, episode
+events) or its labels, or when a reasoning request carries a task. Its sample SHALL span enough
+history for a sleep to run, and its scripted consolidation SHALL return a gist so gist
+verification is rendered too.
+
+#### Scenario: A classification without its question
+- **WHEN** a classify request in the dry run renders only a commitment line and the trigger
+- **THEN** the dry run fails and no live call is made
+
 ### Requirement: Scoring reuses the published items and judge prompts
 LoCoMo SHALL be scored per category with its official token F1 and with the judge running the
 published `ACCURACY_PROMPT` text (categories 1–4 headline; category 5 apart with the official
