@@ -23,7 +23,7 @@ use crate::datasets::runner::{ItemOutcomeSummary, PreflightEstimate};
 use crate::pareto::{
     ScorecardRow, ScorecardStatus, compute_convex_pareto, scorecard_rows_to_pareto_input,
 };
-use crate::record::RunRecord;
+use crate::record::{MONOAGENS_MODE_OFFLINE, RunRecord};
 use crate::scenario::ensure_not_sealed_path;
 
 /// Configuration for [`generate_benchmark_report`].
@@ -34,6 +34,8 @@ pub struct ReportOptions {
     pub manifest_path: Option<PathBuf>,
     pub extra_notes: Vec<String>,
     pub skip_python_charts: bool,
+    /// Category suite name; when set, the report covers only that category's datasets.
+    pub suite: Option<String>,
     /// Optional banner repeated on every table (e.g. a partial-run label).
     pub label: Option<String>,
     /// Optional Markdown appended to `REPORT.md` and shown in `index.html`.
@@ -82,15 +84,44 @@ pub fn generate_benchmark_report(opts: &ReportOptions) -> Result<GeneratedReport
     fs::create_dir_all(&charts_dir)?;
     fs::create_dir_all(&tx_out_dir)?;
 
-    let registry = standard_benchmark_registry();
-    let manifest = resolve_manifest_for_report(opts, &registry)?;
+    let full_registry = standard_benchmark_registry();
+    let registry: Vec<BenchmarkDatasetSpec> = match opts
+        .suite
+        .as_deref()
+        .and_then(crate::datasets::suite_domain)
+    {
+        Some(domain) => full_registry
+            .iter()
+            .filter(|s| s.domain == domain)
+            .cloned()
+            .collect(),
+        None => full_registry.clone(),
+    };
+    let manifest = resolve_manifest_for_report(opts, &full_registry)?;
     let loaded_runs = collect_run_records_recursive(&opts.run_dir)?;
     let preflight = load_preflight_if_present(&opts.run_dir);
 
     let mut by_ds: BTreeMap<String, LoadedDatasetRun> = BTreeMap::new();
+    let mut invalid_ids: BTreeSet<String> = BTreeSet::new();
     for run in loaded_runs {
-        by_ds.insert(run.record.scenario_id.clone(), run);
+        let rec = &run.record;
+        let offline = rec.monoagens_mode.as_deref() == Some(MONOAGENS_MODE_OFFLINE);
+        if !rec.is_full_monoagens() && !offline {
+            invalid_ids.insert(rec.scenario_id.clone());
+        } else {
+            by_ds.insert(rec.scenario_id.clone(), run);
+        }
     }
+    // Any record that is neither a full MonoAgens live run nor an explicit offline run is
+    // excluded from the MonoAgens results and flagged in every table (`Design 8`).
+    let invalid_banner =
+        (!invalid_ids.is_empty()).then(|| "invalid: not full MonoAgens".to_owned());
+    let banner_label = match (opts.label.as_deref(), invalid_banner.as_deref()) {
+        (Some(l), Some(b)) => Some(format!("{l}; {b}")),
+        (Some(l), None) => Some(l.to_owned()),
+        (None, Some(b)) => Some(b.to_owned()),
+        (None, None) => None,
+    };
 
     // Copy any per-item JSONL transcripts from subdirs into report/transcripts/<dataset>/ so all
     // report links resolve locally under report/.
@@ -168,6 +199,36 @@ pub fn generate_benchmark_report(opts: &ReportOptions) -> Result<GeneratedReport
                 domain: domain_slug(spec.domain).to_owned(),
                 lane: lane.to_string(),
                 status: "unavailable".to_owned(),
+                reason,
+                contamination_risk: contam.to_string(),
+            });
+            continue;
+        }
+
+        if invalid_ids.contains(&spec.id) {
+            let reason = "invalid: not full MonoAgens".to_owned();
+            scorecard_rows.push(ScorecardRow {
+                dataset_id: spec.id.clone(),
+                domain: spec.domain,
+                lane,
+                status: ScorecardStatus::NotScored,
+                core_applicability: core_app,
+                contamination_risk: contam,
+                metrics: spec
+                    .primary_metrics
+                    .iter()
+                    .map(|m| (m.clone(), None))
+                    .collect(),
+                metric_intervals: Vec::new(),
+                cost_usd: 0.0,
+                e_tok: 0.0,
+                reason: Some(reason.clone()),
+            });
+            status_rows.push(StatusRow {
+                dataset_id: spec.id.clone(),
+                domain: domain_slug(spec.domain).to_owned(),
+                lane: lane.to_string(),
+                status: "not_scored".to_owned(),
                 reason,
                 contamination_risk: contam.to_string(),
             });
@@ -347,7 +408,7 @@ pub fn generate_benchmark_report(opts: &ReportOptions) -> Result<GeneratedReport
         &cost_rows,
         &by_ds,
     )?;
-    if let Some(l) = opts.label.as_deref() {
+    if let Some(l) = banner_label.as_deref() {
         prepend_label_column(&report_dir, &csv_files, l)?;
     }
 
@@ -400,7 +461,7 @@ pub fn generate_benchmark_report(opts: &ReportOptions) -> Result<GeneratedReport
         &failure_sections,
         &chart_files,
         &pareto,
-        opts.label.as_deref(),
+        banner_label.as_deref(),
         opts.appendix_markdown.as_deref(),
     );
     let md_path = report_dir.join("REPORT.md");
@@ -417,7 +478,7 @@ pub fn generate_benchmark_report(opts: &ReportOptions) -> Result<GeneratedReport
         &charts_dir,
         &chart_files,
         &pareto,
-        opts.label.as_deref(),
+        banner_label.as_deref(),
         opts.appendix_markdown.as_deref(),
     )?;
     let html_path = report_dir.join("index.html");
@@ -1016,6 +1077,7 @@ struct ReproInfo {
     embedder_revision: String,
     seeds: String,
     history_reasoning_mode: String,
+    monoagens_mode: String,
     lab_version: String,
     started_at: String,
     finished_at: String,
@@ -1052,6 +1114,7 @@ fn build_repro_info(
     let mut emb_revs = BTreeSet::new();
     let mut seeds = BTreeSet::new();
     let mut hist_modes = BTreeSet::new();
+    let mut monoagens_modes = BTreeSet::new();
     let mut lab_vers = BTreeSet::new();
     let mut starts = BTreeSet::new();
     let mut finishes = BTreeSet::new();
@@ -1067,6 +1130,9 @@ fn build_repro_info(
         lab_vers.insert(r.core_version.clone());
         if let Some(hm) = &r.history_reasoning_mode {
             hist_modes.insert(hm.clone());
+        }
+        if let Some(mm) = &r.monoagens_mode {
+            monoagens_modes.insert(mm.clone());
         }
         if let Some(p) = &r.dataset_provenance {
             manifest_digests.insert(p.manifest_digest.clone());
@@ -1138,6 +1204,7 @@ fn build_repro_info(
         embedder_revision: join_or(emb_revs, "unspecified"),
         seeds: join_or(seeds, "1"),
         history_reasoning_mode: join_or(hist_modes, "scripted_silent"),
+        monoagens_mode: join_or(monoagens_modes, "absent"),
         lab_version: join_or(lab_vers, env!("CARGO_PKG_VERSION")),
         started_at: starts
             .into_iter()
@@ -1242,6 +1309,7 @@ fn render_markdown_report(
         "| History reasoning mode | `{}` |",
         repro.history_reasoning_mode
     );
+    let _ = writeln!(md, "| MonoAgens mode | `{}` |", repro.monoagens_mode);
     let _ = writeln!(md, "| Seeds | `{}` |", repro.seeds);
     let _ = writeln!(
         md,
@@ -1441,7 +1509,11 @@ fn render_markdown_report(
     // 9. Caveats
     md.push_str("## 9. Methodological Caveats\n\n");
     md.push_str("- **Non-official judge substitution:** Official judges (`gpt-4o`, `gpt-5`, `Gemini-3.1-flash-lite`) were not used; judge-scored metrics are emitted under `<metric>_non_official_judge`.\n");
-    md.push_str("- **History reasoning mode:** Static memory and ToM histories ran through Core's unmodified loop under `scripted_silent` (`$0` API cost during ingestion; real Gate wake counts recorded).\n");
+    let _ = writeln!(
+        md,
+        "- **History reasoning mode:** recorded mode(s): `{}`. Offline suites load static memory/ToM histories through Core's unmodified loop with a silent scripted model; live memory runs load every turn through the live model.",
+        repro.history_reasoning_mode
+    );
     md.push_str("- **Contamination & small clusters:** Public benchmarks released before 2026 carry moderate-to-high contamination risk; clustered corpora (`locomo`, `memory_agent_bench`, `group_mem_bench`, `capa`, `pitch`, `fantom`, `molweni`, `hi_tom`, `dyntom`) report cluster-bootstrap 95% CIs.\n");
     md.push_str("- **License terms:** `locomo`, `opentom`, `exploretom`, and `tomi` are `CC-BY-NC-4.0` (non-commercial research use only); `opentom` requests ran under ZDR (`0 days` retention) on OpenCode Go.\n");
     md.push_str("- **Gaps & cost cap:** `pis`, `proact`, and `mpbench` remain `unavailable` without silent substitution. Owner waived the USD cost cap (`--max-cost-usd 1000000`).\n");
@@ -1537,6 +1609,7 @@ fn render_html_report(
             "History reasoning mode",
             repro.history_reasoning_mode.clone(),
         ),
+        ("MonoAgens mode", repro.monoagens_mode.clone()),
         ("Seeds", repro.seeds.clone()),
         (
             "Start / End UTC",

@@ -639,20 +639,21 @@ fn seeded_stratified_sampling_is_deterministic_across_arms_and_clusters() {
     assert!(ci_1.ci95_low <= ci_1.point_estimate && ci_1.point_estimate <= ci_1.ci95_high);
 }
 
-/// Regression: live probes must see the question text and turn a plain-text completion into a
-/// dispatched reply action (Core's reasoning plan alone carries no payload text).
+/// Task 11.1: every live model call uses the production path (`render_context_plan_with` +
+/// `RenderExtras::populate_payloads_from_store` + strict ThoughtBatch). A probe asking about an
+/// early history turn must see only what Core rendered (recalled memories), never the raw
+/// transcript, and the scored answer must be Core's dispatched `Act` payload.
 #[test]
-fn live_probe_prompt_carries_question_and_plain_text_becomes_action() {
+fn live_probe_uses_core_rendered_sections_and_dispatched_act_payload() {
     use std::sync::Mutex;
 
     use monoagens_lab::reason_seam::model::{
-        CallOutcome, ModelCallRecord, ModelCallSuccess, ModelOutput, ModelProvider, ModelRequest,
-        TokenUsage,
+        CallOutcome, MessagePart, ModelCallRecord, ModelCallSuccess, ModelOutput, ModelProvider,
+        ModelRequest, TokenUsage,
     };
 
     struct RecordingProvider {
         seen: Mutex<Vec<ModelRequest>>,
-        answer: String,
     }
     impl ModelProvider for RecordingProvider {
         fn provider_name(&self) -> &str {
@@ -666,9 +667,28 @@ fn live_probe_prompt_carries_question_and_plain_text_becomes_action() {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .push(request.clone());
+            let user_text: String = request
+                .messages
+                .iter()
+                .flat_map(|m| &m.parts)
+                .filter_map(|p| match p {
+                    MessagePart::Text(t) => Some(t.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(
+                request.response_schema,
+                monoagens_lab::reason_seam::model::ResponseSchemaMode::ThoughtBatchStrict,
+                "probe calls must request the strict ThoughtBatch schema"
+            );
+            let raw = if user_text.contains("What is the vault code?") {
+                r#"{"acts":[{"act":"act","capability_id":"a.speak","places":["vault_room"],"people":["lab_proctor"],"payload":[52,52,49,55],"motivation":5,"confidence_0_20":19,"used_ids":[]}]}"#.to_owned()
+            } else {
+                r#"{"acts":[{"act":"think","thought":"silent history","motivation":1,"confidence_0_20":10,"used_ids":[]}]}"#.to_owned()
+            };
             let output = ModelOutput::ThoughtActs(
-                monoagens_lab::reason_seam::parse_thought_output(&self.answer)
-                    .expect("plain text falls back to a think act"),
+                monoagens_lab::reason_seam::parse_thought_output(&raw).expect("strict batch"),
             );
             Ok(ModelCallSuccess {
                 record: ModelCallRecord {
@@ -679,7 +699,7 @@ fn live_probe_prompt_carries_question_and_plain_text_becomes_action() {
                     usage: Some(TokenUsage {
                         input_tokens: 12,
                         output_tokens: 3,
-                        cached_tokens: None,
+                        cached_tokens: Some(4),
                         reasoning_tokens: Some(2),
                         total_tokens: 15,
                     }),
@@ -687,7 +707,7 @@ fn live_probe_prompt_carries_question_and_plain_text_becomes_action() {
                     outcome: CallOutcome::Success,
                 },
                 output,
-                raw_text: self.answer.clone(),
+                raw_text: raw,
             })
         }
     }
@@ -727,7 +747,6 @@ fn live_probe_prompt_carries_question_and_plain_text_becomes_action() {
     };
     let provider = RecordingProvider {
         seen: Mutex::new(Vec::new()),
-        answer: "4417".to_owned(),
     };
     let mut guard = CostGuard::default();
     let exec = execute_external_item(
@@ -741,22 +760,72 @@ fn live_probe_prompt_carries_question_and_plain_text_becomes_action() {
         &mut guard,
     )
     .expect("execute");
+
     let seen = provider.seen.lock().unwrap();
-    assert!(
-        seen.iter().any(|r| {
-            r.messages.iter().any(|m| {
-                m.parts.iter().any(|p| match p {
-                    monoagens_lab::reason_seam::model::MessagePart::Text(t) => {
-                        t.contains("What is the vault code?")
-                            && t.contains("The vault code is 4417.")
-                    }
-                    _ => false,
-                })
-            })
-        }),
-        "probe prompt must carry visible history and the question"
+    assert_eq!(
+        seen.len(),
+        1,
+        "only the probe call uses the live provider offline"
     );
+    let req = &seen[0];
+    let system = match &req.messages[0].parts[0] {
+        MessagePart::Text(t) => t.clone(),
+        _ => panic!("system message must be text"),
+    };
+    let user_prompt = match &req.messages[1].parts[0] {
+        MessagePart::Text(t) => t.clone(),
+        _ => panic!("user message must be text"),
+    };
+    assert!(
+        system.contains("[ANCHOR]"),
+        "system prompt must be Core's rendered static prefix, got: {system}"
+    );
+    for slot in ["[WORKING_SET]", "[RECALLED]", "[TRIGGER]"] {
+        assert!(
+            user_prompt.contains(slot),
+            "Core-rendered dynamic context missing {slot}: {user_prompt}"
+        );
+    }
+    assert!(
+        user_prompt.contains("The vault code is 4417."),
+        "recalled/staged memory payload must be rendered, got: {user_prompt}"
+    );
+    assert!(
+        user_prompt.contains("What is the vault code?"),
+        "trigger section must carry the probe percept, got: {user_prompt}"
+    );
+    assert!(
+        !system.contains("You are the soul in the MonoAgens evaluation harness")
+            && !user_prompt.contains("Conversation transcript visible to you:")
+            && !user_prompt.contains("Evaluator question:")
+            && !user_prompt.contains("[0] t="),
+        "Lab prompt override must be gone: system={system} user={user_prompt}"
+    );
+    let session = req.session_id.as_deref().unwrap_or_default();
+    assert!(
+        session.starts_with("ses_") && session.len() > 4,
+        "stable session header value missing: {session}"
+    );
+
     assert_eq!(exec.predictions.len(), 1);
     assert_eq!(exec.predictions[0].response_text.as_deref(), Some("4417"));
     assert!(exec.predictions[0].spoke);
+    let model_call = exec
+        .transcript_events
+        .iter()
+        .find_map(|ev| match ev {
+            monoagens_lab::datasets::TranscriptRecord::ModelCall {
+                cached_tokens,
+                session_id,
+                ..
+            } => Some((*cached_tokens, session_id.clone())),
+            _ => None,
+        })
+        .expect("model call transcript");
+    assert_eq!(
+        model_call.0,
+        Some(4),
+        "cached tokens must be recorded per call"
+    );
+    assert_eq!(model_call.1.as_deref(), Some(session));
 }

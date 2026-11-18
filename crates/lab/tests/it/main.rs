@@ -5,6 +5,7 @@ mod datasets_manifest;
 mod datasets_ops;
 mod datasets_runner;
 mod lab_harness;
+mod memory_comparison;
 mod prior_cli;
 mod property_suites;
 mod security_and_ablation;

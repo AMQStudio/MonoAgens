@@ -1052,3 +1052,137 @@ fn tool_selection_respects_static_core_budget_and_excludes_schema_drifted_proced
     assert_eq!(selected.procedures[0].name, "valid_status_proc");
     assert_eq!(selected.excluded_stale_procedures, 1);
 }
+
+/// Task 11.4: OpenCode `cache_read` is read before OpenAI `cached_tokens`; a response with neither
+/// reports `unknown` (never `0`), per-call cached tokens are recorded, and the stable
+/// `x-opencode-session` header value travels on every request.
+#[test]
+fn opencode_cache_read_tokens_and_stable_session_header_are_recorded() {
+    let thought = json!({
+        "acts": [{
+            "act": "think",
+            "thought": "cache telemetry probe",
+            "motivation": 3,
+            "confidence_0_20": 15,
+            "used_ids": []
+        }]
+    })
+    .to_string();
+
+    let opencode_body = json!({
+        "model": "deepseek-v4.1-flash",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": thought}}],
+        "usage": {
+            "prompt_tokens": 9200,
+            "completion_tokens": 300,
+            "total_tokens": 9500,
+            "opencode": {
+                "billing_source": "go",
+                "tokens": {
+                    "input": 1200,
+                    "output": 300,
+                    "reasoning": 120,
+                    "cache_read": 8000,
+                    "cache_write_5m": 0,
+                    "cache_write_1h": 0
+                }
+            }
+        }
+    })
+    .to_string();
+    let openai_body = json!({
+        "model": "gpt-x",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": thought}}],
+        "usage": {
+            "prompt_tokens": 80,
+            "completion_tokens": 20,
+            "total_tokens": 100,
+            "prompt_tokens_details": {"cached_tokens": 64}
+        }
+    })
+    .to_string();
+    let bare_body = json!({
+        "model": "gpt-x",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": thought}}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12}
+    })
+    .to_string();
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+    let addr = listener.local_addr().expect("addr");
+    let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let captured_srv = Arc::clone(&captured);
+    let bodies = [opencode_body, openai_body, bare_body];
+    let handle = thread::spawn(move || {
+        for body in bodies {
+            let (mut stream, _) = listener.accept().expect("accept client");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut raw = String::new();
+            let mut content_length = 0_usize;
+            loop {
+                let mut line = String::new();
+                let n = reader.read_line(&mut line).expect("read header");
+                if n == 0 || line == "\r\n" || line == "\n" {
+                    break;
+                }
+                raw.push_str(&line);
+                if let Some(rest) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_length = rest.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut req_body = vec![0_u8; content_length];
+            if content_length > 0 {
+                reader.read_exact(&mut req_body).expect("read body");
+            }
+            raw.push_str(&String::from_utf8_lossy(&req_body));
+            captured_srv.lock().expect("lock").push(raw);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+
+    let provider = OpenAiModelProvider::new(OpenAiModelConfig::new(
+        format!("http://{addr}/v1/chat/completions"),
+        Some(SecretString::new("sk-test")),
+    ))
+    .expect("provider");
+
+    let mut cached = Vec::new();
+    for idx in 0..3_u64 {
+        let mut req = ModelRequest::text(
+            EventId::new(idx + 1),
+            ModelPurpose::Reason,
+            "deepseek-v4.1-flash",
+            "system",
+            "user",
+        );
+        req.session_id = Some("ses_stable_item_1".to_owned());
+        let res = provider.invoke(&req).expect("mock response parses");
+        cached.push(res.record.usage.expect("usage").cached_tokens);
+    }
+    handle.join().expect("server thread finishes");
+
+    assert_eq!(cached, vec![Some(8_000), Some(64), None]);
+    let telemetry = provider.telemetry_snapshot();
+    assert_eq!(
+        telemetry.call_cached_tokens,
+        vec![Some(8_000), Some(64), None]
+    );
+    assert_eq!(telemetry.cumulative_cached_tokens, 8_064);
+    assert_eq!(telemetry.cached_tokens_unknown_calls, 1);
+
+    let requests = captured.lock().expect("lock captured");
+    assert_eq!(requests.len(), 3);
+    for raw in requests.iter() {
+        assert!(
+            raw.to_ascii_lowercase()
+                .contains("x-opencode-session: ses_stable_item_1"),
+            "missing stable session header in request: {raw}"
+        );
+    }
+}

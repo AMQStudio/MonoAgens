@@ -680,9 +680,9 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
     let mut pareto_input_path: Option<PathBuf> = None;
     let mut only_ids: Option<Vec<String>> = None;
     let mut out_dir: Option<PathBuf> = None;
+    let mut runs_root: Option<PathBuf> = None;
     let mut seed: u64 = 1;
     let mut live = false;
-    let mut live_full_history = false;
     let mut max_cost_usd: Option<f64> = None;
     let mut model_endpoint: Option<String> = None;
     let mut model_name = "scripted".to_owned();
@@ -700,6 +700,9 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
     let mut allow_no_embedder = false;
     let mut preflight_only = false;
     let mut pilot_items: Option<usize> = None;
+    let mut memory_phase = "0".to_owned();
+    let mut memory_pilot = false;
+    let mut memory_reuse_from: Vec<PathBuf> = Vec::new();
     let mut report_flag = false;
     let mut report_notes: Vec<String> = Vec::new();
     let mut secrets_path: Option<PathBuf> = None;
@@ -712,7 +715,7 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
                 i += 1;
                 suite = args
                     .get(i)
-                    .ok_or("--suite requires 'standard' or 'in_tree_only'")?
+                    .ok_or("--suite requires standard, in_tree_only, or a category")?
                     .clone();
             }
             "--datasets-dir" => {
@@ -752,7 +755,12 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
                     .map_err(|e| format!("invalid --seed '{val}': {e}"))?;
             }
             "--live" => live = true,
-            "--live-full-history" => live_full_history = true,
+            "--runs-root" => {
+                i += 1;
+                runs_root = Some(PathBuf::from(
+                    args.get(i).ok_or("--runs-root requires a directory path")?,
+                ));
+            }
             "--max-cost-usd" => {
                 i += 1;
                 let val = args.get(i).ok_or("--max-cost-usd requires a float")?;
@@ -881,6 +889,17 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
                         .map_err(|e| format!("invalid --pilot-items '{val}': {e}"))?,
                 );
             }
+            "--phase" => {
+                i += 1;
+                memory_phase = args.get(i).ok_or("--phase requires 0")?.clone();
+            }
+            "--pilot" => memory_pilot = true,
+            "--reuse-items-from" => {
+                i += 1;
+                memory_reuse_from.push(PathBuf::from(
+                    args.get(i).ok_or("--reuse-items-from requires a run directory")?,
+                ));
+            }
             "--report" => report_flag = true,
             "--report-note" => {
                 i += 1;
@@ -894,6 +913,27 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
             other => return Err(format!("unknown argument '{other}' for benchmark")),
         }
         i += 1;
+    }
+
+    let category_suite = datasets::suite_domain(&suite).is_some();
+    let memory_suite = suite == "memory-comparison";
+    if !category_suite && !memory_suite && suite != "standard" && suite != "in_tree_only" {
+        return Err(format!(
+            "unknown benchmark suite '{suite}' (expected standard, in_tree_only, memory-comparison, or one of {})",
+            datasets::CATEGORY_SUITES.join("|")
+        ));
+    }
+    if category_suite && out_dir.is_none() {
+        out_dir = Some(PathBuf::from(datasets::DEFAULT_RUNS_ROOT).join(&suite));
+    }
+    if memory_suite && out_dir.is_none() {
+        let base = PathBuf::from(datasets::DEFAULT_RUNS_ROOT)
+            .join("2026-11-18-phase0-deepseek-v4.1-flash");
+        out_dir = Some(if memory_pilot {
+            base.join("pilot")
+        } else {
+            base
+        });
     }
 
     let loaded_prior = load_prior_or_default(prior_path.as_deref()).map_err(|e| e.to_string())?;
@@ -918,6 +958,10 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
     let resolved_judge_endpoint = judge_endpoint
         .clone()
         .or_else(|| provider_secrets.model_endpoint.clone());
+
+    if memory_suite && only_ids.is_none() {
+        only_ids = Some(vec!["locomo".to_owned(), "longmemeval".to_owned()]);
+    }
 
     let mut extra_headers: Vec<(String, SecretString)> = Vec::new();
     let mut extra_header_names: Vec<String> = Vec::new();
@@ -1002,7 +1046,7 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
     let mut sidecar_guard: Option<SidecarProcessGuard> = None;
     let mut embedder_backend: Option<String> = None;
     let mut embedder_revision: Option<String> = None;
-    let configured_embedder: Option<EmbeddingGemma2Embedder> = if suite == "standard"
+    let configured_embedder: Option<EmbeddingGemma2Embedder> = if (category_suite || memory_suite)
         && !allow_no_embedder
         && !preflight_only
     {
@@ -1066,17 +1110,99 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
         None
     };
 
+    if memory_suite {
+        if !live {
+            return Err("memory-comparison requires --live".to_owned());
+        }
+        let phase = if memory_pilot {
+            monoagens_lab::memory::MemoryPhase::Pilot
+        } else {
+            monoagens_lab::memory::MemoryPhase::parse(&memory_phase).map_err(|e| e.to_string())?
+        };
+        let run_dir = out_dir
+            .clone()
+            .ok_or_else(|| "memory-comparison requires an output directory".to_owned())?;
+        let proxy_api_key = model_api_key_env
+            .as_deref()
+            .and_then(|name| env::var(name).ok())
+            .filter(|value| !value.trim().is_empty())
+            .map(SecretString::new)
+            .or_else(|| provider_secrets.model_api_key.clone());
+        if proxy_api_key.is_none() {
+            return Err(
+                "memory-comparison needs an API key (--model-api-key-env or MONOAGENS_MODEL_API_KEY)"
+                    .to_owned(),
+            );
+        }
+        let proxy = monoagens_lab::memory::MeteringProxy::start(
+            monoagens_lab::memory::MeteringProxyConfig::phase0(
+                proxy_api_key,
+                run_dir.join("ledger.jsonl"),
+            ),
+        )
+        .map_err(|e| e.to_string())?;
+        let embedder: Option<std::sync::Arc<dyn Embedder>> =
+            configured_embedder.map(|e| std::sync::Arc::new(e) as std::sync::Arc<dyn Embedder>);
+        let memory_opts = monoagens_lab::memory::MemorySuiteOptions {
+            datasets_dir: datasets_dir.clone(),
+            manifest_path: manifest_path.clone(),
+            run_dir: run_dir.clone(),
+            prior: loaded_prior.prior.clone(),
+            seed,
+            phase,
+            live,
+            max_cost_usd,
+            provider_endpoint: Some(proxy.chat_completions_url()),
+            judge_endpoint: Some(proxy.chat_completions_url()),
+            probe_provider: None,
+            judge: None,
+            embedder,
+            write_report: true,
+            only_datasets: None,
+            max_items_per_dataset: None,
+            reuse_from: memory_reuse_from.clone(),
+        };
+        let outcome =
+            monoagens_lab::memory::run_memory_suite(&memory_opts).map_err(|e| e.to_string())?;
+        if let Some(pilot) = &outcome.pilot {
+            println!(
+                "memory pilot run_dir={} calls={} cost=${:.4} projected_rest=${:.2} wall_rest={:.0}s",
+                outcome.run_dir.display(),
+                pilot.calls,
+                pilot.list_cost_usd,
+                pilot.projected_rest_list_cost_usd,
+                pilot.projected_rest_wall_clock_s
+            );
+        } else {
+            println!(
+                "memory phase 0 run_dir={} datasets={} status={} report={}",
+                outcome.run_dir.display(),
+                outcome.datasets.len(),
+                outcome
+                    .stopped_reason
+                    .clone()
+                    .unwrap_or_else(|| "complete".to_owned()),
+                outcome
+                    .report_md
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default()
+            );
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+
     let opts = datasets::BenchmarkExecutionOptions {
         manifest_path: manifest_path.clone(),
         only_ids,
         seed,
         live,
-        live_full_history,
         max_cost_usd,
         out_dir: out_dir.clone(),
+        runs_root: runs_root.clone(),
         pilot_prefix_n: pilot_items,
         preflight_only,
-        require_semantic_embedder: suite == "standard" && !allow_no_embedder && !preflight_only,
+        require_semantic_embedder: category_suite && !allow_no_embedder && !preflight_only,
         probe_model_name: model_name,
         probe_provider: live_probe_provider
             .as_ref()
@@ -1118,13 +1244,18 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
     }
     drop(sidecar_guard);
 
-    if report_flag && let Some(dir) = out_dir.as_deref() {
+    // Each category suite owns its run directory and report; `standard` only indexes.
+    let auto_report = category_suite && !preflight_only;
+    if (report_flag || auto_report)
+        && let Some(dir) = out_dir.as_deref()
+    {
         datasets::generate_benchmark_report(&datasets::ReportOptions {
             run_dir: dir.to_path_buf(),
             out_dir: None,
             manifest_path,
             extra_notes: report_notes,
             skip_python_charts: false,
+            suite: category_suite.then(|| suite.clone()),
             label: None,
             appendix_markdown: None,
         })
@@ -1581,6 +1712,7 @@ fn run_report_cmd(args: &[String]) -> Result<ExitCode, String> {
         manifest_path,
         extra_notes: notes,
         skip_python_charts,
+        suite: None,
         label,
         appendix_markdown,
     })
@@ -1700,5 +1832,5 @@ fn extract_endpoint_host(endpoint: &str) -> Option<String> {
 }
 
 fn usage() -> String {
-    "Usage:\n  monoagens-lab run --scenario <path> [--prior <path>] [--seed <u64>] [--json] [--record-out <path>]\n  monoagens-lab suite [--root <dir>] [--set development|validation] [--prior <path>] [--seeds 1,2] [--json]\n  monoagens-lab compare (--scenario <path> | --set development|validation [--root <dir>]) --mechanism <id> [--prior <path>] [--seeds 1,2,3,4,5] [--out-dir <dir>] [--json]\n  monoagens-lab replay --scenario <path> [--prior <path>] [--seed <u64>] [--json]\n  monoagens-lab baseline --adapter <slug> --scenario <path> [--prior <path>] [--seed <u64>] [--sealed] [--timeout-s <u64>] [--json]\n  monoagens-lab benchmark --suite <standard|in_tree_only> [--datasets-dir <path>] [--prior <path>] [--pareto] [--pareto-input <path>] [--report] [--json]\n  monoagens-lab report --run <dir> [--out <dir>] [--manifest <path>] [--note <text>] [--json]\n  monoagens-lab datasets <init|list|pin|fetch|verify> [ids...] [--manifest <path>] [--datasets-dir <path>] [--record-checksums] [--json]\n  monoagens-lab pareto --input <scorecard.json> [--json]\n  monoagens-lab mechanisms [--json]\n  monoagens-lab test-body [--state-dir <path>]".to_owned()
+    "Usage:\n  monoagens-lab run --scenario <path> [--prior <path>] [--seed <u64>] [--json] [--record-out <path>]\n  monoagens-lab suite [--root <dir>] [--set development|validation] [--prior <path>] [--seeds 1,2] [--json]\n  monoagens-lab compare (--scenario <path> | --set development|validation [--root <dir>]) --mechanism <id> [--prior <path>] [--seeds 1,2,3,4,5] [--out-dir <dir>] [--json]\n  monoagens-lab replay --scenario <path> [--prior <path>] [--seed <u64>] [--json]\n  monoagens-lab baseline --adapter <slug> --scenario <path> [--prior <path>] [--seed <u64>] [--sealed] [--timeout-s <u64>] [--json]\n  monoagens-lab benchmark --suite <standard|in_tree_only|memory|prospective|timing|group|tom|indonesian|security> [--datasets-dir <path>] [--prior <path>] [--pareto] [--pareto-input <path>] [--report] [--json]\n  monoagens-lab report --run <dir> [--out <dir>] [--manifest <path>] [--note <text>] [--json]\n  monoagens-lab datasets <init|list|pin|fetch|verify> [ids...] [--manifest <path>] [--datasets-dir <path>] [--record-checksums] [--json]\n  monoagens-lab pareto --input <scorecard.json> [--json]\n  monoagens-lab mechanisms [--json]\n  monoagens-lab test-body [--state-dir <path>]".to_owned()
 }

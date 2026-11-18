@@ -2930,6 +2930,7 @@ dependencies = [
  "sha2",
  "tar",
  "tempfile",
+ "tokio",
  "toml",
  "zip",
 ]

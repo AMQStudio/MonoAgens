@@ -17,6 +17,7 @@ pub mod clock;
 pub mod datasets;
 pub mod driver;
 pub mod guard;
+pub mod memory;
 pub mod metrics;
 pub mod pareto;
 pub mod record;

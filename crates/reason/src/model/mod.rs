@@ -106,6 +106,12 @@ pub struct ModelRequest {
     pub timeout_ms: u64,
     pub max_output_tokens: Option<u32>,
     pub temperature: Option<f32>,
+    /// Stable per-conversation identifier sent as `x-opencode-session` by providers that support it
+    /// (OpenCode Go routes requests sharing this value to the same worker and prompt cache).
+    pub session_id: Option<String>,
+    /// Additional per-request HTTP headers for providers that support them (for example the Lab's
+    /// metering proxy attribution headers). Never contains credentials; values are not recorded.
+    pub extra_headers: Vec<(String, String)>,
 }
 
 impl ModelRequest {
@@ -137,6 +143,8 @@ impl ModelRequest {
             timeout_ms: 30_000,
             max_output_tokens: None,
             temperature: None,
+            session_id: None,
+            extra_headers: Vec::new(),
         }
     }
 }

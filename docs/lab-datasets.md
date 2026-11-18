@@ -74,11 +74,18 @@ Checks SHA-256 and byte size of every file, the extraction marker, and the cache
 # Offline deterministic / in-tree verification (never calls paid APIs)
 monoagens-lab benchmark --suite in_tree_only --pareto --json
 
-# Subset run (always marked partial, listing left-out datasets)
-monoagens-lab benchmark --suite standard --only locomo,when2speak --out-dir lab/runs/pilot --json
+# One category per run, each with its own run directory and report
+monoagens-lab benchmark --suite memory --live --max-cost-usd 5.00 --out-dir lab/runs/memory --json
+monoagens-lab benchmark --suite tom    --live --max-cost-usd 5.00 --out-dir lab/runs/tom    --json
 
-# Live run (requires explicit --max-cost-usd cap; runs scripted preflight estimate first)
-monoagens-lab benchmark --suite standard \
+# Subset run inside a category (always marked partial, listing left-out datasets)
+monoagens-lab benchmark --suite memory --only locomo,longmemeval --out-dir lab/runs/memory --json
+
+# Standard index: strictly one row per registered dataset from the latest per-category runs
+monoagens-lab benchmark --suite standard --runs-root lab/runs --pareto --json
+
+# Live run with an explicit cost cap (scripted preflight estimate first)
+monoagens-lab benchmark --suite memory \
   --live --max-cost-usd 5.00 \
   --model-endpoint https://api.example.com/v1/chat/completions --model gpt-4o --model-api-key-env OPENAI_API_KEY \
   --judge-endpoint https://api.example.com/v1/chat/completions --judge-model gpt-4o --judge-api-key-env OPENAI_API_KEY \
@@ -87,7 +94,10 @@ monoagens-lab benchmark --suite standard \
 ```
 
 Notes:
+- `--suite memory|prospective|timing|group|tom|indonesian|security` runs exactly one category and auto-writes its report into `<out-dir>/report`.
+- `--suite standard` never executes a dataset: it indexes the latest run record per dataset under `--runs-root` (default `lab/runs`) and emits one row per registered dataset.
 - `--live` requires `--max-cost-usd <cap>` and always runs a deterministic scripted preflight simulation first (reporting `total_history_percepts`, `total_estimated_history_wakes`, `total_estimated_probe_calls`, `total_estimated_judge_calls`, and `total_worst_case_usd`), aborting before any paid call if worst-case spend exceeds the cap.
+- A live run reported as MonoAgens must be full: every history percept goes through the core loop with the live model, all switches are on, and prompts come from `monoagens_reason`'s production renderer. Run records carry `monoagens_mode = "full"`; any deviation records `invalid` and the report banner `invalid: not full MonoAgens` excludes those scores.
 - Substituting a non-official judge model for `gpt-4o`, `gpt-5`, or `Gemini-3.1-flash-lite` either renames metrics to `<metric>_non_official_judge` (`--judge-substitution rename`) or fails (`--judge-substitution fail`).
 - `ScenarioSet::External` is strictly rejected by all calibration paths (`external` results never tune the prior).
 - Never read `lab/scenarios/sealed/` and never write to `lab/runs/reference/`.
@@ -103,7 +113,8 @@ Notes:
 | `--extra-header NAME=ENV_VAR` (repeatable) | Reads the value from the environment and sends it on every soul/judge request (e.g. `--extra-header x-opencode-session=OPENCODE_SESSION_ID`). |
 | `--embed-endpoint URL` | Uses an already-running EmbeddingGemma 2 sidecar instead of spawning the pinned one. |
 | `--embed-model-path PATH` | Overrides the manifest-resolved embedder weights directory. |
-| `--allow-no-embedder` | Offline-only escape hatch; a `--suite standard` run without a semantic embedder otherwise refuses to start. |
+| `--allow-no-embedder` | Offline-only escape hatch; a category suite run without a semantic embedder otherwise refuses to start. |
+| `--runs-root DIR` | Root scanned by `--suite standard` for the latest per-category run records (default `lab/runs`). |
 | `--preflight-only` | Runs conversion + scripted cost preflight and writes `preflight.json`, without any paid call. |
 | `--pilot-items N` | Truncates the seeded R-54 sample to its first N items (pilot gate). |
 | `--report` | Generates the standard report into `<out-dir>/report` after the run. |
@@ -113,8 +124,8 @@ OpenCode Go (official docs: <https://opencode.ai/docs/console/go> and <https://o
 
 - Base URL `https://opencode.ai/inference/go`, OpenAI Chat Completions path `/openai/v1/chat/completions`.
 - Model ID `deepseek-v4.1-flash` (live list: `GET https://opencode.ai/inference/go/v1/models`).
-- Go **requires** a stable `x-opencode-session` header per conversation and a client-specific `User-Agent` (the Lab sends `monoagens-lab/<version>`).
-- Usage reports `opencode.list_cost` and `opencode.allowance` per response.
+- Go **requires** a stable `x-opencode-session` header per conversation and a client-specific `User-Agent` (the Lab sends `monoagens-lab/<version>`). The Lab generates a stable `ses_<hash>` value per run and item for every soul call; `--extra-header x-opencode-session=...` still applies to judge calls.
+- Usage reports `opencode.list_cost` and `opencode.allowance` per response. Cached input tokens are read from `usage.opencode.tokens.cache_read` first, then `prompt_tokens_details.cached_tokens`; when neither is present the count is recorded as `unknown`, never `0`.
 
 ### Report generation
 

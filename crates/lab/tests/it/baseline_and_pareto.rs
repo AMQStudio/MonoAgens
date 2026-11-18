@@ -397,9 +397,9 @@ fn pareto_holm_and_benchmark_suite_semantics() {
             .any(|s| s.contains("MuTual"))
     );
 
-    // 5. `--suite standard` strictly fails non-zero naming missing/unverified required external datasets
-    let std_err = run_benchmark_suite("standard", &empty_dir, None, &prior)
-        .expect_err("standard benchmark suite must fail loudly when external datasets are missing");
+    // 5. `--suite memory` strictly fails non-zero naming missing/unverified required datasets
+    let std_err = run_benchmark_suite("memory", &empty_dir, None, &prior)
+        .expect_err("category benchmark suite must fail loudly when external datasets are missing");
     let err_str = std_err.to_string();
     assert!(
         err_str.contains("locomo") && err_str.contains("longmemeval"),
@@ -408,7 +408,7 @@ fn pareto_holm_and_benchmark_suite_semantics() {
 }
 
 #[test]
-fn cli_benchmark_standard_exits_nonzero_when_datasets_missing() {
+fn cli_benchmark_category_exits_nonzero_when_datasets_missing() {
     let empty_root = TempDir::new().expect("temp datasets root");
     let empty_dir = empty_root.path().join("datasets");
     fs::create_dir_all(&empty_dir).unwrap();
@@ -418,7 +418,7 @@ fn cli_benchmark_standard_exits_nonzero_when_datasets_missing() {
         .args([
             "benchmark",
             "--suite",
-            "standard",
+            "memory",
             "--manifest",
             template_manifest.to_str().unwrap(),
             "--datasets-dir",
@@ -429,7 +429,7 @@ fn cli_benchmark_standard_exits_nonzero_when_datasets_missing() {
 
     assert!(
         !out.status.success(),
-        "benchmark --suite standard must exit non-zero when datasets are missing"
+        "benchmark --suite memory must exit non-zero when datasets are missing"
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(

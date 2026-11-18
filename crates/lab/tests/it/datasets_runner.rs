@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use monoagens_core::Prior;
+use monoagens_core::{Prior, Switches};
 use monoagens_lab::datasets::{
     BenchmarkExecutionOptions, ChecksumsRecorded, ConvertedDataset, Converter, CoreApplicability,
     DatasetAvailability, DatasetHandlerRegistry, DatasetLane, DatasetManifestEntry,
@@ -15,8 +15,8 @@ use monoagens_lab::datasets::{
     save_manifest_to_path, validate_semantic_embedder,
 };
 use monoagens_lab::{
-    LabError, RunRecord, ScorecardStatus, compute_convex_pareto, run_benchmark_suite_with_options,
-    sha256_hex, standard_benchmark_registry,
+    BenchmarkDomain, LabError, RunRecord, ScorecardStatus, compute_convex_pareto,
+    run_benchmark_suite_with_options, sha256_hex, standard_benchmark_registry,
 };
 use monoagens_protocol::{ActorId, Audience, PlaceId, VisibleScope};
 use monoagens_reason::embed::{Embedder, ScriptedEmbedder};
@@ -326,14 +326,14 @@ fn standard_suite_fails_before_run_on_missing_and_checksum_mismatch() {
         ..BenchmarkExecutionOptions::default()
     };
     let err_tamper = run_benchmark_suite_with_options(
-        "standard",
+        "memory",
         &datasets_dir,
         None,
         false,
         &Prior::default(),
         &opts,
     )
-    .expect_err("checksum mismatch must fail --suite standard before any run");
+    .expect_err("checksum mismatch must fail --suite memory before any run");
     let msg = err_tamper.to_string();
     assert!(msg.contains("locomo"), "msg={msg}");
     assert!(msg.contains("sha256 mismatch"), "msg={msg}");
@@ -344,14 +344,14 @@ fn standard_suite_fails_before_run_on_missing_and_checksum_mismatch() {
     fs::remove_dir_all(datasets_dir.join("longmemeval")).unwrap();
 
     let err_missing = run_benchmark_suite_with_options(
-        "standard",
+        "memory",
         &datasets_dir,
         None,
         false,
         &Prior::default(),
         &opts,
     )
-    .expect_err("missing dataset must fail --suite standard");
+    .expect_err("missing dataset must fail --suite memory");
     let msg2 = err_missing.to_string();
     assert!(msg2.contains("longmemeval"), "msg={msg2}");
     assert!(msg2.contains("datasets fetch longmemeval"), "msg={msg2}");
@@ -379,13 +379,13 @@ fn cli_benchmark_only_produces_partial_report_and_run_records() {
     );
     save_manifest_to_path(&manifest, &manifest_path).unwrap();
 
-    // Run `--only locomo` even though the other 21 datasets are absent (passing --allow-no-embedder
-    // in this offline test without EmbeddingGemma 2 weights).
+    // Run `--only locomo` inside the memory category even though the other memory datasets are
+    // absent (passing --allow-no-embedder in this offline test without EmbeddingGemma 2 weights).
     let out = Command::new(lab_bin())
         .args([
             "benchmark",
             "--suite",
-            "standard",
+            "memory",
             "--manifest",
             manifest_path.to_str().unwrap(),
             "--datasets-dir",
@@ -414,7 +414,7 @@ fn cli_benchmark_only_produces_partial_report_and_run_records() {
 
     let external_count = registry
         .iter()
-        .filter(|s| s.requires_external_corpus)
+        .filter(|s| s.requires_external_corpus && s.domain == BenchmarkDomain::Memory)
         .count();
     assert_eq!(
         report["scorecard"].as_array().unwrap().len(),
@@ -691,7 +691,7 @@ fn live_preflight_budget_cap_silent_history_and_judge_substitution_policy() {
         ..BenchmarkExecutionOptions::default()
     };
     let err_no_cap = run_benchmark_suite_with_options(
-        "standard",
+        "memory",
         &datasets_dir,
         None,
         false,
@@ -705,7 +705,7 @@ fn live_preflight_budget_cap_silent_history_and_judge_substitution_policy() {
     let probe_provider = {
         let mut p = ScriptedModelProvider::new();
         p.set_fallback(ScriptedReply::text(
-            r#"{"acts":[{"act":"act","capability_id":"a.speak","places":["place_longmemeval"],"people":["user"],"payload":"cobalt","motivation":5,"confidence_0_20":19,"used_ids":[]}]}"#,
+            r#"{"acts":[{"act":"act","capability_id":"a.speak","places":["place_longmemeval"],"people":["user"],"payload":[99,111,98,97,108,116],"motivation":5,"confidence_0_20":19,"used_ids":[]}]}"#,
         ));
         p
     };
@@ -734,7 +734,7 @@ fn live_preflight_budget_cap_silent_history_and_judge_substitution_policy() {
         ..BenchmarkExecutionOptions::default()
     };
     let err_budget = run_benchmark_suite_with_options(
-        "standard",
+        "memory",
         &datasets_dir,
         None,
         false,
@@ -763,7 +763,7 @@ fn live_preflight_budget_cap_silent_history_and_judge_substitution_policy() {
         ..BenchmarkExecutionOptions::default()
     };
     let rep_official = run_benchmark_suite_with_options(
-        "standard",
+        "memory",
         &datasets_dir,
         None,
         false,
@@ -776,13 +776,23 @@ fn live_preflight_budget_cap_silent_history_and_judge_substitution_policy() {
         rep_official.run_records[0]
             .history_reasoning_mode
             .as_deref(),
-        Some("scripted_silent")
+        Some("live")
+    );
+    assert_eq!(
+        rep_official.run_records[0].monoagens_mode.as_deref(),
+        Some("invalid"),
+        "scripted providers in a live run are never full MonoAgens"
     );
     let lme_row = rep_official
         .scorecard
         .iter()
         .find(|r| r.dataset_id == "longmemeval")
         .unwrap();
+    assert_eq!(lme_row.status, ScorecardStatus::NotScored);
+    assert_eq!(
+        lme_row.reason.as_deref(),
+        Some("invalid: not full MonoAgens")
+    );
     assert_eq!(
         lme_row.metrics.get("overall_acc").copied().flatten(),
         Some(1.0)
@@ -807,7 +817,7 @@ fn live_preflight_budget_cap_silent_history_and_judge_substitution_policy() {
         ..BenchmarkExecutionOptions::default()
     };
     let rep_rename = run_benchmark_suite_with_options(
-        "standard",
+        "memory",
         &datasets_dir,
         None,
         false,
@@ -856,7 +866,7 @@ fn live_preflight_budget_cap_silent_history_and_judge_substitution_policy() {
         ..BenchmarkExecutionOptions::default()
     };
     let err_sub = run_benchmark_suite_with_options(
-        "standard",
+        "memory",
         &datasets_dir,
         None,
         false,
@@ -1081,7 +1091,7 @@ fn capa_live_judge_uses_rust_openai_provider_secrets_cost_guard_and_substitution
         ..BenchmarkExecutionOptions::default()
     };
     let rep = run_benchmark_suite_with_options(
-        "standard",
+        "prospective",
         &datasets_dir,
         None,
         false,
@@ -1137,7 +1147,7 @@ fn capa_live_judge_uses_rust_openai_provider_secrets_cost_guard_and_substitution
         ..BenchmarkExecutionOptions::default()
     };
     let err_halt = run_benchmark_suite_with_options(
-        "standard",
+        "prospective",
         &datasets_dir,
         None,
         false,
@@ -1213,9 +1223,9 @@ fn task_10_2_and_10_3_and_10_5_live_options_embedder_and_report_parity() {
     }
     save_manifest_to_path(&manifest, &manifest_path).unwrap();
 
-    // Task 10.5: standard run refuses without semantic embedder when require_semantic_embedder=true.
+    // Task 10.5: a category run refuses without semantic embedder when require_semantic_embedder=true.
     let err_no_emb = run_benchmark_suite_with_options(
-        "standard",
+        "prospective",
         &datasets_dir,
         None,
         false,
@@ -1258,7 +1268,9 @@ fn task_10_2_and_10_3_and_10_5_live_options_embedder_and_report_parity() {
             if let Ok(mut g) = cap_srv.lock() {
                 g.push((hdr_part.to_owned(), body_part.to_owned()));
             }
-            let is_judge = body_part.contains("CAPA") || body_part.contains("Evaluate CAPA");
+            // Soul effort is `medium`, judge effort `high` in this test; word-based detection
+            // would misfire on rendered Core prompts.
+            let is_judge = body_part.contains(r#""reasoning_effort":"high""#);
             let content = if is_judge {
                 r#"{"label":"no","score":0.0,"rationale":"mismatch in mock test"}"#.to_owned()
             } else {
@@ -1371,7 +1383,7 @@ fn task_10_2_and_10_3_and_10_5_live_options_embedder_and_report_parity() {
     };
 
     let rep = run_benchmark_suite_with_options(
-        "standard",
+        "prospective",
         &datasets_dir,
         None,
         false,
@@ -1392,10 +1404,37 @@ fn task_10_2_and_10_3_and_10_5_live_options_embedder_and_report_parity() {
         reqs.len()
     );
     assert!(
-        reqs.iter().all(|(h, _)| h
+        reqs.iter()
+            .all(|(h, _)| h.to_ascii_lowercase().contains("x-opencode-session:")),
+        "every HTTP call must carry an x-opencode-session header"
+    );
+    // Soul calls carry the stable per-run-and-item session value; the configured header value
+    // still applies to judge calls built outside the Core loop.
+    let soul_sessions: Vec<&str> = reqs
+        .iter()
+        .filter(|(_, b)| b.contains(r#""reasoning_effort":"medium""#))
+        .filter_map(|(h, _)| {
+            h.lines().find_map(|line| {
+                line.strip_prefix("x-opencode-session: ")
+                    .or_else(|| line.strip_prefix("X-OpenCode-Session: "))
+            })
+        })
+        .collect();
+    assert!(!soul_sessions.is_empty(), "no soul calls captured");
+    let first_session = soul_sessions[0].trim();
+    assert!(
+        first_session.starts_with("ses_"),
+        "soul session must be generated per item, got {first_session}"
+    );
+    assert!(
+        soul_sessions.iter().all(|s| s.trim() == first_session),
+        "session value must be stable per run and item: {soul_sessions:?}"
+    );
+    assert!(
+        reqs.iter().any(|(h, _)| h
             .to_ascii_lowercase()
             .contains(&format!("x-opencode-session: {secret_session}"))),
-        "every HTTP call must carry x-opencode-session"
+        "judge calls keep the configured extra header"
     );
     assert!(
         reqs.iter()
@@ -1441,6 +1480,7 @@ fn task_10_2_and_10_3_and_10_5_live_options_embedder_and_report_parity() {
         manifest_path: Some(manifest_path),
         extra_notes: vec!["unit test note".to_owned()],
         skip_python_charts: true,
+        suite: None,
         label: None,
         appendix_markdown: None,
     })
@@ -1467,4 +1507,305 @@ fn task_10_2_and_10_3_and_10_5_live_options_embedder_and_report_parity() {
     assert!(md.contains("x-opencode-session"));
     assert!(!md.contains(secret_session));
     let _ = rep;
+}
+
+/// Task 11.2: a live run that deviates from full MonoAgens (scripted provider/switch off) is
+/// recorded `invalid` and its scores are excluded from the regenerated report.
+#[test]
+fn live_deviation_is_recorded_invalid_and_excluded_from_reports() {
+    use monoagens_lab::datasets::{
+        ReportOptions, derive_monoagens_mode, generate_benchmark_report,
+    };
+    use monoagens_lab::record::{MONOAGENS_MODE_INVALID, MONOAGENS_MODE_OFFLINE};
+
+    let tmp = TempDir::new().unwrap();
+    let manifest_path = tmp.path().join("datasets.manifest.toml");
+    let datasets_dir = tmp.path().join("datasets");
+    let out_dir = tmp.path().join("memory");
+    fs::create_dir_all(&datasets_dir).unwrap();
+
+    let registry = standard_benchmark_registry();
+    let mut manifest = load_and_validate_manifest(
+        &workspace_root().join("lab/datasets.manifest.example.toml"),
+        &registry,
+    )
+    .unwrap();
+    seed_verified_dataset_file(
+        manifest.get_mut("longmemeval").unwrap(),
+        &datasets_dir,
+        "longmemeval_s_cleaned.json",
+        b"lme",
+    );
+    save_manifest_to_path(&manifest, &manifest_path).unwrap();
+
+    let mut handlers = DatasetHandlerRegistry::default();
+    handlers.register_behavioral(
+        Box::new(StubBehavioralConverter {
+            id: "longmemeval".to_owned(),
+            version: "1.0.0".to_owned(),
+        }),
+        Box::new(StubScorer {
+            id: "longmemeval".to_owned(),
+            requires_judge: false,
+            metric_name: "overall_acc".to_owned(),
+        }),
+    );
+
+    // No provider is supplied, so the runner falls back to `ScriptedModelProvider` even though
+    // `live` is requested: that deviation must invalidate the record, never produce a score.
+    let opts = BenchmarkExecutionOptions {
+        manifest_path: Some(manifest_path.clone()),
+        only_ids: Some(vec!["longmemeval".to_owned()]),
+        out_dir: Some(out_dir.clone()),
+        live: true,
+        max_cost_usd: Some(5.0),
+        handlers,
+        ..BenchmarkExecutionOptions::default()
+    };
+    let rep = run_benchmark_suite_with_options(
+        "memory",
+        &datasets_dir,
+        None,
+        false,
+        &Prior::default(),
+        &opts,
+    )
+    .expect("deviating live run still records an invalid record");
+
+    let rec = &rep.run_records[0];
+    assert_eq!(rec.monoagens_mode.as_deref(), Some(MONOAGENS_MODE_INVALID));
+    assert_eq!(rec.history_reasoning_mode.as_deref(), Some("live"));
+    assert!(!rec.is_full_monoagens());
+    let row = rep
+        .scorecard
+        .iter()
+        .find(|r| r.dataset_id == "longmemeval")
+        .unwrap();
+    assert_eq!(row.status, ScorecardStatus::NotScored);
+    assert_eq!(row.reason.as_deref(), Some("invalid: not full MonoAgens"));
+
+    // A switch off is always invalid; a non-live run is explicitly offline, never invalid.
+    let mut switches_off = Switches::all_enabled();
+    switches_off.credence = false;
+    assert_eq!(
+        derive_monoagens_mode(true, true, &switches_off, Some("live"), Some("core_render")),
+        MONOAGENS_MODE_INVALID
+    );
+    assert_eq!(
+        derive_monoagens_mode(
+            true,
+            false,
+            &Switches::all_enabled(),
+            Some("live"),
+            Some("core_render")
+        ),
+        MONOAGENS_MODE_INVALID
+    );
+    assert_eq!(
+        derive_monoagens_mode(
+            false,
+            false,
+            &Switches::all_enabled(),
+            Some("scripted_silent"),
+            Some("core_render")
+        ),
+        MONOAGENS_MODE_OFFLINE
+    );
+
+    let summary = generate_benchmark_report(&ReportOptions {
+        run_dir: out_dir.clone(),
+        out_dir: None,
+        manifest_path: Some(manifest_path),
+        extra_notes: Vec::new(),
+        skip_python_charts: true,
+        suite: Some("memory".to_owned()),
+        label: None,
+        appendix_markdown: None,
+    })
+    .expect("regenerate report");
+    let report_dir = PathBuf::from(&summary.report_dir);
+    let md = fs::read_to_string(report_dir.join("REPORT.md")).unwrap();
+    assert!(
+        md.contains("invalid: not full MonoAgens"),
+        "invalid banner missing from report:\n{md}"
+    );
+    assert!(
+        !md.contains("| overall_acc | 1.0000"),
+        "invalid score leaked"
+    );
+    let status_csv = fs::read_to_string(report_dir.join("tables/status.csv")).unwrap();
+    assert!(
+        status_csv.contains("invalid: not full MonoAgens"),
+        "status table must name the invalid record: {status_csv}"
+    );
+}
+
+/// Task 11.3: `--suite memory` runs only memory datasets and its own report holds no other
+/// category.
+#[test]
+fn cli_memory_suite_runs_only_memory_and_report_has_no_other_category() {
+    let tmp = TempDir::new().unwrap();
+    let manifest_path = tmp.path().join("datasets.manifest.toml");
+    let datasets_dir = tmp.path().join("datasets");
+    let out_dir = tmp.path().join("memory");
+    fs::create_dir_all(&datasets_dir).unwrap();
+
+    let registry = standard_benchmark_registry();
+    let mut manifest = load_and_validate_manifest(
+        &workspace_root().join("lab/datasets.manifest.example.toml"),
+        &registry,
+    )
+    .unwrap();
+    seed_verified_dataset_file(
+        manifest.get_mut("locomo").unwrap(),
+        &datasets_dir,
+        "data/locomo10.json",
+        br#"[{"sample_id":"s0","conversation":{"speaker_a":"alice","speaker_b":"bob","session_1":[{"speaker":"alice","dia_id":"D1:1","text":"hi"}]},"qa":[{"question":"Who greeted?","answer":"alice","evidence":["D1:1"],"category":1}]}]"#,
+    );
+    save_manifest_to_path(&manifest, &manifest_path).unwrap();
+
+    let out = Command::new(lab_bin())
+        .args([
+            "benchmark",
+            "--suite",
+            "memory",
+            "--manifest",
+            manifest_path.to_str().unwrap(),
+            "--datasets-dir",
+            datasets_dir.to_str().unwrap(),
+            "--only",
+            "locomo",
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+            "--allow-no-embedder",
+            "--json",
+        ])
+        .output()
+        .expect("run benchmark --suite memory");
+    assert!(
+        out.status.success(),
+        "benchmark --suite memory failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["suite"], "memory");
+    let specs = report["dataset_specs"].as_array().unwrap();
+    assert!(!specs.is_empty());
+    assert!(
+        specs.iter().all(|s| s["domain"].as_str() == Some("memory")),
+        "memory suite leaked another category: {specs:?}"
+    );
+    let rows = report["scorecard"].as_array().unwrap();
+    assert!(
+        rows.iter().all(|r| r["domain"].as_str() == Some("memory")),
+        "scorecard leaked another category: {rows:?}"
+    );
+    assert!(rows.len() <= 5, "memory suite rows: {rows:?}");
+
+    let md = fs::read_to_string(out_dir.join("report/REPORT.md")).unwrap();
+    assert!(md.contains("### Memory"), "memory section missing:\n{md}");
+    for other in [
+        "### Prospective Memory & Delegation",
+        "### Proactivity & Timing",
+        "### Group Chat",
+        "### Theory of Mind",
+        "### Indonesian Probes",
+        "### Security",
+    ] {
+        assert!(
+            !md.contains(other),
+            "category report contains {other}:\n{md}"
+        );
+    }
+}
+
+/// Task 11.5: a regenerated report marks records without `monoagens_mode` (the 2026-11-18 pilot
+/// shape) invalid and excludes their scores.
+#[test]
+fn report_marks_records_without_monoagens_mode_invalid() {
+    use monoagens_lab::datasets::{ReportOptions, generate_benchmark_report};
+
+    let tmp = TempDir::new().unwrap();
+    let manifest_path = tmp.path().join("datasets.manifest.toml");
+    let datasets_dir = tmp.path().join("datasets");
+    let out_dir = tmp.path().join("memory");
+    fs::create_dir_all(&datasets_dir).unwrap();
+
+    let registry = standard_benchmark_registry();
+    let mut manifest = load_and_validate_manifest(
+        &workspace_root().join("lab/datasets.manifest.example.toml"),
+        &registry,
+    )
+    .unwrap();
+    seed_verified_dataset_file(
+        manifest.get_mut("longmemeval").unwrap(),
+        &datasets_dir,
+        "longmemeval_s_cleaned.json",
+        b"lme",
+    );
+    save_manifest_to_path(&manifest, &manifest_path).unwrap();
+
+    let mut handlers = DatasetHandlerRegistry::default();
+    handlers.register_behavioral(
+        Box::new(StubBehavioralConverter {
+            id: "longmemeval".to_owned(),
+            version: "1.0.0".to_owned(),
+        }),
+        Box::new(StubScorer {
+            id: "longmemeval".to_owned(),
+            requires_judge: false,
+            metric_name: "overall_acc".to_owned(),
+        }),
+    );
+    run_benchmark_suite_with_options(
+        "memory",
+        &datasets_dir,
+        None,
+        false,
+        &Prior::default(),
+        &BenchmarkExecutionOptions {
+            manifest_path: Some(manifest_path.clone()),
+            only_ids: Some(vec!["longmemeval".to_owned()]),
+            out_dir: Some(out_dir.clone()),
+            handlers,
+            ..BenchmarkExecutionOptions::default()
+        },
+    )
+    .expect("offline memory run");
+
+    // Recreate the legacy pilot record shape: `monoagens_mode` absent.
+    let rec_path = out_dir.join("longmemeval__seed-1.json");
+    let raw = fs::read_to_string(&rec_path).unwrap();
+    let mut value: Value = serde_json::from_str(&raw).unwrap();
+    assert!(value.get("monoagens_mode").is_some());
+    value.as_object_mut().unwrap().remove("monoagens_mode");
+    fs::write(&rec_path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+
+    let summary = generate_benchmark_report(&ReportOptions {
+        run_dir: out_dir.clone(),
+        out_dir: None,
+        manifest_path: Some(manifest_path),
+        extra_notes: Vec::new(),
+        skip_python_charts: true,
+        suite: Some("memory".to_owned()),
+        label: Some("PILOT".to_owned()),
+        appendix_markdown: None,
+    })
+    .expect("regenerate legacy report");
+    let report_dir = PathBuf::from(&summary.report_dir);
+    let md = fs::read_to_string(report_dir.join("REPORT.md")).unwrap();
+    assert!(
+        md.contains("invalid: not full MonoAgens"),
+        "invalid banner missing:\n{md}"
+    );
+    assert!(
+        md.contains("PILOT; invalid: not full MonoAgens"),
+        "banner must preserve the requested label:\n{md}"
+    );
+    let status_csv = fs::read_to_string(report_dir.join("tables/status.csv")).unwrap();
+    assert!(
+        status_csv.contains("invalid: not full MonoAgens"),
+        "status.csv must mark the legacy record invalid: {status_csv}"
+    );
 }

@@ -1003,9 +1003,36 @@ fn sampling_defaults_and_cluster_bootstrap_across_benchmarks() {
     let s2 = sample_items_stratified(&loc_conv.items, &default_sampling_rule("locomo", 42));
     assert_eq!(s1.chosen_item_ids, s2.chosen_item_ids);
 
+    // Run each category suite into its own run directory, then let `--suite standard` index the
+    // latest per-category records (`Design 8`, Task 11.3).
+    for category in [
+        "memory",
+        "prospective",
+        "timing",
+        "group",
+        "tom",
+        "indonesian",
+        "security",
+    ] {
+        let opts = BenchmarkExecutionOptions {
+            manifest_path: Some(manifest_path.clone()),
+            out_dir: Some(out_dir.join(category)),
+            ..BenchmarkExecutionOptions::default()
+        };
+        run_benchmark_suite_with_options(
+            category,
+            &datasets_dir,
+            None,
+            false,
+            &Prior::default(),
+            &opts,
+        )
+        .unwrap_or_else(|e| panic!("category suite {category} failed: {e}"));
+    }
+
     let opts = BenchmarkExecutionOptions {
         manifest_path: Some(manifest_path),
-        out_dir: Some(out_dir.clone()),
+        runs_root: Some(out_dir.clone()),
         ..BenchmarkExecutionOptions::default()
     };
     let report: BenchmarkSuiteReport = run_benchmark_suite_with_options(
@@ -1016,7 +1043,7 @@ fn sampling_defaults_and_cluster_bootstrap_across_benchmarks() {
         &Prior::default(),
         &opts,
     )
-    .expect("full offline standard suite over all 20 verified synthetic fixtures succeeds");
+    .expect("standard index over all category runs succeeds");
 
     assert_eq!(report.scorecard.len(), 23);
     // Spot-check lanes and offline statuses:
@@ -1041,7 +1068,7 @@ fn sampling_defaults_and_cluster_bootstrap_across_benchmarks() {
     assert_eq!(find_row("ubuntu_irc").status, ScorecardStatus::Run);
     assert_eq!(find_row("molweni").status, ScorecardStatus::Run);
     assert!(report.pareto.is_some());
-    assert!(out_dir.join("locomo__seed-1.postcard").is_file());
+    assert!(out_dir.join("memory/locomo__seed-1.postcard").is_file());
     assert!(
         GoldBook {
             dataset_id: "x".into(),

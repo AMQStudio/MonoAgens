@@ -46,7 +46,7 @@ pub use framework::{
     ScorerDetailRecorder, ScorerItemOutcome, ScorerMetric, ScorerReport, SplitMix64,
     TranscriptRecord, assert_visiblescope_gold_evidence, cluster_bootstrap_ci,
     execute_external_item, execute_external_item_with_embedder, load_or_convert_cached,
-    make_text_percept, sample_items_stratified, validate_semantic_embedder,
+    make_text_percept, sample_items_stratified, session_id_for, validate_semantic_embedder,
 };
 pub use group_mem_bench::{GroupMemBenchConverter, GroupMemBenchScorer};
 pub use hi_tom::{HiTomConverter, HiTomScorer};
@@ -77,10 +77,12 @@ pub use pm_bench::{PmBenchConverter, PmBenchScorer};
 pub use proactive_bench::{ProactiveBenchConverter, ProactiveBenchScorer};
 pub use report::{GeneratedReportSummary, ReportOptions, generate_benchmark_report};
 pub use runner::{
-    BenchmarkExecutionOptions, DatasetHandlerRegistry, JudgeConfig, JudgeSubstitutionPolicy,
-    PreflightDatasetEstimate, PreflightEstimate, estimate_live_preflight,
+    BenchmarkExecutionOptions, CATEGORY_SUITES, DEFAULT_RUNS_ROOT, DatasetHandlerRegistry,
+    JudgeConfig, JudgeSubstitutionPolicy, PreflightDatasetEstimate, PreflightEstimate,
+    build_standard_index, derive_monoagens_mode, estimate_live_preflight,
     execute_external_datasets, load_lab_provider_secrets, official_judge_model,
-    resolve_judge_metric_name, resolve_manifest_path, verify_required_datasets_with_manifest,
+    resolve_judge_metric_name, resolve_manifest_path, suite_domain,
+    verify_required_datasets_with_manifest,
 };
 pub use scoring_utils::{default_sampling_rule, run_optional_python_helper};
 pub use stale::{StaleConverter, StaleScorer};

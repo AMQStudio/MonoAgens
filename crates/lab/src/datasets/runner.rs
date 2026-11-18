@@ -21,7 +21,7 @@ use monoagens_reason::secrets::{
 use serde::{Deserialize, Serialize};
 
 use crate::LabError;
-use crate::benchmark::BenchmarkDatasetSpec;
+use crate::benchmark::{BenchmarkDatasetSpec, BenchmarkDomain, standard_benchmark_registry};
 use crate::datasets::capa::{CapaConverter, CapaScorer};
 use crate::datasets::dyntom::{DynTomConverter, DynTomScorer};
 use crate::datasets::exploretom::{ExploreTomConverter, ExploreTomScorer};
@@ -57,9 +57,65 @@ use crate::datasets::when2speak::{When2SpeakConverter, When2SpeakScorer};
 use crate::guard::CostGuard;
 use crate::metrics::RunMetricsSummary;
 use crate::pareto::{ScorecardRow, ScorecardStatus};
-use crate::record::{DatasetRunProvenance, MetricScoreInterval, PurposeCost, RunRecord};
+use crate::record::{
+    DatasetRunProvenance, MONOAGENS_MODE_FULL, MONOAGENS_MODE_INVALID, MONOAGENS_MODE_OFFLINE,
+    MetricScoreInterval, PROMPT_SOURCE_CORE_RENDER, PurposeCost, RunRecord,
+};
 use crate::scenario::ScenarioSet;
 use crate::sha256_hex;
+
+/// Category suites accepted by `--suite` (`Design 8`); each runs one `BenchmarkDomain` only.
+pub const CATEGORY_SUITES: [&str; 7] = [
+    "memory",
+    "prospective",
+    "timing",
+    "group",
+    "tom",
+    "indonesian",
+    "security",
+];
+
+/// Maps a category suite name to its single [`BenchmarkDomain`].
+#[must_use]
+pub fn suite_domain(suite: &str) -> Option<BenchmarkDomain> {
+    match suite {
+        "memory" => Some(BenchmarkDomain::Memory),
+        "prospective" => Some(BenchmarkDomain::Prospective),
+        "timing" => Some(BenchmarkDomain::ProactivityTiming),
+        "group" => Some(BenchmarkDomain::GroupChat),
+        "tom" => Some(BenchmarkDomain::TheoryOfMind),
+        "indonesian" => Some(BenchmarkDomain::IndonesianRegister),
+        "security" => Some(BenchmarkDomain::Security),
+        _ => None,
+    }
+}
+
+/// Derives `RunRecord.monoagens_mode` from what actually ran (`Design 8`).
+///
+/// A live run is `full` only when the provider is real, every switch is on, history was loaded
+/// through the live model, and prompts came from the production renderer. Otherwise a live run is
+/// recorded `invalid`; a non-live run is `offline` and makes no MonoAgens claim.
+#[must_use]
+pub fn derive_monoagens_mode(
+    live: bool,
+    provider_is_live: bool,
+    switches: &Switches,
+    history_reasoning_mode: Option<&str>,
+    prompt_source: Option<&str>,
+) -> &'static str {
+    if !live {
+        return MONOAGENS_MODE_OFFLINE;
+    }
+    let full = provider_is_live
+        && switches == &Switches::all_enabled()
+        && history_reasoning_mode != Some("scripted_silent")
+        && prompt_source == Some(PROMPT_SOURCE_CORE_RENDER);
+    if full {
+        MONOAGENS_MODE_FULL
+    } else {
+        MONOAGENS_MODE_INVALID
+    }
+}
 
 /// Official judge model requirement handling when configured judge differs from upstream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,7 +202,6 @@ pub fn estimate_live_preflight(
     switches: &Switches,
     seed: u64,
     max_cost_usd: f64,
-    live_full_history: bool,
 ) -> Result<PreflightEstimate, LabError> {
     let silent_probe = {
         let mut p = ScriptedModelProvider::new();
@@ -181,7 +236,7 @@ pub fn estimate_live_preflight(
                 seed,
                 &silent_probe,
                 "preflight-scripted",
-                live_full_history,
+                false,
                 &mut guard,
             )?;
             hist_w = hist_w.saturating_add(exec.total_history_gate_wakes);
@@ -191,7 +246,8 @@ pub fn estimate_live_preflight(
         } else {
             0
         };
-        let paid_history_calls = if live_full_history { hist_w } else { 0 };
+        // Live runs load history through the live model, so every history wake is a paid call.
+        let paid_history_calls = hist_w;
         let worst_tok = (probe_calls + paid_history_calls) * WORST_CASE_TOK_PER_PROBE
             + judge_calls * WORST_CASE_TOK_PER_JUDGE;
         let worst_usd = (worst_tok as f64 / 1_000.0) * WORST_CASE_USD_PER_1K_TOK;
@@ -299,9 +355,10 @@ pub struct BenchmarkExecutionOptions<'a> {
     pub only_ids: Option<Vec<String>>,
     pub seed: u64,
     pub live: bool,
-    pub live_full_history: bool,
     pub max_cost_usd: Option<f64>,
     pub out_dir: Option<PathBuf>,
+    /// Root scanned by `--suite standard` for the latest per-category run records.
+    pub runs_root: Option<PathBuf>,
     pub target_items_per_dataset: Option<usize>,
     pub pilot_prefix_n: Option<usize>,
     pub preflight_only: bool,
@@ -328,9 +385,9 @@ impl Default for BenchmarkExecutionOptions<'_> {
             only_ids: None,
             seed: 1,
             live: false,
-            live_full_history: false,
             max_cost_usd: None,
             out_dir: None,
+            runs_root: None,
             target_items_per_dataset: None,
             pilot_prefix_n: None,
             preflight_only: false,
@@ -384,7 +441,9 @@ pub fn verify_required_datasets_with_manifest(
     registry: &[BenchmarkDatasetSpec],
     only_ids: Option<&[String]>,
 ) -> Result<(DatasetsManifest, Vec<PathBuf>), LabError> {
-    let manifest = load_and_validate_manifest(manifest_path, registry)?;
+    // Registry↔manifest consistency always uses the full standard registry, even when the caller
+    // asks for one category; `registry` below only selects which required dataset ids to verify.
+    let manifest = load_and_validate_manifest(manifest_path, &standard_benchmark_registry())?;
 
     let mut targets: BTreeSet<String> = BTreeSet::new();
     if let Some(only) = only_ids {
@@ -467,7 +526,7 @@ pub fn execute_external_datasets(
             "--live benchmark run requires --max-cost-usd <cap>".to_owned(),
         ));
     }
-    if suite == "standard" && opts.require_semantic_embedder {
+    if opts.require_semantic_embedder {
         let valid = match opts.embedder {
             Some(emb) => {
                 let backend = emb.backend_name().to_ascii_lowercase();
@@ -495,9 +554,11 @@ pub fn execute_external_datasets(
     let manifest_digest = format!("sha256:{}", sha256_hex(&manifest_raw));
     let loaded_prior = monoagens_store::LoadedPrior::from_prior(prior.clone())?;
 
+    let suite_scope = suite_domain(suite);
     let external_specs: Vec<&BenchmarkDatasetSpec> = registry
         .iter()
         .filter(|s| s.requires_external_corpus)
+        .filter(|s| suite_scope.is_none_or(|dom| s.domain == dom))
         .collect();
 
     let only_set: Option<BTreeSet<String>> = opts
@@ -576,7 +637,6 @@ pub fn execute_external_datasets(
             &Switches::all_enabled(),
             opts.seed,
             cap,
-            opts.live_full_history,
         )?;
         if let Some(dir) = &opts.out_dir {
             fs::create_dir_all(dir)?;
@@ -673,7 +733,7 @@ pub fn execute_external_datasets(
         let verify_res = verify_manifest_entry(entry, datasets_dir)?;
         if !verify_res.verified
             && !only_regenerable_cache_failures(&verify_res)
-            && suite != "standard"
+            && suite_domain(suite).is_none()
         {
             rows.push(ScorecardRow {
                 dataset_id: spec.id.clone(),
@@ -752,6 +812,8 @@ pub fn execute_external_datasets(
                         is_partial,
                         None,
                         Vec::new(),
+                        MONOAGENS_MODE_OFFLINE,
+                        None,
                     );
                     if let Some(prov) = rec.dataset_provenance.as_mut() {
                         prov.embedder_backend = opts
@@ -816,6 +878,8 @@ pub fn execute_external_datasets(
                         is_partial,
                         None,
                         Vec::new(),
+                        MONOAGENS_MODE_OFFLINE,
+                        None,
                     );
                     if let Some(prov) = rec.dataset_provenance.as_mut() {
                         prov.embedder_backend = opts
@@ -934,9 +998,12 @@ pub fn execute_external_datasets(
                 opts.seed,
                 probe_provider,
                 &opts.probe_model_name,
-                opts.live_full_history,
+                opts.live,
                 &mut guard,
                 active_embedder,
+                None,
+                None,
+                None,
             )?;
             if history_mode_recorded.is_none() && item.history_mode == HistoryMode::StaticSilent {
                 history_mode_recorded = Some(exec.history_reasoning_mode);
@@ -1063,7 +1130,21 @@ pub fn execute_external_datasets(
             });
         }
 
-        let row_status = if !any_scored && any_not_scored {
+        // Every model call above went through the production renderer; record that and derive
+        // whether this run actually exercised the full MonoAgens (`Design 8`).
+        let prompt_source = Some(PROMPT_SOURCE_CORE_RENDER);
+        let provider_is_live = probe_provider.provider_name() != "scripted";
+        let monoagens_mode = derive_monoagens_mode(
+            opts.live,
+            provider_is_live,
+            &switches,
+            history_mode_recorded.as_deref(),
+            prompt_source,
+        );
+        // A deviating live run is never a MonoAgens result: keep its metrics out of the scorecard
+        // and the Pareto frontier by marking the row `not_scored`.
+        let invalid_run = monoagens_mode == MONOAGENS_MODE_INVALID;
+        let row_status = if invalid_run || (!any_scored && any_not_scored) {
             ScorecardStatus::NotScored
         } else if is_partial || any_not_scored {
             ScorecardStatus::Partial
@@ -1097,6 +1178,8 @@ pub fn execute_external_datasets(
             is_partial,
             history_mode_recorded,
             combined_costs.into_values().collect(),
+            monoagens_mode,
+            prompt_source,
         );
         rec.metrics.percepts = total_percepts_count;
         rec.metrics.decisions_go = total_decisions_go;
@@ -1153,7 +1236,9 @@ pub fn execute_external_datasets(
             metric_intervals: intervals,
             cost_usd,
             e_tok,
-            reason: if row_status == ScorecardStatus::NotScored {
+            reason: if invalid_run {
+                Some("invalid: not full MonoAgens".to_owned())
+            } else if row_status == ScorecardStatus::NotScored {
                 Some("requires --live judge".to_owned())
             } else {
                 None
@@ -1419,6 +1504,8 @@ fn build_external_run_record(
     partial_run: bool,
     history_reasoning_mode: Option<String>,
     cost_by_purpose: Vec<PurposeCost>,
+    monoagens_mode: &str,
+    prompt_source: Option<&str>,
 ) -> RunRecord {
     let switches = Switches::all_enabled();
     let pinned_revision = entry
@@ -1463,6 +1550,7 @@ fn build_external_run_record(
         },
         cost_by_purpose,
         history_reasoning_mode,
+        monoagens_mode: Some(monoagens_mode.to_owned()),
         dataset_provenance: Some(DatasetRunProvenance {
             dataset_id: dataset_id.to_owned(),
             pinned_revision,
@@ -1485,6 +1573,9 @@ fn build_external_run_record(
             provider_endpoint_host: None,
             embedder_backend: None,
             embedder_revision: None,
+            prompt_source: prompt_source.map(str::to_owned),
+            development_exposure: None,
+            memory_usage: None,
             category_metrics: BTreeMap::new(),
             failed_items: Vec::new(),
             model_latencies_ms: Vec::new(),
@@ -1725,6 +1816,212 @@ fn take_pilot_prefix(
         .into_iter()
         .filter(|it| allowed_clusters.contains(&it.cluster_id))
         .collect()
+}
+
+/// Default root scanned by `--suite standard` for the latest per-category runs.
+pub const DEFAULT_RUNS_ROOT: &str = "lab/runs";
+
+/// Collects the newest persisted [`RunRecord`] per dataset id under `root` (recursively,
+/// skipping `report/` and `transcripts/`).
+fn collect_latest_run_records(
+    root: &Path,
+) -> Result<BTreeMap<String, (RunRecord, SystemTime)>, LabError> {
+    let mut latest: BTreeMap<String, (RunRecord, SystemTime)> = BTreeMap::new();
+    if !root.is_dir() {
+        return Ok(latest);
+    }
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                if name != "report" && name != "transcripts" {
+                    stack.push(path);
+                }
+                continue;
+            }
+            let Some(fname) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if !fname.ends_with(".json")
+                || !fname.contains("__seed-")
+                || fname.ends_with(".outcomes.json")
+            {
+                continue;
+            }
+            let Ok(raw) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(rec) = serde_json::from_str::<RunRecord>(&raw) else {
+                continue;
+            };
+            let mtime = fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .unwrap_or(UNIX_EPOCH);
+            let ds = rec.scenario_id.clone();
+            match latest.get(&ds) {
+                Some((_, existing)) if *existing >= mtime => {}
+                _ => {
+                    latest.insert(ds, (rec, mtime));
+                }
+            }
+        }
+    }
+    Ok(latest)
+}
+
+/// Builds the `--suite standard` index: strictly one row per registered dataset, taken from the
+/// latest per-category run under `opts.runs_root` (default `lab/runs`). Never executes a dataset
+/// and never mixes categories in one execution.
+pub fn build_standard_index(
+    manifest_path: &Path,
+    registry: &[BenchmarkDatasetSpec],
+    opts: &BenchmarkExecutionOptions<'_>,
+) -> Result<ExternalExecutionResult, LabError> {
+    let manifest = load_and_validate_manifest(manifest_path, &standard_benchmark_registry())?;
+    let runs_root = opts
+        .runs_root
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_RUNS_ROOT));
+    crate::scenario::ensure_not_sealed_path(&runs_root)?;
+    let latest = collect_latest_run_records(&runs_root)?;
+
+    let only_set: Option<BTreeSet<String>> = opts
+        .only_ids
+        .as_ref()
+        .map(|ids| ids.iter().cloned().collect());
+    let is_partial = only_set.is_some();
+    let mut left_out = Vec::new();
+    let mut rows = Vec::new();
+    let mut records = Vec::new();
+
+    for spec in registry.iter().filter(|s| s.requires_external_corpus) {
+        let entry = manifest.get(&spec.id).ok_or_else(|| {
+            LabError::Protocol(format!("manifest missing external dataset '{}'", spec.id))
+        })?;
+        let base_metrics: BTreeMap<String, Option<f64>> = spec
+            .primary_metrics
+            .iter()
+            .map(|m| (m.clone(), None))
+            .collect();
+        let excluded_by_only = only_set.as_ref().is_some_and(|set| !set.contains(&spec.id));
+        if excluded_by_only {
+            left_out.push(spec.id.clone());
+        }
+
+        if entry.availability == DatasetAvailability::Unavailable {
+            rows.push(ScorecardRow {
+                dataset_id: spec.id.clone(),
+                domain: spec.domain,
+                lane: entry.lane,
+                status: ScorecardStatus::Unavailable,
+                core_applicability: entry.core_applicability,
+                contamination_risk: entry.contamination_risk,
+                metrics: base_metrics,
+                metric_intervals: Vec::new(),
+                cost_usd: 0.0,
+                e_tok: 0.0,
+                reason: Some(entry.reason.clone()),
+            });
+            continue;
+        }
+
+        let loaded = latest.get(&spec.id);
+        let offline_ok = loaded
+            .is_some_and(|(rec, _)| rec.monoagens_mode.as_deref() == Some(MONOAGENS_MODE_OFFLINE));
+        let valid = loaded.is_some_and(|(rec, _)| rec.is_full_monoagens()) || offline_ok;
+
+        if excluded_by_only {
+            rows.push(ScorecardRow {
+                dataset_id: spec.id.clone(),
+                domain: spec.domain,
+                lane: entry.lane,
+                status: ScorecardStatus::NotScored,
+                core_applicability: entry.core_applicability,
+                contamination_risk: entry.contamination_risk,
+                metrics: base_metrics,
+                metric_intervals: Vec::new(),
+                cost_usd: 0.0,
+                e_tok: 0.0,
+                reason: Some("excluded by --only".to_owned()),
+            });
+            continue;
+        }
+
+        let Some((rec, _)) = loaded else {
+            rows.push(ScorecardRow {
+                dataset_id: spec.id.clone(),
+                domain: spec.domain,
+                lane: entry.lane,
+                status: ScorecardStatus::NotScored,
+                core_applicability: entry.core_applicability,
+                contamination_risk: entry.contamination_risk,
+                metrics: base_metrics,
+                metric_intervals: Vec::new(),
+                cost_usd: 0.0,
+                e_tok: 0.0,
+                reason: Some("no per-category run recorded".to_owned()),
+            });
+            continue;
+        };
+
+        if !valid {
+            rows.push(ScorecardRow {
+                dataset_id: spec.id.clone(),
+                domain: spec.domain,
+                lane: entry.lane,
+                status: ScorecardStatus::NotScored,
+                core_applicability: entry.core_applicability,
+                contamination_risk: entry.contamination_risk,
+                metrics: base_metrics,
+                metric_intervals: Vec::new(),
+                cost_usd: 0.0,
+                e_tok: 0.0,
+                reason: Some("invalid: not full MonoAgens".to_owned()),
+            });
+            continue;
+        }
+
+        let prov = rec.dataset_provenance.as_ref();
+        let intervals = prov.map(|p| p.metric_scores.clone()).unwrap_or_default();
+        let mut metric_map: BTreeMap<String, Option<f64>> = BTreeMap::new();
+        for iv in &intervals {
+            metric_map.insert(iv.metric.clone(), iv.value);
+        }
+        let any_scored = intervals.iter().any(|iv| iv.value.is_some());
+        let any_unscored = intervals.iter().any(|iv| iv.value.is_none());
+        let partial_flag = prov.is_some_and(|p| p.partial_run);
+        let status = if !any_scored && any_unscored {
+            ScorecardStatus::NotScored
+        } else if partial_flag || any_unscored {
+            ScorecardStatus::Partial
+        } else {
+            ScorecardStatus::Run
+        };
+        let cost_usd: f64 = rec.cost_by_purpose.iter().map(|p| p.cost_usd).sum();
+        let e_tok: f64 = rec
+            .cost_by_purpose
+            .iter()
+            .map(|p| (p.tokens_in + p.tokens_out) as f64)
+            .sum();
+        rows.push(ScorecardRow {
+            dataset_id: spec.id.clone(),
+            domain: spec.domain,
+            lane: entry.lane,
+            status,
+            core_applicability: entry.core_applicability,
+            contamination_risk: entry.contamination_risk,
+            metrics: metric_map,
+            metric_intervals: intervals,
+            cost_usd,
+            e_tok,
+            reason: None,
+        });
+        records.push(rec.clone());
+    }
+
+    Ok((rows, records, is_partial, left_out, None))
 }
 
 fn utc_iso_now() -> String {

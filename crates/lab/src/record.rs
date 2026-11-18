@@ -12,6 +12,15 @@ use crate::checks::CheckResult;
 use crate::metrics::RunMetricsSummary;
 use crate::scenario::ScenarioSet;
 
+/// `RunRecord.monoagens_mode` for a live run that exercised the full MonoAgens loop.
+pub const MONOAGENS_MODE_FULL: &str = "full";
+/// `RunRecord.monoagens_mode` for a live run that deviated from the full MonoAgens.
+pub const MONOAGENS_MODE_INVALID: &str = "invalid";
+/// `RunRecord.monoagens_mode` for a non-live run (never a MonoAgens benchmark result).
+pub const MONOAGENS_MODE_OFFLINE: &str = "offline";
+/// `DatasetRunProvenance.prompt_source` when every model call used the production renderer.
+pub const PROMPT_SOURCE_CORE_RENDER: &str = "core_render";
+
 /// Token and call accounting grouped by [`ModelPurpose`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PurposeCost {
@@ -44,6 +53,37 @@ pub struct FailedItemRecord {
     pub probe_id: String,
     pub stage: String,
     pub reason: String,
+}
+
+/// Token and cost accounting for one ledger phase of a memory-suite dataset.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UsageBreakdown {
+    pub calls: u64,
+    pub uncached_input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub cached_unknown_calls: u64,
+    pub output_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub list_cost_usd: f64,
+    pub allowance_cost_usd: f64,
+}
+
+/// Ingest/answer/judge usage recorded for a memory-suite dataset run.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MemoryUsageTotals {
+    pub ingest: UsageBreakdown,
+    pub answer: UsageBreakdown,
+    pub judge: UsageBreakdown,
+    pub latencies_ms: Vec<u64>,
+    /// Ledger usage grouped by the recorded call purpose (`reason`/`classify`/`consolidate`/`judge`).
+    #[serde(default)]
+    pub by_purpose: BTreeMap<String, UsageBreakdown>,
+    /// Calls whose provider `finish_reason` was `length`, per purpose.
+    #[serde(default)]
+    pub runaway_by_purpose: BTreeMap<String, u64>,
+    /// Configured model output cap (`model.max_output_tokens`).
+    #[serde(default)]
+    pub max_output_tokens: Option<u32>,
 }
 
 /// Provenance and sampling metadata attached to external dataset runs (`benchmark-evaluation/spec.md`).
@@ -84,6 +124,15 @@ pub struct DatasetRunProvenance {
     pub embedder_backend: Option<String>,
     #[serde(default)]
     pub embedder_revision: Option<String>,
+    /// `core_render` when every model call was rendered by `monoagens_reason`, never by the Lab.
+    #[serde(default)]
+    pub prompt_source: Option<String>,
+    /// `none` when no MonoAgens change was informed by this benchmark.
+    #[serde(default)]
+    pub development_exposure: Option<String>,
+    /// Ledger-derived ingest/answer/judge usage for a memory-suite run.
+    #[serde(default)]
+    pub memory_usage: Option<MemoryUsageTotals>,
     #[serde(default)]
     pub category_metrics: BTreeMap<String, BTreeMap<String, f64>>,
     #[serde(default)]
@@ -122,6 +171,9 @@ pub struct RunRecord {
     pub cost_by_purpose: Vec<PurposeCost>,
     #[serde(default)]
     pub history_reasoning_mode: Option<String>,
+    /// `full` only when the run exercised the complete MonoAgens loop (`Design 8`).
+    #[serde(default)]
+    pub monoagens_mode: Option<String>,
     #[serde(default)]
     pub dataset_provenance: Option<DatasetRunProvenance>,
 }
@@ -138,6 +190,20 @@ impl RunRecord {
             switches.self_mechanics_guide,
         );
         map
+    }
+
+    /// Returns `true` only for a live run that exercised the full MonoAgens: production prompt
+    /// rendering, all switches on, live history, and `monoagens_mode = "full"`.
+    #[must_use]
+    pub fn is_full_monoagens(&self) -> bool {
+        self.monoagens_mode.as_deref() == Some(MONOAGENS_MODE_FULL)
+            && self.switches == Switches::all_enabled()
+            && self.history_reasoning_mode.as_deref() != Some("scripted_silent")
+            && self
+                .dataset_provenance
+                .as_ref()
+                .and_then(|p| p.prompt_source.as_deref())
+                == Some(PROMPT_SOURCE_CORE_RENDER)
     }
 
     /// Encodes this run record using `postcard`.

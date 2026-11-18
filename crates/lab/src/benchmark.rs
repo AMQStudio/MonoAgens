@@ -17,8 +17,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::LabError;
 use crate::datasets::{
-    BenchmarkExecutionOptions, PreflightEstimate, execute_external_datasets,
-    load_and_validate_manifest, resolve_manifest_path, verify_required_datasets_with_manifest,
+    BenchmarkExecutionOptions, PreflightEstimate, build_standard_index, execute_external_datasets,
+    load_and_validate_manifest, resolve_manifest_path, suite_domain,
+    verify_required_datasets_with_manifest,
 };
 use crate::pareto::{
     ConvexParetoReport, ParetoScorecardInput, ScorecardRow, compute_convex_pareto,
@@ -483,35 +484,79 @@ pub fn run_benchmark_suite_with_options(
     opts: &BenchmarkExecutionOptions<'_>,
 ) -> Result<BenchmarkSuiteReport, LabError> {
     ensure_not_sealed_path(datasets_dir)?;
-    let registry = standard_benchmark_registry();
+    let full_registry = standard_benchmark_registry();
     let manifest_path = resolve_manifest_path(opts.manifest_path.as_deref(), datasets_dir);
-
-    let manifest = if suite == "standard" {
-        let (m, _present) = verify_required_datasets_with_manifest(
-            &manifest_path,
-            datasets_dir,
-            &registry,
-            opts.only_ids.as_deref(),
-        )?;
-        m
-    } else if suite == "in_tree_only" {
-        load_and_validate_manifest(&manifest_path, &registry)?
-    } else {
-        return Err(LabError::Protocol(format!(
-            "unknown benchmark suite '{suite}' (expected 'standard' or 'in_tree_only')"
-        )));
+    let suite_scope = suite_domain(suite);
+    let active_registry: Vec<BenchmarkDatasetSpec> = match suite_scope {
+        Some(domain) => full_registry
+            .iter()
+            .filter(|s| s.domain == domain)
+            .cloned()
+            .collect(),
+        None => full_registry.clone(),
     };
 
-    let (scorecard, run_records, partial, left_out_datasets, preflight_estimate) =
-        execute_external_datasets(
-            suite,
-            &manifest,
-            &manifest_path,
-            datasets_dir,
-            &registry,
-            prior,
-            opts,
-        )?;
+    let (scorecard, run_records, partial, left_out_datasets, preflight_estimate, dataset_specs) =
+        if suite == "standard" {
+            // The standard suite only indexes the latest per-category runs; it never executes.
+            let (rows, records, partial, left_out, preflight) =
+                build_standard_index(&manifest_path, &full_registry, opts)?;
+            (
+                rows,
+                records,
+                partial,
+                left_out,
+                preflight,
+                full_registry.clone(),
+            )
+        } else if suite == "in_tree_only" {
+            let manifest = load_and_validate_manifest(&manifest_path, &full_registry)?;
+            let (rows, records, partial, left_out, preflight) = execute_external_datasets(
+                suite,
+                &manifest,
+                &manifest_path,
+                datasets_dir,
+                &full_registry,
+                prior,
+                opts,
+            )?;
+            (
+                rows,
+                records,
+                partial,
+                left_out,
+                preflight,
+                full_registry.clone(),
+            )
+        } else if suite_scope.is_some() {
+            let (manifest, _present) = verify_required_datasets_with_manifest(
+                &manifest_path,
+                datasets_dir,
+                &active_registry,
+                opts.only_ids.as_deref(),
+            )?;
+            let (rows, records, partial, left_out, preflight) = execute_external_datasets(
+                suite,
+                &manifest,
+                &manifest_path,
+                datasets_dir,
+                &active_registry,
+                prior,
+                opts,
+            )?;
+            (
+                rows,
+                records,
+                partial,
+                left_out,
+                preflight,
+                active_registry.clone(),
+            )
+        } else {
+            return Err(LabError::Protocol(format!(
+                "unknown benchmark suite '{suite}' (expected 'standard', 'in_tree_only', or one of memory|prospective|timing|group|tom|indonesian|security)"
+            )));
+        };
 
     let tool_rag_scaling = run_tool_rag_scaling_eval(prior);
     let arm_t_ok = run_arm_t_restart_parity_check(prior)?;
@@ -544,7 +589,7 @@ pub fn run_benchmark_suite_with_options(
         partial,
         left_out_datasets,
         datasets_dir: datasets_dir.to_string_lossy().into_owned(),
-        dataset_specs: registry,
+        dataset_specs,
         scorecard,
         run_records,
         preflight_estimate,

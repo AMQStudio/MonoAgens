@@ -155,8 +155,14 @@ struct OpenCodeUsageMeta {
 }
 
 #[derive(Deserialize, Clone)]
+#[allow(dead_code)]
 struct OpenCodeTokenDetails {
+    input: Option<u64>,
+    output: Option<u64>,
     reasoning: Option<u64>,
+    cache_read: Option<u64>,
+    cache_write_5m: Option<u64>,
+    cache_write_1h: Option<u64>,
 }
 
 /// Cumulative HTTP retry and provider-reported quota telemetry from [`OpenAiModelProvider`].
@@ -174,9 +180,18 @@ pub struct OpenAiTelemetrySnapshot {
     pub cumulative_tokens_in: u64,
     pub cumulative_tokens_out: u64,
     pub cumulative_reasoning_tokens: u64,
+    /// Sum of provider-reported cached input tokens (`cache_read` or `cached_tokens`).
+    #[serde(default)]
+    pub cumulative_cached_tokens: u64,
+    /// Calls whose provider response reported no cached-token count at all (`unknown`, never `0`).
+    #[serde(default)]
+    pub cached_tokens_unknown_calls: u64,
     pub call_tokens_in: Vec<u64>,
     pub call_tokens_out: Vec<u64>,
     pub call_reasoning_tokens: Vec<u64>,
+    /// Per-call cached input tokens; `None` means the provider reported `unknown`.
+    #[serde(default)]
+    pub call_cached_tokens: Vec<Option<u64>>,
     pub call_latencies_ms: Vec<u64>,
 }
 
@@ -403,12 +418,31 @@ impl ModelProvider for OpenAiModelProvider {
         }
 
         let mut attempt: u32 = 0;
+        let session_header = request
+            .session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .and_then(|sid| HeaderValue::from_str(sid).ok());
         let (status, raw_body) = loop {
+            let mut headers = self.parsed_headers.clone();
+            if let Some(val) = &session_header {
+                headers.insert(HeaderName::from_static("x-opencode-session"), val.clone());
+            }
+            for (name, value) in &request.extra_headers {
+                let Ok(h_name) = HeaderName::from_bytes(name.trim().as_bytes()) else {
+                    continue;
+                };
+                let Ok(h_val) = HeaderValue::from_str(value) else {
+                    continue;
+                };
+                headers.insert(h_name, h_val);
+            }
             let mut req = self
                 .client
                 .post(&self.config.endpoint_url)
                 .timeout(Duration::from_millis(timeout_ms))
-                .headers(self.parsed_headers.clone())
+                .headers(headers)
                 .json(&payload);
             if let Some(key) = &self.config.api_key {
                 req = req.bearer_auth(key.expose());
@@ -548,11 +582,22 @@ impl ModelProvider for OpenAiModelProvider {
         let usage = parsed.usage.map(|u| {
             let input_tokens = u.prompt_tokens.unwrap_or(0);
             let output_tokens = u.completion_tokens.unwrap_or(0);
-            let cached_tokens = u.prompt_tokens_details.and_then(|d| d.cached_tokens);
-            let reasoning_tokens = u
+            // OpenCode reports cached reads in `usage.opencode.tokens.cache_read` (its `input`
+            // excludes cache hits); OpenAI-compatible APIs use `prompt_tokens_details.cached_tokens`.
+            let opencode_reasoning = u
                 .opencode
                 .as_ref()
-                .and_then(|oc| oc.tokens.as_ref().and_then(|t| t.reasoning))
+                .and_then(|oc| oc.tokens.as_ref().and_then(|t| t.reasoning));
+            let cached_tokens = u
+                .opencode
+                .as_ref()
+                .and_then(|oc| oc.tokens.as_ref().and_then(|t| t.cache_read))
+                .or_else(|| {
+                    u.prompt_tokens_details
+                        .as_ref()
+                        .and_then(|d| d.cached_tokens)
+                });
+            let reasoning_tokens = opencode_reasoning
                 .or_else(|| u.completion_tokens_details.and_then(|d| d.reasoning_tokens));
             if let Ok(mut t) = self.telemetry.lock() {
                 t.call_count = t.call_count.saturating_add(1);
@@ -561,9 +606,19 @@ impl ModelProvider for OpenAiModelProvider {
                 t.cumulative_reasoning_tokens = t
                     .cumulative_reasoning_tokens
                     .saturating_add(reasoning_tokens.unwrap_or(0));
+                match cached_tokens {
+                    Some(c) => {
+                        t.cumulative_cached_tokens = t.cumulative_cached_tokens.saturating_add(c)
+                    }
+                    None => {
+                        t.cached_tokens_unknown_calls =
+                            t.cached_tokens_unknown_calls.saturating_add(1)
+                    }
+                }
                 t.call_tokens_in.push(input_tokens);
                 t.call_tokens_out.push(output_tokens);
                 t.call_reasoning_tokens.push(reasoning_tokens.unwrap_or(0));
+                t.call_cached_tokens.push(cached_tokens);
                 t.call_latencies_ms.push(latency_ms);
                 if let Some(c) = u.cost {
                     t.cumulative_cost_usd += c;

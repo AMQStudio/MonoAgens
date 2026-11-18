@@ -412,6 +412,8 @@ impl RenderedContext {
             timeout_ms: 30_000,
             max_output_tokens: None,
             temperature: None,
+            session_id: None,
+            extra_headers: Vec::new(),
         }
     }
 }

@@ -587,6 +587,7 @@ pub fn run_scenario<S: Store>(
         metrics,
         cost_by_purpose: purpose_cost_vec,
         history_reasoning_mode: None,
+        monoagens_mode: Some(crate::record::MONOAGENS_MODE_OFFLINE.to_owned()),
         dataset_provenance: None,
     };
 
