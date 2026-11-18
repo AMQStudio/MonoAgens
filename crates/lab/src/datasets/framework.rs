@@ -560,6 +560,12 @@ pub enum TranscriptRecord {
         latency_ms: u64,
         outcome: String,
         error_detail: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        strict_schema: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure_field: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure_reason: Option<String>,
     },
     Action {
         probe_id: String,
@@ -655,7 +661,7 @@ pub fn execute_external_item_with_embedder(
         "interactive"
     };
     // Stable per-run-and-item session value so repeated prefixes hit the provider prompt cache.
-    let session_id = session_id_for(seed, &item.item_id);
+    let session_id = conversation_id_for(seed, &item.item_id);
 
     let mut history_gate_wakes = 0_u64;
     let mut purpose_costs: BTreeMap<u8, PurposeCost> = BTreeMap::new();
@@ -936,9 +942,9 @@ pub fn execute_external_item_with_embedder(
     })
 }
 
-/// Stable `x-opencode-session` value shared by every call of one run and item (`R-58`).
+/// Stable conversation identifier shared by every call of one run and item (`R-58`).
 #[must_use]
-pub fn session_id_for(seed: u64, item_id: &str) -> String {
+pub fn conversation_id_for(seed: u64, item_id: &str) -> String {
     let digest = crate::sha256_hex(format!("{seed}:{item_id}").as_bytes());
     format!("ses_{}", &digest[..32])
 }
@@ -1081,7 +1087,7 @@ struct DriveEffectsContext<'a> {
     item_id: &'a str,
     probe_id: &'a str,
     is_silent_history: bool,
-    /// Stable `x-opencode-session` value for this run and item.
+    /// Stable conversation identifier for this run and item.
     session_id: &'a str,
     /// Proxy attribution for this item; the phase is set per call.
     attribution: Option<&'a crate::memory::proxy::CallAttribution>,
@@ -1158,7 +1164,7 @@ fn drive_model_effects(
                         model_name,
                         extras.attachments.clone(),
                     );
-                    req.session_id = Some(ctx.session_id.to_owned());
+                    req.conversation_id = Some(ctx.session_id.to_owned());
                     if let Some(timeout_ms) = ctx.request_timeout_ms {
                         req.timeout_ms = timeout_ms.max(1);
                     }
@@ -1223,6 +1229,9 @@ fn drive_model_effects(
                                     latency_ms: ok.record.latency_ms,
                                     outcome: "success".to_owned(),
                                     error_detail: None,
+                                    strict_schema: Some(ok.record.strict_schema),
+                                    failure_field: None,
+                                    failure_reason: None,
                                 });
                                 let inp = match ok.output {
                                     ModelOutput::ThoughtActs(parsed) => Input::ModelResult {
@@ -1246,6 +1255,7 @@ fn drive_model_effects(
                                         reason: fail.to_string(),
                                     });
                                 }
+                                let fmt_rec = fail.output_format_record();
                                 ctx.transcript_events.push(TranscriptRecord::ModelCall {
                                     phase: ctx.phase.to_owned(),
                                     turn_or_probe_id: ctx.turn_or_probe_id.to_owned(),
@@ -1262,6 +1272,9 @@ fn drive_model_effects(
                                     latency_ms: fail.record.latency_ms,
                                     outcome: format!("failed:{}", fail.class),
                                     error_detail: Some(fail.detail.clone()),
+                                    strict_schema: Some(fail.record.strict_schema),
+                                    failure_field: fmt_rec.as_ref().map(|r| r.field.clone()),
+                                    failure_reason: fmt_rec.as_ref().map(|r| r.reason.clone()),
                                 });
                                 (fail.to_core_input(), 0, 0, None, None)
                             }

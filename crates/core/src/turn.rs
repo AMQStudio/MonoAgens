@@ -1195,6 +1195,9 @@ pub(crate) fn execute_turn<S: Store>(
             thought_rec.taint = turn_taint;
             if let Some(thought_text) = acts.iter().find_map(|a| match a {
                 ThoughtAct::Think { thought, .. } => Some(thought),
+                ThoughtAct::Consolidate {
+                    output: ConsolidateOutput::Gist { summary, .. },
+                } => Some(summary),
                 _ => None,
             }) {
                 thought_rec.payload = OpaquePayload::from_bytes(thought_text.as_bytes());
@@ -1717,15 +1720,17 @@ pub(crate) fn execute_turn<S: Store>(
                                     Some(place.clone()),
                                     now,
                                 );
+                                let plan = build_consolidate_plan(
+                                    core,
+                                    &stored_thought,
+                                    place,
+                                    scope,
+                                    now,
+                                    items,
+                                );
                                 effects.push(Effect::Model {
                                     purpose: ModelPurpose::Consolidate,
-                                    plan: ContextPlan {
-                                        trigger_event_id: Some(stored_thought.id),
-                                        place: Some(place),
-                                        visible_scope: Some(scope),
-                                        items,
-                                        ..ContextPlan::default()
-                                    },
+                                    plan,
                                 });
                             }
 
@@ -2905,7 +2910,8 @@ fn assemble_full_context_plan<S: Store>(
             places: e.places.clone(),
             people: e.people.clone(),
             is_fired_or_overdue: e.due_ms <= now || e.is_overdue || e.due_woken,
-            estimated_bytes: 96,
+            condition: e.condition.clone(),
+            estimated_bytes: 96 + e.condition.len(),
         })
         .collect();
     commitments.sort_by_key(|c| (c.due_ms.as_millis(), c.expectation_id.as_u64()));
@@ -4682,33 +4688,36 @@ fn process_judged_silences_on_percept<S: Store>(
             let similar = max_matching_cosine(&percept.embeddings, &exp.condition_embeddings)
                 .is_some_and(|s| s >= lo);
             if similar {
-                if let Some(mut_exp) = core.state_mut().expectation_book.expectations.get_mut(&sid)
-                    && let Some(rs) = &mut mut_exp.response_spec
-                {
-                    rs.awaiting_reask_classify = true;
-                    rs.pending_reask_event_id = Some(stored.id);
-                }
-                core.state_mut().expectation_book.pending_classify.insert(
-                    stored.id,
-                    PendingClassifyKind::SilenceReask {
-                        expectation_id: sid,
-                    },
-                );
-                let scope = core.state().visible_scope_for(
-                    stored.audience.clone(),
-                    Some(stored.place.clone()),
+                match build_classify_plan(
+                    core,
+                    stored,
+                    &exp,
                     now,
-                );
-                classify_effects.push(Effect::Model {
-                    purpose: ModelPurpose::Classify,
-                    plan: ContextPlan {
-                        trigger_event_id: Some(stored.id),
-                        place: Some(stored.place.clone()),
-                        visible_scope: Some(scope),
-                        items: vec![exp.target_event_id, stored.id],
-                        ..ContextPlan::default()
-                    },
-                });
+                    vec![exp.target_event_id, stored.id],
+                ) {
+                    Ok(plan) => {
+                        if let Some(mut_exp) =
+                            core.state_mut().expectation_book.expectations.get_mut(&sid)
+                            && let Some(rs) = &mut mut_exp.response_spec
+                        {
+                            rs.awaiting_reask_classify = true;
+                            rs.pending_reask_event_id = Some(stored.id);
+                        }
+                        core.state_mut().expectation_book.pending_classify.insert(
+                            stored.id,
+                            PendingClassifyKind::SilenceReask {
+                                expectation_id: sid,
+                            },
+                        );
+                        classify_effects.push(Effect::Model {
+                            purpose: ModelPurpose::Classify,
+                            plan,
+                        });
+                    }
+                    Err(reason) => {
+                        record_classify_refusal(core, stored, now, &reason)?;
+                    }
+                }
             }
         }
     }
@@ -4790,40 +4799,182 @@ fn process_free_text_conditions_on_percept<S: Store>(
             return Ok(());
         }
 
-        let pending = if exp.kind == ExpectKind::Goal {
-            PendingClassifyKind::GoalAttribution {
-                expectation_id: exp.expectation_id,
-                similarity: sim,
+        match build_classify_plan(core, stored, &exp, now, vec![exp.expectation_id, stored.id]) {
+            Ok(plan) => {
+                let pending = if exp.kind == ExpectKind::Goal {
+                    PendingClassifyKind::GoalAttribution {
+                        expectation_id: exp.expectation_id,
+                        similarity: sim,
+                    }
+                } else {
+                    PendingClassifyKind::Condition {
+                        expectation_id: exp.expectation_id,
+                        similarity: sim,
+                    }
+                };
+                core.state_mut()
+                    .expectation_book
+                    .pending_classify
+                    .insert(stored.id, pending);
+                classify_effects.push(Effect::Model {
+                    purpose: ModelPurpose::Classify,
+                    plan,
+                });
             }
-        } else {
-            PendingClassifyKind::Condition {
-                expectation_id: exp.expectation_id,
-                similarity: sim,
+            Err(reason) => {
+                record_classify_refusal(core, stored, now, &reason)?;
             }
-        };
-        core.state_mut()
-            .expectation_book
-            .pending_classify
-            .insert(stored.id, pending);
-        let scope = core.state().visible_scope_for(
-            stored.audience.clone(),
-            Some(stored.place.clone()),
-            now,
-        );
-        classify_effects.push(Effect::Model {
-            purpose: ModelPurpose::Classify,
-            plan: ContextPlan {
-                trigger_event_id: Some(stored.id),
-                place: Some(stored.place.clone()),
-                visible_scope: Some(scope),
-                items: vec![exp.expectation_id, stored.id],
-                ..ContextPlan::default()
-            },
-        });
+        }
         break;
     }
 
     Ok(())
+}
+
+fn select_caps_for_scope<S: Store>(
+    core: &Core<S>,
+    scope: &VisibleScope,
+    now: Time,
+) -> SelectedToolSet {
+    let catalog = core.state().effective_capability_catalog();
+    let procs: Vec<ProcedureEntry> = core.state().procedures.values().cloned().collect();
+    let tool_budget = ToolSelectionBudget::from_prior(core.prior(), catalog.len());
+    select_tools_for_context(&[], &[], &catalog, &procs, scope, now, tool_budget)
+}
+
+fn build_classify_plan<S: Store>(
+    core: &Core<S>,
+    trigger: &EventRecord,
+    exp: &ExpectationRecord,
+    now: Time,
+    items: Vec<EventId>,
+) -> Result<ContextPlan, String> {
+    if exp.condition.trim().is_empty() {
+        return Err("classification condition text is empty".to_owned());
+    }
+    if trigger.payload.as_bytes().is_empty() {
+        return Err("classification trigger event has empty content".to_owned());
+    }
+    let scope =
+        core.state()
+            .visible_scope_for(trigger.audience.clone(), Some(trigger.place.clone()), now);
+    if !scope.allows(&trigger.audience, Some(trigger.id), now) {
+        return Err("classification trigger event is not visible in scope".to_owned());
+    }
+    let soul_id = core.state().soul_actor_id.clone();
+    let selected_tools = select_caps_for_scope(core, &scope, now);
+    let trigger_seg = Some(segment_from_event(
+        ContextSlotKind::Trigger,
+        trigger,
+        &soul_id,
+        core.state()
+            .memory_entries
+            .get(&trigger.id)
+            .map(|m| m.basis),
+        false,
+        "trigger",
+    ));
+    let commitments = vec![CommitmentSlotItem {
+        expectation_id: exp.expectation_id,
+        kind: exp.kind,
+        due_ms: exp.due_ms,
+        expiry_ms: exp.expiry_ms,
+        places: exp.places.clone(),
+        people: exp.people.clone(),
+        is_fired_or_overdue: exp.due_ms <= now || exp.is_overdue || exp.due_woken,
+        condition: exp.condition.clone(),
+        estimated_bytes: 96 + exp.condition.len(),
+    }];
+    let sections = ContextSections {
+        slot_0_anchor: core.state().identity_anchor.clone(),
+        slot_0_principles: core.state().principles.clone(),
+        static_core_caps: selected_tools.static_core,
+        dynamic_caps: selected_tools.dynamic_caps,
+        commitments,
+        now_ms: now,
+        knowledge_cutoff: core.state().knowledge_cutoff.clone(),
+        trigger: trigger_seg,
+        budget_bytes: core.prior().context_budget_bytes,
+        ..ContextSections::default()
+    };
+    Ok(ContextPlan {
+        trigger_event_id: Some(trigger.id),
+        place: Some(trigger.place.clone()),
+        visible_scope: Some(scope),
+        items,
+        sections,
+        ..ContextPlan::default()
+    })
+}
+
+fn record_classify_refusal<S: Store>(
+    core: &mut Core<S>,
+    trigger: &EventRecord,
+    now: Time,
+    reason: &str,
+) -> Result<(), CoreError> {
+    let dv = EventRecord::derived_from(
+        trigger,
+        EventKind::DoorVerdict,
+        now,
+        ActorId::new("core"),
+        trigger.place.clone(),
+        trigger.audience.clone(),
+        None,
+        NumericFeatures::default(),
+        OpaquePayload::default(),
+        Vec::new(),
+        Some(EventDetail::DoorVerdict {
+            door: DoorKind::Context,
+            target_event_id: Some(trigger.id),
+            rule: "classify_missing_inputs".to_owned(),
+            verdict: format!("refused: {reason}"),
+        }),
+    );
+    append_and_apply(core, dv)?;
+    Ok(())
+}
+
+fn build_consolidate_plan<S: Store>(
+    core: &Core<S>,
+    trigger: &EventRecord,
+    place: PlaceId,
+    scope: VisibleScope,
+    now: Time,
+    items: Vec<EventId>,
+) -> ContextPlan {
+    let soul_id = core.state().soul_actor_id.clone();
+    let selected_tools = select_caps_for_scope(core, &scope, now);
+    let trigger_seg = Some(segment_from_event(
+        ContextSlotKind::Trigger,
+        trigger,
+        &soul_id,
+        core.state()
+            .memory_entries
+            .get(&trigger.id)
+            .map(|m| m.basis),
+        false,
+        "trigger",
+    ));
+    let sections = ContextSections {
+        slot_0_anchor: core.state().identity_anchor.clone(),
+        slot_0_principles: core.state().principles.clone(),
+        static_core_caps: selected_tools.static_core,
+        dynamic_caps: selected_tools.dynamic_caps,
+        now_ms: now,
+        knowledge_cutoff: core.state().knowledge_cutoff.clone(),
+        trigger: trigger_seg,
+        budget_bytes: core.prior().context_budget_bytes,
+        ..ContextSections::default()
+    };
+    ContextPlan {
+        trigger_event_id: Some(trigger.id),
+        place: Some(place),
+        visible_scope: Some(scope),
+        items,
+        sections,
+        ..ContextPlan::default()
+    }
 }
 
 fn handle_classify_result<S: Store>(
@@ -5968,12 +6119,30 @@ fn emit_consolidate_effects_for_episodes<S: Store>(
         let scope =
             core.state()
                 .visible_scope_for(Audience::new(aud_members), Some(ep.place.clone()), now);
-        let mut plan = ContextPlan {
-            trigger_event_id: Some(ep.episode_id),
-            place: Some(ep.place.clone()),
-            visible_scope: Some(scope),
-            items: ep.event_ids.clone(),
-            ..ContextPlan::default()
+        let mut plan = if let Some(trigger_rec) =
+            core.store().get(ep.episode_id).ok().flatten().or_else(|| {
+                ep.event_ids
+                    .first()
+                    .and_then(|id| core.store().get(*id).ok().flatten())
+            }) {
+            let mut p = build_consolidate_plan(
+                core,
+                &trigger_rec,
+                ep.place.clone(),
+                scope,
+                now,
+                ep.event_ids.clone(),
+            );
+            p.trigger_event_id = Some(ep.episode_id);
+            p
+        } else {
+            ContextPlan {
+                trigger_event_id: Some(ep.episode_id),
+                place: Some(ep.place.clone()),
+                visible_scope: Some(scope),
+                items: ep.event_ids.clone(),
+                ..ContextPlan::default()
+            }
         };
         match doors.context(&mut plan) {
             DoorDecision::Allow | DoorDecision::Strip { .. } => {

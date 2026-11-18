@@ -1053,11 +1053,12 @@ fn tool_selection_respects_static_core_budget_and_excludes_schema_drifted_proced
     assert_eq!(selected.excluded_stale_procedures, 1);
 }
 
-/// Task 11.4: OpenCode `cache_read` is read before OpenAI `cached_tokens`; a response with neither
-/// reports `unknown` (never `0`), per-call cached tokens are recorded, and the stable
-/// `x-opencode-session` header value travels on every request.
+/// Task 24.4: Configured usage paths are read; absent cached-token fields record `None` (`unknown`,
+/// never `0`); `{conversation_id}` extra header travels on every request.
 #[test]
-fn opencode_cache_read_tokens_and_stable_session_header_are_recorded() {
+fn configured_usage_paths_and_conversation_header_are_recorded() {
+    use monoagens_reason::{ExtraHeaderValue, UsageFieldPaths};
+
     let thought = json!({
         "acts": [{
             "act": "think",
@@ -1069,40 +1070,24 @@ fn opencode_cache_read_tokens_and_stable_session_header_are_recorded() {
     })
     .to_string();
 
-    let opencode_body = json!({
-        "model": "deepseek-v4.1-flash",
+    let custom_usage_body = json!({
+        "model": "neutral-model-a",
         "choices": [{"index": 0, "message": {"role": "assistant", "content": thought}}],
         "usage": {
             "prompt_tokens": 9200,
             "completion_tokens": 300,
             "total_tokens": 9500,
-            "opencode": {
-                "billing_source": "go",
+            "custom_metrics": {
                 "tokens": {
-                    "input": 1200,
-                    "output": 300,
                     "reasoning": 120,
-                    "cache_read": 8000,
-                    "cache_write_5m": 0,
-                    "cache_write_1h": 0
+                    "cache_read": 8000
                 }
             }
         }
     })
     .to_string();
-    let openai_body = json!({
-        "model": "gpt-x",
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": thought}}],
-        "usage": {
-            "prompt_tokens": 80,
-            "completion_tokens": 20,
-            "total_tokens": 100,
-            "prompt_tokens_details": {"cached_tokens": 64}
-        }
-    })
-    .to_string();
     let bare_body = json!({
-        "model": "gpt-x",
+        "model": "neutral-model-a",
         "choices": [{"index": 0, "message": {"role": "assistant", "content": thought}}],
         "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12}
     })
@@ -1112,7 +1097,7 @@ fn opencode_cache_read_tokens_and_stable_session_header_are_recorded() {
     let addr = listener.local_addr().expect("addr");
     let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let captured_srv = Arc::clone(&captured);
-    let bodies = [opencode_body, openai_body, bare_body];
+    let bodies = [custom_usage_body, bare_body];
     let handle = thread::spawn(move || {
         for body in bodies {
             let (mut stream, _) = listener.accept().expect("accept client");
@@ -1146,43 +1131,519 @@ fn opencode_cache_read_tokens_and_stable_session_header_are_recorded() {
         }
     });
 
-    let provider = OpenAiModelProvider::new(OpenAiModelConfig::new(
+    let mut cfg = OpenAiModelConfig::new(
         format!("http://{addr}/v1/chat/completions"),
         Some(SecretString::new("sk-test")),
-    ))
-    .expect("provider");
+    );
+    cfg.extra_headers = vec![(
+        "x-conversation-session".to_owned(),
+        ExtraHeaderValue::ConversationId,
+    )];
+    cfg.usage_paths = UsageFieldPaths {
+        cached_tokens: "custom_metrics.tokens.cache_read".to_owned(),
+        reasoning_tokens: "custom_metrics.tokens.reasoning".to_owned(),
+        ..UsageFieldPaths::default()
+    };
+    let provider = OpenAiModelProvider::new(cfg).expect("provider");
 
     let mut cached = Vec::new();
-    for idx in 0..3_u64 {
+    for idx in 0..2_u64 {
         let mut req = ModelRequest::text(
             EventId::new(idx + 1),
             ModelPurpose::Reason,
-            "deepseek-v4.1-flash",
+            "neutral-model-a",
             "system",
             "user",
         );
-        req.session_id = Some("ses_stable_item_1".to_owned());
+        req.conversation_id = Some("conv_stable_item_1".to_owned());
         let res = provider.invoke(&req).expect("mock response parses");
         cached.push(res.record.usage.expect("usage").cached_tokens);
     }
     handle.join().expect("server thread finishes");
 
-    assert_eq!(cached, vec![Some(8_000), Some(64), None]);
+    assert_eq!(cached, vec![Some(8_000), None]);
     let telemetry = provider.telemetry_snapshot();
-    assert_eq!(
-        telemetry.call_cached_tokens,
-        vec![Some(8_000), Some(64), None]
-    );
-    assert_eq!(telemetry.cumulative_cached_tokens, 8_064);
+    assert_eq!(telemetry.call_cached_tokens, vec![Some(8_000), None]);
+    assert_eq!(telemetry.cumulative_cached_tokens, 8_000);
     assert_eq!(telemetry.cached_tokens_unknown_calls, 1);
 
     let requests = captured.lock().expect("lock captured");
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 2);
     for raw in requests.iter() {
         assert!(
             raw.to_ascii_lowercase()
-                .contains("x-opencode-session: ses_stable_item_1"),
-            "missing stable session header in request: {raw}"
+                .contains("x-conversation-session: conv_stable_item_1"),
+            "missing stable conversation header in request: {raw}"
         );
     }
+}
+
+#[test]
+fn extra_headers_support_literal_env_and_conversation_id_and_guard_protocol_headers() {
+    use monoagens_reason::ExtraHeaderValue;
+
+    for forbidden in ["Authorization", "content-type", "Content-Length", "HOST"] {
+        let mut cfg = OpenAiModelConfig::new("http://127.0.0.1:1/v1/chat/completions", None);
+        cfg.extra_headers = vec![(
+            forbidden.to_owned(),
+            ExtraHeaderValue::Literal(SecretString::new("bad")),
+        )];
+        let err = OpenAiModelProvider::new(cfg).expect_err("must reject protocol header");
+        assert!(
+            err.to_ascii_lowercase()
+                .contains(&forbidden.to_ascii_lowercase()),
+            "error must name forbidden header '{forbidden}': {err}"
+        );
+    }
+
+    let env_key = "MONOAGENS_TEST_EXTRA_HEADER_VAL";
+    // SAFETY: test-local env var set before provider construction in single-threaded test.
+    unsafe {
+        std::env::set_var(env_key, "env-secret-value");
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock");
+    let addr = listener.local_addr().expect("addr");
+    let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let cap_clone = Arc::clone(&captured);
+    let body_str = json!({
+        "id": "cmpl-hdr",
+        "model": "neutral-model-b",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": golden_multi_act_json() }
+        }],
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+            "prompt_tokens_details": { "cached_tokens": 40 },
+            "completion_tokens_details": { "reasoning_tokens": 5 }
+        }
+    })
+    .to_string();
+    let handle = thread::spawn(move || {
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut raw = String::new();
+            let mut content_length = 0_usize;
+            loop {
+                let mut line = String::new();
+                let n = reader.read_line(&mut line).expect("read header");
+                if n == 0 || line == "\r\n" || line == "\n" {
+                    break;
+                }
+                raw.push_str(&line);
+                if let Some(rest) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_length = rest.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut req_body = vec![0_u8; content_length];
+            if content_length > 0 {
+                reader.read_exact(&mut req_body).expect("read body");
+            }
+            raw.push_str(&String::from_utf8_lossy(&req_body));
+            cap_clone.lock().expect("lock captured").push(raw);
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body_str.len(),
+                body_str
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+
+    let mut cfg = OpenAiModelConfig::new(format!("http://{addr}/v1/chat/completions"), None);
+    cfg.extra_headers = vec![
+        (
+            "x-literal-hdr".to_owned(),
+            ExtraHeaderValue::Literal(SecretString::new("lit-secret-value")),
+        ),
+        (
+            "x-env-hdr".to_owned(),
+            ExtraHeaderValue::Env(env_key.to_owned()),
+        ),
+        ("x-conv-hdr".to_owned(), ExtraHeaderValue::ConversationId),
+    ];
+    let dbg = format!("{cfg:?}");
+    assert!(!dbg.contains("lit-secret-value"));
+    assert!(!dbg.contains("env-secret-value"));
+    assert!(dbg.contains("x-literal-hdr"));
+    assert!(dbg.contains("x-env-hdr"));
+    assert!(dbg.contains("x-conv-hdr"));
+
+    let provider = OpenAiModelProvider::new(cfg).expect("provider");
+    let mut req1 = ModelRequest::text(
+        EventId::new(1),
+        ModelPurpose::Reason,
+        "neutral-model-b",
+        "sys",
+        "usr",
+    );
+    req1.conversation_id = Some("conv-alpha".to_owned());
+    let res1 = provider.invoke(&req1).expect("call 1");
+    let u1 = res1.record.usage.expect("usage");
+    assert_eq!(u1.cached_tokens, Some(40));
+    assert_eq!(u1.reasoning_tokens, Some(5));
+
+    let mut req2 = ModelRequest::text(
+        EventId::new(2),
+        ModelPurpose::Reason,
+        "neutral-model-b",
+        "sys",
+        "usr",
+    );
+    req2.conversation_id = Some("conv-beta".to_owned());
+    let _ = provider.invoke(&req2).expect("call 2");
+    handle.join().expect("server finishes");
+
+    let reqs = captured.lock().expect("captured");
+    assert_eq!(reqs.len(), 2);
+    let r1 = reqs[0].to_ascii_lowercase();
+    let r2 = reqs[1].to_ascii_lowercase();
+    assert!(r1.contains("x-literal-hdr: lit-secret-value"));
+    assert!(r1.contains("x-env-hdr: env-secret-value"));
+    assert!(r1.contains("x-conv-hdr: conv-alpha"));
+    assert!(r2.contains("x-conv-hdr: conv-beta"));
+}
+
+#[test]
+fn source_scan_provider_and_gateway_sources_are_provider_neutral() {
+    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root");
+    let scan_dirs = [
+        workspace_root.join("crates/reason/src"),
+        workspace_root.join("crates/gateway/src"),
+        workspace_root.join("crates/lab/src"),
+    ];
+    let forbidden_providers = [
+        "opencode",
+        "x-opencode-session",
+        "anthropic",
+        "claude",
+        "openrouter",
+        "deepseek",
+        "qwen",
+        "llama",
+        "mistral",
+        "sonnet",
+        "opus",
+        "haiku",
+    ];
+    let strict_model_names = ["gemini"];
+    let mut violations = Vec::new();
+    let mut stack = scan_dirs.to_vec();
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("read_dir") {
+            let entry = entry.expect("entry");
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                let text = std::fs::read_to_string(&path).expect("read .rs");
+                let lower = text.to_ascii_lowercase();
+                for term in forbidden_providers {
+                    if lower.contains(term) {
+                        violations.push(format!("{}: contains '{term}'", path.display()));
+                    }
+                }
+                let p_str = path.to_string_lossy();
+                let is_metric_or_dataset_const = p_str
+                    .ends_with("crates/lab/src/datasets/report.rs")
+                    || p_str.ends_with("crates/lab/src/datasets/stale.rs")
+                    || p_str.ends_with("crates/lab/src/datasets/runner.rs");
+                if !is_metric_or_dataset_const {
+                    for term in strict_model_names {
+                        if lower.contains(term) {
+                            violations.push(format!("{}: contains '{term}'", path.display()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "provider-neutrality scan failed:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn output_limits_per_purpose_normal_at_limit_and_empty_at_limit() {
+    use monoagens_reason::{OutputLimitProfile, PRODUCT_DEFAULT_MAX_OUTPUT_TOKENS};
+
+    assert_eq!(PRODUCT_DEFAULT_MAX_OUTPUT_TOKENS, 16_384);
+    assert_eq!(OutputLimitProfile::default().reason, 16_384);
+    assert_eq!(OutputLimitProfile::default().classify, 16_384);
+    assert_eq!(OutputLimitProfile::default().consolidate, 16_384);
+
+    let normal_body = json!({
+        "model": "neutral-profile-model",
+        "choices": [{
+            "index": 0,
+            "finish_reason": "stop",
+            "message": { "role": "assistant", "content": golden_multi_act_json() }
+        }],
+        "usage": { "prompt_tokens": 100, "completion_tokens": 40, "total_tokens": 140 }
+    })
+    .to_string();
+    let at_limit_valid_body = json!({
+        "model": "neutral-profile-model",
+        "choices": [{
+            "index": 0,
+            "finish_reason": "length",
+            "message": {
+                "role": "assistant",
+                "content": json!({"label": "matched", "score": 0.9, "rationale": null}).to_string()
+            }
+        }],
+        "usage": { "prompt_tokens": 100, "completion_tokens": 512, "total_tokens": 612 }
+    })
+    .to_string();
+    let empty_at_limit_body = json!({
+        "model": "neutral-profile-model",
+        "choices": [{
+            "index": 0,
+            "finish_reason": "length",
+            "message": { "role": "assistant", "content": "" }
+        }],
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 1024,
+            "total_tokens": 1124,
+            "completion_tokens_details": { "reasoning_tokens": 1024 }
+        }
+    })
+    .to_string();
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock");
+    let addr = listener.local_addr().expect("addr");
+    let captured_bodies: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let cap_clone = Arc::clone(&captured_bodies);
+    let responses = [normal_body, at_limit_valid_body, empty_at_limit_body];
+    let handle = thread::spawn(move || {
+        for body_str in responses {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut content_length = 0_usize;
+            loop {
+                let mut line = String::new();
+                let n = reader.read_line(&mut line).expect("read header");
+                if n == 0 || line == "\r\n" || line == "\n" {
+                    break;
+                }
+                if let Some(rest) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_length = rest.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut req_body = vec![0_u8; content_length];
+            if content_length > 0 {
+                reader.read_exact(&mut req_body).expect("read body");
+            }
+            let val: Value = serde_json::from_slice(&req_body).expect("json body");
+            cap_clone.lock().expect("lock").push(val);
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body_str.len(),
+                body_str
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+
+    let mut cfg = OpenAiModelConfig::new(format!("http://{addr}/v1/chat/completions"), None);
+    cfg.output_limit_param = "max_output_tokens".to_owned();
+    cfg.profile_name = Some("neutral-fast".to_owned());
+    cfg.output_limits = OutputLimitProfile {
+        reason: 1024,
+        classify: 512,
+        consolidate: 2048,
+    };
+    let provider = OpenAiModelProvider::new(cfg).expect("provider");
+
+    // 1. Normal Reason call
+    let req_normal = ModelRequest::text(
+        EventId::new(1),
+        ModelPurpose::Reason,
+        "neutral-profile-model",
+        "sys",
+        "usr",
+    );
+    provider.invoke(&req_normal).expect("normal call succeeds");
+    assert_eq!(provider.telemetry_snapshot().runaways_reason, 0);
+
+    // 2. Classify call at the limit with valid output -> parsed + recorded as classify runaway
+    let req_at_limit = ModelRequest::text(
+        EventId::new(2),
+        ModelPurpose::Classify,
+        "neutral-profile-model",
+        "sys",
+        "usr",
+    );
+    let ok_limit = provider
+        .invoke(&req_at_limit)
+        .expect("valid output at limit still parses");
+    assert!(matches!(ok_limit.output, ModelOutput::Verdict(_)));
+    assert_eq!(provider.telemetry_snapshot().runaways_classify, 1);
+
+    // 3. Reason call at the limit with empty visible output -> error names reasoning used the whole limit + setting + profile
+    let req_empty = ModelRequest::text(
+        EventId::new(3),
+        ModelPurpose::Reason,
+        "neutral-profile-model",
+        "sys",
+        "usr",
+    );
+    let err = provider
+        .invoke(&req_empty)
+        .expect_err("empty output at limit must fail");
+    assert!(
+        err.detail.contains("reasoning used the whole limit"),
+        "unexpected error: {}",
+        err.detail
+    );
+    assert!(err.detail.contains("output_limits.reason"));
+    assert!(err.detail.contains("neutral-fast"));
+    assert_eq!(provider.telemetry_snapshot().runaways_reason, 1);
+
+    handle.join().expect("server finishes");
+    let bodies = captured_bodies.lock().expect("bodies");
+    assert_eq!(bodies[0]["max_output_tokens"], json!(1024));
+    assert_eq!(bodies[1]["max_output_tokens"], json!(512));
+    assert_eq!(bodies[2]["max_output_tokens"], json!(1024));
+}
+
+#[test]
+fn pilot_output_format_failure_fixtures_record_and_reject_in_strict_schema() {
+    let batch_schema = strict_thought_batch_schema();
+    let batch_validator = jsonschema::validator_for(&batch_schema).expect("valid batch schema");
+    let clf_schema = strict_classification_verdict_schema();
+    let clf_validator = jsonschema::validator_for(&clf_schema).expect("valid classify schema");
+
+    let reason_fixtures = [
+        (
+            "acts[0].motivation",
+            "1..=5",
+            json!({
+                "protocol_version": {"major": 1, "minor": 0},
+                "acts": [{
+                    "act": "think",
+                    "thought": "test",
+                    "motivation": 0,
+                    "confidence_0_20": 10,
+                    "used_ids": [],
+                    "importance": null,
+                    "basis": null,
+                    "value": null
+                }]
+            }),
+        ),
+        (
+            "acts[0].places",
+            "at least one place",
+            json!({
+                "protocol_version": {"major": 1, "minor": 0},
+                "acts": [{
+                    "act": "act",
+                    "capability_id": "a.speak",
+                    "places": [],
+                    "people": [],
+                    "payload": [104, 105],
+                    "motivation": 3,
+                    "confidence_0_20": 15,
+                    "used_ids": [],
+                    "expected": null,
+                    "domain": null
+                }]
+            }),
+        ),
+        (
+            "acts[0].capability_id",
+            "must not be empty",
+            json!({
+                "protocol_version": {"major": 1, "minor": 0},
+                "acts": [{
+                    "act": "act",
+                    "capability_id": "",
+                    "places": ["room"],
+                    "people": [],
+                    "payload": [104, 105],
+                    "motivation": 3,
+                    "confidence_0_20": 15,
+                    "used_ids": [],
+                    "expected": null,
+                    "domain": null
+                }]
+            }),
+        ),
+    ];
+
+    for (expected_field, expected_reason_substr, payload) in reason_fixtures {
+        assert!(
+            !batch_validator.is_valid(&payload),
+            "tightened ThoughtBatch schema must reject invalid {expected_field}"
+        );
+        let provider = ScriptedModelProvider::from_replies([ScriptedReply::RawText {
+            text: payload.to_string(),
+            usage: monoagens_reason::TokenUsage::default(),
+            latency_ms: 1,
+        }]);
+        let req = ModelRequest::text(
+            EventId::new(1),
+            ModelPurpose::Reason,
+            "neutral-test-model",
+            "sys",
+            "usr",
+        );
+        let err = provider.invoke(&req).expect_err("must fail parse");
+        let rec = err
+            .output_format_record()
+            .expect("must produce OutputFormatFailureRecord");
+        assert_eq!(rec.purpose, ModelPurpose::Reason);
+        assert_eq!(rec.field, expected_field);
+        assert!(
+            rec.reason.contains(expected_reason_substr),
+            "unexpected reason for {expected_field}: {}",
+            rec.reason
+        );
+        assert!(rec.strict_schema);
+    }
+
+    let classify_payload = json!({
+        "protocol_version": {"major": 1, "minor": 0},
+        "label": "",
+        "score": 0.5,
+        "rationale": null
+    });
+    assert!(
+        !clf_validator.is_valid(&classify_payload),
+        "tightened ClassificationVerdict schema must reject empty label"
+    );
+    let provider = ScriptedModelProvider::from_replies([ScriptedReply::RawText {
+        text: classify_payload.to_string(),
+        usage: monoagens_reason::TokenUsage::default(),
+        latency_ms: 1,
+    }]);
+    let req = ModelRequest::text(
+        EventId::new(2),
+        ModelPurpose::Classify,
+        "neutral-test-model",
+        "sys",
+        "usr",
+    );
+    let err = provider.invoke(&req).expect_err("must fail parse");
+    let rec = err
+        .output_format_record()
+        .expect("must produce OutputFormatFailureRecord");
+    assert_eq!(rec.purpose, ModelPurpose::Classify);
+    assert_eq!(rec.field, "label");
+    assert!(rec.reason.contains("non-empty string"));
+    assert!(rec.strict_schema);
 }

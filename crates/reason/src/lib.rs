@@ -28,10 +28,12 @@ pub use embed::{
 };
 pub use info_gap_clf::{InfoGapClassifier, InfoGapError, InfoGapEvaluation};
 pub use model::{
-    CallOutcome, MessagePart, MessageRole, ModelCallFailure, ModelCallRecord, ModelCallSuccess,
-    ModelMessage, ModelOutput, ModelProvider, ModelRequest, OpenAiModelConfig, OpenAiModelProvider,
-    ProviderFailureClass, ReasoningEffort, ResponseSchemaMode, ScriptedModelProvider,
-    ScriptedReply, TokenUsage,
+    CallOutcome, DEFAULT_OUTPUT_LIMIT_PARAM, ExtraHeaderValue, MessagePart, MessageRole,
+    ModelCallFailure, ModelCallRecord, ModelCallSuccess, ModelMessage, ModelOutput, ModelProvider,
+    ModelRequest, OpenAiModelConfig, OpenAiModelProvider, OutputFormatFailureRecord,
+    OutputLimitProfile, PRODUCT_DEFAULT_MAX_OUTPUT_TOKENS, ProviderFailureClass, ReasoningEffort,
+    ResponseSchemaMode, ScriptedModelProvider, ScriptedReply, TokenUsage, UsageFieldPaths,
+    validate_extra_header_name,
 };
 pub use parse::{
     DecodedRubric, FailedWake, MotivationLevel, ParseOptions, ParsedModelActs, decode_rubric,

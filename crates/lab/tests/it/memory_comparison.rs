@@ -17,7 +17,7 @@ use monoagens_lab::memory::judge::JudgeRunner;
 use monoagens_lab::memory::{
     CallAttribution, DatasetArtifact, LOCOMO_ANSWER_FORMAT_V1, LONGMEMEVAL_ANSWER_FORMAT_V1,
     MemoryItemScore, MemoryPhase, MemoryRunFile, MemorySuiteOptions, MeteringProxy,
-    MeteringProxyConfig, generate_memory_report, list_cost_usd, locomo_judge_prompt,
+    MeteringProxyConfig, ScoreContext, generate_memory_report, list_cost_usd, locomo_judge_prompt,
     longmemeval_judge_prompt, parse_locomo_verdict, parse_longmemeval_verdict, parse_usage,
     score_locomo, score_longmemeval, select_pilot_locomo_ids, select_pilot_longmemeval_ids,
 };
@@ -221,7 +221,7 @@ fn metering_proxy_sets_wire_headers_parses_usage_and_never_writes_secrets() {
             json!({
                 "prompt_tokens": 9200,
                 "completion_tokens": 300,
-                "opencode": {"tokens": {"input": 1200, "output": 300, "reasoning": 120, "cache_read": 8000}}
+                "custom_usage": {"tokens": {"input": 1200, "output": 300, "reasoning": 120, "cache_read": 8000}}
             })
         } else {
             json!({
@@ -243,15 +243,48 @@ fn metering_proxy_sets_wire_headers_parses_usage_and_never_writes_secrets() {
     let tmp = TempDir::new().unwrap();
     let ledger = tmp.path().join("ledger.jsonl");
     let key = "sk-test-SECRET-KEY";
-    let config = MeteringProxyConfig {
-        upstream_url: upstream.url(),
-        api_key: Some(monoagens_reason::secrets::SecretString::new(key)),
-        model: "deepseek-v4.1-flash".to_owned(),
-        reasoning_effort: "high".to_owned(),
-        user_agent: "monoagens-lab-test/1.0".to_owned(),
-        ledger_path: ledger.clone(),
-        max_retries: 1,
-    };
+    let prof = monoagens_lab::memory::RunProfile::parse_toml_str(&format!(
+        r#"
+version = 1
+name = "neutral-test-profile"
+endpoint_url = "{}"
+model = "neutral-test-model"
+reasoning_effort = "high"
+output_limit_param = "max_completion_tokens"
+
+[output_limits]
+classify = 1024
+reason = 4096
+consolidate = 8192
+
+[headers]
+x-test-session = "{{conversation_id}}"
+
+[usage_paths]
+input_tokens = "prompt_tokens"
+uncached_input_tokens = "custom_usage.tokens.input"
+output_tokens = "custom_usage.tokens.output"
+cached_tokens = "custom_usage.tokens.cache_read"
+reasoning_tokens = "custom_usage.tokens.reasoning"
+list_cost = "custom_usage.list_cost"
+allowance = "custom_usage.allowance"
+
+[pricing]
+uncached_input_per_m = 0.15
+cached_input_per_m = 0.003
+output_per_m = 0.60
+"#,
+        upstream.url()
+    ))
+    .unwrap();
+    let mut config = MeteringProxyConfig::from_profile(
+        &prof,
+        Some(monoagens_reason::secrets::SecretString::new(key)),
+        ledger.clone(),
+    )
+    .unwrap();
+    config.user_agent = "monoagens-lab-test/1.0".to_owned();
+    config.max_retries = 1;
     let proxy = MeteringProxy::start(config).unwrap();
     let client = reqwest::blocking::Client::new();
     for (conversation, requested_effort) in [("conv-a", "low"), ("conv-b", "max")] {
@@ -277,18 +310,14 @@ fn metering_proxy_sets_wire_headers_parses_usage_and_never_writes_secrets() {
     for req in &captured {
         assert_eq!(
             req.body.get("model").and_then(|v| v.as_str()),
-            Some("deepseek-v4.1-flash")
+            Some("neutral-test-model")
         );
         assert_eq!(
             req.body.get("reasoning_effort").and_then(|v| v.as_str()),
             Some("high")
         );
         assert_eq!(req.header("user-agent"), Some("monoagens-lab-test/1.0"));
-        assert!(
-            req.header("x-opencode-session")
-                .unwrap()
-                .starts_with("ses_")
-        );
+        assert!(req.header("x-test-session").unwrap().starts_with("conv_"));
         assert_eq!(
             req.header("authorization"),
             Some(format!("Bearer {key}").as_str())
@@ -297,8 +326,8 @@ fn metering_proxy_sets_wire_headers_parses_usage_and_never_writes_secrets() {
         assert!(req.header("x-lab-dataset").is_none());
     }
     assert_ne!(
-        captured[0].header("x-opencode-session"),
-        captured[1].header("x-opencode-session")
+        captured[0].header("x-test-session"),
+        captured[1].header("x-test-session")
     );
 
     let raw = fs::read_to_string(&ledger).unwrap();
@@ -322,7 +351,7 @@ fn metering_proxy_sets_wire_headers_parses_usage_and_never_writes_secrets() {
     assert_eq!(lines[0]["finish_reason"], "length");
 
     // Secret scan: the API key, Authorization value and the session value never hit disk.
-    let session = monoagens_lab::memory::session_id_for_attribution("monoagens", "conv-a");
+    let session = monoagens_lab::memory::conversation_id_for_attribution("monoagens", "conv-a");
     for entry in walk(tmp.path()) {
         let text = fs::read_to_string(&entry).unwrap_or_default();
         assert!(
@@ -355,16 +384,25 @@ fn proxy_aborts_upstream_when_client_gives_up() {
         )
     });
     let tmp = TempDir::new().unwrap();
-    let proxy = MeteringProxy::start(MeteringProxyConfig {
-        upstream_url: upstream.url(),
-        api_key: Some(monoagens_reason::secrets::SecretString::new("sk-test")),
-        model: "deepseek-v4.1-flash".to_owned(),
-        reasoning_effort: "high".to_owned(),
-        user_agent: "monoagens-lab-test/1.0".to_owned(),
-        ledger_path: tmp.path().join("ledger.jsonl"),
-        max_retries: 0,
-    })
+    let prof = monoagens_lab::memory::RunProfile::parse_toml_str(&format!(
+        r#"
+version = 1
+name = "neutral-test-profile"
+endpoint_url = "{}"
+model = "neutral-test-model"
+reasoning_effort = "high"
+"#,
+        upstream.url()
+    ))
     .unwrap();
+    let mut cfg = MeteringProxyConfig::from_profile(
+        &prof,
+        Some(monoagens_reason::secrets::SecretString::new("sk-test")),
+        tmp.path().join("ledger.jsonl"),
+    )
+    .unwrap();
+    cfg.max_retries = 0;
+    let proxy = MeteringProxy::start(cfg).unwrap();
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_millis(200))
         .build()
@@ -401,13 +439,18 @@ fn proxy_usage_parser_and_cost_match_list_price() {
             "opencode": {"tokens": {"input": 1200, "output": 300, "reasoning": 120, "cache_read": 8000}}
         }
     });
-    let usage = parse_usage(&response, 1.0).unwrap();
+    let prof = monoagens_lab::memory::RunProfile::load_from_path(
+        &workspace_root().join("lab/profiles/deepseek-v4.1-flash-high.toml"),
+    )
+    .unwrap();
+    let usage =
+        monoagens_lab::memory::parse_usage_with_paths(&response, 1.0, &prof.usage_paths).unwrap();
     assert_eq!(usage.uncached_input_tokens, 1200);
     assert_eq!(usage.cached_input_tokens, Some(8000));
     assert_eq!(usage.output_tokens, 300);
     assert_eq!(usage.reasoning_tokens, Some(120));
     let expected = (1200.0 * 0.15 + 8000.0 * 0.003 + 300.0 * 0.60) / 1_000_000.0;
-    assert!((list_cost_usd(1200, 8000, 300, 1.0) - expected).abs() < 1e-12);
+    assert!((list_cost_usd(1200, 8000, 300, 1.0, &prof.pricing) - expected).abs() < 1e-12);
 
     let fallback = json!({
         "usage": {
@@ -450,6 +493,28 @@ fn workspace_root() -> std::path::PathBuf {
         .to_path_buf()
 }
 
+fn neutral_test_profile(upstream_url: &str) -> monoagens_lab::memory::RunProfile {
+    monoagens_lab::memory::RunProfile::parse_toml_str(&format!(
+        r#"
+version = 1
+name = "neutral-test-profile"
+endpoint_url = "{upstream_url}"
+model = "neutral-test-model"
+reasoning_effort = "high"
+output_limit_param = "max_completion_tokens"
+
+[output_limits]
+classify = 1024
+reason = 4096
+consolidate = 8192
+
+[headers]
+x-test-session = "{{conversation_id}}"
+"#
+    ))
+    .unwrap()
+}
+
 fn suite_options(tmp: &TempDir, proxy_url: String, phase: MemoryPhase) -> MemorySuiteOptions {
     MemorySuiteOptions {
         datasets_dir: workspace_root().join("lab/datasets"),
@@ -459,6 +524,7 @@ fn suite_options(tmp: &TempDir, proxy_url: String, phase: MemoryPhase) -> Memory
         seed: 1,
         phase,
         live: true,
+        profile: Some(neutral_test_profile(&proxy_url)),
         max_cost_usd: Some(100.0),
         provider_endpoint: Some(proxy_url.clone()),
         judge_endpoint: Some(proxy_url),
@@ -476,16 +542,15 @@ fn suite_options(tmp: &TempDir, proxy_url: String, phase: MemoryPhase) -> Memory
 fn ledger_totals_equal_run_record_totals() {
     let upstream = MockUpstream::start(|captured, _seq| thinking_or_answer(captured));
     let tmp = TempDir::new().unwrap();
-    let proxy = MeteringProxy::start(MeteringProxyConfig {
-        upstream_url: upstream.url(),
-        api_key: Some(monoagens_reason::secrets::SecretString::new("sk-test")),
-        model: "deepseek-v4.1-flash".to_owned(),
-        reasoning_effort: "high".to_owned(),
-        user_agent: "monoagens-lab-test/1.0".to_owned(),
-        ledger_path: tmp.path().join("run/ledger.jsonl"),
-        max_retries: 1,
-    })
+    let prof = neutral_test_profile(&upstream.url());
+    let mut cfg = MeteringProxyConfig::from_profile(
+        &prof,
+        Some(monoagens_reason::secrets::SecretString::new("sk-test")),
+        tmp.path().join("run/ledger.jsonl"),
+    )
     .unwrap();
+    cfg.max_retries = 1;
+    let proxy = MeteringProxy::start(cfg).unwrap();
     let opts = suite_options(&tmp, proxy.chat_completions_url(), MemoryPhase::Pilot);
     let outcome = monoagens_lab::memory::run_memory_suite(&opts).unwrap();
     assert_eq!(outcome.datasets.len(), 1);
@@ -528,7 +593,7 @@ fn ledger_totals_equal_run_record_totals() {
         .count() as u64;
     assert_eq!(usage.judge.calls, judge_calls);
     for entry in &entries {
-        assert_eq!(entry["model"], "deepseek-v4.1-flash");
+        assert_eq!(entry["model"], "neutral-test-model");
         assert_eq!(entry["reasoning_effort"], "high");
     }
 }
@@ -537,16 +602,15 @@ fn ledger_totals_equal_run_record_totals() {
 fn rerun_resumes_without_repeating_completed_conversations() {
     let upstream = MockUpstream::start(|captured, _seq| thinking_or_answer(captured));
     let tmp = TempDir::new().unwrap();
-    let proxy = MeteringProxy::start(MeteringProxyConfig {
-        upstream_url: upstream.url(),
-        api_key: Some(monoagens_reason::secrets::SecretString::new("sk-test")),
-        model: "deepseek-v4.1-flash".to_owned(),
-        reasoning_effort: "high".to_owned(),
-        user_agent: "monoagens-lab-test/1.0".to_owned(),
-        ledger_path: tmp.path().join("run/ledger.jsonl"),
-        max_retries: 1,
-    })
+    let prof = neutral_test_profile(&upstream.url());
+    let mut cfg = MeteringProxyConfig::from_profile(
+        &prof,
+        Some(monoagens_reason::secrets::SecretString::new("sk-test")),
+        tmp.path().join("run/ledger.jsonl"),
+    )
     .unwrap();
+    cfg.max_retries = 1;
+    let proxy = MeteringProxy::start(cfg).unwrap();
     let opts = suite_options(&tmp, proxy.chat_completions_url(), MemoryPhase::Pilot);
     let first = monoagens_lab::memory::run_memory_suite(&opts).unwrap();
     let item_id = first.datasets[0].n_items;
@@ -760,15 +824,21 @@ fn judge_config<'a>() -> JudgeExecutionConfig<'a> {
 #[test]
 fn unparsable_verdict_retries_once_then_records_judge_failure() {
     let judge = MockJudge::new(vec![Ok("maybe".to_owned()), Ok("CORRECT".to_owned())]);
+    let gold = fixture_gold();
+    let questions = fixture_questions();
+    let cached = BTreeMap::new();
+    let jcfg = judge_config();
     let score = score_locomo(
         &[prediction(Some("Paris"))],
-        &fixture_gold(),
-        &fixture_questions(),
-        &BTreeMap::new(),
-        Some(&judge),
-        &judge_config(),
-        Path::new("."),
-        1,
+        &ScoreContext {
+            gold: &gold,
+            questions: &questions,
+            cached_items: &cached,
+            judge: Some(&judge),
+            judge_config: &jcfg,
+            project_root: Path::new("."),
+            seed: 1,
+        },
     )
     .unwrap();
     assert_eq!(judge.calls(), 2);
@@ -777,13 +847,15 @@ fn unparsable_verdict_retries_once_then_records_judge_failure() {
     let failing = MockJudge::new(vec![Ok("???".to_owned()), Ok("still no label".to_owned())]);
     let score = score_locomo(
         &[prediction(Some("Paris"))],
-        &fixture_gold(),
-        &fixture_questions(),
-        &BTreeMap::new(),
-        Some(&failing),
-        &judge_config(),
-        Path::new("."),
-        1,
+        &ScoreContext {
+            gold: &gold,
+            questions: &questions,
+            cached_items: &cached,
+            judge: Some(&failing),
+            judge_config: &jcfg,
+            project_root: Path::new("."),
+            seed: 1,
+        },
     )
     .unwrap();
     assert_eq!(failing.calls(), 2);
@@ -793,7 +865,7 @@ fn unparsable_verdict_retries_once_then_records_judge_failure() {
     let judge_metric = score
         .metrics
         .iter()
-        .find(|m| m.name == "j_deepseek")
+        .find(|m| m.name == "judge_acc")
         .unwrap();
     assert_eq!(judge_metric.value, None);
 }
@@ -820,15 +892,20 @@ fn locomo_scoring_f1_refusal_and_silence() {
         Ok(r#"{"label": "CORRECT"}"#.to_owned()),
         Ok(r#"{"label": "WRONG"}"#.to_owned()),
     ]);
+    let questions = fixture_questions();
+    let cached = BTreeMap::new();
+    let jcfg = judge_config();
     let score = score_locomo(
         &[prediction(Some("Paris")), cat5],
-        &gold,
-        &fixture_questions(),
-        &BTreeMap::new(),
-        Some(&judge),
-        &judge_config(),
-        Path::new("."),
-        1,
+        &ScoreContext {
+            gold: &gold,
+            questions: &questions,
+            cached_items: &cached,
+            judge: Some(&judge),
+            judge_config: &jcfg,
+            project_root: Path::new("."),
+            seed: 1,
+        },
     )
     .unwrap();
     assert_eq!(score.n_items, 2);
@@ -857,21 +934,24 @@ fn locomo_scoring_f1_refusal_and_silence() {
         score
             .metrics
             .iter()
-            .find(|m| m.name == "j_deepseek")
+            .find(|m| m.name == "judge_acc")
             .unwrap()
             .value,
         Some(1.0)
     );
 
+    let silent_gold = fixture_gold();
     let silent = score_locomo(
         &[prediction(None)],
-        &fixture_gold(),
-        &fixture_questions(),
-        &BTreeMap::new(),
-        None,
-        &judge_config(),
-        Path::new("."),
-        1,
+        &ScoreContext {
+            gold: &silent_gold,
+            questions: &questions,
+            cached_items: &cached,
+            judge: None,
+            judge_config: &jcfg,
+            project_root: Path::new("."),
+            seed: 1,
+        },
     )
     .unwrap();
     assert!(silent.items[0].silent);
@@ -920,22 +1000,27 @@ fn longmemeval_scoring_reports_abstention_apart() {
     abs.item_id = "abs_item".to_owned();
     abs.cluster_id = "abs_cluster".to_owned();
     let judge = MockJudge::new(vec![Ok("yes".to_owned()), Ok("yes".to_owned())]);
+    let questions = fixture_questions();
+    let cached = BTreeMap::new();
+    let jcfg = judge_config();
     let score = score_longmemeval(
         &[prediction(Some("gold")), abs],
-        &gold,
-        &fixture_questions(),
-        &BTreeMap::new(),
-        Some(&judge),
-        &judge_config(),
-        Path::new("."),
-        1,
+        &ScoreContext {
+            gold: &gold,
+            questions: &questions,
+            cached_items: &cached,
+            judge: Some(&judge),
+            judge_config: &jcfg,
+            project_root: Path::new("."),
+            seed: 1,
+        },
     )
     .unwrap();
     assert_eq!(
         score
             .metrics
             .iter()
-            .find(|m| m.name == "acc_j_deepseek")
+            .find(|m| m.name == "judge_acc")
             .unwrap()
             .value,
         Some(1.0)
@@ -944,7 +1029,7 @@ fn longmemeval_scoring_reports_abstention_apart() {
         score
             .metrics
             .iter()
-            .find(|m| m.name == "abs_acc_j_deepseek")
+            .find(|m| m.name == "abs_judge_acc")
             .unwrap()
             .value,
         Some(1.0)
@@ -953,7 +1038,7 @@ fn longmemeval_scoring_reports_abstention_apart() {
         score
             .metrics
             .iter()
-            .find(|m| m.name == "acc_j_deepseek_task_avg")
+            .find(|m| m.name == "judge_acc_task_avg")
             .unwrap()
             .value,
         Some(1.0)
@@ -1085,7 +1170,7 @@ fn fixture_record() -> RunRecord {
             not_scored_reason: None,
         },
         MetricScoreInterval {
-            metric: "j_deepseek".to_owned(),
+            metric: "judge_acc".to_owned(),
             value: Some(0.625),
             ci95_low: Some(0.5),
             ci95_high: Some(0.75),
@@ -1101,7 +1186,7 @@ fn fixture_record() -> RunRecord {
             not_scored_reason: None,
         },
         MetricScoreInterval {
-            metric: "j_deepseek_cat_4".to_owned(),
+            metric: "judge_acc_cat_4".to_owned(),
             value: Some(0.625),
             ci95_low: Some(0.5),
             ci95_high: Some(0.75),
@@ -1286,6 +1371,8 @@ fn memory_report_tables_come_from_run_records() {
         }],
         pilot: None,
         notes: Vec::new(),
+        output_limits: None,
+        runaways_by_purpose: None,
     };
     fs::write(
         run_dir.join("memory_run.json"),
@@ -1363,6 +1450,7 @@ fn registered_capability_yields_dispatched_speak_answer_and_configured_timeout()
                     }),
                     latency_ms: 1,
                     outcome: CallOutcome::Success,
+                    strict_schema: true,
                 },
                 output,
                 raw_text: raw,
@@ -1495,6 +1583,7 @@ fn mock_history_prompts_carry_trigger_and_capability() {
                     usage,
                     latency_ms: 1,
                     outcome: CallOutcome::Success,
+                    strict_schema: true,
                 },
                 output,
                 raw_text: raw,
@@ -1636,4 +1725,239 @@ fn mock_history_prompts_carry_trigger_and_capability() {
         }
         assert_eq!(exec.percepts_count, 7);
     }
+}
+
+#[test]
+fn benchmark_model_profile_loads_from_toml_and_live_without_profile_refuses() {
+    use monoagens_lab::memory::RunProfile;
+
+    let prof = RunProfile::load_from_path(
+        &workspace_root().join("lab/profiles/deepseek-v4.1-flash-high.toml"),
+    )
+    .expect("load committed profile");
+    assert_eq!(prof.output_limits.classify, 1_024);
+    assert_eq!(prof.output_limits.reason, 4_096);
+    assert_eq!(prof.output_limits.consolidate, 8_192);
+    assert_eq!(prof.output_limit_param, "max_completion_tokens");
+
+    let tmp = TempDir::new().unwrap();
+    let mut opts = suite_options(&tmp, "http://127.0.0.1:1".to_owned(), MemoryPhase::Pilot);
+    opts.profile = None;
+    let err = monoagens_lab::memory::run_memory_suite(&opts)
+        .expect_err("live run without profile must refuse");
+    assert!(
+        err.to_string().contains("--profile"),
+        "error must name --profile flag: {err}"
+    );
+}
+
+#[test]
+fn render_dry_run_blocks_live_run_on_empty_trigger_or_no_capabilities() {
+    use monoagens_lab::memory::{run_render_dry_run_gate, validate_rendered_dry_run_request};
+    use monoagens_protocol::{
+        CapabilityDescriptor, CapabilityFlags, CapabilityId, CapabilitySchemaHash,
+    };
+
+    let err_trigger = validate_rendered_dry_run_request(
+        "classify",
+        "item-42",
+        "turn-7",
+        "[STATIC_CORE_CAPABILITIES]\n- a.speak\n[/STATIC_CORE_CAPABILITIES]",
+        "[DYNAMIC_CAPABILITIES]\n- none\n[/DYNAMIC_CAPABILITIES]\n[TRIGGER]\ntrigger: none\n[/TRIGGER]",
+    )
+    .expect_err("empty trigger must block live run");
+    assert!(err_trigger.to_string().contains("classify"));
+    assert!(err_trigger.to_string().contains("item-42"));
+
+    let err_caps = validate_rendered_dry_run_request(
+        "reason",
+        "item-99",
+        "probe-1",
+        "[STATIC_CORE_CAPABILITIES]\n- none\n[/STATIC_CORE_CAPABILITIES]",
+        "[DYNAMIC_CAPABILITIES]\n- none\n[/DYNAMIC_CAPABILITIES]\n[TRIGGER]\nhello\n[/TRIGGER]",
+    )
+    .expect_err("no capabilities must block live run");
+    assert!(err_caps.to_string().contains("reason"));
+    assert!(err_caps.to_string().contains("item-99"));
+
+    let soul = ActorId::new("soul");
+    let user = ActorId::new("user");
+    let place = PlaceId::new("p-dry");
+    let aud = Audience::new([user.clone(), soul.clone()]);
+    let item = ExternalItem {
+        item_id: "dry_item".to_owned(),
+        cluster_id: "dry_item".to_owned(),
+        strata_key: "test".to_owned(),
+        history: vec![make_text_percept(
+            "user",
+            "p-dry",
+            aud.members.iter().cloned(),
+            1_000,
+            "Remember the code is 9912.",
+        )],
+        checkpoint_group: None,
+        probes: vec![monoagens_lab::datasets::ExternalProbe {
+            probe_id: "q1".to_owned(),
+            percept: make_text_percept(
+                "user",
+                "p-dry",
+                aud.members.iter().cloned(),
+                2_000,
+                "What is the code?",
+            ),
+            isolated_checkpoint: true,
+            probe_scope: VisibleScope::new(aud, Some(place.clone())),
+            expected_capability: None,
+        }],
+        history_mode: HistoryMode::StaticSilent,
+        capabilities: vec![CapabilityDescriptor {
+            id: CapabilityId::new("a.speak"),
+            description: "Speak".to_owned(),
+            places: vec![place],
+            flags: CapabilityFlags {
+                communicative: true,
+                identity_changing: false,
+                irreversible: false,
+            },
+            typical_latency_ms: 1,
+            capability_schema_hash: CapabilitySchemaHash::new("h-dry"),
+            sensed_effect: None,
+        }],
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let prior = monoagens_store::load_prior_or_default(None).unwrap().prior;
+    let written = run_render_dry_run_gate(&[("locomo".to_owned(), &item)], dir.path(), &prior, 1)
+        .expect("valid item passes dry run");
+    assert_eq!(written.len(), 1);
+    assert!(written[0].exists());
+}
+
+#[test]
+fn metering_proxy_reads_headers_limits_and_usage_paths_from_config() {
+    use monoagens_lab::memory::{CallAttribution, MeteringProxy, MeteringProxyConfig, RunProfile};
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+    let addr = listener.local_addr().expect("addr");
+    let captured: Arc<Mutex<Option<(String, serde_json::Value)>>> = Arc::new(Mutex::new(None));
+    let cap_clone = Arc::clone(&captured);
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+        let mut hdrs = String::new();
+        let mut len = 0_usize;
+        loop {
+            let mut line = String::new();
+            let n = reader.read_line(&mut line).expect("read");
+            if n == 0 || line == "\r\n" || line == "\n" {
+                break;
+            }
+            hdrs.push_str(&line);
+            if let Some(rest) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                len = rest.trim().parse().unwrap_or(0);
+            }
+        }
+        let mut body = vec![0_u8; len];
+        if len > 0 {
+            reader.read_exact(&mut body).expect("body");
+        }
+        let json_body: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        *cap_clone.lock().expect("lock") = Some((hdrs, json_body));
+        let resp_body = json!({
+            "model": "neutral-proxy-model",
+            "choices": [{
+                "index": 0,
+                "finish_reason": "stop",
+                "message": { "role": "assistant", "content": "{\"label\":\"ok\",\"score\":1.0,\"rationale\":null}" }
+            }],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 25,
+                "custom_usage": {
+                    "cached_read": 60,
+                    "reasoning": 10
+                }
+            }
+        })
+        .to_string();
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            resp_body.len(),
+            resp_body
+        );
+        let _ = stream.write_all(resp.as_bytes());
+        let _ = stream.flush();
+    });
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ledger_path = dir.path().join("ledger.jsonl");
+    let prof = RunProfile::parse_toml_str(&format!(
+        r#"
+version = 1
+name = "neutral-proxy-test"
+endpoint_url = "http://{addr}/v1/chat/completions"
+model = "neutral-proxy-model"
+reasoning_effort = "high"
+output_limit_param = "max_output_tokens"
+
+[output_limits]
+classify = 777
+reason = 4096
+consolidate = 8192
+
+[headers]
+x-neutral-session = "prefix:{{conversation_id}}"
+
+[usage_paths]
+cached_tokens = "custom_usage.cached_read"
+reasoning_tokens = "custom_usage.reasoning"
+"#
+    ))
+    .expect("parse profile");
+    let cfg = MeteringProxyConfig::from_profile(&prof, None, ledger_path.clone()).expect("cfg");
+
+    let proxy = MeteringProxy::start(cfg).expect("start proxy");
+    let client = reqwest::blocking::Client::new();
+    let mut headers = reqwest::header::HeaderMap::new();
+    for (k, v) in (CallAttribution {
+        participant: "monoagens".to_owned(),
+        dataset: "locomo".to_owned(),
+        conversation: "conv-1".to_owned(),
+        phase: "answer".to_owned(),
+    })
+    .headers()
+    {
+        headers.insert(
+            reqwest::header::HeaderName::from_bytes(k.as_bytes()).unwrap(),
+            reqwest::header::HeaderValue::from_str(&v).unwrap(),
+        );
+    }
+    headers.insert(
+        reqwest::header::HeaderName::from_static("x-lab-purpose"),
+        reqwest::header::HeaderValue::from_static("classify"),
+    );
+    let resp = client
+        .post(proxy.chat_completions_url())
+        .headers(headers)
+        .json(&json!({"messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .expect("send to proxy");
+    assert!(resp.status().is_success());
+    drop(proxy);
+    handle.join().expect("upstream finishes");
+
+    let (hdrs, body) = captured.lock().expect("lock").clone().expect("captured");
+    assert!(
+        hdrs.to_ascii_lowercase()
+            .contains("x-neutral-session: prefix:conv_")
+    );
+    assert_eq!(body["max_output_tokens"], json!(777));
+
+    let ledger_raw = fs::read_to_string(&ledger_path).expect("ledger");
+    let entry: monoagens_lab::memory::LedgerEntry =
+        serde_json::from_str(ledger_raw.lines().next().expect("line")).expect("parse ledger");
+    assert_eq!(entry.cached_input_tokens, Some(60));
+    assert_eq!(entry.reasoning_tokens, Some(10));
 }

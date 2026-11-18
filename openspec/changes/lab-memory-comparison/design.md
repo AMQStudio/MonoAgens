@@ -73,7 +73,7 @@ context.
 The judge is `deepseek-v4.1-flash`, effort `high`, through the proxy, running the published prompt
 texts verbatim: LoCoMo `ACCURACY_PROMPT` with JSON verdict; LongMemEval-S's five task-specific
 prompts (standard, temporal with off-by-one tolerance, knowledge-update, preference rubric,
-abstention). Metrics are named `j_deepseek` (LoCoMo) and `acc_j_deepseek` (LongMemEval-S), with
+abstention). Metrics are named neutrally `judge_acc` (LoCoMo) and `judge_acc` per question type (LongMemEval-S); the judge model and profile are recorded in the setup block, with
 the prompt version recorded. LoCoMo official token F1 and the category 5 refusal check are
 computed locally without a model. An unparsable verdict is retried once, then recorded as a judge
 failure, never as correct.

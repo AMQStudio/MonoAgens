@@ -1336,8 +1336,8 @@ fn task_10_2_and_10_3_and_10_5_live_options_embedder_and_report_parity() {
     let mut soul_cfg = OpenAiModelConfig::new(&endpoint_url, Some(SecretString::new("k-soul")));
     soul_cfg.reasoning_effort = Some(ReasoningEffort::Medium);
     soul_cfg.extra_headers = vec![(
-        "x-opencode-session".to_owned(),
-        SecretString::new(secret_session),
+        "x-session-id".to_owned(),
+        monoagens_lab::reason_seam::model::ExtraHeaderValue::ConversationId,
     )];
     soul_cfg.user_agent = Some("monoagens-lab/0.1.0".to_owned());
     let soul_prov = OpenAiModelProvider::new(soul_cfg).unwrap();
@@ -1345,8 +1345,10 @@ fn task_10_2_and_10_3_and_10_5_live_options_embedder_and_report_parity() {
     let mut judge_cfg = OpenAiModelConfig::new(&endpoint_url, Some(SecretString::new("k-judge")));
     judge_cfg.reasoning_effort = Some(ReasoningEffort::High);
     judge_cfg.extra_headers = vec![(
-        "x-opencode-session".to_owned(),
-        SecretString::new(secret_session),
+        "x-session-id".to_owned(),
+        monoagens_lab::reason_seam::model::ExtraHeaderValue::Literal(SecretString::new(
+            secret_session,
+        )),
     )];
     judge_cfg.user_agent = Some("monoagens-lab/0.1.0".to_owned());
     let judge_prov = OpenAiModelProvider::new(judge_cfg).unwrap();
@@ -1405,8 +1407,8 @@ fn task_10_2_and_10_3_and_10_5_live_options_embedder_and_report_parity() {
     );
     assert!(
         reqs.iter()
-            .all(|(h, _)| h.to_ascii_lowercase().contains("x-opencode-session:")),
-        "every HTTP call must carry an x-opencode-session header"
+            .all(|(h, _)| h.to_ascii_lowercase().contains("x-session-id:")),
+        "every HTTP call must carry an x-session-id header"
     );
     // Soul calls carry the stable per-run-and-item session value; the configured header value
     // still applies to judge calls built outside the Core loop.
@@ -1415,8 +1417,8 @@ fn task_10_2_and_10_3_and_10_5_live_options_embedder_and_report_parity() {
         .filter(|(_, b)| b.contains(r#""reasoning_effort":"medium""#))
         .filter_map(|(h, _)| {
             h.lines().find_map(|line| {
-                line.strip_prefix("x-opencode-session: ")
-                    .or_else(|| line.strip_prefix("X-OpenCode-Session: "))
+                line.strip_prefix("x-session-id: ")
+                    .or_else(|| line.strip_prefix("X-Session-Id: "))
             })
         })
         .collect();
@@ -1433,7 +1435,7 @@ fn task_10_2_and_10_3_and_10_5_live_options_embedder_and_report_parity() {
     assert!(
         reqs.iter().any(|(h, _)| h
             .to_ascii_lowercase()
-            .contains(&format!("x-opencode-session: {secret_session}"))),
+            .contains(&format!("x-session-id: {secret_session}"))),
         "judge calls keep the configured extra header"
     );
     assert!(

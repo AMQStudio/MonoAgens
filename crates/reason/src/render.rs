@@ -310,11 +310,15 @@ impl RenderExtras {
             }
         }
         for eid in ids {
-            if let Some(rec) = store.get(eid)?
-                && !rec.payload.is_empty()
-            {
-                let text = String::from_utf8_lossy(rec.payload.as_bytes()).into_owned();
-                self.event_payloads.insert(eid, text);
+            if let Some(rec) = store.get(eid)? {
+                if !rec.payload.is_empty() {
+                    let text = String::from_utf8_lossy(rec.payload.as_bytes()).into_owned();
+                    self.event_payloads.insert(eid, text);
+                } else if let Some(detail) = &rec.detail
+                    && let Ok(text) = serde_json::to_string(detail)
+                {
+                    self.event_payloads.insert(eid, text);
+                }
             }
         }
         Ok(())
@@ -412,7 +416,7 @@ impl RenderedContext {
             timeout_ms: 30_000,
             max_output_tokens: None,
             temperature: None,
-            session_id: None,
+            conversation_id: None,
             extra_headers: Vec::new(),
         }
     }
@@ -594,6 +598,9 @@ fn render_slot_0_anchor(sections: &ContextSections) -> String {
             );
         }
     }
+    out.push_str(
+        "output_contract: motivation in 1..=5; confidence_0_20 in 0..=20; act requires non-empty capability_id and >=1 place; classify label must be non-empty.\n",
+    );
     out.push_str("[/ANCHOR]");
     out
 }
@@ -800,21 +807,40 @@ fn render_commitments(commitments: &[CommitmentSlotItem]) -> String {
                 .iter()
                 .map(|a| sanitize_single_line(a.as_str()))
                 .collect();
-            let _ = writeln!(
-                out,
-                "- id={} kind={} status={} due={} expiry={} places=[{}] people=[{}]",
-                c.expectation_id,
-                kind,
-                if c.is_fired_or_overdue {
-                    "overdue_or_due"
-                } else {
-                    "active"
-                },
-                format_absolute_utc(c.due_ms),
-                format_absolute_utc(c.expiry_ms),
-                places.join(","),
-                people.join(","),
-            );
+            if c.condition.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "- id={} kind={} status={} due={} expiry={} places=[{}] people=[{}]",
+                    c.expectation_id,
+                    kind,
+                    if c.is_fired_or_overdue {
+                        "overdue_or_due"
+                    } else {
+                        "active"
+                    },
+                    format_absolute_utc(c.due_ms),
+                    format_absolute_utc(c.expiry_ms),
+                    places.join(","),
+                    people.join(","),
+                );
+            } else {
+                let _ = writeln!(
+                    out,
+                    "- id={} kind={} status={} due={} expiry={} places=[{}] people=[{}] condition={}",
+                    c.expectation_id,
+                    kind,
+                    if c.is_fired_or_overdue {
+                        "overdue_or_due"
+                    } else {
+                        "active"
+                    },
+                    format_absolute_utc(c.due_ms),
+                    format_absolute_utc(c.expiry_ms),
+                    places.join(","),
+                    people.join(","),
+                    sanitize_single_line(&c.condition),
+                );
+            }
         }
     }
     out.push_str("[/COMMITMENTS]");

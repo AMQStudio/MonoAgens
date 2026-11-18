@@ -1644,3 +1644,297 @@ fn free_text_condition_bands_and_goal_reached_and_expiry() {
         "expired goal must no longer attract events"
     );
 }
+
+#[test]
+fn classify_plans_carry_trigger_and_condition_across_silence_reask_goal_and_condition_paths() {
+    let prior = Prior {
+        wake_gate_lo: 0.25,
+        silence_sample_rate: 1.0,
+        ..Prior::default()
+    };
+
+    let mut core = Core::open(MemStore::new(), prior, Switches::all_enabled(), 1).unwrap();
+    let mut doors = NoopDoors;
+
+    core.step(
+        Input::BodyState(BodyState {
+            protocol_version: Default::default(),
+            body_id: BodyId::new("b1"),
+            status: BodyStatus::Ready,
+            capabilities: vec![CapabilityDescriptor {
+                id: CapabilityId::new("a.speak"),
+                description: "Speak in room:clf".to_owned(),
+                places: vec![PlaceId::new("room:clf")],
+                flags: CapabilityFlags {
+                    communicative: true,
+                    identity_changing: false,
+                    irreversible: false,
+                },
+                typical_latency_ms: 100,
+                capability_schema_hash: CapabilitySchemaHash::new("h-clf"),
+                sensed_effect: None,
+            }],
+            timestamp_ms: Time::from_millis(100),
+        }),
+        Time::from_millis(100),
+        &mut doors,
+    )
+    .unwrap();
+
+    // 1. Condition + Goal paths: open a Promise (Condition) and a Goal via a Reason turn.
+    let mut seed_p = make_percept("alice", "room:clf", &["alice", "soul"], 1_000);
+    seed_p.addressees = vec![ActorId::new("soul")];
+    seed_p.payload = OpaquePayload::from_bytes(b"seed turn");
+    let eff = core
+        .step(
+            Input::Percept(Box::new(seed_p)),
+            Time::from_millis(1_000),
+            &mut doors,
+        )
+        .unwrap();
+    let req_id = match eff.as_slice() {
+        [Effect::Model { plan, .. }] => plan.trigger_event_id.unwrap(),
+        _ => panic!("expected Reason wake"),
+    };
+    core.step(
+        Input::ModelResult {
+            request_id: req_id,
+            acts: vec![
+                ThoughtAct::Expect {
+                    expect_kind: ExpectKind::Promise,
+                    places: vec![PlaceId::new("room:clf")],
+                    people: vec![ActorId::new("alice")],
+                    condition: "alice confirms the delivery".to_owned(),
+                    due_ms: Some(Time::from_millis(50_000)),
+                    expiry_ms: Time::from_millis(100_000),
+                    recurrence: None,
+                    promise_meta: None,
+                    domain: None,
+                    about_ids: Vec::new(),
+                },
+                ThoughtAct::Expect {
+                    expect_kind: ExpectKind::Goal,
+                    places: vec![PlaceId::new("room:clf")],
+                    people: vec![ActorId::new("alice")],
+                    condition: "finish quarterly audit".to_owned(),
+                    due_ms: Some(Time::from_millis(60_000)),
+                    expiry_ms: Time::from_millis(110_000),
+                    recurrence: None,
+                    promise_meta: None,
+                    domain: None,
+                    about_ids: Vec::new(),
+                },
+            ],
+        },
+        Time::from_millis(1_100),
+        &mut doors,
+    )
+    .unwrap();
+
+    let cond_exp_id = core
+        .state()
+        .expectation_book
+        .expectations
+        .values()
+        .find(|e| e.kind == ExpectKind::Promise)
+        .unwrap()
+        .expectation_id;
+    let goal_exp_id = core
+        .state()
+        .expectation_book
+        .expectations
+        .values()
+        .find(|e| e.kind == ExpectKind::Goal)
+        .unwrap()
+        .expectation_id;
+    core.set_expectation_embeddings(cond_exp_id, vec![emb([1.0, 0.0, 0.0])]);
+    core.set_expectation_embeddings(goal_exp_id, vec![emb([0.0, 1.0, 0.0])]);
+
+    // Trigger Condition path
+    let mut p_cond = make_percept("alice", "room:clf", &["alice", "soul"], 2_000);
+    p_cond.payload = OpaquePayload::from_bytes(b"package arrived at front desk");
+    p_cond.embeddings = vec![emb([0.8, 0.6, 0.0])]; // cosine 0.8 -> middle band
+    let eff_cond = core
+        .step(
+            Input::Percept(Box::new(p_cond)),
+            Time::from_millis(2_000),
+            &mut doors,
+        )
+        .unwrap();
+    let cond_plan = eff_cond
+        .iter()
+        .find_map(|e| match e {
+            Effect::Model {
+                purpose: ModelPurpose::Classify,
+                plan,
+            } => Some(plan),
+            _ => None,
+        })
+        .expect("expected Condition Classify effect");
+    assert!(cond_plan.sections.trigger.is_some());
+    assert_eq!(
+        cond_plan.sections.commitments.len(),
+        1,
+        "Condition classify plan must carry commitment"
+    );
+    assert_eq!(
+        cond_plan.sections.commitments[0].condition,
+        "alice confirms the delivery"
+    );
+    assert!(
+        !cond_plan.sections.static_core_caps.is_empty()
+            || !cond_plan.sections.dynamic_caps.is_empty(),
+        "Condition classify plan must carry registered capabilities"
+    );
+
+    // Trigger Goal path (from carol so alice's judged_silence doesn't intercept)
+    let mut p_goal = make_percept("carol", "room:clf", &["carol", "soul"], 2_500);
+    p_goal.payload = OpaquePayload::from_bytes(b"audit spreadsheet uploaded");
+    p_goal.embeddings = vec![emb([0.0, 0.8, 0.6])]; // cosine 0.8 with goal -> middle band
+    let eff_goal = core
+        .step(
+            Input::Percept(Box::new(p_goal)),
+            Time::from_millis(2_500),
+            &mut doors,
+        )
+        .unwrap();
+    let goal_plan = eff_goal
+        .iter()
+        .find_map(|e| match e {
+            Effect::Model {
+                purpose: ModelPurpose::Classify,
+                plan,
+            } => Some(plan),
+            _ => None,
+        })
+        .expect("expected Goal Classify effect");
+    assert!(goal_plan.sections.trigger.is_some());
+    assert_eq!(goal_plan.sections.commitments.len(), 1);
+    assert_eq!(
+        goal_plan.sections.commitments[0].condition,
+        "finish quarterly audit"
+    );
+
+    // 2. SilenceReask path: silent percept from bob opens judged_silence, then follow-up triggers Classify.
+    let mut p_silent = make_percept("bob", "room:clf", &["bob", "soul"], 3_000);
+    p_silent.payload = OpaquePayload::from_bytes(b"bob whispers quietly");
+    p_silent.embeddings = vec![emb([0.0, 0.0, 1.0])];
+    let _ = core
+        .step(
+            Input::Percept(Box::new(p_silent)),
+            Time::from_millis(3_000),
+            &mut doors,
+        )
+        .unwrap();
+    let mut p_reask = make_percept("bob", "room:clf", &["bob", "soul"], 3_200);
+    p_reask.payload = OpaquePayload::from_bytes(b"hello? did you hear me?");
+    p_reask.embeddings = vec![emb([0.0, 0.0, 1.0])];
+    let eff_reask = core
+        .step(
+            Input::Percept(Box::new(p_reask)),
+            Time::from_millis(3_200),
+            &mut doors,
+        )
+        .unwrap();
+    let reask_plan = eff_reask
+        .iter()
+        .find_map(|e| match e {
+            Effect::Model {
+                purpose: ModelPurpose::Classify,
+                plan,
+            } => Some(plan),
+            _ => None,
+        })
+        .expect("expected SilenceReask Classify effect");
+    assert!(reask_plan.sections.trigger.is_some());
+    assert_eq!(reask_plan.sections.commitments.len(), 1);
+    assert_eq!(
+        reask_plan.sections.commitments[0].condition,
+        "judged_silence"
+    );
+}
+
+#[test]
+fn classify_plan_refuses_when_condition_or_trigger_content_is_missing() {
+    let prior = Prior {
+        wake_gate_lo: 0.25,
+        ..Prior::default()
+    };
+
+    let mut core = Core::open(MemStore::new(), prior, Switches::all_enabled(), 1).unwrap();
+    let mut doors = NoopDoors;
+
+    let mut seed_p = make_percept("alice", "room:clf", &["alice", "soul"], 1_000);
+    seed_p.addressees = vec![ActorId::new("soul")];
+    let eff = core
+        .step(
+            Input::Percept(Box::new(seed_p)),
+            Time::from_millis(1_000),
+            &mut doors,
+        )
+        .unwrap();
+    let req_id = match eff.as_slice() {
+        [Effect::Model { plan, .. }] => plan.trigger_event_id.unwrap(),
+        _ => panic!("expected Reason wake"),
+    };
+    core.step(
+        Input::ModelResult {
+            request_id: req_id,
+            acts: vec![ThoughtAct::Expect {
+                expect_kind: ExpectKind::Promise,
+                places: vec![PlaceId::new("room:clf")],
+                people: vec![ActorId::new("alice")],
+                condition: "   ".to_owned(), // empty condition
+                due_ms: Some(Time::from_millis(50_000)),
+                expiry_ms: Time::from_millis(100_000),
+                recurrence: None,
+                promise_meta: None,
+                domain: None,
+                about_ids: Vec::new(),
+            }],
+        },
+        Time::from_millis(1_100),
+        &mut doors,
+    )
+    .unwrap();
+
+    let exp_id = core
+        .state()
+        .expectation_book
+        .expectations
+        .values()
+        .find(|e| e.kind == ExpectKind::Promise)
+        .unwrap()
+        .expectation_id;
+    core.set_expectation_embeddings(exp_id, vec![emb([1.0, 0.0, 0.0])]);
+
+    let mut p = make_percept("alice", "room:clf", &["alice", "soul"], 2_000);
+    p.payload = OpaquePayload::from_bytes(b"something happened");
+    p.embeddings = vec![emb([0.8, 0.6, 0.0])];
+    let eff = core
+        .step(
+            Input::Percept(Box::new(p)),
+            Time::from_millis(2_000),
+            &mut doors,
+        )
+        .unwrap();
+    assert!(
+        !eff.iter().any(|e| matches!(
+            e,
+            Effect::Model {
+                purpose: ModelPurpose::Classify,
+                ..
+            }
+        )),
+        "Classify must be refused when condition text is empty"
+    );
+    let log = core.store().read_after_seq(None, usize::MAX).unwrap();
+    assert!(
+        log.iter().any(|rec| matches!(
+            &rec.detail,
+            Some(EventDetail::DoorVerdict { rule, verdict, .. })
+                if rule == "classify_missing_inputs" && verdict.contains("empty")
+        )),
+        "refusal reason must be recorded in the log"
+    );
+}

@@ -204,6 +204,8 @@ pub struct CommitmentSlotItem {
     pub places: Vec<PlaceId>,
     pub people: Vec<ActorId>,
     pub is_fired_or_overdue: bool,
+    #[serde(default)]
+    pub condition: String,
     pub estimated_bytes: usize,
 }
 

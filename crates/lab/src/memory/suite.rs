@@ -31,11 +31,12 @@ use crate::memory::prompts::{
     LONGMEMEVAL_ANSWER_FORMAT_V1, LONGMEMEVAL_PROMPT_VERSION,
 };
 use crate::memory::proxy::{
-    CallAttribution, LedgerEntry, MEMORY_MODEL, MEMORY_REASONING_EFFORT, peak_multiplier_at,
-    read_ledger_totals,
+    CallAttribution, LedgerEntry, RunProfile, peak_multiplier_at, read_ledger_totals,
 };
 use crate::memory::report;
-use crate::memory::scoring::{MemoryItemScore, MemoryScore, score_locomo, score_longmemeval};
+use crate::memory::scoring::{
+    MemoryItemScore, MemoryScore, ScoreContext, score_locomo, score_longmemeval,
+};
 use crate::record::{
     DatasetRunProvenance, MemoryUsageTotals, MetricScoreInterval, PROMPT_SOURCE_CORE_RENDER,
     PurposeCost, RunRecord, UsageBreakdown,
@@ -82,6 +83,7 @@ pub struct MemorySuiteOptions {
     pub seed: u64,
     pub phase: MemoryPhase,
     pub live: bool,
+    pub profile: Option<RunProfile>,
     pub max_cost_usd: Option<f64>,
     /// Chat-completions endpoint of the metering proxy for MonoAgens.
     pub provider_endpoint: Option<String>,
@@ -156,6 +158,10 @@ pub struct MemoryRunFile {
     pub datasets: Vec<DatasetArtifact>,
     pub pilot: Option<PilotSummary>,
     pub notes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_limits: Option<crate::reason_seam::model::OutputLimitProfile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runaways_by_purpose: Option<BTreeMap<String, u64>>,
 }
 
 /// Outcome returned by [`run_memory_suite`].
@@ -521,7 +527,7 @@ fn append_scoring_lines(
             serde_json::json!({
                 "record_type": "score_verdict",
                 "probe_id": item.probe_id,
-                "metric_name": "j_deepseek",
+                "metric_name": "judge_acc",
                 "score": item.judge_correct.map(|c| if c { 1.0 } else { 0.0 }),
                 "passed": item.judge_correct,
                 "judge_verdict": item.judge_verdict,
@@ -644,11 +650,33 @@ fn pct(values: &mut [u64], p: f64) -> u64 {
 
 /// Runs phase 0 (pilot or full) and writes the memory report.
 pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome, LabError> {
+    if opts.live && opts.profile.is_none() {
+        return Err(LabError::Protocol(
+            "--live run requires --profile <path> (no provider defaults exist in code)".to_owned(),
+        ));
+    }
     if opts.live && opts.max_cost_usd.is_none() {
         return Err(LabError::Protocol(
             "--live memory run requires --max-cost-usd <cap>".to_owned(),
         ));
     }
+    let profile_model = opts
+        .profile
+        .as_ref()
+        .map_or_else(|| "test-model".to_owned(), |p| p.model.clone());
+    let profile_effort = opts
+        .profile
+        .as_ref()
+        .map_or_else(|| "high".to_owned(), |p| p.reasoning_effort.clone());
+    let profile_limits = opts
+        .profile
+        .as_ref()
+        .map(|p| p.output_limits.clone())
+        .unwrap_or_default();
+    let profile_limit_param = opts.profile.as_ref().map_or_else(
+        || crate::reason_seam::model::DEFAULT_OUTPUT_LIMIT_PARAM.to_owned(),
+        |p| p.output_limit_param.clone(),
+    );
     let manifest_path = resolve_manifest_path(opts.manifest_path.as_deref(), &opts.datasets_dir);
     let manifest =
         load_and_validate_manifest(&manifest_path, &crate::standard_benchmark_registry())?;
@@ -683,10 +711,13 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
     } else if let Some(endpoint) = &opts.provider_endpoint {
         let mut cfg = OpenAiModelConfig::new(endpoint.clone(), None);
         cfg.reasoning_effort = Some(
-            MEMORY_REASONING_EFFORT
+            profile_effort
                 .parse()
                 .map_err(|e: String| LabError::Protocol(format!("reasoning effort: {e}")))?,
         );
+        cfg.output_limits = profile_limits.clone();
+        cfg.output_limit_param = profile_limit_param.clone();
+        cfg.profile_name = opts.profile.as_ref().map(|p| p.name.clone());
         cfg.user_agent = Some(format!("monoagens-lab/{}", env!("CARGO_PKG_VERSION")));
         cfg.max_retries = 0;
         cfg.default_timeout_ms = 600_000;
@@ -700,7 +731,10 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
     let judge: Option<Arc<dyn JudgeRunner>> = if let Some(j) = &opts.judge {
         Some(Arc::clone(j))
     } else if let Some(endpoint) = &opts.judge_endpoint {
-        Some(Arc::new(HttpJudgeClient::new(endpoint.clone())?) as Arc<dyn JudgeRunner>)
+        Some(
+            Arc::new(HttpJudgeClient::new(endpoint.clone(), &profile_model)?)
+                as Arc<dyn JudgeRunner>,
+        )
     } else {
         None
     };
@@ -724,9 +758,50 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
             "memory suite requires a live provider (proxy endpoint) or a test provider".to_owned(),
         ));
     };
+    if opts.live {
+        let dry_prior = monoagens_store::load_prior_or_default(None)?.prior;
+        let mut dry_samples: Vec<(String, crate::datasets::ExternalItem)> = Vec::new();
+        for (dataset_id, converter, instruction) in &datasets {
+            if opts
+                .only_datasets
+                .as_ref()
+                .is_some_and(|ids| !ids.iter().any(|id| id == dataset_id))
+            {
+                continue;
+            }
+            let mut converted = load_dataset(
+                converter.as_ref(),
+                &opts.datasets_dir,
+                &manifest,
+                dataset_id,
+            )?;
+            apply_answer_format(&mut converted.items, instruction);
+            ensure_speak_capabilities(&mut converted.items);
+            if converted.items.is_empty() {
+                continue;
+            }
+            converted.items.sort_by(|a, b| a.item_id.cmp(&b.item_id));
+            let mut sample = converted.items.remove(0);
+            sample.history.truncate(2);
+            sample.probes.truncate(1);
+            dry_samples.push(((*dataset_id).to_owned(), sample));
+        }
+        let dry_refs: Vec<(String, &crate::datasets::ExternalItem)> = dry_samples
+            .iter()
+            .map(|(ds, it)| (ds.clone(), it))
+            .collect();
+        let dry_paths = run_render_dry_run_gate(&dry_refs, &opts.run_dir, &dry_prior, opts.seed)?;
+        notes.push(format!(
+            "Render dry run passed ({} files) with profile limits classify={}, reason={}, consolidate={}.",
+            dry_paths.len(),
+            profile_limits.classify,
+            profile_limits.reason,
+            profile_limits.consolidate
+        ));
+    }
     let judge_config = JudgeExecutionConfig {
         live: opts.live,
-        judge_model: Some(MEMORY_MODEL),
+        judge_model: Some(&profile_model),
         judge_prompt_version: Some(LONGMEMEVAL_PROMPT_VERSION),
         provider: None,
         datasets_dir: Some(&opts.datasets_dir),
@@ -815,7 +890,7 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
                 &Switches::all_enabled(),
                 opts.seed,
                 provider.as_ref(),
-                MEMORY_MODEL,
+                &profile_model,
                 opts.live,
                 &mut guard,
                 opts.embedder.as_deref(),
@@ -889,6 +964,15 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
         let cached_items = load_cached_scores(&cached_dirs, dataset_id);
         // A resumed run with no new items reuses the recorded scores and does not call the judge
         // again (the previous pilot doubled judge calls on resume).
+        let score_ctx = ScoreContext {
+            gold: &converted.gold_book,
+            questions: &selected_questions,
+            cached_items: &cached_items,
+            judge: judge.as_deref(),
+            judge_config: &judge_config,
+            project_root: &opts.run_dir,
+            seed: opts.seed,
+        };
         let score = if !executed_any {
             fs::read_to_string(
                 opts.run_dir
@@ -897,50 +981,14 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
             .ok()
             .and_then(|raw| serde_json::from_str::<MemoryScore>(&raw).ok())
             .unwrap_or(if *dataset_id == "locomo" {
-                score_locomo(
-                    &predictions,
-                    &converted.gold_book,
-                    &selected_questions,
-                    &cached_items,
-                    judge.as_deref(),
-                    &judge_config,
-                    &opts.run_dir,
-                    opts.seed,
-                )?
+                score_locomo(&predictions, &score_ctx)?
             } else {
-                score_longmemeval(
-                    &predictions,
-                    &converted.gold_book,
-                    &selected_questions,
-                    &cached_items,
-                    judge.as_deref(),
-                    &judge_config,
-                    &opts.run_dir,
-                    opts.seed,
-                )?
+                score_longmemeval(&predictions, &score_ctx)?
             })
         } else if *dataset_id == "locomo" {
-            score_locomo(
-                &predictions,
-                &converted.gold_book,
-                &selected_questions,
-                &cached_items,
-                judge.as_deref(),
-                &judge_config,
-                &opts.run_dir,
-                opts.seed,
-            )?
+            score_locomo(&predictions, &score_ctx)?
         } else {
-            score_longmemeval(
-                &predictions,
-                &converted.gold_book,
-                &selected_questions,
-                &cached_items,
-                judge.as_deref(),
-                &judge_config,
-                &opts.run_dir,
-                opts.seed,
-            )?
+            score_longmemeval(&predictions, &score_ctx)?
         };
         if executed_any {
             append_scoring_lines(&opts.run_dir, &score, &converted.gold_book)?;
@@ -1007,7 +1055,7 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
             prior_format_version: loaded_prior.prior.version,
             prior_digest: loaded_prior.digest.clone(),
             open_offset: 0,
-            model_id: MEMORY_MODEL.to_owned(),
+            model_id: profile_model.clone(),
             embedder_id: opts
                 .embedder
                 .as_ref()
@@ -1071,7 +1119,7 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
                 },
                 chosen_item_ids: completed.iter().map(|c| c.item_id.clone()).collect(),
                 metric_scores: intervals,
-                judge_model: Some(MEMORY_MODEL.to_owned()),
+                judge_model: Some(profile_model.clone()),
                 judge_prompt_version: Some(if *dataset_id == "locomo" {
                     LOCOMO_PROMPT_VERSION.to_owned()
                 } else {
@@ -1083,8 +1131,8 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
                 judge_tokens_out: usage.judge.output_tokens,
                 history_gate_wakes: completed.iter().map(|c| c.total_history_gate_wakes).sum(),
                 partial_run: opts.phase == MemoryPhase::Pilot,
-                reasoning_effort: Some(MEMORY_REASONING_EFFORT.to_owned()),
-                judge_reasoning_effort: Some(MEMORY_REASONING_EFFORT.to_owned()),
+                reasoning_effort: Some(profile_effort.clone()),
+                judge_reasoning_effort: Some(profile_effort.clone()),
                 extra_header_names: Vec::new(),
                 provider_endpoint_host: opts
                     .provider_endpoint
@@ -1166,9 +1214,9 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
         None
     };
     let run_file = MemoryRunFile {
-        model: MEMORY_MODEL.to_owned(),
-        reasoning_effort: MEMORY_REASONING_EFFORT.to_owned(),
-        judge_model: MEMORY_MODEL.to_owned(),
+        model: profile_model.clone(),
+        reasoning_effort: profile_effort,
+        judge_model: profile_model,
         judge_prompt_versions,
         answer_format_version: ANSWER_FORMAT_PROMPT_VERSION.to_owned(),
         seed: opts.seed,
@@ -1185,6 +1233,10 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
         datasets: artifacts.clone(),
         pilot: pilot.clone(),
         notes,
+        output_limits: Some(profile_limits),
+        runaways_by_purpose: Some(count_runaways_by_purpose(
+            &opts.run_dir.join("ledger.jsonl"),
+        )),
     };
     fs::write(
         opts.run_dir.join("memory_run.json"),
@@ -1326,4 +1378,126 @@ fn build_pilot_summary(
         projected_rest_list_cost_usd: projected_rest,
         projected_rest_wall_clock_s: mean_wall_per_question * rest_questions as f64,
     })
+}
+
+fn count_runaways_by_purpose(ledger_path: &Path) -> BTreeMap<String, u64> {
+    let mut counts = BTreeMap::from([
+        ("reason".to_owned(), 0_u64),
+        ("classify".to_owned(), 0_u64),
+        ("consolidate".to_owned(), 0_u64),
+    ]);
+    let Ok(raw) = fs::read_to_string(ledger_path) else {
+        return counts;
+    };
+    for line in raw.lines() {
+        let Ok(entry) = serde_json::from_str::<crate::memory::proxy::LedgerEntry>(line) else {
+            continue;
+        };
+        if entry.finish_reason.as_deref() == Some("length") {
+            *counts.entry(entry.purpose).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
+/// Validates a single rendered dry-run request, blocking live runs on empty triggers or missing capabilities.
+pub fn validate_rendered_dry_run_request(
+    purpose: &str,
+    item_id: &str,
+    turn_or_probe_id: &str,
+    system_prompt: &str,
+    user_prompt: &str,
+) -> Result<(), LabError> {
+    if user_prompt.contains("trigger: none") {
+        return Err(LabError::Protocol(format!(
+            "render dry run blocked live run: empty trigger ('trigger: none') for purpose '{purpose}', item '{item_id}', turn '{turn_or_probe_id}'"
+        )));
+    }
+    let no_static =
+        system_prompt.contains("[STATIC_CORE_CAPABILITIES]\n- none\n[/STATIC_CORE_CAPABILITIES]");
+    let no_dynamic =
+        user_prompt.contains("[DYNAMIC_CAPABILITIES]\n- none\n[/DYNAMIC_CAPABILITIES]");
+    if no_static && no_dynamic {
+        return Err(LabError::Protocol(format!(
+            "render dry run blocked live run: no capabilities rendered for purpose '{purpose}', item '{item_id}', turn '{turn_or_probe_id}'"
+        )));
+    }
+    Ok(())
+}
+
+/// Renders a no-network scripted dry run over sample items before any `--live` run (`24.6`).
+pub fn run_render_dry_run_gate(
+    samples: &[(String, &crate::datasets::ExternalItem)],
+    run_dir: &Path,
+    prior: &monoagens_core::Prior,
+    seed: u64,
+) -> Result<Vec<PathBuf>, LabError> {
+    use crate::datasets::framework::{TranscriptRecord, execute_external_item_with_embedder};
+    use crate::reason_seam::model::{ScriptedModelProvider, ScriptedReply, TokenUsage};
+
+    let dry_dir = run_dir.join("dry_run");
+    fs::create_dir_all(&dry_dir)?;
+    let mut written = Vec::new();
+    let switches = monoagens_core::Switches::all_enabled();
+
+    for (dataset_id, item) in samples {
+        let mut provider = ScriptedModelProvider::new();
+        provider.set_fallback(ScriptedReply::RawText {
+            text: serde_json::json!({
+                "protocol_version": {"major": 1, "minor": 0},
+                "acts": [{
+                    "act": "think",
+                    "thought": "dry-run scripted check",
+                    "motivation": 2,
+                    "confidence_0_20": 12,
+                    "used_ids": []
+                }]
+            })
+            .to_string(),
+            usage: TokenUsage::default(),
+            latency_ms: 1,
+        });
+        let mut guard = crate::CostGuard::default();
+        let exec = execute_external_item_with_embedder(
+            item,
+            prior,
+            &switches,
+            seed,
+            &provider,
+            "dry-run-scripted",
+            false,
+            &mut guard,
+            None,
+            None,
+            Some(30_000),
+            Some(1_024),
+        )?;
+        let out_path = dry_dir.join(format!("{dataset_id}__dry_run.jsonl"));
+        let mut lines = String::new();
+        for rec in &exec.transcript_events {
+            if let TranscriptRecord::ModelCall {
+                purpose,
+                turn_or_probe_id,
+                system_prompt,
+                user_prompt,
+                ..
+            } = rec
+            {
+                validate_rendered_dry_run_request(
+                    purpose,
+                    &item.item_id,
+                    turn_or_probe_id,
+                    system_prompt,
+                    user_prompt,
+                )?;
+                let line = serde_json::to_string(rec)
+                    .map_err(|e| LabError::Serialization(e.to_string()))?;
+                lines.push_str(&line);
+                lines.push('\n');
+            }
+        }
+        fs::write(&out_path, lines)?;
+        written.push(out_path);
+    }
+    Ok(written)
 }

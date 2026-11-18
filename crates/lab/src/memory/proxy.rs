@@ -1,11 +1,12 @@
-//! Lab-local OpenAI-compatible metering proxy in front of OpenCode Go (`Design 1`).
+//! Lab-local provider-neutral OpenAI-compatible metering proxy (`Design 1`).
 //!
 //! Every call of a participant or the judge goes through this loopback server. The proxy
-//! overwrites the model and `reasoning_effort`, sets the Lab User-Agent and a stable
-//! `x-opencode-session` per `(participant, conversation)`, aborts the upstream request when the
-//! client gives up, and appends exactly one ledger line per call. Header values and API keys are
-//! never written.
+//! overwrites the model and `reasoning_effort`, injects configured headers (filling
+//! `{conversation_id}` per `(participant, conversation)`), applies per-purpose output limits,
+//! aborts the upstream request when the client gives up, and appends one ledger line per call.
+//! Header values and API keys are never written.
 
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::net::SocketAddr;
@@ -23,23 +24,104 @@ use tokio::net::{TcpListener, TcpStream};
 use crate::LabError;
 use crate::sha256_hex;
 
-/// List price for `deepseek-v4.1-flash` on OpenCode Go, USD per million tokens (`R-58`).
-pub const PRICE_UNCACHED_INPUT_PER_M: f64 = 0.15;
-/// Cached input read price, USD per million tokens.
-pub const PRICE_CACHED_INPUT_PER_M: f64 = 0.003;
-/// Output (including reasoning) price, USD per million tokens.
-pub const PRICE_OUTPUT_PER_M: f64 = 0.60;
-
-/// Upstream OpenCode Go chat-completions endpoint (`R-58`).
-pub const OPENCODE_GO_CHAT_COMPLETIONS_URL: &str =
-    "https://opencode.ai/inference/go/openai/v1/chat/completions";
-
-/// Model and effort used by every memory-suite call and the judge.
-pub const MEMORY_MODEL: &str = "deepseek-v4.1-flash";
-/// Reasoning effort used by every memory-suite call and the judge.
-pub const MEMORY_REASONING_EFFORT: &str = "high";
 /// Recorded answer-format instruction version.
 pub const ANSWER_FORMAT_V1: &str = "answer_format_v1";
+
+/// Token pricing in USD per million tokens, loaded from a [`RunProfile`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProfilePricing {
+    #[serde(default)]
+    pub uncached_input_per_m: f64,
+    #[serde(default)]
+    pub cached_input_per_m: f64,
+    #[serde(default)]
+    pub output_per_m: f64,
+}
+
+/// Provider-neutral run configuration loaded from `--profile <path>` (`lab/profiles/<name>.toml`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunProfile {
+    pub version: u32,
+    pub name: String,
+    pub endpoint_url: String,
+    pub model: String,
+    pub reasoning_effort: String,
+    #[serde(default = "default_output_limit_param")]
+    pub output_limit_param: String,
+    #[serde(default)]
+    pub output_limits: crate::reason_seam::model::OutputLimitProfile,
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+    #[serde(default)]
+    pub usage_paths: ProxyUsagePaths,
+    #[serde(default)]
+    pub pricing: ProfilePricing,
+}
+
+fn default_output_limit_param() -> String {
+    crate::reason_seam::model::DEFAULT_OUTPUT_LIMIT_PARAM.to_owned()
+}
+
+impl RunProfile {
+    /// Parses and validates a run profile TOML string.
+    pub fn parse_toml_str(raw: &str) -> Result<Self, LabError> {
+        let profile: Self = toml::from_str(raw)
+            .map_err(|e| LabError::Protocol(format!("invalid run profile TOML: {e}")))?;
+        profile.validate()?;
+        Ok(profile)
+    }
+
+    /// Loads and validates a run profile TOML file from `path`.
+    pub fn load_from_path(path: &Path) -> Result<Self, LabError> {
+        let raw = fs::read_to_string(path).map_err(|e| {
+            LabError::Protocol(format!(
+                "failed to read run profile '{}': {e}",
+                path.display()
+            ))
+        })?;
+        Self::parse_toml_str(&raw)
+    }
+
+    /// Validates required fields and protocol-header guards.
+    pub fn validate(&self) -> Result<(), LabError> {
+        if self.version != 1 {
+            return Err(LabError::Protocol(format!(
+                "unsupported run profile version {} (expected 1)",
+                self.version
+            )));
+        }
+        if self.name.trim().is_empty() {
+            return Err(LabError::Protocol(
+                "run profile 'name' must not be empty".to_owned(),
+            ));
+        }
+        if self.endpoint_url.trim().is_empty() {
+            return Err(LabError::Protocol(
+                "run profile 'endpoint_url' must not be empty".to_owned(),
+            ));
+        }
+        if self.model.trim().is_empty() {
+            return Err(LabError::Protocol(
+                "run profile 'model' must not be empty".to_owned(),
+            ));
+        }
+        if self.reasoning_effort.trim().is_empty() {
+            return Err(LabError::Protocol(
+                "run profile 'reasoning_effort' must not be empty".to_owned(),
+            ));
+        }
+        if self.output_limit_param.trim().is_empty() {
+            return Err(LabError::Protocol(
+                "run profile 'output_limit_param' must not be empty".to_owned(),
+            ));
+        }
+        for name in self.headers.keys() {
+            crate::reason_seam::model::validate_extra_header_name(name)
+                .map_err(LabError::Protocol)?;
+        }
+        Ok(())
+    }
+}
 
 /// Attribution carried from a Lab client to the proxy in `x-lab-*` headers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,77 +218,128 @@ pub fn peak_multiplier_at(now: SystemTime) -> f64 {
     if weekday_peak { 2.0 } else { 1.0 }
 }
 
-/// List-price cost in USD for one call, applying the peak-hour multiplier.
+/// List-price cost in USD for one call, applying `pricing` and the peak-hour multiplier.
 #[must_use]
-pub fn list_cost_usd(uncached_input: u64, cached_input: u64, output: u64, multiplier: f64) -> f64 {
-    (uncached_input as f64 * PRICE_UNCACHED_INPUT_PER_M
-        + cached_input as f64 * PRICE_CACHED_INPUT_PER_M
-        + output as f64 * PRICE_OUTPUT_PER_M)
+pub fn list_cost_usd(
+    uncached_input: u64,
+    cached_input: u64,
+    output: u64,
+    multiplier: f64,
+    pricing: &ProfilePricing,
+) -> f64 {
+    (uncached_input as f64 * pricing.uncached_input_per_m
+        + cached_input as f64 * pricing.cached_input_per_m
+        + output as f64 * pricing.output_per_m)
         / 1_000_000.0
         * multiplier
 }
 
-/// Derives the stable `x-opencode-session` value for a participant and conversation.
+/// Derives the stable conversation identifier for a participant and conversation.
 /// The value itself is never written to any file.
 #[must_use]
-pub fn session_id_for_attribution(participant: &str, conversation: &str) -> String {
+pub fn conversation_id_for_attribution(participant: &str, conversation: &str) -> String {
     let digest = sha256_hex(format!("{participant}\u{1f}{conversation}").as_bytes());
-    format!("ses_{}", &digest[..32])
+    format!("conv_{}", &digest[..32])
 }
 
-/// Extracts metering fields from an OpenAI-compatible response body.
+/// Configurable JSON dot-paths for reading metering usage from provider responses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProxyUsagePaths {
+    pub input_tokens: String,
+    pub uncached_input_tokens: Option<String>,
+    pub output_tokens: String,
+    pub cached_tokens: String,
+    pub reasoning_tokens: String,
+    pub list_cost: Option<String>,
+    pub allowance: Option<String>,
+}
+
+impl Default for ProxyUsagePaths {
+    fn default() -> Self {
+        Self {
+            input_tokens: "prompt_tokens".to_owned(),
+            uncached_input_tokens: None,
+            output_tokens: "completion_tokens".to_owned(),
+            cached_tokens: "prompt_tokens_details.cached_tokens".to_owned(),
+            reasoning_tokens: "completion_tokens_details.reasoning_tokens".to_owned(),
+            list_cost: None,
+            allowance: None,
+        }
+    }
+}
+
+fn lookup_json_path<'a>(root: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut cur = root;
+    for seg in trimmed.split('.') {
+        cur = cur.as_object()?.get(seg)?;
+    }
+    Some(cur)
+}
+
+fn lookup_u64(root: &serde_json::Value, path: &str) -> Option<u64> {
+    lookup_json_path(root, path).and_then(serde_json::Value::as_u64)
+}
+
+fn lookup_f64(root: &serde_json::Value, path: &str) -> Option<f64> {
+    lookup_json_path(root, path).and_then(serde_json::Value::as_f64)
+}
+
+/// Extracts metering fields from an OpenAI-compatible response body using default OpenAI-compatible paths.
 #[must_use]
-pub fn parse_usage(response: &serde_json::Value, _multiplier: f64) -> Option<ParsedUsage> {
+pub fn parse_usage(response: &serde_json::Value, multiplier: f64) -> Option<ParsedUsage> {
+    parse_usage_with_paths(response, multiplier, &ProxyUsagePaths::default())
+}
+
+/// Extracts metering fields from a response body using configured JSON paths.
+#[must_use]
+pub fn parse_usage_with_paths(
+    response: &serde_json::Value,
+    _multiplier: f64,
+    paths: &ProxyUsagePaths,
+) -> Option<ParsedUsage> {
     let usage = response.get("usage")?;
-    let opencode_tokens = usage.get("opencode").and_then(|o| o.get("tokens"));
-    let prompt_tokens = usage
-        .get("prompt_tokens")
-        .and_then(serde_json::Value::as_u64);
-    let cached = opencode_tokens
-        .and_then(|t| t.get("cache_read"))
-        .and_then(serde_json::Value::as_u64)
-        .or_else(|| {
-            usage
-                .get("prompt_tokens_details")
-                .and_then(|d| d.get("cached_tokens"))
-                .and_then(serde_json::Value::as_u64)
+    let prompt_tokens = lookup_u64(usage, &paths.input_tokens);
+    let cached = lookup_u64(usage, &paths.cached_tokens).or_else(|| {
+        usage
+            .get("prompt_tokens_details")
+            .and_then(|d| d.get("cached_tokens"))
+            .and_then(serde_json::Value::as_u64)
+    });
+    let uncached = paths
+        .uncached_input_tokens
+        .as_deref()
+        .and_then(|p| lookup_u64(usage, p))
+        .unwrap_or_else(|| {
+            prompt_tokens
+                .unwrap_or(0)
+                .saturating_sub(cached.unwrap_or(0))
         });
-    // OpenCode's `tokens.input` excludes cache reads; OpenAI's `prompt_tokens` includes them.
-    let uncached = match opencode_tokens
-        .and_then(|t| t.get("input"))
-        .and_then(serde_json::Value::as_u64)
-    {
-        Some(v) => v,
-        None => prompt_tokens
-            .unwrap_or(0)
-            .saturating_sub(cached.unwrap_or(0)),
-    };
-    let output = opencode_tokens
-        .and_then(|t| t.get("output"))
-        .and_then(serde_json::Value::as_u64)
+    let output = lookup_u64(usage, &paths.output_tokens)
         .or_else(|| {
             usage
                 .get("completion_tokens")
                 .and_then(serde_json::Value::as_u64)
         })
         .unwrap_or(0);
-    let reasoning = opencode_tokens
-        .and_then(|t| t.get("reasoning"))
-        .and_then(serde_json::Value::as_u64)
-        .or_else(|| {
-            usage
-                .get("completion_tokens_details")
-                .and_then(|d| d.get("reasoning_tokens"))
-                .and_then(serde_json::Value::as_u64)
-        });
-    let reported_list = usage
-        .get("opencode")
-        .and_then(|o| o.get("list_cost"))
-        .and_then(serde_json::Value::as_f64);
-    let reported_allowance = usage
-        .get("opencode")
-        .and_then(|o| o.get("allowance"))
-        .and_then(serde_json::Value::as_f64);
+    let reasoning = lookup_u64(usage, &paths.reasoning_tokens).or_else(|| {
+        usage
+            .get("completion_tokens_details")
+            .and_then(|d| d.get("reasoning_tokens"))
+            .and_then(serde_json::Value::as_u64)
+    });
+    let reported_list = paths
+        .list_cost
+        .as_deref()
+        .and_then(|p| lookup_f64(usage, p));
+    let reported_allowance = paths
+        .allowance
+        .as_deref()
+        .and_then(|p| lookup_f64(usage, p));
     Some(ParsedUsage {
         prompt_tokens,
         uncached_input_tokens: uncached,
@@ -288,7 +421,7 @@ pub fn read_ledger_totals(
     Ok(totals)
 }
 
-/// Configuration for [`MeteringProxy`].
+/// Configuration for [`MeteringProxy`], populated from [`RunProfile`].
 #[derive(Clone)]
 pub struct MeteringProxyConfig {
     pub upstream_url: String,
@@ -298,10 +431,16 @@ pub struct MeteringProxyConfig {
     pub user_agent: String,
     pub ledger_path: PathBuf,
     pub max_retries: u32,
+    pub extra_headers: Vec<(String, String)>,
+    pub output_limit_param: String,
+    pub output_limits: crate::reason_seam::model::OutputLimitProfile,
+    pub usage_paths: ProxyUsagePaths,
+    pub pricing: ProfilePricing,
 }
 
 impl std::fmt::Debug for MeteringProxyConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let header_names: Vec<&str> = self.extra_headers.iter().map(|(k, _)| k.as_str()).collect();
         f.debug_struct("MeteringProxyConfig")
             .field("upstream_url", &self.upstream_url)
             .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
@@ -310,23 +449,39 @@ impl std::fmt::Debug for MeteringProxyConfig {
             .field("user_agent", &self.user_agent)
             .field("ledger_path", &self.ledger_path)
             .field("max_retries", &self.max_retries)
+            .field("extra_header_names", &header_names)
+            .field("output_limit_param", &self.output_limit_param)
+            .field("output_limits", &self.output_limits)
             .finish()
     }
 }
 
 impl MeteringProxyConfig {
-    /// Standard phase 0 configuration: OpenCode Go, DeepSeek v4.1 Flash, effort `high`.
-    #[must_use]
-    pub fn phase0(api_key: Option<SecretString>, ledger_path: PathBuf) -> Self {
-        Self {
-            upstream_url: OPENCODE_GO_CHAT_COMPLETIONS_URL.to_owned(),
+    /// Builds a [`MeteringProxyConfig`] solely from a validated [`RunProfile`].
+    pub fn from_profile(
+        profile: &RunProfile,
+        api_key: Option<SecretString>,
+        ledger_path: PathBuf,
+    ) -> Result<Self, LabError> {
+        profile.validate()?;
+        Ok(Self {
+            upstream_url: profile.endpoint_url.clone(),
             api_key,
-            model: MEMORY_MODEL.to_owned(),
-            reasoning_effort: MEMORY_REASONING_EFFORT.to_owned(),
+            model: profile.model.clone(),
+            reasoning_effort: profile.reasoning_effort.clone(),
             user_agent: format!("monoagens-lab/{}", env!("CARGO_PKG_VERSION")),
             ledger_path,
             max_retries: 3,
-        }
+            extra_headers: profile
+                .headers
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            output_limit_param: profile.output_limit_param.clone(),
+            output_limits: profile.output_limits.clone(),
+            usage_paths: profile.usage_paths.clone(),
+            pricing: profile.pricing.clone(),
+        })
     }
 }
 
@@ -600,7 +755,14 @@ async fn forward_chat_completion(
             let body = format!("{{\"error\":\"invalid request JSON: {err}\"}}");
             write_ledger(
                 shared,
-                &aborted_entry(&attribution, &purpose, started, 400, err.to_string()),
+                &aborted_entry(
+                    &shared.cfg,
+                    &attribution,
+                    &purpose,
+                    started,
+                    400,
+                    err.to_string(),
+                ),
             );
             return write_http_response(stream, 400, body.as_bytes()).await;
         }
@@ -615,9 +777,23 @@ async fn forward_chat_completion(
             serde_json::Value::String(shared.cfg.reasoning_effort.clone()),
         );
         obj.insert("stream".to_owned(), serde_json::Value::Bool(false));
+        let limit_param = if shared.cfg.output_limit_param.trim().is_empty() {
+            crate::reason_seam::model::DEFAULT_OUTPUT_LIMIT_PARAM
+        } else {
+            shared.cfg.output_limit_param.trim()
+        };
+        if !obj.contains_key(limit_param) {
+            let purpose_limit = match purpose.as_str() {
+                "classify" => shared.cfg.output_limits.classify,
+                "consolidate" => shared.cfg.output_limits.consolidate,
+                _ => shared.cfg.output_limits.reason,
+            };
+            obj.insert(limit_param.to_owned(), serde_json::json!(purpose_limit));
+        }
     }
 
-    let session = session_id_for_attribution(&attribution.participant, &attribution.conversation);
+    let conv_id =
+        conversation_id_for_attribution(&attribution.participant, &attribution.conversation);
     let mut attempts: u32 = 0;
     let (status, raw_body) = loop {
         attempts += 1;
@@ -626,8 +802,13 @@ async fn forward_chat_completion(
             .post(&shared.cfg.upstream_url)
             .header("content-type", "application/json")
             .header("user-agent", &shared.cfg.user_agent)
-            .header("x-opencode-session", &session)
             .json(&payload);
+        for (hdr_name, hdr_tmpl) in &shared.cfg.extra_headers {
+            if crate::reason_seam::model::validate_extra_header_name(hdr_name).is_ok() {
+                let val = hdr_tmpl.replace("{conversation_id}", &conv_id);
+                builder = builder.header(hdr_name, val);
+            }
+        }
         if let Some(key) = &shared.cfg.api_key {
             builder = builder.bearer_auth(key.expose());
         }
@@ -642,6 +823,7 @@ async fn forward_chat_completion(
             write_ledger(
                 shared,
                 &aborted_entry(
+                    &shared.cfg,
                     &attribution,
                     &purpose,
                     started,
@@ -681,7 +863,14 @@ async fn forward_chat_completion(
                 }
                 write_ledger(
                     shared,
-                    &aborted_entry(&attribution, &purpose, started, 502, err.to_string()),
+                    &aborted_entry(
+                        &shared.cfg,
+                        &attribution,
+                        &purpose,
+                        started,
+                        502,
+                        err.to_string(),
+                    ),
                 );
                 return write_http_response(
                     stream,
@@ -698,8 +887,13 @@ async fn forward_chat_completion(
     let entry = match parsed
         .as_ref()
         .filter(|_| (200..300).contains(&status))
-        .and_then(|v| parse_usage(v, peak_multiplier_at(SystemTime::now())))
-    {
+        .and_then(|v| {
+            parse_usage_with_paths(
+                v,
+                peak_multiplier_at(SystemTime::now()),
+                &shared.cfg.usage_paths,
+            )
+        }) {
         Some(usage) => {
             let multiplier = peak_multiplier_at(SystemTime::now());
             let list = usage.reported_list_cost_usd.unwrap_or_else(|| {
@@ -708,6 +902,7 @@ async fn forward_chat_completion(
                     usage.cached_input_tokens.unwrap_or(0),
                     usage.output_tokens,
                     multiplier,
+                    &shared.cfg.pricing,
                 )
             });
             LedgerEntry {
@@ -766,6 +961,7 @@ fn truncate_error(body: &[u8]) -> String {
 }
 
 fn aborted_entry(
+    cfg: &MeteringProxyConfig,
     attribution: &CallAttribution,
     purpose: &str,
     started: Instant,
@@ -778,8 +974,8 @@ fn aborted_entry(
         conversation: attribution.conversation.clone(),
         phase: attribution.phase.clone(),
         purpose: purpose.to_owned(),
-        model: MEMORY_MODEL.to_owned(),
-        reasoning_effort: MEMORY_REASONING_EFFORT.to_owned(),
+        model: cfg.model.clone(),
+        reasoning_effort: cfg.reasoning_effort.clone(),
         prompt_tokens: None,
         uncached_input_tokens: 0,
         cached_input_tokens: None,

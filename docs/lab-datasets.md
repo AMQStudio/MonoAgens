@@ -135,3 +135,13 @@ monoagens-lab report --run lab/runs/<run-id> [--out <dir>] [--note "..."] [--no-
 ```
 
 Every value is derived from the persisted run records and `*.outcomes.json` files: `REPORT.md`, self-contained `index.html`, `tables/*.csv`, `charts/*`, `transcripts/<dataset>/<item_id>.{jsonl,md}` for failure examples, and the reproducibility block (commit, prior digest, manifest digest, provider host, efforts, judge substitution, seeds/splits, embedder, `history_reasoning_mode`).
+
+## Live Memory-Suite Profiles (`--profile`)
+
+Every `--live` run requires `--profile <path>` pointing to a provider-neutral run configuration file (for example `lab/profiles/deepseek-v4.1-flash-high.toml`). No provider endpoint, header, usage path, pricing, or model limit profile is hard-coded in `crates/lab`.
+
+```sh
+cargo run -p monoagens-lab -- benchmark --suite memory-comparison --live --pilot \
+  --profile lab/profiles/deepseek-v4.1-flash-high.toml \
+  --max-cost-usd 2.00 --datasets-dir lab/datasets --out-dir lab/runs/pilot
+```

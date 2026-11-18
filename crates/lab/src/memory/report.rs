@@ -136,8 +136,8 @@ fn locomo_rows(ds: &LoadedDataset) -> Vec<CategoryRow> {
             continue;
         }
         let f1 = metric_value(&ds.record, &format!("qa_f1_cat_{cat}"));
-        let judge = metric_value(&ds.record, &format!("j_deepseek_cat_{cat}"));
-        let ci = fmt_ci(&ds.record, &format!("j_deepseek_cat_{cat}"));
+        let judge = metric_value(&ds.record, &format!("judge_acc_cat_{cat}"));
+        let ci = fmt_ci(&ds.record, &format!("judge_acc_cat_{cat}"));
         rows.push((name, n, f1, judge, ci));
     }
     rows
@@ -152,7 +152,7 @@ fn lme_rows(ds: &LoadedDataset) -> Vec<(String, usize, Option<f64>, String)> {
     }
     let mut rows = Vec::new();
     for (qtype, n) in counts {
-        let name = format!("acc_j_deepseek_{qtype}");
+        let name = format!("judge_acc_{qtype}");
         rows.push((
             qtype,
             n,
@@ -602,9 +602,9 @@ fn render_markdown(
     md.push_str("## 2. Results\n\n");
     for ds in datasets {
         if ds.artifact.dataset_id == "locomo" {
-            md.push_str("### LoCoMo (official token F1 and `j_deepseek`)\n\n");
+            md.push_str("### LoCoMo (official token F1 and `judge_acc`)\n\n");
             md.push_str(
-                "| Category | n | F1 | `j_deepseek` | 95% CI (judge) |\n|---|---:|---:|---:|---|\n",
+                "| Category | n | F1 | `judge_acc` | 95% CI (judge) |\n|---|---:|---:|---:|---|\n",
             );
             for (name, n, f1, judge, ci) in locomo_rows(ds) {
                 let _ = writeln!(
@@ -628,20 +628,20 @@ fn render_markdown(
                 md,
                 "| **Headline (cat 1–4)** | {headline_n} | {} | {} | {} |",
                 fmt_score(metric_value(&ds.record, "qa_f1")),
-                fmt_score(metric_value(&ds.record, "j_deepseek")),
-                fmt_ci(&ds.record, "j_deepseek")
+                fmt_score(metric_value(&ds.record, "judge_acc")),
+                fmt_ci(&ds.record, "judge_acc")
             );
             let cat5_n = ds.items.iter().filter(|i| i.category == "cat_5").count();
             let _ = writeln!(
                 md,
                 "| **Cat 5 refusal** | {cat5_n} | {} | {} | {} |\n",
                 fmt_score(metric_value(&ds.record, "cat5_refusal_acc")),
-                fmt_score(metric_value(&ds.record, "j_deepseek_cat_5")),
-                fmt_ci(&ds.record, "j_deepseek_cat_5")
+                fmt_score(metric_value(&ds.record, "judge_acc_cat_5")),
+                fmt_ci(&ds.record, "judge_acc_cat_5")
             );
         } else {
-            md.push_str("### LongMemEval-S (`acc_j_deepseek`)\n\n");
-            md.push_str("| Question type | n | `acc_j_deepseek` | 95% CI |\n|---|---:|---:|---|\n");
+            md.push_str("### LongMemEval-S (`judge_acc`)\n\n");
+            md.push_str("| Question type | n | `judge_acc` | 95% CI |\n|---|---:|---:|---|\n");
             for (qtype, n, acc, ci) in lme_rows(ds) {
                 let _ = writeln!(md, "| {qtype} | {n} | {} | {ci} |", fmt_score(acc));
             }
@@ -649,20 +649,20 @@ fn render_markdown(
             let _ = writeln!(
                 md,
                 "| **Overall** | {non_abs_n} | {} | {} |",
-                fmt_score(metric_value(&ds.record, "acc_j_deepseek")),
-                fmt_ci(&ds.record, "acc_j_deepseek")
+                fmt_score(metric_value(&ds.record, "judge_acc")),
+                fmt_ci(&ds.record, "judge_acc")
             );
             let _ = writeln!(
                 md,
                 "| **Task-averaged** | — | {} | — |",
-                fmt_score(metric_value(&ds.record, "acc_j_deepseek_task_avg"))
+                fmt_score(metric_value(&ds.record, "judge_acc_task_avg"))
             );
             let abs_n = ds.items.iter().filter(|i| i.is_abs).count();
             let _ = writeln!(
                 md,
                 "| **Abstention (`_abs`)** | {abs_n} | {} | {} |\n",
-                fmt_score(metric_value(&ds.record, "abs_acc_j_deepseek")),
-                fmt_ci(&ds.record, "abs_acc_j_deepseek")
+                fmt_score(metric_value(&ds.record, "abs_judge_acc")),
+                fmt_ci(&ds.record, "abs_judge_acc")
             );
         }
     }
@@ -877,7 +877,7 @@ fn render_markdown(
     let schema_total: usize = defects.schema_failures.values().sum();
     let _ = writeln!(
         md,
-        "- **Schema failures (MonoAgens + DeepSeek behaviour, not papered over):** {} failed model outputs: {}. Example: {}",
+        "- **Schema failures (MonoAgens + configured model behaviour, not papered over):** {} failed model outputs: {}. Example: {}",
         schema_total,
         defects
             .schema_failures
@@ -890,7 +890,7 @@ fn render_markdown(
     md.push('\n');
 
     md.push_str("## 8. Caveats\n\n");
-    md.push_str("- **Judge:** the judge is DeepSeek v4.1 Flash, not the published judge (gpt-4o-mini / gpt-4o); judge metrics are named for our judge and are not comparable with published numbers.\n");
+    md.push_str("- **Judge:** the judge is the configured judge model, not the published judge (gpt-4o-mini / gpt-4o); judge metrics are named for our judge and are not comparable with published numbers.\n");
     md.push_str("- **Contamination:** LoCoMo and LongMemEval-S predate this run and may be in model training data; no mitigation beyond recording `development_exposure` is claimed.\n");
     md.push_str("- **Small clusters:** LongMemEval-S has one history per question (500 clusters); LoCoMo has 10 conversations, so its cluster-bootstrap intervals are wide.\n");
     md.push_str("- **Pilot:** a pilot table reflects one LoCoMo conversation and 20 LongMemEval-S questions and is not a full-run score.\n");
@@ -952,7 +952,7 @@ fn render_html(
     html.push_str("<h2>Results</h2>");
     for ds in datasets {
         if ds.artifact.dataset_id == "locomo" {
-            html.push_str("<h3>LoCoMo</h3><table><tr><th>Category</th><th>n</th><th>F1</th><th>j_deepseek</th><th>95% CI</th></tr>");
+            html.push_str("<h3>LoCoMo</h3><table><tr><th>Category</th><th>n</th><th>F1</th><th>judge_acc</th><th>95% CI</th></tr>");
             for (name, n, f1, judge, ci) in locomo_rows(ds) {
                 let _ = writeln!(
                     html,
@@ -964,7 +964,7 @@ fn render_html(
             }
             html.push_str("</table>");
         } else {
-            html.push_str("<h3>LongMemEval-S</h3><table><tr><th>Question type</th><th>n</th><th>acc_j_deepseek</th><th>95% CI</th></tr>");
+            html.push_str("<h3>LongMemEval-S</h3><table><tr><th>Question type</th><th>n</th><th>judge_acc</th><th>95% CI</th></tr>");
             for (qtype, n, acc, ci) in lme_rows(ds) {
                 let _ = writeln!(
                     html,
@@ -976,11 +976,11 @@ fn render_html(
             let _ = writeln!(
                 html,
                 "<tr><td><b>Overall</b></td><td>—</td><td>{}</td><td>{}</td></tr><tr><td><b>Task-averaged</b></td><td>—</td><td>{}</td><td>—</td></tr><tr><td><b>Abstention</b></td><td>—</td><td>{}</td><td>{}</td></tr>",
-                fmt_score(metric_value(&ds.record, "acc_j_deepseek")),
-                fmt_ci(&ds.record, "acc_j_deepseek"),
-                fmt_score(metric_value(&ds.record, "acc_j_deepseek_task_avg")),
-                fmt_score(metric_value(&ds.record, "abs_acc_j_deepseek")),
-                fmt_ci(&ds.record, "abs_acc_j_deepseek")
+                fmt_score(metric_value(&ds.record, "judge_acc")),
+                fmt_ci(&ds.record, "judge_acc"),
+                fmt_score(metric_value(&ds.record, "judge_acc_task_avg")),
+                fmt_score(metric_value(&ds.record, "abs_judge_acc")),
+                fmt_ci(&ds.record, "abs_judge_acc")
             );
             html.push_str("</table>");
         }
@@ -1034,7 +1034,7 @@ fn render_html(
         let _ = writeln!(html, "<h2>{}</h2>{}", escape_html(name), svg);
     }
 
-    html.push_str("<h2>Known product defects observed</h2><ul><li>Classify plans carry no rendered trigger/sections (core turn.rs ~4703/4814; reason render_trigger): verdicts are made without the percept text.</li><li>Production has no default output cap; this run used 4096 and counts calls ending at the cap as runaway.</li><li>Schema failures are counted per type in REPORT.md rather than papered over.</li></ul><h2>Caveats</h2><ul><li>The judge is DeepSeek v4.1 Flash, not the published judge; its metrics are named <code>j_deepseek</code>/<code>acc_j_deepseek</code>.</li><li>Public benchmarks may be in model training data; <code>development_exposure</code> is recorded.</li><li>LoCoMo has 10 clusters, so its intervals are wide; a pilot is not a full-run score.</li><li>No published scores of other systems appear here.</li></ul>");
+    html.push_str("<h2>Known product defects observed</h2><ul><li>Classify plans carry no rendered trigger/sections (core turn.rs ~4703/4814; reason render_trigger): verdicts are made without the percept text.</li><li>Production has no default output cap; this run used 4096 and counts calls ending at the cap as runaway.</li><li>Schema failures are counted per type in REPORT.md rather than papered over.</li></ul><h2>Caveats</h2><ul><li>The judge is the configured judge model, not the published judge; its metrics are named <code>judge_acc</code>.</li><li>Public benchmarks may be in model training data; <code>development_exposure</code> is recorded.</li><li>LoCoMo has 10 clusters, so its intervals are wide; a pilot is not a full-run score.</li><li>No published scores of other systems appear here.</li></ul>");
     html.push_str("</body></html>");
     html
 }
@@ -1123,12 +1123,12 @@ pub fn generate_memory_report(run_dir: &Path) -> Result<GeneratedMemoryReport, L
     }
     write_csv(
         &tables_dir.join("locomo_categories.csv"),
-        &["category", "n", "qa_f1", "j_deepseek", "ci95"],
+        &["category", "n", "qa_f1", "judge_acc", "ci95"],
         &locomo_rows_csv,
     )?;
     write_csv(
         &tables_dir.join("longmemeval_types.csv"),
-        &["question_type", "n", "acc_j_deepseek", "ci95"],
+        &["question_type", "n", "judge_acc", "ci95"],
         &lme_rows_csv,
     )?;
     write_csv(
@@ -1258,12 +1258,7 @@ pub fn generate_memory_report(run_dir: &Path) -> Result<GeneratedMemoryReport, L
             + usage.answer.cached_input_tokens
             + usage.answer.output_tokens) as f64
             / n;
-        let score = if ds.artifact.dataset_id == "locomo" {
-            metric_value(&ds.record, "j_deepseek")
-        } else {
-            metric_value(&ds.record, "acc_j_deepseek")
-        }
-        .unwrap_or(0.0);
+        let score = metric_value(&ds.record, "judge_acc").unwrap_or(0.0);
         points.push((ds.artifact.dataset_id.clone(), score, tokens));
     }
     charts.insert(

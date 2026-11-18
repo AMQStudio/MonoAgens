@@ -108,18 +108,30 @@ fn category_of(entry: &crate::datasets::GoldEntry) -> String {
         .unwrap_or_else(|| "unknown".to_owned())
 }
 
+/// Shared inputs for scoring LoCoMo and LongMemEval-S predictions.
+pub struct ScoreContext<'a> {
+    pub gold: &'a GoldBook,
+    pub questions: &'a BTreeMap<(String, String), String>,
+    pub cached_items: &'a BTreeMap<(String, String), MemoryItemScore>,
+    pub judge: Option<&'a dyn JudgeRunner>,
+    pub judge_config: &'a JudgeExecutionConfig<'a>,
+    pub project_root: &'a std::path::Path,
+    pub seed: u64,
+}
+
 /// Scores LoCoMo: per-category official token F1 (categories 1–4 headline), the official
-/// category-5 refusal check, and `j_deepseek` from the published `ACCURACY_PROMPT`.
+/// category-5 refusal check, and `judge_acc` from the published `ACCURACY_PROMPT`.
 pub fn score_locomo(
     predictions: &[ExternalPrediction],
-    gold: &GoldBook,
-    questions: &BTreeMap<(String, String), String>,
-    cached_items: &BTreeMap<(String, String), MemoryItemScore>,
-    judge: Option<&dyn JudgeRunner>,
-    judge_config: &JudgeExecutionConfig<'_>,
-    project_root: &std::path::Path,
-    seed: u64,
+    ctx: &ScoreContext<'_>,
 ) -> Result<MemoryScore, LabError> {
+    let gold = ctx.gold;
+    let questions = ctx.questions;
+    let cached_items = ctx.cached_items;
+    let judge = ctx.judge;
+    let judge_config = ctx.judge_config;
+    let project_root = ctx.project_root;
+    let seed = ctx.seed;
     let mut score = MemoryScore::default();
     let judge_calls_before = judge.map(|j| j.calls()).unwrap_or(0);
     let mut f1_headline: Vec<(String, f64)> = Vec::new();
@@ -286,7 +298,7 @@ pub fn score_locomo(
                         probe_id: pred.probe_id.clone(),
                         cluster_id: pred.cluster_id.clone(),
                         category: Some(category.clone()),
-                        metric_name: "j_deepseek".to_owned(),
+                        metric_name: "judge_acc".to_owned(),
                         score: None,
                         passed: None,
                         judge_prompt: Some(prompt),
@@ -330,11 +342,11 @@ pub fn score_locomo(
     if judge.is_some() {
         score
             .metrics
-            .push(metric_with_cluster_ci("j_deepseek", &judge_headline, seed));
+            .push(metric_with_cluster_ci("judge_acc", &judge_headline, seed));
     } else {
         score
             .metrics
-            .push(not_scored_metric("j_deepseek", "no judge configured"));
+            .push(not_scored_metric("judge_acc", "no judge configured"));
     }
     score
         .metrics
@@ -349,7 +361,7 @@ pub fn score_locomo(
     if judge.is_some() {
         for (cat, obs) in &judge_by_cat {
             score.metrics.push(metric_with_cluster_ci(
-                &format!("j_deepseek_cat_{cat}"),
+                &format!("judge_acc_cat_{cat}"),
                 obs,
                 seed,
             ));
@@ -359,11 +371,9 @@ pub fn score_locomo(
         .metrics
         .push(metric_with_cluster_ci("cat5_refusal_acc", &refusal, seed));
     if judge.is_some() {
-        score.metrics.push(metric_with_cluster_ci(
-            "j_deepseek_cat_5",
-            &judge_cat5,
-            seed,
-        ));
+        score
+            .metrics
+            .push(metric_with_cluster_ci("judge_acc_cat_5", &judge_cat5, seed));
     }
     score
         .metrics
@@ -386,24 +396,25 @@ pub fn score_locomo(
                 .category_metrics
                 .entry(format!("cat_{cat}"))
                 .or_default()
-                .insert("j_deepseek".to_owned(), mean);
+                .insert("judge_acc".to_owned(), mean);
         }
     }
     Ok(score)
 }
 
-/// Scores LongMemEval-S: `acc_j_deepseek` per question type, overall and task-averaged, with
+/// Scores LongMemEval-S: `judge_acc` per question type, overall and task-averaged, with
 /// abstention (`_abs`) reported apart.
 pub fn score_longmemeval(
     predictions: &[ExternalPrediction],
-    gold: &GoldBook,
-    questions: &BTreeMap<(String, String), String>,
-    cached_items: &BTreeMap<(String, String), MemoryItemScore>,
-    judge: Option<&dyn JudgeRunner>,
-    _judge_config: &JudgeExecutionConfig<'_>,
-    _project_root: &std::path::Path,
-    seed: u64,
+    ctx: &ScoreContext<'_>,
 ) -> Result<MemoryScore, LabError> {
+    let gold = ctx.gold;
+    let questions = ctx.questions;
+    let cached_items = ctx.cached_items;
+    let judge = ctx.judge;
+    let _judge_config = ctx.judge_config;
+    let _project_root = ctx.project_root;
+    let seed = ctx.seed;
     let mut score = MemoryScore::default();
     let judge_calls_before = judge.map(|j| j.calls()).unwrap_or(0);
     let mut overall: Vec<(String, f64)> = Vec::new();
@@ -543,7 +554,7 @@ pub fn score_longmemeval(
     if judge.is_some() {
         score
             .metrics
-            .push(metric_with_cluster_ci("acc_j_deepseek", &overall, seed));
+            .push(metric_with_cluster_ci("judge_acc", &overall, seed));
         let type_means: Vec<f64> = by_type
             .values()
             .filter(|obs| !obs.is_empty())
@@ -555,7 +566,7 @@ pub fn score_longmemeval(
             Some(type_means.iter().sum::<f64>() / type_means.len() as f64)
         };
         score.metrics.push(crate::datasets::ScorerMetric {
-            name: "acc_j_deepseek_task_avg".to_owned(),
+            name: "judge_acc_task_avg".to_owned(),
             value: task_avg,
             ci95_low: task_avg,
             ci95_high: task_avg,
@@ -565,17 +576,15 @@ pub fn score_longmemeval(
         if abstention.is_empty() {
             score
                 .metrics
-                .push(not_scored_metric("abs_acc_j_deepseek", "no _abs items"));
+                .push(not_scored_metric("abs_judge_acc", "no _abs items"));
         } else {
-            score.metrics.push(metric_with_cluster_ci(
-                "abs_acc_j_deepseek",
-                &abstention,
-                seed,
-            ));
+            score
+                .metrics
+                .push(metric_with_cluster_ci("abs_judge_acc", &abstention, seed));
         }
         for (qt, obs) in &by_type {
             score.metrics.push(metric_with_cluster_ci(
-                &format!("acc_j_deepseek_{qt}"),
+                &format!("judge_acc_{qt}"),
                 obs,
                 seed,
             ));
@@ -583,7 +592,7 @@ pub fn score_longmemeval(
     } else {
         score
             .metrics
-            .push(not_scored_metric("acc_j_deepseek", "no judge configured"));
+            .push(not_scored_metric("judge_acc", "no judge configured"));
     }
     score
         .metrics
@@ -596,7 +605,7 @@ pub fn score_longmemeval(
                 .category_metrics
                 .entry(qt.clone())
                 .or_default()
-                .insert("acc_j_deepseek".to_owned(), mean);
+                .insert("judge_acc".to_owned(), mean);
         }
     }
     Ok(score)

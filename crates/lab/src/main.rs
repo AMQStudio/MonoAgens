@@ -706,6 +706,7 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
     let mut report_flag = false;
     let mut report_notes: Vec<String> = Vec::new();
     let mut secrets_path: Option<PathBuf> = None;
+    let mut profile_path: Option<PathBuf> = None;
     let mut json = false;
 
     let mut i = 0;
@@ -731,6 +732,12 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
             "--prior" => {
                 i += 1;
                 prior_path = Some(PathBuf::from(args.get(i).ok_or("--prior requires a path")?));
+            }
+            "--profile" => {
+                i += 1;
+                profile_path = Some(PathBuf::from(
+                    args.get(i).ok_or("--profile requires a path")?,
+                ));
             }
             "--only" => {
                 i += 1;
@@ -897,7 +904,8 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
             "--reuse-items-from" => {
                 i += 1;
                 memory_reuse_from.push(PathBuf::from(
-                    args.get(i).ok_or("--reuse-items-from requires a run directory")?,
+                    args.get(i)
+                        .ok_or("--reuse-items-from requires a run directory")?,
                 ));
             }
             "--report" => report_flag = true,
@@ -927,14 +935,26 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
         out_dir = Some(PathBuf::from(datasets::DEFAULT_RUNS_ROOT).join(&suite));
     }
     if memory_suite && out_dir.is_none() {
-        let base = PathBuf::from(datasets::DEFAULT_RUNS_ROOT)
-            .join("2026-11-18-phase0-deepseek-v4.1-flash");
+        let base = PathBuf::from(datasets::DEFAULT_RUNS_ROOT).join("memory-comparison");
         out_dir = Some(if memory_pilot {
             base.join("pilot")
         } else {
             base
         });
     }
+
+    if live && profile_path.is_none() {
+        return Err(
+            "--live run requires --profile <path> (e.g. --profile lab/profiles/<name>.toml)"
+                .to_owned(),
+        );
+    }
+    let loaded_profile = match &profile_path {
+        Some(p) => {
+            Some(monoagens_lab::memory::RunProfile::load_from_path(p).map_err(|e| e.to_string())?)
+        }
+        None => None,
+    };
 
     let loaded_prior = load_prior_or_default(prior_path.as_deref()).map_err(|e| e.to_string())?;
     let pareto_input: Option<ParetoScorecardInput> = match pareto_input_path {
@@ -963,7 +983,8 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
         only_ids = Some(vec!["locomo".to_owned(), "longmemeval".to_owned()]);
     }
 
-    let mut extra_headers: Vec<(String, SecretString)> = Vec::new();
+    let mut extra_headers: Vec<(String, monoagens_lab::reason_seam::model::ExtraHeaderValue)> =
+        Vec::new();
     let mut extra_header_names: Vec<String> = Vec::new();
     for spec in &extra_headers_spec {
         let Some((hdr_name, env_var)) = spec.split_once('=') else {
@@ -987,7 +1008,12 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
             ));
         }
         extra_header_names.push(hdr_name.to_owned());
-        extra_headers.push((hdr_name.to_owned(), SecretString::new(hdr_val)));
+        extra_headers.push((
+            hdr_name.to_owned(),
+            monoagens_lab::reason_seam::model::ExtraHeaderValue::Literal(SecretString::new(
+                hdr_val,
+            )),
+        ));
     }
 
     let lab_ua = format!("monoagens-lab/{}", env!("CARGO_PKG_VERSION"));
@@ -1134,13 +1160,17 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
                     .to_owned(),
             );
         }
-        let proxy = monoagens_lab::memory::MeteringProxy::start(
-            monoagens_lab::memory::MeteringProxyConfig::phase0(
-                proxy_api_key,
-                run_dir.join("ledger.jsonl"),
-            ),
+        let profile = loaded_profile
+            .as_ref()
+            .ok_or_else(|| "--live memory-comparison requires --profile <path>".to_owned())?;
+        let proxy_cfg = monoagens_lab::memory::MeteringProxyConfig::from_profile(
+            profile,
+            proxy_api_key,
+            run_dir.join("ledger.jsonl"),
         )
         .map_err(|e| e.to_string())?;
+        let proxy =
+            monoagens_lab::memory::MeteringProxy::start(proxy_cfg).map_err(|e| e.to_string())?;
         let embedder: Option<std::sync::Arc<dyn Embedder>> =
             configured_embedder.map(|e| std::sync::Arc::new(e) as std::sync::Arc<dyn Embedder>);
         let memory_opts = monoagens_lab::memory::MemorySuiteOptions {
@@ -1151,6 +1181,7 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
             seed,
             phase,
             live,
+            profile: Some(profile.clone()),
             max_cost_usd,
             provider_endpoint: Some(proxy.chat_completions_url()),
             judge_endpoint: Some(proxy.chat_completions_url()),

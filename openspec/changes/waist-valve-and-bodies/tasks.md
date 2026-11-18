@@ -65,7 +65,7 @@ with [`core-and-lab`](../core-and-lab/tasks.md). Every task group carries its ow
 
 ## 10. Reopened — provider-neutral headers and output limits (owner review 2026-11-18, core-and-lab Decision 21)
 
-- [ ] 10.1 Gateway: send the configured extra headers with `{conversation_id}` filled by a stable id per conversation or place, and the per-purpose output limit of the configured model profile, on every model call; config schema and validation for both (protocol-header guard, default 16,384) (spec "The gateway sends configured headers and output limits on every model call"). Verify with gateway tests using a mock provider: two calls of one chat share the header value, two chats differ, no value is logged, limits per purpose reach the request.
+- [x] 10.1 Gateway: send the configured extra headers with `{conversation_id}` filled by a stable id per conversation or place, and the per-purpose output limit of the configured model profile, on every model call; config schema and validation for both (protocol-header guard, default 16,384) (spec "The gateway sends configured headers and output limits on every model call"). Verify with gateway tests using a mock provider: two calls of one chat share the header value, two chats differ, no value is logged, limits per purpose reach the request.
 
 ## Workflow follow-up
 

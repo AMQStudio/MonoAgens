@@ -1515,7 +1515,7 @@ fn render_markdown_report(
         repro.history_reasoning_mode
     );
     md.push_str("- **Contamination & small clusters:** Public benchmarks released before 2026 carry moderate-to-high contamination risk; clustered corpora (`locomo`, `memory_agent_bench`, `group_mem_bench`, `capa`, `pitch`, `fantom`, `molweni`, `hi_tom`, `dyntom`) report cluster-bootstrap 95% CIs.\n");
-    md.push_str("- **License terms:** `locomo`, `opentom`, `exploretom`, and `tomi` are `CC-BY-NC-4.0` (non-commercial research use only); `opentom` requests ran under ZDR (`0 days` retention) on OpenCode Go.\n");
+    md.push_str("- **License terms:** `locomo`, `opentom`, `exploretom`, and `tomi` are `CC-BY-NC-4.0` (non-commercial research use only); `opentom` requests ran under ZDR (`0 days` retention) with the configured provider.\n");
     md.push_str("- **Gaps & cost cap:** `pis`, `proact`, and `mpbench` remain `unavailable` without silent substitution. Owner waived the USD cost cap (`--max-cost-usd 1000000`).\n");
     if let Some(app) = appendix {
         md.push_str("\n---\n\n");

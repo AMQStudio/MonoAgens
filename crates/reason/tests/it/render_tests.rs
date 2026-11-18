@@ -155,6 +155,7 @@ fn sample_plan(with_guide: bool, with_valve: Option<ValveSelfSnapshot>) -> Conte
             places: vec![PlaceId::new("room:main")],
             people: vec![ActorId::new("alice")],
             is_fired_or_overdue: true,
+            condition: String::new(),
             estimated_bytes: 96,
         }],
         working_set: vec![ContextSegment {
@@ -1089,4 +1090,205 @@ fn read_http_body(stream: &mut TcpStream) -> String {
         reader.read_exact(&mut buf).expect("read body");
     }
     String::from_utf8_lossy(&buf).into_owned()
+}
+
+#[test]
+fn render_contract_reason_classify_and_consolidate_all_carry_trigger_and_capabilities() {
+    use monoagens_protocol::{ConsolidateOutput, EmbeddingTag, TaggedEmbedding};
+
+    let tag = EmbeddingTag {
+        embed_model_ver: "gemma2-256".to_owned(),
+        dim_d: 3,
+        prompt_regime_id: "default".to_owned(),
+    };
+    let emb = |vals: [f32; 3]| TaggedEmbedding {
+        tag: tag.clone(),
+        values: vals.to_vec(),
+    };
+
+    let prior = Prior {
+        wake_gate_lo: 0.25,
+        ..Prior::default()
+    };
+    let mut core = Core::open(MemStore::new(), prior, Switches::all_enabled(), 1).unwrap();
+    let mut doors = NoopDoors;
+
+    core.step(
+        Input::BodyState(BodyState {
+            protocol_version: CURRENT_PROTOCOL_VERSION,
+            body_id: BodyId::new("b-contract"),
+            status: BodyStatus::Ready,
+            capabilities: vec![CapabilityDescriptor {
+                id: CapabilityId::new("a.speak"),
+                description: "Speak in room:contract".to_owned(),
+                places: vec![PlaceId::new("room:contract")],
+                flags: CapabilityFlags {
+                    communicative: true,
+                    identity_changing: false,
+                    irreversible: false,
+                },
+                typical_latency_ms: 100,
+                capability_schema_hash: CapabilitySchemaHash::new("h-contract"),
+                sensed_effect: None,
+            }],
+            timestamp_ms: t(100),
+        }),
+        t(100),
+        &mut doors,
+    )
+    .unwrap();
+
+    let render_text =
+        |core: &Core<MemStore>, purpose: ModelPurpose, plan: &ContextPlan| -> String {
+            let mut extras = RenderExtras::default();
+            let _ = extras.populate_payloads_from_store(plan, core.store());
+            let req = build_model_request_from_plan(
+                plan,
+                &extras,
+                plan.trigger_event_id.unwrap_or(EventId::new(1)),
+                purpose,
+                "neutral-test-model",
+            );
+            req.messages
+                .iter()
+                .flat_map(|m| m.parts.iter())
+                .map(|p| match p {
+                    monoagens_reason::MessagePart::Text(s) => s.as_str(),
+                    _ => "",
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+    // 1. Reason wake
+    let mut p_reason = Percept::minimal(
+        ActorId::new("alice"),
+        PlaceId::new("room:contract"),
+        Audience::new([ActorId::new("alice"), ActorId::new("soul")]),
+        t(1_000),
+        OpaquePayload::from_bytes(b"reason trigger hello"),
+    );
+    p_reason.addressees = vec![ActorId::new("soul")];
+    let eff_reason = core
+        .step(Input::Percept(Box::new(p_reason)), t(1_000), &mut doors)
+        .unwrap();
+    let reason_plan = eff_reason
+        .iter()
+        .find_map(|e| match e {
+            Effect::Model {
+                purpose: ModelPurpose::Reason,
+                plan,
+            } => Some(plan.clone()),
+            _ => None,
+        })
+        .expect("Reason effect");
+    let reason_text = render_text(&core, ModelPurpose::Reason, &reason_plan);
+    assert!(!reason_text.contains("trigger: none"));
+    assert!(reason_text.contains("reason trigger hello"));
+    assert!(reason_text.contains("a.speak"));
+
+    // 2. Open an expectation and trigger Classify + Consolidate
+    let req_id = reason_plan.trigger_event_id.unwrap();
+    let eff_cons = core
+        .step(
+            Input::ModelResult {
+                request_id: req_id,
+                acts: vec![
+                    ThoughtAct::Expect {
+                        expect_kind: ExpectKind::Promise,
+                        places: vec![PlaceId::new("room:contract")],
+                        people: vec![ActorId::new("alice")],
+                        condition: "alice confirms contract delivery".to_owned(),
+                        due_ms: Some(t(50_000)),
+                        expiry_ms: t(100_000),
+                        recurrence: None,
+                        promise_meta: None,
+                        domain: None,
+                        about_ids: Vec::new(),
+                    },
+                    ThoughtAct::Consolidate {
+                        output: ConsolidateOutput::Gist {
+                            summary: "consolidate trigger reflection".to_owned(),
+                            about_ids: vec![req_id],
+                            places: vec![PlaceId::new("room:contract")],
+                            people: vec![ActorId::new("alice")],
+                            domain: None,
+                        },
+                    },
+                ],
+            },
+            t(1_100),
+            &mut doors,
+        )
+        .unwrap();
+
+    let cons_plan = eff_cons
+        .iter()
+        .find_map(|e| match e {
+            Effect::Model {
+                purpose: ModelPurpose::Consolidate,
+                plan,
+            } => Some(plan.clone()),
+            _ => None,
+        })
+        .expect("Consolidate effect");
+    let cons_text = render_text(&core, ModelPurpose::Consolidate, &cons_plan);
+    assert!(!cons_text.contains("trigger: none"));
+    assert!(cons_text.contains("consolidate trigger reflection"));
+    assert!(cons_text.contains("a.speak"));
+
+    let exp_id = core
+        .state()
+        .expectation_book
+        .expectations
+        .values()
+        .find(|e| e.kind == ExpectKind::Promise)
+        .unwrap()
+        .expectation_id;
+    core.set_expectation_embeddings(exp_id, vec![emb([1.0, 0.0, 0.0])]);
+
+    let mut p_clf = Percept::minimal(
+        ActorId::new("alice"),
+        PlaceId::new("room:contract"),
+        Audience::new([ActorId::new("alice"), ActorId::new("soul")]),
+        t(2_000),
+        OpaquePayload::from_bytes(b"classify trigger arrival"),
+    );
+    p_clf.embeddings = vec![emb([0.8, 0.6, 0.0])];
+    let eff_clf = core
+        .step(Input::Percept(Box::new(p_clf)), t(2_000), &mut doors)
+        .unwrap();
+    let clf_plan = eff_clf
+        .iter()
+        .find_map(|e| match e {
+            Effect::Model {
+                purpose: ModelPurpose::Classify,
+                plan,
+            } => Some(plan.clone()),
+            _ => None,
+        })
+        .expect("Classify effect");
+    let clf_text = render_text(&core, ModelPurpose::Classify, &clf_plan);
+    assert!(!clf_text.contains("trigger: none"));
+    assert!(clf_text.contains("classify trigger arrival"));
+    assert!(clf_text.contains("alice confirms contract delivery"));
+    assert!(clf_text.contains("by=alice"));
+    assert!(clf_text.contains("a.speak"));
+    eprintln!("=== RENDERED CLASSIFY REQUEST ===\n{clf_text}\n=== END ===");
+
+    // Pre-24.2 plan shape (empty sections, only trigger_event_id + items) FAILS this contract:
+    let pre_24_2_plan = ContextPlan {
+        trigger_event_id: clf_plan.trigger_event_id,
+        place: clf_plan.place.clone(),
+        visible_scope: clf_plan.visible_scope.clone(),
+        items: clf_plan.items.clone(),
+        ..ContextPlan::default()
+    };
+    let old_text = render_text(&core, ModelPurpose::Classify, &pre_24_2_plan);
+    assert!(
+        old_text.contains("trigger: none")
+            && !old_text.contains("classify trigger arrival")
+            && !old_text.contains("a.speak"),
+        "pre-24.2 plan shape must fail the render contract"
+    );
 }

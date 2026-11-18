@@ -16,7 +16,11 @@ use crate::parse::{
 pub mod openai;
 pub mod scripted;
 
-pub use openai::{OpenAiModelConfig, OpenAiModelProvider, ReasoningEffort};
+pub use openai::{
+    DEFAULT_OUTPUT_LIMIT_PARAM, ExtraHeaderValue, OpenAiModelConfig, OpenAiModelProvider,
+    OutputLimitProfile, PRODUCT_DEFAULT_MAX_OUTPUT_TOKENS, ReasoningEffort, UsageFieldPaths,
+    validate_extra_header_name,
+};
 pub use scripted::{ScriptedModelProvider, ScriptedReply};
 
 /// Message role inside a [`ModelRequest`].
@@ -106,11 +110,10 @@ pub struct ModelRequest {
     pub timeout_ms: u64,
     pub max_output_tokens: Option<u32>,
     pub temperature: Option<f32>,
-    /// Stable per-conversation identifier sent as `x-opencode-session` by providers that support it
-    /// (OpenCode Go routes requests sharing this value to the same worker and prompt cache).
-    pub session_id: Option<String>,
-    /// Additional per-request HTTP headers for providers that support them (for example the Lab's
-    /// metering proxy attribution headers). Never contains credentials; values are not recorded.
+    /// Stable per-conversation or per-place identifier used to fill `{conversation_id}` in
+    /// configured extra headers at run time.
+    pub conversation_id: Option<String>,
+    /// Additional per-request HTTP headers. Never contains credentials; values are not recorded.
     pub extra_headers: Vec<(String, String)>,
 }
 
@@ -143,7 +146,7 @@ impl ModelRequest {
             timeout_ms: 30_000,
             max_output_tokens: None,
             temperature: None,
-            session_id: None,
+            conversation_id: None,
             extra_headers: Vec::new(),
         }
     }
@@ -209,6 +212,17 @@ pub struct ModelCallRecord {
     pub usage: Option<TokenUsage>,
     pub latency_ms: u64,
     pub outcome: CallOutcome,
+    #[serde(default)]
+    pub strict_schema: bool,
+}
+
+/// Structured record of an output-format parse failure (24.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputFormatFailureRecord {
+    pub purpose: ModelPurpose,
+    pub field: String,
+    pub reason: String,
+    pub strict_schema: bool,
 }
 
 /// Typed decoded output returned on a successful model call.
@@ -259,6 +273,24 @@ impl ModelCallFailure {
             reason: self.to_string(),
         }
     }
+
+    /// Returns the structured output-format failure record when `class == InvalidOutput`.
+    #[must_use]
+    pub fn output_format_record(&self) -> Option<OutputFormatFailureRecord> {
+        if self.class != ProviderFailureClass::InvalidOutput {
+            return None;
+        }
+        let (field, reason) = match &self.failed_wake {
+            Some(fw) => (fw.field.clone(), fw.reason.clone()),
+            None => ("output".to_owned(), self.detail.clone()),
+        };
+        Some(OutputFormatFailureRecord {
+            purpose: self.record.purpose,
+            field,
+            reason,
+            strict_schema: self.record.strict_schema,
+        })
+    }
 }
 
 impl fmt::Display for ModelCallFailure {
@@ -291,6 +323,7 @@ pub(crate) fn decode_model_response(
     usage: Option<TokenUsage>,
     latency_ms: u64,
 ) -> Result<ModelCallSuccess, ModelCallFailure> {
+    let strict_schema = request.response_schema != ResponseSchemaMode::None;
     let build_record = |outcome: CallOutcome| ModelCallRecord {
         request_id: request.request_id,
         purpose: request.purpose,
@@ -299,6 +332,7 @@ pub(crate) fn decode_model_response(
         usage,
         latency_ms,
         outcome,
+        strict_schema,
     };
 
     let output = match request.purpose {

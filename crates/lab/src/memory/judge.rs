@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::LabError;
-use crate::memory::proxy::{CallAttribution, MEMORY_MODEL};
+use crate::memory::proxy::CallAttribution;
 
 /// One judge transport used by the scorers.
 pub trait JudgeRunner: Send + Sync {
@@ -21,19 +21,21 @@ pub trait JudgeRunner: Send + Sync {
 /// HTTP judge client posting to the lab metering proxy.
 pub struct HttpJudgeClient {
     endpoint: String,
+    model: String,
     client: reqwest::blocking::Client,
     calls: Mutex<u64>,
 }
 
 impl HttpJudgeClient {
-    /// Builds a judge client for the proxy's chat-completions endpoint.
-    pub fn new(endpoint: impl Into<String>) -> Result<Self, LabError> {
+    /// Builds a judge client for the proxy's chat-completions endpoint using `model`.
+    pub fn new(endpoint: impl Into<String>, model: impl Into<String>) -> Result<Self, LabError> {
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(600))
             .build()
             .map_err(|e| LabError::Protocol(format!("judge HTTP client: {e}")))?;
         Ok(Self {
             endpoint: endpoint.into(),
+            model: model.into(),
             client,
             calls: Mutex::new(0),
         })
@@ -47,7 +49,7 @@ impl JudgeRunner for HttpJudgeClient {
             *calls += 1;
         }
         let body = json!({
-            "model": MEMORY_MODEL,
+            "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0,
             "max_completion_tokens": crate::memory::suite::MEMORY_MAX_OUTPUT_TOKENS,

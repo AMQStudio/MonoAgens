@@ -1,0 +1,28 @@
+version = 1
+name = "deepseek-v4.1-flash-high"
+endpoint_url = "https://opencode.ai/inference/go/openai/v1/chat/completions"
+model = "deepseek-v4.1-flash"
+reasoning_effort = "high"
+output_limit_param = "max_completion_tokens"
+
+[output_limits]
+classify = 1024
+reason = 4096
+consolidate = 8192
+
+[headers]
+x-opencode-session = "{conversation_id}"
+
+[usage_paths]
+input_tokens = "prompt_tokens"
+uncached_input_tokens = "opencode.tokens.input"
+output_tokens = "opencode.tokens.output"
+cached_tokens = "opencode.tokens.cache_read"
+reasoning_tokens = "opencode.tokens.reasoning"
+list_cost = "opencode.list_cost"
+allowance = "opencode.allowance"
+
+[pricing]
+uncached_input_per_m = 0.15
+cached_input_per_m = 0.003
+output_per_m = 0.60

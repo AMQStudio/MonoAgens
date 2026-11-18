@@ -124,6 +124,8 @@ impl ModelProvider for ScriptedModelProvider {
                     usage: None,
                     latency_ms: 0,
                     outcome: CallOutcome::Failed(ProviderFailureClass::InvalidOutput),
+                    strict_schema: request.response_schema
+                        != crate::model::ResponseSchemaMode::None,
                 }),
                 status_code: None,
                 failed_wake: None,
@@ -158,6 +160,8 @@ impl ModelProvider for ScriptedModelProvider {
                     usage: None,
                     latency_ms,
                     outcome: CallOutcome::Failed(class),
+                    strict_schema: request.response_schema
+                        != crate::model::ResponseSchemaMode::None,
                 }),
                 status_code,
                 failed_wake: None,

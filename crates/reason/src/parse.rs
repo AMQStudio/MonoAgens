@@ -160,6 +160,7 @@ pub struct ParsedModelActs {
 pub fn strict_thought_batch_schema() -> Value {
     let mut schema = generate_json_schema::<ThoughtBatch>();
     tighten_object_schemas(&mut schema);
+    tighten_thought_batch_constraints(&mut schema);
     schema
 }
 
@@ -168,7 +169,56 @@ pub fn strict_thought_batch_schema() -> Value {
 pub fn strict_classification_verdict_schema() -> Value {
     let mut schema = generate_json_schema::<ClassificationVerdict>();
     tighten_object_schemas(&mut schema);
+    tighten_classification_verdict_constraints(&mut schema);
     schema
+}
+
+fn tighten_thought_batch_constraints(val: &mut Value) {
+    match val {
+        Value::Object(map) => {
+            if let Some(Value::Object(props)) = map.get_mut("properties") {
+                if let Some(Value::Object(mot)) = props.get_mut("motivation") {
+                    mot.insert("minimum".to_owned(), Value::from(1));
+                    mot.insert("maximum".to_owned(), Value::from(5));
+                }
+                if let Some(Value::Object(conf)) = props.get_mut("confidence_0_20") {
+                    conf.insert("minimum".to_owned(), Value::from(0));
+                    conf.insert("maximum".to_owned(), Value::from(20));
+                }
+                if let Some(Value::Object(cap)) = props.get_mut("capability_id") {
+                    cap.insert("minLength".to_owned(), Value::from(1));
+                }
+                let is_act_variant = props.get("act").is_some_and(|act_prop| {
+                    act_prop.get("const").and_then(Value::as_str) == Some("act")
+                        || act_prop
+                            .get("enum")
+                            .and_then(Value::as_array)
+                            .is_some_and(|arr| arr.len() == 1 && arr[0].as_str() == Some("act"))
+                });
+                if is_act_variant && let Some(Value::Object(places)) = props.get_mut("places") {
+                    places.insert("minItems".to_owned(), Value::from(1));
+                }
+            }
+            for child in map.values_mut() {
+                tighten_thought_batch_constraints(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                tighten_thought_batch_constraints(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn tighten_classification_verdict_constraints(val: &mut Value) {
+    if let Value::Object(map) = val
+        && let Some(Value::Object(props)) = map.get_mut("properties")
+        && let Some(Value::Object(label)) = props.get_mut("label")
+    {
+        label.insert("minLength".to_owned(), Value::from(1));
+    }
 }
 
 fn tighten_object_schemas(val: &mut Value) {

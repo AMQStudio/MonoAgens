@@ -892,6 +892,7 @@ impl ModelProvider for BlockingModelProvider {
                 usage: None,
                 latency_ms: 50,
                 outcome: CallOutcome::Success,
+                strict_schema: true,
             },
             output: monoagens_reason::ModelOutput::ThoughtActs(monoagens_reason::ParsedModelActs {
                 protocol_version: CURRENT_PROTOCOL_VERSION,
@@ -1796,4 +1797,210 @@ async fn soul_prior_config_loads_and_rejects_unknown_key_out_of_range_and_missin
         err_range.to_string().contains("speaking_bar") && err_range.to_string().contains("[1, 5]"),
         "err={err_range}"
     );
+}
+
+#[test]
+fn gateway_config_validates_protocol_headers_and_default_output_limits() {
+    let base_cfg = monoagens_gateway::parse_config_str(
+        r#"
+version = 1
+[model]
+provider = "openai_compatible"
+model = "neutral-model"
+"#,
+        std::path::Path::new("monoagens.toml"),
+        std::path::Path::new("."),
+    )
+    .expect("valid default config");
+    assert_eq!(base_cfg.model.output_limits.reason, 16_384);
+    assert_eq!(base_cfg.model.output_limits.classify, 16_384);
+    assert_eq!(base_cfg.model.output_limits.consolidate, 16_384);
+    assert_eq!(base_cfg.model.output_limit_param, "max_completion_tokens");
+
+    let bad = monoagens_gateway::parse_config_str(
+        r#"
+version = 1
+[model.extra_headers]
+Authorization = "Bearer bad"
+"#,
+        std::path::Path::new("monoagens.toml"),
+        std::path::Path::new("."),
+    )
+    .expect_err("must reject protocol header");
+    assert!(
+        bad.to_string()
+            .to_ascii_lowercase()
+            .contains("authorization")
+    );
+}
+
+#[tokio::test]
+async fn gateway_sends_configured_headers_and_per_purpose_limits_via_mock_provider() {
+    use monoagens_core::ContextPlan;
+    use monoagens_gateway::{
+        DailyBudgetTracker, GatewayModelExecutor, build_provider_from_config_async,
+    };
+    use monoagens_protocol::EventId;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+
+    let thought = serde_json::json!({
+        "acts": [{
+            "act": "think",
+            "thought": "gateway mock ok",
+            "motivation": 3,
+            "confidence_0_20": 15,
+            "used_ids": []
+        }]
+    })
+    .to_string();
+    let classify_ok = serde_json::json!({
+        "label": "matched",
+        "score": 0.9,
+        "rationale": null
+    })
+    .to_string();
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock");
+    let addr = listener.local_addr().expect("addr");
+    let captured: Arc<Mutex<Vec<(String, serde_json::Value)>>> = Arc::new(Mutex::new(Vec::new()));
+    let cap_clone = Arc::clone(&captured);
+    let handle = std::thread::spawn(move || {
+        for idx in 0..4 {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut hdrs = String::new();
+            let mut content_len = 0_usize;
+            loop {
+                let mut line = String::new();
+                let n = reader.read_line(&mut line).expect("read");
+                if n == 0 || line == "\r\n" || line == "\n" {
+                    break;
+                }
+                hdrs.push_str(&line);
+                if let Some(rest) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_len = rest.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0_u8; content_len];
+            if content_len > 0 {
+                reader.read_exact(&mut body).expect("body");
+            }
+            let json_body: serde_json::Value = serde_json::from_slice(&body).expect("json");
+            cap_clone.lock().expect("lock").push((hdrs, json_body));
+            let content = if idx == 2 { &classify_ok } else { &thought };
+            let resp_body = serde_json::json!({
+                "model": "neutral-model",
+                "choices": [{
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": { "role": "assistant", "content": content }
+                }],
+                "usage": { "prompt_tokens": 50, "completion_tokens": 10, "total_tokens": 60 }
+            })
+            .to_string();
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                resp_body.len(),
+                resp_body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+
+    let cfg = monoagens_gateway::parse_config_str(
+        r#"
+version = 1
+[model]
+provider = "openai_compatible"
+model = "neutral-model"
+output_limit_param = "max_output_tokens"
+
+[model.output_limits]
+reason = 4096
+classify = 1024
+consolidate = 8192
+
+[model.extra_headers]
+x-conv-id = "{conversation_id}"
+x-static-hdr = "secret-gw-hdr-val"
+"#,
+        std::path::Path::new("monoagens.toml"),
+        std::path::Path::new("."),
+    )
+    .expect("valid config");
+
+    let secrets = ProviderSecrets {
+        model_endpoint: Some(format!("http://{addr}/v1/chat/completions")),
+        ..ProviderSecrets::default()
+    };
+    let provider = build_provider_from_config_async(&cfg, &secrets)
+        .await
+        .expect("build provider");
+    let diagnostics = DiagnosticSink::new(&secrets);
+    let exec = GatewayModelExecutor::with_provider(
+        provider,
+        &cfg,
+        DailyBudgetTracker::new(Time::from_millis(1_000), 100_000),
+        diagnostics.clone(),
+        CueRecorder::new(),
+        Arc::new(VirtualClock::new(Time::from_millis(1_000))),
+    );
+    let store = MemStore::new();
+
+    let plan_alpha = ContextPlan {
+        trigger_event_id: Some(EventId::new(1)),
+        place: Some(PlaceId::new("room:alpha")),
+        ..ContextPlan::default()
+    };
+    let plan_beta = ContextPlan {
+        trigger_event_id: Some(EventId::new(2)),
+        place: Some(PlaceId::new("room:beta")),
+        ..ContextPlan::default()
+    };
+
+    // 2 calls on room:alpha (Reason, Consolidate), 1 Classify on room:alpha, 1 Reason on room:beta
+    let req1 = exec.prepare_request(ModelPurpose::Reason, &plan_alpha, &store);
+    let req2 = exec.prepare_request(ModelPurpose::Consolidate, &plan_alpha, &store);
+    let req3 = exec.prepare_request(ModelPurpose::Classify, &plan_alpha, &store);
+    let req4 = exec.prepare_request(ModelPurpose::Reason, &plan_beta, &store);
+
+    let _ = exec.execute_prepared(req1).await;
+    let _ = exec.execute_prepared(req2).await;
+    let _ = exec.execute_prepared(req3).await;
+    let _ = exec.execute_prepared(req4).await;
+    handle.join().expect("server finishes");
+
+    let reqs = captured.lock().expect("captured");
+    assert_eq!(reqs.len(), 4);
+    let extract_hdr = |hdrs: &str, name: &str| -> String {
+        hdrs.lines()
+            .find_map(|l| {
+                let lower = l.to_ascii_lowercase();
+                lower
+                    .strip_prefix(&format!("{name}:"))
+                    .map(|v| v.trim().to_owned())
+            })
+            .expect("header present")
+    };
+    let alpha_1 = extract_hdr(&reqs[0].0, "x-conv-id");
+    let alpha_2 = extract_hdr(&reqs[1].0, "x-conv-id");
+    let beta_1 = extract_hdr(&reqs[3].0, "x-conv-id");
+    assert_eq!(alpha_1, alpha_2, "same chat must share header value");
+    assert_ne!(alpha_1, beta_1, "different chats must differ");
+    assert_eq!(extract_hdr(&reqs[0].0, "x-static-hdr"), "secret-gw-hdr-val");
+
+    assert_eq!(reqs[0].1["max_output_tokens"], serde_json::json!(4096));
+    assert_eq!(reqs[1].1["max_output_tokens"], serde_json::json!(8192));
+    assert_eq!(reqs[2].1["max_output_tokens"], serde_json::json!(1024));
+    assert_eq!(reqs[3].1["max_output_tokens"], serde_json::json!(4096));
+
+    // No header value logged in diagnostics
+    let logs = diagnostics.records();
+    for entry in logs {
+        assert!(!entry.message.contains(&alpha_1));
+        assert!(!entry.message.contains("secret-gw-hdr-val"));
+    }
 }

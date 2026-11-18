@@ -705,6 +705,7 @@ fn live_probe_uses_core_rendered_sections_and_dispatched_act_payload() {
                     }),
                     latency_ms: 7,
                     outcome: CallOutcome::Success,
+                    strict_schema: true,
                 },
                 output,
                 raw_text: raw,
@@ -801,7 +802,7 @@ fn live_probe_uses_core_rendered_sections_and_dispatched_act_payload() {
             && !user_prompt.contains("[0] t="),
         "Lab prompt override must be gone: system={system} user={user_prompt}"
     );
-    let session = req.session_id.as_deref().unwrap_or_default();
+    let session = req.conversation_id.as_deref().unwrap_or_default();
     assert!(
         session.starts_with("ses_") && session.len() > 4,
         "stable session header value missing: {session}"

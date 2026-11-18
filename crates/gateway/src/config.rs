@@ -96,6 +96,10 @@ pub struct ModelConfig {
     pub model: String,
     pub daily_token_budget: u64,
     pub max_output_tokens: Option<u32>,
+    pub output_limits: monoagens_reason::OutputLimitProfile,
+    pub output_limit_param: String,
+    pub extra_headers: Vec<(String, String)>,
+    pub usage_paths: monoagens_reason::UsageFieldPaths,
     pub temperature: Option<f32>,
 }
 
@@ -106,6 +110,10 @@ impl Default for ModelConfig {
             model: "gpt-4o-mini".to_owned(),
             daily_token_budget: 100_000,
             max_output_tokens: None,
+            output_limits: monoagens_reason::OutputLimitProfile::default(),
+            output_limit_param: monoagens_reason::DEFAULT_OUTPUT_LIMIT_PARAM.to_owned(),
+            extra_headers: Vec::new(),
+            usage_paths: monoagens_reason::UsageFieldPaths::default(),
             temperature: None,
         }
     }
@@ -830,6 +838,91 @@ fn parse_config_document(doc: &DocumentMut) -> Result<GatewayConfig, ConfigError
                 });
             }
             cfg.model.temperature = Some(temp as f32);
+        }
+        if let Some(param) =
+            get_opt_str(model_tbl, "output_limit_param", "model.output_limit_param")?
+        {
+            if param.trim().is_empty() {
+                return Err(ConfigError::InvalidValue {
+                    key: "model.output_limit_param".to_owned(),
+                    value: param,
+                    expected: "non-empty parameter name",
+                });
+            }
+            cfg.model.output_limit_param = param.trim().to_owned();
+        }
+        if let Some(lim_tbl) = get_opt_table(model_tbl, "output_limits")? {
+            if let Some(v) = get_opt_i64(lim_tbl, "reason", "model.output_limits.reason")? {
+                cfg.model.output_limits.reason =
+                    check_u64_range("model.output_limits.reason", v, 1, 1_000_000, "1..=1000000")?
+                        as u32;
+            }
+            if let Some(v) = get_opt_i64(lim_tbl, "classify", "model.output_limits.classify")? {
+                cfg.model.output_limits.classify = check_u64_range(
+                    "model.output_limits.classify",
+                    v,
+                    1,
+                    1_000_000,
+                    "1..=1000000",
+                )? as u32;
+            }
+            if let Some(v) = get_opt_i64(lim_tbl, "consolidate", "model.output_limits.consolidate")?
+            {
+                cfg.model.output_limits.consolidate = check_u64_range(
+                    "model.output_limits.consolidate",
+                    v,
+                    1,
+                    1_000_000,
+                    "1..=1000000",
+                )? as u32;
+            }
+        }
+        if let Some(hdr_tbl) = get_opt_table(model_tbl, "extra_headers")? {
+            for (k, val) in hdr_tbl.iter() {
+                let valid_name =
+                    monoagens_reason::validate_extra_header_name(k).map_err(|_| {
+                        ConfigError::InvalidValue {
+                            key: format!("model.extra_headers.{k}"),
+                            value: k.to_owned(),
+                            expected: "non-protocol HTTP header name (cannot override Authorization, Content-Type, Content-Length, or Host)",
+                        }
+                    })?;
+                let s = val.as_str().ok_or_else(|| ConfigError::InvalidType {
+                    key: format!("model.extra_headers.{k}"),
+                    expected: "string",
+                })?;
+                cfg.model.extra_headers.push((valid_name, s.to_owned()));
+            }
+        }
+        if let Some(up_tbl) = get_opt_table(model_tbl, "usage_paths")? {
+            if let Some(v) = get_opt_str(up_tbl, "input_tokens", "model.usage_paths.input_tokens")?
+            {
+                cfg.model.usage_paths.input_tokens = v;
+            }
+            if let Some(v) =
+                get_opt_str(up_tbl, "output_tokens", "model.usage_paths.output_tokens")?
+            {
+                cfg.model.usage_paths.output_tokens = v;
+            }
+            if let Some(v) =
+                get_opt_str(up_tbl, "cached_tokens", "model.usage_paths.cached_tokens")?
+            {
+                cfg.model.usage_paths.cached_tokens = v;
+            }
+            if let Some(v) = get_opt_str(
+                up_tbl,
+                "reasoning_tokens",
+                "model.usage_paths.reasoning_tokens",
+            )? {
+                cfg.model.usage_paths.reasoning_tokens = v;
+            }
+            if let Some(v) = get_opt_str(up_tbl, "total_tokens", "model.usage_paths.total_tokens")?
+            {
+                cfg.model.usage_paths.total_tokens = v;
+            }
+            if let Some(v) = get_opt_str(up_tbl, "cost", "model.usage_paths.cost")? {
+                cfg.model.usage_paths.cost = if v.trim().is_empty() { None } else { Some(v) };
+            }
         }
     }
 

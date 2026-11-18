@@ -1296,6 +1296,8 @@ impl ModelProvider for CostGuardedJudgeProvider<'_> {
                         usage: None,
                         latency_ms: 0,
                         outcome: CallOutcome::Failed(ProviderFailureClass::RateLimit),
+                        strict_schema: request.response_schema
+                            != crate::reason_seam::model::ResponseSchemaMode::None,
                     }),
                     status_code: None,
                     failed_wake: None,
@@ -1318,6 +1320,8 @@ impl ModelProvider for CostGuardedJudgeProvider<'_> {
                         usage: None,
                         latency_ms: 0,
                         outcome: CallOutcome::Failed(ProviderFailureClass::RateLimit),
+                        strict_schema: request.response_schema
+                            != crate::reason_seam::model::ResponseSchemaMode::None,
                     }),
                     status_code: None,
                     failed_wake: None,

@@ -103,6 +103,16 @@ pub fn build_provider_from_config(
                 .unwrap_or_else(|| DEFAULT_OPENAI_ENDPOINT.to_owned());
             let mut oa_cfg = OpenAiModelConfig::new(endpoint, secrets.model_api_key.clone());
             oa_cfg.default_timeout_ms = config.runtime.model_timeout_ms.max(1);
+            oa_cfg.output_limits = config.model.output_limits.clone();
+            oa_cfg.output_limit_param = config.model.output_limit_param.clone();
+            oa_cfg.usage_paths = config.model.usage_paths.clone();
+            oa_cfg.profile_name = Some(config.model.model.clone());
+            oa_cfg.extra_headers = config
+                .model
+                .extra_headers
+                .iter()
+                .map(|(k, v)| (k.clone(), monoagens_reason::ExtraHeaderValue::parse(v)))
+                .collect();
             let provider =
                 OpenAiModelProvider::new(oa_cfg).map_err(|detail| ProviderInitError { detail })?;
             Ok(Arc::new(provider))
@@ -153,6 +163,7 @@ pub struct GatewayModelExecutor {
     model_name: String,
     timeout_ms: u64,
     max_output_tokens: Option<u32>,
+    output_limits: monoagens_reason::OutputLimitProfile,
     temperature: Option<f32>,
     working_cue_ms: u64,
     progress_note_ms: u64,
@@ -179,6 +190,7 @@ impl GatewayModelExecutor {
             model_name: config.model.model.clone(),
             timeout_ms: config.runtime.model_timeout_ms,
             max_output_tokens: config.model.max_output_tokens,
+            output_limits: config.model.output_limits.clone(),
             temperature: config.model.temperature,
             working_cue_ms: config.runtime.working_cue_ms,
             progress_note_ms: config.runtime.progress_note_ms,
@@ -210,7 +222,24 @@ impl GatewayModelExecutor {
         let mut req =
             build_model_request_from_plan(plan, &extras, request_id, purpose, &self.model_name);
         req.timeout_ms = self.timeout_ms;
-        req.max_output_tokens = self.max_output_tokens;
+        req.max_output_tokens = Some(
+            self.max_output_tokens
+                .unwrap_or_else(|| self.output_limits.for_purpose(purpose)),
+        );
+        req.conversation_id = plan
+            .place
+            .as_ref()
+            .or_else(|| {
+                plan.visible_scope
+                    .as_ref()
+                    .and_then(|s| s.target_place.as_ref())
+            })
+            .map(|p| {
+                format!(
+                    "conv_{}",
+                    &blake3::hash(p.as_str().as_bytes()).to_hex()[..32]
+                )
+            });
         req.temperature = self.temperature;
         req
     }
@@ -254,6 +283,7 @@ impl GatewayModelExecutor {
                     usage: None,
                     latency_ms: elapsed,
                     outcome: CallOutcome::Failed(ProviderFailureClass::Timeout),
+                    strict_schema: true,
                 };
                 self.diagnostics.record_model_call(record);
                 let msg = format!(
@@ -276,6 +306,7 @@ impl GatewayModelExecutor {
                     usage: None,
                     latency_ms: elapsed,
                     outcome: CallOutcome::Failed(ProviderFailureClass::Server),
+                    strict_schema: true,
                 };
                 self.diagnostics.record_model_call(record);
                 let msg = format!("model worker panicked: {join_err}");

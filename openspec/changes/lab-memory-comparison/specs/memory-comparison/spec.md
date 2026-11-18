@@ -40,15 +40,14 @@ the owner's approval and with an explicit `--max-cost-usd`.
 
 ### Requirement: Scoring reuses the published items and judge prompts
 LoCoMo SHALL be scored per category with its official token F1 and with the judge running the
-published `ACCURACY_PROMPT` text (categories 1–4 as the headline, category 5 reported apart with
-the official refusal check). LongMemEval-S SHALL be scored per question type with the five
-published task-specific judge prompts, abstention apart. Judge metrics SHALL be named for the
-Lab's judge (for example `j_deepseek`), record the prompt version, and carry cluster-bootstrap
-intervals by conversation.
+published `ACCURACY_PROMPT` text (categories 1–4 headline; category 5 apart with the official
+refusal check). LongMemEval-S SHALL be scored per question type with its five published judge
+prompts, abstention apart. Judge metrics SHALL be named `judge_acc`, never after a model; the
+judge model, profile and prompt version SHALL be recorded; intervals are cluster-bootstrap.
 
 #### Scenario: Reading the LoCoMo results
 - **WHEN** a LoCoMo run completes
-- **THEN** each participant shows F1 and `j_deepseek` for categories 1–4 with 95 % intervals and category 5 separately
+- **THEN** each participant shows F1 and `judge_acc` for categories 1–4 with 95 % intervals and category 5 separately
 
 #### Scenario: The soul stays silent on a question
 - **WHEN** the full MonoAgens dispatches no answer to a question

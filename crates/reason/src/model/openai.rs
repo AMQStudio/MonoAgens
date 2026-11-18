@@ -64,6 +64,143 @@ impl FromStr for ReasoningEffort {
     }
 }
 
+/// Protocol headers that extra headers must never override (`model-providers` spec).
+const PROTOCOL_FORBIDDEN_HEADERS: &[&str] =
+    &["authorization", "content-type", "content-length", "host"];
+
+/// Validates that an extra HTTP header name is well-formed and does not override a protocol header.
+pub fn validate_extra_header_name(name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("extra header name must not be empty".to_owned());
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if PROTOCOL_FORBIDDEN_HEADERS.contains(&lower.as_str()) {
+        return Err(format!(
+            "extra header '{trimmed}' cannot override protocol header '{lower}'"
+        ));
+    }
+    HeaderName::from_bytes(trimmed.as_bytes())
+        .map_err(|e| format!("invalid extra header name '{trimmed}': {e}"))?;
+    Ok(trimmed.to_owned())
+}
+
+/// Configured value source for an extra HTTP header.
+#[derive(Clone, Debug)]
+pub enum ExtraHeaderValue {
+    /// Static literal value (redacted in logs/debug).
+    Literal(SecretString),
+    /// Value read from an environment variable at provider construction time.
+    Env(String),
+    /// Replaced at call time with the request's stable `conversation_id`.
+    ConversationId,
+}
+
+impl ExtraHeaderValue {
+    /// Parses a config string (`"{conversation_id}"`, `"env:VAR"`, or literal).
+    #[must_use]
+    pub fn parse(raw: &str) -> Self {
+        let trimmed = raw.trim();
+        if trimmed == "{conversation_id}" {
+            Self::ConversationId
+        } else if let Some(var) = trimmed.strip_prefix("env:") {
+            Self::Env(var.trim().to_owned())
+        } else {
+            Self::Literal(SecretString::new(raw.to_owned()))
+        }
+    }
+}
+
+/// Configurable JSON dot-paths for reading token usage from provider responses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsageFieldPaths {
+    pub input_tokens: String,
+    pub output_tokens: String,
+    pub cached_tokens: String,
+    pub reasoning_tokens: String,
+    pub total_tokens: String,
+    pub cost: Option<String>,
+}
+
+impl Default for UsageFieldPaths {
+    fn default() -> Self {
+        Self {
+            input_tokens: "prompt_tokens".to_owned(),
+            output_tokens: "completion_tokens".to_owned(),
+            cached_tokens: "prompt_tokens_details.cached_tokens".to_owned(),
+            reasoning_tokens: "completion_tokens_details.reasoning_tokens".to_owned(),
+            total_tokens: "total_tokens".to_owned(),
+            cost: Some("cost".to_owned()),
+        }
+    }
+}
+
+fn lookup_json_path<'a>(root: &'a Value, path: &str) -> Option<&'a Value> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut cur = root;
+    for seg in trimmed.split('.') {
+        cur = cur.as_object()?.get(seg)?;
+    }
+    Some(cur)
+}
+
+fn lookup_u64_path(root: &Value, path: &str) -> Option<u64> {
+    lookup_json_path(root, path).and_then(Value::as_u64)
+}
+
+fn lookup_f64_path(root: &Value, path: &str) -> Option<f64> {
+    lookup_json_path(root, path).and_then(Value::as_f64)
+}
+
+/// Default JSON parameter name for output-token limits.
+pub const DEFAULT_OUTPUT_LIMIT_PARAM: &str = "max_completion_tokens";
+
+/// Product default output-token limit per purpose (`model-providers` spec).
+pub const PRODUCT_DEFAULT_MAX_OUTPUT_TOKENS: u32 = 16_384;
+
+/// Per-purpose output-token limits for a model profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputLimitProfile {
+    pub reason: u32,
+    pub classify: u32,
+    pub consolidate: u32,
+}
+
+impl Default for OutputLimitProfile {
+    fn default() -> Self {
+        Self {
+            reason: PRODUCT_DEFAULT_MAX_OUTPUT_TOKENS,
+            classify: PRODUCT_DEFAULT_MAX_OUTPUT_TOKENS,
+            consolidate: PRODUCT_DEFAULT_MAX_OUTPUT_TOKENS,
+        }
+    }
+}
+
+impl OutputLimitProfile {
+    /// Returns the configured output-token limit for `purpose`.
+    #[must_use]
+    pub const fn for_purpose(&self, purpose: monoagens_core::ModelPurpose) -> u32 {
+        match purpose {
+            monoagens_core::ModelPurpose::Reason => self.reason,
+            monoagens_core::ModelPurpose::Classify => self.classify,
+            monoagens_core::ModelPurpose::Consolidate => self.consolidate,
+        }
+    }
+
+    /// Returns the configuration setting name for `purpose`'s limit.
+    #[must_use]
+    pub const fn setting_name(purpose: monoagens_core::ModelPurpose) -> &'static str {
+        match purpose {
+            monoagens_core::ModelPurpose::Reason => "output_limits.reason",
+            monoagens_core::ModelPurpose::Classify => "output_limits.classify",
+            monoagens_core::ModelPurpose::Consolidate => "output_limits.consolidate",
+        }
+    }
+}
+
 /// Configuration for [`OpenAiModelProvider`].
 #[derive(Clone)]
 pub struct OpenAiModelConfig {
@@ -71,7 +208,11 @@ pub struct OpenAiModelConfig {
     pub api_key: Option<SecretString>,
     pub default_timeout_ms: u64,
     pub reasoning_effort: Option<ReasoningEffort>,
-    pub extra_headers: Vec<(String, SecretString)>,
+    pub extra_headers: Vec<(String, ExtraHeaderValue)>,
+    pub usage_paths: UsageFieldPaths,
+    pub output_limit_param: String,
+    pub output_limits: OutputLimitProfile,
+    pub profile_name: Option<String>,
     pub user_agent: Option<String>,
     pub max_retries: u32,
 }
@@ -85,6 +226,10 @@ impl fmt::Debug for OpenAiModelConfig {
             .field("default_timeout_ms", &self.default_timeout_ms)
             .field("reasoning_effort", &self.reasoning_effort)
             .field("extra_header_names", &header_names)
+            .field("usage_paths", &self.usage_paths)
+            .field("output_limit_param", &self.output_limit_param)
+            .field("output_limits", &self.output_limits)
+            .field("profile_name", &self.profile_name)
             .field("user_agent", &self.user_agent)
             .field("max_retries", &self.max_retries)
             .finish()
@@ -101,6 +246,10 @@ impl OpenAiModelConfig {
             default_timeout_ms: 30_000,
             reasoning_effort: None,
             extra_headers: Vec::new(),
+            usage_paths: UsageFieldPaths::default(),
+            output_limit_param: DEFAULT_OUTPUT_LIMIT_PARAM.to_owned(),
+            output_limits: OutputLimitProfile::default(),
+            profile_name: None,
             user_agent: None,
             max_retries: 0,
         }
@@ -111,12 +260,13 @@ impl OpenAiModelConfig {
 struct ChatCompletionsResponse {
     model: Option<String>,
     choices: Vec<ChatChoice>,
-    usage: Option<ChatUsage>,
+    usage: Option<Value>,
 }
 
 #[derive(Deserialize)]
 struct ChatChoice {
     message: ChatMessageResp,
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -125,62 +275,19 @@ struct ChatMessageResp {
     refusal: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct ChatUsage {
-    prompt_tokens: Option<u64>,
-    completion_tokens: Option<u64>,
-    total_tokens: Option<u64>,
-    prompt_tokens_details: Option<PromptTokensDetails>,
-    completion_tokens_details: Option<CompletionTokensDetails>,
-    cost: Option<f64>,
-    opencode: Option<OpenCodeUsageMeta>,
-}
-
-#[derive(Deserialize)]
-struct PromptTokensDetails {
-    cached_tokens: Option<u64>,
-}
-
-#[derive(Deserialize)]
-struct CompletionTokensDetails {
-    reasoning_tokens: Option<u64>,
-}
-
-#[derive(Deserialize, Clone)]
-struct OpenCodeUsageMeta {
-    billing_source: Option<String>,
-    list_cost: Option<f64>,
-    allowance: Option<f64>,
-    tokens: Option<OpenCodeTokenDetails>,
-}
-
-#[derive(Deserialize, Clone)]
-#[allow(dead_code)]
-struct OpenCodeTokenDetails {
-    input: Option<u64>,
-    output: Option<u64>,
-    reasoning: Option<u64>,
-    cache_read: Option<u64>,
-    cache_write_5m: Option<u64>,
-    cache_write_1h: Option<u64>,
-}
-
-/// Cumulative HTTP retry and provider-reported quota telemetry from [`OpenAiModelProvider`].
+/// Cumulative HTTP retry and provider-reported usage telemetry from [`OpenAiModelProvider`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OpenAiTelemetrySnapshot {
     pub retries_total: u64,
     pub rate_limit_hits: u64,
-    pub last_billing_source: Option<String>,
     pub cumulative_cost_usd: f64,
-    pub cumulative_list_cost_usd: f64,
-    pub cumulative_allowance_usd: f64,
     pub quota_headers_seen: Vec<String>,
     /// Per-call usage captured for the report's mean/p95 token and latency figures.
     pub call_count: u64,
     pub cumulative_tokens_in: u64,
     pub cumulative_tokens_out: u64,
     pub cumulative_reasoning_tokens: u64,
-    /// Sum of provider-reported cached input tokens (`cache_read` or `cached_tokens`).
+    /// Sum of provider-reported cached input tokens.
     #[serde(default)]
     pub cumulative_cached_tokens: u64,
     /// Calls whose provider response reported no cached-token count at all (`unknown`, never `0`).
@@ -193,6 +300,24 @@ pub struct OpenAiTelemetrySnapshot {
     #[serde(default)]
     pub call_cached_tokens: Vec<Option<u64>>,
     pub call_latencies_ms: Vec<u64>,
+    #[serde(default)]
+    pub runaways_reason: u64,
+    #[serde(default)]
+    pub runaways_classify: u64,
+    #[serde(default)]
+    pub runaways_consolidate: u64,
+}
+
+impl OpenAiTelemetrySnapshot {
+    /// Returns the number of calls that hit the output limit for `purpose`.
+    #[must_use]
+    pub const fn runaways_for(&self, purpose: monoagens_core::ModelPurpose) -> u64 {
+        match purpose {
+            monoagens_core::ModelPurpose::Reason => self.runaways_reason,
+            monoagens_core::ModelPurpose::Classify => self.runaways_classify,
+            monoagens_core::ModelPurpose::Consolidate => self.runaways_consolidate,
+        }
+    }
 }
 
 /// Stateless OpenAI-compatible HTTP [`ModelProvider`] sending `store: false` and strict schemas.
@@ -201,6 +326,8 @@ pub struct OpenAiModelProvider {
     config: OpenAiModelConfig,
     client: Client,
     parsed_headers: HeaderMap,
+    conversation_headers: Vec<HeaderName>,
+    header_secrets: Vec<SecretString>,
     retries_total: AtomicU64,
     rate_limit_hits: AtomicU64,
     telemetry: Mutex<OpenAiTelemetrySnapshot>,
@@ -213,16 +340,33 @@ impl OpenAiModelProvider {
             return Err("OpenAI-compatible endpoint_url must not be empty".to_owned());
         }
         let mut parsed_headers = HeaderMap::new();
+        let mut conversation_headers = Vec::new();
+        let mut header_secrets = Vec::new();
         for (name, val) in &config.extra_headers {
-            let trimmed = name.trim();
-            if trimmed.is_empty() {
-                return Err("extra header name must not be empty".to_owned());
-            }
+            let trimmed = validate_extra_header_name(name)?;
             let h_name = HeaderName::from_bytes(trimmed.as_bytes())
                 .map_err(|e| format!("invalid extra header name '{trimmed}': {e}"))?;
-            let h_val = HeaderValue::from_str(val.expose())
-                .map_err(|e| format!("invalid extra header value for '{trimmed}': {e}"))?;
-            parsed_headers.insert(h_name, h_val);
+            match val {
+                ExtraHeaderValue::Literal(secret) => {
+                    let h_val = HeaderValue::from_str(secret.expose())
+                        .map_err(|e| format!("invalid extra header value for '{trimmed}': {e}"))?;
+                    header_secrets.push(secret.clone());
+                    parsed_headers.insert(h_name, h_val);
+                }
+                ExtraHeaderValue::Env(var) => {
+                    let env_val = std::env::var(var).map_err(|_| {
+                        format!("extra header '{trimmed}' env var '{var}' is not set")
+                    })?;
+                    let secret = SecretString::new(env_val);
+                    let h_val = HeaderValue::from_str(secret.expose())
+                        .map_err(|e| format!("invalid extra header value for '{trimmed}': {e}"))?;
+                    header_secrets.push(secret);
+                    parsed_headers.insert(h_name, h_val);
+                }
+                ExtraHeaderValue::ConversationId => {
+                    conversation_headers.push(h_name);
+                }
+            }
         }
         let mut builder =
             Client::builder().timeout(Duration::from_millis(config.default_timeout_ms.max(1)));
@@ -241,13 +385,15 @@ impl OpenAiModelProvider {
             config,
             client,
             parsed_headers,
+            conversation_headers,
+            header_secrets,
             retries_total: AtomicU64::new(0),
             rate_limit_hits: AtomicU64::new(0),
             telemetry: Mutex::new(OpenAiTelemetrySnapshot::default()),
         })
     }
 
-    /// Returns cumulative retries, rate-limit hits, and OpenCode usage/quota telemetry.
+    /// Returns cumulative retries, rate-limit hits, and usage telemetry.
     #[must_use]
     pub fn telemetry_snapshot(&self) -> OpenAiTelemetrySnapshot {
         let mut snap = self.telemetry.lock().map(|g| g.clone()).unwrap_or_default();
@@ -261,7 +407,7 @@ impl OpenAiModelProvider {
         if let Some(key) = &self.config.api_key {
             secrets.push(key);
         }
-        for (_, val) in &self.config.extra_headers {
+        for val in &self.header_secrets {
             secrets.push(val);
         }
         redact_secrets(text, &secrets)
@@ -285,6 +431,7 @@ impl OpenAiModelProvider {
                 usage: None,
                 latency_ms,
                 outcome: CallOutcome::Failed(class),
+                strict_schema: request.response_schema != crate::model::ResponseSchemaMode::None,
             }),
             status_code,
             failed_wake: None,
@@ -376,6 +523,15 @@ impl ModelProvider for OpenAiModelProvider {
             "store": false,
         });
 
+        let effective_limit = request
+            .max_output_tokens
+            .unwrap_or_else(|| self.config.output_limits.for_purpose(request.purpose));
+        let limit_param = if self.config.output_limit_param.trim().is_empty() {
+            DEFAULT_OUTPUT_LIMIT_PARAM
+        } else {
+            self.config.output_limit_param.trim()
+        };
+
         if let Some(obj) = payload.as_object_mut() {
             match request.response_schema {
                 ResponseSchemaMode::None => {}
@@ -406,9 +562,7 @@ impl ModelProvider for OpenAiModelProvider {
                     );
                 }
             }
-            if let Some(max_tok) = request.max_output_tokens {
-                obj.insert("max_completion_tokens".to_owned(), json!(max_tok));
-            }
+            obj.insert(limit_param.to_owned(), json!(effective_limit));
             if let Some(temp) = request.temperature {
                 obj.insert("temperature".to_owned(), json!(temp));
             }
@@ -418,19 +572,24 @@ impl ModelProvider for OpenAiModelProvider {
         }
 
         let mut attempt: u32 = 0;
-        let session_header = request
-            .session_id
+        let conv_header_val = request
+            .conversation_id
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .and_then(|sid| HeaderValue::from_str(sid).ok());
+            .and_then(|cid| HeaderValue::from_str(cid).ok());
         let (status, raw_body) = loop {
             let mut headers = self.parsed_headers.clone();
-            if let Some(val) = &session_header {
-                headers.insert(HeaderName::from_static("x-opencode-session"), val.clone());
+            if let Some(val) = &conv_header_val {
+                for h_name in &self.conversation_headers {
+                    headers.insert(h_name.clone(), val.clone());
+                }
             }
             for (name, value) in &request.extra_headers {
-                let Ok(h_name) = HeaderName::from_bytes(name.trim().as_bytes()) else {
+                let Ok(trimmed) = validate_extra_header_name(name) else {
+                    continue;
+                };
+                let Ok(h_name) = HeaderName::from_bytes(trimmed.as_bytes()) else {
                     continue;
                 };
                 let Ok(h_val) = HeaderValue::from_str(value) else {
@@ -580,25 +739,12 @@ impl ModelProvider for OpenAiModelProvider {
             .unwrap_or_else(|| request.model.clone());
 
         let usage = parsed.usage.map(|u| {
-            let input_tokens = u.prompt_tokens.unwrap_or(0);
-            let output_tokens = u.completion_tokens.unwrap_or(0);
-            // OpenCode reports cached reads in `usage.opencode.tokens.cache_read` (its `input`
-            // excludes cache hits); OpenAI-compatible APIs use `prompt_tokens_details.cached_tokens`.
-            let opencode_reasoning = u
-                .opencode
-                .as_ref()
-                .and_then(|oc| oc.tokens.as_ref().and_then(|t| t.reasoning));
-            let cached_tokens = u
-                .opencode
-                .as_ref()
-                .and_then(|oc| oc.tokens.as_ref().and_then(|t| t.cache_read))
-                .or_else(|| {
-                    u.prompt_tokens_details
-                        .as_ref()
-                        .and_then(|d| d.cached_tokens)
-                });
-            let reasoning_tokens = opencode_reasoning
-                .or_else(|| u.completion_tokens_details.and_then(|d| d.reasoning_tokens));
+            let paths = &self.config.usage_paths;
+            let input_tokens = lookup_u64_path(&u, &paths.input_tokens).unwrap_or(0);
+            let output_tokens = lookup_u64_path(&u, &paths.output_tokens).unwrap_or(0);
+            let cached_tokens = lookup_u64_path(&u, &paths.cached_tokens);
+            let reasoning_tokens = lookup_u64_path(&u, &paths.reasoning_tokens);
+            let cost = paths.cost.as_deref().and_then(|p| lookup_f64_path(&u, p));
             if let Ok(mut t) = self.telemetry.lock() {
                 t.call_count = t.call_count.saturating_add(1);
                 t.cumulative_tokens_in = t.cumulative_tokens_in.saturating_add(input_tokens);
@@ -608,11 +754,11 @@ impl ModelProvider for OpenAiModelProvider {
                     .saturating_add(reasoning_tokens.unwrap_or(0));
                 match cached_tokens {
                     Some(c) => {
-                        t.cumulative_cached_tokens = t.cumulative_cached_tokens.saturating_add(c)
+                        t.cumulative_cached_tokens = t.cumulative_cached_tokens.saturating_add(c);
                     }
                     None => {
                         t.cached_tokens_unknown_calls =
-                            t.cached_tokens_unknown_calls.saturating_add(1)
+                            t.cached_tokens_unknown_calls.saturating_add(1);
                     }
                 }
                 t.call_tokens_in.push(input_tokens);
@@ -620,22 +766,12 @@ impl ModelProvider for OpenAiModelProvider {
                 t.call_reasoning_tokens.push(reasoning_tokens.unwrap_or(0));
                 t.call_cached_tokens.push(cached_tokens);
                 t.call_latencies_ms.push(latency_ms);
-                if let Some(c) = u.cost {
+                if let Some(c) = cost {
                     t.cumulative_cost_usd += c;
                 }
-                if let Some(oc) = u.opencode {
-                    if let Some(bs) = oc.billing_source {
-                        t.last_billing_source = Some(bs);
-                    }
-                    if let Some(lc) = oc.list_cost {
-                        t.cumulative_list_cost_usd += lc;
-                    }
-                    if let Some(al) = oc.allowance {
-                        t.cumulative_allowance_usd += al;
-                    }
-                }
             }
-            let total_tokens = u.total_tokens.unwrap_or(input_tokens + output_tokens);
+            let total_tokens =
+                lookup_u64_path(&u, &paths.total_tokens).unwrap_or(input_tokens + output_tokens);
             TokenUsage {
                 input_tokens,
                 output_tokens,
@@ -667,16 +803,53 @@ impl ModelProvider for OpenAiModelProvider {
             ));
         }
 
-        let content_text =
-            extract_message_text(choice.message.content.as_ref()).ok_or_else(|| {
-                self.make_failure(
-                    request,
-                    ProviderFailureClass::InvalidOutput,
-                    Some(status.as_u16()),
-                    latency_ms,
-                    "OpenAI choice message missing text content",
-                )
-            })?;
+        let at_limit = choice.finish_reason.as_deref() == Some("length")
+            || usage
+                .as_ref()
+                .is_some_and(|u| u.output_tokens >= u64::from(effective_limit));
+        if at_limit && let Ok(mut t) = self.telemetry.lock() {
+            match request.purpose {
+                monoagens_core::ModelPurpose::Reason => {
+                    t.runaways_reason = t.runaways_reason.saturating_add(1);
+                }
+                monoagens_core::ModelPurpose::Classify => {
+                    t.runaways_classify = t.runaways_classify.saturating_add(1);
+                }
+                monoagens_core::ModelPurpose::Consolidate => {
+                    t.runaways_consolidate = t.runaways_consolidate.saturating_add(1);
+                }
+            }
+        }
+
+        let content_text = extract_message_text(choice.message.content.as_ref());
+        let visible_empty = content_text.as_deref().is_none_or(|s| s.trim().is_empty());
+        if at_limit && visible_empty {
+            let setting = OutputLimitProfile::setting_name(request.purpose);
+            let profile = self
+                .config
+                .profile_name
+                .as_deref()
+                .unwrap_or(&resolved_model);
+            return Err(self.make_failure(
+                request,
+                ProviderFailureClass::InvalidOutput,
+                Some(status.as_u16()),
+                latency_ms,
+                &format!(
+                    "reasoning used the whole limit ({effective_limit} tokens); raise '{setting}' for model profile '{profile}'"
+                ),
+            ));
+        }
+
+        let content_text = content_text.ok_or_else(|| {
+            self.make_failure(
+                request,
+                ProviderFailureClass::InvalidOutput,
+                Some(status.as_u16()),
+                latency_ms,
+                "OpenAI choice message missing text content",
+            )
+        })?;
 
         decode_model_response(
             self.provider_name(),

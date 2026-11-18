@@ -14,14 +14,14 @@ pub use prompts::{
     locomo_judge_prompt, longmemeval_judge_prompt, parse_locomo_verdict, parse_longmemeval_verdict,
 };
 pub use proxy::{
-    CallAttribution, LedgerEntry, LedgerTotals, MeteringProxy, MeteringProxyConfig,
-    OPENCODE_GO_CHAT_COMPLETIONS_URL, PRICE_CACHED_INPUT_PER_M, PRICE_OUTPUT_PER_M,
-    PRICE_UNCACHED_INPUT_PER_M, list_cost_usd, parse_usage, peak_multiplier_at, read_ledger_totals,
-    session_id_for_attribution,
+    CallAttribution, LedgerEntry, LedgerTotals, MeteringProxy, MeteringProxyConfig, ProfilePricing,
+    ProxyUsagePaths, RunProfile, conversation_id_for_attribution, list_cost_usd, parse_usage,
+    parse_usage_with_paths, peak_multiplier_at, read_ledger_totals,
 };
 pub use report::{GeneratedMemoryReport, generate_memory_report};
-pub use scoring::{MemoryItemScore, MemoryScore, score_locomo, score_longmemeval};
+pub use scoring::{MemoryItemScore, MemoryScore, ScoreContext, score_locomo, score_longmemeval};
 pub use suite::{
     DatasetArtifact, MemoryPhase, MemoryRunFile, MemorySuiteOptions, MemorySuiteOutcome,
-    PilotSummary, run_memory_suite, select_pilot_locomo_ids, select_pilot_longmemeval_ids,
+    PilotSummary, run_memory_suite, run_render_dry_run_gate, select_pilot_locomo_ids,
+    select_pilot_longmemeval_ids, validate_rendered_dry_run_request,
 };
