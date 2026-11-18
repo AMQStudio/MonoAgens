@@ -472,6 +472,29 @@ rulings:
   check the core's side only. Their records go to git-ignored `lab/runs/<run-id>/` with a summary;
   only the owner promotes records to `lab/runs/reference/` or prunes a mechanism.
 
+### 21. Reopened 2026-11-18: live model-call defects
+
+The first live pilot (`lab-memory-comparison` phase 0, 2026-11-18) showed defects every scripted
+test missed, because the scripted provider never reads its prompt:
+
+- **Empty classification prompts.** `turn.rs` (~4703, ~4814) builds Classify plans with only
+  `trigger_event_id` and `items`; the renderer reads `sections`, so the request says
+  `trigger: none` with no event or condition text. The core SHALL fill the trigger section and a
+  condition section for Classify plans the way it does for Reason plans.
+- **No output limit.** With no limit the model ran to 65,536 output tokens on 121 calls (91 % of
+  the pilot's LongMemEval cost). Limits become per purpose and per model profile, default 16,384;
+  measured benchmark profile for `deepseek-v4.1-flash` at `high`: classify 1,024, reason 4,096,
+  consolidate 8,192 (provisional).
+- **Provider-specific code.** `openai.rs` hard-codes `x-opencode-session`, a `session_id` field and
+  OpenCode usage structs. Owner rule: no provider is special-cased in code; headers
+  (`{conversation_id}` placeholder), the output-limit parameter name and usage field paths come
+  from configuration, standard OpenAI-compatible fields by default.
+- **Output-format failures** (~113: invalid motivation, places, label, act fields) are diagnosed
+  first from the recorded pilot; a retry that feeds the parse error back is an owner decision
+  after the diagnosis.
+- **Render dry run.** Every live Lab run is preceded by a no-network render of real requests for
+  every purpose; an empty trigger or capability list blocks the run.
+
 ## Risks / Trade-offs
 
 - [Most formulas are the researcher's inference, not established results] → Every parameter

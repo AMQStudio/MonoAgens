@@ -101,3 +101,51 @@ Each provider call SHALL run under a time limit, after which it is reported as a
 #### Scenario: The endpoint hangs
 - **WHEN** the endpoint does not answer within the limit
 - **THEN** the call ends as a timeout and the loop continues
+
+### Requirement: Provider code is provider-neutral
+Provider code SHALL contain no provider name and no provider-specific header, parameter or
+response field. Every difference between providers SHALL come from configuration: endpoint,
+extra headers, the output-limit parameter name, and the paths of usage fields.
+
+#### Scenario: Checking the source for provider names
+- **WHEN** the provider-neutrality test scans the provider and gateway sources
+- **THEN** it finds no provider name, provider-specific header name or provider-specific usage field
+
+### Requirement: Extra headers are generic and never override protocol headers
+A provider SHALL send configured extra headers whose values are literals, environment variables,
+or the placeholder `{conversation_id}`, filled at run time with a stable id per conversation or
+place. Extra headers SHALL NOT override `Authorization`, `Content-Type`, `Content-Length` or
+`Host`. Only header names SHALL be recorded, never values.
+
+#### Scenario: A per-conversation header
+- **WHEN** the configuration sets an extra header to `{conversation_id}`
+- **THEN** every call of one conversation carries the same value, another conversation carries a different one, and no value appears in any log or record
+
+#### Scenario: A configured header would override authorization
+- **WHEN** the configuration sets an extra header named `Authorization`
+- **THEN** configuration loading fails naming the header
+
+### Requirement: Usage fields are read by configuration
+Token usage SHALL be read from the OpenAI-compatible standard fields by default (input, output,
+`prompt_tokens_details.cached_tokens`, `completion_tokens_details.reasoning_tokens`) or from
+configured JSON paths. A field the response does not carry SHALL be recorded as `unknown`, never
+as 0.
+
+#### Scenario: A provider reports cached tokens elsewhere
+- **WHEN** the configuration sets a cached-tokens path and a response carries a value there
+- **THEN** that value is recorded as the call's cached input tokens
+
+### Requirement: Every call has an output limit per purpose
+Every model call SHALL carry an output-token limit set per purpose and per model profile in
+configuration, sent under the configured parameter name (default `max_completion_tokens`). The
+product default SHALL be 16,384 tokens for every purpose. A call that ends at the limit SHALL be
+recorded as a runaway for its purpose; if it ends at the limit with no visible output, the
+recorded error SHALL say that reasoning used the whole limit and name the setting to raise.
+
+#### Scenario: A call runs to its limit
+- **WHEN** a classification call ends because it reached its output limit
+- **THEN** it is recorded as a classify runaway with its tokens, and its output is parsed as returned
+
+#### Scenario: Reasoning uses the whole limit
+- **WHEN** a call reaches its limit and returns no visible output
+- **THEN** the error names the purpose's output-limit setting for that model profile

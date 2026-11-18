@@ -63,6 +63,10 @@ with [`core-and-lab`](../core-and-lab/tasks.md). Every task group carries its ow
 - [x] 9.2 Make `monoagens replay` take the prior from `prior_loaded` events (task 23.4) and drop its `Prior::default()` use; add an integration test for the two-session prior change scenario.
 - [x] 9.3 Verify `cargo test -p monoagens-cli -p monoagens-gateway`, clippy `-D warnings`, and `openspec validate waist-valve-and-bodies --strict`.
 
+## 10. Reopened — provider-neutral headers and output limits (owner review 2026-11-18, core-and-lab Decision 21)
+
+- [ ] 10.1 Gateway: send the configured extra headers with `{conversation_id}` filled by a stable id per conversation or place, and the per-purpose output limit of the configured model profile, on every model call; config schema and validation for both (protocol-header guard, default 16,384) (spec "The gateway sends configured headers and output limits on every model call"). Verify with gateway tests using a mock provider: two calls of one chat share the header value, two chats differ, no value is logged, limits per purpose reach the request.
+
 ## Workflow follow-up
 
 - Implement Phases 0–3 in lockstep with `core-and-lab` and archive both changes cleanly into `openspec/specs/` after review and conformance verification.

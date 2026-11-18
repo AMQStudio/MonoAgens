@@ -342,3 +342,23 @@ including after a restart in the middle of a task.
 #### Scenario: A restart in the middle of a task
 - **WHEN** a multi-step scenario is run both ways with a restart between two steps
 - **THEN** the report shows success and cost for the rebuilt context and for the transcript
+
+### Requirement: A render dry run gates every live run
+Before any `--live` run the Lab SHALL render, with a scripted provider and no network, the real
+requests for a sample of history turns and probes of every selected benchmark and every purpose
+that occurs, write them to the run directory, and refuse to start the live run when any request
+renders an empty trigger or no capabilities.
+
+#### Scenario: A dry run finds an empty trigger
+- **WHEN** a dry-run request renders `trigger: none`
+- **THEN** the live run does not start and the command names the purpose and the item
+
+### Requirement: Benchmark model profiles set measured output limits
+The Lab SHALL take output limits from a named model profile. The profile for `deepseek-v4.1-flash`
+at effort `high` SHALL set classify 1,024, reason 4,096 and consolidate 8,192 tokens (the last
+provisional), derived from the 2026-11-18 pilot, and every run SHALL report runaways per purpose
+so the profile can be revised.
+
+#### Scenario: Reporting runaways against the profile
+- **WHEN** a run with that profile finishes
+- **THEN** its report shows, per purpose, the limit used and the number of calls that reached it

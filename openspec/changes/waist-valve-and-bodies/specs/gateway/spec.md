@@ -77,3 +77,12 @@ and `progress_note` (`10 s`) notifications.
 #### Scenario: Inline key halts startup and genuine waits emit honest cues
 - **WHEN** `monoagens.toml` contains an inline secret key or an action genuinely runs past `10 s`
 - **THEN** inline secrets abort startup cleanly and genuine waits emit `working_cue` at `1 s` and `progress_note` at `10 s`
+
+### Requirement: The gateway sends configured headers and output limits on every model call
+The gateway SHALL send the configured extra headers, with `{conversation_id}` filled by a stable
+id per conversation or place, and the per-purpose output limit of its model profile on every
+model call, under the provider-neutral rules of `model-providers`.
+
+#### Scenario: Two messages in the same chat
+- **WHEN** two messages from one chat each lead to a model call
+- **THEN** both calls carry the same `{conversation_id}` header value and the per-purpose output limit

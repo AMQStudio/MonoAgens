@@ -205,3 +205,16 @@ breaker; similar unlinked events classify without bypassing the gate.
 #### Scenario: A conflicting commitment is proposed while a hard dependency is open
 - **WHEN** a candidate act commits to overlapping exclusive resources against an open `PromiseMeta`
 - **THEN** conflict status is flagged to reasoning for renegotiation or refusal prior to emitting the promise
+
+### Requirement: A classification call carries what it judges
+Every classification call SHALL render the triggering event's text (speaker, place, time and
+content, under the same `VisibleScope` rules as reasoning) and the text of the condition,
+expectation or goal it is judged against. A classification plan without both SHALL NOT be sent.
+
+#### Scenario: Classifying an event against an open condition
+- **WHEN** an event at or above the lower band triggers a classification for an open condition
+- **THEN** the rendered request contains the event's speaker and content and the condition's text, and never renders `trigger: none`
+
+#### Scenario: A classification plan is missing its inputs
+- **WHEN** the event or the condition text cannot be rendered for a classification
+- **THEN** no model call is made and the failure is recorded with its reason

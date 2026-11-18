@@ -207,3 +207,21 @@ SHALL be recorded with that purpose.
 #### Scenario: Cost by purpose
 - **WHEN** the log of a run is read
 - **THEN** tokens can be totalled separately for reasoning, classification and consolidation
+
+### Requirement: Every rendered model request contains its trigger
+For every purpose (reason, classify, consolidate) the rendered request SHALL contain the content
+that triggered it and the capabilities registered for its place. Tests of this rule SHALL read
+the rendered request text, not only the emitted effect.
+
+#### Scenario: A contract test over all purposes
+- **WHEN** the contract test drives a percept that wakes reasoning, one that triggers a classification and one that triggers consolidation
+- **THEN** each rendered request contains its trigger content and the registered capabilities
+
+### Requirement: Output-format failures are diagnosed before any retry is added
+Model outputs that fail to parse SHALL be recorded per failure type (field and reason) with
+whether a strict output schema was sent. Defects in the prompt or schema SHALL be fixed. A retry
+that sends the parse error back to the model SHALL NOT be added without the owner's decision.
+
+#### Scenario: Reading the failure types of a run
+- **WHEN** the failures of a live run are listed
+- **THEN** each failure shows its purpose, the failing field, the reason, and whether a strict schema was requested

@@ -54,6 +54,7 @@ User-Agent and the per-(participant, conversation) `x-opencode-session`, and wri
 line per call: participant, dataset, conversation, phase, uncached input, cached read, output,
 reasoning tokens, latency, list cost, allowance cost, status. It reads `usage.opencode.tokens`
 (falling back to `prompt_tokens_details.cached_tokens`). Header values and keys are never written.
+Per `core-and-lab` Decision 21 the proxy is provider-neutral: header names, the session value (`{conversation_id}`), output limits per purpose (benchmark model profile), the output-limit parameter name and usage field paths all come from the run configuration, never from code.
 *Why:* frameworks make internal calls the Lab cannot see (Run 4: Mem0 cannot set headers;
 Graphiti's generic client does not send `reasoning_effort`); one proxy meters all identically and
 enforces parity in one place. For phase 0 the proxy is used even though MonoAgens' own provider
