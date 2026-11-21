@@ -6,7 +6,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
-use monoagens_protocol::{ActionId, ActorId, CapabilityId, OpaquePayload, PlaceId, Time};
+use monoagens_core::{EventDetail, EventKind, EventRecord, ExpectationLifecycleState};
+use monoagens_protocol::{
+    ActionId, ActorId, CapabilityId, EventId, OpaquePayload, PlaceId, ReceiptOutcome, Time,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::config::ValveConfig;
@@ -161,6 +164,19 @@ pub struct DigestItem {
     pub queued_at_ms: Time,
     pub scheduled_at_ms: Time,
     pub reason: ValveReasonTag,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expectation_id: Option<EventId>,
+}
+
+/// Append-only event-log payload persisted inside `EventKind::DoorVerdict` for `DigestQueue` replay.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "digest_event", rename_all = "snake_case")]
+pub enum DigestLogRecord {
+    Queued { item: DigestItem },
+    Cancelled { place: PlaceId, key: String },
+    Drained { action_ids: Vec<ActionId> },
 }
 
 /// Batched digest delivered at one of the `3x/day` local digest slots.
@@ -171,11 +187,20 @@ pub struct DigestBatch {
     pub items: Vec<DigestItem>,
 }
 
-/// Deduplicated `3x/day` digest queue ensuring a message never fires twice.
+/// Deduplicated, event-sourced `3x/day` digest queue with replannable reconsider-before-send
+/// cancellation (`arXiv:2610.05159`) ensuring stale or duplicate messages never fire.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DigestQueue {
     pending: Vec<DigestItem>,
     seen_or_dispatched: BTreeSet<ActionId>,
+    #[serde(default)]
+    cancelled_actions: BTreeSet<ActionId>,
+    #[serde(default)]
+    superseded_topics: BTreeMap<PlaceId, BTreeSet<String>>,
+    #[serde(default)]
+    superseded_expectations: BTreeSet<EventId>,
+    #[serde(default)]
+    superseded_dropped_total: u64,
 }
 
 impl DigestQueue {
@@ -185,13 +210,161 @@ impl DigestQueue {
         Self::default()
     }
 
-    /// Enqueues `item` once; returns `false` if `item.action_id` was already queued or dispatched.
+    /// Enqueues `item` once; returns `false` if `item.action_id` was already queued,
+    /// dispatched, or cancelled/superseded.
     pub fn enqueue_once(&mut self, item: DigestItem) -> bool {
+        if self.is_item_superseded(&item) {
+            return false;
+        }
         if !self.seen_or_dispatched.insert(item.action_id.clone()) {
             return false;
         }
         self.pending.push(item);
         true
+    }
+
+    fn is_item_superseded(&self, item: &DigestItem) -> bool {
+        if self.cancelled_actions.contains(&item.action_id) {
+            return true;
+        }
+        if let Some(eid) = item.expectation_id
+            && self.superseded_expectations.contains(&eid)
+        {
+            return true;
+        }
+        if let Some(topic) = &item.topic
+            && self
+                .superseded_topics
+                .get(&item.place)
+                .is_some_and(|keys| keys.contains(topic))
+        {
+            return true;
+        }
+        self.superseded_topics
+            .get(&item.place)
+            .is_some_and(|keys| {
+                keys.contains(item.action_id.as_str())
+                    || item
+                        .expectation_id
+                        .is_some_and(|eid| keys.contains(&eid.to_string()))
+            })
+    }
+
+    /// Marks queued items matching `(place, topic_or_expectation_id)` as superseded/cancelled
+    /// so they are dropped before dispatch (`arXiv:2610.05159`). Returns the number cancelled.
+    pub fn cancel_matching(&mut self, place: &PlaceId, topic_or_expectation_id: &str) -> usize {
+        self.superseded_topics
+            .entry(place.clone())
+            .or_default()
+            .insert(topic_or_expectation_id.to_owned());
+        if let Ok(raw_id) = topic_or_expectation_id.parse::<u64>() {
+            self.superseded_expectations.insert(EventId::new(raw_id));
+        }
+
+        let mut cancelled = 0usize;
+        let mut kept = Vec::with_capacity(self.pending.len());
+        for item in self.pending.drain(..) {
+            let matches_place = &item.place == place;
+            let matches_key = item.topic.as_deref() == Some(topic_or_expectation_id)
+                || item
+                    .expectation_id
+                    .is_some_and(|eid| eid.to_string() == topic_or_expectation_id)
+                || item.action_id.as_str() == topic_or_expectation_id;
+            if matches_place && matches_key {
+                self.cancelled_actions.insert(item.action_id.clone());
+                self.seen_or_dispatched.insert(item.action_id);
+                cancelled += 1;
+            } else {
+                kept.push(item);
+            }
+        }
+        self.pending = kept;
+        self.superseded_dropped_total = self
+            .superseded_dropped_total
+            .saturating_add(u64::try_from(cancelled).unwrap_or(u64::MAX));
+        cancelled
+    }
+
+    /// Cancels any queued digest items tied to `expectation_id` in `place`.
+    pub fn cancel_for_expectation(&mut self, place: &PlaceId, expectation_id: EventId) -> usize {
+        self.superseded_expectations.insert(expectation_id);
+        self.cancel_matching(place, &expectation_id.to_string())
+    }
+
+    /// Replays [`DigestQueue`] state deterministically from append-only [`EventRecord`]s across restarts.
+    pub fn replay_from_events(&mut self, events: &[EventRecord]) {
+        *self = Self::new();
+        for ev in events {
+            match ev.kind {
+                EventKind::DoorVerdict => {
+                    if let Ok(rec) = serde_json::from_slice::<DigestLogRecord>(ev.payload.as_bytes())
+                    {
+                        match rec {
+                            DigestLogRecord::Queued { item } => {
+                                let _ = self.enqueue_once(item);
+                            }
+                            DigestLogRecord::Cancelled { place, key } => {
+                                let _ = self.cancel_matching(&place, &key);
+                            }
+                            DigestLogRecord::Drained { action_ids } => {
+                                for aid in action_ids {
+                                    self.seen_or_dispatched.insert(aid.clone());
+                                    self.pending.retain(|item| item.action_id != aid);
+                                }
+                            }
+                        }
+                    }
+                }
+                EventKind::ExpectationChanged => match &ev.detail {
+                    Some(EventDetail::ExpectationTransition {
+                        expectation_id,
+                        action_id,
+                        to_state:
+                            ExpectationLifecycleState::Kept
+                            | ExpectationLifecycleState::KeptLate
+                            | ExpectationLifecycleState::Cancelled
+                            | ExpectationLifecycleState::Released
+                            | ExpectationLifecycleState::Answered
+                            | ExpectationLifecycleState::Reached
+                            | ExpectationLifecycleState::Rejected
+                            | ExpectationLifecycleState::Expired,
+                        ..
+                    }) => {
+                        let _ = self.cancel_for_expectation(&ev.place, *expectation_id);
+                        if let Some(aid) = action_id {
+                            let _ = self.cancel_matching(&ev.place, aid.as_str());
+                        }
+                    }
+                    Some(EventDetail::ExpectationRevised { expectation_id, .. }) => {
+                        let _ = self.cancel_for_expectation(&ev.place, *expectation_id);
+                    }
+                    _ => {}
+                },
+                EventKind::Action => {
+                    if let Some(EventDetail::Action { action_id, .. }) = &ev.detail {
+                        self.seen_or_dispatched.insert(action_id.clone());
+                        self.pending.retain(|item| &item.action_id != action_id);
+                    }
+                }
+                EventKind::Receipt => {
+                    if let Some(EventDetail::Receipt {
+                        action_id, outcome, ..
+                    }) = &ev.detail
+                        && *outcome != ReceiptOutcome::Held
+                    {
+                        self.seen_or_dispatched.insert(action_id.clone());
+                        self.pending.retain(|item| &item.action_id != action_id);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Returns total queued items suppressed by reconsider-before-send cancellation.
+    #[must_use]
+    pub const fn superseded_dropped_total(&self) -> u64 {
+        self.superseded_dropped_total
     }
 
     /// Returns the number of currently queued digest items.
@@ -212,14 +385,29 @@ impl DigestQueue {
         &self.pending
     }
 
-    /// Drains all due digest items (`scheduled_at_ms <= t_now`), grouped deterministically by
-    /// `(recipient, scheduled_at_ms)`. Items stay marked in `seen_or_dispatched` so they never
-    /// fire twice.
+    /// Drains all due digest items (`scheduled_at_ms <= t_now`), dropping any superseded items.
     pub fn drain_due(&mut self, t_now: Time) -> Vec<DigestBatch> {
-        let mut due_groups: BTreeMap<(ActorId, Time), Vec<DigestItem>> = BTreeMap::new();
-        let mut remaining = Vec::with_capacity(self.pending.len());
+        self.drain_due_reconsidered(t_now, |_| false)
+    }
 
-        for item in self.pending.drain(..) {
+    /// Pre-drain reconsider-before-send hook: evaluates `is_superseded(&item)` on every due item
+    /// before dispatch, dropping stale/cancelled entries instead of delivering them.
+    pub fn drain_due_reconsidered<F>(&mut self, t_now: Time, mut is_superseded: F) -> Vec<DigestBatch>
+    where
+        F: FnMut(&DigestItem) -> bool,
+    {
+        let mut due_groups: BTreeMap<(ActorId, Time), Vec<DigestItem>> = BTreeMap::new();
+        let pending = std::mem::take(&mut self.pending);
+        let mut remaining = Vec::with_capacity(pending.len());
+        let mut dropped_now = 0u64;
+
+        for item in pending {
+            if self.is_item_superseded(&item) || is_superseded(&item) {
+                self.cancelled_actions.insert(item.action_id.clone());
+                self.seen_or_dispatched.insert(item.action_id);
+                dropped_now = dropped_now.saturating_add(1);
+                continue;
+            }
             if item.scheduled_at_ms <= t_now {
                 due_groups
                     .entry((item.recipient.clone(), item.scheduled_at_ms))
@@ -230,6 +418,7 @@ impl DigestQueue {
             }
         }
         self.pending = remaining;
+        self.superseded_dropped_total = self.superseded_dropped_total.saturating_add(dropped_now);
 
         due_groups
             .into_iter()

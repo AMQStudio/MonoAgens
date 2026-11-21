@@ -83,8 +83,9 @@ pub use expectations::{
 pub use gate::{
     BacklogEventInput, BacklogScheduleResult, CandidateMemory, CommitmentInputs, DecisionReason,
     DecisionTrace, ExpectationCue, FrozenDialogueActHead, GateOutcome, MAX_CHUNKS_PER_WAKE,
-    OpenWait, PlaceBacklogChunk, PlaceHistoryEntry, PromiseSummary, chunk_place_backlog,
-    cosine_similarity, decide_gate, is_backlog_event, schedule_backlog_chunks,
+    OPEN_WAIT_PEER_JITTER_MAX_MS, OpenWait, PlaceBacklogChunk, PlaceHistoryEntry, PromiseSummary,
+    chunk_place_backlog, compute_open_wait_jitter_ms, cosine_similarity, decide_gate,
+    is_backlog_event, schedule_backlog_chunks,
 };
 pub use ledger::{
     ActorCard, CapabilityHealthStats, FalseBeliefFlag, OpenRequestItem, PerceptionLedger,

@@ -277,6 +277,8 @@ fn test_body_round_trips_all_12_waist2_envelopes_and_matches_schema_shapes() {
         approved: true,
         resolver: actor.clone(),
         resolved_at_ms: Time::from_millis(700),
+        signature: None,
+        out_of_band_channel: false,
     };
     assert_matches_schema("ApprovalResolveParams", &approve_params);
     let approve_res: ApprovalResolveResult = body
@@ -453,6 +455,7 @@ fn test_body_round_trips_all_12_waist2_envelopes_and_matches_schema_shapes() {
         embeddings: Vec::new(),
         attachments: Vec::new(),
         dialogue_act_gap: None,
+        peer_expertise_margin: None,
     };
     let aud_err = body
         .call::<_, PerceptEmitResult>(RpcId::Int(18), Waist2Method::PerceptEmit, no_aud)

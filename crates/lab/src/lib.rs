@@ -58,9 +58,10 @@ pub use pareto::{
 };
 pub use record::{DatasetRunProvenance, MetricScoreInterval, PurposeCost, RunRecord};
 pub use scenario::{
-    CostGuardConfig, EventAnnotation, FalseBeliefProbe, RecallProbeAnnotation, ReportControlProbe,
-    Scenario, ScenarioAnnotations, ScenarioSet, ScriptedActionRule, ScriptedEvent,
-    ScriptedEventKind, ScriptedFollowUpPercept, ScriptedModelResponse, TestBodySpec,
+    AbstentionPairAnnotation, CostGuardConfig, EventAnnotation, FalseBeliefProbe,
+    RecallProbeAnnotation, ReplanProbeAnnotation, ReportControlProbe, Scenario,
+    ScenarioAnnotations, ScenarioSet, ScriptedActionRule, ScriptedEvent, ScriptedEventKind,
+    ScriptedFollowUpPercept, ScriptedModelResponse, TestBodySpec, WarningAbstentionProbe,
     WarrantedReply, ensure_not_sealed_path, load_scenarios_from_set,
 };
 pub use soul_dir::{SoulDir, SoulManifest};

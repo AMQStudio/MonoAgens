@@ -5,16 +5,17 @@ use std::collections::{BTreeSet, HashSet};
 
 use cedar_policy::Decision;
 use monoagens_core::{
-    ContextPlan, ContextSlotKind, DoorDecision, Doors, DroppedContextItem, LogSeq,
+    ContextPlan, ContextSlotKind, DoorDecision, Doors, DroppedContextItem, EventRecord, LogSeq,
 };
 use monoagens_protocol::{
-    Action, ActorId, CapabilityFlags, DeclassToken, EventId, OwnerSigned, Percept, PlaceId, Taint,
-    Time, VisibleScope,
+    Action, ActionId, ActorId, ApprovalResolveParams, CapabilityFlags, DeclassToken, EventId, HAct,
+    OwnerSigned, Percept, PlaceId, Taint, Time, VisibleScope,
 };
 
 use crate::approvals::{
-    ActionRiskMetadata, ApprovalGrant, ApprovalManager, HoldRequestContext, RiskTier,
-    classify_action_risk, compute_h_act,
+    ActionRiskMetadata, ApprovalGrant, ApprovalManager, ApprovalResolveError,
+    ApprovalResolveOutcome, HoldRequestContext, RiskTier, classify_action_risk, compute_h_act,
+    sign_approval_resolution,
 };
 use crate::config::{ValveConfig, ValveMode, ValveRuleToggle};
 use crate::hooks::{
@@ -126,7 +127,32 @@ impl Valve {
         }
     }
 
-    /// Registers an owner [`ApprovalGrant`] bound to `H_act`, `state_epoch`, and TTL.
+    /// Configures the 32-byte keyed BLAKE3-MAC key used to verify out-of-band owner approvals.
+    pub fn set_approval_attestation_key(&mut self, key: [u8; 32]) {
+        self.approvals.set_attestation_key(key);
+    }
+
+    /// Signs an out-of-band `approval/resolve` payload using the Valve's attestation key.
+    #[must_use]
+    pub fn sign_approval_resolution(
+        &self,
+        action_id: &ActionId,
+        h_act: &HAct,
+        state_epoch: u64,
+        approved: bool,
+        resolved_at_ms: Time,
+    ) -> String {
+        sign_approval_resolution(
+            self.approvals.attestation_key(),
+            action_id,
+            h_act,
+            state_epoch,
+            approved,
+            resolved_at_ms,
+        )
+    }
+
+    /// Registers an owner [`ApprovalGrant`] bound to `action_id`, `H_act`, `state_epoch`, and TTL.
     pub fn grant_approval(&mut self, grant: ApprovalGrant) {
         let h_act = grant.h_act.clone();
         self.approvals.register_grant(grant);
@@ -149,6 +175,7 @@ impl Valve {
     ) -> ApprovalGrant {
         let h_act = compute_h_act(action, self.snapshot.state_epoch);
         let grant = ApprovalGrant::new(
+            action.action_id.clone(),
             h_act,
             self.snapshot.state_epoch,
             self.snapshot.t_now,
@@ -160,10 +187,99 @@ impl Valve {
         grant
     }
 
+    /// Signs and registers an out-of-band owner [`ApprovalGrant`] at `snapshot.state_epoch` and `snapshot.t_now`.
+    pub fn approve_action_signed(
+        &mut self,
+        action: &Action,
+        is_embodied: bool,
+        signer: ActorId,
+    ) -> ApprovalGrant {
+        let h_act = compute_h_act(action, self.snapshot.state_epoch);
+        let sig = self.sign_approval_resolution(
+            &action.action_id,
+            &h_act,
+            self.snapshot.state_epoch,
+            true,
+            self.snapshot.t_now,
+        );
+        self.approve_action(action, is_embodied, signer, sig)
+    }
+
+    /// Validates and settles an out-of-band `approval/resolve` request (`I-HITL`), failing closed
+    /// on non-out-of-band channels, invalid signatures, non-owner resolvers, stale epochs, or TTL expiry.
+    pub fn resolve_approval(
+        &mut self,
+        params: &ApprovalResolveParams,
+    ) -> Result<ApprovalResolveOutcome, ApprovalResolveError> {
+        let res = self.approvals.resolve_out_of_band(
+            &params.action_id,
+            &params.h_act,
+            params.state_epoch,
+            params.approved,
+            &params.resolver,
+            params.resolved_at_ms,
+            params.out_of_band_channel,
+            params.signature.as_deref(),
+            self.snapshot.owner_actor_id.as_ref(),
+            &self.config,
+        );
+        match &res {
+            Ok(outcome) => {
+                let rule = if params.approved {
+                    "valve.approval.resolve_granted"
+                } else {
+                    "valve.approval.resolve_denied"
+                };
+                self.audit_log.record_config_change(
+                    self.snapshot.log_seq,
+                    self.snapshot.t_now,
+                    rule,
+                    format!(
+                        "action={} h_act={} epoch={} latency_ms={}",
+                        params.action_id.as_str(),
+                        params.h_act.as_str(),
+                        params.state_epoch,
+                        outcome.latency_ms,
+                    ),
+                );
+            }
+            Err(err) => {
+                self.audit_log.record_config_change(
+                    self.snapshot.log_seq,
+                    self.snapshot.t_now,
+                    "valve.approval.resolve_rejected",
+                    format!(
+                        "action={} reason={}",
+                        params.action_id.as_str(),
+                        err.reason_str()
+                    ),
+                );
+            }
+        }
+        res
+    }
+
+    /// Reconstructs `ApprovalManager` and `DigestQueue` state deterministically from append-only events.
+    pub fn replay_from_events(&mut self, events: &[EventRecord]) -> u64 {
+        let replayed_epoch = self.approvals.replay_from_events(
+            events,
+            self.snapshot.owner_actor_id.as_ref(),
+            &self.config,
+        );
+        self.snapshot.state_epoch = self.snapshot.state_epoch.max(replayed_epoch);
+        self.digest_queue.replay_from_events(events);
+        self.snapshot.state_epoch
+    }
+
     /// Returns a shared reference to the [`ApprovalManager`].
     #[must_use]
     pub fn approval_manager(&self) -> &ApprovalManager {
         &self.approvals
+    }
+
+    /// Returns a mutable reference to the [`ApprovalManager`].
+    pub fn approval_manager_mut(&mut self) -> &mut ApprovalManager {
+        &mut self.approvals
     }
 
     /// Returns a shared reference to the [`DigestQueue`].
@@ -172,15 +288,99 @@ impl Valve {
         &self.digest_queue
     }
 
+    /// Returns a mutable reference to the [`DigestQueue`].
+    pub fn digest_queue_mut(&mut self) -> &mut DigestQueue {
+        &mut self.digest_queue
+    }
+
+    /// Cancels any queued digest items matching `(place, topic_or_expectation_id)` before dispatch.
+    pub fn cancel_queued_digests(&mut self, place: &PlaceId, topic_or_expectation_id: &str) -> usize {
+        let cancelled = self
+            .digest_queue
+            .cancel_matching(place, topic_or_expectation_id);
+        if cancelled > 0 {
+            self.audit_log.record_config_change(
+                self.snapshot.log_seq,
+                self.snapshot.t_now,
+                "valve.quiet_hours.digest_cancelled",
+                format!(
+                    "cancelled {cancelled} queued digest(s) in place={} key={topic_or_expectation_id}",
+                    place.as_str()
+                ),
+            );
+        }
+        cancelled
+    }
+
+    /// Applies intervening expectation cancellations/revisions from `events` to suppress stale digests.
+    pub fn reconsider_digests_from_events(&mut self, events: &[EventRecord]) -> usize {
+        let mut cancelled_total = 0usize;
+        for ev in events {
+            match (&ev.kind, &ev.detail) {
+                (
+                    monoagens_core::EventKind::ExpectationChanged,
+                    Some(monoagens_core::EventDetail::ExpectationTransition {
+                        expectation_id,
+                        action_id,
+                        to_state:
+                            monoagens_core::ExpectationLifecycleState::Kept
+                            | monoagens_core::ExpectationLifecycleState::KeptLate
+                            | monoagens_core::ExpectationLifecycleState::Cancelled
+                            | monoagens_core::ExpectationLifecycleState::Released
+                            | monoagens_core::ExpectationLifecycleState::Answered
+                            | monoagens_core::ExpectationLifecycleState::Reached
+                            | monoagens_core::ExpectationLifecycleState::Rejected
+                            | monoagens_core::ExpectationLifecycleState::Expired,
+                        ..
+                    }),
+                ) => {
+                    cancelled_total += self
+                        .digest_queue
+                        .cancel_for_expectation(&ev.place, *expectation_id);
+                    if let Some(aid) = action_id {
+                        cancelled_total += self.digest_queue.cancel_matching(&ev.place, aid.as_str());
+                    }
+                }
+                (
+                    monoagens_core::EventKind::ExpectationChanged,
+                    Some(monoagens_core::EventDetail::ExpectationRevised {
+                        expectation_id, ..
+                    }),
+                ) => {
+                    cancelled_total += self
+                        .digest_queue
+                        .cancel_for_expectation(&ev.place, *expectation_id);
+                }
+                _ => {}
+            }
+        }
+        cancelled_total
+    }
+
     /// Returns a shared reference to the [`ProactiveCapTracker`].
     #[must_use]
     pub fn proactive_cap_tracker(&self) -> &ProactiveCapTracker {
         &self.proactive_tracker
     }
 
-    /// Drains all due `3x/day` digest batches at `snapshot.t_now` (never using wall clock).
+    /// Drains all due `3x/day` digest batches at `snapshot.t_now` after pre-send reconsideration
+    /// (never using wall clock).
     pub fn drain_due_digests(&mut self) -> Vec<DigestBatch> {
-        self.digest_queue.drain_due(self.snapshot.t_now)
+        let before = self.digest_queue.superseded_dropped_total();
+        let batches = self.digest_queue.drain_due(self.snapshot.t_now);
+        let dropped = self
+            .digest_queue
+            .superseded_dropped_total()
+            .saturating_sub(before);
+        if dropped > 0 {
+            self.audit_log.record_config_change(
+                self.snapshot.log_seq,
+                self.snapshot.t_now,
+                "valve.quiet_hours.digest_reconsidered",
+                format!("suppressed {dropped} stale/cancelled digest item(s) before drain"),
+            );
+        }
+        batches
     }
 
     /// Sets the [`ValveMode`] and logs the configuration change.
@@ -301,6 +501,27 @@ impl Valve {
                     },
                     Some(ValveReasonTag::ChainBrake),
                     "valve.inbound.chain_brake".to_owned(),
+                );
+            }
+        }
+
+        if self.config.is_rule_active(ValveRuleToggle::PeerLoopBrake)
+            && self.snapshot.automated_actors.contains(&percept.actor)
+        {
+            let consecutive = self
+                .snapshot
+                .consecutive_automated_turns_by_place
+                .get(&percept.place)
+                .copied()
+                .unwrap_or(0);
+            if consecutive >= self.config.max_consecutive_automated_turns {
+                return (
+                    DoorDecision::Refuse {
+                        rule: "valve.inbound.peer_loop_brake".to_owned(),
+                        reason: ValveReasonTag::PeerLoopBrake.as_str().to_owned(),
+                    },
+                    Some(ValveReasonTag::PeerLoopBrake),
+                    "valve.inbound.peer_loop_brake".to_owned(),
                 );
             }
         }
@@ -474,6 +695,47 @@ impl Valve {
             );
         }
 
+        if self.config.is_rule_active(ValveRuleToggle::PeerLoopBrake) {
+            if action.capability_id.as_str().starts_with("a2a.") {
+                let hop = self
+                    .snapshot
+                    .action_a2a_hops
+                    .get(&action.action_id)
+                    .copied()
+                    .or(self.snapshot.current_a2a_hop)
+                    .unwrap_or(0);
+                if hop > self.config.max_a2a_hops {
+                    return (
+                        DoorDecision::Refuse {
+                            rule: "valve.action.a2a_hop_limit".to_owned(),
+                            reason: ValveReasonTag::PeerLoopBrake.as_str().to_owned(),
+                        },
+                        Some(ValveReasonTag::PeerLoopBrake),
+                        "valve.action.a2a_hop_limit".to_owned(),
+                    );
+                }
+            }
+            if action.capability_id.as_str() != "memory.recall"
+                && action.places.iter().any(|p| {
+                    self.snapshot
+                        .consecutive_automated_turns_by_place
+                        .get(p)
+                        .copied()
+                        .unwrap_or(0)
+                        >= self.config.max_consecutive_automated_turns
+                })
+            {
+                return (
+                    DoorDecision::Refuse {
+                        rule: "valve.action.peer_loop_brake".to_owned(),
+                        reason: ValveReasonTag::PeerLoopBrake.as_str().to_owned(),
+                    },
+                    Some(ValveReasonTag::PeerLoopBrake),
+                    "valve.action.peer_loop_brake".to_owned(),
+                );
+            }
+        }
+
         if self.config.is_rule_active(ValveRuleToggle::BudgetGuard)
             && self.snapshot.daily_tokens_used >= self.config.daily_token_budget
         {
@@ -570,6 +832,8 @@ impl Valve {
             false
         };
 
+        let is_trusted_owner_chain = effective_taint == Taint::Trusted && roles.is_owner;
+
         if self.config.is_rule_active(ValveRuleToggle::TaintBlocking) {
             match check_action_under_taint(
                 effective_taint,
@@ -601,6 +865,7 @@ impl Valve {
                                 t_now: self.snapshot.t_now,
                                 is_embodied,
                                 reason_tag: ValveReasonTag::TaintBlocked,
+                                is_trusted_owner_chain,
                             },
                             &self.config,
                         );
@@ -649,6 +914,7 @@ impl Valve {
                         t_now: self.snapshot.t_now,
                         is_embodied,
                         reason_tag: ValveReasonTag::PendingApproval,
+                        is_trusted_owner_chain,
                     },
                     &self.config,
                 );
@@ -726,6 +992,11 @@ impl Valve {
                         queued_at_ms: self.snapshot.t_now,
                         scheduled_at_ms,
                         reason,
+                        topic: action
+                            .correlation_id
+                            .as_ref()
+                            .map(|c| c.as_str().to_owned()),
+                        expectation_id: None,
                     });
                     if !inserted {
                         return (

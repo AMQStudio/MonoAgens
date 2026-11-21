@@ -3708,6 +3708,10 @@ impl<'a> BinReader<'a> {
         Self { buf, pos: 0 }
     }
 
+    pub(crate) const fn remaining(&self) -> usize {
+        self.buf.len().saturating_sub(self.pos)
+    }
+
     pub(crate) fn fixed<const N: usize>(&mut self) -> Result<[u8; N], EventFormatError> {
         if self.pos + N > self.buf.len() {
             return Err(EventFormatError::MalformedRecord(

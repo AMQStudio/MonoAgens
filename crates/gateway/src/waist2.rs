@@ -2,7 +2,7 @@
 //! action settlement (`R-36`, `R-45`, `R-50`).
 
 use core::fmt;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -11,13 +11,13 @@ use std::sync::{Arc, Mutex};
 use monoagens_core::Input;
 use monoagens_protocol::{
     Action, ActionCancelParams, ActionCancelResult, ActionExecuteParams, ActionExecuteResult,
-    ActionId, ActionReceiptParams, ActionReceiptResult, BlobGetParams, BlobPutParams,
-    BodyDiscoverParams, BodyDiscoverResult, BodyHeartbeatParams, BodyHeartbeatResult, BodyId,
-    BodyState, BodyStatus, CURRENT_PROTOCOL_VERSION, CapabilityDescriptor, CapabilityId,
-    MAX_INLINE_ATTACHMENT_BYTES, PerceptEmitParams, PerceptEmitResult, PlaceId, Receipt,
-    ReceiptOutcome, RpcId, StateQueryParams, StateQueryResult, TerminationReason, Time,
-    Waist2Error, Waist2Headers, Waist2Method, Waist2Request, Waist2Response, check_version,
-    sort_capabilities,
+    ActionId, ActionReceiptParams, ActionReceiptResult, ApprovalResolveParams,
+    ApprovalResolveResult, BlobGetParams, BlobPutParams, BodyDiscoverParams, BodyDiscoverResult,
+    BodyHeartbeatParams, BodyHeartbeatResult, BodyId, BodyState, BodyStatus,
+    CURRENT_PROTOCOL_VERSION, CapabilityDescriptor, CapabilityId, MAX_INLINE_ATTACHMENT_BYTES,
+    PerceptEmitParams, PerceptEmitResult, PlaceId, Receipt, ReceiptOutcome, RpcId,
+    StateQueryParams, StateQueryResult, TerminationReason, Time, Waist2Error, Waist2Headers,
+    Waist2Method, Waist2Request, Waist2Response, check_version, sort_capabilities,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -30,7 +30,7 @@ use tokio::sync::{Notify, mpsc, oneshot};
 use crate::clock::{Clock, run_with_clock_timeout};
 use crate::cues::{CueRecorder, WaitCueGuard, spawn_wait_cue_monitor};
 use crate::logging::{DiagnosticSink, LogLevel};
-use crate::runtime::IngressQueue;
+use crate::runtime::{ControlCommand, IngressQueue};
 use crate::seams::GatewaySeams;
 
 const RPC_METHOD_NOT_FOUND: i32 = -32601;
@@ -342,6 +342,7 @@ pub struct BodyRouter {
     diagnostics: DiagnosticSink,
     cues: CueRecorder,
     clock: Arc<dyn Clock>,
+    control_tx: Arc<Mutex<Option<mpsc::UnboundedSender<ControlCommand>>>>,
     action_timeout_ms: u64,
     hook_timeout_ms: u64,
     working_cue_ms: u64,
@@ -352,6 +353,7 @@ pub struct BodyRouter {
 struct RouterState {
     bodies: BTreeMap<BodyId, BodyConnection>,
     place_to_body: BTreeMap<PlaceId, BodyId>,
+    attested_oob_bodies: BTreeSet<BodyId>,
     children: Vec<Child>,
 }
 
@@ -378,11 +380,35 @@ impl BodyRouter {
             diagnostics,
             cues,
             clock,
+            control_tx: Arc::new(Mutex::new(None)),
             action_timeout_ms,
             hook_timeout_ms,
             working_cue_ms,
             progress_note_ms,
         }
+    }
+
+    pub(crate) fn set_control_tx(&self, tx: mpsc::UnboundedSender<ControlCommand>) {
+        *self.control_tx.lock().expect("control_tx lock") = Some(tx);
+    }
+
+    /// Registers a `BodyId` as an attested out-of-band owner control channel permitted to
+    /// submit `approval/resolve` (`I-HITL`). Unregistered chat bodies fail closed.
+    pub fn register_out_of_band_control_body(&self, body_id: BodyId) {
+        self.inner
+            .lock()
+            .expect("router lock")
+            .attested_oob_bodies
+            .insert(body_id);
+    }
+
+    /// Revokes out-of-band control status for `body_id`.
+    pub fn unregister_out_of_band_control_body(&self, body_id: &BodyId) {
+        self.inner
+            .lock()
+            .expect("router lock")
+            .attested_oob_bodies
+            .remove(body_id);
     }
 
     /// Returns the shared [`ActionSettlementTracker`].
@@ -715,12 +741,8 @@ impl BodyRouter {
             "blob/put" => self.handle_blob_put(rpc_id.clone(), params),
             "blob/get" => self.handle_blob_get(rpc_id.clone(), params),
             "approval/resolve" => {
-                // Seam 6.x: absent unless wired.
-                serialize_err_response(
-                    rpc_id.clone(),
-                    RPC_METHOD_NOT_FOUND,
-                    "approval/resolve capability is not wired in this Gateway",
-                )
+                self.handle_approval_resolve(rpc_id.clone(), params, body_id)
+                    .await
             }
             other => serialize_err_response(
                 rpc_id.clone(),
@@ -951,6 +973,75 @@ impl BodyRouter {
             },
         ))
         .ok()
+    }
+
+    async fn handle_approval_resolve(
+        &self,
+        rpc_id: Option<RpcId>,
+        params: Value,
+        body_id: Option<&BodyId>,
+    ) -> Option<String> {
+        let parsed: ApprovalResolveParams = match serde_json::from_value(params) {
+            Ok(p) => p,
+            Err(err) => {
+                return serialize_err_response(
+                    rpc_id,
+                    RPC_INVALID_PARAMS,
+                    &format!("invalid approval/resolve params: {err}"),
+                );
+            }
+        };
+        if let Err(err) = check_version(parsed.headers.protocol_version, CURRENT_PROTOCOL_VERSION) {
+            return serde_json::to_string(&Waist2Response::<ApprovalResolveResult>::err(
+                rpc_id,
+                Waist2Error::unsupported_version(err.received, err.supported),
+            ))
+            .ok();
+        }
+        let Some(control_tx) = self.control_tx.lock().expect("control_tx lock").clone() else {
+            return serialize_err_response(
+                rpc_id,
+                RPC_METHOD_NOT_FOUND,
+                "approval/resolve capability is not wired in this Gateway",
+            );
+        };
+
+        let is_attested_oob = body_id.is_some_and(|bid| {
+            self.inner
+                .lock()
+                .expect("router lock")
+                .attested_oob_bodies
+                .contains(bid)
+        });
+        let from_in_band_body = if is_attested_oob {
+            None
+        } else {
+            Some(
+                body_id
+                    .cloned()
+                    .unwrap_or_else(|| BodyId::new("unknown_in_band_body")),
+            )
+        };
+
+        let (tx, rx) = oneshot::channel();
+        if control_tx
+            .send(ControlCommand::ResolveApproval {
+                params: Box::new(parsed),
+                from_in_band_body,
+                reply: tx,
+            })
+            .is_err()
+        {
+            return serialize_err_response(rpc_id, RPC_BACKPRESSURE, "owner task exited");
+        }
+        match rx.await {
+            Ok(Ok(res)) => serde_json::to_string(&Waist2Response::ok(rpc_id, res)).ok(),
+            Ok(Err(werr)) => {
+                serde_json::to_string(&Waist2Response::<ApprovalResolveResult>::err(rpc_id, werr))
+                    .ok()
+            }
+            Err(_) => serialize_err_response(rpc_id, RPC_BACKPRESSURE, "owner task exited"),
+        }
     }
 
     fn handle_blob_put(&self, rpc_id: Option<RpcId>, params: Value) -> Option<String> {

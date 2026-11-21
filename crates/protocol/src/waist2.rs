@@ -535,6 +535,8 @@ pub struct PerceptEmitParams {
     pub attachments: Vec<AttachmentHandle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dialogue_act_gap: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_expertise_margin: Option<f32>,
 }
 
 const fn default_untrusted() -> Taint {
@@ -570,6 +572,7 @@ impl PerceptEmitParams {
             embeddings: percept.embeddings,
             attachments: percept.attachments,
             dialogue_act_gap: percept.dialogue_act_gap,
+            peer_expertise_margin: percept.peer_expertise_margin,
         }
     }
 
@@ -606,6 +609,7 @@ impl PerceptEmitParams {
             embeddings: self.embeddings,
             attachments: self.attachments,
             dialogue_act_gap: self.dialogue_act_gap,
+            peer_expertise_margin: self.peer_expertise_margin,
         };
         percept.validate(supported_version)?;
         Ok(percept)
@@ -693,6 +697,10 @@ pub struct ApprovalResolveParams {
     pub approved: bool,
     pub resolver: ActorId,
     pub resolved_at_ms: Time,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    #[serde(default)]
+    pub out_of_band_channel: bool,
 }
 
 /// Result for `approval/resolve`.

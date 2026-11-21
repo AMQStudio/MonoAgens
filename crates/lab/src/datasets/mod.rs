@@ -46,8 +46,9 @@ pub use framework::{
     JudgeExecutionConfig, SILENT_THINK_JSON, SamplingResult, SamplingRule, Scorer,
     ScorerDetailRecorder, ScorerItemOutcome, ScorerMetric, ScorerReport, SplitMix64,
     TranscriptRecord, assert_visiblescope_gold_evidence, cluster_bootstrap_ci, conversation_id_for,
-    execute_external_item, execute_external_item_with_embedder, load_or_convert_cached,
-    make_text_percept, sample_items_stratified, validate_semantic_embedder,
+    execute_external_item, execute_external_item_with_embedder,
+    execute_external_item_with_model_and_state, load_or_convert_cached, make_text_percept,
+    sample_items_stratified, validate_semantic_embedder,
 };
 pub use group_mem_bench::{GroupMemBenchConverter, GroupMemBenchScorer};
 pub use hi_tom::{HiTomConverter, HiTomScorer};

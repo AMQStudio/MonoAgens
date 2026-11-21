@@ -244,6 +244,17 @@ fn timing_budgets_sealed_refusal_and_22_metric_suite_coverage() {
         "hard_forget_resurrection",
         "barge_in_latency_ms",
         "cache_share",
+        "trajectory_checkpoint_ece",
+        "early_signed_cal_error",
+        "late_signed_cal_error",
+        "stale_replan_leak_rate",
+        "self_repair_patience_rate",
+        "annoyance_index",
+        "warning_over_abstention_delta",
+        "paired_abstention_accuracy",
+        "hitl_escalation_rate_per_day",
+        "hitl_flood_rejection_rate",
+        "inalienable_approval_spoof_blocks",
     ] {
         assert!(
             all_produced_keys.contains(required_key),

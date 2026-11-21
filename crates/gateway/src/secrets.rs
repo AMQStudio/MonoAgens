@@ -68,6 +68,9 @@ impl From<SecretError> for SecretsLoadError {
 /// Canonical environment variable for attachment AEAD master key material.
 pub const ENV_ATTACHMENT_MASTER_KEY: &str = "MONOAGENS_ATTACHMENT_MASTER_KEY";
 
+/// Canonical environment variable for out-of-band `I-HITL` approval attestation secret (`C-5`).
+pub const ENV_APPROVAL_ATTESTATION_KEY: &str = "MONOAGENS_APPROVAL_ATTESTATION_KEY";
+
 /// Canonical forbidden key names that must never appear with values inside `monoagens.toml`.
 #[must_use]
 pub fn is_forbidden_secret_key(key: &str) -> bool {
@@ -95,6 +98,9 @@ pub fn is_forbidden_secret_key(key: &str) -> bool {
             | "monoagens_embed_api_key"
             | "attachment_master_key"
             | "monoagens_attachment_master_key"
+            | "attestation_key"
+            | "approval_attestation_key"
+            | "monoagens_approval_attestation_key"
             | "master_key"
             | "aead_key"
             | "encryption_key"
@@ -360,11 +366,30 @@ impl fmt::Debug for AttachmentSecrets {
     }
 }
 
-/// Combined provider and attachment custody secrets loaded by the Gateway secrets layer.
+/// Secret key material for out-of-band `I-HITL` approval MAC verification (`C-5`), loaded
+/// exclusively from `secrets.toml` or environment variables (never from `monoagens.toml` or Core).
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct ApprovalSecrets {
+    pub attestation_key: Option<SecretString>,
+}
+
+impl fmt::Debug for ApprovalSecrets {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ApprovalSecrets")
+            .field(
+                "attestation_key",
+                &self.attestation_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
+}
+
+/// Combined provider, attachment custody, and approval attestation secrets loaded by Gateway.
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct GatewaySecrets {
     pub providers: ProviderSecrets,
     pub attachments: AttachmentSecrets,
+    pub approvals: ApprovalSecrets,
 }
 
 /// Loads [`AttachmentSecrets`] from `secrets.toml` (`[attachments].master_key`,
@@ -398,7 +423,48 @@ where
     })
 }
 
-/// Loads both [`ProviderSecrets`] and [`AttachmentSecrets`] from `secrets.toml` and `env_lookup`.
+/// Loads [`ApprovalSecrets`] from `secrets.toml` (`[approvals].attestation_key`,
+/// `approval_attestation_key`, or `MONOAGENS_APPROVAL_ATTESTATION_KEY`) and environment variables,
+/// with environment variables taking precedence.
+pub fn load_approval_secrets<F>(
+    secrets_path: Option<&Path>,
+    env_lookup: F,
+) -> Result<ApprovalSecrets, SecretsLoadError>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let file_key = match secrets_path {
+        Some(path) if path.exists() => {
+            let raw = std::fs::read_to_string(path).map_err(|err| SecretsLoadError::Io {
+                path: path.display().to_string(),
+                detail: err.to_string(),
+            })?;
+            parse_approval_attestation_key_str(&raw, path)?
+        }
+        _ => None,
+    };
+
+    let env_key = env_lookup(ENV_APPROVAL_ATTESTATION_KEY)
+        .map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
+        .map(SecretString::new);
+
+    Ok(ApprovalSecrets {
+        attestation_key: env_key.or(file_key),
+    })
+}
+
+/// Derives the 32-byte keyed BLAKE3-MAC approval attestation key from [`ApprovalSecrets`],
+/// falling back to [`monoagens_valve::default_test_approval_mac_key`] when unconfigured.
+#[must_use]
+pub fn resolve_approval_mac_key(secrets: &ApprovalSecrets) -> [u8; 32] {
+    match &secrets.attestation_key {
+        Some(secret) => monoagens_valve::derive_approval_mac_key(secret.expose().as_bytes()),
+        None => monoagens_valve::default_test_approval_mac_key(),
+    }
+}
+
+/// Loads [`ProviderSecrets`], [`AttachmentSecrets`], and [`ApprovalSecrets`] from `secrets.toml` and `env_lookup`.
 pub fn load_gateway_secrets<F>(
     secrets_path: Option<&Path>,
     env_lookup: F,
@@ -407,11 +473,64 @@ where
     F: Fn(&str) -> Option<String>,
 {
     let providers = load_provider_secrets(secrets_path, &env_lookup)?;
-    let attachments = load_attachment_secrets(secrets_path, env_lookup)?;
+    let attachments = load_attachment_secrets(secrets_path, &env_lookup)?;
+    let approvals = load_approval_secrets(secrets_path, env_lookup)?;
     Ok(GatewaySecrets {
         providers,
         attachments,
+        approvals,
     })
+}
+
+fn parse_approval_attestation_key_str(
+    raw: &str,
+    path: &Path,
+) -> Result<Option<SecretString>, SecretsLoadError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.starts_with('{') {
+        let val: serde_json::Value =
+            serde_json::from_str(trimmed).map_err(|err| SecretsLoadError::Parse {
+                path: path.display().to_string(),
+                detail: format!("invalid JSON secrets file: {err}"),
+            })?;
+        for key in [
+            "approval_attestation_key",
+            ENV_APPROVAL_ATTESTATION_KEY,
+            "attestation_key",
+        ] {
+            if let Some(s) = val.get(key).and_then(serde_json::Value::as_str) {
+                let t = s.trim();
+                if !t.is_empty() {
+                    return Ok(Some(SecretString::new(t.to_owned())));
+                }
+            }
+        }
+        return Ok(None);
+    }
+
+    let doc = raw
+        .parse::<DocumentMut>()
+        .map_err(|err| SecretsLoadError::Parse {
+            path: path.display().to_string(),
+            detail: err.to_string(),
+        })?;
+    let mut flat: BTreeMap<String, String> = BTreeMap::new();
+    collect_toml_strings(doc.as_table(), "", &mut flat, path)?;
+
+    let found = [
+        "approvals.attestation_key",
+        "approvals.approval_attestation_key",
+        "approval_attestation_key",
+        ENV_APPROVAL_ATTESTATION_KEY,
+        "attestation_key",
+    ]
+    .iter()
+    .find_map(|k| flat.get(*k).cloned());
+
+    Ok(found.map(SecretString::new))
 }
 
 fn parse_attachment_master_key_str(

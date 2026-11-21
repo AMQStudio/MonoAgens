@@ -1,0 +1,511 @@
+{
+  "id": "val-03-7day-trajectory-calibration",
+  "name": "Validation 03 7-Day Continuous Trajectory Calibration & VisibleScope Privacy",
+  "set": "validation",
+  "start_time_ms": 0,
+  "model_latency_ms": 10,
+  "model_id": "scripted",
+  "embedder_id": "none",
+  "online_adaptation": true,
+  "bodies": [
+    {
+      "body_id": "chat-body",
+      "places": [
+        "room:dm_alice",
+        "room:team"
+      ],
+      "capabilities": [
+        {
+          "id": "chat.speak",
+          "description": "Capability chat.speak",
+          "places": [
+            "room:dm_alice",
+            "room:team"
+          ],
+          "flags": {
+            "communicative": true,
+            "identity_changing": false,
+            "irreversible": false
+          },
+          "typical_latency_ms": 10,
+          "capability_schema_hash": "sha256:cap-chat.speak",
+          "sensed_effect": null
+        }
+      ],
+      "action_scripts": []
+    }
+  ],
+  "events": [
+    {
+      "at_ms": 1000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:dm_alice",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 1000,
+        "payload": [
+          100,
+          97,
+          121,
+          49,
+          32,
+          112,
+          114,
+          105,
+          118,
+          97,
+          116,
+          101,
+          32,
+          115,
+          101,
+          99,
+          114,
+          101,
+          116
+        ],
+        "taint": "trusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 86401000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "bob",
+        "origin_actor": "bob",
+        "place": "room:team",
+        "audience": [
+          "alice",
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 86401000,
+        "payload": [
+          100,
+          97,
+          121,
+          50,
+          32,
+          114,
+          111,
+          117,
+          116,
+          105,
+          110,
+          101,
+          32,
+          112,
+          105,
+          110,
+          103
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 172801000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:team",
+        "audience": [
+          "alice",
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 172801000,
+        "payload": [
+          100,
+          97,
+          121,
+          51,
+          32,
+          115,
+          111,
+          117,
+          108,
+          32,
+          115,
+          116,
+          97,
+          116,
+          117,
+          115
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 259201000,
+      "body_id": null,
+      "event": {
+        "kind": "trigger_sleep"
+      }
+    },
+    {
+      "at_ms": 345601000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "bob",
+        "origin_actor": "bob",
+        "place": "room:team",
+        "audience": [
+          "alice",
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 345601000,
+        "payload": [
+          100,
+          97,
+          121,
+          53,
+          32,
+          112,
+          105,
+          110,
+          103
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 432001000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:team",
+        "audience": [
+          "alice",
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 432001000,
+        "payload": [
+          100,
+          97,
+          121,
+          54,
+          32,
+          115,
+          111,
+          117,
+          108,
+          32,
+          114,
+          101,
+          99,
+          97,
+          112
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 518401000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:dm_alice",
+        "audience": [
+          "alice",
+          "soul"
+        ],
+        "timestamp_ms": 518401000,
+        "payload": [
+          100,
+          97,
+          121,
+          55,
+          32,
+          115,
+          111,
+          117,
+          108,
+          32,
+          99,
+          108,
+          111,
+          115,
+          101,
+          111,
+          117,
+          116
+        ],
+        "taint": "trusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 518402000,
+      "body_id": null,
+      "event": {
+        "kind": "record_calibration",
+        "conf_0_20": 17,
+        "correct": true
+      }
+    },
+    {
+      "at_ms": 518403000,
+      "body_id": null,
+      "event": {
+        "kind": "record_calibration",
+        "conf_0_20": 3,
+        "correct": false
+      }
+    },
+    {
+      "at_ms": 518404000,
+      "body_id": null,
+      "event": {
+        "kind": "trigger_sleep"
+      }
+    }
+  ],
+  "scripted_model": [
+    {
+      "wake_index": 0,
+      "acts": [
+        {
+          "act": "act",
+          "capability_id": "chat.speak",
+          "places": [
+            "room:dm_alice"
+          ],
+          "people": [
+            "alice"
+          ],
+          "payload": [
+            78,
+            111,
+            116,
+            101,
+            100,
+            32,
+            105,
+            110,
+            32,
+            68,
+            77
+          ],
+          "motivation": 4,
+          "confidence_0_20": 17,
+          "used_ids": [],
+          "expected": null,
+          "domain": null
+        }
+      ],
+      "tokens_in": 40,
+      "tokens_out": 15
+    },
+    {
+      "wake_index": 1,
+      "acts": [
+        {
+          "act": "act",
+          "capability_id": "chat.speak",
+          "places": [
+            "room:team"
+          ],
+          "people": [
+            "alice"
+          ],
+          "payload": [
+            68,
+            97,
+            121,
+            32,
+            51,
+            32,
+            116,
+            101,
+            97,
+            109,
+            32,
+            115,
+            116,
+            97,
+            116,
+            117,
+            115
+          ],
+          "motivation": 4,
+          "confidence_0_20": 17,
+          "used_ids": [],
+          "expected": null,
+          "domain": null
+        }
+      ],
+      "tokens_in": 40,
+      "tokens_out": 15
+    },
+    {
+      "wake_index": 2,
+      "acts": [
+        {
+          "act": "act",
+          "capability_id": "chat.speak",
+          "places": [
+            "room:team"
+          ],
+          "people": [
+            "alice"
+          ],
+          "payload": [
+            68,
+            97,
+            121,
+            32,
+            54,
+            32,
+            114,
+            101,
+            99,
+            97,
+            112
+          ],
+          "motivation": 4,
+          "confidence_0_20": 17,
+          "used_ids": [],
+          "expected": null,
+          "domain": null
+        }
+      ],
+      "tokens_in": 40,
+      "tokens_out": 15
+    },
+    {
+      "wake_index": 3,
+      "acts": [
+        {
+          "act": "act",
+          "capability_id": "chat.speak",
+          "places": [
+            "room:dm_alice"
+          ],
+          "people": [
+            "alice"
+          ],
+          "payload": [
+            68,
+            97,
+            121,
+            32,
+            55,
+            32,
+            99,
+            108,
+            111,
+            115,
+            101,
+            111,
+            117,
+            116
+          ],
+          "motivation": 4,
+          "confidence_0_20": 17,
+          "used_ids": [],
+          "expected": null,
+          "domain": null
+        }
+      ],
+      "tokens_in": 40,
+      "tokens_out": 15
+    }
+  ],
+  "checks": [
+    {
+      "check": "action_in_place",
+      "name": "dm_alice_spoken",
+      "kind": "structural",
+      "place": "room:dm_alice",
+      "capability_id": "chat.speak",
+      "after_ms": 1000,
+      "before_ms": 600000000,
+      "expected_present": true
+    },
+    {
+      "check": "action_in_place",
+      "name": "team_spoken",
+      "kind": "structural",
+      "place": "room:team",
+      "capability_id": "chat.speak",
+      "after_ms": 1000,
+      "before_ms": 600000000,
+      "expected_present": true
+    },
+    {
+      "check": "context_contains",
+      "name": "dm_secret_excluded_from_team_context",
+      "kind": "structural",
+      "item_event_id": 1,
+      "label": "room:team",
+      "expected_present": false
+    }
+  ],
+  "annotations": {
+    "event_annotations": {
+      "0": {
+        "warranted": "speak",
+        "addressed_to_soul": true
+      },
+      "1": {
+        "warranted": "silent"
+      },
+      "2": {
+        "warranted": "speak",
+        "addressed_to_soul": true
+      },
+      "4": {
+        "warranted": "silent"
+      },
+      "5": {
+        "warranted": "speak",
+        "addressed_to_soul": true
+      },
+      "6": {
+        "warranted": "speak",
+        "addressed_to_soul": true
+      }
+    },
+    "participant_count": 3,
+    "delta_ni_measured": 0.0
+  }
+}

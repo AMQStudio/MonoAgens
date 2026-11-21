@@ -355,6 +355,13 @@
     "payload": {
       "$ref": "#/$defs/OpaquePayload"
     },
+    "peer_expertise_margin": {
+      "format": "float",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
     "place": {
       "$ref": "#/$defs/PlaceId"
     },

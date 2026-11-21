@@ -277,6 +277,7 @@ impl<T: TtsPlaybackSink> VoiceBody<T> {
             embeddings: Vec::new(),
             attachments: Vec::new(),
             dialogue_act_gap: None,
+            peer_expertise_margin: None,
         };
 
         let decision = self.barge_monitor.observe(vad_prob, frame_ms, now_ms);

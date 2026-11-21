@@ -448,6 +448,8 @@ fn all_twelve_method_envelopes_validate_against_their_generated_schemas() {
             approved: true,
             resolver: actor.clone(),
             resolved_at_ms: Time::from_millis(300),
+            signature: None,
+            out_of_band_channel: false,
         },
     );
     assert_validates_against(

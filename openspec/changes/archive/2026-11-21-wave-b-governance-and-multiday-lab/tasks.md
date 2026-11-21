@@ -1,0 +1,32 @@
+# Tasks
+
+## 1. Track 1 — Decoupled Inalienable HITL (`approval/resolve`), Anti-Fatigue & `Verify-Before-Abstain` (`wave-b-hitl`)
+
+- [x] 1.1 Add strictly additive `#[serde(default)]` `signature: Option<String>` and `out_of_band_channel: bool` fields to `ApprovalResolveParams` in `crates/protocol/src/waist2.rs` with canonical signing preimage + keyed BLAKE3-MAC verification helper in `crates/valve/src/approvals.rs`, replacing `!signature.trim().is_empty()` and rejecting non-out-of-band / invalid-signature resolutions (`cargo test -p monoagens-protocol -p monoagens-valve`).
+- [x] 1.2 Implement event-sourced `ApprovalManager::replay_from_events` and `DigestQueue` restart projection + pre-drain reconsider-before-send cancellation (`cancel_matching`) + trusted/tainted hourly quota partitioning (`MIN_TRUSTED_SLOTS_PER_HOUR = 2`, `MAX_UNTRUSTED_PROMPTS_PER_HOUR = 2`) and rubber-stamp telemetry in `crates/valve/src/{approvals,quiet_hours,valve}.rs`; add unit tests for restart recovery, untrusted flood vs trusted owner slot reservation, and stale digest cancellation (`cargo test -p monoagens-valve`).
+- [x] 1.3 Add structural provenance framing (`[TRUSTED_VALVE_SNAPSHOT]` / `[OWNER_MEMORY]` vs `[UNTRUSTED_PERCEPT]` / `[PROVISIONAL]`) and deterministic `Verify-Before-Abstain` guidance (zero word lists) in Valve's `[SELF_GUIDE]` Context Door (`crates/valve/src/` & `crates/reason/src/render.rs` if rendered), verified by unit tests (`cargo test -p monoagens-valve -p monoagens-reason`).
+- [x] 1.4 Wire `approval/resolve` end-to-end across `crates/gateway/src/{waist2,seams,runtime}.rs` (`ControlCommand::ResolveApproval` into `OwnerTaskContext` via a concrete `ValveDoorController` implementing `DoorController::resolve_approval`, rejecting untrusted in-band chat bodies and persisting resolution events before action re-dispatch), and wire `crates/cli/src/lib.rs` `monoagens approvals list/grant/deny` with replayed `state_epoch` (fixing hardcoded `0`) and a structured 3-line impact card (`cargo test -p monoagens-gateway -p monoagens-cli`).
+
+## 2. Track 2 — Multi-Agent Group Chat Coordination (`wave-b-multibot`)
+
+- [x] 2.1 Add strictly additive `#[serde(default)]` `automated_peer: bool` on `ActorFacts` and `peer_expertise_margin: Option<f32>` on `Percept` in `crates/protocol/src/message.rs`, preserving legacy JSON deserialization compatibility (`cargo test -p monoagens-protocol`).
+- [x] 2.2 Add deterministic Valve `PeerLoopBrake` (`ValveReasonTag::PeerLoopBrake`, `ValveRuleToggle::PeerLoopBrake`, `max_consecutive_automated_turns = 4` per place resetting to `0` on any non-automated turn) and `max_a2a_hops = 3` in `crates/valve/src/{config,snapshot,valve}.rs`, plus `hop_count` / `visited_agents` cycle detection failing closed (`ERR_A2A_CYCLE`) in `bodies/plugin-a2a-bridge/src/`; add unit tests for flat-room bot ping-pong, human reset, and transitive A2A cycle rejection (`cargo test -p monoagens-valve -p plugin-a2a-bridge`).
+- [x] 2.3 Track `automated_peer` and `consecutive_automated_turns_by_place` in `CoreState` (`crates/core/src/state/mod.rs`), gate `CommitmentInputs::turn_allocated` bypass when an automated peer repeatedly addresses Soul after `consecutive_automated_turns >= 2`, and add deterministic `SeededRng` per-soul jitter scaled by `(1 + 2 * peer_expertise_margin)` to `OpenWait.due_ms` when peer agents or `peer_expertise_margin > 0` are active (`crates/core/src/{gate/decide,turn/step}.rs`); verify with unit tests confirming human-only `dev-08` timing stays regression-free while multi-bot rooms yield cleanly without chorus collisions (`cargo test -p monoagens-core`).
+
+## 3. Track 3 — Multi-Day Lab Metrics, Stateful `pm_bench` & 6 Offline Scenarios (`wave-b-lab`)
+
+- [x] 3.1 Upgrade `crates/lab/src/metrics.rs` to compute true multi-checkpoint `trajectory_checkpoint_ece` (`early_signed_cal_error`, `late_signed_cal_error`, preserving existing `tc_ece`), `stale_replan_leak_rate`, `self_repair_patience_rate`, `annoyance_index`, `warning_over_abstention_delta`, `paired_abstention_accuracy`, `hitl_escalation_rate_per_day`, `hitl_flood_rejection_rate`, and `inalienable_approval_spoof_blocks`, with unit tests verifying each metric (`cargo test -p monoagens-lab metrics`).
+- [x] 3.2 Add opt-in `HistoryMode::LiveSequential` continuous-timeline execution mode in `crates/lab/src/datasets/pm_bench.rs` (preserving existing `StaticSilent` behavior) and add a test confirming `ExpectationBook` and `place_memory` persist across simulated days (`cargo test -p monoagens-lab pm_bench`).
+- [x] 3.3 Author and validate the 6 new `$0` offline scenarios (strictly outside `lab/scenarios/sealed/`): `lab/scenarios/development/dev_09_multiday_replan_and_cancel.json`, `dev_10_multiparty_self_repair.json`, `dev_11_warning_over_abstention_dos.json`, `dev_12_approval_fatigue_and_ihitl.json`, `dev_13_multi_agent_pingpong_and_chorus.json`, and `lab/scenarios/validation/val_03_7day_trajectory_calibration.json`, ensuring all 6 parse, load, and pass Lab suite schema tests (`cargo test -p monoagens-lab`).
+
+## 4. Integration, Merge & End-to-End Offline Verification (Coordinator)
+
+- [x] 4.1 Merge Track 1 (`wave-b-hitl`), Track 2 (`wave-b-multibot`), and Track 3 (`wave-b-lab`) cleanly into the workspace and resolve any shared-file merges (`crates/valve/src/valve.rs`, `crates/protocol/`).
+- [x] 4.2 Run full workspace checks (`cargo test --workspace`, `cargo test -p monoagens-core --features tck-hooks`, `cargo clippy --workspace --all-targets -- -D warnings`, `cd training && uv run pytest -v`) and confirm zero warnings and zero regressions.
+- [x] 4.3 Build `./target/release/monoagens-lab` and run full 5-seed offline `--release` suites across `development` (`13` scenarios) and `validation` (`3` scenarios) + ablations (`$0` API cost, never touching `lab/scenarios/sealed/`), verifying Wave B scenarios & hard invariants (`delta_ni = 0`, `hard_forget = 0`, `self_echo = 0`) and recording Wave B results in `research/findings/2026-11-21-v2-offline-test-drive.md`.
+- [x] 4.4 Run `openspec validate wave-b-governance-and-multiday-lab --strict` and `node .gitnexus/run.cjs detect-changes --scope all --repo .` and ensure all checkboxes in `tasks.md` are marked `[x]`.
+
+## Workflow follow-up
+
+- Review Wave B diff and reports with the owner before committing or archiving `wave-b-governance-and-multiday-lab`.
+- Archive `wave-b-governance-and-multiday-lab` into `openspec/specs/` after review approval.

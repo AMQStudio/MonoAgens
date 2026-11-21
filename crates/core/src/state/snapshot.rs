@@ -40,7 +40,7 @@ use crate::neural::PlaceAdaptState;
 use crate::recall::{ImportanceInputs, MemoryBasis, MemoryEntry};
 
 const SNAPSHOT_MAGIC: &[u8; 4] = b"MGSN";
-const SNAPSHOT_VERSION: u16 = 11;
+const SNAPSHOT_VERSION: u16 = 12;
 
 pub fn encode_snapshot(state: &CoreState) -> Vec<u8> {
     let mut w = BinWriter::new();
@@ -297,6 +297,11 @@ pub fn encode_snapshot(state: &CoreState) -> Vec<u8> {
             None => w.u8(0),
         }
     }
+    w.u32(state.consecutive_automated_turns_by_place.len() as u32);
+    for (place, &count) in &state.consecutive_automated_turns_by_place {
+        w.str(place.as_str());
+        w.u32(count);
+    }
 
     w.finish()
 }
@@ -310,7 +315,7 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<CoreState, EventFormatError> {
         ));
     }
     let version = r.u16()?;
-    if version != 10 && version != SNAPSHOT_VERSION {
+    if !(10..=SNAPSHOT_VERSION).contains(&version) {
         return Err(EventFormatError::MalformedRecord(format!(
             "unsupported snapshot version {version} (supported 10..={SNAPSHOT_VERSION})"
         )));
@@ -725,6 +730,18 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<CoreState, EventFormatError> {
     } else {
         BTreeMap::new()
     };
+    let consecutive_automated_turns_by_place = if version >= 12 {
+        let cat_len = r.u32()? as usize;
+        let mut map = BTreeMap::new();
+        for _ in 0..cat_len {
+            let place = PlaceId::new(r.string()?);
+            let count = r.u32()?;
+            map.insert(place, count);
+        }
+        map
+    } else {
+        BTreeMap::new()
+    };
 
     let startup_recovery_pending = !unconsumed_inputs.is_empty();
     Ok(CoreState {
@@ -795,6 +812,7 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<CoreState, EventFormatError> {
         recorded_config,
         config_loaded_count,
         decision_neural_hints,
+        consecutive_automated_turns_by_place,
     })
 }
 
@@ -2451,6 +2469,7 @@ pub(crate) fn encode_actor_facts_from_msg(facts: &ActorFacts) -> Vec<u8> {
         beta_0: facts.beta_0,
         teacher_weight: facts.teacher_weight,
         trusted_origin: facts.trusted_origin,
+        automated_peer: facts.automated_peer,
     })
 }
 
@@ -2460,16 +2479,27 @@ fn encode_actor_facts(entry: &ActorFactsEntry) -> Vec<u8> {
     w.f64(entry.beta_0);
     w.f64(entry.teacher_weight);
     w.u8(u8::from(entry.trusted_origin));
+    w.u8(u8::from(entry.automated_peer));
     w.finish()
 }
 
 pub(crate) fn decode_actor_facts(bytes: &[u8]) -> Result<ActorFactsEntry, EventFormatError> {
     let mut r = BinReader::new(bytes);
+    let alpha_0 = r.f64()?;
+    let beta_0 = r.f64()?;
+    let teacher_weight = r.f64()?;
+    let trusted_origin = r.u8()? != 0;
+    let automated_peer = if r.remaining() > 0 {
+        r.u8()? != 0
+    } else {
+        false
+    };
     Ok(ActorFactsEntry {
-        alpha_0: r.f64()?,
-        beta_0: r.f64()?,
-        teacher_weight: r.f64()?,
-        trusted_origin: r.u8()? != 0,
+        alpha_0,
+        beta_0,
+        teacher_weight,
+        trusted_origin,
+        automated_peer,
     })
 }
 

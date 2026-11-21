@@ -11,6 +11,12 @@ use serde_json::{Value, json};
 /// A2A protocol version implemented by this bridge.
 pub const A2A_PROTOCOL_VERSION: &str = "1.0.1";
 
+/// Default maximum transitive A2A delegation hop count (`C-14`).
+pub const DEFAULT_MAX_A2A_HOPS: u8 = 3;
+
+/// Canonical refusal code emitted when an A2A delegation exceeds `max_a2a_hops` or revisits an agent.
+pub const ERR_A2A_CYCLE: &str = "ERR_A2A_CYCLE";
+
 /// A2A `v1.0.1` `AgentInterface` entry inside `AgentCard.supportedInterfaces`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -83,6 +89,8 @@ pub struct A2aMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
     pub parts: Vec<A2aPart>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
 }
 
 /// Status block inside an A2A `Task`.
@@ -98,6 +106,8 @@ pub struct A2aTaskStatus {
 pub struct A2aTask {
     pub id: String,
     pub status: A2aTaskStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
 }
 
 /// Union result returned by A2A `SendMessage`.
@@ -262,6 +272,7 @@ impl LocalMockA2aPeer {
                         }),
                         data: None,
                     }],
+                    metadata: None,
                 }),
             };
             return serde_json::to_value(A2aSendResult::Task {
@@ -270,10 +281,41 @@ impl LocalMockA2aPeer {
             .map_err(|e| (-32603, e.to_string()));
         }
 
+        let msg_hop = msg
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("hopCount").or_else(|| m.get("hop_count")))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let msg_visited: Vec<String> = msg
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("visitedAgents").or_else(|| m.get("visited_agents")))
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let self_visits = msg_visited
+            .iter()
+            .filter(|a| a.as_str() == self.card.name)
+            .count();
+
         self.next_task_seq += 1;
         let tid = format!("a2a-task-{}", self.next_task_seq);
 
-        let (state, polls_left, reply_text) = if text.trim() == "hold" {
+        let (state, polls_left, reply_text) = if msg_hop > u64::from(DEFAULT_MAX_A2A_HOPS)
+            || self_visits > 1
+        {
+            (
+                A2aTaskState::Rejected,
+                0,
+                format!("{ERR_A2A_CYCLE}: delegation hop/cycle limit exceeded"),
+            )
+        } else if text.trim() == "hold" {
             (
                 A2aTaskState::InputRequired,
                 0,
@@ -301,8 +343,10 @@ impl LocalMockA2aPeer {
                         text: Some(reply_text),
                         data: None,
                     }],
+                    metadata: msg.metadata.clone(),
                 }),
             },
+            metadata: msg.metadata,
         };
         self.tasks.insert(
             tid,
@@ -339,6 +383,7 @@ impl LocalMockA2aPeer {
                         text: Some(format!("A2A task '{tid}' completed")),
                         data: None,
                     }],
+                    metadata: None,
                 });
             }
         }

@@ -80,19 +80,15 @@ struct RawPmAction {
     id: String,
 }
 
-impl Converter for PmBenchConverter {
-    fn dataset_id(&self) -> &str {
-        "pm_bench"
-    }
-
-    fn converter_version(&self) -> &str {
-        "1.2.0"
-    }
-
-    fn convert(
+impl PmBenchConverter {
+    /// Converts `pm_bench` using the requested [`HistoryMode`] (`StaticSilent` by default, or
+    /// opt-in `LiveSequential` for continuous 7-day timeline execution preserving `ExpectationBook`
+    /// and per-place `place_memory` across simulated days).
+    pub fn convert_with_history_mode(
         &self,
         dataset_dir: &Path,
         manifest_entry: &DatasetManifestEntry,
+        history_mode: HistoryMode,
     ) -> Result<ConvertedDataset, LabError> {
         let raw = fs::read_to_string(dataset_dir.join("data/synthetic_week_v9.json"))?;
         let parsed: RawPmBenchFile = serde_json::from_str(&raw)
@@ -103,8 +99,10 @@ impl Converter for PmBenchConverter {
         let place = PlaceId::new("place:virtual_week_sim");
         let aud = Audience::new([env_actor.clone(), soul.clone()]);
         let base_ms: u64 = 1_700_000_000_000;
+        let is_sequential = history_mode == HistoryMode::LiveSequential;
 
         let mut items = Vec::new();
+        let mut sequential_probes = Vec::new();
         let mut gold_entries = Vec::new();
         let mut running_history = Vec::new();
         let mut running_ev = Vec::new();
@@ -155,9 +153,14 @@ impl Converter for PmBenchConverter {
                     updates.join("\n"),
                     menu.join("; ")
                 );
-                let item_id = format!("pm_step_{d_idx:02}_{s_idx:02}");
+                let step_key = format!("pm_step_{d_idx:02}_{s_idx:02}");
+                let (item_id, probe_id) = if is_sequential {
+                    ("pm_bench_live_sequential".to_owned(), step_key)
+                } else {
+                    (step_key, "choose".to_owned())
+                };
                 let probe = ExternalProbe {
-                    probe_id: "choose".to_owned(),
+                    probe_id: probe_id.clone(),
                     percept: make_text_percept(
                         "env:virtual_week",
                         place.as_str(),
@@ -165,7 +168,7 @@ impl Converter for PmBenchConverter {
                         ts,
                         &step_text,
                     ),
-                    isolated_checkpoint: true,
+                    isolated_checkpoint: !is_sequential,
                     probe_scope: VisibleScope::new(aud.clone(), Some(place.clone())),
                     expected_capability: None,
                 };
@@ -188,7 +191,7 @@ impl Converter for PmBenchConverter {
 
                 gold_entries.push(GoldEntry {
                     item_id: item_id.clone(),
-                    probe_id: "choose".to_owned(),
+                    probe_id,
                     cluster_id: "virtual_week_7d".to_owned(),
                     gold_answer: due.join(","),
                     accepted_answers: due,
@@ -198,16 +201,20 @@ impl Converter for PmBenchConverter {
                     metadata,
                 });
 
-                items.push(ExternalItem {
-                    item_id,
-                    cluster_id: "virtual_week_7d".to_owned(),
-                    strata_key: format!("day_{day_no}"),
-                    history: running_history.clone(),
-                    checkpoint_group: None,
-                    probes: vec![probe],
-                    history_mode: HistoryMode::StaticSilent,
-                    capabilities: Vec::new(),
-                });
+                if is_sequential {
+                    sequential_probes.push(probe);
+                } else {
+                    items.push(ExternalItem {
+                        item_id,
+                        cluster_id: "virtual_week_7d".to_owned(),
+                        strata_key: format!("day_{day_no}"),
+                        history: running_history.clone(),
+                        checkpoint_group: None,
+                        probes: vec![probe],
+                        history_mode,
+                        capabilities: Vec::new(),
+                    });
+                }
 
                 let turn_idx = running_history.len();
                 running_history.push(make_text_percept(
@@ -225,6 +232,19 @@ impl Converter for PmBenchConverter {
             }
         }
 
+        if is_sequential {
+            items.push(ExternalItem {
+                item_id: "pm_bench_live_sequential".to_owned(),
+                cluster_id: "virtual_week_7d".to_owned(),
+                strata_key: "week_7d".to_owned(),
+                history: Vec::new(),
+                checkpoint_group: None,
+                probes: sequential_probes,
+                history_mode: HistoryMode::LiveSequential,
+                capabilities: Vec::new(),
+            });
+        }
+
         Ok(ConvertedDataset {
             dataset_id: "pm_bench".to_owned(),
             pinned_revision: manifest_entry
@@ -238,6 +258,24 @@ impl Converter for PmBenchConverter {
                 entries: gold_entries,
             },
         })
+    }
+}
+
+impl Converter for PmBenchConverter {
+    fn dataset_id(&self) -> &str {
+        "pm_bench"
+    }
+
+    fn converter_version(&self) -> &str {
+        "1.2.0"
+    }
+
+    fn convert(
+        &self,
+        dataset_dir: &Path,
+        manifest_entry: &DatasetManifestEntry,
+    ) -> Result<ConvertedDataset, LabError> {
+        self.convert_with_history_mode(dataset_dir, manifest_entry, HistoryMode::StaticSilent)
     }
 }
 
@@ -331,5 +369,218 @@ impl Scorer for PmBenchScorer {
             judge_model: None,
             judge_prompt_version: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use monoagens_core::{CoreConfig, ModelPurpose, NeuralModel};
+    use monoagens_reason::model::{
+        ModelCallFailure, ModelCallSuccess, ModelProvider, ModelRequest, ScriptedModelProvider,
+        ScriptedReply,
+    };
+
+    use super::*;
+    use crate::CostGuard;
+    use crate::benchmark::BenchmarkDomain;
+    use crate::datasets::framework::{
+        assert_visiblescope_gold_evidence, execute_external_item_with_model_and_state,
+    };
+    use crate::datasets::manifest::{
+        ChecksumsRecorded, ContaminationRisk, CoreApplicability, DatasetAvailability, DatasetLane,
+        DatasetLicense, LicenseStatus, ManifestEntryKind,
+    };
+
+    fn test_manifest_entry() -> DatasetManifestEntry {
+        DatasetManifestEntry {
+            id: "pm_bench".to_owned(),
+            kind: ManifestEntryKind::Dataset,
+            domain: BenchmarkDomain::Prospective,
+            relative_dir: "pm_bench".to_owned(),
+            sources: Vec::new(),
+            license: DatasetLicense {
+                spdx: "MIT".to_owned(),
+                terms: "test".to_owned(),
+                status: LicenseStatus::Cleared,
+            },
+            availability: DatasetAvailability::Available,
+            core_applicability: CoreApplicability::CoreBehavioral,
+            lane: DatasetLane::CoreBehavioral,
+            contamination_risk: ContaminationRisk::Low,
+            contamination_note: "test".to_owned(),
+            reason: "pm_bench LiveSequential test".to_owned(),
+            split: None,
+            files: Vec::new(),
+            checksums_recorded: ChecksumsRecorded::Na,
+            checksums_recorded_date: None,
+            converter_version: "1.2.0".to_owned(),
+            scorer_version: "1.0.0".to_owned(),
+        }
+    }
+
+    #[test]
+    fn pm_bench_live_sequential_preserves_expectation_book_and_place_memory_across_days() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data_dir = dir.path().join("data");
+        fs::create_dir_all(&data_dir).expect("mkdir data");
+
+        let two_day_json = r#"{
+          "scenario_name": "two_day_live_seq_test",
+          "days": [
+            {
+              "name": "Monday",
+              "tasks": [{"id": "task_alpha", "label": "Prepare weekly brief"}],
+              "lures": [],
+              "steps": [
+                {
+                  "id": "d1_s1",
+                  "time": "09:00",
+                  "text": "Morning check-in on Monday.",
+                  "options": ["A) Start"],
+                  "updates": [],
+                  "groundtruth": {"actions": [{"id": "task_alpha"}]}
+                }
+              ]
+            },
+            {
+              "name": "Tuesday",
+              "tasks": [{"id": "task_beta", "label": "Send follow-up"}],
+              "lures": [],
+              "steps": [
+                {
+                  "id": "d2_s1",
+                  "time": "10:00",
+                  "text": "Morning check-in on Tuesday.",
+                  "options": ["A) Follow up"],
+                  "updates": [],
+                  "groundtruth": {"actions": [{"id": "task_beta"}]}
+                }
+              ]
+            }
+          ]
+        }"#;
+        fs::write(data_dir.join("synthetic_week_v9.json"), two_day_json).expect("write fixture");
+
+        let manifest = test_manifest_entry();
+        let static_conv = PmBenchConverter
+            .convert(dir.path(), &manifest)
+            .expect("static convert");
+        assert_eq!(static_conv.items.len(), 2);
+        assert!(
+            static_conv
+                .items
+                .iter()
+                .all(|it| it.history_mode == HistoryMode::StaticSilent)
+        );
+
+        let seq_conv = PmBenchConverter
+            .convert_with_history_mode(dir.path(), &manifest, HistoryMode::LiveSequential)
+            .expect("live_sequential convert");
+        assert_eq!(seq_conv.items.len(), 1);
+        let item = &seq_conv.items[0];
+        assert_eq!(item.history_mode, HistoryMode::LiveSequential);
+        assert_eq!(item.probes.len(), 2);
+        assert!(!item.probes[0].isolated_checkpoint);
+        assert_visiblescope_gold_evidence(&seq_conv.items, &seq_conv.gold_book)
+            .expect("visiblescope");
+
+        let model_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .join("crates/core/tests/fixtures/neural_phase1_golden.safetensors");
+        let model = Arc::new(
+            NeuralModel::from_safetensors_bytes(
+                &fs::read(&model_path).expect("read golden model"),
+                None,
+            )
+            .expect("load golden model"),
+        );
+
+        struct DayRoutingProvider;
+
+        impl ModelProvider for DayRoutingProvider {
+            fn provider_name(&self) -> &str {
+                "day_routing_test"
+            }
+
+            fn invoke(&self, request: &ModelRequest) -> Result<ModelCallSuccess, ModelCallFailure> {
+                let prompt_dbg = format!("{:?}", request.messages);
+                let reply = if request.purpose == ModelPurpose::Reason
+                    && prompt_dbg.contains("Day 2 (Tuesday)")
+                {
+                    r#"{"acts":[
+                      {"act":"act","capability_id":"chat.speak","places":["place:virtual_week_sim"],"people":[],"payload":[116,97,115,107,95,98,101,116,97],"motivation":4,"confidence_0_20":18,"used_ids":[]}
+                    ]}"#
+                } else if request.purpose == ModelPurpose::Reason
+                    && prompt_dbg.contains("Day 1 (Monday)")
+                {
+                    r#"{"acts":[
+                      {"act":"expect","expect_kind":"promise","about_ids":[],"places":["place:virtual_week_sim"],"people":["env:virtual_week"],"condition":"deliver weekly brief","due_ms":1700518400000,"expiry_ms":1700604800000},
+                      {"act":"act","capability_id":"chat.speak","places":["place:virtual_week_sim"],"people":[],"payload":[116,97,115,107,95,97,108,112,104,97],"motivation":4,"confidence_0_20":18,"used_ids":[]}
+                    ]}"#
+                } else {
+                    crate::datasets::SILENT_THINK_JSON
+                };
+                ScriptedModelProvider::from_replies([ScriptedReply::text(reply)]).invoke(request)
+            }
+        }
+
+        let provider = DayRoutingProvider;
+
+        let mut guard = CostGuard::default();
+        let (exec, final_state) = execute_external_item_with_model_and_state(
+            item,
+            &CoreConfig::default(),
+            1,
+            Some(model),
+            &provider,
+            "scripted",
+            false,
+            &mut guard,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("execute LiveSequential pm_bench");
+
+        assert_eq!(exec.history_reasoning_mode, "live_sequential");
+        assert_eq!(exec.predictions.len(), 2);
+        assert!(
+            final_state
+                .expectation_book
+                .expectations
+                .values()
+                .any(|e| e.condition == "deliver weekly brief" && e.is_active()),
+            "Day 1 ExpectationBook entry must persist into Day 2 in LiveSequential mode"
+        );
+        let h_place = final_state
+            .place_memory
+            .get(&PlaceId::new("place:virtual_week_sim"))
+            .expect("place_memory persisted for virtual_week_sim");
+        assert!(
+            h_place.iter().any(|&v| v.abs() > 1e-6),
+            "per-place recurrent place_memory h_t must be non-zero across simulated days"
+        );
+
+        let scored = PmBenchScorer
+            .score(
+                &exec.predictions,
+                &seq_conv.gold_book,
+                &JudgeExecutionConfig::default(),
+                1,
+            )
+            .expect("score LiveSequential pm_bench");
+        let f1 = scored
+            .metrics
+            .iter()
+            .find(|m| m.name == "set_f1")
+            .and_then(|m| m.value)
+            .unwrap();
+        assert!((f1 - 1.0).abs() < 1e-9);
     }
 }

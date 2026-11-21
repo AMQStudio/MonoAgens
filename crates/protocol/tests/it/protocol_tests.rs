@@ -81,6 +81,7 @@ fn all_waist1_messages_round_trip() {
         embed_model_ver: "embeddinggemma-2".to_owned(),
     }];
     percept.dialogue_act_gap = Some(0.91);
+    percept.peer_expertise_margin = Some(0.42);
     round_trip(&percept);
 
     let action = Action {
@@ -132,6 +133,7 @@ fn all_waist1_messages_round_trip() {
         beta_0: 1.0,
         teacher_weight: 1.0,
         trusted_origin: true,
+        automated_peer: true,
     };
     round_trip(&actor_facts);
 
@@ -385,6 +387,8 @@ fn waist2_all_twelve_methods_round_trip() {
             approved: true,
             resolver: actor.clone(),
             resolved_at_ms: Time::from_millis(300),
+            signature: Some("blake3-mac:deadbeef".to_owned()),
+            out_of_band_channel: true,
         }),
         Waist2Call::QuestionAnswer(QuestionAnswerParams {
             headers: headers.clone(),
@@ -846,4 +850,59 @@ fn waist2_typed_error_codes_and_taint_monotonicity() {
         Taint::join_min([Taint::Trusted, Taint::Provisional, Taint::Trusted]),
         Taint::Provisional
     );
+}
+
+#[test]
+fn approval_resolve_params_preserves_legacy_json_compatibility() {
+    let legacy_json = serde_json::json!({
+        "headers": {
+            "idempotency_key": "legacy-resolve-1",
+            "protocol_version": { "major": 1, "minor": 0 }
+        },
+        "action_id": "act-1",
+        "h_act": "blake3:abcd",
+        "state_epoch": 2,
+        "approved": true,
+        "resolver": "per_owner",
+        "resolved_at_ms": 123456
+    });
+    let parsed: ApprovalResolveParams =
+        serde_json::from_value(legacy_json).expect("legacy ApprovalResolveParams must deserialize");
+    assert_eq!(parsed.signature, None);
+    assert!(!parsed.out_of_band_channel);
+
+    let mut signed = parsed;
+    signed.signature = Some("blake3-mac:001122".to_owned());
+    signed.out_of_band_channel = true;
+    round_trip(&signed);
+}
+
+#[test]
+fn legacy_actor_facts_and_percept_deserialize_with_neutral_peer_defaults() {
+    let legacy_actor_facts = json!({
+        "protocol_version": { "major": 1, "minor": 0 },
+        "actor_id": "per_alice",
+        "alpha_0": 2.0,
+        "beta_0": 1.0,
+        "teacher_weight": 1.0,
+        "trusted_origin": false
+    });
+    let parsed_facts: ActorFacts =
+        serde_json::from_value(legacy_actor_facts).expect("legacy ActorFacts must deserialize");
+    assert!(!parsed_facts.automated_peer);
+
+    let legacy_percept = json!({
+        "actor": "per_alice",
+        "place": "chat:room-1",
+        "audience": ["per_alice", "soul"],
+        "timestamp_ms": 1_700_000_000_000u64,
+        "payload": [104, 105]
+    });
+    let parsed_percept: Percept =
+        serde_json::from_value(legacy_percept).expect("legacy Percept must deserialize");
+    assert_eq!(parsed_percept.peer_expertise_margin, None);
+
+    // Omitting None `peer_expertise_margin` on serialization preserves compact wire payloads.
+    let serialized = serde_json::to_value(&parsed_percept).expect("serialize");
+    assert!(serialized.get("peer_expertise_margin").is_none());
 }

@@ -154,6 +154,8 @@ fn a2a_bridge_http_loopback_peer_task_lifecycle_and_held_approval() {
             approved: true,
             resolver: ActorId::new("per_owner"),
             resolved_at_ms: Time::from_millis(3_000),
+            signature: None,
+            out_of_band_channel: false,
         },
     ))
     .expect("encode");
@@ -193,4 +195,84 @@ fn a2a_bridge_http_loopback_peer_task_lifecycle_and_held_approval() {
         })
         .expect_err("unknown capability");
     assert_eq!(err.error_code(), Some(Waist2ErrorCode::UnknownCapability));
+}
+
+#[test]
+fn a2a_bridge_rejects_transitive_cycles_and_hop_overflow_fail_closed() {
+    use monoagens_body_sdk::MetaValue;
+    use plugin_a2a_bridge::ERR_A2A_CYCLE;
+
+    let mut bridge = A2aBridgeBody::connect(
+        A2aBridgeConfig::new("planner"),
+        LocalMockA2aPeer::new("planner", "http://127.0.0.1:0/rpc"),
+    );
+
+    // 1. Hop count 2 (< max_a2a_hops=3) with disjoint visited_agents succeeds.
+    let mut h_ok = Waist2Headers::new("k-hop-2");
+    h_ok.meta.insert("hop_count".to_owned(), MetaValue::Int(2));
+    h_ok.meta.insert(
+        "visited_agents".to_owned(),
+        MetaValue::Array(vec![
+            MetaValue::String("triage".to_owned()),
+            MetaValue::String("reviewer".to_owned()),
+        ]),
+    );
+    let ok_res = bridge
+        .execute(ActionExecuteParams {
+            headers: h_ok,
+            action_id: ActionId::new("act-hop-ok"),
+            capability_id: CapabilityId::new("a2a.planner.delegate"),
+            places: vec![PlaceId::new("a2a:planner")],
+            audience: Audience::new([ActorId::new("per_owner")]),
+            payload: OpaquePayload::from_bytes(b"review summary".as_slice()),
+            timeout_ms: Some(1_000),
+            h_act: None,
+        })
+        .expect("hop 2 allowed");
+    assert!(ok_res.accepted);
+    assert_eq!(ok_res.receipt.expect("rcpt").outcome, ReceiptOutcome::Done);
+
+    // 2. Cycle revisiting "planner" in visited_agents fails closed with ERR_A2A_CYCLE.
+    let mut h_cycle = Waist2Headers::new("k-cycle");
+    h_cycle.meta.insert("hop_count".to_owned(), MetaValue::Int(1));
+    h_cycle.meta.insert(
+        "visited_agents".to_owned(),
+        MetaValue::Array(vec![MetaValue::String("planner".to_owned())]),
+    );
+    let cycle_res = bridge
+        .execute(ActionExecuteParams {
+            headers: h_cycle,
+            action_id: ActionId::new("act-cycle"),
+            capability_id: CapabilityId::new("a2a.planner.delegate"),
+            places: vec![PlaceId::new("a2a:planner")],
+            audience: Audience::new([ActorId::new("per_owner")]),
+            payload: OpaquePayload::from_bytes(b"loop back".as_slice()),
+            timeout_ms: Some(1_000),
+            h_act: None,
+        })
+        .expect("cycle returns refused receipt");
+    assert!(!cycle_res.accepted);
+    let cycle_rcpt = cycle_res.receipt.expect("cycle receipt");
+    assert_eq!(cycle_rcpt.outcome, ReceiptOutcome::Refused);
+    assert_eq!(cycle_rcpt.reason_code.as_deref(), Some(ERR_A2A_CYCLE));
+
+    // 3. Hop count 3 (>= max_a2a_hops=3) via JSON payload metadata also fails closed with ERR_A2A_CYCLE.
+    let overflow_res = bridge
+        .execute(ActionExecuteParams {
+            headers: Waist2Headers::new("k-overflow"),
+            action_id: ActionId::new("act-overflow"),
+            capability_id: CapabilityId::new("a2a.planner.delegate"),
+            places: vec![PlaceId::new("a2a:planner")],
+            audience: Audience::new([ActorId::new("per_owner")]),
+            payload: OpaquePayload::from_bytes(
+                br#"{"hop_count":3,"visited_agents":["a","b","c"],"task":"deep"}"#.as_slice(),
+            ),
+            timeout_ms: Some(1_000),
+            h_act: None,
+        })
+        .expect("overflow returns refused receipt");
+    assert!(!overflow_res.accepted);
+    let overflow_rcpt = overflow_res.receipt.expect("overflow receipt");
+    assert_eq!(overflow_rcpt.outcome, ReceiptOutcome::Refused);
+    assert_eq!(overflow_rcpt.reason_code.as_deref(), Some(ERR_A2A_CYCLE));
 }

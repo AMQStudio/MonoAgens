@@ -78,6 +78,8 @@ pub struct ActorFactsEntry {
     pub beta_0: f64,
     pub teacher_weight: f64,
     pub trusted_origin: bool,
+    #[serde(default)]
+    pub automated_peer: bool,
 }
 
 /// Per-wake projection snapshot recorded at wake start for deterministic crash/tail consistency.
@@ -174,6 +176,9 @@ pub struct CoreState {
     pub config_loaded_count: u64,
     #[serde(default)]
     pub decision_neural_hints: BTreeMap<EventId, (Option<f32>, Option<f32>)>,
+    /// Per-place count of consecutive automated-actor/soul turns (resets to 0 on non-automated turn).
+    #[serde(default)]
+    pub consecutive_automated_turns_by_place: BTreeMap<PlaceId, u32>,
 }
 
 impl Default for CoreState {
@@ -254,6 +259,7 @@ impl CoreState {
             recorded_config: None,
             config_loaded_count: 0,
             decision_neural_hints: BTreeMap::new(),
+            consecutive_automated_turns_by_place: BTreeMap::new(),
         }
     }
 
@@ -340,6 +346,34 @@ impl CoreState {
             let drain = self.recent_receipt_cues.len() - 16;
             self.recent_receipt_cues.drain(0..drain);
         }
+    }
+
+    /// Returns `true` if `actor` is the soul itself or an edge-attested `automated_peer`.
+    #[must_use]
+    pub fn is_automated_actor(&self, actor: &ActorId) -> bool {
+        actor == &self.soul_actor_id
+            || self
+                .actor_facts
+                .get(actor)
+                .is_some_and(|entry| entry.automated_peer)
+    }
+
+    /// Returns `true` when `actor` is an `automated_peer` and the place has already seen
+    /// `consecutive_automated_turns >= 2`, suppressing unconditional `turn_allocated` bypass.
+    #[must_use]
+    pub fn is_peer_turn_allocation_suppressed(&self, actor: &ActorId, place: &PlaceId) -> bool {
+        let is_peer = self
+            .actor_facts
+            .get(actor)
+            .is_some_and(|entry| entry.automated_peer);
+        if !is_peer {
+            return false;
+        }
+        self.consecutive_automated_turns_by_place
+            .get(place)
+            .copied()
+            .unwrap_or(0)
+            >= 2
     }
 
     /// Looks up whether `cause` (or any of its `caused_by` ancestors) was marked `turn_allocated`.
@@ -545,8 +579,9 @@ impl CoreState {
             })
             .unwrap_or(0.0);
 
-        let turn_allocated = f64::from(deg_soul) >= DEFAULT_DEG_ALLOC_THRESHOLD
-            || addressees.contains(&self.soul_actor_id);
+        let turn_allocated = (f64::from(deg_soul) >= DEFAULT_DEG_ALLOC_THRESHOLD
+            || addressees.contains(&self.soul_actor_id))
+            && !self.is_peer_turn_allocation_suppressed(&percept.actor, &percept.place);
         let answers_cue = self.expectation_cues.iter().any(|c| {
             c.answers_event
                 && visible_scope.allows(&c.audience, c.expectation_id, percept.timestamp_ms)
@@ -810,6 +845,13 @@ impl CoreState {
                         },
                     );
                     self.next_action_seq = self.next_action_seq.saturating_add(1).max(1);
+                    if capability_id.as_str() != "memory.recall" {
+                        let count = self
+                            .consecutive_automated_turns_by_place
+                            .entry(record.place.clone())
+                            .or_insert(0);
+                        *count = count.saturating_add(1);
+                    }
                 }
                 if record.id.as_u64() != 0 {
                     self.event_authors
@@ -1651,6 +1693,7 @@ impl CoreState {
                     for place in &tainted_places {
                         self.place_memory.remove(place);
                         self.place_adapt.remove(place);
+                        self.consecutive_automated_turns_by_place.remove(place);
                     }
 
                     self.memory_candidates
@@ -1883,6 +1926,16 @@ impl CoreState {
             percept.timestamp_ms,
             percept.actor == self.soul_actor_id,
         );
+        if self.is_automated_actor(&percept.actor) {
+            let count = self
+                .consecutive_automated_turns_by_place
+                .entry(percept.place.clone())
+                .or_insert(0);
+            *count = count.saturating_add(1);
+        } else {
+            self.consecutive_automated_turns_by_place
+                .insert(percept.place.clone(), 0);
+        }
 
         let mut deg_by_actor = BTreeMap::new();
         if let Some(ds) = percept.numeric_features.deg_soul {
@@ -2005,6 +2058,14 @@ impl CoreState {
 
 pub(crate) fn encode_actor_facts_from_msg(facts: &monoagens_protocol::ActorFacts) -> Vec<u8> {
     snapshot::encode_actor_facts_from_msg(facts)
+}
+
+/// Decodes a canonical `EventKind::ActorFacts` payload into [`ActorFactsEntry`],
+/// defaulting `automated_peer` to `false` for legacy pre-Wave-B payloads.
+pub fn decode_actor_facts_entry(
+    bytes: &[u8],
+) -> Result<ActorFactsEntry, crate::event::EventFormatError> {
+    snapshot::decode_actor_facts(bytes)
 }
 
 pub(crate) fn encode_identity_payload(signed: &OwnerSigned<OpaquePayload>) -> Vec<u8> {

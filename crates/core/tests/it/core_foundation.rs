@@ -342,6 +342,7 @@ fn three_class_queue_priority_overflow_and_single_preemption_receipt() {
             beta_0: 1.0,
             teacher_weight: 1.0,
             trusted_origin: true,
+            automated_peer: false,
         }))
         .expect("B"),
         QueueClass::B

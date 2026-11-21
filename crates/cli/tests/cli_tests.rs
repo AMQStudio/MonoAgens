@@ -368,12 +368,26 @@ fn cli_replay_offline_succeeds_and_mutated_log_reports_divergence() {
 }
 
 #[test]
-fn cli_approvals_renders_canonical_h_act_and_grant_exits_nonzero_when_unwired() {
+fn cli_approvals_renders_3line_impact_card_real_epoch_and_wires_grant_and_deny() {
     let tmp = TempDir::new().expect("tempdir");
     let cfg_path = write_scripted_config(tmp.path());
     let data_dir = tmp.path().join("data");
-    let (_decision_id, action) = seed_sample_store_with_held_action(&data_dir);
+    let (_decision_id, expired_action) = seed_sample_store_with_held_action(&data_dir);
 
+    // 1. Human-mode `approvals list` renders structured 3-line impact card
+    let human_out = Command::new(monoagens_bin())
+        .args(["--config", cfg_path.to_str().unwrap(), "approvals", "list"])
+        .output()
+        .expect("approvals list human");
+    assert!(human_out.status.success());
+    let human_stdout = String::from_utf8_lossy(&human_out.stdout);
+    let lines: Vec<&str> = human_stdout.lines().collect();
+    assert_eq!(lines.len(), 3, "expected 3-line impact card, got:\n{human_stdout}");
+    assert!(lines[0].contains("capability=tool.write") && lines[0].contains("action=act-cli-held-1") && lines[0].contains("expires_at_ms="));
+    assert!(lines[1].contains("places=[cli:terminal]") && lines[1].contains("taint=trusted"));
+    assert!(lines[2].contains("h_act=blake3:") && lines[2].contains("state_epoch=0"));
+
+    // 2. JSON-mode `approvals list` emits canonical H_act & real state_epoch
     let out = Command::new(monoagens_bin())
         .args([
             "--config",
@@ -388,8 +402,10 @@ fn cli_approvals_renders_canonical_h_act_and_grant_exits_nonzero_when_unwired() 
     let list: Vec<Value> = serde_json::from_slice(&out.stdout).expect("JSON array");
     assert_eq!(list.len(), 1);
 
-    let (expected_h_act, expected_input, expected_preimage) = canonical_h_act_details(&action, 0);
+    let (expected_h_act, expected_input, expected_preimage) =
+        canonical_h_act_details(&expired_action, 0);
     assert_eq!(list[0]["h_act"], expected_h_act.as_str());
+    assert_eq!(list[0]["state_epoch"], 0);
     let actual_input: ActionCanonicalInput =
         serde_json::from_value(list[0]["canonical_input"].clone()).expect("canonical_input");
     assert_eq!(actual_input, expected_input);
@@ -398,13 +414,13 @@ fn cli_approvals_renders_canonical_h_act_and_grant_exits_nonzero_when_unwired() 
         serde_json::to_vec(&expected_input).unwrap()
     );
     assert_eq!(
-        canonical_json_bytes(action.payload.as_bytes()),
+        canonical_json_bytes(expired_action.payload.as_bytes()),
         expected_input.payload
     );
     let _ = expected_preimage;
 
-    // grant must NOT fake success: exits non-zero explaining blocked write path.
-    let grant_out = Command::new(monoagens_bin())
+    // 3. Stale 1970-timestamp held action fails closed as expired_ttl
+    let expired_grant = Command::new(monoagens_bin())
         .args([
             "--config",
             cfg_path.to_str().unwrap(),
@@ -413,10 +429,258 @@ fn cli_approvals_renders_canonical_h_act_and_grant_exits_nonzero_when_unwired() 
             "act-cli-held-1",
         ])
         .output()
+        .expect("expired grant");
+    assert!(!expired_grant.status.success());
+    assert!(
+        String::from_utf8_lossy(&expired_grant.stderr).contains("expired_ttl"),
+        "stderr={}",
+        String::from_utf8_lossy(&expired_grant.stderr)
+    );
+
+    // 4. Seed a fresh unexpired held action at current wall clock & grant it out-of-band
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_millis() as u64;
+    let mut store = SegmentedStore::open(StoreConfig::new(data_dir)).expect("reopen store");
+    let fresh_action = Action {
+        protocol_version: monoagens_protocol::CURRENT_PROTOCOL_VERSION,
+        action_id: ActionId::new("act-cli-fresh-1"),
+        capability_id: CapabilityId::new("tool.write"),
+        places: vec![PlaceId::new("cli:terminal")],
+        audience: Audience::new([ActorId::new("per_owner")]),
+        origin_actor: OriginActor::new(ActorId::new("per_owner")),
+        taint: Taint::Trusted,
+        payload: OpaquePayload::from_bytes(br#"{"b":2,"a":1}"#.as_slice()),
+        correlation_id: None,
+        expected_effect: None,
+        h_act: None,
+        timestamp_ms: Time::from_millis(now_ms),
+    };
+    let fresh_h_act = compute_h_act(&fresh_action, 0);
+    store
+        .append(EventRecord::new_root(
+            EventKind::Action,
+            Time::from_millis(now_ms),
+            ActorId::new("per_owner"),
+            PlaceId::new("cli:terminal"),
+            Audience::new([ActorId::new("per_owner")]),
+            OriginActor::new(ActorId::new("per_owner")),
+            Taint::Trusted,
+            NumericFeatures::default(),
+            fresh_action.payload.clone(),
+            Vec::new(),
+            Some(EventDetail::Action {
+                action_id: fresh_action.action_id.clone(),
+                capability_id: fresh_action.capability_id.clone(),
+                h_act: Some(fresh_h_act.clone()),
+                correlation_id: None,
+            }),
+        ))
+        .expect("append fresh action");
+    store
+        .append(EventRecord::new_root(
+            EventKind::Receipt,
+            Time::from_millis(now_ms + 1),
+            ActorId::new("valve"),
+            PlaceId::new("cli:terminal"),
+            Audience::new([ActorId::new("per_owner")]),
+            OriginActor::new(ActorId::new("per_owner")),
+            Taint::Trusted,
+            NumericFeatures::default(),
+            OpaquePayload::default(),
+            Vec::new(),
+            Some(EventDetail::Receipt {
+                action_id: fresh_action.action_id.clone(),
+                capability_id: fresh_action.capability_id.clone(),
+                outcome: ReceiptOutcome::Held,
+                termination_reason: None,
+                progress: None,
+                delivered_units: None,
+                h_act: Some(fresh_h_act),
+            }),
+        ))
+        .expect("append fresh held receipt");
+    drop(store);
+
+    let grant_out = Command::new(monoagens_bin())
+        .env("MONOAGENS_APPROVAL_ATTESTATION_KEY", "cli-test-secret-key")
+        .args([
+            "--config",
+            cfg_path.to_str().unwrap(),
+            "--json",
+            "approvals",
+            "grant",
+            "act-cli-fresh-1",
+        ])
+        .output()
         .expect("approvals grant");
-    assert!(!grant_out.status.success());
-    let stderr = String::from_utf8_lossy(&grant_out.stderr);
-    assert!(stderr.contains("blocked"), "stderr={stderr}");
+    assert!(
+        grant_out.status.success(),
+        "approvals grant stderr={}",
+        String::from_utf8_lossy(&grant_out.stderr)
+    );
+    let grant_json: Value = serde_json::from_slice(&grant_out.stdout).expect("grant json");
+    assert_eq!(grant_json["applied"], true);
+    assert_eq!(grant_json["approved"], true);
+    assert_eq!(grant_json["out_of_band_channel"], true);
+
+    // Re-running grant on already-resolved action fails closed
+    let second_grant = Command::new(monoagens_bin())
+        .env("MONOAGENS_APPROVAL_ATTESTATION_KEY", "cli-test-secret-key")
+        .args([
+            "--config",
+            cfg_path.to_str().unwrap(),
+            "approvals",
+            "grant",
+            "act-cli-fresh-1",
+        ])
+        .output()
+        .expect("second grant");
+    assert!(!second_grant.status.success());
+
+    // 5. Seed a post-HardForget held action with non-zero state_epoch=2 and test `approvals deny`
+    let mut store = SegmentedStore::open(StoreConfig::new(tmp.path().join("data"))).expect("reopen store");
+    store
+        .append(EventRecord::new_root(
+            EventKind::HardForget,
+            Time::from_millis(now_ms + 10),
+            ActorId::new("core"),
+            PlaceId::new("core:forget"),
+            Audience::new([ActorId::new("per_owner")]),
+            OriginActor::new(ActorId::new("per_owner")),
+            Taint::Trusted,
+            NumericFeatures::default(),
+            OpaquePayload::default(),
+            Vec::new(),
+            Some(EventDetail::HardForget {
+                target_event_ids: vec![],
+                target_actor_ids: vec![],
+                epoch: 2,
+                reason: "epoch_bump".to_owned(),
+            }),
+        ))
+        .expect("append hard_forget");
+    let action2 = Action {
+        protocol_version: monoagens_protocol::CURRENT_PROTOCOL_VERSION,
+        action_id: ActionId::new("act-cli-held-epoch2"),
+        capability_id: CapabilityId::new("fs.delete"),
+        places: vec![PlaceId::new("cli:terminal")],
+        audience: Audience::new([ActorId::new("per_owner")]),
+        origin_actor: OriginActor::new(ActorId::new("per_owner")),
+        taint: Taint::Trusted,
+        payload: OpaquePayload::from_bytes(br#"{"path":"/tmp/x"}"#.as_slice()),
+        correlation_id: None,
+        expected_effect: None,
+        h_act: None,
+        timestamp_ms: Time::from_millis(now_ms + 20),
+    };
+    let h_act2 = compute_h_act(&action2, 2);
+    store
+        .append(EventRecord::new_root(
+            EventKind::Action,
+            Time::from_millis(now_ms + 20),
+            ActorId::new("per_owner"),
+            PlaceId::new("cli:terminal"),
+            Audience::new([ActorId::new("per_owner")]),
+            OriginActor::new(ActorId::new("per_owner")),
+            Taint::Trusted,
+            NumericFeatures::default(),
+            action2.payload.clone(),
+            Vec::new(),
+            Some(EventDetail::Action {
+                action_id: action2.action_id.clone(),
+                capability_id: action2.capability_id.clone(),
+                h_act: Some(h_act2.clone()),
+                correlation_id: None,
+            }),
+        ))
+        .expect("append action2");
+    store
+        .append(EventRecord::new_root(
+            EventKind::Receipt,
+            Time::from_millis(now_ms + 21),
+            ActorId::new("valve"),
+            PlaceId::new("cli:terminal"),
+            Audience::new([ActorId::new("per_owner")]),
+            OriginActor::new(ActorId::new("per_owner")),
+            Taint::Trusted,
+            NumericFeatures::default(),
+            OpaquePayload::default(),
+            Vec::new(),
+            Some(EventDetail::Receipt {
+                action_id: action2.action_id.clone(),
+                capability_id: action2.capability_id.clone(),
+                outcome: ReceiptOutcome::Held,
+                termination_reason: None,
+                progress: None,
+                delivered_units: None,
+                h_act: Some(h_act2.clone()),
+            }),
+        ))
+        .expect("append receipt2");
+    drop(store);
+
+    let list_epoch2 = Command::new(monoagens_bin())
+        .args([
+            "--config",
+            cfg_path.to_str().unwrap(),
+            "--json",
+            "approvals",
+            "list",
+        ])
+        .output()
+        .expect("approvals list epoch 2");
+    assert!(list_epoch2.status.success());
+    let parsed2: Vec<Value> = serde_json::from_slice(&list_epoch2.stdout).expect("json");
+    let epoch2_item = parsed2
+        .iter()
+        .find(|item| item["action_id"] == "act-cli-held-epoch2")
+        .expect("act-cli-held-epoch2 present");
+    assert_eq!(epoch2_item["state_epoch"], 2);
+    assert_eq!(epoch2_item["h_act"], h_act2.as_str());
+
+    let deny_out = Command::new(monoagens_bin())
+        .env("MONOAGENS_APPROVAL_ATTESTATION_KEY", "cli-test-secret-key")
+        .args([
+            "--config",
+            cfg_path.to_str().unwrap(),
+            "--json",
+            "approvals",
+            "deny",
+            "act-cli-held-epoch2",
+        ])
+        .output()
+        .expect("approvals deny");
+    assert!(
+        deny_out.status.success(),
+        "approvals deny stderr={}",
+        String::from_utf8_lossy(&deny_out.stderr)
+    );
+    let deny_json: Value = serde_json::from_slice(&deny_out.stdout).expect("deny json");
+    assert_eq!(deny_json["applied"], true);
+    assert_eq!(deny_json["approved"], false);
+    assert_eq!(deny_json["state_epoch"], 2);
+
+    // Denied action no longer appears in pending approvals list
+    let list_final = Command::new(monoagens_bin())
+        .args([
+            "--config",
+            cfg_path.to_str().unwrap(),
+            "--json",
+            "approvals",
+            "list",
+        ])
+        .output()
+        .expect("approvals list final");
+    assert!(list_final.status.success());
+    let final_arr: Vec<Value> = serde_json::from_slice(&list_final.stdout).expect("json");
+    assert!(
+        !final_arr
+            .iter()
+            .any(|item| item["action_id"] == "act-cli-held-epoch2"
+                || item["action_id"] == "act-cli-fresh-1")
+    );
 }
 
 #[test]

@@ -115,11 +115,21 @@
         "headers": {
           "$ref": "#/$defs/Waist2Headers"
         },
+        "out_of_band_channel": {
+          "default": false,
+          "type": "boolean"
+        },
         "resolved_at_ms": {
           "$ref": "#/$defs/Time"
         },
         "resolver": {
           "$ref": "#/$defs/ActorId"
+        },
+        "signature": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "state_epoch": {
           "format": "uint64",
@@ -596,6 +606,13 @@
         },
         "payload": {
           "$ref": "#/$defs/OpaquePayload"
+        },
+        "peer_expertise_margin": {
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "place": {
           "$ref": "#/$defs/PlaceId"

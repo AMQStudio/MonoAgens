@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use monoagens_core::LogSeq;
+use monoagens_core::{DecisionOutcome, DecisionReason, EventDetail, EventKind, EventRecord, LogSeq};
 use monoagens_protocol::{
     ActionId, ActorId, Audience, CapabilityDescriptor, CapabilityId, DeclassToken, EventId,
     OriginActor, OwnerSigned, PendingApproval, PlaceId, Taint, Time,
@@ -84,6 +84,12 @@ pub struct ValveSnapshot {
     pub action_urgencies: BTreeMap<ActionId, f64>,
     pub active_recipient: Option<ActorId>,
     pub recipient_timezones: BTreeMap<ActorId, String>,
+
+    // Wave B Track 2: event-sourced automated peer loop brake & A2A hop tracking
+    pub automated_actors: BTreeSet<ActorId>,
+    pub consecutive_automated_turns_by_place: BTreeMap<PlaceId, u32>,
+    pub current_a2a_hop: Option<u8>,
+    pub action_a2a_hops: BTreeMap<ActionId, u8>,
 }
 
 impl Default for ValveSnapshot {
@@ -123,6 +129,10 @@ impl ValveSnapshot {
             action_urgencies: BTreeMap::new(),
             active_recipient: None,
             recipient_timezones: BTreeMap::new(),
+            automated_actors: BTreeSet::new(),
+            consecutive_automated_turns_by_place: BTreeMap::new(),
+            current_a2a_hop: None,
+            action_a2a_hops: BTreeMap::new(),
         }
     }
 
@@ -142,5 +152,91 @@ impl ValveSnapshot {
     /// Registers an item's [`Audience`] for Absolute Line 2 enforcement.
     pub fn register_item_audience(&mut self, event_id: EventId, audience: Audience) {
         self.item_audiences.insert(event_id, audience);
+    }
+
+    /// Derives `automated_actors` and `consecutive_automated_turns_by_place` purely from
+    /// the canonical event log (`ARCHITECTURE.md` event-sourced projection), resetting a place's
+    /// counter to `0` on any admitted non-automated turn.
+    pub fn replay_peer_loop_from_events(
+        &mut self,
+        events: &[EventRecord],
+        soul_actor_id: &ActorId,
+    ) {
+        self.automated_actors.clear();
+        self.consecutive_automated_turns_by_place.clear();
+
+        let mut self_caused_ids: BTreeSet<EventId> = BTreeSet::new();
+        let mut blocked_ids: BTreeSet<EventId> = BTreeSet::new();
+        for rec in events {
+            if rec.kind == EventKind::Decision
+                && let Some(EventDetail::Decision {
+                    target_event_id,
+                    outcome,
+                    reason,
+                    ..
+                }) = &rec.detail
+            {
+                if *reason == Some(DecisionReason::SelfCaused) {
+                    self_caused_ids.insert(*target_event_id);
+                }
+                if *outcome == DecisionOutcome::DoorBlocked {
+                    blocked_ids.insert(*target_event_id);
+                }
+            }
+        }
+
+        for rec in events {
+            match rec.kind {
+                EventKind::ActorFacts => {
+                    if let Ok(entry) =
+                        monoagens_core::state::decode_actor_facts_entry(rec.payload.as_bytes())
+                    {
+                        if entry.automated_peer {
+                            self.automated_actors.insert(rec.actor.clone());
+                        } else {
+                            self.automated_actors.remove(&rec.actor);
+                        }
+                    }
+                }
+                EventKind::HardForget => {
+                    if let Some(EventDetail::HardForget {
+                        target_actor_ids, ..
+                    }) = &rec.detail
+                    {
+                        for actor in target_actor_ids {
+                            self.automated_actors.remove(actor);
+                        }
+                    }
+                }
+                EventKind::Percept => {
+                    if self_caused_ids.contains(&rec.id) || blocked_ids.contains(&rec.id) {
+                        continue;
+                    }
+                    if self.automated_actors.contains(&rec.actor) || &rec.actor == soul_actor_id {
+                        let count = self
+                            .consecutive_automated_turns_by_place
+                            .entry(rec.place.clone())
+                            .or_insert(0);
+                        *count = count.saturating_add(1);
+                    } else {
+                        self.consecutive_automated_turns_by_place
+                            .insert(rec.place.clone(), 0);
+                    }
+                }
+                EventKind::Action => {
+                    if let Some(EventDetail::Action { capability_id, .. }) = &rec.detail
+                        && capability_id.as_str() == "memory.recall"
+                    {
+                        continue;
+                    }
+                    let count = self
+                        .consecutive_automated_turns_by_place
+                        .entry(rec.place.clone())
+                        .or_insert(0);
+                    *count = count.saturating_add(1);
+                }
+                _ => {}
+            }
+        }
     }
 }

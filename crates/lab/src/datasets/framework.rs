@@ -44,6 +44,10 @@ pub enum HistoryMode {
     StaticSilent,
     /// Interactive/timing benchmarks: decision turns use the active probe model provider.
     Interactive,
+    /// Continuous stateful sequential timeline: probes execute sequentially on a single
+    /// continuous `Core` instance so `ExpectationBook` and per-place `place_memory` (`h_t`)
+    /// persist across simulated days rather than resetting per probe.
+    LiveSequential,
 }
 
 /// One evaluation probe attached to an [`ExternalItem`].
@@ -653,11 +657,45 @@ pub fn execute_external_item_with_embedder(
     request_timeout_ms: Option<u64>,
     max_output_tokens: Option<u32>,
 ) -> Result<ExternalItemExecution, LabError> {
+    let (exec, _state) = execute_external_item_with_model_and_state(
+        item,
+        config,
+        seed,
+        None,
+        probe_provider,
+        probe_model_name,
+        live,
+        guard,
+        embedder,
+        attribution,
+        request_timeout_ms,
+        max_output_tokens,
+    )?;
+    Ok(exec)
+}
+
+/// Executes one [`ExternalItem`] against Core's unmodified loop with an optional [`monoagens_core::NeuralModel`],
+/// returning both the [`ExternalItemExecution`] and the final [`monoagens_core::CoreState`].
+#[allow(clippy::too_many_arguments)]
+pub fn execute_external_item_with_model_and_state(
+    item: &ExternalItem,
+    config: &CoreConfig,
+    seed: u64,
+    model: Option<Arc<monoagens_core::NeuralModel>>,
+    probe_provider: &dyn ModelProvider,
+    probe_model_name: &str,
+    live: bool,
+    guard: &mut CostGuard,
+    embedder: Option<&dyn Embedder>,
+    attribution: Option<&crate::memory::proxy::CallAttribution>,
+    request_timeout_ms: Option<u64>,
+    max_output_tokens: Option<u32>,
+) -> Result<(ExternalItemExecution, monoagens_core::CoreState), LabError> {
     let cfg = CoreConfig {
         seed,
         ..config.clone()
     };
-    let mut core = Core::open(MemStore::new(), cfg, None)?;
+    let mut core = Core::open(MemStore::new(), cfg, model)?;
     register_item_capabilities(&mut core, item);
     let silent_provider = {
         let mut p = ScriptedModelProvider::new();
@@ -666,12 +704,11 @@ pub fn execute_external_item_with_embedder(
     };
 
     let use_silent_history = item.history_mode == HistoryMode::StaticSilent && !live;
-    let history_mode_label = if use_silent_history {
-        "scripted_silent"
-    } else if item.history_mode == HistoryMode::StaticSilent {
-        "live"
-    } else {
-        "interactive"
+    let history_mode_label = match item.history_mode {
+        HistoryMode::StaticSilent if !live => "scripted_silent",
+        HistoryMode::StaticSilent => "live",
+        HistoryMode::Interactive => "interactive",
+        HistoryMode::LiveSequential => "live_sequential",
     };
     // Stable per-run-and-item session value so repeated prefixes hit the provider prompt cache.
     let session_id = conversation_id_for(seed, &item.item_id);
@@ -902,166 +939,267 @@ pub fn execute_external_item_with_embedder(
         last_time = last_time.max(until);
     }
 
-    let checkpoint = core.take_snapshot(format!("post-ingestion-{}", item.item_id))?;
-    let base_events = core.store().read_after_seq(None, usize::MAX)?;
     let mut predictions = Vec::with_capacity(item.probes.len());
+    if item.history_mode == HistoryMode::LiveSequential {
+        for (p_idx, probe) in item.probes.iter().enumerate() {
+            let probe_ts = probe.percept.timestamp_ms.max(last_time);
+            if probe_ts > last_time {
+                let until = Time::from_millis(probe_ts.as_millis().saturating_sub(1));
+                fire_due_ticks!(until, &probe.probe_id, probe_provider, probe_model_name);
+            }
+            let pred = execute_probe_on_core(
+                &mut core,
+                &mut hist_last_seq,
+                item,
+                p_idx,
+                probe,
+                last_time,
+                history_gate_wakes,
+                &session_id,
+                probe_provider,
+                probe_model_name,
+                guard,
+                embedder,
+                attribution,
+                request_timeout_ms,
+                max_output_tokens,
+                &mut purpose_costs,
+                &mut transcript_events,
+                &mut failed_items,
+                &mut decisions_go,
+                &mut decisions_note,
+                &mut decisions_silent,
+                &mut decisions_door_blocked,
+                &mut actions_dispatched,
+                &mut percepts_count,
+                &mut model_latencies_ms,
+            )?;
+            last_time = probe_ts;
+            predictions.push(pred);
+        }
+    } else {
+        let checkpoint = core.take_snapshot(format!("post-ingestion-{}", item.item_id))?;
+        let base_events = core.store().read_after_seq(None, usize::MAX)?;
 
-    for (p_idx, probe) in item.probes.iter().enumerate() {
-        let mut cloned_store = MemStore::new();
-        let mut cloned_last_seq: Option<LogSeq> = None;
-        for rec in &base_events {
-            let eid = cloned_store.append(rec.clone())?;
-            cloned_last_seq = Some(rec.seq);
-            if let Some(EventDetail::PerceptMeta { embeddings, .. }) = &rec.detail {
-                for emb in embeddings {
-                    cloned_store.insert_vector(eid, emb.clone());
+        for (p_idx, probe) in item.probes.iter().enumerate() {
+            let mut cloned_store = MemStore::new();
+            let mut cloned_last_seq: Option<LogSeq> = None;
+            for rec in &base_events {
+                let eid = cloned_store.append(rec.clone())?;
+                cloned_last_seq = Some(rec.seq);
+                if let Some(EventDetail::PerceptMeta { embeddings, .. }) = &rec.detail {
+                    for emb in embeddings {
+                        cloned_store.insert_vector(eid, emb.clone());
+                    }
                 }
             }
+            if let Some(last_rec) = base_events.last() {
+                cloned_last_seq = Some(last_rec.seq);
+            }
+            cloned_store.snapshot(checkpoint.clone())?;
+            let probe_cfg = CoreConfig {
+                seed,
+                ..config.clone()
+            };
+            let mut probe_core = Core::open(cloned_store, probe_cfg, None)?;
+            register_item_capabilities(&mut probe_core, item);
+            // Advance cursor past any ConfigLoaded/Open events appended by Core::open
+            let open_tail = probe_core
+                .store()
+                .read_after_seq(cloned_last_seq, usize::MAX)?;
+            if let Some(last_open) = open_tail.last() {
+                cloned_last_seq = Some(last_open.seq);
+            }
+
+            let pred = execute_probe_on_core(
+                &mut probe_core,
+                &mut cloned_last_seq,
+                item,
+                p_idx,
+                probe,
+                last_time,
+                history_gate_wakes,
+                &session_id,
+                probe_provider,
+                probe_model_name,
+                guard,
+                embedder,
+                attribution,
+                request_timeout_ms,
+                max_output_tokens,
+                &mut purpose_costs,
+                &mut transcript_events,
+                &mut failed_items,
+                &mut decisions_go,
+                &mut decisions_note,
+                &mut decisions_silent,
+                &mut decisions_door_blocked,
+                &mut actions_dispatched,
+                &mut percepts_count,
+                &mut model_latencies_ms,
+            )?;
+            predictions.push(pred);
         }
-        if let Some(last_rec) = base_events.last() {
-            cloned_last_seq = Some(last_rec.seq);
-        }
-        cloned_store.snapshot(checkpoint.clone())?;
-        let probe_cfg = CoreConfig {
-            seed,
-            ..config.clone()
-        };
-        let mut probe_core = Core::open(cloned_store, probe_cfg, None)?;
-        register_item_capabilities(&mut probe_core, item);
-        // Advance cursor past any ConfigLoaded/Open events appended by Core::open
-        let open_tail = probe_core
-            .store()
-            .read_after_seq(cloned_last_seq, usize::MAX)?;
-        if let Some(last_open) = open_tail.last() {
-            cloned_last_seq = Some(last_open.seq);
-        }
-
-        let mut p = probe.percept.clone();
-        p.protocol_version = CURRENT_PROTOCOL_VERSION;
-        // Evaluation probes are addressed to the Soul by definition: without an addressee the
-        // Gate legitimately holds silence and no answer would ever be produced.
-        p.addressees = vec![ActorId::new("soul")];
-        embed_percept_if_configured(&mut p, embedder)?;
-        let p_text = String::from_utf8_lossy(p.payload.as_bytes()).into_owned();
-        let emb_meta = p.embeddings.first().map(|e| {
-            (
-                e.tag.dim_d,
-                format!(
-                    "{}:{}:{}",
-                    e.tag.embed_model_ver, e.tag.dim_d, e.tag.prompt_regime_id
-                ),
-            )
-        });
-        transcript_events.push(TranscriptRecord::Percept {
-            phase: "probe".to_owned(),
-            turn_or_probe_id: probe.probe_id.clone(),
-            actor: p.actor.as_str().to_owned(),
-            place: p.place.as_str().to_owned(),
-            audience: p
-                .audience
-                .members
-                .iter()
-                .map(|a| a.as_str().to_owned())
-                .collect(),
-            timestamp_ms: p.timestamp_ms.as_millis(),
-            text: p_text,
-            embedding_dim: emb_meta.as_ref().map(|m| m.0),
-            embedding_tag: emb_meta.map(|m| m.1),
-        });
-        percepts_count += 1;
-
-        let req = Waist2Request::new(
-            None,
-            Waist2Method::PerceptEmit,
-            PerceptEmitParams::from_percept(
-                Waist2Headers::new(format!("ext-{}-probe-{p_idx}", item.item_id)),
-                p,
-            ),
-        );
-        let parsed_probe = req
-            .params
-            .into_percept(CURRENT_PROTOCOL_VERSION)
-            .map_err(|e| LabError::Protocol(e.to_string()))?;
-        let probe_ts = parsed_probe.timestamp_ms.max(last_time);
-        let effects = probe_core.step(Input::Percept(Box::new(parsed_probe)), probe_ts, guard)?;
-        collect_new_store_events(
-            &mut probe_core,
-            &mut cloned_last_seq,
-            "probe",
-            &probe.probe_id,
-            &mut decisions_go,
-            &mut decisions_note,
-            &mut decisions_silent,
-            &mut decisions_door_blocked,
-            &mut transcript_events,
-        )?;
-
-        let mut drive_ctx = DriveEffectsContext {
-            phase: "probe",
-            turn_or_probe_id: &probe.probe_id,
-            item_id: &item.item_id,
-            probe_id: &probe.probe_id,
-            is_silent_history: false,
-            session_id: &session_id,
-            attribution,
-            request_timeout_ms,
-            max_output_tokens,
-            transcript_events: &mut transcript_events,
-            failed_items: &mut failed_items,
-            actions_dispatched: &mut actions_dispatched,
-            model_latencies_ms: &mut model_latencies_ms,
-        };
-        let (probe_wakes, tok_in, tok_out, reply_text) = drive_model_effects(
-            &mut probe_core,
-            effects,
-            probe_ts,
-            guard,
-            probe_provider,
-            probe_model_name,
-            &mut purpose_costs,
-            &mut drive_ctx,
-        )?;
-        collect_new_store_events(
-            &mut probe_core,
-            &mut cloned_last_seq,
-            "probe",
-            &probe.probe_id,
-            &mut decisions_go,
-            &mut decisions_note,
-            &mut decisions_silent,
-            &mut decisions_door_blocked,
-            &mut transcript_events,
-        )?;
-
-        predictions.push(ExternalPrediction {
-            item_id: item.item_id.clone(),
-            probe_id: probe.probe_id.clone(),
-            cluster_id: item.cluster_id.clone(),
-            spoke: reply_text.is_some(),
-            response_text: reply_text,
-            action_turn_ms: Some(probe_ts.as_millis()),
-            probe_gate_wakes: probe_wakes,
-            history_gate_wakes,
-            tokens_in: tok_in,
-            tokens_out: tok_out,
-            cost_usd: 0.0,
-        });
     }
 
-    Ok(ExternalItemExecution {
-        predictions,
-        history_reasoning_mode: history_mode_label.to_owned(),
-        total_history_gate_wakes: history_gate_wakes,
-        cost_by_purpose: purpose_costs.into_values().collect(),
-        transcript_events,
-        failed_items,
+    let final_state = core.state().clone();
+    Ok((
+        ExternalItemExecution {
+            predictions,
+            history_reasoning_mode: history_mode_label.to_owned(),
+            total_history_gate_wakes: history_gate_wakes,
+            cost_by_purpose: purpose_costs.into_values().collect(),
+            transcript_events,
+            failed_items,
+            decisions_go,
+            decisions_note,
+            decisions_silent,
+            decisions_door_blocked,
+            actions_dispatched,
+            percepts_count,
+            model_latencies_ms,
+        },
+        final_state,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_probe_on_core(
+    probe_core: &mut Core<MemStore>,
+    last_seq: &mut Option<LogSeq>,
+    item: &ExternalItem,
+    p_idx: usize,
+    probe: &ExternalProbe,
+    last_time: Time,
+    history_gate_wakes: u64,
+    session_id: &str,
+    probe_provider: &dyn ModelProvider,
+    probe_model_name: &str,
+    guard: &mut CostGuard,
+    embedder: Option<&dyn Embedder>,
+    attribution: Option<&crate::memory::proxy::CallAttribution>,
+    request_timeout_ms: Option<u64>,
+    max_output_tokens: Option<u32>,
+    purpose_costs: &mut BTreeMap<u8, PurposeCost>,
+    transcript_events: &mut Vec<TranscriptRecord>,
+    failed_items: &mut Vec<FailedItemRecord>,
+    decisions_go: &mut usize,
+    decisions_note: &mut usize,
+    decisions_silent: &mut usize,
+    decisions_door_blocked: &mut usize,
+    actions_dispatched: &mut usize,
+    percepts_count: &mut usize,
+    model_latencies_ms: &mut Vec<u64>,
+) -> Result<ExternalPrediction, LabError> {
+    let mut p = probe.percept.clone();
+    p.protocol_version = CURRENT_PROTOCOL_VERSION;
+    // Evaluation probes are addressed to the Soul by definition: without an addressee the
+    // Gate legitimately holds silence and no answer would ever be produced.
+    p.addressees = vec![ActorId::new("soul")];
+    embed_percept_if_configured(&mut p, embedder)?;
+    let p_text = String::from_utf8_lossy(p.payload.as_bytes()).into_owned();
+    let emb_meta = p.embeddings.first().map(|e| {
+        (
+            e.tag.dim_d,
+            format!(
+                "{}:{}:{}",
+                e.tag.embed_model_ver, e.tag.dim_d, e.tag.prompt_regime_id
+            ),
+        )
+    });
+    transcript_events.push(TranscriptRecord::Percept {
+        phase: "probe".to_owned(),
+        turn_or_probe_id: probe.probe_id.clone(),
+        actor: p.actor.as_str().to_owned(),
+        place: p.place.as_str().to_owned(),
+        audience: p
+            .audience
+            .members
+            .iter()
+            .map(|a| a.as_str().to_owned())
+            .collect(),
+        timestamp_ms: p.timestamp_ms.as_millis(),
+        text: p_text,
+        embedding_dim: emb_meta.as_ref().map(|m| m.0),
+        embedding_tag: emb_meta.map(|m| m.1),
+    });
+    *percepts_count += 1;
+
+    let req = Waist2Request::new(
+        None,
+        Waist2Method::PerceptEmit,
+        PerceptEmitParams::from_percept(
+            Waist2Headers::new(format!("ext-{}-probe-{p_idx}", item.item_id)),
+            p,
+        ),
+    );
+    let parsed_probe = req
+        .params
+        .into_percept(CURRENT_PROTOCOL_VERSION)
+        .map_err(|e| LabError::Protocol(e.to_string()))?;
+    let probe_ts = parsed_probe.timestamp_ms.max(last_time);
+    let effects = probe_core.step(Input::Percept(Box::new(parsed_probe)), probe_ts, guard)?;
+    collect_new_store_events(
+        probe_core,
+        last_seq,
+        "probe",
+        &probe.probe_id,
         decisions_go,
         decisions_note,
         decisions_silent,
         decisions_door_blocked,
+        transcript_events,
+    )?;
+
+    let mut drive_ctx = DriveEffectsContext {
+        phase: "probe",
+        turn_or_probe_id: &probe.probe_id,
+        item_id: &item.item_id,
+        probe_id: &probe.probe_id,
+        is_silent_history: false,
+        session_id,
+        attribution,
+        request_timeout_ms,
+        max_output_tokens,
+        transcript_events,
+        failed_items,
         actions_dispatched,
-        percepts_count,
         model_latencies_ms,
+    };
+    let (probe_wakes, tok_in, tok_out, reply_text) = drive_model_effects(
+        probe_core,
+        effects,
+        probe_ts,
+        guard,
+        probe_provider,
+        probe_model_name,
+        purpose_costs,
+        &mut drive_ctx,
+    )?;
+    collect_new_store_events(
+        probe_core,
+        last_seq,
+        "probe",
+        &probe.probe_id,
+        decisions_go,
+        decisions_note,
+        decisions_silent,
+        decisions_door_blocked,
+        transcript_events,
+    )?;
+
+    Ok(ExternalPrediction {
+        item_id: item.item_id.clone(),
+        probe_id: probe.probe_id.clone(),
+        cluster_id: item.cluster_id.clone(),
+        spoke: reply_text.is_some(),
+        response_text: reply_text,
+        action_turn_ms: Some(probe_ts.as_millis()),
+        probe_gate_wakes: probe_wakes,
+        history_gate_wakes,
+        tokens_in: tok_in,
+        tokens_out: tok_out,
+        cost_usd: 0.0,
     })
 }
 

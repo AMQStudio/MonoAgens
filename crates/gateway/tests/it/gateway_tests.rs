@@ -2000,3 +2000,403 @@ x-static-hdr = "secret-gw-hdr-val"
         assert!(!entry.message.contains("secret-gw-hdr-val"));
     }
 }
+
+#[test]
+fn end_to_end_approval_resolve_rejects_in_band_and_dispatches_attested_oob_once() {
+    use monoagens_gateway::ValveDoorController;
+    use monoagens_protocol::{ApprovalResolveParams, ApprovalResolveResult, Waist2Headers};
+    use monoagens_valve::{
+        Valve, ValveConfig, ValveSnapshot, derive_approval_mac_key, sign_approval_resolution,
+    };
+
+    let owner = ActorId::new("per_owner");
+    let _place = PlaceId::new("room:ops");
+    let mac_key = derive_approval_mac_key(b"gw-oob-test-secret-01");
+    let clock = Arc::new(VirtualClock::new(Time::from_millis(5_000_000)));
+
+    let mut snap = ValveSnapshot::new(monoagens_core::LogSeq::ZERO, clock.now());
+    snap.owner_actor_id = Some(owner.clone());
+    snap.known_actors.insert(owner.clone());
+    snap.known_actors.insert(ActorId::new("soul"));
+    snap.active_context_audience = Some(Audience::new([owner.clone(), ActorId::new("soul")]));
+    snap.capability_risk_metadata.insert(
+        CapabilityId::new("wallet.pay"),
+        monoagens_valve::ActionRiskMetadata {
+            is_financial_or_credential: true,
+            ..Default::default()
+        },
+    );
+    let mut valve = Valve::with_default_policies(ValveConfig::default(), snap).expect("valve");
+    valve.set_approval_attestation_key(mac_key);
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    rt.block_on(async move {
+        let scripted = Arc::new(ScriptedModelProvider::from_replies([ScriptedReply::text(
+            json!({
+                "acts": [{
+                    "act": "act",
+                    "capability_id": "wallet.pay",
+                    "places": ["room:ops"],
+                    "people": ["per_owner"],
+                    "payload": [112, 97, 121],
+                    "motivation": 4,
+                    "confidence_0_20": 18,
+                    "used_ids": [],
+                    "expected": null,
+                    "domain": null
+                }]
+            })
+            .to_string(),
+        )]));
+
+        let cfg = default_test_config(ModelProviderKind::Scripted);
+        let core_cfg = CoreConfig {
+            seed: 21,
+            ..CoreConfig::default()
+        };
+
+        let runtime = GatewayRuntime::start(
+            cfg,
+            &ProviderSecrets::default(),
+            || Ok(MemStore::new()),
+            core_cfg,
+            ValveDoorController::new(valve),
+            GatewayOptions {
+                clock: clock.clone(),
+                provider: Some(scripted),
+                diagnostics: DiagnosticSink::default(),
+                cues: CueRecorder::default(),
+                seams: GatewaySeams::default(),
+            },
+        )
+        .await
+        .expect("start gateway");
+
+        let handle = runtime.handle();
+        let (executed_join, body_ctrl) = spawn_ndjson_mock_body(
+            &handle,
+            "body-chat",
+            "room:ops",
+            "wallet.pay",
+            MockBodyBehavior::ImmediateDone,
+        );
+        let body_tx = body_ctrl.wait_connected().await;
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+        // Trigger model wake -> wallet.pay (financial R2) -> Held as PendingApproval
+        let mut p = make_percept(
+            "per_owner",
+            "room:ops",
+            &["per_owner", "soul"],
+            5_000_000,
+            b"pay 50",
+        );
+        p.taint = monoagens_protocol::Taint::Trusted;
+        handle
+            .submit_and_wait(Input::Percept(Box::new(p)))
+            .await
+            .expect("submit percept");
+
+        let mut held_info = None;
+        for _ in 0..40 {
+            let events = handle.read_events().await.expect("read events");
+            for ev in &events {
+                if let Some(EventDetail::Receipt {
+                    action_id,
+                    outcome: ReceiptOutcome::Held,
+                    h_act: Some(h_act),
+                    ..
+                }) = &ev.detail
+                {
+                    held_info = Some((action_id.clone(), h_act.clone()));
+                }
+            }
+            if held_info.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        }
+        let (action_id, h_act) = match held_info {
+            Some(info) => info,
+            None => {
+                let evs = handle.read_events().await.unwrap_or_default();
+                panic!("action held with H_act missing; events={evs:#?}");
+            }
+        };
+
+        // 1. In-band chat body (`body-chat`, NOT registered as OOB control) attempting `approval/resolve`
+        //    over Waist-2 NDJSON MUST fail closed (NOT -32601, and NOT applied!).
+        let valid_sig = sign_approval_resolution(
+            &mac_key,
+            &action_id,
+            &h_act,
+            0,
+            true,
+            Time::from_millis(5_001_000),
+        );
+        let inband_req = Waist2Request::new(
+            Some(monoagens_protocol::RpcId::Int(999)),
+            Waist2Method::ApprovalResolve,
+            ApprovalResolveParams {
+                headers: Waist2Headers::new("inband-spoof"),
+                action_id: action_id.clone(),
+                h_act: h_act.clone(),
+                state_epoch: 0,
+                approved: true,
+                resolver: owner.clone(),
+                resolved_at_ms: Time::from_millis(5_001_000),
+                signature: Some(valid_sig.clone()),
+                out_of_band_channel: true,
+            },
+        );
+        let _ = body_tx.send(serde_json::to_string(&inband_req).unwrap());
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+        let events_after_inband = handle.read_events().await.expect("events");
+        assert!(events_after_inband.iter().any(|ev| matches!(
+            &ev.detail,
+            Some(EventDetail::DoorVerdict { rule, .. }) if rule == "valve.approval.resolve_rejected"
+        )));
+        assert!(!events_after_inband.iter().any(|ev| matches!(
+            &ev.detail,
+            Some(EventDetail::Receipt { outcome: ReceiptOutcome::Done, .. })
+        )));
+
+        // 2. Invalid signature on out-of-band handle fails closed
+        let bad_oob = ApprovalResolveParams {
+            headers: Waist2Headers::new("oob-bad-sig"),
+            action_id: action_id.clone(),
+            h_act: h_act.clone(),
+            state_epoch: 0,
+            approved: true,
+            resolver: owner.clone(),
+            resolved_at_ms: Time::from_millis(5_001_000),
+            signature: Some(
+                "blake3-mac:0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_owned(),
+            ),
+            out_of_band_channel: true,
+        };
+        let bad_res = handle.resolve_approval(bad_oob).await;
+        assert!(bad_res.is_err());
+
+        // 3. Valid attested out-of-band resolution persists grant, dispatches once, and settles Done
+        clock.advance_by(1_000);
+        let good_oob = ApprovalResolveParams {
+            headers: Waist2Headers::new("oob-valid"),
+            action_id: action_id.clone(),
+            h_act: h_act.clone(),
+            state_epoch: 0,
+            approved: true,
+            resolver: owner,
+            resolved_at_ms: Time::from_millis(5_001_000),
+            signature: Some(valid_sig),
+            out_of_band_channel: true,
+        };
+        let ok_res: ApprovalResolveResult = handle
+            .resolve_approval(good_oob.clone())
+            .await
+            .expect("attested OOB approval succeeds");
+        assert!(ok_res.applied);
+
+        let mut done_seen = false;
+        for _ in 0..40 {
+            let events = handle.read_events().await.expect("events");
+            if events.iter().any(|ev| matches!(
+                &ev.detail,
+                Some(EventDetail::Receipt { action_id: aid, outcome: ReceiptOutcome::Done, .. }) if aid == &action_id
+            )) {
+                done_seen = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        }
+        assert!(done_seen, "expected Done receipt after OOB approval");
+
+        // Replaying the same OOB resolution fails closed (single-use grant)
+        assert!(handle.resolve_approval(good_oob).await.is_err());
+
+        runtime.shutdown().await;
+        let executed = executed_join.await.expect("body join");
+        assert_eq!(executed.len(), 1, "action must dispatch at most once");
+        assert_eq!(executed[0].action_id, action_id);
+    });
+}
+
+#[test]
+fn waist2_attested_oob_body_approval_resolve_deny_and_restart_replay() {
+    use monoagens_gateway::ValveDoorController;
+    use monoagens_protocol::{ApprovalResolveParams, Waist2Headers};
+    use monoagens_valve::{
+        Valve, ValveConfig, ValveSnapshot, derive_approval_mac_key, sign_approval_resolution,
+    };
+
+    let owner = ActorId::new("per_owner");
+    let mac_key = derive_approval_mac_key(b"gw-oob-deny-secret");
+    let clock = Arc::new(VirtualClock::new(Time::from_millis(6_000_000)));
+
+    let mut snap = ValveSnapshot::new(monoagens_core::LogSeq::ZERO, clock.now());
+    snap.owner_actor_id = Some(owner.clone());
+    snap.known_actors.insert(owner.clone());
+    snap.known_actors.insert(ActorId::new("soul"));
+    snap.active_context_audience = Some(Audience::new([owner.clone(), ActorId::new("soul")]));
+    snap.capability_risk_metadata.insert(
+        CapabilityId::new("wallet.pay"),
+        monoagens_valve::ActionRiskMetadata {
+            is_financial_or_credential: true,
+            ..Default::default()
+        },
+    );
+    let mut valve = Valve::with_default_policies(ValveConfig::default(), snap).expect("valve");
+    valve.set_approval_attestation_key(mac_key);
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    let owner_for_async = owner.clone();
+    let (persisted, executed) = rt.block_on(async move {
+        let owner = owner_for_async;
+        let scripted = Arc::new(ScriptedModelProvider::from_replies([ScriptedReply::text(
+            json!({
+                "acts": [{
+                    "act": "act",
+                    "capability_id": "wallet.pay",
+                    "places": ["room:ops"],
+                    "people": ["per_owner"],
+                    "payload": [100, 101, 110, 121],
+                    "motivation": 4,
+                    "confidence_0_20": 18,
+                    "used_ids": [],
+                    "expected": null,
+                    "domain": null
+                }]
+            })
+            .to_string(),
+        )]));
+
+        let cfg = default_test_config(ModelProviderKind::Scripted);
+        let core_cfg = CoreConfig {
+            seed: 29,
+            ..CoreConfig::default()
+        };
+
+        let runtime = GatewayRuntime::start(
+            cfg,
+            &ProviderSecrets::default(),
+            || Ok(MemStore::new()),
+            core_cfg,
+            ValveDoorController::new(valve),
+            GatewayOptions {
+                clock: clock.clone(),
+                provider: Some(scripted),
+                diagnostics: DiagnosticSink::default(),
+                cues: CueRecorder::default(),
+                seams: GatewaySeams::default(),
+            },
+        )
+        .await
+        .expect("start gateway");
+
+        let handle = runtime.handle();
+        let (executed_join, body_ctrl) = spawn_ndjson_mock_body(
+            &handle,
+            "oob-console",
+            "room:ops",
+            "wallet.pay",
+            MockBodyBehavior::ImmediateDone,
+        );
+        let body_tx = body_ctrl.wait_connected().await;
+        handle.register_out_of_band_control_body(BodyId::new("oob-console"));
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+        let mut p = make_percept(
+            "per_owner",
+            "room:ops",
+            &["per_owner", "soul"],
+            6_000_000,
+            b"pay 99",
+        );
+        p.taint = monoagens_protocol::Taint::Trusted;
+        handle
+            .submit_and_wait(Input::Percept(Box::new(p)))
+            .await
+            .expect("submit percept");
+
+        let mut held_info = None;
+        for _ in 0..40 {
+            let events = handle.read_events().await.expect("events");
+            for ev in &events {
+                if let Some(EventDetail::Receipt {
+                    action_id,
+                    outcome: ReceiptOutcome::Held,
+                    h_act: Some(h_act),
+                    ..
+                }) = &ev.detail
+                {
+                    held_info = Some((action_id.clone(), h_act.clone()));
+                }
+            }
+            if held_info.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        }
+        let (action_id, h_act) = held_info.expect("held action");
+
+        // Attested OOB control body sends Waist-2 NDJSON `approval/resolve` with `approved = false`
+        let deny_ts = Time::from_millis(6_002_000);
+        clock.advance_by(2_000);
+        let deny_sig =
+            sign_approval_resolution(&mac_key, &action_id, &h_act, 0, false, deny_ts);
+        let deny_req = Waist2Request::new(
+            Some(monoagens_protocol::RpcId::Int(55)),
+            Waist2Method::ApprovalResolve,
+            ApprovalResolveParams {
+                headers: Waist2Headers::new("oob-deny-1"),
+                action_id: action_id.clone(),
+                h_act,
+                state_epoch: 0,
+                approved: false,
+                resolver: owner.clone(),
+                resolved_at_ms: deny_ts,
+                signature: Some(deny_sig),
+                out_of_band_channel: true,
+            },
+        );
+        let _ = body_tx.send(serde_json::to_string(&deny_req).unwrap());
+
+        let mut refused_seen = false;
+        for _ in 0..40 {
+            let events = handle.read_events().await.expect("events");
+            if events.iter().any(|ev| matches!(
+                &ev.detail,
+                Some(EventDetail::Receipt { action_id: aid, outcome: ReceiptOutcome::Refused, .. }) if aid == &action_id
+            )) {
+                refused_seen = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        }
+        assert!(refused_seen, "expected Refused receipt after OOB denial");
+
+        let persisted = handle.read_events().await.expect("events");
+        runtime.shutdown().await;
+        let executed = executed_join.await.expect("body join");
+        (persisted, executed)
+    });
+
+    assert!(executed.is_empty(), "denied action must never dispatch");
+
+    // Verify persisted events replay cleanly in a fresh Valve after restart
+    let mut replayed_snap = ValveSnapshot::new(monoagens_core::LogSeq::ZERO, Time::from_millis(6_002_000));
+    replayed_snap.owner_actor_id = Some(owner);
+    let mut replayed_valve =
+        Valve::with_default_policies(ValveConfig::default(), replayed_snap).expect("v");
+    replayed_valve.set_approval_attestation_key(mac_key);
+    replayed_valve.replay_from_events(&persisted);
+    assert!(replayed_valve.approval_manager().pending().is_empty());
+}

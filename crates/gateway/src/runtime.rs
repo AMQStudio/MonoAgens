@@ -7,10 +7,12 @@ use std::sync::{Arc, Mutex};
 
 use monoagens_core::neural::NeuralModel;
 use monoagens_core::{
-    Core, CoreConfig, CoreError, Effect, EventRecord, Input, QueueClass, QueueOverflow, Store,
-    StoreError, ThreeClassQueue,
+    Core, CoreConfig, CoreError, DoorDecision, Effect, EventRecord, Input, QueueClass,
+    QueueOverflow, Store, StoreError, ThreeClassQueue,
 };
-use monoagens_protocol::{BodyId, Time};
+use monoagens_protocol::{
+    ApprovalResolveParams, ApprovalResolveResult, BodyId, Time, Waist2Error,
+};
 use monoagens_reason::ModelProvider;
 use monoagens_store::{ConfigLoadError, SegmentedStore, StoreConfig};
 use tokio::sync::{Notify, mpsc, oneshot};
@@ -166,12 +168,17 @@ impl IngressQueue {
     }
 }
 
-enum ControlCommand {
+pub(crate) enum ControlCommand {
     ReadEvents {
         reply: oneshot::Sender<Result<Vec<EventRecord>, GatewayError>>,
     },
     NextDue {
         reply: oneshot::Sender<Option<Time>>,
+    },
+    ResolveApproval {
+        params: Box<ApprovalResolveParams>,
+        from_in_band_body: Option<BodyId>,
+        reply: oneshot::Sender<Result<ApprovalResolveResult, Waist2Error>>,
     },
     Shutdown {
         reply: oneshot::Sender<()>,
@@ -290,6 +297,28 @@ impl GatewayHandle {
             .send(ControlCommand::NextDue { reply: tx })
             .map_err(|_| GatewayError::OwnerExited)?;
         rx.await.map_err(|_| GatewayError::OwnerExited)
+    }
+
+    /// Registers a `BodyId` as an attested out-of-band owner control channel for `approval/resolve`.
+    pub fn register_out_of_band_control_body(&self, body_id: BodyId) {
+        self.router.register_out_of_band_control_body(body_id);
+    }
+
+    /// Submits an attested out-of-band `approval/resolve` command directly into `OwnerTaskContext`.
+    pub async fn resolve_approval(
+        &self,
+        params: ApprovalResolveParams,
+    ) -> Result<ApprovalResolveResult, Waist2Error> {
+        let (tx, rx) = oneshot::channel();
+        self.control_tx
+            .send(ControlCommand::ResolveApproval {
+                params: Box::new(params),
+                from_in_band_body: None,
+                reply: tx,
+            })
+            .map_err(|_| Waist2Error::invalid_receipt_transition("owner task exited"))?;
+        rx.await
+            .map_err(|_| Waist2Error::invalid_receipt_transition("owner task exited"))?
     }
 
     /// Returns the shared [`IngressQueue`].
@@ -457,6 +486,7 @@ impl GatewayRuntime {
         );
 
         let (control_tx, control_rx) = mpsc::unbounded_channel();
+        router.set_control_tx(control_tx.clone());
         let (ready_tx, ready_rx) = oneshot::channel();
         let ownership_stats = OwnershipStats::default();
 
@@ -643,6 +673,11 @@ async fn run_core_owner_task<S, F, D>(
     let (used, limit) = ctx.budget.snapshot(ctx.clock.now());
     core.set_daily_budget(used as f64, limit as f64);
 
+    if let Ok(events) = core.store().read_in_order(None, usize::MAX) {
+        ctx.doors.replay_from_store_events(&events);
+    }
+    ctx.doors.sync_state_epoch(core.state().epoch);
+
     if core.state().startup_recovery_pending {
         let now = ctx.clock.now();
         ctx.doors.sync_runtime_state(
@@ -651,9 +686,11 @@ async fn run_core_owner_task<S, F, D>(
             used,
             &ctx.router.all_capabilities(),
         );
+        ctx.doors.sync_state_epoch(core.state().epoch);
         ctx.stats.enter_step();
         let recovery_res = core.recover_startup(now, &mut ctx.doors);
         ctx.stats.exit_step();
+        persist_door_approval_events(&mut core, &mut ctx);
         match recovery_res {
             Ok(effects) => spawn_effects(&core, &ctx, effects),
             Err(err) => {
@@ -683,12 +720,14 @@ async fn run_core_owner_task<S, F, D>(
                 used,
                 &ctx.router.all_capabilities(),
             );
+            ctx.doors.sync_state_epoch(core.state().epoch);
 
             let is_tick = matches!(env.input, Input::Tick);
             let is_body_state = matches!(env.input, Input::BodyState(_));
             ctx.stats.enter_step();
             let step_res = core.step(env.input, now, &mut ctx.doors);
             ctx.stats.exit_step();
+            persist_door_approval_events(&mut core, &mut ctx);
 
             match step_res {
                 Ok(effects) => {
@@ -726,21 +765,8 @@ async fn run_core_owner_task<S, F, D>(
 
         // 2. Drain non-blocking control commands before sleeping.
         while let Ok(cmd) = ctx.control_rx.try_recv() {
-            match cmd {
-                ControlCommand::ReadEvents { reply } => {
-                    let res = core
-                        .store()
-                        .read_in_order(None, usize::MAX)
-                        .map_err(GatewayError::from);
-                    let _ = reply.send(res);
-                }
-                ControlCommand::NextDue { reply } => {
-                    let _ = reply.send(core.next_due());
-                }
-                ControlCommand::Shutdown { reply } => {
-                    let _ = reply.send(());
-                    return;
-                }
+            if handle_control_command(cmd, &mut core, &mut ctx) {
+                return;
             }
         }
 
@@ -763,16 +789,10 @@ async fn run_core_owner_task<S, F, D>(
             biased;
             cmd = ctx.control_rx.recv() => {
                 match cmd {
-                    Some(ControlCommand::ReadEvents { reply }) => {
-                        let res = core.store().read_in_order(None, usize::MAX).map_err(GatewayError::from);
-                        let _ = reply.send(res);
-                    }
-                    Some(ControlCommand::NextDue { reply }) => {
-                        let _ = reply.send(core.next_due());
-                    }
-                    Some(ControlCommand::Shutdown { reply }) => {
-                        let _ = reply.send(());
-                        return;
+                    Some(c) => {
+                        if handle_control_command(c, &mut core, &mut ctx) {
+                            return;
+                        }
                     }
                     None => {
                         return;
@@ -793,6 +813,131 @@ async fn run_core_owner_task<S, F, D>(
                     }
                 }
             }
+        }
+    }
+}
+
+fn persist_door_approval_events<S: Store, D: DoorController>(
+    core: &mut Core<S>,
+    ctx: &mut OwnerTaskContext<D>,
+) {
+    let events = ctx.doors.take_pending_approval_events();
+    for ev in events {
+        if let Err(err) = core.store_mut().append(ev) {
+            ctx.diagnostics.log(
+                ctx.clock.now(),
+                LogLevel::Error,
+                "gateway.approval",
+                &format!("failed to persist approval event: {err}"),
+            );
+        }
+    }
+}
+
+fn handle_control_command<S: Store, D: DoorController>(
+    cmd: ControlCommand,
+    core: &mut Core<S>,
+    ctx: &mut OwnerTaskContext<D>,
+) -> bool {
+    match cmd {
+        ControlCommand::ReadEvents { reply } => {
+            let res = core
+                .store()
+                .read_in_order(None, usize::MAX)
+                .map_err(GatewayError::from);
+            let _ = reply.send(res);
+            false
+        }
+        ControlCommand::NextDue { reply } => {
+            let _ = reply.send(core.next_due());
+            false
+        }
+        ControlCommand::ResolveApproval {
+            params,
+            from_in_band_body,
+            reply,
+        } => {
+            let params = *params;
+            let now = ctx.clock.now();
+            let (used, _limit) = ctx.budget.snapshot(now);
+            ctx.doors.sync_runtime_state(
+                core.state().last_seq,
+                now,
+                used,
+                &ctx.router.all_capabilities(),
+            );
+            ctx.doors.sync_state_epoch(core.state().epoch);
+
+            if let Some(bad_body) = from_in_band_body {
+                ctx.doors.record_in_band_rejection_audit(
+                    &params,
+                    &format!(
+                        "approval/resolve rejected from untrusted or in-band body '{}'",
+                        bad_body.as_str()
+                    ),
+                );
+                persist_door_approval_events(core, ctx);
+                let _ = reply.send(Err(Waist2Error::invalid_receipt_transition(
+                    "approval/resolve rejected from untrusted or in-band chat body",
+                )));
+                return false;
+            }
+
+            let Some(resolve_res) = ctx.doors.resolve_approval(&params) else {
+                let _ = reply.send(Err(Waist2Error {
+                    code: -32601,
+                    message: "approval/resolve capability is not wired in this Gateway".to_owned(),
+                    data: None,
+                }));
+                return false;
+            };
+
+            // Record-first: persist resolution / rejection audit events before any dispatch.
+            persist_door_approval_events(core, ctx);
+
+            let res = match resolve_res {
+                Err(werr) => Err(werr),
+                Ok(ok_res) => {
+                    if params.approved {
+                        if let Some(mut action) = ctx.doors.take_approved_action(&params.action_id)
+                        {
+                            let door_dec = ctx.doors.action(&mut action);
+                            persist_door_approval_events(core, ctx);
+                            match door_dec {
+                                DoorDecision::Allow | DoorDecision::Strip { .. } => {
+                                    ctx.router.spawn_dispatch_action(action);
+                                    Ok(ok_res)
+                                }
+                                DoorDecision::Refuse { reason, .. }
+                                | DoorDecision::Hold { reason, .. } => {
+                                    Err(Waist2Error::invalid_receipt_transition(reason))
+                                }
+                            }
+                        } else {
+                            Ok(ok_res)
+                        }
+                    } else {
+                        if let Some(receipt) =
+                            ctx.doors.take_pending_denial_receipt(&params.action_id)
+                        {
+                            ctx.stats.enter_step();
+                            let step_res = core.step(Input::Receipt(receipt), now, &mut ctx.doors);
+                            ctx.stats.exit_step();
+                            persist_door_approval_events(core, ctx);
+                            if let Ok(effects) = step_res {
+                                spawn_effects(core, ctx, effects);
+                            }
+                        }
+                        Ok(ok_res)
+                    }
+                }
+            };
+            let _ = reply.send(res);
+            false
+        }
+        ControlCommand::Shutdown { reply } => {
+            let _ = reply.send(());
+            true
         }
     }
 }

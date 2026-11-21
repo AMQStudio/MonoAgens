@@ -318,6 +318,36 @@ pub fn decide_gate(
     }
 }
 
+/// Maximum baseline peer jitter (`ms`) added to `OpenWait.due_ms` in multi-bot / specialist rooms.
+pub const OPEN_WAIT_PEER_JITTER_MAX_MS: f64 = 1_500.0;
+
+/// Computes deterministic per-soul `OpenWait` jitter (`ms`) scaled by `(1 + 2 * peer_expertise_margin)`.
+///
+/// Returns `0` in single-participant or human-only rooms (`!room_has_automated_peers && margin <= 0.0`)
+/// so human-only patience timing (`dev-08`) stays completely invariant.
+#[must_use]
+pub fn compute_open_wait_jitter_ms(
+    seed: u64,
+    draw_key: EventId,
+    non_soul_audience: usize,
+    room_has_automated_peers: bool,
+    peer_expertise_margin: Option<f32>,
+) -> u64 {
+    let margin = peer_expertise_margin
+        .filter(|v| v.is_finite())
+        .map_or(0.0_f64, |v| f64::from(v.clamp(0.0, 1.0)));
+    if non_soul_audience < 2 || (!room_has_automated_peers && margin <= 0.0) {
+        return 0;
+    }
+    let unit = SeededRng::draw_unit(seed ^ 0x4A17_7E01, draw_key);
+    let raw = (unit * OPEN_WAIT_PEER_JITTER_MAX_MS * (1.0 + 2.0 * margin)).floor();
+    if raw.is_finite() && raw > 0.0 {
+        raw as u64
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

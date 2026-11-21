@@ -59,12 +59,13 @@ pub use runtime::{
 };
 pub use seams::{
     AsyncGatewayHook, AttachmentCustodySeam, DoorController, DoorsAdapter, GatewaySeams,
-    IdentitySeam, PreQueueIndexSeam, SeamError,
+    IdentitySeam, PreQueueIndexSeam, SeamError, ValveDoorController,
 };
 pub use secrets::{
-    AttachmentSecrets, ENV_ATTACHMENT_MASTER_KEY, GatewaySecrets, SecretsLoadError,
-    is_forbidden_secret_key, load_attachment_secrets, load_gateway_secrets, load_provider_secrets,
-    load_secrets_toml_file, parse_secrets_toml_str, validate_no_inline_secrets_in_toml,
+    ApprovalSecrets, AttachmentSecrets, ENV_APPROVAL_ATTESTATION_KEY, ENV_ATTACHMENT_MASTER_KEY,
+    GatewaySecrets, SecretsLoadError, is_forbidden_secret_key, load_approval_secrets,
+    load_attachment_secrets, load_gateway_secrets, load_provider_secrets, load_secrets_toml_file,
+    parse_secrets_toml_str, resolve_approval_mac_key, validate_no_inline_secrets_in_toml,
     validate_non_secret_file,
 };
 pub use waist2::{

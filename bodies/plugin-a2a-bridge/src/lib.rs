@@ -12,18 +12,30 @@ use std::time::Duration;
 use monoagens_body_kit::{capability_schema_hash, make_refused_receipt, make_terminal_receipt};
 use monoagens_body_sdk::{
     ActionCancelParams, ActionCancelResult, ActionExecuteParams, ActionExecuteResult, ActionId,
-    ApprovalResolveParams, ApprovalResolveResult, Audience, BodyDiscoverParams, BodyDiscoverResult,
-    BodyHandler, BodyId, BodyStatus, CURRENT_PROTOCOL_VERSION, CapabilityDescriptor,
-    CapabilityFlags, CapabilityId, PerceptEmitParams, PerceptEmitResult, PlaceId, Receipt,
-    ReceiptOutcome, TerminationReason, Time, Waist2Error, sort_capabilities,
+    ActorId, ApprovalResolveParams, ApprovalResolveResult, Audience, BodyDiscoverParams,
+    BodyDiscoverResult, BodyHandler, BodyId, BodyStatus, CURRENT_PROTOCOL_VERSION,
+    CapabilityDescriptor, CapabilityFlags, CapabilityId, MetaValue, PerceptEmitParams,
+    PerceptEmitResult, PlaceId, Receipt, ReceiptOutcome, TerminationReason, Time, Waist2Error,
+    sort_capabilities,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 pub use a2a::{
     A2A_PROTOCOL_VERSION, A2aMessage, A2aPart, A2aSendResult, A2aTask, A2aTaskState, A2aTaskStatus,
-    A2aTransport, A2aTransportError, AgentCard, AgentInterface, AgentSkill,
-    HttpLoopbackA2aTransport, LocalMockA2aPeer,
+    A2aTransport, A2aTransportError, AgentCard, AgentInterface, AgentSkill, DEFAULT_MAX_A2A_HOPS,
+    ERR_A2A_CYCLE, HttpLoopbackA2aTransport, LocalMockA2aPeer,
 };
+
+/// Transitive delegation tracking metadata carried across A2A task dispatches (`C-14`).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct A2aHopMetadata {
+    #[serde(default)]
+    pub hop_count: u8,
+    #[serde(default)]
+    pub visited_agents: Vec<ActorId>,
+}
 
 /// Configuration for [`A2aBridgeBody`].
 #[derive(Debug, Clone)]
@@ -32,6 +44,7 @@ pub struct A2aBridgeConfig {
     pub agent_id: String,
     pub max_poll_attempts: u32,
     pub poll_interval_ms: u64,
+    pub max_a2a_hops: u8,
 }
 
 impl A2aBridgeConfig {
@@ -44,6 +57,7 @@ impl A2aBridgeConfig {
             agent_id,
             max_poll_attempts: 20,
             poll_interval_ms: 5,
+            max_a2a_hops: DEFAULT_MAX_A2A_HOPS,
         }
     }
 
@@ -341,6 +355,43 @@ impl<T: A2aTransport> BodyHandler for A2aBridgeBody<T> {
             });
         }
 
+        let hop_meta = extract_a2a_hop_metadata(&params);
+        let cycle_detected = hop_meta
+            .visited_agents
+            .iter()
+            .any(|a| a.as_str() == self.config.agent_id || a.as_str() == self.place.as_str());
+        let hop_overflow =
+            self.config.max_a2a_hops == 0 || hop_meta.hop_count >= self.config.max_a2a_hops;
+        if cycle_detected || hop_overflow {
+            let detail = if cycle_detected {
+                format!(
+                    "A2A delegation cycle detected revisiting agent '{}'",
+                    self.config.agent_id
+                )
+            } else {
+                format!(
+                    "A2A delegation hop_count {} reached max_a2a_hops {}",
+                    hop_meta.hop_count, self.config.max_a2a_hops
+                )
+            };
+            let receipt = make_refused_receipt(
+                params.action_id,
+                params.capability_id,
+                ERR_A2A_CYCLE,
+                detail,
+                params.h_act,
+                Time::from_millis(self.clock_now_ms),
+            );
+            return Ok(ActionExecuteResult {
+                accepted: false,
+                receipt: Some(receipt),
+            });
+        }
+
+        let mut next_visited = hop_meta.visited_agents;
+        next_visited.push(ActorId::new(&self.config.agent_id));
+        let next_hop = hop_meta.hop_count.saturating_add(1);
+
         let text = String::from_utf8_lossy(params.payload.as_bytes()).into_owned();
         let msg = A2aMessage {
             role: "ROLE_USER".to_owned(),
@@ -350,6 +401,10 @@ impl<T: A2aTransport> BodyHandler for A2aBridgeBody<T> {
                 text: Some(text),
                 data: None,
             }],
+            metadata: Some(json!({
+                "hopCount": next_hop,
+                "visitedAgents": next_visited,
+            })),
         };
 
         let receipt = match self.transport.send_message(&skill_id, msg) {
@@ -429,6 +484,7 @@ impl<T: A2aTransport> BodyHandler for A2aBridgeBody<T> {
                 )),
                 data: None,
             }],
+            metadata: None,
         };
 
         if let Err(err) = self.transport.send_message(&pending.skill_id, msg) {
@@ -451,4 +507,55 @@ impl<T: A2aTransport> BodyHandler for A2aBridgeBody<T> {
         }
         Ok(PerceptEmitResult { accepted: true })
     }
+}
+
+fn extract_a2a_hop_metadata(params: &ActionExecuteParams) -> A2aHopMetadata {
+    let mut meta = A2aHopMetadata::default();
+
+    if let Ok(val) = serde_json::from_slice::<serde_json::Value>(params.payload.as_bytes()) {
+        if let Some(hop) = val
+            .get("hop_count")
+            .or_else(|| val.get("hopCount"))
+            .and_then(serde_json::Value::as_u64)
+        {
+            meta.hop_count = u8::try_from(hop).unwrap_or(u8::MAX);
+        }
+        if let Some(arr) = val
+            .get("visited_agents")
+            .or_else(|| val.get("visitedAgents"))
+            .and_then(serde_json::Value::as_array)
+        {
+            for item in arr {
+                if let Some(s) = item.as_str() {
+                    meta.visited_agents.push(ActorId::new(s));
+                }
+            }
+        }
+    }
+
+    if let Some(hop_val) = params
+        .headers
+        .meta
+        .get("hop_count")
+        .or_else(|| params.headers.meta.get("hopCount"))
+        && let MetaValue::Int(h) = hop_val
+    {
+        meta.hop_count = u8::try_from((*h).max(0)).unwrap_or(u8::MAX);
+    }
+    if let Some(visited_val) = params
+        .headers
+        .meta
+        .get("visited_agents")
+        .or_else(|| params.headers.meta.get("visitedAgents"))
+        && let MetaValue::Array(arr) = visited_val
+    {
+        meta.visited_agents.clear();
+        for item in arr {
+            if let MetaValue::String(s) = item {
+                meta.visited_agents.push(ActorId::new(s));
+            }
+        }
+    }
+
+    meta
 }

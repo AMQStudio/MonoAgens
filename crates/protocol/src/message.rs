@@ -170,6 +170,8 @@ pub struct Percept {
     pub attachments: Vec<AttachmentHandle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dialogue_act_gap: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_expertise_margin: Option<f32>,
 }
 
 const fn default_taint() -> Taint {
@@ -212,6 +214,7 @@ impl Percept {
             embeddings: Vec::new(),
             attachments: Vec::new(),
             dialogue_act_gap: None,
+            peer_expertise_margin: None,
         }
     }
 
@@ -308,4 +311,6 @@ pub struct ActorFacts {
     pub beta_0: f64,
     pub teacher_weight: f64,
     pub trusted_origin: bool,
+    #[serde(default)]
+    pub automated_peer: bool,
 }

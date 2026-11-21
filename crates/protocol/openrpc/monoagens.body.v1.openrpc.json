@@ -279,11 +279,21 @@
           "headers": {
             "$ref": "#/components/schemas/Waist2Headers"
           },
+          "out_of_band_channel": {
+            "default": false,
+            "type": "boolean"
+          },
           "resolved_at_ms": {
             "$ref": "#/components/schemas/Time"
           },
           "resolver": {
             "$ref": "#/components/schemas/ActorId"
+          },
+          "signature": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "state_epoch": {
             "format": "uint64",
@@ -993,6 +1003,13 @@
           "payload": {
             "$ref": "#/components/schemas/OpaquePayload"
           },
+          "peer_expertise_margin": {
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "place": {
             "$ref": "#/components/schemas/PlaceId"
           },
@@ -1165,6 +1182,13 @@
           },
           "payload": {
             "$ref": "#/components/schemas/OpaquePayload"
+          },
+          "peer_expertise_margin": {
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "place": {
             "$ref": "#/components/schemas/PlaceId"
@@ -2225,6 +2249,17 @@
           }
         },
         {
+          "name": "peer_expertise_margin",
+          "required": false,
+          "schema": {
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        {
           "name": "repair",
           "required": false,
           "schema": {
@@ -2508,6 +2543,24 @@
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
+          }
+        },
+        {
+          "name": "out_of_band_channel",
+          "required": false,
+          "schema": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "signature",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       ],

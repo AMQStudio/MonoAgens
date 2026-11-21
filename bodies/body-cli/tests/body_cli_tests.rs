@@ -199,6 +199,8 @@ fn body_cli_persistent_runtime_handles_unknown_cap_held_approval_and_crash_journ
             approved: true,
             resolver: ActorId::new("per_owner"),
             resolved_at_ms: Time::from_millis(2_000),
+            signature: None,
+            out_of_band_channel: false,
         },
     ))
     .expect("encode");

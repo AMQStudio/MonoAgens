@@ -222,6 +222,7 @@ impl<B: Ros2Backend> Ros2BridgeBody<B> {
             embeddings: Vec::new(),
             attachments: Vec::new(),
             dialogue_act_gap: None,
+            peer_expertise_margin: None,
         }
     }
 

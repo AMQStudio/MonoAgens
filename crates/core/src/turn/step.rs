@@ -398,6 +398,10 @@ pub(crate) fn execute_turn<S: Store>(
 
             let mut gate_outcome = None;
             let mut audit_withheld: Option<(u8, f64, f64, &'static str)> = None;
+            let suppress_peer_turn_alloc = !blocked
+                && core
+                    .state()
+                    .is_peer_turn_allocation_suppressed(&stored.actor, &stored.place);
             let detail = if blocked {
                 audit_withheld = Some((0, 0.0, 0.0, "door_blocked"));
                 EventDetail::Decision {
@@ -642,7 +646,44 @@ pub(crate) fn execute_turn<S: Store>(
                         .channel
                         .clone()
                         .unwrap_or_else(|| ChannelId::new(percept.actor.as_str()));
-                    let due_ms = now.saturating_add_ms(gate.wait_delta_ms);
+                    let soul_id = &core.state().soul_actor_id;
+                    let non_soul_audience = percept
+                        .audience
+                        .members
+                        .iter()
+                        .filter(|a| *a != soul_id)
+                        .count();
+                    let room_has_automated_peers = percept
+                        .audience
+                        .members
+                        .iter()
+                        .filter(|a| *a != soul_id)
+                        .any(|a| {
+                            core.state()
+                                .actor_facts
+                                .get(a)
+                                .is_some_and(|f| f.automated_peer)
+                        })
+                        || core
+                            .state()
+                            .place_participants
+                            .get(&stored.place)
+                            .is_some_and(|set| {
+                                set.iter().filter(|a| *a != soul_id).any(|a| {
+                                    core.state()
+                                        .actor_facts
+                                        .get(a)
+                                        .is_some_and(|f| f.automated_peer)
+                                })
+                            });
+                    let jitter_ms = crate::gate::compute_open_wait_jitter_ms(
+                        core.seed(),
+                        core.state().draw_key(stored.id),
+                        non_soul_audience,
+                        room_has_automated_peers,
+                        percept.peer_expertise_margin,
+                    );
+                    let due_ms = now.saturating_add_ms(gate.wait_delta_ms.saturating_add(jitter_ms));
                     let wait_rec = EventRecord::derived_from(
                         &stored,
                         EventKind::ExpectationOpened,
@@ -681,9 +722,9 @@ pub(crate) fn execute_turn<S: Store>(
                                 .map(|o| o.score)
                         })
                         .unwrap_or(0.0);
-                    let turn_allocated =
-                        percept.addressees.contains(&core.state().soul_actor_id)
-                            || f64::from(deg_soul) >= crate::state::DEFAULT_DEG_ALLOC_THRESHOLD;
+                    let turn_allocated = (percept.addressees.contains(&core.state().soul_actor_id)
+                        || f64::from(deg_soul) >= crate::state::DEFAULT_DEG_ALLOC_THRESHOLD)
+                        && !suppress_peer_turn_alloc;
                     core.state_mut()
                         .turn_allocated_by_trigger
                         .insert(stored.id, turn_allocated);

@@ -1471,6 +1471,8 @@ fn run_b_must_05(session: &mut ChildRpcSession, probe: &ProbeTarget) -> Conforma
         approved: true,
         resolver: ActorId::new("per_tck_owner"),
         resolved_at_ms: Time::from_millis(1_000),
+        signature: None,
+        out_of_band_channel: false,
     };
     match session.call::<ApprovalResolveParams, ApprovalResolveResult>(
         Waist2Method::ApprovalResolve,
@@ -1597,6 +1599,8 @@ fn run_b_must_05(session: &mut ChildRpcSession, probe: &ProbeTarget) -> Conforma
         approved: true,
         resolver: ActorId::new("per_tck_owner"),
         resolved_at_ms: Time::from_millis(1_100),
+        signature: None,
+        out_of_band_channel: false,
     };
     match session.call::<ApprovalResolveParams, ApprovalResolveResult>(
         Waist2Method::ApprovalResolve,

@@ -1,0 +1,416 @@
+{
+  "id": "dev-10-multiparty-self-repair",
+  "name": "Dev 10 Multi-Party Self-Repair Patience & S2 Third-Person Mentions",
+  "set": "development",
+  "start_time_ms": 0,
+  "model_latency_ms": 10,
+  "model_id": "scripted",
+  "embedder_id": "none",
+  "bodies": [
+    {
+      "body_id": "chat-body",
+      "places": [
+        "room:team"
+      ],
+      "capabilities": [
+        {
+          "id": "chat.speak",
+          "description": "Capability chat.speak",
+          "places": [
+            "room:team"
+          ],
+          "flags": {
+            "communicative": true,
+            "identity_changing": false,
+            "irreversible": false
+          },
+          "typical_latency_ms": 10,
+          "capability_schema_hash": "sha256:cap-chat.speak",
+          "sensed_effect": null
+        }
+      ],
+      "action_scripts": []
+    }
+  ],
+  "events": [
+    {
+      "at_ms": 1000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "bob",
+        "origin_actor": "bob",
+        "place": "room:team",
+        "audience": [
+          "alice",
+          "bob",
+          "carol",
+          "soul"
+        ],
+        "timestamp_ms": 1000,
+        "payload": [
+          109,
+          111,
+          114,
+          110,
+          105,
+          110,
+          103,
+          32,
+          116,
+          101,
+          97,
+          109
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 2000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:team",
+        "audience": [
+          "alice",
+          "bob",
+          "carol",
+          "soul"
+        ],
+        "timestamp_ms": 2000,
+        "payload": [
+          99,
+          97,
+          114,
+          111,
+          108,
+          32,
+          114,
+          101,
+          109,
+          101,
+          109,
+          98,
+          101,
+          114,
+          32,
+          119,
+          104,
+          97,
+          116,
+          32,
+          115,
+          111,
+          117,
+          108,
+          32,
+          115,
+          97,
+          105,
+          100
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "carol"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 3000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "carol",
+        "origin_actor": "carol",
+        "place": "room:team",
+        "audience": [
+          "alice",
+          "bob",
+          "carol",
+          "soul"
+        ],
+        "timestamp_ms": 3000,
+        "payload": [
+          103,
+          111,
+          116,
+          32,
+          105,
+          116,
+          32,
+          100,
+          101,
+          112,
+          108,
+          111,
+          121,
+          32,
+          97,
+          116,
+          32,
+          52,
+          112,
+          109
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "alice"
+        ]
+      }
+    },
+    {
+      "at_ms": 4000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:team",
+        "audience": [
+          "alice",
+          "bob",
+          "carol",
+          "soul"
+        ],
+        "timestamp_ms": 4000,
+        "payload": [
+          119,
+          97,
+          105,
+          116,
+          32,
+          114,
+          101,
+          108,
+          101,
+          97,
+          115,
+          101,
+          32,
+          111,
+          110,
+          32,
+          84,
+          117,
+          101,
+          115,
+          100,
+          97,
+          121,
+          63
+        ],
+        "taint": "untrusted",
+        "named": [
+          "soul"
+        ],
+        "dialogue_act_gap": 1.0
+      }
+    },
+    {
+      "at_ms": 4400,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:team",
+        "audience": [
+          "alice",
+          "bob",
+          "carol",
+          "soul"
+        ],
+        "timestamp_ms": 4400,
+        "payload": [
+          115,
+          111,
+          114,
+          114,
+          121,
+          32,
+          109,
+          101,
+          97,
+          110,
+          116,
+          32,
+          87,
+          101,
+          100,
+          110,
+          101,
+          115,
+          100,
+          97,
+          121
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "bob"
+        ]
+      }
+    },
+    {
+      "at_ms": 10000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:team",
+        "audience": [
+          "alice",
+          "bob",
+          "carol",
+          "soul"
+        ],
+        "timestamp_ms": 10000,
+        "payload": [
+          115,
+          111,
+          117,
+          108,
+          32,
+          99,
+          111,
+          110,
+          102,
+          105,
+          114,
+          109,
+          32,
+          87,
+          101,
+          100,
+          110,
+          101,
+          115,
+          100,
+          97,
+          121
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    }
+  ],
+  "scripted_model": [
+    {
+      "wake_index": 0,
+      "acts": [
+        {
+          "act": "act",
+          "capability_id": "chat.speak",
+          "places": [
+            "room:team"
+          ],
+          "people": [
+            "alice"
+          ],
+          "payload": [
+            67,
+            111,
+            110,
+            102,
+            105,
+            114,
+            109,
+            101,
+            100,
+            32,
+            87,
+            101,
+            100,
+            110,
+            101,
+            115,
+            100,
+            97,
+            121,
+            32,
+            50,
+            112,
+            109
+          ],
+          "motivation": 4,
+          "confidence_0_20": 18,
+          "used_ids": [],
+          "expected": null,
+          "domain": null
+        }
+      ],
+      "tokens_in": 45,
+      "tokens_out": 15
+    }
+  ],
+  "checks": [
+    {
+      "check": "action_in_place",
+      "name": "patient_during_s2_and_self_repair",
+      "kind": "structural",
+      "place": "room:team",
+      "capability_id": "chat.speak",
+      "after_ms": 1000,
+      "before_ms": 9999,
+      "expected_present": false
+    },
+    {
+      "check": "action_in_place",
+      "name": "spoke_when_explicitly_addressed",
+      "kind": "structural",
+      "place": "room:team",
+      "capability_id": "chat.speak",
+      "after_ms": 10000,
+      "before_ms": 15000,
+      "expected_present": true
+    },
+    {
+      "check": "payload_contains",
+      "name": "confirmed_wednesday_spoken",
+      "kind": "structural",
+      "place": "room:team",
+      "event_kind": "action",
+      "text": "Confirmed Wednesday",
+      "expected_present": true
+    }
+  ],
+  "annotations": {
+    "event_annotations": {
+      "0": {
+        "warranted": "silent"
+      },
+      "1": {
+        "warranted": "silent",
+        "sel_other": true,
+        "self_repair_eligible": true
+      },
+      "2": {
+        "warranted": "silent",
+        "answered": true
+      },
+      "3": {
+        "warranted": "silent",
+        "self_repair_eligible": true
+      },
+      "4": {
+        "warranted": "silent",
+        "answered": true
+      },
+      "5": {
+        "warranted": "speak",
+        "addressed_to_soul": true
+      }
+    },
+    "participant_count": 4
+  }
+}

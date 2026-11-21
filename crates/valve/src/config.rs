@@ -12,6 +12,12 @@ use crate::quiet_hours::{
 };
 use crate::roles::{PHYSICAL_PRESENCE_TTL_S, PHYSICAL_ROOM_RADIUS_M, ROOM_PRESENCE_TTL_S};
 
+/// Default consecutive automated-turn brake threshold per place (`C-14`).
+pub const DEFAULT_MAX_CONSECUTIVE_AUTOMATED_TURNS: u32 = 4;
+
+/// Default maximum transitive A2A delegation hop count (`C-14`).
+pub const DEFAULT_MAX_A2A_HOPS: u8 = 3;
+
 /// Operational mode recorded in `ValveSelfSnapshot` and `door_verdict` logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -46,6 +52,7 @@ pub enum ValveRuleToggle {
     TaintBlocking,
     QuietHours,
     ProactiveCap,
+    PeerLoopBrake,
 }
 
 impl ValveRuleToggle {
@@ -62,6 +69,7 @@ impl ValveRuleToggle {
             Self::TaintBlocking => "taint_blocking",
             Self::QuietHours => "quiet_hours",
             Self::ProactiveCap => "proactive_cap",
+            Self::PeerLoopBrake => "peer_loop_brake",
         }
     }
 }
@@ -80,6 +88,7 @@ pub struct ValveConfig {
     pub taint_blocking_enabled: bool,
     pub quiet_hours_enabled: bool,
     pub proactive_cap_enabled: bool,
+    pub peer_loop_brake_enabled: bool,
 
     pub room_presence_ttl_s: u64,
     pub physical_presence_ttl_s: u64,
@@ -88,6 +97,8 @@ pub struct ValveConfig {
     pub daily_token_budget: u64,
     pub max_chain_wakes: u32,
     pub proactive_daily_cap: u32,
+    pub max_consecutive_automated_turns: u32,
+    pub max_a2a_hops: u8,
 
     // V2 approval lifecycle & sliding caps
     pub approval_ttl_chat_s: u64,
@@ -118,12 +129,15 @@ impl Default for ValveConfig {
             taint_blocking_enabled: true,
             quiet_hours_enabled: false,
             proactive_cap_enabled: true,
+            peer_loop_brake_enabled: true,
             room_presence_ttl_s: ROOM_PRESENCE_TTL_S,
             physical_presence_ttl_s: PHYSICAL_PRESENCE_TTL_S,
             physical_room_radius_m: PHYSICAL_ROOM_RADIUS_M,
             daily_token_budget: 100_000,
             max_chain_wakes: 8,
             proactive_daily_cap: PROACTIVE_DAILY_CAP,
+            max_consecutive_automated_turns: DEFAULT_MAX_CONSECUTIVE_AUTOMATED_TURNS,
+            max_a2a_hops: DEFAULT_MAX_A2A_HOPS,
             approval_ttl_chat_s: APPROVAL_TTL_CHAT_S,
             approval_ttl_embodied_s: APPROVAL_TTL_EMBODIED_S,
             max_prompts_per_hour: MAX_PROMPTS_PER_HOUR,
@@ -154,6 +168,7 @@ impl ValveConfig {
             taint_blocking_enabled: false,
             quiet_hours_enabled: false,
             proactive_cap_enabled: false,
+            peer_loop_brake_enabled: false,
             ..Self::default()
         }
     }
@@ -175,6 +190,7 @@ impl ValveConfig {
             ValveRuleToggle::TaintBlocking => self.taint_blocking_enabled,
             ValveRuleToggle::QuietHours => self.quiet_hours_enabled,
             ValveRuleToggle::ProactiveCap => self.proactive_cap_enabled,
+            ValveRuleToggle::PeerLoopBrake => self.peer_loop_brake_enabled,
         }
     }
 
@@ -190,6 +206,7 @@ impl ValveConfig {
             || self.taint_blocking_enabled
             || self.quiet_hours_enabled
             || self.proactive_cap_enabled
+            || self.peer_loop_brake_enabled
     }
 
     /// Returns the effective mode label (`"off"` when `ValveMode::Off` or no rules are enabled).
@@ -215,6 +232,7 @@ impl ValveConfig {
             ValveRuleToggle::TaintBlocking => &mut self.taint_blocking_enabled,
             ValveRuleToggle::QuietHours => &mut self.quiet_hours_enabled,
             ValveRuleToggle::ProactiveCap => &mut self.proactive_cap_enabled,
+            ValveRuleToggle::PeerLoopBrake => &mut self.peer_loop_brake_enabled,
         };
         let prev = *slot;
         *slot = enabled;

@@ -243,7 +243,7 @@ fn lab_compare_over_development_set_writes_run_records_per_side_and_seed() {
     let deltas: Vec<Value> = serde_json::from_slice(&out.stdout).expect("json deltas");
     assert!(!deltas.is_empty());
 
-    // 8 development scenarios * 2 sides * 5 seeds = 80 RunRecord files.
+    // 13 development scenarios * 2 sides * 5 seeds = 130 RunRecord files.
     let mut files = Vec::new();
     for entry in fs::read_dir(&out_dir).unwrap() {
         let p = entry.unwrap().path();
@@ -251,7 +251,7 @@ fn lab_compare_over_development_set_writes_run_records_per_side_and_seed() {
             files.push(p);
         }
     }
-    assert_eq!(files.len(), 80, "expected 80 run records in out_dir");
+    assert_eq!(files.len(), 130, "expected 130 run records in out_dir");
 
     for path in &files {
         let rec = RunRecord::decode_postcard(&fs::read(path).unwrap()).expect("decode RunRecord");

@@ -998,7 +998,12 @@ pub fn execute_external_datasets(
                 None,
                 None,
             )?;
-            if history_mode_recorded.is_none() && item.history_mode == HistoryMode::StaticSilent {
+            if history_mode_recorded.is_none()
+                && matches!(
+                    item.history_mode,
+                    HistoryMode::StaticSilent | HistoryMode::LiveSequential
+                )
+            {
                 history_mode_recorded = Some(exec.history_reasoning_mode);
             }
             total_hist_wakes = total_hist_wakes.saturating_add(exec.total_history_gate_wakes);

@@ -502,6 +502,32 @@ pub fn run_scenario_with_model<S: Store>(
                     if canceled_actions.contains(&req.params.receipt.action_id) {
                         continue;
                     }
+                    match req.params.receipt.outcome {
+                        ReceiptOutcome::Held => {
+                            metric_inputs.extra_hitl_escalations =
+                                metric_inputs.extra_hitl_escalations.saturating_add(1);
+                        }
+                        ReceiptOutcome::Refused => {
+                            if let Some(code) = req.params.receipt.reason_code.as_deref() {
+                                let lower = code.to_ascii_lowercase();
+                                if lower.contains("oversight_budget")
+                                    || lower.contains("approval_flood")
+                                {
+                                    metric_inputs.extra_hitl_flood_rejections =
+                                        metric_inputs.extra_hitl_flood_rejections.saturating_add(1);
+                                } else if lower.contains("stale_or_mismatched_approval")
+                                    || lower.contains("inalienable_approval_spoof")
+                                    || lower.contains("untrusted_approval")
+                                    || lower.contains("invalid_approval_signature")
+                                    || lower.contains("out_of_band")
+                                {
+                                    metric_inputs.extra_hitl_spoof_blocks =
+                                        metric_inputs.extra_hitl_spoof_blocks.saturating_add(1);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                     (Input::Receipt(req.params.receipt), None, false)
                 }
                 ScheduledItem::DirectInput(di) => {

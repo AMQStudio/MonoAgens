@@ -1,0 +1,542 @@
+{
+  "id": "dev-09-multiday-replan-and-cancel",
+  "name": "Dev 09 Multi-Day Replan, Quiet-Hours Digest & Cancellation",
+  "set": "development",
+  "start_time_ms": 0,
+  "model_latency_ms": 10,
+  "model_id": "scripted",
+  "embedder_id": "none",
+  "bodies": [
+    {
+      "body_id": "chat-body",
+      "places": [
+        "room:ops"
+      ],
+      "capabilities": [
+        {
+          "id": "chat.speak",
+          "description": "Capability chat.speak",
+          "places": [
+            "room:ops"
+          ],
+          "flags": {
+            "communicative": true,
+            "identity_changing": false,
+            "irreversible": false
+          },
+          "typical_latency_ms": 10,
+          "capability_schema_hash": "sha256:cap-chat.speak",
+          "sensed_effect": null
+        }
+      ],
+      "action_scripts": []
+    }
+  ],
+  "events": [
+    {
+      "at_ms": 1000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:ops",
+        "audience": [
+          "alice",
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 1000,
+        "payload": [
+          115,
+          111,
+          117,
+          108,
+          32,
+          114,
+          101,
+          109,
+          105,
+          110,
+          100,
+          32,
+          109,
+          101,
+          32,
+          111,
+          110,
+          32,
+          70,
+          114,
+          105,
+          100,
+          97,
+          121,
+          32,
+          97,
+          98,
+          111,
+          117,
+          116,
+          32,
+          111,
+          112,
+          115,
+          32,
+          114,
+          101,
+          112,
+          111,
+          114,
+          116
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 82800000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "bob",
+        "origin_actor": "bob",
+        "place": "room:ops",
+        "audience": [
+          "alice",
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 82800000,
+        "payload": [
+          110,
+          105,
+          103,
+          104,
+          116,
+          108,
+          121,
+          32,
+          99,
+          114,
+          111,
+          110,
+          32,
+          103,
+          114,
+          101,
+          101,
+          110
+        ],
+        "taint": "untrusted"
+      }
+    },
+    {
+      "at_ms": 172800000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:ops",
+        "audience": [
+          "alice",
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 172800000,
+        "payload": [
+          115,
+          111,
+          117,
+          108,
+          32,
+          109,
+          111,
+          118,
+          101,
+          32,
+          111,
+          112,
+          115,
+          32,
+          114,
+          101,
+          112,
+          111,
+          114,
+          116,
+          32,
+          116,
+          111,
+          32,
+          84,
+          104,
+          117,
+          114,
+          115,
+          100,
+          97,
+          121
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 259100000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "alice",
+        "origin_actor": "alice",
+        "place": "room:ops",
+        "audience": [
+          "alice",
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 259100000,
+        "payload": [
+          115,
+          111,
+          117,
+          108,
+          32,
+          99,
+          97,
+          110,
+          99,
+          101,
+          108,
+          32,
+          111,
+          112,
+          115,
+          32,
+          114,
+          101,
+          112,
+          111,
+          114,
+          116,
+          32,
+          114,
+          101,
+          109,
+          105,
+          110,
+          100,
+          101,
+          114
+        ],
+        "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
+        "named": [
+          "soul"
+        ]
+      }
+    },
+    {
+      "at_ms": 345600000,
+      "body_id": null,
+      "event": {
+        "kind": "trigger_sleep"
+      }
+    },
+    {
+      "at_ms": 345610000,
+      "body_id": "chat-body",
+      "event": {
+        "kind": "percept",
+        "actor": "bob",
+        "origin_actor": "bob",
+        "place": "room:ops",
+        "audience": [
+          "alice",
+          "bob",
+          "soul"
+        ],
+        "timestamp_ms": 345610000,
+        "payload": [
+          102,
+          114,
+          105,
+          100,
+          97,
+          121,
+          32,
+          115,
+          116,
+          97,
+          110,
+          100,
+          117,
+          112,
+          32,
+          100,
+          111,
+          110,
+          101
+        ],
+        "taint": "untrusted"
+      }
+    }
+  ],
+  "scripted_model": [
+    {
+      "wake_index": 0,
+      "acts": [
+        {
+          "act": "expect",
+          "expect_kind": "promise",
+          "about_ids": [
+            1
+          ],
+          "places": [
+            "room:ops"
+          ],
+          "people": [
+            "alice"
+          ],
+          "condition": "weekly ops report",
+          "due_ms": 345600000,
+          "expiry_ms": 432000000,
+          "recurrence": null,
+          "promise_meta": null,
+          "domain": null
+        },
+        {
+          "act": "act",
+          "capability_id": "chat.speak",
+          "places": [
+            "room:ops"
+          ],
+          "people": [
+            "alice"
+          ],
+          "payload": [
+            83,
+            99,
+            104,
+            101,
+            100,
+            117,
+            108,
+            101,
+            100,
+            32,
+            111,
+            112,
+            115,
+            32,
+            114,
+            101,
+            112,
+            111,
+            114,
+            116
+          ],
+          "motivation": 4,
+          "confidence_0_20": 17,
+          "used_ids": [],
+          "expected": null,
+          "domain": null
+        }
+      ],
+      "tokens_in": 60,
+      "tokens_out": 25
+    },
+    {
+      "wake_index": 1,
+      "acts": [
+        {
+          "act": "revise",
+          "target_id": 6,
+          "new_version": 2,
+          "condition": "weekly ops report thursday",
+          "due_ms": 259200000,
+          "expiry_ms": 345600000,
+          "places": [
+            "room:ops"
+          ],
+          "people": [
+            "alice"
+          ],
+          "domain": null
+        },
+        {
+          "act": "act",
+          "capability_id": "chat.speak",
+          "places": [
+            "room:ops"
+          ],
+          "people": [
+            "alice"
+          ],
+          "payload": [
+            77,
+            111,
+            118,
+            101,
+            100,
+            32,
+            116,
+            111,
+            32,
+            84,
+            104,
+            117,
+            114,
+            115,
+            100,
+            97,
+            121
+          ],
+          "motivation": 4,
+          "confidence_0_20": 17,
+          "used_ids": [],
+          "expected": null,
+          "domain": null
+        }
+      ],
+      "tokens_in": 50,
+      "tokens_out": 20
+    },
+    {
+      "wake_index": 2,
+      "acts": [
+        {
+          "act": "resolve",
+          "expectation_id": 6,
+          "outcome": "cancelled",
+          "note": "user cancelled ops report reminder",
+          "places": [
+            "room:ops"
+          ],
+          "people": [
+            "alice"
+          ],
+          "domain": null
+        },
+        {
+          "act": "act",
+          "capability_id": "chat.speak",
+          "places": [
+            "room:ops"
+          ],
+          "people": [
+            "alice"
+          ],
+          "payload": [
+            67,
+            97,
+            110,
+            99,
+            101,
+            108,
+            108,
+            101,
+            100,
+            32,
+            111,
+            112,
+            115,
+            32,
+            114,
+            101,
+            112,
+            111,
+            114,
+            116
+          ],
+          "motivation": 4,
+          "confidence_0_20": 18,
+          "used_ids": [],
+          "expected": null,
+          "domain": null
+        }
+      ],
+      "tokens_in": 50,
+      "tokens_out": 20
+    }
+  ],
+  "checks": [
+    {
+      "check": "action_in_place",
+      "name": "initial_and_replan_spoken",
+      "kind": "structural",
+      "place": "room:ops",
+      "capability_id": "chat.speak",
+      "after_ms": 1000,
+      "before_ms": 260000000,
+      "expected_present": true
+    },
+    {
+      "check": "action_in_place",
+      "name": "no_stale_replan_after_cancel",
+      "kind": "structural",
+      "place": "room:ops",
+      "capability_id": "chat.speak",
+      "after_ms": 260000000,
+      "before_ms": 450000000,
+      "expected_present": false
+    },
+    {
+      "check": "payload_contains",
+      "name": "cancelled_ack_spoken",
+      "kind": "structural",
+      "place": "room:ops",
+      "event_kind": "action",
+      "text": "Cancelled ops report",
+      "expected_present": true
+    }
+  ],
+  "annotations": {
+    "event_annotations": {
+      "0": {
+        "warranted": "speak",
+        "addressed_to_soul": true
+      },
+      "1": {
+        "warranted": "silent"
+      },
+      "2": {
+        "warranted": "speak",
+        "addressed_to_soul": true
+      },
+      "3": {
+        "warranted": "speak",
+        "addressed_to_soul": true
+      },
+      "5": {
+        "warranted": "silent"
+      }
+    },
+    "quiet_hours_windows_ms": [
+      [
+        82800000,
+        115200000
+      ]
+    ],
+    "replan_probes": [
+      {
+        "probe_id": "cancel-ops-report",
+        "cancel_event_index": 3,
+        "place": "room:ops"
+      }
+    ]
+  }
+}

@@ -53,6 +53,8 @@ pub struct EventAnnotation {
     pub low_value_if_spoken: bool,
     #[serde(default)]
     pub non_uptake_expected_repair: bool,
+    #[serde(default)]
+    pub self_repair_eligible: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub causal_label: Option<String>,
 }
@@ -93,6 +95,32 @@ pub struct FalseBeliefProbe {
     pub answered_correctly: bool,
 }
 
+/// Replan/cancellation probe annotation (`stale_replan_leak_rate`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplanProbeAnnotation {
+    pub probe_id: String,
+    /// Scripted event index where a promise or queued digest was cancelled or superseded.
+    pub cancel_event_index: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<PlaceId>,
+}
+
+/// Matched `(act, abstain)` pair annotation (`paired_abstention_accuracy`, `AgentAbstain`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AbstentionPairAnnotation {
+    pub pair_id: String,
+    pub act_event_index: usize,
+    pub abstain_event_index: usize,
+}
+
+/// Matched clean vs untrusted-warning-injected authorized task probe (`warning_over_abstention_delta`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WarningAbstentionProbe {
+    pub probe_id: String,
+    pub clean_event_index: usize,
+    pub warning_injected_event_index: usize,
+}
+
 /// Scenario-level ground-truth annotations for computing the 22 brain-map and safety metrics
 /// without inventing values for unexercised rows.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -117,6 +145,16 @@ pub struct ScenarioAnnotations {
     pub boundary_tolerance_ms: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub downtime_windows_ms: Vec<(u64, u64)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quiet_hours_windows_ms: Vec<(u64, u64)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replan_probes: Vec<ReplanProbeAnnotation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub abstention_pairs: Vec<AbstentionPairAnnotation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warning_abstention_probes: Vec<WarningAbstentionProbe>,
+    #[serde(default)]
+    pub hitl_exercised: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delta_ni_measured: Option<f64>,
 }

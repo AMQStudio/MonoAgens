@@ -59,6 +59,7 @@ fn make_percept(
         continued_attention: None,
         attachments: vec![],
         timestamp_ms: Time::from_millis(ts_ms),
+        peer_expertise_margin: None,
     }
 }
 
@@ -220,6 +221,7 @@ fn told_credence_cited_vs_uncited_decay_robustness_and_domain_isolation() {
             beta_0: 1.0,
             teacher_weight: 1.0,
             trusted_origin: false,
+            automated_peer: false,
         }),
         Time::from_millis(1_000),
         &mut doors,

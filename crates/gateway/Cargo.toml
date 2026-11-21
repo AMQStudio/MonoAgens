@@ -12,6 +12,7 @@ monoagens-core = { workspace = true }
 monoagens-protocol = { workspace = true }
 monoagens-reason = { workspace = true }
 monoagens-store = { workspace = true }
+monoagens-valve = { path = "../valve" }
 rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

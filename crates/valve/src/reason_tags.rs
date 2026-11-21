@@ -30,11 +30,12 @@ pub enum ValveReasonTag {
     HookWideningOverridden,
     TaintedProcedureWrite,
     DailyCapReached,
+    PeerLoopBrake,
 }
 
 impl ValveReasonTag {
     /// Complete ordered list of every canonical [`ValveReasonTag`].
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::PendingApproval,
         Self::QuietHoursDigest,
         Self::StaleOrMismatchedApproval,
@@ -49,6 +50,7 @@ impl ValveReasonTag {
         Self::HookWideningOverridden,
         Self::TaintedProcedureWrite,
         Self::DailyCapReached,
+        Self::PeerLoopBrake,
     ];
 
     /// Canonical wire/receipt reason code string.
@@ -69,6 +71,7 @@ impl ValveReasonTag {
             Self::HookWideningOverridden => "hook_widening_overridden",
             Self::TaintedProcedureWrite => "tainted_procedure_write",
             Self::DailyCapReached => "daily_cap_reached",
+            Self::PeerLoopBrake => "peer_loop_brake",
         }
     }
 }
@@ -197,6 +200,13 @@ pub const fn valve_guide_entry(tag: ValveReasonTag) -> ValveGuideEntry {
             summary_tag: "proactive_daily_cap_reached",
             self_guide_cue: "proactive daily notification cap reached",
         },
+        ValveReasonTag::PeerLoopBrake => ValveGuideEntry {
+            tag,
+            canonical_str: "peer_loop_brake",
+            template_key: "valve.guide.peer_loop_brake",
+            summary_tag: "automated_peer_loop_brake",
+            self_guide_cue: "consecutive automated peer turns exceeded limit; loop brake active",
+        },
     }
 }
 
@@ -288,11 +298,20 @@ pub fn build_valve_self_snapshot(
     if taint_gating_active {
         opaque_tags.push(ValveReasonTag::TaintBlocked.as_str().to_owned());
     }
+    opaque_tags.push(crate::self_guide::VERIFY_BEFORE_ABSTAIN_TAG.to_owned());
     if config.proactive_cap_enabled && daily_cap_remaining == Some(0) {
         opaque_tags.push(ValveReasonTag::DailyCapReached.as_str().to_owned());
     }
     if config.budget_guard_enabled && snapshot.daily_tokens_used >= config.daily_token_budget {
         opaque_tags.push(ValveReasonTag::BudgetExhausted.as_str().to_owned());
+    }
+    if config.peer_loop_brake_enabled
+        && snapshot
+            .consecutive_automated_turns_by_place
+            .values()
+            .any(|&c| c >= config.max_consecutive_automated_turns)
+    {
+        opaque_tags.push(ValveReasonTag::PeerLoopBrake.as_str().to_owned());
     }
 
     ValveSelfSnapshot {

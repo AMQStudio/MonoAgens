@@ -277,6 +277,7 @@ impl<S: TerminalOutputSink> CliBody<S> {
             embeddings: Vec::new(),
             attachments: Vec::new(),
             dialogue_act_gap: None,
+            peer_expertise_margin: None,
         };
         (params, is_self_echo)
     }

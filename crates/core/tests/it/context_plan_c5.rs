@@ -429,6 +429,7 @@ fn monotonic_taint_propagation_unforgeable_origin_and_spotlighting() -> Result<(
             beta_0: 1.0,
             teacher_weight: 0.9,
             trusted_origin: true,
+            automated_peer: false,
         }),
         t(150),
         &mut doors,

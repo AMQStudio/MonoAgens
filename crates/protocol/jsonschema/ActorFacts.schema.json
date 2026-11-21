@@ -37,6 +37,10 @@
       "format": "double",
       "type": "number"
     },
+    "automated_peer": {
+      "default": false,
+      "type": "boolean"
+    },
     "beta_0": {
       "format": "double",
       "type": "number"

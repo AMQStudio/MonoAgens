@@ -77,6 +77,8 @@ fn mcp_bridge_input_required_held_then_approval_resolve_single_receipt() {
             approved: true,
             resolver: ActorId::new("per_owner"),
             resolved_at_ms: Time::from_millis(2_000),
+            signature: None,
+            out_of_band_channel: false,
         },
     ))
     .expect("encode");
@@ -114,6 +116,8 @@ fn mcp_bridge_input_required_held_then_approval_resolve_single_receipt() {
             approved: true,
             resolver: ActorId::new("per_owner"),
             resolved_at_ms: Time::from_millis(2_500),
+            signature: None,
+            out_of_band_channel: false,
         },
     ))
     .expect("encode");

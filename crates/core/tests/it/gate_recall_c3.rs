@@ -1151,3 +1151,259 @@ fn cross_embedder_query_partition_non_mixing_and_text_partitioning() {
         .unwrap();
     assert_eq!(partitioned_hits, vec![txt_v2_id]);
 }
+
+#[test]
+fn automated_peer_turn_allocation_suppressed_after_two_consecutive_turns_and_human_resets() {
+    use monoagens_core::{CoreState, OPEN_WAIT_PEER_JITTER_MAX_MS, compute_open_wait_jitter_ms};
+    use monoagens_protocol::{ActorFacts, CURRENT_PROTOCOL_VERSION};
+
+    let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).expect("open core");
+    let mut doors = NoopDoors;
+    let bot_a = ActorId::new("bot_a");
+    let human = ActorId::new("per_alice");
+    let place = "room:bot-chat";
+
+    core.step(
+        Input::ActorFacts(ActorFacts {
+            protocol_version: CURRENT_PROTOCOL_VERSION,
+            actor_id: bot_a.clone(),
+            alpha_0: 1.0,
+            beta_0: 1.0,
+            teacher_weight: 0.5,
+            trusted_origin: false,
+            automated_peer: true,
+        }),
+        Time::from_millis(100),
+        &mut doors,
+    )
+    .expect("bot facts");
+    core.step(
+        Input::ActorFacts(ActorFacts {
+            protocol_version: CURRENT_PROTOCOL_VERSION,
+            actor_id: human.clone(),
+            alpha_0: 2.0,
+            beta_0: 1.0,
+            teacher_weight: 1.0,
+            trusted_origin: true,
+            automated_peer: false,
+        }),
+        Time::from_millis(200),
+        &mut doors,
+    )
+    .expect("human facts");
+
+    // Turn 1: bot_a addresses soul -> consecutive = 0 (< 2) -> Commitment wakes.
+    let mut p1 = make_percept("bot_a", place, &["bot_a", "per_alice", "soul"], 1_000);
+    p1.addressees = vec![ActorId::new("soul")];
+    let eff1 = core
+        .step(Input::Percept(Box::new(p1)), Time::from_millis(1_000), &mut doors)
+        .expect("turn 1");
+    assert!(matches!(eff1.as_slice(), [Effect::Model { .. }]));
+    assert_eq!(
+        core.state()
+            .consecutive_automated_turns_by_place
+            .get(&PlaceId::new(place)),
+        Some(&1)
+    );
+
+    // Turn 2: bot_a addresses soul -> consecutive = 1 (< 2) -> Commitment still wakes.
+    let mut p2 = make_percept("bot_a", place, &["bot_a", "per_alice", "soul"], 1_100);
+    p2.addressees = vec![ActorId::new("soul")];
+    let eff2 = core
+        .step(Input::Percept(Box::new(p2)), Time::from_millis(1_100), &mut doors)
+        .expect("turn 2");
+    assert!(matches!(eff2.as_slice(), [Effect::Model { .. }]));
+    assert_eq!(
+        core.state()
+            .consecutive_automated_turns_by_place
+            .get(&PlaceId::new(place)),
+        Some(&2)
+    );
+
+    // Turn 3: bot_a addresses soul with consecutive == 2 (>= 2) -> turn_allocated suppressed!
+    // Under neutral fallback (model = None), emits Silent(NeutralFallback) with zero model wakes.
+    let mut p3 = make_percept("bot_a", place, &["bot_a", "per_alice", "soul"], 1_200);
+    p3.addressees = vec![ActorId::new("soul")];
+    let eff3 = core
+        .step(Input::Percept(Box::new(p3)), Time::from_millis(1_200), &mut doors)
+        .expect("turn 3");
+    assert!(eff3.is_empty(), "peer mention after >=2 consecutive turns must not force Commitment");
+    let last_dec = core
+        .store()
+        .read_in_order(None, 200)
+        .unwrap()
+        .into_iter()
+        .rfind(|r| r.kind == EventKind::Decision)
+        .expect("last decision");
+    assert!(matches!(
+        last_dec.detail,
+        Some(EventDetail::Decision {
+            outcome: DecisionOutcome::Silent,
+            reason: Some(DecisionReason::NeutralFallback),
+            ..
+        })
+    ));
+
+    // Snapshot round-trip preserves automated_peer and consecutive_automated_turns_by_place.
+    let snap_bytes = core.state().encode_snapshot();
+    let decoded_state = CoreState::decode_snapshot(&snap_bytes).expect("decode snapshot v12");
+    assert!(decoded_state.actor_facts[&bot_a].automated_peer);
+    assert_eq!(
+        decoded_state
+            .consecutive_automated_turns_by_place
+            .get(&PlaceId::new(place)),
+        Some(&3)
+    );
+
+    // Human speaks -> consecutive counter resets to 0.
+    let p_human = make_percept("per_alice", place, &["bot_a", "per_alice", "soul"], 1_300);
+    core.step(
+        Input::Percept(Box::new(p_human)),
+        Time::from_millis(1_300),
+        &mut doors,
+    )
+    .expect("human turn");
+    assert_eq!(
+        core.state()
+            .consecutive_automated_turns_by_place
+            .get(&PlaceId::new(place)),
+        Some(&0)
+    );
+
+    // Next bot_a direct address wakes normally again.
+    let mut p4 = make_percept("bot_a", place, &["bot_a", "per_alice", "soul"], 1_400);
+    p4.addressees = vec![ActorId::new("soul")];
+    let eff4 = core
+        .step(Input::Percept(Box::new(p4)), Time::from_millis(1_400), &mut doors)
+        .expect("turn 4");
+    assert!(matches!(eff4.as_slice(), [Effect::Model { .. }]));
+
+    // Verify OpenWait jitter invariants: 0 in human-only rooms, bounded by J_MAX * (1 + 2*margin) in bot rooms.
+    assert_eq!(
+        compute_open_wait_jitter_ms(42, EventId::new(10), 2, false, None),
+        0
+    );
+    assert_eq!(
+        compute_open_wait_jitter_ms(42, EventId::new(10), 1, true, Some(0.9)),
+        0
+    );
+    let j0 = compute_open_wait_jitter_ms(42, EventId::new(10), 2, true, None);
+    let j_specialist = compute_open_wait_jitter_ms(42, EventId::new(10), 2, true, Some(1.0));
+    assert!(j0 < OPEN_WAIT_PEER_JITTER_MAX_MS as u64);
+    assert!(j_specialist <= (OPEN_WAIT_PEER_JITTER_MAX_MS * 3.0) as u64);
+    assert_eq!(j_specialist, j0 * 3); // exact deterministic scaling when margin=1.0
+}
+
+#[test]
+fn open_wait_expertise_jitter_spreads_multibot_chorus_while_preserving_human_only_timing() {
+    use monoagens_protocol::{ActorFacts, CURRENT_PROTOCOL_VERSION};
+
+    let wait_model = build_wait_neural_model();
+    let mut doors = NoopDoors;
+
+    // 1. Human-only room: exact baseline wait_delta_ms without jitter (dev-08 parity).
+    let mut core_human_a = Core::open(
+        MemStore::new(),
+        CoreConfig {
+            seed: 11,
+            ..CoreConfig::default()
+        },
+        Some(Arc::clone(&wait_model)),
+    )
+    .unwrap();
+    let mut core_human_b = Core::open(
+        MemStore::new(),
+        CoreConfig {
+            seed: 99,
+            ..CoreConfig::default()
+        },
+        Some(Arc::clone(&wait_model)),
+    )
+    .unwrap();
+
+    for c in [&mut core_human_a, &mut core_human_b] {
+        let mut p = make_percept("per_alice", "room:human", &["per_alice", "per_bob", "soul"], 1_000);
+        p.named = vec![ActorId::new("soul")];
+        p.dialogue_act_gap = Some(1.0);
+        let eff = c
+            .step(Input::Percept(Box::new(p)), Time::from_millis(1_000), &mut doors)
+            .unwrap();
+        assert!(eff.is_empty());
+    }
+    assert_eq!(
+        core_human_a.next_due(),
+        core_human_b.next_due(),
+        "human-only rooms must stay 100% jitter-free regardless of soul seed"
+    );
+    let human_due = core_human_a.next_due().unwrap();
+
+    // 2. Multi-bot room with automated peers + peer_expertise_margin: due_ms spreads deterministically,
+    // and when the earlier peer replies first, the slower soul emits DecisionReason::Yielded.
+    let mut core_generalist = Core::open(
+        MemStore::new(),
+        CoreConfig {
+            seed: 7,
+            ..CoreConfig::default()
+        },
+        Some(Arc::clone(&wait_model)),
+    )
+    .unwrap();
+    let bot_facts = ActorFacts {
+        protocol_version: CURRENT_PROTOCOL_VERSION,
+        actor_id: ActorId::new("bot_specialist"),
+        alpha_0: 1.0,
+        beta_0: 1.0,
+        teacher_weight: 0.5,
+        trusted_origin: false,
+        automated_peer: true,
+    };
+    core_generalist
+        .step(Input::ActorFacts(bot_facts), Time::from_millis(500), &mut doors)
+        .unwrap();
+
+    let mut p_open = make_percept(
+        "per_alice",
+        "room:bots",
+        &["per_alice", "bot_specialist", "soul"],
+        1_000,
+    );
+    p_open.named = vec![ActorId::new("soul")];
+    p_open.dialogue_act_gap = Some(1.0);
+    p_open.peer_expertise_margin = Some(0.8);
+    let eff_wait = core_generalist
+        .step(Input::Percept(Box::new(p_open)), Time::from_millis(1_000), &mut doors)
+        .unwrap();
+    assert!(eff_wait.is_empty());
+    let generalist_due = core_generalist.next_due().expect("wait scheduled");
+    assert!(
+        generalist_due > human_due,
+        "generalist soul with positive peer_expertise_margin must defer beyond human-only due_ms"
+    );
+
+    // Specialist peer replies before generalist_due -> generalist yields cleanly without waking.
+    core_generalist.set_neural_model(None);
+    let p_specialist_reply = make_percept(
+        "bot_specialist",
+        "room:bots",
+        &["per_alice", "bot_specialist", "soul"],
+        human_due.as_millis(),
+    );
+    let eff_yield = core_generalist
+        .step(
+            Input::Percept(Box::new(p_specialist_reply)),
+            human_due,
+            &mut doors,
+        )
+        .unwrap();
+    assert!(eff_yield.is_empty());
+    assert!(core_generalist.state().open_waits.is_empty());
+    let records = core_generalist.store().read_in_order(None, 200).unwrap();
+    assert!(records.iter().any(|r| matches!(
+        &r.detail,
+        Some(EventDetail::Decision {
+            outcome: DecisionOutcome::Silent,
+            reason: Some(DecisionReason::Yielded),
+            ..
+        })
+    )));
+}
