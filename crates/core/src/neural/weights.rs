@@ -56,12 +56,16 @@ pub struct NeuralModelConfig {
     pub n_layers: usize,
     pub tabm_k: usize,
     pub h_dim: usize,
+    #[serde(default)]
+    pub h_actor_dim: usize,
     pub cell_type: CellType,
     pub temperature: f32,
     pub cic_threshold: f32,
     pub max_wait_ms: f32,
     pub has_phase2_heads: bool,
     pub has_phase3_heads: bool,
+    #[serde(default)]
+    pub has_v22_heads: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_embed_model_ver: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -117,6 +121,15 @@ pub struct Phase3HeadWeights {
     pub p_memory_relevance_bias: f32,
 }
 
+/// Optional V2.2 cognitive control heads (`compute_tier`, `p_user_correction`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct V22HeadWeights {
+    pub compute_tier_weight: Vec<f32>,
+    pub compute_tier_bias: [f32; 3],
+    pub p_user_correction_weight: Vec<f32>,
+    pub p_user_correction_bias: f32,
+}
+
 /// Fully validated, immutable Pure-Rust neural controller weights loaded from `safetensors`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NeuralModel {
@@ -139,14 +152,17 @@ pub struct NeuralModel {
     pub final_norm_bias: Vec<f32>,
     // Per-place working memory cell
     pub memory_cell: RecurrentCellWeights,
+    // Optional per-actor working memory cell (when h_actor_dim > 0)
+    pub actor_memory_cell: Option<RecurrentCellWeights>,
     // Phase 1 heads (required)
     pub gate_4_weight: Vec<f32>,
     pub gate_4_bias: [f32; 4],
     pub wait_delta_t_weight: Vec<f32>,
     pub wait_delta_t_bias: f32,
-    // Optional Phase 2 & 3 heads
+    // Optional Phase 2, Phase 3 & V2.2 heads
     pub phase2: Option<Phase2HeadWeights>,
     pub phase3: Option<Phase3HeadWeights>,
+    pub v22_heads: Option<V22HeadWeights>,
 }
 
 impl NeuralModel {
@@ -177,6 +193,12 @@ impl NeuralModel {
             SafeTensors::deserialize(bytes).map_err(|e| NeuralError::SafeTensorParse(e.to_string()))?;
 
         let feature_schema_version = parse_u16_gt_zero(meta_map, "feature_schema_version")?;
+        if feature_schema_version != 1 && feature_schema_version != 2 {
+            return Err(NeuralError::InvalidMetadata {
+                key: "feature_schema_version",
+                detail: format!("unsupported schema version {feature_schema_version}, expected 1 or 2"),
+            });
+        }
         let d_in_emb = parse_usize_gt_zero(meta_map, "d_in_emb")?;
         let d_in_num = parse_usize_gt_zero(meta_map, "d_in_num")?;
         let d_e = parse_usize_gt_zero(meta_map, "d_e")?;
@@ -185,6 +207,7 @@ impl NeuralModel {
         let n_layers = parse_usize_gt_zero(meta_map, "n_layers")?;
         let tabm_k = parse_usize_gt_zero(meta_map, "tabm_k")?;
         let h_dim = parse_usize_gt_zero(meta_map, "h_dim")?;
+        let h_actor_dim = parse_optional_usize_nonneg(meta_map, "h_actor_dim")?;
         let cell_type_str = meta_map
             .get("cell_type")
             .ok_or(NeuralError::MissingMetadata("cell_type"))?;
@@ -196,6 +219,7 @@ impl NeuralModel {
 
         let has_phase2_heads = parse_optional_bool(meta_map, "has_phase2_heads")?;
         let has_phase3_heads = parse_optional_bool(meta_map, "has_phase3_heads")?;
+        let has_v22_heads = parse_optional_bool(meta_map, "has_v22_heads")?;
         let expected_embed_model_ver =
             parse_optional_nonempty_str(meta_map, "expected_embed_model_ver")?;
         let expected_prompt_regime_id =
@@ -261,12 +285,14 @@ impl NeuralModel {
             n_layers,
             tabm_k,
             h_dim,
+            h_actor_dim,
             cell_type,
             temperature,
             cic_threshold,
             max_wait_ms,
             has_phase2_heads,
             has_phase3_heads,
+            has_v22_heads,
             expected_embed_model_ver,
             expected_prompt_regime_id,
         };
@@ -280,7 +306,7 @@ impl NeuralModel {
         let plr_in_dim = d_in_num * 2 * plr_n_frequencies;
         let plr_linear_weight = load_f32_tensor(&tensors, "stem.plr.linear.weight", &[d_n, plr_in_dim])?;
         let plr_linear_bias = load_f32_tensor(&tensors, "stem.plr.linear.bias", &[d_n])?;
-        let fusion_in_dim = d_e + d_n + h_dim;
+        let fusion_in_dim = d_e + d_n + h_dim + h_actor_dim;
         let fusion_weight = load_f32_tensor(&tensors, "stem.fusion.weight", &[d_model, fusion_in_dim])?;
         let fusion_bias = load_f32_tensor(&tensors, "stem.fusion.bias", &[d_model])?;
 
@@ -302,21 +328,19 @@ impl NeuralModel {
         let final_norm_bias = load_f32_tensor(&tensors, "trunk.final_norm.bias", &[d_model])?;
 
         // Load & validate per-place working memory cell.
-        let memory_cell = match cell_type {
-            CellType::MinGru => RecurrentCellWeights::MinGru {
-                w_z_weight: load_f32_tensor(&tensors, "memory.mingru.w_z.weight", &[h_dim, d_model])?,
-                w_z_bias: load_f32_tensor(&tensors, "memory.mingru.w_z.bias", &[h_dim])?,
-                w_h_weight: load_f32_tensor(&tensors, "memory.mingru.w_h.weight", &[h_dim, d_model])?,
-                w_h_bias: load_f32_tensor(&tensors, "memory.mingru.w_h.bias", &[h_dim])?,
-            },
-            CellType::GatedDeltaNet2 => RecurrentCellWeights::GatedDeltaNet2 {
-                w_erase_weight: load_f32_tensor(&tensors, "memory.gdn2.w_erase.weight", &[h_dim, d_model])?,
-                w_erase_bias: load_f32_tensor(&tensors, "memory.gdn2.w_erase.bias", &[h_dim])?,
-                w_write_weight: load_f32_tensor(&tensors, "memory.gdn2.w_write.weight", &[h_dim, d_model])?,
-                w_write_bias: load_f32_tensor(&tensors, "memory.gdn2.w_write.bias", &[h_dim])?,
-                w_delta_weight: load_f32_tensor(&tensors, "memory.gdn2.w_delta.weight", &[h_dim, d_model])?,
-                w_delta_bias: load_f32_tensor(&tensors, "memory.gdn2.w_delta.bias", &[h_dim])?,
-            },
+        let memory_cell = load_recurrent_cell(&tensors, "memory", cell_type, h_dim, d_model)?;
+
+        // Load & validate optional per-actor working memory cell (when h_actor_dim > 0).
+        let actor_memory_cell = if h_actor_dim > 0 {
+            Some(load_recurrent_cell(
+                &tensors,
+                "actor_memory",
+                cell_type,
+                h_actor_dim,
+                d_model,
+            )?)
+        } else {
+            None
         };
 
         // Load & validate Phase 1 required heads.
@@ -370,6 +394,25 @@ impl NeuralModel {
             None
         };
 
+        let v22_heads = if has_v22_heads {
+            let compute_tier_weight =
+                load_f32_tensor(&tensors, "head.compute_tier.weight", &[3, d_model])?;
+            let ct_bias_vec = load_f32_tensor(&tensors, "head.compute_tier.bias", &[3])?;
+            let compute_tier_bias = [ct_bias_vec[0], ct_bias_vec[1], ct_bias_vec[2]];
+            let p_user_correction_weight =
+                load_f32_tensor(&tensors, "head.p_user_correction.weight", &[1, d_model])?;
+            let p_user_correction_bias =
+                load_f32_tensor(&tensors, "head.p_user_correction.bias", &[1])?[0];
+            Some(V22HeadWeights {
+                compute_tier_weight,
+                compute_tier_bias,
+                p_user_correction_weight,
+                p_user_correction_bias,
+            })
+        } else {
+            None
+        };
+
         Ok(Self {
             config,
             blake3: actual_blake3,
@@ -387,12 +430,14 @@ impl NeuralModel {
             final_norm_weight,
             final_norm_bias,
             memory_cell,
+            actor_memory_cell,
             gate_4_weight,
             gate_4_bias,
             wait_delta_t_weight,
             wait_delta_t_bias,
             phase2,
             phase3,
+            v22_heads,
         })
     }
 
@@ -424,29 +469,11 @@ impl NeuralModel {
                 .sum::<usize>()
             + self.final_norm_weight.len()
             + self.final_norm_bias.len();
-        let cell = match &self.memory_cell {
-            RecurrentCellWeights::MinGru {
-                w_z_weight,
-                w_z_bias,
-                w_h_weight,
-                w_h_bias,
-            } => w_z_weight.len() + w_z_bias.len() + w_h_weight.len() + w_h_bias.len(),
-            RecurrentCellWeights::GatedDeltaNet2 {
-                w_erase_weight,
-                w_erase_bias,
-                w_write_weight,
-                w_write_bias,
-                w_delta_weight,
-                w_delta_bias,
-            } => {
-                w_erase_weight.len()
-                    + w_erase_bias.len()
-                    + w_write_weight.len()
-                    + w_write_bias.len()
-                    + w_delta_weight.len()
-                    + w_delta_bias.len()
-            }
-        };
+        let cell = recurrent_cell_param_count(&self.memory_cell);
+        let actor_cell = self
+            .actor_memory_cell
+            .as_ref()
+            .map_or(0, recurrent_cell_param_count);
         let p1 = self.gate_4_weight.len() + 4 + self.wait_delta_t_weight.len() + 1;
         let p2 = self.phase2.as_ref().map_or(0, |h| {
             h.p_uncertainty_weight.len() + 1 + h.p_verify_weight.len() + 1
@@ -454,7 +481,61 @@ impl NeuralModel {
         let p3 = self.phase3.as_ref().map_or(0, |h| {
             h.p_encode_importance_weight.len() + 1 + h.p_memory_relevance_weight.len() + 1
         });
-        stem + trunk + cell + p1 + p2 + p3
+        let v22 = self.v22_heads.as_ref().map_or(0, |h| {
+            h.compute_tier_weight.len() + 3 + h.p_user_correction_weight.len() + 1
+        });
+        stem + trunk + cell + actor_cell + p1 + p2 + p3 + v22
+    }
+}
+
+fn load_recurrent_cell(
+    tensors: &SafeTensors<'_>,
+    prefix: &str,
+    cell_type: CellType,
+    h_dim: usize,
+    d_model: usize,
+) -> Result<RecurrentCellWeights, NeuralError> {
+    match cell_type {
+        CellType::MinGru => Ok(RecurrentCellWeights::MinGru {
+            w_z_weight: load_f32_tensor(tensors, &format!("{prefix}.mingru.w_z.weight"), &[h_dim, d_model])?,
+            w_z_bias: load_f32_tensor(tensors, &format!("{prefix}.mingru.w_z.bias"), &[h_dim])?,
+            w_h_weight: load_f32_tensor(tensors, &format!("{prefix}.mingru.w_h.weight"), &[h_dim, d_model])?,
+            w_h_bias: load_f32_tensor(tensors, &format!("{prefix}.mingru.w_h.bias"), &[h_dim])?,
+        }),
+        CellType::GatedDeltaNet2 => Ok(RecurrentCellWeights::GatedDeltaNet2 {
+            w_erase_weight: load_f32_tensor(tensors, &format!("{prefix}.gdn2.w_erase.weight"), &[h_dim, d_model])?,
+            w_erase_bias: load_f32_tensor(tensors, &format!("{prefix}.gdn2.w_erase.bias"), &[h_dim])?,
+            w_write_weight: load_f32_tensor(tensors, &format!("{prefix}.gdn2.w_write.weight"), &[h_dim, d_model])?,
+            w_write_bias: load_f32_tensor(tensors, &format!("{prefix}.gdn2.w_write.bias"), &[h_dim])?,
+            w_delta_weight: load_f32_tensor(tensors, &format!("{prefix}.gdn2.w_delta.weight"), &[h_dim, d_model])?,
+            w_delta_bias: load_f32_tensor(tensors, &format!("{prefix}.gdn2.w_delta.bias"), &[h_dim])?,
+        }),
+    }
+}
+
+fn recurrent_cell_param_count(cell: &RecurrentCellWeights) -> usize {
+    match cell {
+        RecurrentCellWeights::MinGru {
+            w_z_weight,
+            w_z_bias,
+            w_h_weight,
+            w_h_bias,
+        } => w_z_weight.len() + w_z_bias.len() + w_h_weight.len() + w_h_bias.len(),
+        RecurrentCellWeights::GatedDeltaNet2 {
+            w_erase_weight,
+            w_erase_bias,
+            w_write_weight,
+            w_write_bias,
+            w_delta_weight,
+            w_delta_bias,
+        } => {
+            w_erase_weight.len()
+                + w_erase_bias.len()
+                + w_write_weight.len()
+                + w_write_bias.len()
+                + w_delta_weight.len()
+                + w_delta_bias.len()
+        }
     }
 }
 
@@ -601,6 +682,20 @@ fn parse_optional_nonempty_str(
         });
     }
     Ok(Some(trimmed.to_owned()))
+}
+
+fn parse_optional_usize_nonneg(
+    meta: &HashMap<String, String>,
+    key: &'static str,
+) -> Result<usize, NeuralError> {
+    let Some(raw) = meta.get(key) else {
+        return Ok(0);
+    };
+    raw.parse::<usize>()
+        .map_err(|e| NeuralError::InvalidMetadata {
+            key,
+            detail: format!("'{raw}' is not a valid non-negative integer: {e}"),
+        })
 }
 
 fn parse_optional_bool(
@@ -818,6 +913,176 @@ pub(crate) mod tests_support {
         );
         serialize_tensors_map(meta, entries)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_synthetic_v22_tensors_map(
+        schema_version: u16,
+        d_in_emb: usize,
+        d_in_num: usize,
+        d_e: usize,
+        d_n: usize,
+        d_model: usize,
+        d_ff: usize,
+        n_layers: usize,
+        tabm_k: usize,
+        h_dim: usize,
+        h_actor_dim: usize,
+        n_freq: usize,
+        cell_type: CellType,
+        has_phase2: bool,
+        has_phase3: bool,
+        has_v22_heads: bool,
+    ) -> RawSyntheticTensors {
+        let (mut meta, mut list) = build_synthetic_tensors_map(
+            d_in_emb,
+            d_in_num,
+            d_e,
+            d_n,
+            d_model,
+            d_ff,
+            n_layers,
+            tabm_k,
+            h_dim,
+            n_freq,
+            cell_type,
+            has_phase2,
+            has_phase3,
+        );
+        meta.insert("feature_schema_version".to_owned(), schema_version.to_string());
+        meta.insert("h_actor_dim".to_owned(), h_actor_dim.to_string());
+        meta.insert("has_v22_heads".to_owned(), has_v22_heads.to_string());
+
+        if h_actor_dim > 0 {
+            let fusion_in = d_e + d_n + h_dim + h_actor_dim;
+            if let Some((_, shape, bytes)) =
+                list.iter_mut().find(|(n, _, _)| n == "stem.fusion.weight")
+            {
+                *shape = vec![d_model, fusion_in];
+                *bytes = make_f32_data(d_model * fusion_in, 77, 0.0);
+            }
+            match cell_type {
+                CellType::MinGru => {
+                    list.push((
+                        "actor_memory.mingru.w_z.weight".to_owned(),
+                        vec![h_actor_dim, d_model],
+                        make_f32_data(h_actor_dim * d_model, 70, 0.0),
+                    ));
+                    list.push((
+                        "actor_memory.mingru.w_z.bias".to_owned(),
+                        vec![h_actor_dim],
+                        make_f32_data(h_actor_dim, 71, 0.0),
+                    ));
+                    list.push((
+                        "actor_memory.mingru.w_h.weight".to_owned(),
+                        vec![h_actor_dim, d_model],
+                        make_f32_data(h_actor_dim * d_model, 72, 0.0),
+                    ));
+                    list.push((
+                        "actor_memory.mingru.w_h.bias".to_owned(),
+                        vec![h_actor_dim],
+                        make_f32_data(h_actor_dim, 73, 0.0),
+                    ));
+                }
+                CellType::GatedDeltaNet2 => {
+                    list.push((
+                        "actor_memory.gdn2.w_erase.weight".to_owned(),
+                        vec![h_actor_dim, d_model],
+                        make_f32_data(h_actor_dim * d_model, 74, 0.0),
+                    ));
+                    list.push((
+                        "actor_memory.gdn2.w_erase.bias".to_owned(),
+                        vec![h_actor_dim],
+                        make_f32_data(h_actor_dim, 75, 0.0),
+                    ));
+                    list.push((
+                        "actor_memory.gdn2.w_write.weight".to_owned(),
+                        vec![h_actor_dim, d_model],
+                        make_f32_data(h_actor_dim * d_model, 76, 0.0),
+                    ));
+                    list.push((
+                        "actor_memory.gdn2.w_write.bias".to_owned(),
+                        vec![h_actor_dim],
+                        make_f32_data(h_actor_dim, 77, 0.0),
+                    ));
+                    list.push((
+                        "actor_memory.gdn2.w_delta.weight".to_owned(),
+                        vec![h_actor_dim, d_model],
+                        make_f32_data(h_actor_dim * d_model, 78, 0.0),
+                    ));
+                    list.push((
+                        "actor_memory.gdn2.w_delta.bias".to_owned(),
+                        vec![h_actor_dim],
+                        make_f32_data(h_actor_dim, 79, 0.0),
+                    ));
+                }
+            }
+        }
+
+        if has_v22_heads {
+            list.push((
+                "head.compute_tier.weight".to_owned(),
+                vec![3, d_model],
+                make_f32_data(3 * d_model, 80, 0.0),
+            ));
+            list.push((
+                "head.compute_tier.bias".to_owned(),
+                vec![3],
+                make_f32_data(3, 81, 0.0),
+            ));
+            list.push((
+                "head.p_user_correction.weight".to_owned(),
+                vec![1, d_model],
+                make_f32_data(d_model, 82, 0.0),
+            ));
+            list.push((
+                "head.p_user_correction.bias".to_owned(),
+                vec![1],
+                make_f32_data(1, 83, 0.0),
+            ));
+        }
+
+        (meta, list)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_synthetic_v22_safetensors(
+        schema_version: u16,
+        d_in_emb: usize,
+        d_in_num: usize,
+        d_e: usize,
+        d_n: usize,
+        d_model: usize,
+        d_ff: usize,
+        n_layers: usize,
+        tabm_k: usize,
+        h_dim: usize,
+        h_actor_dim: usize,
+        n_freq: usize,
+        cell_type: CellType,
+        has_phase2: bool,
+        has_phase3: bool,
+        has_v22_heads: bool,
+    ) -> Vec<u8> {
+        let (meta, entries) = build_synthetic_v22_tensors_map(
+            schema_version,
+            d_in_emb,
+            d_in_num,
+            d_e,
+            d_n,
+            d_model,
+            d_ff,
+            n_layers,
+            tabm_k,
+            h_dim,
+            h_actor_dim,
+            n_freq,
+            cell_type,
+            has_phase2,
+            has_phase3,
+            has_v22_heads,
+        );
+        serialize_tensors_map(meta, entries)
+    }
 }
 
 #[cfg(test)]
@@ -1032,5 +1297,134 @@ mod tests {
             m_contract.config.expected_prompt_regime_id.as_deref(),
             Some("t_d")
         );
+    }
+
+    #[test]
+    fn loads_v22_schema2_models_with_h_actor_and_v22_heads_for_both_cells() {
+        for cell in [CellType::MinGru, CellType::GatedDeltaNet2] {
+            for h_actor_dim in [0usize, 24, 32] {
+                let bytes = tests_support::build_synthetic_v22_safetensors(
+                    2,
+                    256,
+                    32,
+                    64,
+                    32,
+                    128,
+                    192,
+                    2,
+                    8,
+                    64,
+                    h_actor_dim,
+                    8,
+                    cell,
+                    true,
+                    true,
+                    true,
+                );
+                let digest = blake3::hash(&bytes);
+                let model = NeuralModel::from_safetensors_bytes(&bytes, Some(digest))
+                    .expect("valid v2.2 model should load");
+                assert_eq!(model.config.feature_schema_version, 2);
+                assert_eq!(model.config.d_in_num, 32);
+                assert_eq!(model.config.h_actor_dim, h_actor_dim);
+                assert!(model.config.has_v22_heads);
+                assert_eq!(model.actor_memory_cell.is_some(), h_actor_dim > 0);
+                assert!(model.v22_heads.is_some());
+                assert_eq!(
+                    model.fusion_weight.len(),
+                    128 * (64 + 32 + 64 + h_actor_dim)
+                );
+                assert!(model.parameter_count() > 140_000);
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_missing_v22_tensors_and_unsupported_schema_version() {
+        // Missing compute_tier tensor when has_v22_heads == true
+        let (meta, mut entries) = tests_support::build_synthetic_v22_tensors_map(
+            2,
+            256,
+            32,
+            64,
+            32,
+            128,
+            192,
+            2,
+            4,
+            64,
+            24,
+            8,
+            CellType::MinGru,
+            true,
+            false,
+            true,
+        );
+        entries.retain(|(n, _, _)| n != "head.compute_tier.weight");
+        let err = NeuralModel::from_safetensors_bytes(&serialize_tensors_map(meta, entries), None)
+            .expect_err("missing head.compute_tier.weight must fail");
+        assert_eq!(
+            err,
+            NeuralError::MissingTensor("head.compute_tier.weight".to_owned())
+        );
+
+        // Missing actor_memory tensor when h_actor_dim > 0
+        let (meta2, mut entries2) = tests_support::build_synthetic_v22_tensors_map(
+            2,
+            256,
+            32,
+            64,
+            32,
+            128,
+            192,
+            2,
+            4,
+            64,
+            24,
+            8,
+            CellType::GatedDeltaNet2,
+            false,
+            false,
+            false,
+        );
+        entries2.retain(|(n, _, _)| n != "actor_memory.gdn2.w_delta.weight");
+        let err2 =
+            NeuralModel::from_safetensors_bytes(&serialize_tensors_map(meta2, entries2), None)
+                .expect_err("missing actor_memory tensor must fail");
+        assert_eq!(
+            err2,
+            NeuralError::MissingTensor("actor_memory.gdn2.w_delta.weight".to_owned())
+        );
+
+        // Unsupported feature_schema_version = 3
+        let (mut meta3, entries3) = tests_support::build_synthetic_v22_tensors_map(
+            2,
+            256,
+            32,
+            64,
+            32,
+            128,
+            192,
+            2,
+            4,
+            64,
+            0,
+            8,
+            CellType::MinGru,
+            false,
+            false,
+            false,
+        );
+        meta3.insert("feature_schema_version".to_owned(), "3".to_owned());
+        let err3 =
+            NeuralModel::from_safetensors_bytes(&serialize_tensors_map(meta3, entries3), None)
+                .expect_err("unsupported schema version must fail");
+        assert!(matches!(
+            err3,
+            NeuralError::InvalidMetadata {
+                key: "feature_schema_version",
+                ..
+            }
+        ));
     }
 }

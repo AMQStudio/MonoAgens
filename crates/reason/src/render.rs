@@ -420,6 +420,7 @@ impl RenderedContext {
             timeout_ms: 30_000,
             max_output_tokens: None,
             temperature: None,
+            reasoning_effort: None,
             conversation_id: None,
             extra_headers: Vec::new(),
         }
@@ -1159,6 +1160,10 @@ pub fn render_segment(
         if let Some(c) = credence {
             let _ = write!(out, " credence={c:.3}");
         }
+    } else if seg.slot == monoagens_core::ContextSlotKind::PlaceTail
+        && seg.label == "place_tail_thread"
+    {
+        out.push_str(" thread=active");
     } else if seg.is_reference_only {
         out.push_str(" ref_only=true");
     }

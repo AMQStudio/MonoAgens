@@ -288,6 +288,33 @@ pub fn select_tools_for_context(
     now: Time,
     budget: ToolSelectionBudget,
 ) -> SelectedToolSet {
+    select_tools_for_context_with_ucb(
+        query_terms,
+        query_embeddings,
+        capabilities,
+        procedures,
+        &BTreeMap::new(),
+        visible_scope,
+        now,
+        budget,
+    )
+}
+
+/// Variant of [`select_tools_for_context`] that incorporates deterministic Bayesian UCB reliability
+/// scores (`SkillForge`) when ranking eligible procedures, breaking relevance ties in favor of
+/// higher-UCB procedures (and deterministically by smallest `EventId` on exact ties).
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn select_tools_for_context_with_ucb(
+    query_terms: &[String],
+    query_embeddings: &[TaggedEmbedding],
+    capabilities: &[CapabilityCatalogEntry],
+    procedures: &[ProcedureEntry],
+    procedure_ucb_scores: &BTreeMap<EventId, f64>,
+    visible_scope: &VisibleScope,
+    now: Time,
+    budget: ToolSelectionBudget,
+) -> SelectedToolSet {
     let mut active_cap_hashes: BTreeMap<&CapabilityId, &CapabilitySchemaHash> = BTreeMap::new();
     let mut static_candidates: Vec<CapabilityDescriptor> = Vec::new();
     let mut dynamic_candidates: Vec<&CapabilityCatalogEntry> = Vec::new();
@@ -353,7 +380,7 @@ pub fn select_tools_for_context(
     }
 
     let mut excluded_stale_procedures = 0usize;
-    let mut valid_procs: Vec<(f64, &ProcedureEntry)> = Vec::new();
+    let mut valid_procs: Vec<(f64, f64, &ProcedureEntry)> = Vec::new();
     for proc_item in procedures {
         if !proc_item.active || proc_item.retired {
             continue;
@@ -378,16 +405,23 @@ pub fn select_tools_for_context(
             .as_ref()
             .and_then(|emb| max_matching_cosine(query_embeddings, core::slice::from_ref(emb)))
             .map_or(0.0, |c| c.max(0.0));
-        valid_procs.push((0.5 * text_score + 0.5 * vec_score, proc_item));
+        let rel_score = 0.5 * text_score + 0.5 * vec_score;
+        let ucb_score = procedure_ucb_scores
+            .get(&proc_item.procedure_id)
+            .copied()
+            .filter(|v| v.is_finite())
+            .unwrap_or(0.0);
+        valid_procs.push((rel_score, ucb_score, proc_item));
     }
     valid_procs.sort_by(|a, b| {
         b.0.total_cmp(&a.0)
-            .then_with(|| a.1.procedure_id.cmp(&b.1.procedure_id))
+            .then_with(|| b.1.total_cmp(&a.1))
+            .then_with(|| a.2.procedure_id.cmp(&b.2.procedure_id))
     });
     let selected_procs: Vec<ProcedureEntry> = valid_procs
         .into_iter()
         .take(budget.k_proc)
-        .map(|(_, p)| p.clone())
+        .map(|(_, _, p)| p.clone())
         .collect();
 
     SelectedToolSet {
@@ -885,9 +919,15 @@ pub fn enforce_context_budget(sections: &mut ContextSections) -> Vec<DroppedCont
         }
     }
 
-    // 2. Evict oldest place_tail items from head.
+    // 2. Evict oldest place_tail items from head, evicting off-thread items before
+    //    trigger-thread siblings (`place_tail_thread`) to preserve thread continuity.
     while total > sections.budget_bytes && !sections.place_tail.is_empty() {
-        let evicted = sections.place_tail.remove(0);
+        let evict_idx = sections
+            .place_tail
+            .iter()
+            .position(|seg| seg.label != "place_tail_thread")
+            .unwrap_or(0);
+        let evicted = sections.place_tail.remove(evict_idx);
         total = total.saturating_sub(evicted.estimated_bytes);
         dropped.push(DroppedContextItem {
             slot: ContextSlotKind::PlaceTail,
@@ -1060,5 +1100,67 @@ mod tests {
         assert_eq!(after_drift.excluded_stale_procedures, 1);
         assert_eq!(after_drift.procedures.len(), 1);
         assert_eq!(after_drift.procedures[0].name, "single_proc");
+    }
+
+    #[test]
+    fn select_tools_with_ucb_breaks_relevance_ties_by_bayesian_ucb_deterministically() {
+        let cap_id = CapabilityId::new("cap.reply");
+        let cap_hash = CapabilitySchemaHash::new("blake3:reply_v1");
+        let schema = compute_procedure_schema_hash([(&cap_id, &cap_hash)]);
+        let caps = vec![make_cap_entry("cap.reply", "blake3:reply_v1")];
+        let aud = Audience::new([ActorId::new("alice"), ActorId::new("soul")]);
+
+        let procs = vec![
+            ProcedureEntry {
+                procedure_id: EventId::new(10),
+                name: "proc_low_ucb".to_owned(),
+                steps: vec!["reply".to_owned()],
+                required_cap_ids: vec![cap_id.clone()],
+                capability_schema_hash: schema.clone(),
+                audience: aud.clone(),
+                domain: Some(DomainId::new("chat")),
+                active: true,
+                retired: false,
+                owner_signed: false,
+                embedding: None,
+            },
+            ProcedureEntry {
+                procedure_id: EventId::new(20),
+                name: "proc_high_ucb".to_owned(),
+                steps: vec!["reply".to_owned()],
+                required_cap_ids: vec![cap_id],
+                capability_schema_hash: schema,
+                audience: aud.clone(),
+                domain: Some(DomainId::new("chat")),
+                active: true,
+                retired: false,
+                owner_signed: false,
+                embedding: None,
+            },
+        ];
+
+        let mut ucb_scores = BTreeMap::new();
+        ucb_scores.insert(EventId::new(10), 0.42);
+        ucb_scores.insert(EventId::new(20), 0.91);
+
+        let scope = VisibleScope::new(aud, Some(PlaceId::new("room:1")));
+        let budget = ToolSelectionBudget {
+            max_static_core: 4,
+            k_cap: 4,
+            k_proc: 2,
+        };
+        let selected = select_tools_for_context_with_ucb(
+            &["reply".to_owned()],
+            &[],
+            &caps,
+            &procs,
+            &ucb_scores,
+            &scope,
+            Time::from_millis(1_000),
+            budget,
+        );
+        assert_eq!(selected.procedures.len(), 2);
+        assert_eq!(selected.procedures[0].procedure_id, EventId::new(20));
+        assert_eq!(selected.procedures[1].procedure_id, EventId::new(10));
     }
 }

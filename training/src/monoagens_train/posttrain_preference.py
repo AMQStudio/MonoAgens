@@ -151,18 +151,57 @@ def build_stage4_preference_targets(
     mask: np.ndarray,
     dataset_ids: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
-    """Constructs preference pairs, KTO desirability targets, and CFPO timing masks from shards."""
-    bsz, seq_len, _ = x_num.shape
+    """Constructs preference pairs, KTO desirability targets, and CFPO timing masks from v1 or v2 shards."""
+    bsz, seq_len, feat_dim = x_num.shape
+    is_v2 = feat_dim >= 32
     active = mask > 0.5
     direct = (x_num[..., 0] > 0.5) | (x_num[..., 1] > 0.5) | (x_num[..., 3] > 0.5)
-    unaddressed = ~direct
+
+    # V2.2 regime cues (`dev-07` habituation, `dev-10` self-repair/correction, `dev-13` peer-agent)
+    if is_v2:
+        has_recent_soul = x_num[..., 18] > 0.5
+        cos_rephrase = x_num[..., 20]
+        is_reply_last_soul = x_num[..., 22] > 0.5
+        soul_intervened = x_num[..., 23] > 0.5
+        sender_in_top_thread = x_num[..., 26] > 0.5
+        is_auto_peer = x_num[..., 28] > 0.5
+        has_other_peers = x_num[..., 29] > 0.5
+        consec_auto = x_num[..., 30]
+        peer_margin = x_num[..., 31]
+
+        is_peer_pingpong = is_auto_peer & (consec_auto >= (2.0 / 6.0 - 1e-4))
+        is_peer_deferral = has_other_peers & (peer_margin > 0.65)
+        is_peer_own_expertise = has_other_peers & (~is_auto_peer) & (peer_margin < 0.35)
+        is_repair_correction = (
+            has_recent_soul
+            & (is_reply_last_soul | soul_intervened)
+            & (cos_rephrase >= 0.55)
+        )
+        is_self_repair_wait = (
+            (y_gate == GATE_WAIT)
+            & ((x_num[..., 15] >= 0.35) | sender_in_top_thread)
+        )
+        is_habituation_silent = (
+            has_recent_soul
+            & (y_gate == GATE_SILENT)
+            & (~is_reply_last_soul)
+            & (cos_rephrase < 0.45)
+        )
+    else:
+        is_peer_pingpong = np.zeros((bsz, seq_len), dtype=bool)
+        is_peer_deferral = np.zeros((bsz, seq_len), dtype=bool)
+        is_peer_own_expertise = np.zeros((bsz, seq_len), dtype=bool)
+        is_repair_correction = np.zeros((bsz, seq_len), dtype=bool)
+        is_self_repair_wait = np.zeros((bsz, seq_len), dtype=bool)
+        is_habituation_silent = np.zeros((bsz, seq_len), dtype=bool)
+
+    unaddressed = (~direct) | is_peer_pingpong | is_peer_deferral
 
     pos_1 = np.zeros((bsz, seq_len), dtype=np.int64)
     neg_1 = np.zeros((bsz, seq_len), dtype=np.int64)
     m_1 = np.zeros((bsz, seq_len), dtype=np.float32)
 
     pos_2 = np.zeros((bsz, seq_len), dtype=np.int64)
-    neg_2 = np.zeros((bsz, seq_len), dtype=np.float32)
     neg_2_i = np.zeros((bsz, seq_len), dtype=np.int64)
     m_2 = np.zeros((bsz, seq_len), dtype=np.float32)
 
@@ -171,38 +210,52 @@ def build_stage4_preference_targets(
     kto_und_idx = np.full((bsz, seq_len), GATE_GO, dtype=np.int64)
     kto_und_mask = np.zeros((bsz, seq_len), dtype=np.float32)
 
-    # Silent habituation / unaddressed chatter: Silent > Wait > Go
+    # Silent habituation (dev-07) / unaddressed chatter / peer ping-pong (dev-13): Silent > Wait > Go
     is_silent = active & (y_gate == GATE_SILENT)
     pos_1[is_silent] = GATE_SILENT
     neg_1[is_silent] = GATE_WAIT
-    m_1[is_silent] = 1.0
+    m_1[is_silent] = np.where(
+        is_habituation_silent[is_silent] | is_peer_pingpong[is_silent], 1.25, 1.0
+    )
     pos_2[is_silent] = GATE_SILENT
     neg_2_i[is_silent] = GATE_GO
-    m_2[is_silent] = 1.0
+    m_2[is_silent] = np.where(
+        is_habituation_silent[is_silent] | is_peer_pingpong[is_silent] | is_peer_deferral[is_silent],
+        1.5,
+        1.0,
+    )
     kto_und_idx[is_silent] = GATE_GO
     kto_und_mask[is_silent] = 1.0
 
-    # Open-floor loose mention / patience: Wait > Silent > Go
+    # Open-floor loose mention / pecah balon / self-repair (dev-10) / peer deferral (dev-13): Wait > Silent > Go
     is_wait = active & (y_gate == GATE_WAIT)
     pos_1[is_wait] = GATE_WAIT
     neg_1[is_wait] = GATE_SILENT
-    m_1[is_wait] = 1.0
+    m_1[is_wait] = np.where(is_self_repair_wait[is_wait] | is_peer_deferral[is_wait], 1.25, 1.0)
     pos_2[is_wait] = GATE_WAIT
     neg_2_i[is_wait] = GATE_GO
-    m_2[is_wait] = 1.0
+    m_2[is_wait] = np.where(is_self_repair_wait[is_wait] | is_peer_deferral[is_wait], 1.5, 1.0)
     kto_und_idx[is_wait] = GATE_GO
-    kto_und_mask[is_wait] = np.where(unaddressed[is_wait], 1.0, 0.5)
+    kto_und_mask[is_wait] = np.where(
+        unaddressed[is_wait] | is_self_repair_wait[is_wait] | is_peer_deferral[is_wait],
+        1.0,
+        0.5,
+    )
 
-    # Direct dyadic / allocated turns: Go > Wait > Silent
+    # Direct dyadic / repair wake (dev-10) / own-expertise peer wake (dev-13): Go > Wait > Silent
     is_go = active & (y_gate == GATE_GO)
     pos_1[is_go] = GATE_GO
     neg_1[is_go] = GATE_WAIT
-    m_1[is_go] = 1.0
+    m_1[is_go] = np.where(is_repair_correction[is_go] | is_peer_own_expertise[is_go], 1.25, 1.0)
     pos_2[is_go] = GATE_GO
     neg_2_i[is_go] = GATE_SILENT
-    m_2[is_go] = np.where(direct[is_go], 1.0, 0.7)
+    m_2[is_go] = np.where(
+        direct[is_go] | is_repair_correction[is_go] | is_peer_own_expertise[is_go], 1.0, 0.7
+    )
     kto_und_idx[is_go] = GATE_SILENT
-    kto_und_mask[is_go] = np.where(direct[is_go], 1.0, 0.4)
+    kto_und_mask[is_go] = np.where(
+        direct[is_go] | is_repair_correction[is_go] | is_peer_own_expertise[is_go], 1.0, 0.4
+    )
 
     # Internal note: Note > Silent, Note > Go
     is_note = active & (y_gate == GATE_NOTE)
@@ -215,14 +268,21 @@ def build_stage4_preference_targets(
     kto_und_idx[is_note] = GATE_GO
     kto_und_mask[is_note] = 1.0
 
-    # Counterfactual vectorless invariance mask: timing-dominated habituation & procedural timing sequences
-    cfpo_mask = (active & unaddressed & ((y_gate == GATE_SILENT) | (y_gate == GATE_WAIT))).astype(np.float32)
+    # Counterfactual vectorless invariance mask: timing-dominated habituation, peer-brake & procedural timing
+    cfpo_mask = (
+        active
+        & (
+            (unaddressed & ((y_gate == GATE_SILENT) | (y_gate == GATE_WAIT)))
+            | is_peer_pingpong
+            | is_peer_deferral
+            | is_habituation_silent
+        )
+    ).astype(np.float32)
     if dataset_ids is not None:
         proc_ep = np.array([str(ds).startswith("procedural_timing") for ds in dataset_ids], dtype=bool)
         if len(proc_ep) == bsz:
             cfpo_mask[proc_ep] = np.where(active[proc_ep], 1.0, cfpo_mask[proc_ep])
 
-    del neg_2
     return {
         "pos_1": pos_1,
         "neg_1": neg_1,
@@ -318,7 +378,9 @@ def run_stage4_preference_posttrain(
     )
 
     has_aux = all(k in tr for k in ("y_unc", "m_unc", "y_ver", "m_ver", "y_enc", "m_enc", "y_rel", "m_rel"))
+    has_v22 = all(k in tr for k in ("y_compute_tier", "y_user_correction", "v22_mask"))
     zeros_aux = np.zeros_like(tr["mask"], dtype=np.float32)
+    ones_ct = np.ones_like(tr["y_gate"], dtype=np.int64)
 
     train_ds = TensorDataset(
         torch.from_numpy(tr["e_256"]),
@@ -344,6 +406,9 @@ def run_stage4_preference_posttrain(
         torch.from_numpy(tr["m_enc"] if has_aux else zeros_aux),
         torch.from_numpy(tr["y_rel"] if has_aux else zeros_aux),
         torch.from_numpy(tr["m_rel"] if has_aux else zeros_aux),
+        torch.from_numpy(tr["y_compute_tier"] if has_v22 else ones_ct),
+        torch.from_numpy(tr["y_user_correction"] if has_v22 else zeros_aux),
+        torch.from_numpy(tr["v22_mask"] if has_v22 else zeros_aux),
     )
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True)
 
@@ -378,6 +443,9 @@ def run_stage4_preference_posttrain(
             m_enc,
             y_rel,
             m_rel,
+            y_ct,
+            y_uc,
+            m_v22,
         ) in train_loader:
             eb = eb.to(device)
             xb = xb.to(device)
@@ -392,6 +460,7 @@ def run_stage4_preference_posttrain(
             y_ver, m_ver = y_ver.to(device), m_ver.to(device)
             y_enc, m_enc = y_enc.to(device), m_enc.to(device)
             y_rel, m_rel = y_rel.to(device), m_rel.to(device)
+            y_ct, y_uc, m_v22 = y_ct.to(device), y_uc.to(device), m_v22.to(device)
 
             optimizer.zero_grad(set_to_none=True)
             out_pol = model.forward_sequence(eb, xb, temperature=1.0)
@@ -455,7 +524,7 @@ def run_stage4_preference_posttrain(
             ).reshape_as(mb)
             loss_anchor = _masked_mean(kl_anchor + 0.25 * ce_anchor, mb)
 
-            # Retain Phase 2 & Phase 3 auxiliary head calibration while refining gate_4
+            # Retain Phase 2, Phase 3 & V2.2 auxiliary head calibration while refining gate_4
             loss_aux = torch.zeros((), device=device)
             if has_aux and model.arch.has_phase2_heads:
                 if float(m_unc.sum().item()) > 0.0:
@@ -471,6 +540,18 @@ def run_stage4_preference_posttrain(
                 if float(m_rel.sum().item()) > 0.0:
                     pr = out_pol["p_memory_relevance"].clamp(1e-5, 1.0 - 1e-5)
                     loss_aux = loss_aux + _masked_mean(F.binary_cross_entropy(pr, y_rel, reduction="none"), m_rel)
+            if has_v22 and model.arch.has_v22_heads and float(m_v22.sum().item()) > 0.0:
+                ce_ct = F.cross_entropy(
+                    out_pol["compute_tier_logits"].reshape(-1, 3),
+                    y_ct.reshape(-1),
+                    reduction="none",
+                ).reshape_as(m_v22)
+                bce_uc = F.binary_cross_entropy_with_logits(
+                    out_pol["p_user_correction_logit"],
+                    y_uc,
+                    reduction="none",
+                )
+                loss_aux = loss_aux + _masked_mean(ce_ct + bce_uc, m_v22)
 
             total_loss = (
                 cfg.dpo_weight * loss_dpo
@@ -508,5 +589,8 @@ def run_stage4_preference_posttrain(
         "lambda_u": cfg.lambda_u,
         "beta": cfg.beta,
         "margin": cfg.margin,
+        "feature_schema_version": float(model.arch.feature_schema_version),
+        "h_actor_dim": float(model.arch.h_actor_dim),
+        "has_v22_heads": 1.0 if model.arch.has_v22_heads else 0.0,
     }
     return model.cpu(), entry, diag

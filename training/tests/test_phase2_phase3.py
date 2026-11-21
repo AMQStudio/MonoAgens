@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from safetensors import safe_open
 
+from _helpers import resolve_data_repo_root
 from monoagens_train.datasets import (
     PHASE2_DATASETS,
     PHASE3_DATASETS,
@@ -18,7 +19,7 @@ from monoagens_train.features import NUM_FEATURES
 from monoagens_train.licenses import require_dataset_allowed
 from monoagens_train.model import MonoNeuralController, architecture_for_scale
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = resolve_data_repo_root(Path(__file__).resolve().parents[2])
 
 
 def test_phase2_and_phase3_datasets_pass_osi_audit():

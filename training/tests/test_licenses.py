@@ -4,13 +4,14 @@ from pathlib import Path
 
 import pytest
 
+from _helpers import resolve_data_repo_root
 from monoagens_train.licenses import (
     assert_safe_path,
     audit_manifest,
     require_dataset_allowed,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = resolve_data_repo_root(Path(__file__).resolve().parents[2])
 MANIFEST_PATH = REPO_ROOT / "lab" / "datasets.manifest.toml"
 
 

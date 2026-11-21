@@ -566,7 +566,7 @@ impl ModelProvider for OpenAiModelProvider {
             if let Some(temp) = request.temperature {
                 obj.insert("temperature".to_owned(), json!(temp));
             }
-            if let Some(effort) = self.config.reasoning_effort {
+            if let Some(effort) = request.reasoning_effort.or(self.config.reasoning_effort) {
                 obj.insert("reasoning_effort".to_owned(), json!(effort.as_str()));
             }
         }
@@ -879,5 +879,108 @@ fn extract_message_text(content: Option<&Value>) -> Option<String> {
             if buf.is_empty() { None } else { Some(buf) }
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+
+    use monoagens_core::ModelPurpose;
+    use monoagens_protocol::EventId;
+
+    use super::*;
+
+    fn spawn_single_capture_server(captured: Arc<Mutex<String>>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("local addr");
+        thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = Vec::new();
+                let mut tmp = [0_u8; 4096];
+                let mut expected_body_len: Option<usize> = None;
+                let mut header_end: Option<usize> = None;
+                loop {
+                    let n = stream.read(&mut tmp).unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                    if header_end.is_none()
+                        && let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n")
+                    {
+                        header_end = Some(pos + 4);
+                        let hdr = String::from_utf8_lossy(&buf[..pos]);
+                        for line in hdr.lines() {
+                            if let Some((k, v)) = line.split_once(':')
+                                && k.trim().eq_ignore_ascii_case("content-length")
+                            {
+                                expected_body_len = v.trim().parse::<usize>().ok();
+                            }
+                        }
+                    }
+                    if let (Some(he), Some(bl)) = (header_end, expected_body_len)
+                        && buf.len() >= he + bl
+                    {
+                        break;
+                    }
+                }
+                let body = header_end.map_or_else(String::new, |he| {
+                    String::from_utf8_lossy(&buf[he..]).into_owned()
+                });
+                *captured.lock().expect("lock") = body;
+                let resp_body = r#"{"model":"test-model","choices":[{"message":{"content":"{\"acts\":[]}"},"finish_reason":"stop"}]}"#;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    resp_body.len(),
+                    resp_body
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+        format!("http://{addr}/v1/chat/completions")
+    }
+
+    #[test]
+    fn per_request_reasoning_effort_overrides_provider_config() {
+        let cap1 = Arc::new(Mutex::new(String::new()));
+        let url1 = spawn_single_capture_server(Arc::clone(&cap1));
+        let mut cfg = OpenAiModelConfig::new(url1, None);
+        cfg.reasoning_effort = Some(ReasoningEffort::High);
+        let provider = OpenAiModelProvider::new(cfg).expect("provider");
+
+        // Request override = Low overrides config High.
+        let mut req = ModelRequest::text(
+            EventId::new(1),
+            ModelPurpose::Reason,
+            "test-model",
+            "sys",
+            "usr",
+        );
+        req.reasoning_effort = Some(ReasoningEffort::Low);
+        let _ = provider.invoke(&req).expect("invoke override");
+        let parsed1: Value = serde_json::from_str(&cap1.lock().unwrap()).expect("json1");
+        assert_eq!(parsed1["reasoning_effort"], "low");
+
+        // Request override = None falls back to config High.
+        let cap2 = Arc::new(Mutex::new(String::new()));
+        let url2 = spawn_single_capture_server(Arc::clone(&cap2));
+        let mut cfg2 = OpenAiModelConfig::new(url2, None);
+        cfg2.reasoning_effort = Some(ReasoningEffort::High);
+        let provider2 = OpenAiModelProvider::new(cfg2).expect("provider2");
+        let req2 = ModelRequest::text(
+            EventId::new(2),
+            ModelPurpose::Reason,
+            "test-model",
+            "sys",
+            "usr",
+        );
+        assert_eq!(req2.reasoning_effort, None);
+        let _ = provider2.invoke(&req2).expect("invoke fallback");
+        let parsed2: Value = serde_json::from_str(&cap2.lock().unwrap()).expect("json2");
+        assert_eq!(parsed2["reasoning_effort"], "high");
     }
 }

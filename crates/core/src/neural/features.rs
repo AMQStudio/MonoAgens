@@ -1,13 +1,46 @@
-//! Model-agnostic `18d` numeric feature extraction (`x_num`) + optional `10d` `FModal`,
-//! computed strictly post-`VisibleScope` (`Delta_NI = 0`) with `NaN`/`Inf` sanitization.
+//! Model-agnostic numeric feature extraction (`schema = 1`: `18d` `x_num`; `schema = 2`: `32d`
+//! `x_num` = `18d` v1 core + `6d` repair + `4d` thread/actor + `4d` peer-agent) + optional `10d`
+//! `FModal`, computed strictly post-`VisibleScope` (`Delta_NI = 0`) with `NaN`/`Inf` sanitization.
 
-use monoagens_protocol::{FModal, Percept, Time, VisibleScope};
+use std::collections::BTreeSet;
 
+use monoagens_protocol::{
+    ActorId, Audience, DomainId, EventId, ExpectKind, FModal, Percept, PlaceId, TaggedEmbedding,
+    Time, VisibleScope,
+};
+
+use crate::consolidation::EpisodeState;
 use crate::neural::{DEFAULT_EMB_DIM, DEFAULT_NUM_FEATURES, NeuralModelConfig};
 use crate::state::CoreState;
 
-/// Feature schema version emitted by [`extract_x_num`].
+/// Legacy schema v1 identifier emitted by [`extract_x_num`].
 pub const FEATURE_SCHEMA_VERSION: u16 = 1;
+
+/// Feature schema version 1 (`18d` `x_num`).
+pub const FEATURE_SCHEMA_VERSION_V1: u16 = 1;
+
+/// Feature schema version 2 (`32d` `x_num`: `18d` v1 + `6d` repair + `4d` thread/actor + `4d` peer-agent).
+pub const FEATURE_SCHEMA_VERSION_V2: u16 = 2;
+
+/// Numeric feature vector width for schema v1 (`18d`).
+pub const DEFAULT_NUM_FEATURES_V1: usize = DEFAULT_NUM_FEATURES;
+
+/// Numeric feature vector width for schema v2 (`32d`).
+pub const DEFAULT_NUM_FEATURES_V2: usize = 32;
+
+/// Recency window (`ms`) for `has_recent_visible_soul_act` and Loop A repair lookup (`10 min`).
+pub const RECENT_SOUL_REPAIR_WINDOW_MS: u64 = 600_000;
+
+/// Computes the canonical deterministic `BLAKE3` hash over `\n`-joined sorted unique actor IDs
+/// in `audience`, shared by audience-scoped `h_actor` and multi-slot `EpisodeBook` keys (`Delta_NI = 0`).
+#[must_use]
+pub fn canonical_audience_hash(audience: &Audience) -> [u8; 32] {
+    let mut actors: Vec<&str> = audience.members.iter().map(ActorId::as_str).collect();
+    actors.sort_unstable();
+    actors.dedup();
+    let joined = actors.join("\n");
+    crate::blake3::hash(joined.as_bytes())
+}
 
 /// Raw inputs for constructing the bounded `18d` `x_num` feature vector.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -358,6 +391,423 @@ pub fn extract_features_from_state(
     extract_x_num(&inputs)
 }
 
+/// Raw inputs for constructing the bounded `32d` `schema = 2` `x_num` feature vector.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct NumericFeatureInputsV2 {
+    pub base: NumericFeatureInputs,
+    // 18..24 (6d repair, R-68)
+    pub has_recent_visible_soul_act: bool,
+    pub cos_soul_user: f64,
+    pub cos_prev_user_rephrase: f64,
+    pub cos_expected_reply: f64,
+    pub is_reply_to_last_soul: bool,
+    pub soul_intervened_since_sender_last: bool,
+    // 24..28 (4d thread/actor, R-69)
+    pub max_active_thread_cos: f64,
+    pub active_thread_count: usize,
+    pub sender_in_top_thread: bool,
+    pub sender_reliability: f64,
+    // 28..32 (4d peer-agent, R-71)
+    pub is_sender_automated_peer: bool,
+    pub room_has_other_automated_peers: bool,
+    pub consecutive_automated_turns: u32,
+    pub peer_expertise_margin: Option<f32>,
+}
+
+/// Constructs the finite, `[0.0, 1.0]`-bounded `32d` `schema = 2` `x_num` vector.
+#[must_use]
+pub fn extract_x_num_v2(inp: &NumericFeatureInputsV2) -> [f32; DEFAULT_NUM_FEATURES_V2] {
+    let base = extract_x_num(&inp.base);
+    let mut out = [0.0_f32; DEFAULT_NUM_FEATURES_V2];
+    out[..DEFAULT_NUM_FEATURES_V1].copy_from_slice(&base);
+
+    // 18..24: 6d repair geometry (R-68)
+    out[18] = if inp.has_recent_visible_soul_act { 1.0 } else { 0.0 };
+    out[19] = sanitize_unit(inp.cos_soul_user, 0.0);
+    out[20] = sanitize_unit(inp.cos_prev_user_rephrase, 0.0);
+    out[21] = sanitize_unit(inp.cos_expected_reply, 0.0);
+    out[22] = if inp.is_reply_to_last_soul { 1.0 } else { 0.0 };
+    out[23] = if inp.soul_intervened_since_sender_last { 1.0 } else { 0.0 };
+
+    // 24..28: 4d thread/actor cues (R-69)
+    out[24] = sanitize_unit(inp.max_active_thread_cos, 0.0);
+    out[25] = sanitize_unit((inp.active_thread_count.min(6) as f64) / 6.0, 0.0);
+    out[26] = if inp.sender_in_top_thread { 1.0 } else { 0.0 };
+    out[27] = sanitize_unit(inp.sender_reliability, 0.5);
+
+    // 28..32: 4d peer-agent cues (R-71)
+    out[28] = if inp.is_sender_automated_peer { 1.0 } else { 0.0 };
+    out[29] = if inp.room_has_other_automated_peers { 1.0 } else { 0.0 };
+    out[30] = sanitize_unit((inp.consecutive_automated_turns.min(6) as f64) / 6.0, 0.0);
+    out[31] = inp
+        .peer_expertise_margin
+        .filter(|v| v.is_finite())
+        .map_or(0.5_f32, |m| (0.5 * (m.clamp(-1.0, 1.0) + 1.0)).clamp(0.0, 1.0));
+
+    out
+}
+
+/// Strictly post-`VisibleScope` visible repair context for `R-68` features and Loop A repair hints.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct VisibleRepairContext {
+    pub last_soul_event_id: Option<EventId>,
+    pub last_soul_ms: Option<Time>,
+    pub last_soul_embedding: Option<TaggedEmbedding>,
+    pub last_sender_event_id: Option<EventId>,
+    pub last_sender_ms: Option<Time>,
+    pub last_sender_embedding: Option<TaggedEmbedding>,
+}
+
+/// Extracts the most recent visible soul event and prior visible sender event at `place`
+/// strictly post-[`VisibleScope`] (`Delta_NI = 0`), optionally excluding `exclude_event_id`.
+#[must_use]
+pub fn extract_visible_repair_context(
+    state: &CoreState,
+    place: &PlaceId,
+    scope: &VisibleScope,
+    sender: &ActorId,
+    now: Time,
+    exclude_event_id: Option<EventId>,
+) -> VisibleRepairContext {
+    let soul_id = &state.soul_actor_id;
+    let mut ctx = VisibleRepairContext::default();
+
+    let is_newer = |cand_ms: Time, cand_id: EventId, cur_ms: Option<Time>, cur_id: Option<EventId>| {
+        match (cur_ms, cur_id) {
+            (None, _) => true,
+            (Some(cm), Some(cid)) => {
+                cand_ms > cm || (cand_ms == cm && cand_id.as_u64() >= cid.as_u64())
+            }
+            (Some(cm), None) => cand_ms >= cm,
+        }
+    };
+
+    if let Some(entries) = state.place_history.get(place) {
+        for entry in entries {
+            if Some(entry.event_id) == exclude_event_id {
+                continue;
+            }
+            if !scope.allows(&entry.audience, Some(entry.event_id), now) {
+                continue;
+            }
+            let emb = state
+                .memory_entries
+                .get(&entry.event_id)
+                .filter(|m| !m.erased && scope.allows(&m.audience, Some(m.event_id), now))
+                .and_then(|m| m.embeddings.first().cloned());
+
+            if &entry.actor == soul_id
+                && is_newer(entry.timestamp_ms, entry.event_id, ctx.last_soul_ms, ctx.last_soul_event_id)
+            {
+                ctx.last_soul_event_id = Some(entry.event_id);
+                ctx.last_soul_ms = Some(entry.timestamp_ms);
+                if emb.is_some() {
+                    ctx.last_soul_embedding = emb.clone();
+                }
+            }
+            if &entry.actor == sender
+                && is_newer(
+                    entry.timestamp_ms,
+                    entry.event_id,
+                    ctx.last_sender_ms,
+                    ctx.last_sender_event_id,
+                )
+            {
+                ctx.last_sender_event_id = Some(entry.event_id);
+                ctx.last_sender_ms = Some(entry.timestamp_ms);
+                if emb.is_some() {
+                    ctx.last_sender_embedding = emb;
+                }
+            }
+        }
+    }
+
+    for mem in state.memory_entries.values() {
+        if mem.erased || mem.superseded_by.is_some() || &mem.place != place {
+            continue;
+        }
+        if Some(mem.event_id) == exclude_event_id {
+            continue;
+        }
+        if !scope.allows(&mem.audience, Some(mem.event_id), now) {
+            continue;
+        }
+        let emb = mem.embeddings.first().cloned();
+        if &mem.actor == soul_id {
+            if is_newer(mem.timestamp_ms, mem.event_id, ctx.last_soul_ms, ctx.last_soul_event_id) {
+                ctx.last_soul_event_id = Some(mem.event_id);
+                ctx.last_soul_ms = Some(mem.timestamp_ms);
+                if emb.is_some() {
+                    ctx.last_soul_embedding = emb.clone();
+                }
+            } else if ctx.last_soul_event_id == Some(mem.event_id)
+                && ctx.last_soul_embedding.is_none()
+                && emb.is_some()
+            {
+                ctx.last_soul_embedding = emb.clone();
+            }
+        }
+        if &mem.actor == sender {
+            if is_newer(
+                mem.timestamp_ms,
+                mem.event_id,
+                ctx.last_sender_ms,
+                ctx.last_sender_event_id,
+            ) {
+                ctx.last_sender_event_id = Some(mem.event_id);
+                ctx.last_sender_ms = Some(mem.timestamp_ms);
+                if emb.is_some() {
+                    ctx.last_sender_embedding = emb;
+                }
+            } else if ctx.last_sender_event_id == Some(mem.event_id)
+                && ctx.last_sender_embedding.is_none()
+                && emb.is_some()
+            {
+                ctx.last_sender_embedding = emb;
+            }
+        }
+    }
+
+    // Also inspect visible non-judged-silence Response predictions opened by the soul's own acts.
+    for exp in state.expectation_book.expectations.values() {
+        if exp.kind != ExpectKind::Response || !exp.places.contains(place) {
+            continue;
+        }
+        if !scope.allows(&exp.audience, Some(exp.expectation_id), now) {
+            continue;
+        }
+        let Some(spec) = &exp.response_spec else {
+            continue;
+        };
+        if spec.is_judged_silence {
+            continue;
+        }
+        let soul_ev_id = if exp.origin_event_id.as_u64() != 0 {
+            exp.origin_event_id
+        } else {
+            exp.expectation_id
+        };
+        if Some(soul_ev_id) == exclude_event_id {
+            continue;
+        }
+        let emb = spec.act_embeddings.first().cloned();
+        if is_newer(exp.created_at_ms, soul_ev_id, ctx.last_soul_ms, ctx.last_soul_event_id) {
+            ctx.last_soul_event_id = Some(soul_ev_id);
+            ctx.last_soul_ms = Some(exp.created_at_ms);
+            if emb.is_some() {
+                ctx.last_soul_embedding = emb;
+            }
+        } else if ctx.last_soul_event_id == Some(soul_ev_id)
+            && ctx.last_soul_embedding.is_none()
+            && emb.is_some()
+        {
+            ctx.last_soul_embedding = emb;
+        }
+    }
+
+    ctx
+}
+
+fn matching_cosine(percept_embs: &[TaggedEmbedding], target: Option<&TaggedEmbedding>) -> f64 {
+    let Some(t) = target else {
+        return 0.0;
+    };
+    let mut best = 0.0_f64;
+    for q in percept_embs {
+        if q.tag == t.tag {
+            best = best.max(cosine_similarity(&q.values, &t.values));
+        }
+    }
+    best
+}
+
+/// Extracts the `32d` `schema = 2` `x_num` vector from [`CoreState`] strictly post-[`VisibleScope`]
+/// (`Delta_NI = 0`).
+///
+/// Indices `0..18` match [`extract_features_from_state`] bit-for-bit; indices `18..32` append
+/// `6d` repair (`R-68`), `4d` thread/actor (`R-69`), and `4d` peer-agent (`R-71`) channels.
+#[must_use]
+pub fn extract_features_v2_from_state(
+    state: &CoreState,
+    percept: &Percept,
+    now: Time,
+    backlog_queue_depth: usize,
+) -> [f32; DEFAULT_NUM_FEATURES_V2] {
+    let base = extract_features_from_state(state, percept, now, backlog_queue_depth);
+    let scope = VisibleScope::new(percept.audience.clone(), Some(percept.place.clone()));
+    let soul_id = &state.soul_actor_id;
+
+    // 18..24: 6d repair geometry (strictly post-VisibleScope)
+    let repair_ctx = extract_visible_repair_context(
+        state,
+        &percept.place,
+        &scope,
+        &percept.actor,
+        now,
+        None,
+    );
+    let has_recent_visible_soul_act = repair_ctx
+        .last_soul_ms
+        .is_some_and(|ts| now.saturating_sub_ms(ts) <= RECENT_SOUL_REPAIR_WINDOW_MS);
+    let cos_soul_user = matching_cosine(&percept.embeddings, repair_ctx.last_soul_embedding.as_ref());
+    let cos_prev_user_rephrase =
+        matching_cosine(&percept.embeddings, repair_ctx.last_sender_embedding.as_ref());
+
+    let mut cos_expected_reply = 0.0_f64;
+    if !percept.embeddings.is_empty() {
+        for exp in state.expectation_book.expectations.values() {
+            if !exp.is_active()
+                || exp.kind != ExpectKind::Response
+                || !exp.places.contains(&percept.place)
+                || !scope.allows(&exp.audience, Some(exp.expectation_id), now)
+            {
+                continue;
+            }
+            if let Some(spec) = &exp.response_spec {
+                for expected_emb in &spec.expected_reply_embeddings {
+                    cos_expected_reply =
+                        cos_expected_reply.max(matching_cosine(&percept.embeddings, Some(expected_emb)));
+                }
+            }
+        }
+    }
+
+    let is_reply_to_last_soul = percept.reply_to.is_some()
+        && percept.reply_to == repair_ctx.last_soul_event_id;
+    let soul_intervened_since_sender_last = match (repair_ctx.last_soul_ms, repair_ctx.last_sender_ms) {
+        (Some(ts_soul), Some(ts_sender)) => {
+            ts_soul >= ts_sender && repair_ctx.last_soul_event_id != repair_ctx.last_sender_event_id
+        }
+        _ => false,
+    };
+
+    // 24..28: 4d thread/actor features (strictly post-VisibleScope over active/open threads in scope)
+    let mut visible_active_threads = 0usize;
+    let mut max_active_thread_cos = 0.0_f64;
+    let mut top_thread_key: Option<(f64, u64, u64)> = None;
+    let mut sender_in_top_thread = false;
+
+    let scoped_threads = state
+        .episode_book
+        .active_threads_for_scope(&percept.place, &percept.audience);
+    let candidate_episodes: Vec<&crate::consolidation::EpisodeRecord> = if !scoped_threads.is_empty()
+    {
+        scoped_threads
+    } else {
+        state.episode_book.episodes.values().collect()
+    };
+
+    for ep in candidate_episodes {
+        if ep.state != EpisodeState::Open || ep.place != percept.place {
+            continue;
+        }
+        // Verify episode visibility strictly under VisibleScope (Delta_NI = 0).
+        let mut saw_entry = false;
+        let mut all_visible = true;
+        for &eid in &ep.event_ids {
+            if let Some(mem) = state.memory_entries.get(&eid) {
+                saw_entry = true;
+                if mem.erased || !scope.allows(&mem.audience, Some(mem.event_id), now) {
+                    all_visible = false;
+                    break;
+                }
+            }
+        }
+        if !all_visible {
+            continue;
+        }
+        if !saw_entry {
+            let mut ep_aud_members = ep.participants.clone();
+            ep_aud_members.insert(soul_id.clone());
+            let ep_aud = Audience::new(ep_aud_members);
+            if !scope.allows(&ep_aud, Some(ep.episode_id), now) {
+                continue;
+            }
+        }
+
+        visible_active_threads += 1;
+        let cos = matching_cosine(&percept.embeddings, ep.centroid.as_ref());
+        if cos > max_active_thread_cos {
+            max_active_thread_cos = cos;
+        }
+        let cand_key = (cos, ep.end_ms.as_millis(), ep.episode_id.as_u64());
+        let is_better = match top_thread_key {
+            None => true,
+            Some((best_cos, best_end, best_id)) => {
+                (cand_key.0 - best_cos) > 1e-12
+                    || ((cand_key.0 - best_cos).abs() <= 1e-12
+                        && (cand_key.1 > best_end
+                            || (cand_key.1 == best_end && cand_key.2 > best_id)))
+            }
+        };
+        if is_better {
+            top_thread_key = Some(cand_key);
+            sender_in_top_thread = ep.participants.contains(&percept.actor);
+        }
+    }
+
+    let sender_reliability = state
+        .belief_book
+        .source_reliability_at(&percept.actor, &DomainId::new("general"), now)
+        .expected();
+
+    // 28..32: 4d peer-agent features (strictly post-VisibleScope)
+    let is_sender_automated_peer = state
+        .actor_facts
+        .get(&percept.actor)
+        .is_some_and(|f| f.automated_peer);
+
+    let mut visible_other_actors = BTreeSet::new();
+    for m in &percept.audience.members {
+        if m != soul_id && m != &percept.actor {
+            visible_other_actors.insert(m.clone());
+        }
+    }
+    if let Some(entries) = state.place_history.get(&percept.place) {
+        for entry in entries {
+            if scope.allows(&entry.audience, Some(entry.event_id), now)
+                && &entry.actor != soul_id
+                && entry.actor != percept.actor
+            {
+                visible_other_actors.insert(entry.actor.clone());
+            }
+        }
+    }
+    let room_has_other_automated_peers = visible_other_actors.iter().any(|a| {
+        state
+            .actor_facts
+            .get(a)
+            .is_some_and(|f| f.automated_peer)
+    });
+
+    let consecutive_automated_turns = state
+        .consecutive_automated_turns_by_place
+        .get(&percept.place)
+        .copied()
+        .unwrap_or(0);
+
+    let mut out = [0.0_f32; DEFAULT_NUM_FEATURES_V2];
+    out[..DEFAULT_NUM_FEATURES_V1].copy_from_slice(&base);
+    out[18] = if has_recent_visible_soul_act { 1.0 } else { 0.0 };
+    out[19] = sanitize_unit(cos_soul_user, 0.0);
+    out[20] = sanitize_unit(cos_prev_user_rephrase, 0.0);
+    out[21] = sanitize_unit(cos_expected_reply, 0.0);
+    out[22] = if is_reply_to_last_soul { 1.0 } else { 0.0 };
+    out[23] = if soul_intervened_since_sender_last { 1.0 } else { 0.0 };
+    out[24] = sanitize_unit(max_active_thread_cos, 0.0);
+    out[25] = sanitize_unit((visible_active_threads.min(6) as f64) / 6.0, 0.0);
+    out[26] = if sender_in_top_thread { 1.0 } else { 0.0 };
+    out[27] = sanitize_unit(sender_reliability, 0.5);
+    out[28] = if is_sender_automated_peer { 1.0 } else { 0.0 };
+    out[29] = if room_has_other_automated_peers { 1.0 } else { 0.0 };
+    out[30] = sanitize_unit((consecutive_automated_turns.min(6) as f64) / 6.0, 0.0);
+    out[31] = percept
+        .peer_expertise_margin
+        .filter(|v| v.is_finite())
+        .map_or(0.5_f32, |m| (0.5 * (m.clamp(-1.0, 1.0) + 1.0)).clamp(0.0, 1.0));
+    out
+}
+
 /// Helper returning default `256d` zero embedding for vectorless inputs.
 #[must_use]
 pub fn zero_embedding() -> Vec<f32> {
@@ -533,16 +983,335 @@ mod tests {
             n_layers: 1,
             tabm_k: 2,
             h_dim: 8,
+            h_actor_dim: 0,
             cell_type: crate::neural::CellType::MinGru,
             temperature: 1.0,
             cic_threshold: 0.5,
             max_wait_ms: 30_000.0,
             has_phase2_heads: false,
             has_phase3_heads: false,
+            has_v22_heads: false,
             expected_embed_model_ver: Some("egemma2-256".to_owned()),
             expected_prompt_regime_id: Some("t_d".to_owned()),
         };
         let picked = extract_embedding_for_model_config(&p, &cfg);
         assert_eq!(picked, vec![0.9, 0.8, 0.7, 0.6]);
+    }
+
+    #[test]
+    fn canonical_audience_hash_is_order_independent_and_isolates_distinct_audiences() {
+        let a1 = Audience::new([ActorId::new("alice"), ActorId::new("soul")]);
+        let a2 = Audience::new([ActorId::new("soul"), ActorId::new("alice")]);
+        let group = Audience::new([
+            ActorId::new("alice"),
+            ActorId::new("bob"),
+            ActorId::new("soul"),
+        ]);
+        assert_eq!(canonical_audience_hash(&a1), canonical_audience_hash(&a2));
+        assert_ne!(canonical_audience_hash(&a1), canonical_audience_hash(&group));
+    }
+
+    #[test]
+    fn extract_features_v2_populates_repair_thread_peer_and_preserves_delta_ni_zero() {
+        use crate::consolidation::EpisodeAdmitParams;
+        use crate::expectations::{ExpectationRecord, ResponsePredictionSpec};
+        use crate::gate::PlaceHistoryEntry;
+        use crate::state::ActorFactsEntry;
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let tag = EmbeddingTag {
+            embed_model_ver: "egemma2-256".to_owned(),
+            dim_d: 4,
+            prompt_regime_id: "t_d".to_owned(),
+        };
+        let pub_place = PlaceId::new("room:public");
+        let priv_place = PlaceId::new("dm:alice");
+        let pub_aud = Audience::new([
+            ActorId::new("bob"),
+            ActorId::new("peer_bot"),
+            ActorId::new("soul"),
+        ]);
+        let priv_aud = Audience::new([ActorId::new("alice"), ActorId::new("soul")]);
+        let now = Time::from_millis(10_000);
+
+        let build_base_state = || {
+            let mut st = CoreState::new();
+            st.actor_facts.insert(
+                ActorId::new("peer_bot"),
+                ActorFactsEntry {
+                    alpha_0: 2.0,
+                    beta_0: 1.0,
+                    teacher_weight: 0.5,
+                    trusted_origin: true,
+                    automated_peer: true,
+                },
+            );
+            st.consecutive_automated_turns_by_place
+                .insert(pub_place.clone(), 3);
+
+            // Prior visible sender message (event 10)
+            st.place_history.entry(pub_place.clone()).or_default().push(
+                PlaceHistoryEntry {
+                    event_id: EventId::new(10),
+                    actor: ActorId::new("bob"),
+                    audience: pub_aud.clone(),
+                    timestamp_ms: Time::from_millis(5_000),
+                    deg_by_actor: BTreeMap::new(),
+                },
+            );
+            st.upsert_memory_entry(MemoryEntry {
+                event_id: EventId::new(10),
+                source_ids: vec![EventId::new(10)],
+                timestamp_ms: Time::from_millis(5_000),
+                place: pub_place.clone(),
+                actor: ActorId::new("bob"),
+                origin_actor: OriginActor::new(ActorId::new("bob")),
+                basis: MemoryBasis::Observed,
+                taint: Taint::Trusted,
+                audience: pub_aud.clone(),
+                embeddings: vec![TaggedEmbedding {
+                    tag: tag.clone(),
+                    values: vec![0.8, 0.6, 0.0, 0.0],
+                }],
+                attachments: Vec::new(),
+                activation: ActivationTrace::default(),
+                superseded_by: None,
+                is_gist: false,
+                importance: crate::recall::ImportanceInputs::default(),
+                concepts: Vec::new(),
+                erased: false,
+            });
+
+            // Visible recent soul act (event 11) after sender's prior message
+            st.place_history.entry(pub_place.clone()).or_default().push(
+                PlaceHistoryEntry {
+                    event_id: EventId::new(11),
+                    actor: ActorId::new("soul"),
+                    audience: pub_aud.clone(),
+                    timestamp_ms: Time::from_millis(7_000),
+                    deg_by_actor: BTreeMap::new(),
+                },
+            );
+            st.upsert_memory_entry(MemoryEntry {
+                event_id: EventId::new(11),
+                source_ids: vec![EventId::new(11)],
+                timestamp_ms: Time::from_millis(7_000),
+                place: pub_place.clone(),
+                actor: ActorId::new("soul"),
+                origin_actor: OriginActor::new(ActorId::new("soul")),
+                basis: MemoryBasis::SelfCaused,
+                taint: Taint::Trusted,
+                audience: pub_aud.clone(),
+                embeddings: vec![TaggedEmbedding {
+                    tag: tag.clone(),
+                    values: vec![1.0, 0.0, 0.0, 0.0],
+                }],
+                attachments: Vec::new(),
+                activation: ActivationTrace::default(),
+                superseded_by: None,
+                is_gist: false,
+                importance: crate::recall::ImportanceInputs::default(),
+                concepts: Vec::new(),
+                erased: false,
+            });
+
+            // Active visible Response prediction with expected_reply_embeddings
+            st.expectation_book.expectations.insert(
+                EventId::new(12),
+                ExpectationRecord {
+                    expectation_id: EventId::new(12),
+                    origin_event_id: EventId::new(11),
+                    target_event_id: EventId::new(10),
+                    kind: ExpectKind::Response,
+                    state: crate::event::ExpectationLifecycleState::Open,
+                    version: 1,
+                    places: vec![pub_place.clone()],
+                    people: vec![ActorId::new("bob")],
+                    audience: pub_aud.clone(),
+                    domain: None,
+                    condition: "reply".to_owned(),
+                    condition_embeddings: Vec::new(),
+                    about_ids: Vec::new(),
+                    created_at_ms: Time::from_millis(7_000),
+                    updated_at_ms: Time::from_millis(7_000),
+                    due_ms: Time::from_millis(20_000),
+                    expiry_ms: Time::from_millis(30_000),
+                    recurrence: None,
+                    promise_meta: None,
+                    urgency_weight: 0.0,
+                    is_overdue: false,
+                    due_woken: false,
+                    retry_count: 0,
+                    next_retry_at_ms: None,
+                    retry_action: None,
+                    last_action_id: None,
+                    last_capability_id: None,
+                    last_h_act: None,
+                    delivered_units: None,
+                    termination_reason: None,
+                    approval_prompt_emitted: false,
+                    effect_spec: None,
+                    response_spec: Some(ResponsePredictionSpec {
+                        action_id: None,
+                        medium: monoagens_protocol::ChannelId::new("chat"),
+                        addressees: vec![ActorId::new("bob")],
+                        accept_done_receipt: false,
+                        act_embeddings: vec![TaggedEmbedding {
+                            tag: tag.clone(),
+                            values: vec![1.0, 0.0, 0.0, 0.0],
+                        }],
+                        expected_reply_embeddings: vec![TaggedEmbedding {
+                            tag: tag.clone(),
+                            values: vec![0.9, 0.435_89, 0.0, 0.0],
+                        }],
+                        is_judged_silence: false,
+                        silence_sample_propensity: None,
+                        silence_sender: None,
+                        awaiting_reask_classify: false,
+                        pending_reask_event_id: None,
+                        stakes: 0.0,
+                        expected_latency_ms: 5_000,
+                    }),
+                    monitor_spec: None,
+                    goal_chain_ids: Vec::new(),
+                    linked_action_ids: Vec::new(),
+                    linked_expectation_id: None,
+                },
+            );
+
+            // Visible active episode at pub_place containing bob
+            let ep_emb = TaggedEmbedding {
+                tag: tag.clone(),
+                values: vec![1.0, 0.0, 0.0, 0.0],
+            };
+            st.episode_book.admit_event(
+                EpisodeAdmitParams {
+                    event_id: EventId::new(10),
+                    place: &pub_place,
+                    timestamp_ms: Time::from_millis(5_000),
+                    participants: BTreeSet::from([ActorId::new("bob")]),
+                    taint: Taint::Trusted,
+                    embeddings: std::slice::from_ref(&ep_emb),
+                    missed_expectation: false,
+                },
+                &crate::config::CoreConfig::default(),
+            );
+            st
+        };
+
+        let st_clean = build_base_state();
+        let mut st_with_private = build_base_state();
+
+        // Inject private DM memory, soul reply, and private episode (must NOT leak!)
+        st_with_private.upsert_memory_entry(MemoryEntry {
+            event_id: EventId::new(901),
+            source_ids: vec![EventId::new(901)],
+            timestamp_ms: Time::from_millis(9_500),
+            place: priv_place.clone(),
+            actor: ActorId::new("soul"),
+            origin_actor: OriginActor::new(ActorId::new("soul")),
+            basis: MemoryBasis::SelfCaused,
+            taint: Taint::Trusted,
+            audience: priv_aud.clone(),
+            embeddings: vec![TaggedEmbedding {
+                tag: tag.clone(),
+                values: vec![0.0, 0.0, 1.0, 0.0],
+            }],
+            attachments: Vec::new(),
+            activation: ActivationTrace::default(),
+            superseded_by: None,
+            is_gist: false,
+            importance: crate::recall::ImportanceInputs::default(),
+            concepts: Vec::new(),
+            erased: false,
+        });
+        // Also inject a hidden sub-audience private episode at the SAME pub_place!
+        st_with_private.upsert_memory_entry(MemoryEntry {
+            event_id: EventId::new(902),
+            source_ids: vec![EventId::new(902)],
+            timestamp_ms: Time::from_millis(9_600),
+            place: pub_place.clone(),
+            actor: ActorId::new("alice"),
+            origin_actor: OriginActor::new(ActorId::new("alice")),
+            basis: MemoryBasis::Observed,
+            taint: Taint::Trusted,
+            audience: priv_aud.clone(),
+            embeddings: vec![TaggedEmbedding {
+                tag: tag.clone(),
+                values: vec![1.0, 0.0, 0.0, 0.0],
+            }],
+            attachments: Vec::new(),
+            activation: ActivationTrace::default(),
+            superseded_by: None,
+            is_gist: false,
+            importance: crate::recall::ImportanceInputs::default(),
+            concepts: Vec::new(),
+            erased: false,
+        });
+        st_with_private.episode_book.episodes.insert(
+            EventId::new(902),
+            crate::consolidation::EpisodeRecord {
+                episode_id: EventId::new(902),
+                place: pub_place.clone(),
+                state: EpisodeState::Open,
+                event_ids: vec![EventId::new(902)],
+                participants: BTreeSet::from([ActorId::new("alice")]),
+                start_ms: Time::from_millis(9_600),
+                end_ms: Time::from_millis(9_600),
+                centroid: Some(TaggedEmbedding {
+                    tag: tag.clone(),
+                    values: vec![1.0, 0.0, 0.0, 0.0],
+                }),
+                vector_count: 1,
+                taint: Taint::Trusted,
+                gist_id: None,
+                dirty: false,
+                consolidated: false,
+            },
+        );
+
+        let mut percept = Percept::minimal(
+            ActorId::new("bob"),
+            pub_place,
+            pub_aud,
+            now,
+            OpaquePayload::from_bytes(b"actually no"),
+        );
+        percept.reply_to = Some(EventId::new(11));
+        percept.peer_expertise_margin = Some(0.6);
+        percept.embeddings.push(TaggedEmbedding {
+            tag,
+            values: vec![1.0, 0.0, 0.0, 0.0],
+        });
+
+        let v1 = extract_features_from_state(&st_clean, &percept, now, 0);
+        let v2_clean = extract_features_v2_from_state(&st_clean, &percept, now, 0);
+        let v2_priv = extract_features_v2_from_state(&st_with_private, &percept, now, 0);
+
+        // Delta_NI = 0: bit-for-bit identical across all 32 features!
+        assert_eq!(v2_clean, v2_priv);
+        // 0..18 exact match with v1
+        assert_eq!(&v2_clean[..18], &v1[..]);
+        // All 32 bounded in [0, 1] and finite
+        for &val in &v2_clean {
+            assert!(val.is_finite() && (0.0..=1.0).contains(&val));
+        }
+        // Repair features (18..24)
+        assert_eq!(v2_clean[18], 1.0); // has_recent_visible_soul_act
+        assert!((v2_clean[19] - 1.0).abs() < 1e-5); // cos_soul_user
+        assert!((v2_clean[20] - 0.8).abs() < 1e-5); // cos_prev_user_rephrase
+        assert!((v2_clean[21] - 0.9).abs() < 1e-4); // cos_expected_reply
+        assert_eq!(v2_clean[22], 1.0); // is_reply_to_last_soul
+        assert_eq!(v2_clean[23], 1.0); // soul_intervened_since_sender_last
+        // Thread/actor features (24..28)
+        assert!((v2_clean[24] - 1.0).abs() < 1e-5); // max_active_thread_cos
+        assert!((v2_clean[25] - (1.0 / 6.0)).abs() < 1e-5); // active_thread_count_norm
+        assert_eq!(v2_clean[26], 1.0); // sender_in_top_thread
+        assert!((v2_clean[27] - 0.5).abs() < 1e-5); // sender_reliability (uniform Beta(1,1))
+        // Peer-agent features (28..32)
+        assert_eq!(v2_clean[28], 0.0); // is_sender_automated_peer (bob is human)
+        assert_eq!(v2_clean[29], 1.0); // room_has_other_automated_peers (peer_bot)
+        assert!((v2_clean[30] - 0.5).abs() < 1e-5); // consecutive_automated_turns_norm = 3/6
+        assert!((v2_clean[31] - 0.8).abs() < 1e-5); // peer_expertise_margin = 0.5*(0.6+1)
     }
 }

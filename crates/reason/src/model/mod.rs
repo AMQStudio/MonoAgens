@@ -110,6 +110,8 @@ pub struct ModelRequest {
     pub timeout_ms: u64,
     pub max_output_tokens: Option<u32>,
     pub temperature: Option<f32>,
+    /// Optional per-request reasoning effort override (overrides provider config when `Some`).
+    pub reasoning_effort: Option<ReasoningEffort>,
     /// Stable per-conversation or per-place identifier used to fill `{conversation_id}` in
     /// configured extra headers at run time.
     pub conversation_id: Option<String>,
@@ -146,6 +148,7 @@ impl ModelRequest {
             timeout_ms: 30_000,
             max_output_tokens: None,
             temperature: None,
+            reasoning_effort: None,
             conversation_id: None,
             extra_headers: Vec::new(),
         }

@@ -11,12 +11,25 @@ from typing import Any
 
 import numpy as np
 
-from monoagens_train.features import NUM_FEATURES, PerceptNumericInputs, build_x_num
-from monoagens_train.licenses import assert_safe_path, require_dataset_allowed
+from monoagens_train.features import (
+    NUM_FEATURES,
+    NUM_FEATURES_V2,
+    PerceptNumericInputs,
+    PerceptNumericInputsV2,
+    build_x_num,
+    build_x_num_v2,
+    upgrade_x_num_v1_to_v2,
+)
+from monoagens_train.licenses import (
+    assert_safe_path,
+    require_dataset_allowed,
+    require_v22_dataset_allowed,
+)
 
 PHASE1_DATASETS = ("when2speak", "ubuntu_irc", "proactive_bench", "capa")
 PHASE2_DATASETS = ("longmemeval", "stale", "hi_tom", "dyntom")
 PHASE3_DATASETS = ("group_mem_bench", "memory_agent_bench")
+V22_SEA_AND_PREF_DATASETS = ("seadialogues", "indodialect", "permembench", "personamem_v2", "vars")
 GATE_SILENT = 0
 GATE_NOTE = 1
 GATE_WAIT = 2
@@ -154,6 +167,9 @@ class TurnRecord:
     y_memory_relevance: float = 0.0
     mask_memory_relevance: float = 0.0
     pair_query_text: str | None = None
+    y_compute_tier: int = 1
+    y_user_correction: float = 0.0
+    mask_v22: float = 0.0
 
 
 @dataclass
@@ -1701,6 +1717,318 @@ def build_phase3_episodes(repo_root: Path, max_seq_len: int = 24) -> list[Trajec
     return episodes
 
 
+# ---------------------------------------------------------------------------
+# Wave C V2.2 OSI-Clean SEA, Personal Memory, Preference & Repair Loaders
+# ---------------------------------------------------------------------------
+
+
+def _iter_local_records(dataset_dir: Path) -> list[dict[str, Any]]:
+    """Reads local `.jsonl` or `.json` corpus files when present; returns `[]` offline if missing."""
+    if not dataset_dir.is_dir():
+        return []
+    records: list[dict[str, Any]] = []
+    for path in sorted(dataset_dir.rglob("*.jsonl")):
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if line:
+                obj = json.loads(line)
+                if isinstance(obj, dict):
+                    records.append(obj)
+    for path in sorted(dataset_dir.rglob("*.json")):
+        if path.name.startswith("."):
+            continue
+        raw = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        if isinstance(raw, list):
+            records.extend(item for item in raw if isinstance(item, dict))
+        elif isinstance(raw, dict):
+            for key in ("data", "items", "dialogues", "conversations", "examples"):
+                if isinstance(raw.get(key), list):
+                    records.extend(item for item in raw[key] if isinstance(item, dict))
+                    break
+    return records
+
+
+def _x_num_for_schema(inp: PerceptNumericInputsV2, schema_version: int) -> np.ndarray:
+    return build_x_num_v2(inp) if schema_version == 2 else build_x_num(inp)
+
+
+def _load_sea_dialogue_like(
+    dataset_dir: Path,
+    dataset_id: str,
+    *,
+    max_seq_len: int = 24,
+    schema_version: int = 2,
+    is_repair_focused: bool = False,
+) -> list[TrajectoryEpisode]:
+    """Loads local OSI-clean SEA dialogue / dialect / repair records with graceful offline fallback."""
+    rows = _iter_local_records(dataset_dir)
+    episodes: list[TrajectoryEpisode] = []
+    for idx, row in enumerate(rows):
+        cid = str(row.get("id") or row.get("dialogue_id") or f"{dataset_id}_{idx:05d}")
+        raw_turns = row.get("turns") or row.get("messages") or row.get("utterances") or []
+        if not raw_turns and isinstance(row.get("text"), str):
+            raw_turns = [{"speaker": "user", "text": row["text"]}]
+        if not raw_turns:
+            continue
+
+        speakers = {str(t.get("speaker") or t.get("role") or f"spk_{i % 2}") for i, t in enumerate(raw_turns)}
+        is_dyadic = len(speakers) <= 2
+        turns: list[TurnRecord] = []
+        last_soul_t: int | None = None
+        for t_i, raw_t in enumerate(raw_turns[:max_seq_len]):
+            spk = str(raw_t.get("speaker") or raw_t.get("role") or "user")
+            text = str(raw_t.get("text") or raw_t.get("content") or "")[:600]
+            if not text:
+                continue
+            is_assistant = spk.lower() in ("assistant", "soul", "bot", "system")
+            if is_assistant:
+                last_soul_t = t_i
+                continue
+            is_correction = bool(raw_t.get("is_correction") or raw_t.get("is_repair") or False)
+            is_burst = bool(raw_t.get("is_burst_fragment") or False)
+            if is_burst:
+                lbl = GATE_WAIT
+                wait_ms = 2500.0
+                tier = 0
+            elif is_correction or is_repair_focused:
+                lbl = GATE_GO
+                wait_ms = 0.0
+                tier = 2 if is_correction else 1
+            elif is_dyadic or bool(raw_t.get("is_explicit_addressee", False)):
+                lbl = GATE_GO
+                wait_ms = 0.0
+                tier = 1
+            else:
+                lbl = GATE_SILENT
+                wait_ms = 0.0
+                tier = 0
+
+            x_num = _x_num_for_schema(
+                PerceptNumericInputsV2(
+                    is_named_soul=is_dyadic or bool(raw_t.get("is_named_soul", False)),
+                    is_explicit_addressee=is_dyadic or bool(raw_t.get("is_explicit_addressee", False)),
+                    is_reply_or_expect_link=(last_soul_t is not None),
+                    is_dyadic_place=is_dyadic,
+                    active_participant_count=max(2, len(speakers)),
+                    dt_since_last_place_event_s=1.5 if is_burst else (8.0 if t_i > 0 else 0.0),
+                    dt_since_last_soul_act_s=float((t_i - last_soul_t) * 6) if last_soul_t is not None else 86400.0,
+                    dt_since_sender_last_act_s=1.5 if is_burst else 12.0,
+                    total_acts_window=t_i + 1,
+                    sender_exchange_count=t_i,
+                    place_event_count=t_i,
+                    pending_belief_uncertainty=0.65 if is_correction else 0.15,
+                    has_recent_visible_soul_act=(last_soul_t is not None),
+                    cos_prev_user_rephrase=0.80 if is_correction else 0.15,
+                    is_reply_to_last_soul=is_correction and (last_soul_t is not None),
+                    soul_intervened_since_sender_last=(last_soul_t is not None),
+                    active_thread_count=1 if is_dyadic else min(6, len(speakers)),
+                    sender_in_top_thread=True,
+                ),
+                schema_version,
+            )
+            turns.append(
+                TurnRecord(
+                    text=text,
+                    x_num=x_num,
+                    label_gate=lbl,
+                    wait_delta_ms=wait_ms,
+                    loss_mask=1.0,
+                    y_verify=0.9 if is_correction else 0.25,
+                    mask_verify=1.0 if is_repair_focused else 0.0,
+                    y_compute_tier=tier,
+                    y_user_correction=1.0 if is_correction else 0.0,
+                    mask_v22=1.0,
+                )
+            )
+        if turns:
+            cluster_key = f"{dataset_id}:{cid}"
+            episodes.append(
+                TrajectoryEpisode(
+                    episode_id=cluster_key,
+                    dataset_id=dataset_id,
+                    cluster_id=cluster_key,
+                    split=_stable_split_bucket(cluster_key),
+                    turns=turns,
+                )
+            )
+    return episodes
+
+
+def _load_pref_memory_like(
+    dataset_dir: Path,
+    dataset_id: str,
+    *,
+    max_seq_len: int = 24,
+    schema_version: int = 2,
+) -> list[TrajectoryEpisode]:
+    """Loads local OSI-clean personal/preference memory corpora (`PerMemBench`, `PersonaMem-v2`)."""
+    rows = _iter_local_records(dataset_dir)
+    episodes: list[TrajectoryEpisode] = []
+    for idx, row in enumerate(rows):
+        cid = str(row.get("id") or row.get("user_id") or f"{dataset_id}_{idx:05d}")
+        history = row.get("history") or row.get("sessions") or row.get("messages") or []
+        question = str(row.get("question") or row.get("query") or "")[:600]
+        turns: list[TurnRecord] = []
+        hist_budget = max(1, max_seq_len - (1 if question else 0))
+
+        for h_i, item in enumerate(history[:hist_budget]):
+            if isinstance(item, dict):
+                text = str(item.get("content") or item.get("text") or "")[:600]
+                is_pref = bool(item.get("is_preference") or item.get("has_answer") or False)
+                is_update = bool(item.get("is_update") or False)
+            else:
+                text = str(item)[:600]
+                is_pref = False
+                is_update = False
+            if not text:
+                continue
+            x_num = _x_num_for_schema(
+                PerceptNumericInputsV2(
+                    is_explicit_addressee=True,
+                    is_reply_or_expect_link=(h_i > 0),
+                    is_dyadic_place=True,
+                    active_participant_count=2,
+                    dt_since_last_place_event_s=120.0 if h_i > 0 else 0.0,
+                    dt_since_last_soul_act_s=240.0,
+                    total_acts_window=h_i + 1,
+                    sender_exchange_count=h_i,
+                    place_event_count=h_i,
+                    max_visible_mem_cos=0.75 if is_pref else 0.20,
+                    pending_belief_uncertainty=0.75 if is_update else 0.15,
+                    active_thread_count=1,
+                    sender_in_top_thread=True,
+                ),
+                schema_version,
+            )
+            turns.append(
+                TurnRecord(
+                    text=text,
+                    x_num=x_num,
+                    label_gate=GATE_NOTE if (is_pref or is_update) else GATE_SILENT,
+                    wait_delta_ms=0.0,
+                    loss_mask=1.0,
+                    y_uncertainty=0.70 if is_update else 0.15,
+                    mask_uncertainty=1.0,
+                    y_verify=0.85 if is_update else 0.25,
+                    mask_verify=1.0,
+                    y_encode_importance=1.0 if (is_pref or is_update) else 0.10,
+                    mask_encode_importance=1.0,
+                    y_memory_relevance=1.0 if is_pref else 0.10,
+                    mask_memory_relevance=1.0 if question else 0.0,
+                    pair_query_text=question if question else None,
+                    y_compute_tier=2 if is_update else 0,
+                    y_user_correction=1.0 if is_update else 0.0,
+                    mask_v22=1.0,
+                )
+            )
+
+        if question:
+            t_i = len(turns)
+            q_xnum = _x_num_for_schema(
+                PerceptNumericInputsV2(
+                    is_named_soul=True,
+                    is_explicit_addressee=True,
+                    is_reply_or_expect_link=True,
+                    is_dyadic_place=True,
+                    active_participant_count=2,
+                    dt_since_last_place_event_s=600.0,
+                    dt_since_last_soul_act_s=600.0,
+                    total_acts_window=t_i + 1,
+                    sender_exchange_count=t_i,
+                    place_event_count=t_i,
+                    max_visible_mem_cos=0.80,
+                    pending_belief_uncertainty=0.35,
+                    active_thread_count=1,
+                    sender_in_top_thread=True,
+                ),
+                schema_version,
+            )
+            turns.append(
+                TurnRecord(
+                    text=question,
+                    x_num=q_xnum,
+                    label_gate=GATE_GO,
+                    wait_delta_ms=0.0,
+                    loss_mask=1.0,
+                    y_uncertainty=0.25,
+                    mask_uncertainty=1.0,
+                    y_verify=0.80,
+                    mask_verify=1.0,
+                    y_encode_importance=0.65,
+                    mask_encode_importance=1.0,
+                    y_compute_tier=2,
+                    y_user_correction=0.0,
+                    mask_v22=1.0,
+                )
+            )
+
+        if turns:
+            cluster_key = f"{dataset_id}:{cid}"
+            episodes.append(
+                TrajectoryEpisode(
+                    episode_id=cluster_key,
+                    dataset_id=dataset_id,
+                    cluster_id=cluster_key,
+                    split=_stable_split_bucket(cluster_key),
+                    turns=turns,
+                )
+            )
+    return episodes
+
+
+def build_v22_sea_episodes(
+    repo_root: Path,
+    *,
+    max_seq_len: int = 24,
+    schema_version: int = 2,
+    dataset_ids: tuple[str, ...] = V22_SEA_AND_PREF_DATASETS,
+) -> list[TrajectoryEpisode]:
+    """Loads locally available OSI-clean Wave C SEA/preference/repair corpora with offline fallback.
+
+    Strictly enforces `ALLOWED_OSI_SPDX` via `require_v22_dataset_allowed` before touching any path.
+    Datasets whose local directories are not yet downloaded return zero episodes without error.
+    """
+    episodes: list[TrajectoryEpisode] = []
+    for ds_id in dataset_ids:
+        entry = require_v22_dataset_allowed(ds_id)
+        ds_dir = assert_safe_path(
+            repo_root / "lab" / "datasets" / entry.relative_dir,
+            repo_root=repo_root,
+        )
+        if not ds_dir.is_dir():
+            continue
+        if entry.dataset_id in ("seadialogues", "indodialect"):
+            episodes.extend(
+                _load_sea_dialogue_like(
+                    ds_dir,
+                    entry.dataset_id,
+                    max_seq_len=max_seq_len,
+                    schema_version=schema_version,
+                    is_repair_focused=False,
+                )
+            )
+        elif entry.dataset_id == "vars":
+            episodes.extend(
+                _load_sea_dialogue_like(
+                    ds_dir,
+                    entry.dataset_id,
+                    max_seq_len=max_seq_len,
+                    schema_version=schema_version,
+                    is_repair_focused=True,
+                )
+            )
+        elif entry.dataset_id in ("permembench", "personamem_v2"):
+            episodes.extend(
+                _load_pref_memory_like(
+                    ds_dir,
+                    entry.dataset_id,
+                    max_seq_len=max_seq_len,
+                    schema_version=schema_version,
+                )
+            )
+    return episodes
+
+
 def precompute_multitask_shards(
     repo_root: Path,
     cache_path: Path,
@@ -1769,11 +2097,17 @@ def precompute_multitask_shards(
     for ep in episodes:
         split_buckets[ep.split].append(ep)
 
+    inferred_num_features = NUM_FEATURES
+    for ep in episodes:
+        if ep.turns:
+            inferred_num_features = int(ep.turns[0].x_num.shape[-1])
+            break
+
     arrays: dict[str, np.ndarray] = {}
     for split_name, eps in split_buckets.items():
         n = len(eps)
         e_arr = np.zeros((n, max_seq_len, 256), dtype=np.float32)
-        x_arr = np.zeros((n, max_seq_len, NUM_FEATURES), dtype=np.float32)
+        x_arr = np.zeros((n, max_seq_len, inferred_num_features), dtype=np.float32)
         y_gate = np.zeros((n, max_seq_len), dtype=np.int64)
         y_wait = np.zeros((n, max_seq_len), dtype=np.float32)
         mask = np.zeros((n, max_seq_len), dtype=np.float32)
@@ -1785,6 +2119,9 @@ def precompute_multitask_shards(
         m_enc = np.zeros((n, max_seq_len), dtype=np.float32)
         y_rel = np.zeros((n, max_seq_len), dtype=np.float32)
         m_rel = np.zeros((n, max_seq_len), dtype=np.float32)
+        y_ct = np.ones((n, max_seq_len), dtype=np.int64)
+        y_uc = np.zeros((n, max_seq_len), dtype=np.float32)
+        m_v22 = np.zeros((n, max_seq_len), dtype=np.float32)
         ds_names = np.array([ep.dataset_id for ep in eps], dtype=str)
 
         for i, ep in enumerate(eps):
@@ -1792,6 +2129,8 @@ def precompute_multitask_shards(
                 cand_emb = emb_matrix[unique_texts[turn.text]]
                 e_arr[i, t_idx] = cand_emb
                 x_vec = turn.x_num.copy()
+                if inferred_num_features == NUM_FEATURES_V2 and x_vec.shape[-1] == NUM_FEATURES:
+                    x_vec = upgrade_x_num_v1_to_v2(x_vec)
                 if turn.pair_query_text is not None:
                     q_emb = emb_matrix[unique_texts[turn.pair_query_text]]
                     cos_q = float(np.clip(np.dot(q_emb, cand_emb), 0.0, 1.0))
@@ -1808,6 +2147,9 @@ def precompute_multitask_shards(
                 m_enc[i, t_idx] = turn.mask_encode_importance
                 y_rel[i, t_idx] = turn.y_memory_relevance
                 m_rel[i, t_idx] = turn.mask_memory_relevance
+                y_ct[i, t_idx] = turn.y_compute_tier
+                y_uc[i, t_idx] = turn.y_user_correction
+                m_v22[i, t_idx] = turn.mask_v22
 
         arrays[f"{split_name}_e256"] = e_arr
         arrays[f"{split_name}_xnum"] = x_arr
@@ -1822,6 +2164,9 @@ def precompute_multitask_shards(
         arrays[f"{split_name}_menc"] = m_enc
         arrays[f"{split_name}_yrel"] = y_rel
         arrays[f"{split_name}_mrel"] = m_rel
+        arrays[f"{split_name}_yct"] = y_ct
+        arrays[f"{split_name}_yuc"] = y_uc
+        arrays[f"{split_name}_mv22"] = m_v22
         arrays[f"{split_name}_ds"] = ds_names
 
     arrays["prompt_regime_id"] = np.array([prompt_regime_id], dtype=str)
@@ -1897,18 +2242,25 @@ def precompute_phase3_shards(
     )
 
 
-def load_multitask_shards(cache_path: Path) -> dict[str, dict[str, np.ndarray]]:
-    """Loads multi-task shards (backward-compatible with Phase 1 npz files)."""
+def load_multitask_shards(
+    cache_path: Path,
+    *,
+    target_schema_version: int | None = None,
+) -> dict[str, dict[str, np.ndarray]]:
+    """Loads multi-task shards (backward-compatible with Phase 1/2/3 v1 and V2.2 npz files)."""
     data = np.load(cache_path, allow_pickle=False)
     out: dict[str, dict[str, np.ndarray]] = {}
     for split in ("train", "calibration", "test"):
         e = data[f"{split}_e256"]
         x = data[f"{split}_xnum"]
+        if target_schema_version == 2 and x.shape[-1] == NUM_FEATURES:
+            x = upgrade_x_num_v1_to_v2(x)
         yg = data[f"{split}_ygate"]
         yw = data[f"{split}_ywait"]
         m = data[f"{split}_mask"]
         ds = data[f"{split}_ds"]
         zeros = np.zeros_like(m, dtype=np.float32)
+        ones_i64 = np.ones_like(yg, dtype=np.int64)
 
         def _get(suffix: str, fallback: np.ndarray = zeros) -> np.ndarray:
             key = f"{split}_{suffix}"
@@ -1928,6 +2280,9 @@ def load_multitask_shards(cache_path: Path) -> dict[str, dict[str, np.ndarray]]:
             "m_enc": _get("menc"),
             "y_rel": _get("yrel"),
             "m_rel": _get("mrel"),
+            "y_compute_tier": _get("yct", ones_i64),
+            "y_user_correction": _get("yuc"),
+            "v22_mask": _get("mv22"),
             "dataset_id": ds,
         }
         for k, arr in d.items():

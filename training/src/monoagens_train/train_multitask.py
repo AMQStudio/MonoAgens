@@ -27,11 +27,15 @@ from monoagens_train.calibrate import (
     probs_from_logits_k,
 )
 from monoagens_train.datasets import (
+    build_v22_sea_episodes,
     load_multitask_shards,
+    precompute_multitask_shards,
     precompute_phase1_shards,
     precompute_phase2_shards,
     precompute_phase3_shards,
 )
+from monoagens_train.export import export_golden_fixture
+from monoagens_train.features import NUM_FEATURES_V2, upgrade_x_num_v1_to_v2
 from monoagens_train.model import (
     CellKind,
     MonoNeuralController,
@@ -73,6 +77,13 @@ class MultiTaskReportEntry:
     p_memory_relevance_bce: float | None = None
     p_memory_relevance_f1: float | None = None
     p_memory_relevance_top1_acc: float | None = None
+    feature_schema_version: int = 1
+    h_actor_dim: int = 0
+    has_v22_heads: bool = False
+    compute_tier_acc: float | None = None
+    compute_tier_macro_f1: float | None = None
+    p_user_correction_bce: float | None = None
+    p_user_correction_f1: float | None = None
 
 
 def _set_seed(seed: int = 42) -> None:
@@ -82,7 +93,16 @@ def _set_seed(seed: int = 42) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def _merge_splits(shard_dicts: list[dict[str, dict[str, np.ndarray]]], split: str) -> dict[str, np.ndarray]:
+def _merge_splits(
+    shard_dicts: list[dict[str, dict[str, np.ndarray]]],
+    split: str,
+    target_schema_version: int | None = None,
+) -> dict[str, np.ndarray]:
+    non_empty = [sd[split] for sd in shard_dicts if len(sd[split]["e_256"]) > 0]
+    need_v2 = (
+        target_schema_version == 2
+        or any(d["x_num"].shape[-1] == NUM_FEATURES_V2 for d in non_empty)
+    )
     keys = (
         "e_256",
         "x_num",
@@ -97,11 +117,23 @@ def _merge_splits(shard_dicts: list[dict[str, dict[str, np.ndarray]]], split: st
         "m_enc",
         "y_rel",
         "m_rel",
+        "y_compute_tier",
+        "y_user_correction",
+        "v22_mask",
         "dataset_id",
     )
     merged: dict[str, np.ndarray] = {}
     for k in keys:
-        parts = [sd[split][k] for sd in shard_dicts if len(sd[split]["e_256"]) > 0]
+        parts: list[np.ndarray] = []
+        for d in non_empty:
+            if k == "x_num":
+                parts.append(upgrade_x_num_v1_to_v2(d["x_num"]) if need_v2 else d["x_num"])
+            elif k in d:
+                parts.append(d[k])
+            elif k == "y_compute_tier":
+                parts.append(np.ones_like(d["y_gate"], dtype=np.int64))
+            else:
+                parts.append(np.zeros_like(d["mask"], dtype=np.float32))
         merged[k] = np.concatenate(parts, axis=0)
     return merged
 
@@ -205,12 +237,24 @@ def _collect_multitask_outputs(
 ) -> dict[str, np.ndarray]:
     model.eval()
     e = torch.from_numpy(split_dict["e_256"])
-    x = torch.from_numpy(split_dict["x_num"])
+    x_raw = split_dict["x_num"]
+    if model.arch.d_in_num == NUM_FEATURES_V2 and x_raw.shape[-1] != NUM_FEATURES_V2:
+        x_raw = upgrade_x_num_v1_to_v2(x_raw)
+    x = torch.from_numpy(x_raw)
 
     buckets: dict[str, list[np.ndarray]] = {"logits_k": []}
-    for opt_k in ("p_uncertainty", "p_verify", "p_encode_importance", "p_memory_relevance"):
-        if (opt_k in ("p_uncertainty", "p_verify") and model.arch.has_phase2_heads) or (
-            opt_k in ("p_encode_importance", "p_memory_relevance") and model.arch.has_phase3_heads
+    for opt_k in (
+        "p_uncertainty",
+        "p_verify",
+        "p_encode_importance",
+        "p_memory_relevance",
+        "compute_tier_probs",
+        "p_user_correction",
+    ):
+        if (
+            (opt_k in ("p_uncertainty", "p_verify") and model.arch.has_phase2_heads)
+            or (opt_k in ("p_encode_importance", "p_memory_relevance") and model.arch.has_phase3_heads)
+            or (opt_k in ("compute_tier_probs", "p_user_correction") and model.arch.has_v22_heads)
         ):
             buckets[opt_k] = []
 
@@ -324,6 +368,20 @@ def evaluate_multitask_model(
                 hits.append(1.0 if ys[best_idx] >= 0.5 else 0.0)
         rel_top1 = round(float(np.mean(hits)) if hits else 0.0, 6)
 
+    ct_acc = ct_f1 = uc_bce = uc_f1 = None
+    if arch.has_v22_heads and "v22_mask" in test_dict and np.any(test_dict["v22_mask"] > 0.5):
+        mv = test_dict["v22_mask"] > 0.5
+        ct_probs = test_out["compute_tier_probs"][mv]
+        ct_true = test_dict["y_compute_tier"][mv]
+        ct_acc = round(float(np.mean(np.argmax(ct_probs, axis=-1) == ct_true)), 6)
+        ct_f1 = round(compute_macro_f1(ct_probs, ct_true, num_classes=3), 6)
+        ucb, ucf = _binary_metrics(
+            test_out["p_user_correction"],
+            test_dict["y_user_correction"],
+            test_dict["v22_mask"],
+        )
+        uc_bce, uc_f1 = round(ucb, 6), round(ucf, 6)
+
     return MultiTaskReportEntry(
         phase=phase,
         scale=scale,
@@ -352,6 +410,13 @@ def evaluate_multitask_model(
         p_memory_relevance_bce=rel_bce,
         p_memory_relevance_f1=rel_f1,
         p_memory_relevance_top1_acc=rel_top1,
+        feature_schema_version=arch.feature_schema_version,
+        h_actor_dim=arch.h_actor_dim,
+        has_v22_heads=arch.has_v22_heads,
+        compute_tier_acc=ct_acc,
+        compute_tier_macro_f1=ct_f1,
+        p_user_correction_bce=uc_bce,
+        p_user_correction_f1=uc_f1,
     )
 
 
@@ -369,6 +434,9 @@ def train_multitask_model(
     init_checkpoint: Path | None = None,
     use_pcgrad: bool = True,
     modality_dropout_p: float = 0.15,
+    feature_schema_version: int = 1,
+    has_v22_heads: bool = False,
+    h_actor_dim: int = 0,
 ) -> tuple[MonoNeuralController, MultiTaskReportEntry]:
     _set_seed(seed)
     arch = architecture_for_scale(
@@ -376,18 +444,28 @@ def train_multitask_model(
         cell_type,
         has_phase2_heads=(phase >= 2),
         has_phase3_heads=(phase >= 3),
+        has_v22_heads=has_v22_heads,
+        feature_schema_version=feature_schema_version,
+        h_actor_dim=h_actor_dim,
     )
     model = MonoNeuralController(arch).to(device)
     if init_checkpoint is not None and init_checkpoint.is_file():
         model.load_matching_weights(init_checkpoint)
 
     param_count = sum(p.numel() for p in model.parameters())
-    task_weights = HomoscedasticTaskWeights(n_tasks=6).to(device)
+    task_weights = HomoscedasticTaskWeights(n_tasks=8).to(device)
 
     tr = shards["train"]
+    x_tr = (
+        upgrade_x_num_v1_to_v2(tr["x_num"])
+        if arch.d_in_num == NUM_FEATURES_V2 and tr["x_num"].shape[-1] != NUM_FEATURES_V2
+        else tr["x_num"]
+    )
+    zeros_f = np.zeros_like(tr["mask"], dtype=np.float32)
+    ones_i64 = np.ones_like(tr["y_gate"], dtype=np.int64)
     train_ds = TensorDataset(
         torch.from_numpy(tr["e_256"]),
-        torch.from_numpy(tr["x_num"]),
+        torch.from_numpy(x_tr),
         torch.from_numpy(tr["y_gate"]),
         torch.from_numpy(tr["y_wait_ms"]),
         torch.from_numpy(tr["mask"]),
@@ -399,6 +477,9 @@ def train_multitask_model(
         torch.from_numpy(tr["m_enc"]),
         torch.from_numpy(tr["y_rel"]),
         torch.from_numpy(tr["m_rel"]),
+        torch.from_numpy(tr.get("y_compute_tier", ones_i64)),
+        torch.from_numpy(tr.get("y_user_correction", zeros_f)),
+        torch.from_numpy(tr.get("v22_mask", zeros_f)),
     )
     loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, drop_last=False)
     class_weights = _compute_class_weights(tr["y_gate"], tr["mask"], device)
@@ -423,11 +504,11 @@ def train_multitask_model(
     rng = np.random.default_rng(seed)
 
     t0 = time.perf_counter()
-    for _epoch in range(epochs):
+    for epoch in range(epochs):
         model.train()
         task_weights.train()
         for batch in loader:
-            eb, xb, yb, wb, mb, y_u, m_u, y_v, m_v, y_e, m_e, y_r, m_r = [
+            eb, xb, yb, wb, mb, y_u, m_u, y_v, m_v, y_e, m_e, y_r, m_r, y_ct, y_uc, m_v22 = [
                 t.to(device) for t in batch
             ]
             if modality_dropout_p > 0.0:
@@ -452,38 +533,60 @@ def train_multitask_model(
                 F.smooth_l1_loss(wait_pred, wait_true, reduction="none") * mb
             ).sum() / mb.sum().clamp_min(1.0)
 
-            task_losses: list[torch.Tensor] = [
-                task_weights.weight(0, cls_loss),
-                task_weights.weight(1, wait_loss),
-            ]
+            timing_group = task_weights.weight(0, cls_loss) + task_weights.weight(1, wait_loss)
+            aux_losses: list[torch.Tensor] = []
 
             if arch.has_phase2_heads and m_u.sum() > 0:
                 # BCE against fused uncertainty probability (clamped strictly in (1e-5, 1-1e-5))
                 p_u = out["p_uncertainty"].clamp(1e-5, 1.0 - 1e-5)
                 bce_u = -(y_u * torch.log(p_u) + (1.0 - y_u) * torch.log(1.0 - p_u))
                 loss_u = (bce_u * m_u).sum() / m_u.sum().clamp_min(1.0)
-                task_losses.append(task_weights.weight(2, loss_u))
+                aux_losses.append(task_weights.weight(2, loss_u))
 
             if arch.has_phase2_heads and m_v.sum() > 0:
                 bce_v = F.binary_cross_entropy_with_logits(
                     out["p_verify_logit"], y_v, reduction="none"
                 )
                 loss_v = (bce_v * m_v).sum() / m_v.sum().clamp_min(1.0)
-                task_losses.append(task_weights.weight(3, loss_v))
+                aux_losses.append(task_weights.weight(3, loss_v))
 
             if arch.has_phase3_heads and m_e.sum() > 0:
                 bce_e = F.binary_cross_entropy_with_logits(
                     out["p_encode_importance_logit"], y_e, reduction="none"
                 )
                 loss_e = (bce_e * m_e).sum() / m_e.sum().clamp_min(1.0)
-                task_losses.append(task_weights.weight(4, loss_e))
+                aux_losses.append(task_weights.weight(4, loss_e))
 
             if arch.has_phase3_heads and m_r.sum() > 0:
                 bce_r = F.binary_cross_entropy_with_logits(
                     out["p_memory_relevance_logit"], y_r, reduction="none"
                 )
                 loss_r = (bce_r * m_r).sum() / m_r.sum().clamp_min(1.0)
-                task_losses.append(task_weights.weight(5, loss_r))
+                aux_losses.append(task_weights.weight(5, loss_r))
+
+            v22_losses: list[torch.Tensor] = []
+            if arch.has_v22_heads and m_v22.sum() > 0:
+                ce_ct = F.cross_entropy(
+                    out["compute_tier_logits"].reshape(-1, 3),
+                    y_ct.reshape(-1),
+                    reduction="none",
+                ).reshape_as(m_v22)
+                loss_ct = (ce_ct * m_v22).sum() / m_v22.sum().clamp_min(1.0)
+                v22_losses.append(task_weights.weight(6, loss_ct))
+
+                bce_uc = F.binary_cross_entropy_with_logits(
+                    out["p_user_correction_logit"], y_uc, reduction="none"
+                )
+                loss_uc = (bce_uc * m_v22).sum() / m_v22.sum().clamp_min(1.0)
+                v22_losses.append(task_weights.weight(7, loss_uc))
+
+            # Group into <=3 orthogonal task families (Timing, Memory/Verify, V2.2 Chat)
+            # so PCGrad still projects inter-family conflicts at ~3x higher throughput.
+            task_losses: list[torch.Tensor] = [timing_group]
+            if aux_losses:
+                task_losses.append(torch.stack(aux_losses).sum())
+            if v22_losses:
+                task_losses.append(torch.stack(v22_losses).sum())
 
             if use_pcgrad and len(task_losses) > 1:
                 _pcgrad_backward(task_losses, shared_params, head_params, rng)
@@ -493,6 +596,11 @@ def train_multitask_model(
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
         scheduler.step()
+        if epochs >= 4 and (epoch == 0 or (epoch + 1) % 2 == 0 or epoch + 1 == epochs):
+            print(
+                f"[train_multitask] {scale}/{cell_type} epoch {epoch + 1}/{epochs} ({time.perf_counter() - t0:.1f}s)",
+                flush=True,
+            )
     train_seconds = time.perf_counter() - t0
     entry = evaluate_multitask_model(
         model=model,
@@ -515,88 +623,26 @@ def export_multitask_parity_fixture(
     mingru_entry: MultiTaskReportEntry,
     gdn2_entry: MultiTaskReportEntry,
     fixtures_dir: Path,
+    *,
+    fixture_prefix: str | None = None,
 ) -> dict[str, str]:
     """Exports trained compact safetensors + multi-turn JSON parity fixtures for Rust `neural_parity`."""
-    fixtures_dir.mkdir(parents=True, exist_ok=True)
-    rng = np.random.default_rng(2026 + phase)
-
-    e_seq = rng.normal(0.0, 0.25, size=(3, 256)).astype(np.float32)
-    e_seq[1, :] = 0.0  # vectorless step
-    x_seq = rng.uniform(0.0, 1.0, size=(3, 18)).astype(np.float32)
-
-    results: dict[str, Any] = {"phase": phase, "cases": []}
-    blake3_map: dict[str, str] = {}
-
-    for label, model, entry in (
-        ("mingru", mingru_model, mingru_entry),
-        ("gated_deltanet2", gdn2_model, gdn2_entry),
-    ):
-        st_name = (
-            f"neural_phase{phase}_golden.safetensors"
-            if label == "mingru"
-            else f"neural_phase{phase}_golden_{label}.safetensors"
-        )
-        st_path = fixtures_dir / st_name
-        digest = model.export_safetensors(
-            st_path, temperature=entry.temperature, cic_threshold=entry.cic_threshold
-        )
-        blake3_map[label] = digest
-
-        model_cpu = model.cpu().eval()
-        h = torch.zeros(1, model_cpu.arch.h_dim, dtype=torch.float32)
-        steps = []
-        with torch.no_grad():
-            for t in range(3):
-                eb = torch.from_numpy(e_seq[t : t + 1])
-                xb = torch.from_numpy(x_seq[t : t + 1])
-                out = model_cpu.step(eb, xb, h, temperature=entry.temperature)
-                h = out["h_next"]
-                probs = out["gate_probs"][0].numpy()
-                step_rec: dict[str, Any] = {
-                    "e_256": [float(v) for v in e_seq[t]],
-                    "x_num": [float(v) for v in x_seq[t]],
-                    "expected_gate_logits": [float(v) for v in out["gate_logits"][0].numpy()],
-                    "expected_gate_probs": [float(v) for v in probs],
-                    "expected_wait_delta_ms": float(out["wait_delta_ms"][0].item()),
-                    "expected_epistemic_uncertainty": float(
-                        out["epistemic_uncertainty"][0].item()
-                    ),
-                    "expected_cic_abstain": bool(float(np.max(probs)) < entry.cic_threshold),
-                    "expected_h_next": [float(v) for v in h[0].numpy()],
-                    "expected_p_uncertainty": (
-                        float(out["p_uncertainty"][0].item()) if "p_uncertainty" in out else None
-                    ),
-                    "expected_p_verify": (
-                        float(out["p_verify"][0].item()) if "p_verify" in out else None
-                    ),
-                    "expected_p_encode_importance": (
-                        float(out["p_encode_importance"][0].item())
-                        if "p_encode_importance" in out
-                        else None
-                    ),
-                    "expected_p_memory_relevance": (
-                        float(out["p_memory_relevance"][0].item())
-                        if "p_memory_relevance" in out
-                        else None
-                    ),
-                }
-                steps.append(step_rec)
-        results["cases"].append(
-            {
-                "name": label,
-                "safetensors_file": st_name,
-                "blake3": digest,
-                "temperature": entry.temperature,
-                "cic_threshold": entry.cic_threshold,
-                "has_phase2_heads": model_cpu.arch.has_phase2_heads,
-                "has_phase3_heads": model_cpu.arch.has_phase3_heads,
-                "steps": steps,
-            }
-        )
-
-    json_path = fixtures_dir / f"neural_phase{phase}_golden.json"
-    json_path.write_text(json.dumps(results, indent=2), encoding="utf-8")
-    return blake3_map
+    prefix = fixture_prefix or (
+        "neural_v22_golden"
+        if mingru_model.arch.feature_schema_version >= 2
+        else f"neural_phase{phase}_golden"
+    )
+    return export_golden_fixture(
+        cases=(
+            ("mingru", mingru_model, mingru_entry.temperature, mingru_entry.cic_threshold),
+            ("gated_deltanet2", gdn2_model, gdn2_entry.temperature, gdn2_entry.cic_threshold),
+        ),
+        fixtures_dir=fixtures_dir,
+        fixture_prefix=prefix,
+        phase=phase,
+        n_steps=3,
+        seed=2026 + phase,
+    )
 
 
 def run_phase2_and_phase3(
@@ -606,6 +652,9 @@ def run_phase2_and_phase3(
     force_recompute_shards: bool = False,
     phase3_only: bool = False,
     stage4_preference: bool = False,
+    feature_schema_version: int = 1,
+    has_v22_heads: bool = False,
+    h_actor_dim: int = 0,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     cache_dir = repo_root / "training" / "cache"
     p1_cache = precompute_phase1_shards(
@@ -627,9 +676,9 @@ def run_phase2_and_phase3(
         prompt_regime_id="t_d",
     )
 
-    p1_shards = load_multitask_shards(p1_cache)
-    p2_shards = load_multitask_shards(p2_cache)
-    p3_shards = load_multitask_shards(p3_cache)
+    p1_shards = load_multitask_shards(p1_cache, target_schema_version=feature_schema_version)
+    p2_shards = load_multitask_shards(p2_cache, target_schema_version=feature_schema_version)
+    p3_shards = load_multitask_shards(p3_cache, target_schema_version=feature_schema_version)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     artifacts_dir = repo_root / "training" / "artifacts"
@@ -641,8 +690,13 @@ def run_phase2_and_phase3(
     p2_best_path = artifacts_dir / "neural_phase2_best.safetensors"
     if phase3_only and p2_best_path.is_file() and (reports_dir / "phase2_report.json").is_file():
         p2_report = json.loads((reports_dir / "phase2_report.json").read_text(encoding="utf-8"))
+    elif phase3_only:
+        p2_report = {"skipped": True, "feature_schema_version": feature_schema_version}
     else:
-        p12_merged = {sp: _merge_splits([p1_shards, p2_shards], sp) for sp in ("train", "calibration", "test")}
+        p12_merged = {
+            sp: _merge_splits([p1_shards, p2_shards], sp, target_schema_version=feature_schema_version)
+            for sp in ("train", "calibration", "test")
+        }
         p1_best = artifacts_dir / "neural_phase1_best.safetensors"
 
         p2_runs: list[tuple[MonoNeuralController, MultiTaskReportEntry]] = []
@@ -663,6 +717,9 @@ def run_phase2_and_phase3(
                 epochs=epochs_p2,
                 init_checkpoint=warm,
                 use_pcgrad=True,
+                feature_schema_version=feature_schema_version,
+                has_v22_heads=False,
+                h_actor_dim=h_actor_dim,
             )
             p2_runs.append((mdl, ent))
 
@@ -726,18 +783,38 @@ def run_phase2_and_phase3(
             )
         (reports_dir / "phase2_report.md").write_text("\n".join(p2_md) + "\n", encoding="utf-8")
 
-    # ---- PHASE 3: Joint Phase 1 + 2 + 3 (`p_encode_importance`, `p_memory_relevance`) ----
+    # ---- PHASE 3: Joint Phase 1 + 2 + 3 (+ optional V2.2 schema=2 heads & h_actor) ----
     seq_len = int(p1_shards["train"]["x_num"].shape[1])
-    proc_timing_shards = build_procedural_timing_shards(seq_len=seq_len)
+    proc_timing_shards = build_procedural_timing_shards(
+        seq_len=seq_len,
+        n_train=1280 if feature_schema_version == 2 else 640,
+        n_cal=160 if feature_schema_version == 2 else 80,
+        n_test=160 if feature_schema_version == 2 else 80,
+        schema_version=feature_schema_version,
+    )
+    shard_sources = [p1_shards, p2_shards, p3_shards, proc_timing_shards]
+    if feature_schema_version == 2:
+        sea_eps = build_v22_sea_episodes(repo_root, max_seq_len=seq_len, schema_version=2)
+        if sea_eps:
+            sea_cache = precompute_multitask_shards(
+                repo_root=repo_root,
+                cache_path=cache_dir / "v22_sea_shards.npz",
+                episodes=sea_eps,
+                max_seq_len=seq_len,
+                force_recompute=force_recompute_shards,
+                prompt_regime_id="t_d",
+            )
+            shard_sources.append(load_multitask_shards(sea_cache, target_schema_version=2))
+
     p123_merged = {
-        sp: _merge_splits([p1_shards, p2_shards, p3_shards, proc_timing_shards], sp)
+        sp: _merge_splits(shard_sources, sp, target_schema_version=feature_schema_version)
         for sp in ("train", "calibration", "test")
     }
     p3_runs: list[tuple[MonoNeuralController, MultiTaskReportEntry]] = []
     for sc, ct, warm in (
         ("150k", "mingru", None),
         ("150k", "gated_deltanet2", None),
-        ("3m", "mingru", p2_best_path),
+        ("3m", "mingru", p2_best_path if p2_best_path.is_file() else None),
         ("1m", "gated_deltanet2", None),
     ):
         mdl, ent = train_multitask_model(
@@ -748,8 +825,16 @@ def run_phase2_and_phase3(
             phase1_test_split=p1_shards["test"],
             device=device,
             epochs=epochs_p3,
+            batch_size=128,
             init_checkpoint=warm,
             use_pcgrad=True,
+            feature_schema_version=feature_schema_version,
+            has_v22_heads=has_v22_heads,
+            h_actor_dim=h_actor_dim,
+        )
+        print(
+            f"[train_multitask] finished {sc}/{ct} (params={ent.param_count:,}, p1_f1={ent.phase1_gate_macro_f1:.4f}, gate_f1={ent.gate_macro_f1:.4f}, ece={ent.ece:.4f})",
+            flush=True,
         )
         p3_runs.append((mdl, ent))
 
@@ -795,15 +880,24 @@ def run_phase2_and_phase3(
             ),
         )
 
-    p3_best_path = artifacts_dir / "neural_phase3_best.safetensors"
+    p3_best_name = (
+        "neural_v22_best.safetensors"
+        if feature_schema_version == 2
+        else "neural_phase3_best.safetensors"
+    )
+    p3_best_path = artifacts_dir / p3_best_name
     p3_best_blake3 = p3_best_mdl.export_safetensors(
         p3_best_path, temperature=p3_best_ent.temperature, cic_threshold=p3_best_ent.cic_threshold
     )
-    (artifacts_dir / "manifest_phase3.json").write_text(
+    manifest_name = "manifest_v22.json" if feature_schema_version == 2 else "manifest_phase3.json"
+    (artifacts_dir / manifest_name).write_text(
         json.dumps(
             {
                 "artifact": str(p3_best_path.relative_to(repo_root)),
                 "blake3": p3_best_blake3,
+                "feature_schema_version": p3_best_mdl.arch.feature_schema_version,
+                "has_v22_heads": p3_best_mdl.arch.has_v22_heads,
+                "h_actor_dim": p3_best_mdl.arch.h_actor_dim,
                 "expected_embed_model_ver": p3_best_mdl.arch.expected_embed_model_ver,
                 "expected_prompt_regime_id": p3_best_mdl.arch.expected_prompt_regime_id,
                 "stage4_preference": stage4_preference,
@@ -829,6 +923,9 @@ def run_phase2_and_phase3(
             "longmemeval", "stale", "hi_tom", "dyntom",
             "group_mem_bench", "memory_agent_bench",
         ],
+        "feature_schema_version": feature_schema_version,
+        "has_v22_heads": has_v22_heads,
+        "h_actor_dim": h_actor_dim,
         "expected_embed_model_ver": p3_best_mdl.arch.expected_embed_model_ver,
         "expected_prompt_regime_id": p3_best_mdl.arch.expected_prompt_regime_id,
         "stage4_preference": stage4_preference,
@@ -839,12 +936,13 @@ def run_phase2_and_phase3(
         "fixture_blake3": p3_fix_hashes,
         "runs": [asdict(r[1]) for r in p3_runs],
     }
-    (reports_dir / "phase3_report.json").write_text(json.dumps(p3_report, indent=2), encoding="utf-8")
+    report_stem = "v22_report" if feature_schema_version == 2 else "phase3_report"
+    (reports_dir / f"{report_stem}.json").write_text(json.dumps(p3_report, indent=2), encoding="utf-8")
     p3_md = [
-        "# Phase 3 Full Multi-Task Report (Phase 1 + Phase 2 + `p_encode_importance` + `p_memory_relevance`)",
+        f"# Phase 3 Full Multi-Task Report (schema={feature_schema_version}, v22_heads={has_v22_heads}, h_actor_dim={h_actor_dim})",
         "",
         f"- **Device:** `{p3_report['device']}`",
-        f"- **Split Sequences (P1+P2+P3):** train={p3_report['split_counts']['train']}, cal={p3_report['split_counts']['calibration']}, test={p3_report['split_counts']['test']}",
+        f"- **Split Sequences:** train={p3_report['split_counts']['train']}, cal={p3_report['split_counts']['calibration']}, test={p3_report['split_counts']['test']}",
         f"- **Winner:** `{p3_best_ent.scale}` + `{p3_best_ent.cell_type}` (`blake3={p3_best_blake3}`)",
         "",
         "| Scale | Cell | Params | T | P1 F1 | Gate F1 | ECE | TC-ECE | Unc MAE | Verify F1 | EncImp F1 | MemRel F1 | Rel Top-1 |",
@@ -858,19 +956,22 @@ def run_phase2_and_phase3(
             f"{e.p_encode_importance_f1 or 0.0:.4f} | {e.p_memory_relevance_f1 or 0.0:.4f} | "
             f"{e.p_memory_relevance_top1_acc or 0.0:.4f} |"
         )
-    (reports_dir / "phase3_report.md").write_text("\n".join(p3_md) + "\n", encoding="utf-8")
+    (reports_dir / f"{report_stem}.md").write_text("\n".join(p3_md) + "\n", encoding="utf-8")
 
     return p2_report, p3_report
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train MonoAgens Phase 2 & Phase 3 neural heads.")
+    parser = argparse.ArgumentParser(description="Train MonoAgens Phase 2, Phase 3 & V2.2 neural heads.")
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[3])
     parser.add_argument("--epochs-p2", type=int, default=10)
     parser.add_argument("--epochs-p3", type=int, default=10)
     parser.add_argument("--force-recompute-shards", action="store_true")
     parser.add_argument("--phase3-only", action="store_true")
     parser.add_argument("--stage4-preference", action="store_true")
+    parser.add_argument("--feature-schema-version", type=int, choices=(1, 2), default=1)
+    parser.add_argument("--has-v22-heads", action="store_true")
+    parser.add_argument("--h-actor-dim", type=int, default=0)
     args = parser.parse_args()
 
     p2_rep, p3_rep = run_phase2_and_phase3(
@@ -880,8 +981,11 @@ def main() -> None:
         force_recompute_shards=args.force_recompute_shards,
         phase3_only=args.phase3_only,
         stage4_preference=args.stage4_preference,
+        feature_schema_version=args.feature_schema_version,
+        has_v22_heads=args.has_v22_heads,
+        h_actor_dim=args.h_actor_dim,
     )
-    print("PHASE 2 WINNER:", json.dumps(p2_rep["winner"], indent=2))
+    print("PHASE 2 WINNER:", json.dumps(p2_rep.get("winner", p2_rep), indent=2))
     print("PHASE 3 WINNER:", json.dumps(p3_rep["winner"], indent=2))
 
 

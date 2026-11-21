@@ -9,10 +9,12 @@ use monoagens_protocol::{
 };
 
 use crate::activation::{DEFAULT_PETROV_D, closeness_from_trace};
+use crate::consolidation::{DEFAULT_PROC_UCB_C, EpisodeBook};
 use crate::context::{
     AutoRecallTriggerState, CommitmentSlotItem, ContextSections, ContextSegment, ContextSlotKind,
     CoreSelfSnapshot, ModelTask, ProcedureEntry, SelectedToolSet, ToolSelectionBudget,
-    enforce_context_budget, segment_from_event, segment_from_recalled, select_tools_for_context,
+    enforce_context_budget, segment_from_event, segment_from_recalled,
+    select_tools_for_context_with_ucb,
 };
 use crate::event::{
     DecisionOutcome, DoorKind, EventDetail, EventKind, EventRecord, ExpectationLifecycleState,
@@ -21,7 +23,9 @@ use crate::event::{
 use crate::expectations::{ExpectationRecord, PendingClassifyKind, is_positive_verdict_label};
 use crate::neural::GateArm;
 use crate::ports::{ContextPlan, DoorDecision, Doors, ModelPurpose, Store};
-use crate::recall::{MemoryBasis, RecallQuery, RecalledItem, run_recall_with_model};
+use crate::recall::{
+    MemoryBasis, RecallQuery, RecallTimeMode, RecalledItem, run_recall_with_model,
+};
 use crate::state::{CoreState, WakeSnapshotRecord};
 use crate::{Core, CoreError, Effect};
 
@@ -65,23 +69,44 @@ pub(super) fn wake_reasoning_for_event_with_extra<S: Store>(
             wake_people.push(m.clone());
         }
     }
+    let base_recall_limit = core.config().max_recalled_memories.max(1);
+    let effective_recall_limit = if core.neural_model().is_some() && core.config().online_adaptation
+    {
+        let adapt_cfg = core.config().effective_adapt_config();
+        let arm = core
+            .state()
+            .place_adapt
+            .get(&trigger.place)
+            .map_or(crate::neural::RecallDepthArm::Standard, |st| {
+                st.select_recall_depth_at(now, &adapt_cfg)
+            });
+        arm.max_recalled_limit(base_recall_limit)
+    } else {
+        base_recall_limit
+    };
+
     let mut query = RecallQuery::new(scope.clone());
     query.query_event_id = Some(trigger.id);
     query.partition_tag = query_embeddings.first().map(|e| e.tag.clone());
     query.query_embeddings = query_embeddings;
     query.wake_place = Some(trigger.place.clone());
     query.wake_people = wake_people;
-    query.limit = core.config().max_recalled_memories.max(1);
+    query.limit = effective_recall_limit;
     query.record_uses = true;
+    query.time_mode = RecallTimeMode::CurrentOnly;
 
-    let recall = run_recall_with_model(
-        core.store(),
-        core.state(),
-        &query,
-        now,
-        core.config(),
-        core.neural_model(),
-    )?;
+    let recall = if effective_recall_limit == 0 {
+        crate::recall::RecallResult::default()
+    } else {
+        run_recall_with_model(
+            core.store(),
+            core.state(),
+            &query,
+            now,
+            core.config(),
+            core.neural_model(),
+        )?
+    };
 
     let mut plan = assemble_full_context_plan(
         core,
@@ -124,12 +149,17 @@ fn assemble_full_context_plan<S: Store>(
     }
     let catalog = core.state().effective_capability_catalog();
     let procs: Vec<ProcedureEntry> = core.state().procedures.values().cloned().collect();
+    let proc_ucb_scores = core
+        .state()
+        .skill_book
+        .procedure_ucb_scores(DEFAULT_PROC_UCB_C);
     let tool_budget = ToolSelectionBudget::from_config(core.config(), catalog.len());
-    let selected_tools: SelectedToolSet = select_tools_for_context(
+    let selected_tools: SelectedToolSet = select_tools_for_context_with_ucb(
         &query_terms,
         query_embeddings,
         &catalog,
         &procs,
+        &proc_ucb_scores,
         &scope,
         now,
         tool_budget,
@@ -293,18 +323,39 @@ fn assemble_full_context_plan<S: Store>(
     }
 
     let tail_limit = PLACE_TAIL_LIMIT;
-    let tail_start = place_tail_candidates.len().saturating_sub(tail_limit);
-    let place_tail: Vec<ContextSegment> = place_tail_candidates[tail_start..]
-        .iter()
+    let trigger_thread = core
+        .state()
+        .episode_book
+        .thread_for_event(trigger.id)
+        .or_else(|| {
+            trigger
+                .caused_by
+                .iter()
+                .find_map(|cid| core.state().episode_book.thread_for_event(*cid))
+        });
+    let selected_tail = select_thread_aware_place_tail(
+        &place_tail_candidates,
+        trigger_thread,
+        &core.state().episode_book,
+        tail_limit,
+    );
+    let place_tail: Vec<ContextSegment> = selected_tail
+        .into_iter()
         .map(|rec| {
             let basis = core.state().memory_entries.get(&rec.id).map(|m| m.basis);
+            let is_same_thread = trigger_thread.is_some()
+                && core.state().episode_book.thread_for_event(rec.id) == trigger_thread;
             segment_from_event(
                 ContextSlotKind::PlaceTail,
                 rec,
                 &soul_id,
                 basis,
                 false,
-                "place_tail",
+                if is_same_thread {
+                    "place_tail_thread"
+                } else {
+                    "place_tail"
+                },
             )
         })
         .collect();
@@ -424,6 +475,9 @@ fn assemble_full_context_plan<S: Store>(
                 .find_map(|cid| core.state().decision_neural_hints.get(cid).copied())
         })
         .unwrap_or((None, None));
+    let v22_hints = core
+        .state()
+        .lookup_v22_hints(trigger_event_id, &trigger.caused_by);
     let mut plan = ContextPlan {
         trigger_event_id: Some(trigger_event_id),
         place: Some(place.clone()),
@@ -435,6 +489,8 @@ fn assemble_full_context_plan<S: Store>(
         valve_self_snapshot: None,
         neural_p_verify,
         neural_p_uncertainty,
+        compute_tier: v22_hints.compute_tier,
+        repair_context_ids: v22_hints.repair_context_ids,
     };
     plan.refresh_static_prefix_digest();
     Ok(plan)
@@ -1133,8 +1189,21 @@ fn select_caps_for_scope<S: Store>(
 ) -> SelectedToolSet {
     let catalog = core.state().effective_capability_catalog();
     let procs: Vec<ProcedureEntry> = core.state().procedures.values().cloned().collect();
+    let proc_ucb_scores = core
+        .state()
+        .skill_book
+        .procedure_ucb_scores(DEFAULT_PROC_UCB_C);
     let tool_budget = ToolSelectionBudget::from_config(core.config(), catalog.len());
-    select_tools_for_context(&[], &[], &catalog, &procs, scope, now, tool_budget)
+    select_tools_for_context_with_ucb(
+        &[],
+        &[],
+        &catalog,
+        &procs,
+        &proc_ucb_scores,
+        scope,
+        now,
+        tool_budget,
+    )
 }
 
 /// Segment for task material (an earlier message, a gist source, an episode event), or `None`
@@ -1893,4 +1962,136 @@ pub(super) fn record_act_refused<S: Store>(
     );
     append_and_apply(core, refused)?;
     Ok(())
+}
+
+/// Prioritizes `[PLACE_TAIL]` records sharing `trigger_thread` ahead of interleaved off-thread
+/// chatter while preserving chronological order within the selected `<= limit` slice.
+fn select_thread_aware_place_tail<'a>(
+    candidates: &[&'a EventRecord],
+    trigger_thread: Option<EventId>,
+    episode_book: &EpisodeBook,
+    limit: usize,
+) -> Vec<&'a EventRecord> {
+    if limit == 0 || candidates.is_empty() {
+        return Vec::new();
+    }
+    let Some(tid) = trigger_thread else {
+        let start = candidates.len().saturating_sub(limit);
+        return candidates[start..].to_vec();
+    };
+    if candidates.len() <= limit {
+        return candidates.to_vec();
+    }
+
+    let mut same_thread: Vec<&'a EventRecord> = Vec::new();
+    let mut off_thread: Vec<&'a EventRecord> = Vec::new();
+    for &rec in candidates {
+        if episode_book.thread_for_event(rec.id) == Some(tid) {
+            same_thread.push(rec);
+        } else {
+            off_thread.push(rec);
+        }
+    }
+
+    let same_start = same_thread.len().saturating_sub(limit);
+    let mut selected: Vec<&'a EventRecord> = same_thread[same_start..].to_vec();
+    let remaining = limit.saturating_sub(selected.len());
+    if remaining > 0 {
+        let off_start = off_thread.len().saturating_sub(remaining);
+        selected.extend_from_slice(&off_thread[off_start..]);
+    }
+    selected.sort_by_key(|r| (r.timestamp_ms, r.seq, r.id));
+    selected
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::CoreConfig;
+    use crate::consolidation::EpisodeAdmitParams;
+    use monoagens_protocol::EmbeddingTag;
+
+    fn dummy_rec(id: u64, ts_ms: u64, actor: &str) -> EventRecord {
+        let mut r = EventRecord::new_root(
+            EventKind::Percept,
+            Time::from_millis(ts_ms),
+            ActorId::new(actor),
+            PlaceId::new("room:group"),
+            Audience::new([ActorId::new("alice"), ActorId::new("bob"), ActorId::new("soul")]),
+            OriginActor::new(ActorId::new(actor)),
+            Taint::Trusted,
+            NumericFeatures::default(),
+            OpaquePayload::from_bytes(b"hello".as_slice()),
+            Vec::new(),
+            None,
+        );
+        r.id = EventId::new(id);
+        r.seq = LogSeq::new(id);
+        r
+    }
+
+    #[test]
+    fn thread_aware_place_tail_prioritizes_trigger_thread_siblings_in_chronological_order() {
+        let cfg = CoreConfig::default();
+        let mut book = EpisodeBook::new();
+        let place = PlaceId::new("room:group");
+        let aud = Audience::new([
+            ActorId::new("alice"),
+            ActorId::new("bob"),
+            ActorId::new("carol"),
+            ActorId::new("soul"),
+        ]);
+        let tag = EmbeddingTag {
+            embed_model_ver: "egemma2-256".to_owned(),
+            dim_d: 4,
+            prompt_regime_id: "t_d".to_owned(),
+        };
+        let emb_a = TaggedEmbedding {
+            tag: tag.clone(),
+            values: vec![1.0, 0.0, 0.0, 0.0],
+        };
+        let emb_b = TaggedEmbedding {
+            tag,
+            values: vec![0.0, 1.0, 0.0, 0.0],
+        };
+
+        // 2 early Thread A messages (ids 1, 2), followed by 5 interleaved Thread B messages (ids 3..=7).
+        let mut records = Vec::new();
+        for (id, ts, actor, emb) in [
+            (1u64, 1_000u64, "alice", &emb_a),
+            (2, 2_000, "alice", &emb_a),
+            (3, 3_000, "bob", &emb_b),
+            (4, 4_000, "bob", &emb_b),
+            (5, 5_000, "bob", &emb_b),
+            (6, 6_000, "bob", &emb_b),
+            (7, 7_000, "bob", &emb_b),
+        ] {
+            book.admit_event_with_thread(
+                EpisodeAdmitParams {
+                    event_id: EventId::new(id),
+                    place: &place,
+                    timestamp_ms: Time::from_millis(ts),
+                    participants: BTreeSet::from([ActorId::new(actor)]),
+                    taint: Taint::Trusted,
+                    embeddings: std::slice::from_ref(emb),
+                    missed_expectation: false,
+                },
+                Some(&aud),
+                None,
+                &cfg,
+            );
+            records.push(dummy_rec(id, ts, actor));
+        }
+
+        let trigger_thread = book.thread_for_event(EventId::new(1));
+        assert_eq!(trigger_thread, Some(EventId::new(1)));
+        let refs: Vec<&EventRecord> = records.iter().collect();
+
+        // With limit = 3, naive tail would take [5, 6, 7] (losing Thread A completely!).
+        // Thread-aware tail keeps both Thread A siblings [1, 2] plus most recent off-thread [7],
+        // in strictly chronological order [1, 2, 7].
+        let selected = select_thread_aware_place_tail(&refs, trigger_thread, &book, 3);
+        let ids: Vec<u64> = selected.iter().map(|r| r.id.as_u64()).collect();
+        assert_eq!(ids, vec![1, 2, 7]);
+    }
 }

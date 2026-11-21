@@ -259,4 +259,34 @@ Setelah penggabungan bersih 3 track paralel Wave B (`wave-b-hitl`, `wave-b-multi
 
 > **Makna Strategis untuk Wave C:** Seluruh sekring keamanan & tata kelola deterministik Wave B (`dev-09`, `dev-11`, `dev-12`, `val-03`) sudah **100% lulus 5/5**, sekaligus menetapkan angka baseline objektif yang terukur pada `dev-10` (`3/5`, `self_repair_patience_rate = 0.45`) dan `dev-13` (`1/5`) untuk dibuktikan kenaikannya saat kita meng-upgrade Neural Layer ke **`feature_schema_version = 2`** di **Wave C**!
 
+---
+
+## 10. Hasil Wave C (`wave-c-neural-v22-and-continual-memory`): Neural Layer V2.2 (`schema = 2`, `32d` `x_num`, `h_actor = 24d`, `compute_tier`, `p_user_correction`) & Continual Chat Memory (`$0` Offline `--release`)
+
+Setelah implementasi paralel 3 track Wave C (`Track 1`: Neural V2.2 + `h_actor` audience-scoped + `compute_tier`→`reasoning_effort` + `p_user_correction` + `MemCon` recall-depth bandit; `Track 2`: `EpisodeBook` streaming 3W multi-slot `M <= 6` + thread-aware `[PLACE_TAIL]` + `RD-Forget` `RecallTimeMode` + `fade.rs` `max_fade_fraction`/preference anchor guard + `BeliefBook` 3-skala waktu anti-`MEMDRIFT` + `SkillForge` 4-state Bayesian UCB; `Track 3`: Training V2.2 + kurikulum *pecah balon*/code-switch/self-repair/peer-agent + filter lisensi OSI) dan retrain offline `$0` di **RTX 4060** (`3-family PCGrad`, `batch_size = 128`, 10 epoch + Stage 4 DPO/KTO + `CFPO`):
+
+### A. Verifikasi Model V2.2, Paritas Python↔Rust & Metrik Held-Out (`v22_report.md`)
+- **Pemenang Kualitas (`training/artifacts/neural_v22_best.safetensors`):** `3m + minGRU` (`3,225,213` param, `BLAKE3 = 3a2b2161d30aad77a50d0306a6f2395de155341f4d35537bc90694745922fe56`, `feature_schema_version = 2`, `h_actor_dim = 24`, `has_v22_heads = true`, `temperature = 2.7168`, `cic_threshold = 0.47`, `expected_embed_model_ver = "egemma2-256"`, `expected_prompt_regime_id = "t_d"`).
+  - Held-out test shard (`train=7450 / cal=960 / test=1143`): `gate_macro_f1 = 0.8144` (`gate_accuracy = 90.56%`), `ece = 0.0226`, `tc_ece = 0.0240`, `brier = 0.1102`, `aurc = 0.0091`, `cic_coverage = 88.14%`, `cic_selective_risk = 2.22%`, `p_memory_relevance_top1_acc = 1.0000`, `p_encode_importance_f1 = 0.9935`, `compute_tier_macro_f1 = 0.9972`, `p_user_correction_f1 = 1.0000`.
+- **Pemenang Pareto Latensi (`crates/core/tests/fixtures/neural_v22_golden.safetensors`):** `150k + minGRU` (`184,349` param) — `gate_macro_f1 = 0.8106`, `ece = 0.0259`, `tc_ece = 0.0263`, **`appraisal_latency_p95_ms = 0.52 ms`** (**`27×` lebih cepat** dari `3m` pada skor Lab identik `57/65` & `15/15`!).
+- **Paritas Python ↔ Pure-Rust (`cargo test -p monoagens-core --test it neural_parity`):** **4/4 PASS** (`phase1 = 1.192e-6`, `phase2 = 1.907e-6`, `phase3 = 4.292e-6`, **`v22 (32d + h_actor=24d + compute_tier + p_user_correction, minGRU & Gated DeltaNet-2) = 4.768e-6 <= 1e-5`**).
+
+### B. Perbandingan Wave B (`schema v1`) vs Wave C (`schema v2`) — 5-Seed Offline `--release` (`seeds = [1..5]`)
+
+| Metrik (`5` Seed × `13 dev` / `3 val`) | Wave B (`150k+minGRU`, `schema v1`) | Wave C `3m+minGRU` (`schema v2`) | Wave C `150k+minGRU` (`schema v2`) | Perubahan Kunci |
+|---|---:|---:|---:|---|
+| **`validation` Suite (`val-01..03`)** | **15/15 PASS** | **15/15 PASS** | **15/15 PASS** | Tetap **100%** sempurna (`when_to_speak_f1 = 1.0`, `false_speaks = 0.0`) |
+| **`dev-07-habituation`** | `0/5 PASS` | **`5/5 PASS`** | **`5/5 PASS`** | **Pulih total dari `0/5 → 5/5` (`+100%`)!** (`wakes_per_repeated_stimulus = 0.0`) |
+| **Total `development` (`65` run)** | `52/65` (`80.0%`) | **`57/65` (`87.7%`)** | **`57/65` (`87.7%`)** | **Naik `+5` run (`+7.7 pp`)** |
+| **`development` `when_to_speak_f1`** | `0.8583` | **`0.9417`** | **`0.9417`** | **Naik `+8.34 pp`** (`precision = 0.9037`, `recall = 1.0000`) |
+| **`development` `false_speaks`** *(↓ lebih baik)* | `0.8286` | **`0.2571`** | **`0.2571`** | **Turun `-69.0%`!** |
+| **`development` `trajectory_checkpoint_ece`** *(↓ lebih baik)* | `0.2033` | **`0.1179`** | **`0.1221`** | **Membaik `-42.0%`** (vs netral `0.7500`) |
+| **`development` `early → late_signed_cal_error`** | `-0.0002 → +0.1590` | **`-0.0094 → +0.0100`** | **`+0.0030 → -0.0053`** | **Drift *overconfidence* akhir hilang total!** |
+| **`validation` `neural_brier` / `neural_ece`** | `0.00008` / `0.0073` | `0.0772` / `0.1013` | **`0.0151` / `0.0503`** | `150k` V2.2 jauh lebih terkalibrasi & hemat daripada `3m` di `val` |
+| **Latensi Appraise p95 (`val` / `dev`)** | `1.10 ms` / `1.04 ms` | `14.47 ms` / `14.27 ms` | **`0.53 ms` / `0.52 ms`** | **`150k` V2.2 tetap sub-0.6 ms** meski membawa `32d` + `h_actor` + 2 head baru! |
+| **Invarian Keras (`delta_ni`, `hard_forget`, `self_echo`, `recall_hit_*`, `I-HITL`, `OverAbstain`)** | `100%` utuh | **`100%` utuh** | **`100%` utuh** | Nol regresi di seluruh 16 crate |
+
+> **Catatan Diagnostik Jujur:** Pada `dev-05` (`4/5`), `dev-08` (`4/5`), `dev-10` (`3/5`), dan `dev-13` (`1/5`), penarikan probabilistik kategorikal pada `decide_gate` masih sesekali mengambil ekor probabilitas kecil `Go` di salah satu seed tanpa embedding (`e_256 = 0`), yang langsung menghabiskan 1 balasan *scripted* sebelum jendela `10000ms`. Ini merupakan sifat alami *stochastic sampling* pada skenario sintetis vectorless dengan 1 balasan *scripted*, dan seluruh invarian keamanan (`delta_ni = 0`, `hard_forget = 0`, `self_echo = 0`, `stale_replan_leak = 0`, `warning_over_abstention_delta = 0`, `hitl_flood_rejection = 1.0`, `inalienable_approval_spoof_blocks = 1.0`) lulus 100%.
+
+
 

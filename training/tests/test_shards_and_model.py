@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from safetensors.torch import load_file
 
+from _helpers import resolve_data_repo_root
 from monoagens_train.datasets import (
     _when2speak_lab_eval_ids,
     build_phase1_episodes,
@@ -15,7 +16,7 @@ from monoagens_train.datasets import (
 from monoagens_train.features import NUM_FEATURES, PerceptNumericInputs, build_x_num
 from monoagens_train.model import MonoNeuralController, architecture_for_scale
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = resolve_data_repo_root(Path(__file__).resolve().parents[2])
 
 
 def test_x_num_handles_non_finite_and_bounds():

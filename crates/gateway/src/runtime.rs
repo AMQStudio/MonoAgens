@@ -5,7 +5,7 @@ use core::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use monoagens_core::neural::NeuralModel;
+use monoagens_core::neural::{ComputeTier, NeuralModel};
 use monoagens_core::{
     Core, CoreConfig, CoreError, DoorDecision, Effect, EventRecord, Input, QueueClass,
     QueueOverflow, Store, StoreError, ThreeClassQueue,
@@ -13,7 +13,7 @@ use monoagens_core::{
 use monoagens_protocol::{
     ApprovalResolveParams, ApprovalResolveResult, BodyId, Time, Waist2Error,
 };
-use monoagens_reason::ModelProvider;
+use monoagens_reason::{ModelProvider, ReasoningEffort};
 use monoagens_store::{ConfigLoadError, SegmentedStore, StoreConfig};
 use tokio::sync::{Notify, mpsc, oneshot};
 
@@ -942,6 +942,16 @@ fn handle_control_command<S: Store, D: DoorController>(
     }
 }
 
+/// Maps a V2.2 neural [`ComputeTier`] to a per-request OpenAI-compatible [`ReasoningEffort`].
+#[must_use]
+pub const fn map_compute_tier_to_reasoning_effort(tier: ComputeTier) -> ReasoningEffort {
+    match tier {
+        ComputeTier::Fast => ReasoningEffort::Low,
+        ComputeTier::Standard => ReasoningEffort::Medium,
+        ComputeTier::Deep => ReasoningEffort::High,
+    }
+}
+
 fn spawn_effects<S: Store, D: DoorController>(
     core: &Core<S>,
     ctx: &OwnerTaskContext<D>,
@@ -950,7 +960,10 @@ fn spawn_effects<S: Store, D: DoorController>(
     for effect in effects {
         match effect {
             Effect::Model { purpose, plan } => {
-                let req = ctx.model_exec.prepare_request(purpose, &plan, core.store());
+                let mut req = ctx.model_exec.prepare_request(purpose, &plan, core.store());
+                if let Some(tier) = plan.compute_tier {
+                    req.reasoning_effort = Some(map_compute_tier_to_reasoning_effort(tier));
+                }
                 let exec = ctx.model_exec.clone();
                 let ingress = ctx.ingress.clone();
                 let diagnostics = ctx.diagnostics.clone();
@@ -971,5 +984,26 @@ fn spawn_effects<S: Store, D: DoorController>(
                 ctx.router.spawn_dispatch_action(action);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compute_tier_maps_cleanly_to_reasoning_effort() {
+        assert_eq!(
+            map_compute_tier_to_reasoning_effort(ComputeTier::Fast),
+            ReasoningEffort::Low
+        );
+        assert_eq!(
+            map_compute_tier_to_reasoning_effort(ComputeTier::Standard),
+            ReasoningEffort::Medium
+        );
+        assert_eq!(
+            map_compute_tier_to_reasoning_effort(ComputeTier::Deep),
+            ReasoningEffort::High
+        );
     }
 }

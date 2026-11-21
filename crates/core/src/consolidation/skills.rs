@@ -22,14 +22,23 @@ const PROC_CUSUM_K_DRIFT: f64 = 0.1;
 const PROC_CUSUM_H_WARN: f64 = 2.0;
 const PROC_CUSUM_H_RETIRE: f64 = 4.0;
 const PROC_THETA_RETIRE: f64 = 0.35;
+const PROC_TRIAL_MIN_PROMOTE: u64 = 2;
+const PROC_TRIAL_THETA_PROMOTE: f64 = 0.65;
+const PROC_STABLE_MIN_TRIALS: u64 = 5;
+const PROC_STABLE_THETA_PROMOTE: f64 = 0.80;
 
-/// Lifecycle state of an extracted skill procedure (`R-40`).
+/// Default exploration constant `c` for Bayesian UCB procedure ranking (`SkillForge`).
+pub const DEFAULT_PROC_UCB_C: f64 = 0.5;
+
+/// Lifecycle state of an extracted skill procedure (`R-40`, `SkillForge`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProcedureLifecycleState {
     Active,
     Warned,
     Retired,
+    Trial,
+    Stable,
 }
 
 impl ProcedureLifecycleState {
@@ -38,6 +47,8 @@ impl ProcedureLifecycleState {
             Self::Active => 1,
             Self::Warned => 2,
             Self::Retired => 3,
+            Self::Trial => 4,
+            Self::Stable => 5,
         }
     }
 
@@ -46,6 +57,8 @@ impl ProcedureLifecycleState {
             1 => Some(Self::Active),
             2 => Some(Self::Warned),
             3 => Some(Self::Retired),
+            4 => Some(Self::Trial),
+            5 => Some(Self::Stable),
             _ => None,
         }
     }
@@ -141,6 +154,22 @@ impl TrackedProcedure {
         } else {
             0.5
         }
+    }
+
+    /// Deterministic Bayesian UCB score (`SkillForge`):
+    /// `posterior_mean() + ucb_c * sqrt(ln(total_trials + 2) / (trial_count + 1))`.
+    #[must_use]
+    pub fn ucb_score(&self, total_trials: u64, ucb_c: f64) -> f64 {
+        let mean = self.posterior_mean();
+        let c = if ucb_c.is_finite() && ucb_c >= 0.0 {
+            ucb_c
+        } else {
+            0.0
+        };
+        let num = ((total_trials.saturating_add(2)) as f64).ln().max(0.0);
+        let den = (self.trial_count.saturating_add(1)) as f64;
+        let score = mean + c * (num / den).sqrt();
+        if score.is_finite() { score } else { mean }
     }
 
     /// Converts into a [`ProcedureEntry`] for progressive `Tool RAG` disclosure (`R-38`).
@@ -459,7 +488,8 @@ impl SkillBook {
         Some(lesson.credence.expected())
     }
 
-    /// Extracts a new procedure from a reached cross-place goal chain (`A-11`, `14.2`).
+    /// Extracts a new procedure from a reached cross-place goal chain (`Active`) or a single-room
+    /// multi-session repeating pattern (`Trial` when `distinct_episodes >= 2`) (`A-11`, `SkillForge`).
     pub fn extract_procedure_from_goal_chain(
         &mut self,
         params: ExtractProcedureParams,
@@ -484,9 +514,18 @@ impl SkillBook {
             return None;
         }
         let distinct_places: BTreeSet<&str> = places.iter().map(|p| p.as_str()).collect();
-        if distinct_places.len() < 2 {
+        let distinct_episodes: BTreeSet<EventId> = source_event_ids
+            .iter()
+            .copied()
+            .filter(|id| id.as_u64() != 0)
+            .collect();
+        let initial_state = if distinct_places.len() >= 2 {
+            ProcedureLifecycleState::Active
+        } else if distinct_places.len() == 1 && distinct_episodes.len() >= 2 {
+            ProcedureLifecycleState::Trial
+        } else {
             return None;
-        }
+        };
         if required_cap_ids.is_empty() && !Self::chat_habit_bypass_allowed() {
             return None;
         }
@@ -516,7 +555,7 @@ impl SkillBook {
             source_goal_id,
             source_event_ids,
             taint,
-            state: ProcedureLifecycleState::Active,
+            state: initial_state,
             retired_reason: None,
             retired_at_ms: None,
             created_at_ms: now_ms,
@@ -678,6 +717,15 @@ impl SkillBook {
             let emp = (proc_entry.success_count as f64) / (proc_entry.trial_count as f64);
             proc_entry.cusum_baseline_p0 = Some(emp.clamp(0.5, 0.99));
             proc_entry.cusum_stat = 0.0;
+            if proc_entry.state == ProcedureLifecycleState::Trial {
+                if posterior_mean >= PROC_TRIAL_THETA_PROMOTE {
+                    proc_entry.state = ProcedureLifecycleState::Active;
+                } else if posterior_mean < PROC_THETA_RETIRE {
+                    proc_entry.state = ProcedureLifecycleState::Retired;
+                    proc_entry.retired_reason = Some("posterior_reliability_below_retire".to_owned());
+                    proc_entry.retired_at_ms = Some(now_ms);
+                }
+            }
         } else if let Some(p0) = proc_entry.cusum_baseline_p0 {
             let y_t = if succeeded { 1.0 } else { 0.0 };
             let increment = p0 - PROC_CUSUM_K_DRIFT - y_t;
@@ -695,8 +743,22 @@ impl SkillBook {
             } else if proc_entry.cusum_stat >= PROC_CUSUM_H_WARN {
                 proc_entry.state = ProcedureLifecycleState::Warned;
                 proc_entry.warn_count = proc_entry.warn_count.saturating_add(1);
+            } else if proc_entry.trial_count >= PROC_STABLE_MIN_TRIALS
+                && posterior_mean >= PROC_STABLE_THETA_PROMOTE
+            {
+                proc_entry.state = ProcedureLifecycleState::Stable;
             } else {
                 proc_entry.state = ProcedureLifecycleState::Active;
+            }
+        } else if proc_entry.state == ProcedureLifecycleState::Trial
+            && proc_entry.trial_count >= PROC_TRIAL_MIN_PROMOTE
+        {
+            if posterior_mean >= PROC_TRIAL_THETA_PROMOTE {
+                proc_entry.state = ProcedureLifecycleState::Active;
+            } else if posterior_mean < PROC_THETA_RETIRE {
+                proc_entry.state = ProcedureLifecycleState::Retired;
+                proc_entry.retired_reason = Some("trial_reliability_below_retire".to_owned());
+                proc_entry.retired_at_ms = Some(now_ms);
             }
         }
         proc_entry.updated_at_ms = now_ms;
@@ -709,6 +771,25 @@ impl SkillBook {
             cusum_stat: proc_entry.cusum_stat,
             reason: proc_entry.retired_reason.clone(),
         }
+    }
+
+    /// Total execution trials summed across all tracked procedures.
+    #[must_use]
+    pub fn total_procedure_trials(&self) -> u64 {
+        self.procedures
+            .values()
+            .map(|p| p.trial_count)
+            .fold(0u64, u64::saturating_add)
+    }
+
+    /// Computes deterministic Bayesian UCB scores keyed by `procedure_id` for `Tool RAG` ranking.
+    #[must_use]
+    pub fn procedure_ucb_scores(&self, ucb_c: f64) -> BTreeMap<EventId, f64> {
+        let total = self.total_procedure_trials();
+        self.procedures
+            .iter()
+            .map(|(&pid, proc_entry)| (pid, proc_entry.ucb_score(total, ucb_c)))
+            .collect()
     }
 
     /// Exports active and retired procedures into `ContextPlan` tool-selection entries (`R-38`, `R-40`).
@@ -885,5 +966,122 @@ mod tests {
         book.forget(&[EventId::new(10)], &[]);
         assert!(!book.lessons.contains_key(&EventId::new(100)));
         assert!(book.lessons.contains_key(&EventId::new(200)));
+    }
+
+    #[test]
+    fn skillforge_single_room_trial_promotes_through_active_to_stable_and_computes_ucb() {
+        let mut book = SkillBook::new();
+        let cap_id = CapabilityId::new("cap.reply");
+        let cap_hash = CapabilitySchemaHash::new("blake3:reply_v1");
+        let schema = compute_procedure_schema_hash([(&cap_id, &cap_hash)]);
+        let empty_catalog = BTreeMap::new();
+
+        // Single room with only 1 episode -> rejected.
+        let rejected = book.extract_procedure_from_goal_chain(
+            ExtractProcedureParams {
+                procedure_id: Some(EventId::new(500)),
+                source_goal_id: None,
+                name: "single_ep_chat".to_owned(),
+                steps: vec!["greet".to_owned()],
+                required_cap_ids: vec![cap_id.clone()],
+                capability_schema_hash: schema.clone(),
+                places: vec![PlaceId::new("room:chat")],
+                actors: vec![ActorId::new("alice")],
+                audience: Audience::new([ActorId::new("alice"), ActorId::new("soul")]),
+                domain: Some(DomainId::new("chat")),
+                source_event_ids: vec![EventId::new(1)],
+                taint: Taint::Trusted,
+                now_ms: Time::from_millis(1_000),
+            },
+            &empty_catalog,
+        );
+        assert!(rejected.is_none());
+
+        // Single room with >= 2 distinct episodes -> admitted as Trial!
+        let trial_proc = book
+            .extract_procedure_from_goal_chain(
+                ExtractProcedureParams {
+                    procedure_id: Some(EventId::new(501)),
+                    source_goal_id: None,
+                    name: "chat_checkin_proc".to_owned(),
+                    steps: vec!["summarize".to_owned(), "reply".to_owned()],
+                    required_cap_ids: vec![cap_id.clone()],
+                    capability_schema_hash: schema.clone(),
+                    places: vec![PlaceId::new("room:chat")],
+                    actors: vec![ActorId::new("alice")],
+                    audience: Audience::new([ActorId::new("alice"), ActorId::new("soul")]),
+                    domain: Some(DomainId::new("chat")),
+                    source_event_ids: vec![EventId::new(10), EventId::new(20)],
+                    taint: Taint::Trusted,
+                    now_ms: Time::from_millis(2_000),
+                },
+                &empty_catalog,
+            )
+            .expect("single-room multi-session trial procedure admitted");
+        assert_eq!(trial_proc.state, ProcedureLifecycleState::Trial);
+        assert_eq!(ProcedureLifecycleState::from_code(trial_proc.state.code()), Some(ProcedureLifecycleState::Trial));
+
+        // 2 successes promote Trial -> Active (posterior_mean >= 0.65).
+        book.monitor_procedure_outcome(
+            EventId::new(501),
+            ReceiptOutcome::Done,
+            Some(TerminationReason::Normal),
+            Time::from_millis(3_000),
+        );
+        assert_eq!(book.procedures[&EventId::new(501)].state, ProcedureLifecycleState::Trial);
+        book.monitor_procedure_outcome(
+            EventId::new(501),
+            ReceiptOutcome::Done,
+            Some(TerminationReason::Normal),
+            Time::from_millis(4_000),
+        );
+        assert_eq!(book.procedures[&EventId::new(501)].state, ProcedureLifecycleState::Active);
+
+        // 4 more successes (total 6 -> post-lock verified, posterior_mean >= 0.80, cusum == 0) -> Stable!
+        for step in 0..4u64 {
+            book.monitor_procedure_outcome(
+                EventId::new(501),
+                ReceiptOutcome::Done,
+                Some(TerminationReason::Normal),
+                Time::from_millis(5_000 + step * 1_000),
+            );
+        }
+        assert_eq!(book.procedures[&EventId::new(501)].state, ProcedureLifecycleState::Stable);
+        assert_eq!(ProcedureLifecycleState::from_code(ProcedureLifecycleState::Stable.code()), Some(ProcedureLifecycleState::Stable));
+
+        // Add a second lower-reliability procedure to verify Bayesian UCB ranking.
+        book.extract_procedure_from_goal_chain(
+            ExtractProcedureParams {
+                procedure_id: Some(EventId::new(502)),
+                source_goal_id: None,
+                name: "flaky_proc".to_owned(),
+                steps: vec!["retry".to_owned()],
+                required_cap_ids: vec![cap_id],
+                capability_schema_hash: schema,
+                places: vec![PlaceId::new("room:chat")],
+                actors: vec![ActorId::new("alice")],
+                audience: Audience::new([ActorId::new("alice"), ActorId::new("soul")]),
+                domain: Some(DomainId::new("chat")),
+                source_event_ids: vec![EventId::new(30), EventId::new(40)],
+                taint: Taint::Trusted,
+                now_ms: Time::from_millis(9_000),
+            },
+            &empty_catalog,
+        )
+        .expect("second proc");
+        // Give 502 6 trials with 3 failures -> lower posterior mean at same trial count!
+        for (idx, ok) in [true, false, true, false, true, false].into_iter().enumerate() {
+            book.monitor_procedure_outcome(
+                EventId::new(502),
+                if ok { ReceiptOutcome::Done } else { ReceiptOutcome::Failed },
+                Some(TerminationReason::Normal),
+                Time::from_millis(10_000 + (idx as u64) * 1_000),
+            );
+        }
+        let ucb_scores = book.procedure_ucb_scores(DEFAULT_PROC_UCB_C);
+        assert!(
+            ucb_scores[&EventId::new(501)] > ucb_scores[&EventId::new(502)],
+            "reliable Stable procedure must outscore flaky procedure under Bayesian UCB"
+        );
     }
 }

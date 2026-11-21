@@ -37,6 +37,15 @@ pub const DEFAULT_VECTOR_TOP_K: usize = 40;
 /// Default text candidate retrieval limit (`design.md` §7).
 pub const DEFAULT_TEXT_TOP_K: usize = 20;
 
+/// Temporal visibility mode for [`run_recall_with_model`] (`RD-Forget`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecallTimeMode {
+    #[default]
+    CurrentOnly,
+    IncludeSuperseded,
+}
+
 /// Query specification for [`run_recall`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecallQuery {
@@ -53,10 +62,16 @@ pub struct RecallQuery {
     pub limit: usize,
     pub record_uses: bool,
     pub hop_budget_override: Option<usize>,
+    /// Temporal visibility mode controlling whether superseded memories are returned (`RD-Forget`).
+    #[serde(default)]
+    pub time_mode: RecallTimeMode,
 }
 
 impl RecallQuery {
     /// Creates a minimal [`RecallQuery`] scoped to `visible_scope`.
+    ///
+    /// Defaults to [`RecallTimeMode::IncludeSuperseded`] for backward compatibility with existing
+    /// history-inspecting callers; live chat wakes use [`Self::current_only`] (`RD-Forget`).
     #[must_use]
     pub fn new(visible_scope: VisibleScope) -> Self {
         Self {
@@ -71,7 +86,16 @@ impl RecallQuery {
             limit: 10,
             record_uses: false,
             hop_budget_override: None,
+            time_mode: RecallTimeMode::IncludeSuperseded,
         }
+    }
+
+    /// Creates a [`RecallQuery`] scoped to `visible_scope` that excludes superseded memories (`RD-Forget`).
+    #[must_use]
+    pub fn current_only(visible_scope: VisibleScope) -> Self {
+        let mut q = Self::new(visible_scope);
+        q.time_mode = RecallTimeMode::CurrentOnly;
+        q
     }
 }
 
@@ -103,11 +127,52 @@ pub struct RecalledItem {
     pub neural_relevance: Option<f64>,
 }
 
-/// Result of [`run_recall`]; contains strictly post-`VisibleScope` visible items (`Δ_NI = 0`).
+/// Result of [`run_recall`]; contains strictly post-`VisibleScope` visible items (`Δ_NI = 0`)
+/// and separates surfaced `recalled_event_ids` from downstream `cited_event_ids`.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct RecallResult {
     pub items: Vec<RecalledItem>,
     pub used_event_ids: Vec<EventId>,
+    /// All visible event IDs surfaced by this recall pass.
+    #[serde(default)]
+    pub recalled_event_ids: Vec<EventId>,
+    /// Subset of `recalled_event_ids` explicitly cited in reasoning/acts.
+    #[serde(default)]
+    pub cited_event_ids: Vec<EventId>,
+}
+
+impl RecallResult {
+    /// Records downstream cited event IDs, strictly restricting to recalled items and preserving order.
+    pub fn mark_cited(&mut self, cited: &[EventId]) {
+        let (_, cited_from_recalled) =
+            partition_recalled_and_cited(&self.recalled_event_ids, cited);
+        for id in cited_from_recalled {
+            if !self.cited_event_ids.contains(&id) {
+                self.cited_event_ids.push(id);
+            }
+        }
+    }
+}
+
+/// Separates surfaced `recalled_ids` into `(recalled_only, cited_from_recalled)` preserving order.
+#[must_use]
+pub fn partition_recalled_and_cited(
+    recalled_ids: &[EventId],
+    cited_ids: &[EventId],
+) -> (Vec<EventId>, Vec<EventId>) {
+    let cited_set: BTreeSet<EventId> = cited_ids.iter().copied().collect();
+    let mut recalled_only = Vec::new();
+    let mut cited_from_recalled = Vec::new();
+    for &id in recalled_ids {
+        if cited_set.contains(&id) {
+            if !cited_from_recalled.contains(&id) {
+                cited_from_recalled.push(id);
+            }
+        } else if !recalled_only.contains(&id) {
+            recalled_only.push(id);
+        }
+    }
+    (recalled_only, cited_from_recalled)
 }
 
 /// Executes hybrid memory recall strictly through the [`Store`] port and `CoreState` projections,
@@ -210,6 +275,10 @@ pub fn run_recall_with_model<S: Store>(
             .visible_scope
             .allows(&entry.audience, Some(entry.event_id), now_ms)
         {
+            continue;
+        }
+        // RD-Forget temporal visibility filter runs strictly AFTER VisibleScope projection.
+        if query.time_mode == RecallTimeMode::CurrentOnly && entry.superseded_by.is_some() {
             continue;
         }
         visible_entries.push(entry);
@@ -318,10 +387,13 @@ pub fn run_recall_with_model<S: Store>(
         ranked.clear();
     }
 
-    let used_event_ids = ranked.iter().map(|item| item.event_id).collect();
+    let used_event_ids: Vec<EventId> = ranked.iter().map(|item| item.event_id).collect();
+    let recalled_event_ids = used_event_ids.clone();
     Ok(RecallResult {
         items: ranked,
         used_event_ids,
+        recalled_event_ids,
+        cited_event_ids: Vec::new(),
     })
 }
 
@@ -636,5 +708,69 @@ mod tests {
         let rel = r_pub.items[0].neural_relevance.unwrap();
         assert!((0.0..=1.0).contains(&rel) && rel.is_finite());
         let _ = CURRENT_PROTOCOL_VERSION;
+    }
+
+    #[test]
+    fn recall_time_mode_controls_superseded_visibility_and_separates_recalled_vs_cited() {
+        let store = MemStore::new();
+        let mut state = CoreState::new();
+        let mut old_entry = make_entry(10, &["alice", "soul"], 0.8);
+        old_entry.superseded_by = Some(EventId::new(11));
+        state.upsert_memory_entry(old_entry);
+        state.upsert_memory_entry(make_entry(11, &["alice", "soul"], 0.8));
+        // Private superseded entry outside alice's scope must never interfere.
+        let mut priv_entry = make_entry(99, &["bob_private", "soul"], 0.8);
+        priv_entry.superseded_by = Some(EventId::new(100));
+        state.upsert_memory_entry(priv_entry);
+
+        let scope = VisibleScope::new(
+            Audience::new([ActorId::new("alice"), ActorId::new("soul")]),
+            Some(PlaceId::new("room:main")),
+        );
+        let emb = vec![TaggedEmbedding {
+            tag: EmbeddingTag {
+                embed_model_ver: "gemma2".to_owned(),
+                dim_d: 256,
+                prompt_regime_id: "default".to_owned(),
+            },
+            values: vec![0.8; 256],
+        }];
+        let now = Time::from_millis(5_000);
+        let cfg = CoreConfig::default();
+
+        // CurrentOnly excludes superseded entry 10.
+        let mut q_curr = RecallQuery::current_only(scope.clone());
+        assert_eq!(q_curr.time_mode, RecallTimeMode::CurrentOnly);
+        assert_eq!(RecallTimeMode::default(), RecallTimeMode::CurrentOnly);
+        q_curr.query_embeddings = emb.clone();
+        let mut res_curr = run_recall(&store, &state, &q_curr, now, &cfg).unwrap();
+        assert_eq!(res_curr.recalled_event_ids, vec![EventId::new(11)]);
+        assert!(res_curr.cited_event_ids.is_empty());
+        assert_eq!(res_curr.items.len(), 1);
+        assert!(res_curr.items[0].is_current);
+
+        // IncludeSuperseded returns both 11 (current) and 10 (is_current = false), strictly post-VisibleScope.
+        let mut q_all = RecallQuery::new(scope);
+        q_all.time_mode = RecallTimeMode::IncludeSuperseded;
+        q_all.query_embeddings = emb;
+        let mut res_all = run_recall(&store, &state, &q_all, now, &cfg).unwrap();
+        assert_eq!(
+            res_all.recalled_event_ids,
+            vec![EventId::new(11), EventId::new(10)]
+        );
+        assert!(res_all.items[0].is_current);
+        assert!(!res_all.items[1].is_current);
+        assert_eq!(res_all.items[1].superseded_by, Some(EventId::new(11)));
+        assert!(res_all.items.iter().all(|i| i.event_id != EventId::new(99)));
+
+        // Recalled vs cited tracking filters strictly to recalled_event_ids.
+        res_all.mark_cited(&[EventId::new(11), EventId::new(999)]);
+        assert_eq!(res_all.cited_event_ids, vec![EventId::new(11)]);
+        assert_eq!(
+            res_all.recalled_event_ids,
+            vec![EventId::new(11), EventId::new(10)]
+        );
+        res_curr.mark_cited(&[EventId::new(10)]);
+        assert!(res_curr.cited_event_ids.is_empty());
     }
 }

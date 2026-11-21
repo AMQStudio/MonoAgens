@@ -9,6 +9,7 @@ use crate::context::{
     ContextSections, DroppedContextItem, ValveSelfSnapshot, compute_static_prefix_digest,
 };
 use crate::event::{EventFormatError, EventRecord, LogSeq};
+use crate::neural::ComputeTier;
 
 /// Errors returned by a [`Store`] implementation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +90,12 @@ pub struct ContextPlan {
     /// Optional Phase 2 neural uncertainty hint in `[0.0, 1.0]` (`C-4`; `None` under neutral fallback).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub neural_p_uncertainty: Option<f32>,
+    /// Optional V2.2 compute tier after ODAR escalation floor (`None` under neutral fallback / v1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute_tier: Option<ComputeTier>,
+    /// Optional V2.2 Loop A targeted repair context IDs (`[last_soul_event_id, prior_user_event_id]`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repair_context_ids: Vec<EventId>,
 }
 
 impl ContextPlan {

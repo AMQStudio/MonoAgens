@@ -10,7 +10,7 @@ use crate::blake3;
 use crate::config::CoreConfig;
 use crate::event::{DecisionOutcome, EventDetail, EventKind, LogSeq};
 use crate::gate::DecisionReason;
-use crate::neural::FEATURE_SCHEMA_VERSION;
+use crate::neural::{FEATURE_SCHEMA_VERSION_V1, FEATURE_SCHEMA_VERSION_V2};
 use crate::ports::{SnapshotCheckpoint, Store};
 use crate::state::CoreState;
 use crate::{CoreError, RecoveryReport};
@@ -246,12 +246,14 @@ fn verify_trace_pinned(
             format!("event draw={} != trace draw={}", rec.draw, tr.draw),
         ));
     }
-    if tr.feature_schema_version != FEATURE_SCHEMA_VERSION {
+    if tr.feature_schema_version != FEATURE_SCHEMA_VERSION_V1
+        && tr.feature_schema_version != FEATURE_SCHEMA_VERSION_V2
+    {
         return Some((
             "feature_schema_version".to_owned(),
             format!(
-                "trace schema {} != {}",
-                tr.feature_schema_version, FEATURE_SCHEMA_VERSION
+                "trace schema {} not in [{}, {}]",
+                tr.feature_schema_version, FEATURE_SCHEMA_VERSION_V1, FEATURE_SCHEMA_VERSION_V2
             ),
         ));
     }

@@ -11,7 +11,83 @@ ALLOWED_OSI_SPDX = frozenset({"MIT", "Apache-2.0", "CC-BY-4.0", "ISC"})
 BLOCKED_NON_COMMERCIAL_SPDX = frozenset(
     {"CC-BY-NC-4.0", "CC-BY-NC-SA-4.0", "CC-BY-NC-ND-4.0", "UNSPECIFIED", "N/A", ""}
 )
+BLOCKED_COPYLEFT_SPDX = frozenset({"CC-BY-SA-4.0", "CC-BY-SA-3.0", "GPL-3.0", "AGPL-3.0"})
 SEALED_MARKER = ("lab", "scenarios", "sealed")
+
+
+@dataclass(frozen=True)
+class V22DatasetSpec:
+    dataset_id: str
+    display_name: str
+    relative_dir: str
+    spdx: str
+    role: str
+
+
+V22_DATASET_REGISTRY: dict[str, V22DatasetSpec] = {
+    # OSI-clean SEA, personal-memory, preference, and repair corpora
+    "seadialogues": V22DatasetSpec(
+        dataset_id="seadialogues",
+        display_name="SEADialogues",
+        relative_dir="seadialogues",
+        spdx="CC-BY-4.0",
+        role="sea_dialogue",
+    ),
+    "indodialect": V22DatasetSpec(
+        dataset_id="indodialect",
+        display_name="IndoDialect",
+        relative_dir="indodialect",
+        spdx="CC-BY-4.0",
+        role="sea_dialect",
+    ),
+    "permembench": V22DatasetSpec(
+        dataset_id="permembench",
+        display_name="PerMemBench",
+        relative_dir="permembench",
+        spdx="CC-BY-4.0",
+        role="personal_memory",
+    ),
+    "personamem_v2": V22DatasetSpec(
+        dataset_id="personamem_v2",
+        display_name="PersonaMem-v2",
+        relative_dir="personamem_v2",
+        spdx="CC-BY-4.0",
+        role="preference_memory",
+    ),
+    "vars": V22DatasetSpec(
+        dataset_id="vars",
+        display_name="VARS",
+        relative_dir="vars",
+        spdx="Apache-2.0",
+        role="voice_repair",
+    ),
+    # Explicitly blocked non-commercial / ND / ShareAlike corpora for commercial default weights
+    "culturetalk_id": V22DatasetSpec(
+        dataset_id="culturetalk_id",
+        display_name="CULTURETALK-ID",
+        relative_dir="culturetalk_id",
+        spdx="CC-BY-NC-SA-4.0",
+        role="blocked_sea_noncommercial",
+    ),
+    "speak_or_stay_silent": V22DatasetSpec(
+        dataset_id="speak_or_stay_silent",
+        display_name="Speak or Stay Silent",
+        relative_dir="speak_or_stay_silent",
+        spdx="CC-BY-NC-ND-4.0",
+        role="blocked_turntaking_nc_nd",
+    ),
+    "pingpong": V22DatasetSpec(
+        dataset_id="pingpong",
+        display_name="PingPong",
+        relative_dir="pingpong",
+        spdx="CC-BY-SA-4.0",
+        role="blocked_turntaking_sharealike",
+    ),
+}
+
+
+def _normalize_dataset_key(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
 
 
 @dataclass(frozen=True)
@@ -68,7 +144,15 @@ def is_spdx_osi_permissive(spdx_expr: str) -> tuple[bool, str]:
         return False, "empty or missing SPDX license"
     disallowed = [tok for tok in tokens if tok not in ALLOWED_OSI_SPDX]
     if disallowed:
-        return False, f"disallowed SPDX license token(s): {disallowed}"
+        reasons = []
+        for tok in disallowed:
+            if tok in BLOCKED_NON_COMMERCIAL_SPDX or "NC" in tok or "ND" in tok:
+                reasons.append(f"{tok} (non-commercial/no-derivatives)")
+            elif tok in BLOCKED_COPYLEFT_SPDX or "-SA" in tok:
+                reasons.append(f"{tok} (copyleft/ShareAlike)")
+            else:
+                reasons.append(tok)
+        return False, f"disallowed SPDX license token(s): {reasons}"
     return True, f"verified OSI-permissive SPDX: {spdx_expr}"
 
 
@@ -157,3 +241,56 @@ def require_dataset_allowed(manifest_path: Path, dataset_id: str) -> DatasetAudi
         if entry.dataset_id == dataset_id:
             raise ValueError(f"Dataset '{dataset_id}' rejected by license filter: {entry.reason}")
     raise ValueError(f"Dataset '{dataset_id}' not found in manifest '{manifest_path}'")
+
+
+def audit_v22_registry() -> LicenseAuditReport:
+    """Audits all registered Wave C V2.2 SEA/preference/repair corpora against `ALLOWED_OSI_SPDX`."""
+    allowed: list[DatasetAuditEntry] = []
+    rejected: list[DatasetAuditEntry] = []
+    for spec in V22_DATASET_REGISTRY.values():
+        try:
+            assert_safe_path(Path("lab/datasets") / spec.relative_dir)
+        except PermissionError as exc:
+            rejected.append(
+                DatasetAuditEntry(
+                    dataset_id=spec.dataset_id,
+                    kind="dataset",
+                    relative_dir=spec.relative_dir,
+                    spdx=spec.spdx,
+                    allowed=False,
+                    reason=str(exc),
+                )
+            )
+            continue
+
+        ok, reason = is_spdx_osi_permissive(spec.spdx)
+        entry = DatasetAuditEntry(
+            dataset_id=spec.dataset_id,
+            kind="dataset",
+            relative_dir=spec.relative_dir,
+            spdx=spec.spdx,
+            allowed=ok,
+            reason=reason,
+        )
+        if ok:
+            allowed.append(entry)
+        else:
+            rejected.append(entry)
+    return LicenseAuditReport(allowed=tuple(allowed), rejected=tuple(rejected))
+
+
+def require_v22_dataset_allowed(dataset_id: str) -> DatasetAuditEntry:
+    """Validates a Wave C V2.2 dataset ID or display name against the strict OSI commercial filter."""
+    norm = _normalize_dataset_key(dataset_id)
+    report = audit_v22_registry()
+    for entry in report.allowed:
+        spec = V22_DATASET_REGISTRY[entry.dataset_id]
+        if norm in (_normalize_dataset_key(spec.dataset_id), _normalize_dataset_key(spec.display_name)):
+            return entry
+    for entry in report.rejected:
+        spec = V22_DATASET_REGISTRY[entry.dataset_id]
+        if norm in (_normalize_dataset_key(spec.dataset_id), _normalize_dataset_key(spec.display_name)):
+            raise ValueError(
+                f"Dataset '{dataset_id}' ({spec.display_name}) rejected by license filter: {entry.reason}"
+            )
+    raise ValueError(f"Dataset '{dataset_id}' not found in V2.2 dataset registry")

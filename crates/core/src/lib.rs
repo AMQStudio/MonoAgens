@@ -80,6 +80,7 @@ pub use expectations::{
     WakeGateCalibrator, advance_recurrence_schedule, is_fulfilled_state, is_positive_verdict_label,
     is_terminal_state, map_resolve_outcome,
 };
+pub use gate::decide::decide_gate_with_actor;
 pub use gate::{
     BacklogEventInput, BacklogScheduleResult, CandidateMemory, CommitmentInputs, DecisionReason,
     DecisionTrace, ExpectationCue, FrozenDialogueActHead, GateOutcome, MAX_CHUNKS_PER_WAKE,
@@ -98,11 +99,17 @@ pub use r#loop::{
 };
 pub use mem_store::MemStore;
 pub use neural::{
-    AdaptConfig, AdaptFeedback, CellType, DEFAULT_EMB_DIM, DEFAULT_H_DIM, DEFAULT_NUM_FEATURES,
-    FEATURE_SCHEMA_VERSION, GateArm, GateClass, NeuralError, NeuralModel, NeuralModelConfig,
-    NeuralOutputs, NumericFeatureInputs, Phase2HeadWeights, Phase3HeadWeights, PlaceAdaptState,
-    RecurrentCellWeights, SwiGluBlockWeights, extract_embedding_for_model,
-    extract_features_from_state, extract_x_num, forward_step, neutral_outputs,
+    AdaptConfig, AdaptFeedback, CellType, ComputeTier, DEFAULT_EMB_DIM, DEFAULT_H_DIM,
+    DEFAULT_NUM_FEATURES, DEFAULT_NUM_FEATURES_V1, DEFAULT_NUM_FEATURES_V2,
+    FEATURE_SCHEMA_VERSION, FEATURE_SCHEMA_VERSION_V1, FEATURE_SCHEMA_VERSION_V2, GateArm,
+    GateClass, NeuralError, NeuralModel, NeuralModelConfig, NeuralOutputs, NumericFeatureInputs,
+    NumericFeatureInputsV2, Phase2HeadWeights, Phase3HeadWeights, PlaceAdaptState, RecallDepthArm,
+    RecallDepthBanditState, RecurrentCellWeights, SwiGluBlockWeights,
+    USER_CORRECTION_REPAIR_THRESHOLD, V22HeadWeights, VisibleRepairContext,
+    canonical_audience_hash, extract_embedding_for_model, extract_features_from_state,
+    extract_features_v2_from_state, extract_visible_repair_context, extract_x_num,
+    extract_x_num_v2, forward_step, forward_step_with_actor, neutral_outputs,
+    neutral_outputs_with_actor,
 };
 pub use ports::{
     ContextPlan, DoorDecision, Doors, ModelPurpose, NoopDoors, SnapshotCheckpoint, Store,
@@ -119,7 +126,10 @@ pub use replay::{
     replay_log,
 };
 pub use rng::{GateDraw, SeededRng};
-pub use state::{ActorFactsEntry, CoreState, InFlightAction, PendingApprovalEntry, WakeSnapshotRecord};
+pub use state::{
+    ActorFactsEntry, ActorMemorySlot, CoreState, DecisionV22Hints, InFlightAction,
+    MAX_ACTOR_MEMORY_PER_SCOPE, PendingApprovalEntry, WakeSnapshotRecord,
+};
 
 /// All synchronous inputs admitted into [`Core::step`] and [`Core::enqueue`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -849,3 +849,18 @@ pub(super) fn flush_recalibration_if_pending<S: Store>(
     append_and_apply(core, rc)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recall::partition_recalled_and_cited;
+
+    #[test]
+    fn partition_recalled_and_cited_separates_surfaced_from_cited_deterministically() {
+        let recalled = vec![EventId::new(10), EventId::new(20), EventId::new(30)];
+        let cited = vec![EventId::new(20), EventId::new(99)];
+        let (recalled_only, cited_from_recalled) = partition_recalled_and_cited(&recalled, &cited);
+        assert_eq!(recalled_only, vec![EventId::new(10), EventId::new(30)]);
+        assert_eq!(cited_from_recalled, vec![EventId::new(20)]);
+    }
+}

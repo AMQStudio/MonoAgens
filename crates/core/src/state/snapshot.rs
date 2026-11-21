@@ -11,7 +11,10 @@ use monoagens_protocol::{
     VisibleScope,
 };
 
-use super::{ActorFactsEntry, CoreState, InFlightAction, PendingApprovalEntry, WakeSnapshotRecord};
+use super::{
+    ActorFactsEntry, ActorMemorySlot, CoreState, DecisionV22Hints, InFlightAction,
+    PendingApprovalEntry, WakeSnapshotRecord,
+};
 use crate::activation::ActivationTrace;
 use crate::beliefs::{BeliefBook, BeliefLogEntry, BeliefRecord, BetaCredence};
 use crate::consolidation::{
@@ -36,11 +39,11 @@ use crate::ledger::{
     ActorCard, CapabilityHealthStats, FalseBeliefFlag, OpenRequestItem, PerceptionLedger,
     SelfCalibrationStats, ToldLedgerItem, WitnessedFactSummary,
 };
-use crate::neural::PlaceAdaptState;
+use crate::neural::{ComputeTier, PlaceAdaptState, RecallDepthBanditState};
 use crate::recall::{ImportanceInputs, MemoryBasis, MemoryEntry};
 
 const SNAPSHOT_MAGIC: &[u8; 4] = b"MGSN";
-const SNAPSHOT_VERSION: u16 = 12;
+const SNAPSHOT_VERSION: u16 = 13;
 
 pub fn encode_snapshot(state: &CoreState) -> Vec<u8> {
     let mut w = BinWriter::new();
@@ -197,6 +200,13 @@ pub fn encode_snapshot(state: &CoreState) -> Vec<u8> {
         }
         w.u64(ad.total_pulls);
         w.opt_u64(ad.last_updated_ms.map(Time::as_millis));
+        for &v in &ad.recall_depth_bandit.arm_pulls {
+            w.u64(v);
+        }
+        for &v in &ad.recall_depth_bandit.arm_reward_sums {
+            w.f64(v);
+        }
+        w.u64(ad.recall_depth_bandit.total_pulls);
     }
 
     w.u32(state.memory_candidates.len() as u32);
@@ -301,6 +311,32 @@ pub fn encode_snapshot(state: &CoreState) -> Vec<u8> {
     for (place, &count) in &state.consecutive_automated_turns_by_place {
         w.str(place.as_str());
         w.u32(count);
+    }
+    w.u32(state.actor_memory.len() as u32);
+    for ((place, aud_hash, actor), slot) in &state.actor_memory {
+        w.str(place.as_str());
+        w.raw(aud_hash);
+        w.str(actor.as_str());
+        w.u32(slot.vector.len() as u32);
+        for &v in &slot.vector {
+            w.f32(v);
+        }
+        w.u64(slot.last_active_ms.as_millis());
+    }
+    w.u32(state.decision_v22_hints.len() as u32);
+    for (&eid, hints) in &state.decision_v22_hints {
+        w.u64(eid.as_u64());
+        match hints.compute_tier {
+            Some(tier) => {
+                w.u8(1);
+                w.u8(tier.code());
+            }
+            None => w.u8(0),
+        }
+        w.u32(hints.repair_context_ids.len() as u32);
+        for &rid in &hints.repair_context_ids {
+            w.u64(rid.as_u64());
+        }
     }
 
     w.finish()
@@ -562,6 +598,24 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<CoreState, EventFormatError> {
         } else {
             None
         };
+        let recall_depth_bandit = if version >= 13 {
+            let mut r_pulls = [0_u64; 4];
+            for s in &mut r_pulls {
+                *s = r.u64()?;
+            }
+            let mut r_sums = [0.0_f64; 4];
+            for s in &mut r_sums {
+                *s = r.f64()?;
+            }
+            let r_total = r.u64()?;
+            RecallDepthBanditState {
+                arm_pulls: r_pulls,
+                arm_reward_sums: r_sums,
+                total_pulls: r_total,
+            }
+        } else {
+            RecallDepthBanditState::new()
+        };
         place_adapt.insert(
             place,
             PlaceAdaptState {
@@ -572,6 +626,7 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<CoreState, EventFormatError> {
                 arm_reward_sums,
                 total_pulls,
                 last_updated_ms,
+                recall_depth_bandit,
             },
         );
     }
@@ -742,6 +797,73 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<CoreState, EventFormatError> {
     } else {
         BTreeMap::new()
     };
+    let actor_memory = if version >= 13 {
+        let am_len = r.u32()? as usize;
+        let mut map = BTreeMap::new();
+        for _ in 0..am_len {
+            let place = PlaceId::new(r.string()?);
+            let aud_hash = r.fixed::<32>()?;
+            let actor = ActorId::new(r.string()?);
+            let v_len = r.u32()? as usize;
+            let mut vector = Vec::with_capacity(v_len.min(512));
+            for _ in 0..v_len {
+                let v = r.f32()?;
+                if !v.is_finite() {
+                    return Err(EventFormatError::MalformedRecord(
+                        "non-finite actor_memory element in snapshot".to_owned(),
+                    ));
+                }
+                vector.push(v);
+            }
+            let last_active_ms = Time::from_millis(r.u64()?);
+            map.insert(
+                (place, aud_hash, actor),
+                ActorMemorySlot {
+                    vector,
+                    last_active_ms,
+                },
+            );
+        }
+        map
+    } else {
+        BTreeMap::new()
+    };
+    let decision_v22_hints = if version >= 13 {
+        let h_len = r.u32()? as usize;
+        let mut map = BTreeMap::new();
+        for _ in 0..h_len {
+            let eid = EventId::new(r.u64()?);
+            let compute_tier = match r.u8()? {
+                0 => None,
+                1 => {
+                    let c = r.u8()?;
+                    Some(ComputeTier::from_code(c).ok_or_else(|| {
+                        EventFormatError::MalformedRecord(format!("invalid compute_tier code {c}"))
+                    })?)
+                }
+                tag => {
+                    return Err(EventFormatError::MalformedRecord(format!(
+                        "invalid opt compute_tier tag {tag}"
+                    )));
+                }
+            };
+            let r_len = r.u32()? as usize;
+            let mut repair_context_ids = Vec::with_capacity(r_len.min(16));
+            for _ in 0..r_len {
+                repair_context_ids.push(EventId::new(r.u64()?));
+            }
+            map.insert(
+                eid,
+                DecisionV22Hints {
+                    compute_tier,
+                    repair_context_ids,
+                },
+            );
+        }
+        map
+    } else {
+        BTreeMap::new()
+    };
 
     let startup_recovery_pending = !unconsumed_inputs.is_empty();
     Ok(CoreState {
@@ -763,6 +885,7 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<CoreState, EventFormatError> {
         place_participants,
         talk_turns,
         place_memory,
+        actor_memory,
         place_adapt,
         memory_candidates,
         open_promises,
@@ -812,6 +935,7 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<CoreState, EventFormatError> {
         recorded_config,
         config_loaded_count,
         decision_neural_hints,
+        decision_v22_hints,
         consecutive_automated_turns_by_place,
     })
 }

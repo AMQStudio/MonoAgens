@@ -73,6 +73,8 @@ pub struct HardForgetAudit {
     pub surviving_ledger_cards: usize,
     pub surviving_skill_lessons: usize,
     pub surviving_procedures: usize,
+    #[serde(default)]
+    pub surviving_actor_memory: usize,
     pub epoch_frozen: bool,
 }
 
@@ -84,6 +86,7 @@ impl HardForgetAudit {
             && self.surviving_ledger_cards == 0
             && self.surviving_skill_lessons == 0
             && self.surviving_procedures == 0
+            && self.surviving_actor_memory == 0
             && self.epoch_frozen
     }
 }
@@ -306,6 +309,11 @@ pub fn verify_hard_forget_erasure(
             .procedures
             .values()
             .filter(|p| p.actors.contains(target_actor) || p.audience.contains(target_actor))
+            .count(),
+        surviving_actor_memory: st
+            .actor_memory
+            .keys()
+            .filter(|(_, _, actor)| actor == target_actor)
             .count(),
         epoch_frozen: st.epoch > 0,
     })

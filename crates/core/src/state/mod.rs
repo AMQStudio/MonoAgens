@@ -35,13 +35,15 @@ use crate::expectations::{
 };
 use crate::gate::{
     CandidateMemory, CommitmentInputs, DecisionReason, DecisionTrace, ExpectationCue,
-    FrozenDialogueActHead, GateOutcome, OpenWait, PlaceHistoryEntry, PromiseSummary, decide_gate,
+    FrozenDialogueActHead, GateOutcome, OpenWait, PlaceHistoryEntry, PromiseSummary,
 };
+use crate::gate::decide::decide_gate_with_actor;
 use crate::ledger::PerceptionLedger;
 use crate::neural::{
-    AdaptConfig, AdaptFeedback, DEFAULT_H_DIM, NeuralModel, PlaceAdaptState,
-    extract_embedding_for_model, extract_embedding_for_model_config, extract_features_from_state,
-    forward_step,
+    AdaptConfig, AdaptFeedback, ComputeTier, DEFAULT_H_DIM, NeuralModel, PlaceAdaptState,
+    RECENT_SOUL_REPAIR_WINDOW_MS, USER_CORRECTION_REPAIR_THRESHOLD, canonical_audience_hash,
+    extract_embedding_for_model, extract_embedding_for_model_config,
+    extract_features_v2_from_state, extract_visible_repair_context, forward_step_with_actor,
 };
 use crate::privacy::build_visible_scope;
 use crate::recall::{ImportanceInputs, MemoryBasis, MemoryEntry};
@@ -49,8 +51,26 @@ use crate::recall::{ImportanceInputs, MemoryBasis, MemoryEntry};
 const MAX_PLACE_HISTORY_ENTRIES: usize = 64;
 const MAX_TALK_TURNS_PER_PLACE: usize = 512;
 pub(crate) const DEFAULT_DEG_ALLOC_THRESHOLD: f64 = 0.50;
-const DEFAULT_EXCHANGE_LISTENER_MAX: f64 = 3.0;
 const DEFAULT_LATENCY_DECAY_RHO: f64 = 0.995;
+
+/// Per-`(PlaceId, CanonicalAudienceHash)` cap on tracked per-participant `h_actor` slots (`K_ACTORS`).
+pub const MAX_ACTOR_MEMORY_PER_SCOPE: usize = 32;
+
+/// Audience-scoped per-participant recurrent working vector (`h_actor`, `Delta_NI = 0`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActorMemorySlot {
+    pub vector: Vec<f32>,
+    pub last_active_ms: Time,
+}
+
+/// Optional V2.2 per-decision hints propagated into wake [`crate::ports::ContextPlan`].
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct DecisionV22Hints {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute_tier: Option<ComputeTier>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repair_context_ids: Vec<EventId>,
+}
 
 /// Tracked in-flight action awaiting a terminal receipt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,6 +137,9 @@ pub struct CoreState {
 
     /// Per-place `64d` recurrent neural working memory `h_t`.
     pub place_memory: BTreeMap<PlaceId, Vec<f32>>,
+    /// Audience-scoped per-participant recurrent working memory `h_actor` (`Delta_NI = 0`).
+    #[serde(default)]
+    pub actor_memory: BTreeMap<(PlaceId, [u8; 32], ActorId), ActorMemorySlot>,
     /// Per-place bounded Warm-Start UCB online adaptation equalizer state.
     pub place_adapt: BTreeMap<PlaceId, PlaceAdaptState>,
 
@@ -176,6 +199,9 @@ pub struct CoreState {
     pub config_loaded_count: u64,
     #[serde(default)]
     pub decision_neural_hints: BTreeMap<EventId, (Option<f32>, Option<f32>)>,
+    /// V2.2 per-decision `compute_tier` and Loop A `repair_context_ids` hints for wake assembly.
+    #[serde(default)]
+    pub decision_v22_hints: BTreeMap<EventId, DecisionV22Hints>,
     /// Per-place count of consecutive automated-actor/soul turns (resets to 0 on non-automated turn).
     #[serde(default)]
     pub consecutive_automated_turns_by_place: BTreeMap<PlaceId, u32>,
@@ -210,6 +236,7 @@ impl CoreState {
             place_participants: BTreeMap::new(),
             talk_turns: BTreeMap::new(),
             place_memory: BTreeMap::new(),
+            actor_memory: BTreeMap::new(),
             place_adapt: BTreeMap::new(),
             memory_candidates: Vec::new(),
             open_promises: BTreeMap::new(),
@@ -259,8 +286,132 @@ impl CoreState {
             recorded_config: None,
             config_loaded_count: 0,
             decision_neural_hints: BTreeMap::new(),
+            decision_v22_hints: BTreeMap::new(),
             consecutive_automated_turns_by_place: BTreeMap::new(),
         }
+    }
+
+    /// Reads the audience-scoped per-participant `h_actor` vector for `(place, audience, actor)`,
+    /// returning a zero-initialized vector of length `expected_dim` when absent or mismatched.
+    #[must_use]
+    pub fn get_actor_memory(
+        &self,
+        place: &PlaceId,
+        audience: &Audience,
+        actor: &ActorId,
+        expected_dim: usize,
+    ) -> Vec<f32> {
+        if expected_dim == 0 {
+            return Vec::new();
+        }
+        let key = (place.clone(), canonical_audience_hash(audience), actor.clone());
+        self.actor_memory
+            .get(&key)
+            .filter(|slot| slot.vector.len() == expected_dim)
+            .map(|slot| slot.vector.clone())
+            .unwrap_or_else(|| vec![0.0_f32; expected_dim])
+    }
+
+    /// Inserts/updates `h_actor` under `(place, canonical_audience_hash(audience), actor)` and
+    /// enforces the `MAX_ACTOR_MEMORY_PER_SCOPE = 32` cap per `(place, audience_hash)` via
+    /// deterministic `(last_active_ms, ActorId)` LRU eviction.
+    pub fn upsert_actor_memory(
+        &mut self,
+        place: &PlaceId,
+        audience: &Audience,
+        actor: &ActorId,
+        vector: Vec<f32>,
+        now_ms: Time,
+    ) {
+        if vector.is_empty() || !vector.iter().all(|v| v.is_finite()) {
+            return;
+        }
+        let aud_hash = canonical_audience_hash(audience);
+        self.actor_memory.insert(
+            (place.clone(), aud_hash, actor.clone()),
+            ActorMemorySlot {
+                vector,
+                last_active_ms: now_ms,
+            },
+        );
+        loop {
+            let mut scope_count = 0usize;
+            let mut victim: Option<(Time, ActorId)> = None;
+            for ((p, h, a), slot) in &self.actor_memory {
+                if p == place && *h == aud_hash {
+                    scope_count += 1;
+                    let is_older = match &victim {
+                        None => true,
+                        Some((v_ms, v_actor)) => {
+                            slot.last_active_ms < *v_ms
+                                || (slot.last_active_ms == *v_ms && a < v_actor)
+                        }
+                    };
+                    if is_older {
+                        victim = Some((slot.last_active_ms, a.clone()));
+                    }
+                }
+            }
+            if scope_count <= MAX_ACTOR_MEMORY_PER_SCOPE {
+                break;
+            }
+            if let Some((_, victim_actor)) = victim {
+                self.actor_memory
+                    .remove(&(place.clone(), aud_hash, victim_actor));
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Looks up V2.2 wake hints (`compute_tier`, `repair_context_ids`) for `trigger_id` or its causes.
+    #[must_use]
+    pub fn lookup_v22_hints(
+        &self,
+        trigger_id: EventId,
+        caused_by: &[EventId],
+    ) -> DecisionV22Hints {
+        self.decision_v22_hints
+            .get(&trigger_id)
+            .cloned()
+            .or_else(|| {
+                caused_by
+                    .iter()
+                    .find_map(|cid| self.decision_v22_hints.get(cid).cloned())
+            })
+            .unwrap_or_default()
+    }
+
+    /// Computes Loop A targeted repair IDs (`[last_soul_event_id, prior_user_event_id]`) strictly
+    /// post-[`VisibleScope`] (`Delta_NI = 0`) when a recent visible soul act exists at `place`.
+    #[must_use]
+    pub fn find_recent_repair_context_ids(
+        &self,
+        place: &PlaceId,
+        audience: &Audience,
+        sender: &ActorId,
+        now: Time,
+        exclude_event_id: Option<EventId>,
+    ) -> Vec<EventId> {
+        let scope = self.visible_scope_for(audience.clone(), Some(place.clone()), now);
+        let repair =
+            extract_visible_repair_context(self, place, &scope, sender, now, exclude_event_id);
+        let Some(last_soul_id) = repair.last_soul_event_id else {
+            return Vec::new();
+        };
+        let is_recent = repair
+            .last_soul_ms
+            .is_some_and(|ts| now.saturating_sub_ms(ts) <= RECENT_SOUL_REPAIR_WINDOW_MS);
+        if !is_recent {
+            return Vec::new();
+        }
+        let mut ids = vec![last_soul_id];
+        if let Some(prior_user_id) = repair.last_sender_event_id
+            && prior_user_id != last_soul_id
+        {
+            ids.push(prior_user_id);
+        }
+        ids
     }
 
     /// Returns the effective [`AdaptConfig`] projected from the latest `ConfigLoaded` record
@@ -539,24 +690,27 @@ impl CoreState {
         model: Option<&NeuralModel>,
         backlog_queue_depth: usize,
     ) -> GateOutcome {
-        let (addressees, named, reply_to, embeddings) = match &percept.detail {
+        let (addressees, named, reply_to, embeddings, peer_expertise_margin) = match &percept.detail {
             Some(EventDetail::PerceptMeta {
                 addressees,
                 named,
                 reply_to,
                 embeddings,
+                peer_expertise_margin,
                 ..
             }) => (
                 addressees.as_slice(),
                 named.as_slice(),
                 *reply_to,
                 embeddings.as_slice(),
+                *peer_expertise_margin,
             ),
             _ => (
                 &[][..],
                 &[][..],
                 percept.caused_by.first().copied(),
                 &[][..],
+                None,
             ),
         };
 
@@ -632,8 +786,9 @@ impl CoreState {
         synthetic_percept.reply_to = reply_to;
         synthetic_percept.embeddings = embeddings.to_vec();
         synthetic_percept.f_modal = percept.numeric_features.f_modal;
+        synthetic_percept.peer_expertise_margin = peer_expertise_margin;
 
-        let x_num = extract_features_from_state(
+        let x_num = extract_features_v2_from_state(
             self,
             &synthetic_percept,
             percept.timestamp_ms,
@@ -651,19 +806,32 @@ impl CoreState {
             .filter(|v| v.len() == h_dim)
             .cloned()
             .unwrap_or_else(|| vec![0.0_f32; h_dim]);
+        let h_actor_prev = model.and_then(|m| {
+            if m.config.h_actor_dim > 0 {
+                Some(self.get_actor_memory(
+                    &percept.place,
+                    &percept.audience,
+                    &percept.actor,
+                    m.config.h_actor_dim,
+                ))
+            } else {
+                None
+            }
+        });
         let adapt_cfg = config.effective_adapt_config();
         let decayed_adapt = self
             .place_adapt
             .get(&percept.place)
             .map(|st| st.decayed_at(percept.timestamp_ms, &adapt_cfg));
 
-        decide_gate(
+        decide_gate_with_actor(
             self.draw_key(percept.id),
             config,
             model,
             &e_256,
             &x_num,
             &h_prev,
+            h_actor_prev.as_deref(),
             decayed_adapt.as_ref(),
             commitments,
         )
@@ -678,9 +846,13 @@ impl CoreState {
         model: Option<&NeuralModel>,
     ) -> Option<DecisionTrace> {
         let m = model?;
-        let embeddings = match &percept.detail {
-            Some(EventDetail::PerceptMeta { embeddings, .. }) => embeddings.as_slice(),
-            _ => &[][..],
+        let (embeddings, peer_expertise_margin) = match &percept.detail {
+            Some(EventDetail::PerceptMeta {
+                embeddings,
+                peer_expertise_margin,
+                ..
+            }) => (embeddings.as_slice(), *peer_expertise_margin),
+            _ => (&[][..], None),
         };
         let mut synthetic_percept = Percept::minimal(
             percept.actor.clone(),
@@ -693,8 +865,9 @@ impl CoreState {
         synthetic_percept.origin_actor = Some(percept.origin_actor.clone());
         synthetic_percept.embeddings = embeddings.to_vec();
         synthetic_percept.f_modal = percept.numeric_features.f_modal;
+        synthetic_percept.peer_expertise_margin = peer_expertise_margin;
 
-        let x_num = extract_features_from_state(self, &synthetic_percept, percept.timestamp_ms, 0);
+        let x_num = extract_features_v2_from_state(self, &synthetic_percept, percept.timestamp_ms, 0);
         let e_256 = extract_embedding_for_model_config(&synthetic_percept, &m.config);
         let h_dim = m.config.h_dim;
         let h_prev = self
@@ -703,8 +876,20 @@ impl CoreState {
             .filter(|v| v.len() == h_dim)
             .cloned()
             .unwrap_or_else(|| vec![0.0_f32; h_dim]);
+        let h_actor_prev = if m.config.h_actor_dim > 0 {
+            Some(self.get_actor_memory(
+                &percept.place,
+                &percept.audience,
+                &percept.actor,
+                m.config.h_actor_dim,
+            ))
+        } else {
+            None
+        };
 
-        let neural = forward_step(Some(m), &e_256, &x_num, &h_prev, None).ok()?;
+        let neural =
+            forward_step_with_actor(Some(m), &e_256, &x_num, &h_prev, h_actor_prev.as_deref(), None)
+                .ok()?;
         Some(DecisionTrace {
             neural,
             model_blake3: Some(m.blake3),
@@ -817,6 +1002,20 @@ impl CoreState {
                         self.place_memory
                             .insert(record.place.clone(), tr.neural.h_next.clone());
                     }
+                    if (!matches!(outcome, DecisionOutcome::DoorBlocked | DecisionOutcome::Processed)
+                        || *reason == Some(DecisionReason::SelfCaused))
+                        && !tr.neural.h_actor_next.is_empty()
+                        && tr.neural.h_actor_next.iter().all(|v| v.is_finite())
+                        && let Some(sender) = self.event_authors.get(target_event_id).cloned()
+                    {
+                        self.upsert_actor_memory(
+                            &record.place,
+                            &record.audience,
+                            &sender,
+                            tr.neural.h_actor_next.clone(),
+                            record.timestamp_ms,
+                        );
+                    }
                     if !tr.neural.is_neutral_fallback
                         && (tr.neural.p_verify.is_some() || tr.neural.p_uncertainty.is_some())
                     {
@@ -824,6 +1023,34 @@ impl CoreState {
                             *target_event_id,
                             (tr.neural.p_verify, tr.neural.p_uncertainty),
                         );
+                    }
+                    if !tr.neural.is_neutral_fallback {
+                        let repair_context_ids = if tr
+                            .neural
+                            .p_user_correction
+                            .is_some_and(|p| p.is_finite() && p >= USER_CORRECTION_REPAIR_THRESHOLD)
+                            && let Some(sender) = self.event_authors.get(target_event_id).cloned()
+                            && sender != self.soul_actor_id
+                        {
+                            self.find_recent_repair_context_ids(
+                                &record.place,
+                                &record.audience,
+                                &sender,
+                                record.timestamp_ms,
+                                Some(*target_event_id),
+                            )
+                        } else {
+                            Vec::new()
+                        };
+                        if tr.neural.compute_tier.is_some() || !repair_context_ids.is_empty() {
+                            self.decision_v22_hints.insert(
+                                *target_event_id,
+                                DecisionV22Hints {
+                                    compute_tier: tr.neural.compute_tier,
+                                    repair_context_ids,
+                                },
+                            );
+                        }
                     }
                 }
             }
@@ -866,19 +1093,16 @@ impl CoreState {
                     .or_default()
                     .record(record.timestamp_ms);
                 self.record_talk_turn(&record.place, record.timestamp_ms, true);
-                let recipients: Vec<&ActorId> = record
+                for recipient in record
                     .audience
                     .members
                     .iter()
                     .filter(|a| *a != &self.soul_actor_id)
-                    .collect();
-                if (recipients.len() as f64) <= DEFAULT_EXCHANGE_LISTENER_MAX {
-                    for recipient in recipients {
-                        self.actor_exchanges
-                            .entry(recipient.clone())
-                            .or_default()
-                            .record(record.timestamp_ms);
-                    }
+                {
+                    self.actor_exchanges
+                        .entry(recipient.clone())
+                        .or_default()
+                        .record(record.timestamp_ms);
                 }
             }
             EventKind::Receipt => {
@@ -1679,7 +1903,13 @@ impl CoreState {
                         self.active_wake_snapshots.remove(ev);
                         self.auto_recall_states.remove(ev);
                         self.decision_neural_hints.remove(ev);
+                        self.decision_v22_hints.remove(ev);
                         self.procedures.remove(ev);
+                    }
+                    for hints in self.decision_v22_hints.values_mut() {
+                        hints
+                            .repair_context_ids
+                            .retain(|id| !target_event_ids.contains(id));
                     }
                     for (place, hist) in &self.place_history {
                         if hist.iter().any(|h| {
@@ -1695,6 +1925,9 @@ impl CoreState {
                         self.place_adapt.remove(place);
                         self.consecutive_automated_turns_by_place.remove(place);
                     }
+                    self.actor_memory.retain(|(place, _, actor), _| {
+                        !tainted_places.contains(place) && !target_actor_ids.contains(actor)
+                    });
 
                     self.memory_candidates
                         .retain(|m| !target_event_ids.contains(&m.event_id));
@@ -1940,15 +2173,12 @@ impl CoreState {
         let mut deg_by_actor = BTreeMap::new();
         if let Some(ds) = percept.numeric_features.deg_soul {
             deg_by_actor.insert(self.soul_actor_id.clone(), f64::from(ds));
-            if percept.actor != self.soul_actor_id
-                && f64::from(ds) >= DEFAULT_DEG_ALLOC_THRESHOLD
-                && percept.audience.len() <= 2
-            {
-                self.actor_exchanges
-                    .entry(percept.actor.clone())
-                    .or_default()
-                    .record(percept.timestamp_ms);
-            }
+        }
+        if percept.actor != self.soul_actor_id {
+            self.actor_exchanges
+                .entry(percept.actor.clone())
+                .or_default()
+                .record(percept.timestamp_ms);
         }
         let hist = self.place_history.entry(percept.place.clone()).or_default();
         hist.push(PlaceHistoryEntry {
@@ -1963,9 +2193,13 @@ impl CoreState {
             hist.drain(0..drain);
         }
 
-        let embeddings = match &percept.detail {
-            Some(EventDetail::PerceptMeta { embeddings, .. }) => embeddings.clone(),
-            _ => Vec::new(),
+        let (embeddings, reply_to) = match &percept.detail {
+            Some(EventDetail::PerceptMeta {
+                embeddings,
+                reply_to,
+                ..
+            }) => (embeddings.clone(), *reply_to),
+            _ => (Vec::new(), None),
         };
 
         if percept.id.as_u64() != 0 {
@@ -1977,7 +2211,7 @@ impl CoreState {
                 }
             }
             let ep_config = self.recorded_config.clone().unwrap_or_default();
-            let ep_outcome = self.episode_book.admit_event(
+            let ep_outcome = self.episode_book.admit_event_with_thread(
                 EpisodeAdmitParams {
                     event_id: percept.id,
                     place: &percept.place,
@@ -1987,6 +2221,8 @@ impl CoreState {
                     embeddings: &embeddings,
                     missed_expectation: false,
                 },
+                Some(&percept.audience),
+                reply_to,
                 &ep_config,
             );
             if let Some((stale_gist, reopen_ev)) = ep_outcome.reopened_stale_gist {
@@ -2074,4 +2310,380 @@ pub(crate) fn encode_identity_payload(signed: &OwnerSigned<OpaquePayload>) -> Ve
 
 pub(crate) fn encode_body_status(status: BodyStatus) -> u8 {
     snapshot::encode_body_status(status)
+}
+
+#[cfg(test)]
+mod wave_c_track1_tests {
+    use std::sync::Arc;
+
+    use monoagens_protocol::{
+        ActionId, ActorId, Audience, CapabilityId, EventId, OpaquePayload, OriginActor, Percept,
+        PlaceId, Taint, Time,
+    };
+
+    use super::*;
+    use crate::config::CoreConfig;
+    use crate::event::{EventDetail, EventKind, EventRecord, NumericFeatures};
+    use crate::mem_store::MemStore;
+    use crate::neural::weights::tests_support::{
+        build_synthetic_v22_tensors_map, serialize_tensors_map,
+    };
+    use crate::neural::{CellType, ComputeTier, GateArm, NeuralModel, RecallDepthArm};
+    use crate::ports::Store;
+    use crate::tck_hooks::{TckRecordingDoors, verify_hard_forget_erasure};
+    use crate::{Core, Effect, Input, ReplayMode};
+
+    fn make_biased_v22_model(
+        compute_tier_bias: [f32; 3],
+        p_corr_bias: f32,
+        h_actor_dim: usize,
+    ) -> Arc<NeuralModel> {
+        let (mut meta, mut entries) = build_synthetic_v22_tensors_map(
+            2,
+            256,
+            32,
+            32,
+            16,
+            64,
+            96,
+            1,
+            2,
+            32,
+            h_actor_dim,
+            4,
+            CellType::MinGru,
+            true,
+            true,
+            true,
+        );
+        meta.insert("cic_threshold".to_owned(), "0.1".to_owned());
+        let set_f32s = |list: &mut Vec<(String, Vec<usize>, Vec<u8>)>, name: &str, vals: &[f32]| {
+            if let Some((_, _, bytes)) = list.iter_mut().find(|(n, _, _)| n == name) {
+                bytes.clear();
+                for &v in vals {
+                    bytes.extend_from_slice(&v.to_le_bytes());
+                }
+            }
+        };
+        set_f32s(&mut entries, "head.gate_4.weight", &vec![0.0_f32; 4 * 64]);
+        set_f32s(&mut entries, "head.gate_4.bias", &[-4.0, -4.0, -4.0, 6.0]);
+        set_f32s(&mut entries, "head.compute_tier.weight", &vec![0.0_f32; 3 * 64]);
+        set_f32s(&mut entries, "head.compute_tier.bias", &compute_tier_bias);
+        set_f32s(&mut entries, "head.p_user_correction.weight", &vec![0.0_f32; 64]);
+        set_f32s(&mut entries, "head.p_user_correction.bias", &[p_corr_bias]);
+        set_f32s(&mut entries, "head.p_verify.weight", &vec![0.0_f32; 64]);
+        set_f32s(&mut entries, "head.p_verify.bias", &[-4.0]);
+
+        let bytes = serialize_tensors_map(meta, entries);
+        Arc::new(NeuralModel::from_safetensors_bytes(&bytes, None).expect("v22 model"))
+    }
+
+    #[test]
+    fn actor_memory_audience_isolation_lru_32_snapshot_and_hard_forget_audit() {
+        let mut st = CoreState::new();
+        let shared_place = PlaceId::new("room:shared");
+        let dm_aud = Audience::new([ActorId::new("alice"), ActorId::new("soul")]);
+        let grp_aud = Audience::new([
+            ActorId::new("alice"),
+            ActorId::new("bob"),
+            ActorId::new("soul"),
+        ]);
+
+        // DM h_actor never leaks into group chat at the same PlaceId (Delta_NI = 0).
+        st.upsert_actor_memory(
+            &shared_place,
+            &dm_aud,
+            &ActorId::new("alice"),
+            vec![0.9_f32; 24],
+            Time::from_millis(1_000),
+        );
+        assert_eq!(
+            st.get_actor_memory(&shared_place, &dm_aud, &ActorId::new("alice"), 24),
+            vec![0.9_f32; 24]
+        );
+        assert_eq!(
+            st.get_actor_memory(&shared_place, &grp_aud, &ActorId::new("alice"), 24),
+            vec![0.0_f32; 24]
+        );
+
+        // Enforce deterministic K_ACTORS = 32 LRU eviction per (PlaceId, AudienceHash).
+        let big_place = PlaceId::new("room:big");
+        let big_aud = Audience::new([ActorId::new("soul"), ActorId::new("everyone")]);
+        for idx in 0..40_u64 {
+            let actor = ActorId::new(format!("actor_{idx:02}"));
+            st.upsert_actor_memory(
+                &big_place,
+                &big_aud,
+                &actor,
+                vec![idx as f32; 8],
+                Time::from_millis(1_000 + idx * 10),
+            );
+        }
+        let big_hash = canonical_audience_hash(&big_aud);
+        let surviving_in_big: Vec<ActorId> = st
+            .actor_memory
+            .keys()
+            .filter(|(p, h, _)| p == &big_place && *h == big_hash)
+            .map(|(_, _, a)| a.clone())
+            .collect();
+        assert_eq!(surviving_in_big.len(), MAX_ACTOR_MEMORY_PER_SCOPE);
+        assert!(!surviving_in_big.contains(&ActorId::new("actor_00")));
+        assert!(!surviving_in_big.contains(&ActorId::new("actor_07")));
+        assert!(surviving_in_big.contains(&ActorId::new("actor_08")));
+        assert!(surviving_in_big.contains(&ActorId::new("actor_39")));
+
+        // Snapshot v13 roundtrip preserves actor_memory, decision_v22_hints, and recall_depth_bandit.
+        st.decision_v22_hints.insert(
+            EventId::new(42),
+            DecisionV22Hints {
+                compute_tier: Some(ComputeTier::Deep),
+                repair_context_ids: vec![EventId::new(10), EventId::new(9)],
+            },
+        );
+        let adapt_cfg = AdaptConfig::default();
+        st.place_adapt
+            .entry(big_place.clone())
+            .or_default()
+            .record_recall_depth_outcome(
+                RecallDepthArm::Light,
+                0.75,
+                &adapt_cfg,
+                Some(Time::from_millis(2_000)),
+                Taint::Trusted,
+            );
+        let snap = st.encode_snapshot();
+        let decoded = CoreState::decode_snapshot(&snap).expect("v13 snapshot decode");
+        assert_eq!(decoded.actor_memory, st.actor_memory);
+        assert_eq!(decoded.decision_v22_hints, st.decision_v22_hints);
+        assert_eq!(decoded.place_adapt, st.place_adapt);
+
+        // Full Core + HardForgetAudit verifies actor_memory is wiped cleanly.
+        let model = make_biased_v22_model([0.0, 5.0, 0.0], -4.0, 24);
+        let mut core = Core::open(MemStore::new(), CoreConfig::default(), Some(model)).expect("open");
+        let mut doors = TckRecordingDoors::default();
+        let p = Percept::minimal(
+            ActorId::new("alice"),
+            PlaceId::new("dm:alice"),
+            dm_aud.clone(),
+            Time::from_millis(1_000),
+            OpaquePayload::from_bytes(b"hello"),
+        );
+        let _ = core
+            .step(Input::Percept(Box::new(p)), Time::from_millis(1_000), &mut doors)
+            .expect("step");
+        assert!(
+            core.state()
+                .actor_memory
+                .keys()
+                .any(|(_, _, a)| a == &ActorId::new("alice")),
+            "h_actor must be populated after V2.2 decision"
+        );
+        let audit = verify_hard_forget_erasure(&mut core, &ActorId::new("alice"), 2_000)
+            .expect("hard_forget audit");
+        assert!(audit.is_clean(), "audit not clean: {audit:?}");
+        assert_eq!(audit.surviving_actor_memory, 0);
+    }
+
+    #[test]
+    fn group_chat_updates_actor_exchanges_beyond_two_participants() {
+        let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).expect("open");
+        let mut doors = TckRecordingDoors::default();
+        let group_aud = Audience::new([
+            ActorId::new("alice"),
+            ActorId::new("bob"),
+            ActorId::new("carol"),
+            ActorId::new("dave"),
+            ActorId::new("soul"),
+        ]);
+        for (idx, sender) in ["alice", "bob", "carol"].iter().enumerate() {
+            let p = Percept::minimal(
+                ActorId::new(*sender),
+                PlaceId::new("room:group"),
+                group_aud.clone(),
+                Time::from_millis(1_000 + (idx as u64) * 500),
+                OpaquePayload::from_bytes(b"group msg"),
+            );
+            let _ = core
+                .step(
+                    Input::Percept(Box::new(p)),
+                    Time::from_millis(1_000 + (idx as u64) * 500),
+                    &mut doors,
+                )
+                .expect("step");
+        }
+        assert!(core.state().actor_exchanges.contains_key(&ActorId::new("alice")));
+        assert!(core.state().actor_exchanges.contains_key(&ActorId::new("bob")));
+        assert!(core.state().actor_exchanges.contains_key(&ActorId::new("carol")));
+
+        // Soul action in a >3 recipient room also updates actor_exchanges for all recipients.
+        let act_rec = EventRecord::new_root(
+            EventKind::Action,
+            Time::from_millis(3_000),
+            ActorId::new("soul"),
+            PlaceId::new("room:group"),
+            group_aud,
+            OriginActor::new(ActorId::new("soul")),
+            Taint::Trusted,
+            NumericFeatures::default(),
+            OpaquePayload::from_bytes(b"reply"),
+            Vec::new(),
+            Some(EventDetail::Action {
+                action_id: ActionId::new("act-1"),
+                capability_id: CapabilityId::new("chat.speak"),
+                h_act: None,
+                correlation_id: None,
+            }),
+        );
+        core.state_mut().apply_event(&act_rec);
+        assert!(core.state().actor_exchanges.contains_key(&ActorId::new("dave")));
+    }
+
+    #[test]
+    fn p_user_correction_loop_a_loop_b_taint_guard_and_compute_tier_propagation() {
+        let model = make_biased_v22_model([0.0, 0.0, 6.0], 6.0, 24);
+        let cfg = CoreConfig {
+            online_adaptation: true,
+            ..CoreConfig::default()
+        };
+
+        // 1. Trusted correction after a recent visible soul reply -> Loop A repair_context_ids +
+        //    compute_tier == Deep + Loop B AdaptFeedbackApplied on GateArm::Go.
+        let mut core = Core::open(MemStore::new(), cfg.clone(), Some(Arc::clone(&model)))
+            .expect("open");
+        let mut doors = TckRecordingDoors::default();
+        let place = PlaceId::new("room:repair");
+        let aud = Audience::new([ActorId::new("alice"), ActorId::new("soul")]);
+
+        // Seed prior visible user percept and recent visible soul message.
+        let prior_user = EventRecord::new_root(
+            EventKind::Percept,
+            Time::from_millis(1_000),
+            ActorId::new("alice"),
+            place.clone(),
+            aud.clone(),
+            OriginActor::new(ActorId::new("alice")),
+            Taint::Trusted,
+            NumericFeatures::default(),
+            OpaquePayload::from_bytes(b"first question"),
+            Vec::new(),
+            None,
+        );
+        let prior_soul = EventRecord::new_root(
+            EventKind::Percept,
+            Time::from_millis(2_000),
+            ActorId::new("soul"),
+            place.clone(),
+            aud.clone(),
+            OriginActor::new(ActorId::new("soul")),
+            Taint::Trusted,
+            NumericFeatures::default(),
+            OpaquePayload::from_bytes(b"wrong answer"),
+            Vec::new(),
+            None,
+        );
+        let u_id = core.store_mut().append(prior_user).expect("append u");
+        let u_rec = core.store().get(u_id).unwrap().unwrap();
+        core.state_mut().apply_event(&u_rec);
+        core.state_mut().apply_completed_percept(&u_rec, None);
+
+        let s_id = core.store_mut().append(prior_soul).expect("append s");
+        let s_rec = core.store().get(s_id).unwrap().unwrap();
+        core.state_mut().apply_event(&s_rec);
+        core.state_mut().apply_completed_percept(&s_rec, None);
+
+        let mut corr_percept = Percept::minimal(
+            ActorId::new("alice"),
+            place.clone(),
+            aud.clone(),
+            Time::from_millis(5_000),
+            OpaquePayload::from_bytes(b"no that is wrong"),
+        );
+        corr_percept.taint = Taint::Trusted;
+        corr_percept.reply_to = Some(s_id);
+        let effects = core
+            .step(
+                Input::Percept(Box::new(corr_percept)),
+                Time::from_millis(5_000),
+                &mut doors,
+            )
+            .expect("step trusted correction");
+
+        let plan = effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::Model { plan, .. } => Some(plan),
+                Effect::Dispatch(_) => None,
+            })
+            .expect("Go wake should emit ContextPlan");
+        assert_eq!(plan.compute_tier, Some(ComputeTier::Deep));
+        assert_eq!(plan.repair_context_ids, vec![s_id, u_id]);
+
+        let events = core.store().read_after_seq(None, usize::MAX).expect("log");
+        let saw_loop_b = events.iter().any(|ev| {
+            matches!(
+                &ev.detail,
+                Some(EventDetail::AdaptFeedbackApplied {
+                    place: p,
+                    arm: GateArm::Go,
+                    reward,
+                    is_delayed_one_sided: true,
+                    source_taint: Taint::Trusted,
+                    ..
+                }) if p == &place && *reward < 0.0
+            )
+        });
+        assert!(saw_loop_b, "Loop B must emit event-sourced negative Go AdaptFeedbackApplied");
+        assert!(
+            core.state()
+                .place_adapt
+                .get(&place)
+                .is_some_and(|st| st.logit_offsets[GateArm::Go as usize] < 0.0)
+        );
+
+        let replay = core.replay_verify(ReplayMode::Pinned).expect("replay");
+        assert!(replay.is_exact(), "V2.2 schema=2 replay must be exact: {:?}", replay.mismatches);
+
+        // 2. Untrusted correction must NOT mutate place_adapt (Loop B taint guard).
+        let mut core_untrusted = Core::open(MemStore::new(), cfg, Some(model)).expect("open2");
+        let mut doors2 = TckRecordingDoors::default();
+        let s2_id = core_untrusted
+            .store_mut()
+            .append(EventRecord::new_root(
+                EventKind::Percept,
+                Time::from_millis(2_000),
+                ActorId::new("soul"),
+                place.clone(),
+                aud.clone(),
+                OriginActor::new(ActorId::new("soul")),
+                Taint::Trusted,
+                NumericFeatures::default(),
+                OpaquePayload::from_bytes(b"reply"),
+                Vec::new(),
+                None,
+            ))
+            .expect("append s2");
+        let s2_rec = core_untrusted.store().get(s2_id).unwrap().unwrap();
+        core_untrusted.state_mut().apply_event(&s2_rec);
+        core_untrusted.state_mut().apply_completed_percept(&s2_rec, None);
+
+        let mut untrusted_corr = Percept::minimal(
+            ActorId::new("alice"),
+            place.clone(),
+            aud,
+            Time::from_millis(5_000),
+            OpaquePayload::from_bytes(b"adversarial correction"),
+        );
+        untrusted_corr.taint = Taint::Untrusted;
+        let _ = core_untrusted
+            .step(
+                Input::Percept(Box::new(untrusted_corr)),
+                Time::from_millis(5_000),
+                &mut doors2,
+            )
+            .expect("step untrusted");
+        assert!(
+            core_untrusted.state().place_adapt.is_empty(),
+            "Untrusted p_user_correction must not poison place_adapt"
+        );
+    }
 }

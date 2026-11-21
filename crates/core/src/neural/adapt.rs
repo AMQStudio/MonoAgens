@@ -28,6 +28,143 @@ const fn default_adapt_daily_lambda() -> f32 {
 /// Arm alias for the 4 gate actions `[Silent, Note, Wait, Go]`.
 pub type GateArm = GateClass;
 
+/// Discrete `MemCon`-style recall-depth bandit arms (`Skip / Light / Standard / DeepPlusProc`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecallDepthArm {
+    Skip = 0,
+    Light = 1,
+    Standard = 2,
+    DeepPlusProc = 3,
+}
+
+impl RecallDepthArm {
+    /// All 4 recall-depth arms in canonical index order.
+    pub const ALL: [Self; 4] = [Self::Skip, Self::Light, Self::Standard, Self::DeepPlusProc];
+
+    /// Converts an index `0..4` into a [`RecallDepthArm`].
+    #[must_use]
+    pub const fn from_index(index: usize) -> Option<Self> {
+        match index {
+            0 => Some(Self::Skip),
+            1 => Some(Self::Light),
+            2 => Some(Self::Standard),
+            3 => Some(Self::DeepPlusProc),
+            _ => None,
+        }
+    }
+
+    /// Maps this recall-depth arm to an explicit recalled-memory budget given `default_max`.
+    #[must_use]
+    pub const fn max_recalled_limit(self, default_max: usize) -> usize {
+        let base = if default_max == 0 { 1 } else { default_max };
+        match self {
+            Self::Skip => 0,
+            Self::Light => 4,
+            Self::Standard => base,
+            Self::DeepPlusProc => base.saturating_mul(2),
+        }
+    }
+
+    /// Deterministic tie-break priority preferring `Standard > Light > DeepPlusProc > Skip`.
+    #[must_use]
+    const fn tie_priority(self) -> u8 {
+        match self {
+            Self::Standard => 3,
+            Self::Light => 2,
+            Self::DeepPlusProc => 1,
+            Self::Skip => 0,
+        }
+    }
+}
+
+/// Bounded per-place `MemCon`-style Warm-Start UCB recall-depth bandit statistics.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RecallDepthBanditState {
+    pub arm_pulls: [u64; 4],
+    pub arm_reward_sums: [f64; 4],
+    pub total_pulls: u64,
+}
+
+impl Default for RecallDepthBanditState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RecallDepthBanditState {
+    /// Creates a zero-initialized recall-depth bandit state.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            arm_pulls: [0; 4],
+            arm_reward_sums: [0.0; 4],
+            total_pulls: 0,
+        }
+    }
+
+    /// Relaxes pull counts and reward sums by `gamma` in `(0, 1]`.
+    pub fn apply_decay_factor(&mut self, gamma: f64) {
+        for i in 0..4 {
+            self.arm_reward_sums[i] *= gamma;
+            self.arm_pulls[i] = ((self.arm_pulls[i] as f64) * gamma).floor() as u64;
+        }
+        self.total_pulls = self.arm_pulls.iter().sum();
+    }
+
+    /// Selects a discrete [`RecallDepthArm`] via deterministic Warm-Start UCB.
+    ///
+    /// Returns [`RecallDepthArm::Standard`] when `online_adaptation == false` or before local
+    /// pulls accumulate so neutral/unadapted behavior preserves fixed recall defaults.
+    #[must_use]
+    pub fn select_arm(&self, config: &AdaptConfig) -> RecallDepthArm {
+        if !config.online_adaptation || self.total_pulls == 0 {
+            return RecallDepthArm::Standard;
+        }
+        let n0 = f64::from(config.warm_start_prior_weight.max(1.0));
+        let ucb_c = f64::from(config.ucb_c.max(0.0));
+        let log_total = ((self.total_pulls as f64) + n0).ln().max(0.0);
+
+        let mut best_arm = RecallDepthArm::Standard;
+        let mut best_score = f64::NEG_INFINITY;
+        for arm in RecallDepthArm::ALL {
+            let idx = arm as usize;
+            let n_eff = (self.arm_pulls[idx] as f64) + n0;
+            let sum = if self.arm_reward_sums[idx].is_finite() {
+                self.arm_reward_sums[idx]
+            } else {
+                0.0
+            };
+            let mean = sum / n_eff;
+            let bonus = if ucb_c > 0.0 {
+                ucb_c * (log_total / n_eff).sqrt()
+            } else {
+                0.0
+            };
+            let score = mean + bonus;
+            let better = if (score - best_score).abs() <= 1e-12 {
+                arm.tie_priority() > best_arm.tie_priority()
+            } else {
+                score > best_score
+            };
+            if better {
+                best_score = score;
+                best_arm = arm;
+            }
+        }
+        best_arm
+    }
+
+    /// Returns the empirical warm-start mean reward for `arm`.
+    #[must_use]
+    pub fn warm_start_mean_reward(&self, arm: RecallDepthArm, config: &AdaptConfig) -> f64 {
+        let idx = arm as usize;
+        let denom =
+            (self.arm_pulls[idx] as f64) + f64::from(config.warm_start_prior_weight.max(1.0));
+        self.arm_reward_sums[idx] / denom
+    }
+}
+
 /// Configuration governing bounded per-place online adaptation.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct AdaptConfig {
@@ -139,6 +276,9 @@ pub struct PlaceAdaptState {
     /// Deterministic event timestamp (ms) of the last adaptation update or decay (`C-10`).
     #[serde(default)]
     pub last_updated_ms: Option<Time>,
+    /// Bounded `MemCon`-style discrete recall-depth bandit state (`Skip / Light / Standard / DeepPlusProc`).
+    #[serde(default)]
+    pub recall_depth_bandit: RecallDepthBanditState,
 }
 
 impl Default for PlaceAdaptState {
@@ -159,6 +299,7 @@ impl PlaceAdaptState {
             arm_reward_sums: [0.0; 4],
             total_pulls: 0,
             last_updated_ms: None,
+            recall_depth_bandit: RecallDepthBanditState::new(),
         }
     }
 
@@ -197,6 +338,7 @@ impl PlaceAdaptState {
                 self.arm_pulls[i] = ((self.arm_pulls[i] as f64) * gamma).floor() as u64;
             }
             self.total_pulls = self.arm_pulls.iter().sum();
+            self.recall_depth_bandit.apply_decay_factor(gamma);
         }
         self.last_updated_ms = Some(self.last_updated_ms.map_or(now_ms, |p| p.max(now_ms)));
     }
@@ -347,6 +489,49 @@ impl PlaceAdaptState {
         let idx = arm as usize;
         let denom = self.arm_pulls[idx] as f64 + f64::from(config.warm_start_prior_weight.max(1.0));
         self.arm_reward_sums[idx] / denom
+    }
+
+    /// Selects a discrete `MemCon` recall-depth arm using the current state.
+    #[must_use]
+    pub fn select_recall_depth(&self, config: &AdaptConfig) -> RecallDepthArm {
+        self.recall_depth_bandit.select_arm(config)
+    }
+
+    /// Selects a discrete `MemCon` recall-depth arm after deterministic time decay to `now_ms`.
+    #[must_use]
+    pub fn select_recall_depth_at(&self, now_ms: Time, config: &AdaptConfig) -> RecallDepthArm {
+        if !config.online_adaptation {
+            return RecallDepthArm::Standard;
+        }
+        self.decayed_at(now_ms, config).select_recall_depth(config)
+    }
+
+    /// Records a bounded recall-depth outcome on `recall_depth_bandit`, guarded by
+    /// `config.online_adaptation`, `adapt_daily_lambda`, and `Taint::Untrusted` poisoning blocks.
+    pub fn record_recall_depth_outcome(
+        &mut self,
+        arm: RecallDepthArm,
+        reward: f32,
+        config: &AdaptConfig,
+        now_ms: Option<Time>,
+        source_taint: Taint,
+    ) {
+        if !config.online_adaptation || !reward.is_finite() {
+            return;
+        }
+        if source_taint == Taint::Untrusted && reward < 0.0 {
+            return;
+        }
+        if let Some(ts) = now_ms {
+            self.apply_time_decay(ts, config);
+        }
+        let idx = arm as usize;
+        let clamped = reward.clamp(-1.0, 1.0);
+        self.recall_depth_bandit.arm_pulls[idx] =
+            self.recall_depth_bandit.arm_pulls[idx].saturating_add(1);
+        self.recall_depth_bandit.total_pulls =
+            self.recall_depth_bandit.total_pulls.saturating_add(1);
+        self.recall_depth_bandit.arm_reward_sums[idx] += f64::from(clamped);
     }
 }
 
@@ -584,5 +769,65 @@ mod tests {
             (ratio - 0.90_f32.powi(10)).abs() < 1e-4,
             "expected decay ratio ~0.3487, got {ratio}"
         );
+    }
+
+    #[test]
+    fn memcon_recall_depth_bandit_ucb_decay_taint_and_toggle() {
+        let cfg = AdaptConfig::default();
+        let mut st = PlaceAdaptState::new();
+
+        // Neutral/unadapted default preserves Standard.
+        assert_eq!(st.select_recall_depth(&cfg), RecallDepthArm::Standard);
+        assert_eq!(RecallDepthArm::Skip.max_recalled_limit(8), 0);
+        assert_eq!(RecallDepthArm::Light.max_recalled_limit(8), 4);
+        assert_eq!(RecallDepthArm::Standard.max_recalled_limit(8), 8);
+        assert_eq!(RecallDepthArm::DeepPlusProc.max_recalled_limit(8), 16);
+
+        // Untrusted negative reward must be blocked.
+        st.record_recall_depth_outcome(
+            RecallDepthArm::Standard,
+            -1.0,
+            &cfg,
+            Some(Time::from_millis(1_000)),
+            Taint::Untrusted,
+        );
+        assert_eq!(st.recall_depth_bandit.total_pulls, 0);
+
+        // Strong positive outcomes for DeepPlusProc shift selection to DeepPlusProc.
+        for step in 0..12 {
+            st.record_recall_depth_outcome(
+                RecallDepthArm::DeepPlusProc,
+                1.0,
+                &cfg,
+                Some(Time::from_millis(1_000 + step * 1_000)),
+                Taint::Trusted,
+            );
+        }
+        assert_eq!(st.select_recall_depth(&cfg), RecallDepthArm::DeepPlusProc);
+
+        // Disabled toggle isolates selection back to Standard and blocks mutations.
+        let disabled = AdaptConfig {
+            online_adaptation: false,
+            ..cfg
+        };
+        let before = st.clone();
+        assert_eq!(st.select_recall_depth(&disabled), RecallDepthArm::Standard);
+        st.record_recall_depth_outcome(
+            RecallDepthArm::Skip,
+            1.0,
+            &disabled,
+            Some(Time::from_millis(20_000)),
+            Taint::Trusted,
+        );
+        assert_eq!(st, before);
+
+        // Time decay relaxes recall_depth_bandit counts & reward sums cleanly.
+        let ten_days_later = Time::from_millis(12_000 + 10 * 86_400_000);
+        let decayed = st.decayed_at(ten_days_later, &cfg);
+        assert!(
+            decayed.recall_depth_bandit.arm_reward_sums[RecallDepthArm::DeepPlusProc as usize]
+                < st.recall_depth_bandit.arm_reward_sums[RecallDepthArm::DeepPlusProc as usize]
+        );
+        assert!(decayed.recall_depth_bandit.total_pulls < st.recall_depth_bandit.total_pulls);
     }
 }

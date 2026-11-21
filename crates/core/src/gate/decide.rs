@@ -9,7 +9,7 @@ use crate::config::CoreConfig;
 use crate::event::DecisionOutcome;
 use crate::neural::{
     DEFAULT_H_DIM, FEATURE_SCHEMA_VERSION, GateClass, NeuralModel, NeuralOutputs, PlaceAdaptState,
-    forward_step, neutral_outputs,
+    forward_step_with_actor, neutral_outputs_with_actor,
 };
 use crate::rng::SeededRng;
 
@@ -167,6 +167,33 @@ pub fn decide_gate(
     place_adapt: Option<&PlaceAdaptState>,
     commitments: CommitmentInputs,
 ) -> GateOutcome {
+    decide_gate_with_actor(
+        event_id,
+        config,
+        model,
+        e_256,
+        x_num,
+        h_prev,
+        None,
+        place_adapt,
+        commitments,
+    )
+}
+
+/// Evaluates the V2.2 Neural Cognitive Controller gate with optional audience-scoped `h_actor_prev`.
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn decide_gate_with_actor(
+    event_id: EventId,
+    config: &CoreConfig,
+    model: Option<&NeuralModel>,
+    e_256: &[f32],
+    x_num: &[f32],
+    h_prev: &[f32],
+    h_actor_prev: Option<&[f32]>,
+    place_adapt: Option<&PlaceAdaptState>,
+    commitments: CommitmentInputs,
+) -> GateOutcome {
     let adapt_cfg = config.effective_adapt_config();
     let adapt_arg = if adapt_cfg.online_adaptation {
         place_adapt.map(|st| (st, &adapt_cfg))
@@ -174,10 +201,11 @@ pub fn decide_gate(
         None
     };
 
-    let neural = forward_step(model, e_256, x_num, h_prev, adapt_arg).unwrap_or_else(|_| {
-        let zeros = vec![0.0_f32; h_prev.len().max(DEFAULT_H_DIM)];
-        neutral_outputs(&zeros)
-    });
+    let neural = forward_step_with_actor(model, e_256, x_num, h_prev, h_actor_prev, adapt_arg)
+        .unwrap_or_else(|_| {
+            let zeros = vec![0.0_f32; h_prev.len().max(DEFAULT_H_DIM)];
+            neutral_outputs_with_actor(&zeros, h_actor_prev)
+        });
 
     let model_blake3 = model.map(|m| m.blake3);
     let schema_ver = model.map_or(FEATURE_SCHEMA_VERSION, |m| {

@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use monoagens_core::blake3;
-use monoagens_core::neural::{NeuralModel, forward_step};
+use monoagens_core::neural::{NeuralModel, forward_step_with_actor};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -36,6 +36,12 @@ struct GoldenStep {
     expected_p_encode_importance: Option<f32>,
     #[serde(default)]
     expected_p_memory_relevance: Option<f32>,
+    #[serde(default)]
+    expected_h_actor_next: Option<Vec<f32>>,
+    #[serde(default)]
+    expected_compute_tier_probs: Option<[f32; 3]>,
+    #[serde(default)]
+    expected_p_user_correction: Option<f32>,
 }
 
 fn assert_opt_f32_close(label: &str, actual: Option<f32>, expected: Option<f32>, tol: f32) -> f32 {
@@ -50,7 +56,12 @@ fn assert_opt_f32_close(label: &str, actual: Option<f32>, expected: Option<f32>,
     }
 }
 
-fn verify_golden_fixture(filename: &str, expect_phase2: bool, expect_phase3: bool) {
+fn verify_golden_fixture(
+    filename: &str,
+    expect_phase2: bool,
+    expect_phase3: bool,
+    expect_v22: bool,
+) {
     let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let json_path = fixtures_dir.join(filename);
     let json_text = fs::read_to_string(&json_path)
@@ -80,11 +91,24 @@ fn verify_golden_fixture(filename: &str, expect_phase2: bool, expect_phase3: boo
             .expect("load safetensors parity model");
         assert_eq!(model.phase2.is_some(), expect_phase2);
         assert_eq!(model.phase3.is_some(), expect_phase3);
+        assert_eq!(model.v22_heads.is_some(), expect_v22);
         let mut h_prev = vec![0.0_f32; model.config.h_dim];
+        let mut h_actor_prev = if model.config.h_actor_dim > 0 {
+            Some(vec![0.0_f32; model.config.h_actor_dim])
+        } else {
+            None
+        };
 
         for (step_idx, step) in case.steps.iter().enumerate() {
-            let out = forward_step(Some(&model), &step.e_256, &step.x_num, &h_prev, None)
-                .expect("rust forward_step");
+            let out = forward_step_with_actor(
+                Some(&model),
+                &step.e_256,
+                &step.x_num,
+                &h_prev,
+                h_actor_prev.as_deref(),
+                None,
+            )
+            .expect("rust forward_step_with_actor");
 
             for g in 0..4 {
                 let d_logit = (out.gate_logits[g] - step.expected_gate_logits[g]).abs();
@@ -156,6 +180,28 @@ fn verify_golden_fixture(filename: &str, expect_phase2: bool, expect_phase3: boo
                 TOL,
             ));
 
+            if expect_v22 {
+                let exp_ct_probs = step
+                    .expected_compute_tier_probs
+                    .expect("expected_compute_tier_probs");
+                let act_ct_probs = out.compute_tier_probs.expect("rust compute_tier_probs");
+                for t in 0..3 {
+                    let d = (act_ct_probs[t] - exp_ct_probs[t]).abs();
+                    max_abs_diff = max_abs_diff.max(d);
+                    assert!(
+                        d <= TOL,
+                        "{} step {step_idx} compute_tier_probs[{t}] diff {d} > {TOL}",
+                        case.name
+                    );
+                }
+                max_abs_diff = max_abs_diff.max(assert_opt_f32_close(
+                    &format!("{} step {step_idx} p_user_correction", case.name),
+                    out.p_user_correction,
+                    step.expected_p_user_correction,
+                    TOL,
+                ));
+            }
+
             assert_eq!(out.h_next.len(), step.expected_h_next.len());
             for (i, (&r_h, &p_h)) in out.h_next.iter().zip(&step.expected_h_next).enumerate() {
                 let d_h = (r_h - p_h).abs();
@@ -165,6 +211,20 @@ fn verify_golden_fixture(filename: &str, expect_phase2: bool, expect_phase3: boo
                     "{} step {step_idx} h_next[{i}] diff {d_h} > {TOL} (rust={r_h}, py={p_h})",
                     case.name
                 );
+            }
+
+            if let Some(ref exp_ha) = step.expected_h_actor_next {
+                assert_eq!(out.h_actor_next.len(), exp_ha.len());
+                for (i, (&r_a, &p_a)) in out.h_actor_next.iter().zip(exp_ha).enumerate() {
+                    let d_a = (r_a - p_a).abs();
+                    max_abs_diff = max_abs_diff.max(d_a);
+                    assert!(
+                        d_a <= TOL,
+                        "{} step {step_idx} h_actor_next[{i}] diff {d_a} > {TOL} (rust={r_a}, py={p_a})",
+                        case.name
+                    );
+                }
+                h_actor_prev = Some(out.h_actor_next.clone());
             }
 
             h_prev = out.h_next;
@@ -179,15 +239,20 @@ fn verify_golden_fixture(filename: &str, expect_phase2: bool, expect_phase3: boo
 
 #[test]
 fn python_rust_neural_forward_parity_within_1e_5() {
-    verify_golden_fixture("neural_phase1_golden.json", false, false);
+    verify_golden_fixture("neural_phase1_golden.json", false, false, false);
 }
 
 #[test]
 fn python_rust_phase2_neural_forward_parity_within_1e_5() {
-    verify_golden_fixture("neural_phase2_golden.json", true, false);
+    verify_golden_fixture("neural_phase2_golden.json", true, false, false);
 }
 
 #[test]
 fn python_rust_phase3_neural_forward_parity_within_1e_5() {
-    verify_golden_fixture("neural_phase3_golden.json", true, true);
+    verify_golden_fixture("neural_phase3_golden.json", true, true, false);
+}
+
+#[test]
+fn python_rust_v22_neural_forward_parity_within_1e_5() {
+    verify_golden_fixture("neural_v22_golden.json", true, true, true);
 }

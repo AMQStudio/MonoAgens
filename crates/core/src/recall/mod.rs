@@ -7,8 +7,8 @@ pub mod recollection;
 
 pub use crate::privacy::visible_scope;
 pub use engine::{
-    DEFAULT_TEXT_TOP_K, DEFAULT_VECTOR_TOP_K, RecallQuery, RecallResult, RecalledItem, run_recall,
-    run_recall_with_model,
+    DEFAULT_TEXT_TOP_K, DEFAULT_VECTOR_TOP_K, RecallQuery, RecallResult, RecallTimeMode,
+    RecalledItem, partition_recalled_and_cited, run_recall, run_recall_with_model,
 };
 pub use importance::{ImportanceInputs, compute_importance};
 pub use recollection::{

@@ -101,6 +101,7 @@ pub(crate) fn execute_turn<S: Store>(
                     is_dyadic_chat: false,
                     answered: 0.0,
                     channel: percept.channel.clone(),
+                    peer_expertise_margin: percept.peer_expertise_margin,
                 }),
             );
             if let Some(reply_to) = percept.reply_to {
@@ -553,6 +554,33 @@ pub(crate) fn execute_turn<S: Store>(
             }
 
             if let Some(gate) = gate_outcome {
+                // V2.2 p_user_correction Loop B: emit event-sourced propensity-weighted delayed
+                // negative AdaptFeedbackApplied on GateArm::Go when calibrated p_user_correction
+                // >= 0.65 follows a recent visible soul act, strictly subject to Taint & online_adaptation guards.
+                if let Some(p_corr) = gate.neural.p_user_correction
+                    && p_corr.is_finite()
+                    && p_corr >= crate::neural::USER_CORRECTION_REPAIR_THRESHOLD
+                    && stored.actor != core.state().soul_actor_id
+                    && core
+                        .state()
+                        .decision_v22_hints
+                        .get(&stored.id)
+                        .is_some_and(|h| !h.repair_context_ids.is_empty())
+                {
+                    let p_go = gate.neural.gate_probs[3].max(0.15);
+                    let reward = -0.35 * (p_corr / p_go).clamp(0.0, 1.0);
+                    record_place_adapt_feedback(
+                        core,
+                        Some(&stored),
+                        &stored.place,
+                        GateArm::Go,
+                        reward,
+                        true,
+                        stored.taint,
+                        now,
+                    )?;
+                }
+
                 if matches!(
                     gate.outcome,
                     DecisionOutcome::Note | DecisionOutcome::Silent

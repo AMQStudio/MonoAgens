@@ -14,13 +14,17 @@ use crate::event::LogSeq;
 
 pub use episodes::{
     EpisodeAdmitParams, EpisodeBook, EpisodeEventOutcome, EpisodeRecord, EpisodeState,
-    participant_jaccard,
+    MAX_ACTIVE_THREADS_PER_SCOPE, canonical_audience_hash, participant_jaccard,
 };
-pub use fade::{FadeCandidate, select_fade_candidates};
+pub use fade::{
+    DEFAULT_MAX_FADE_FRACTION, FadeCandidate, PREFERENCE_ANCHOR_CONCEPT,
+    is_protected_preference_anchor, select_fade_candidates, select_fade_candidates_guarded,
+};
 pub use skills::{
-    ExtractProcedureParams, FailureEpisodeRecord, LessonEntry, ProcedureLifecycleState,
-    ProcedureMonitorOutcome, RecordLessonParams, RegisterProcedureParams, SkillBook,
-    SuccessEpisodeRecord, TrackedProcedure, compute_procedure_schema_hash, schema_matches_catalog,
+    DEFAULT_PROC_UCB_C, ExtractProcedureParams, FailureEpisodeRecord, LessonEntry,
+    ProcedureLifecycleState, ProcedureMonitorOutcome, RecordLessonParams, RegisterProcedureParams,
+    SkillBook, SuccessEpisodeRecord, TrackedProcedure, compute_procedure_schema_hash,
+    schema_matches_catalog,
 };
 
 /// Evaluated sleep trigger decision at time `now_ms`.

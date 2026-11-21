@@ -8,9 +8,9 @@
 //! # Canonical `safetensors` Contract (Python ↔ Rust 1-to-1 Parity)
 //!
 //! ## Required `__metadata__` Keys (UTF-8 decimal/string values)
-//! - `feature_schema_version`: positive integer (e.g. `"1"` for `256d` emb + `18d` `x_num`)
+//! - `feature_schema_version`: `"1"` (`18d` `x_num`) or `"2"` (`32d` `x_num`)
 //! - `d_in_emb`: embedding input width (e.g. `"256"`)
-//! - `d_in_num`: numeric feature vector width (e.g. `"18"`)
+//! - `d_in_num`: numeric feature vector width (`"18"` for schema v1, `"32"` for schema v2)
 //! - `d_e`: projected embedding width (e.g. `"64"` or `"128"`)
 //! - `d_n`: projected `PLR` numeric feature width (e.g. `"32"` or `"64"`)
 //! - `d_model`: trunk hidden width (e.g. `"128"` or `"256"`)
@@ -25,6 +25,8 @@
 //! ## Optional `__metadata__` Keys
 //! - `has_phase2_heads`: `"true"` or `"false"` (default `"false"`)
 //! - `has_phase3_heads`: `"true"` or `"false"` (default `"false"`)
+//! - `has_v22_heads`: `"true"` or `"false"` (default `"false"`)
+//! - `h_actor_dim`: non-negative integer string (default `"0"`; V2.2 uses `"24"` or `"32"`)
 //! - `plr_n_frequencies`: if present, must match `stem.plr.freqs.shape[1]`
 //! - `d_ff`: if present, must match `trunk.blocks.0.w_gate.weight.shape[0]`
 //!
@@ -38,7 +40,7 @@
 //! - `stem.plr.freqs`: `[d_in_num, n_freq]` (`n_freq >= 1`)
 //! - `stem.plr.linear.weight`: `[d_n, d_in_num * 2 * n_freq]`
 //! - `stem.plr.linear.bias`: `[d_n]`
-//! - `stem.fusion.weight`: `[d_model, d_e + d_n + h_dim]`
+//! - `stem.fusion.weight`: `[d_model, d_e + d_n + h_dim + h_actor_dim]`
 //! - `stem.fusion.bias`: `[d_model]`
 //!
 //! ### `TabM` + Pre-LN Residual SwiGLU Trunk (`l = 0..n_layers`)
@@ -94,16 +96,25 @@ use core::fmt;
 
 use serde::{Deserialize, Serialize};
 
-pub use adapt::{AdaptConfig, AdaptFeedback, GateArm, PlaceAdaptState};
-pub use features::{
-    FEATURE_SCHEMA_VERSION, NumericFeatureInputs, cosine_similarity, extract_embedding_for_model,
-    extract_embedding_for_model_config, extract_features_from_state, extract_fmodal,
-    extract_x_num, extract_x_num_with_fmodal, zero_embedding,
+pub use adapt::{
+    AdaptConfig, AdaptFeedback, GateArm, PlaceAdaptState, RecallDepthArm, RecallDepthBanditState,
 };
-pub use forward::{NeuralOutputs, forward_step, neutral_outputs};
+pub use features::{
+    DEFAULT_NUM_FEATURES_V1, DEFAULT_NUM_FEATURES_V2, FEATURE_SCHEMA_VERSION,
+    FEATURE_SCHEMA_VERSION_V1, FEATURE_SCHEMA_VERSION_V2, NumericFeatureInputs,
+    NumericFeatureInputsV2, RECENT_SOUL_REPAIR_WINDOW_MS, VisibleRepairContext,
+    canonical_audience_hash, cosine_similarity, extract_embedding_for_model,
+    extract_embedding_for_model_config, extract_features_from_state,
+    extract_features_v2_from_state, extract_fmodal, extract_visible_repair_context, extract_x_num,
+    extract_x_num_v2, extract_x_num_with_fmodal, zero_embedding,
+};
+pub use forward::{
+    NeuralOutputs, forward_step, forward_step_with_actor, neutral_outputs,
+    neutral_outputs_with_actor,
+};
 pub use weights::{
     CellType, NeuralModel, NeuralModelConfig, Phase2HeadWeights, Phase3HeadWeights,
-    RecurrentCellWeights, SwiGluBlockWeights,
+    RecurrentCellWeights, SwiGluBlockWeights, V22HeadWeights,
 };
 
 /// Default per-place recurrent working memory dimension.
@@ -112,8 +123,11 @@ pub const DEFAULT_H_DIM: usize = 64;
 /// Default `EmbeddingGemma 2` frozen input width.
 pub const DEFAULT_EMB_DIM: usize = 256;
 
-/// Default V2 model-agnostic numeric feature count (`x_num`).
+/// Default V2 model-agnostic numeric feature count (`x_num`, schema v1 = `18`).
 pub const DEFAULT_NUM_FEATURES: usize = 18;
+
+/// Default `p_user_correction` threshold for Loop A repair metadata & Loop B delayed negative Go feedback.
+pub const USER_CORRECTION_REPAIR_THRESHOLD: f32 = 0.65;
 
 /// Errors produced during neural weight loading, validation, or inference.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -220,5 +234,72 @@ impl GateClass {
             3 => Some(Self::Go),
             _ => None,
         }
+    }
+}
+
+/// V2.2 compute-tier class index mapping for `head.compute_tier` `[Fast, Standard, Deep]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComputeTier {
+    Fast = 0,
+    Standard = 1,
+    Deep = 2,
+}
+
+impl ComputeTier {
+    /// Returns all 3 compute tiers in canonical logit index order.
+    pub const ALL: [Self; 3] = [Self::Fast, Self::Standard, Self::Deep];
+
+    /// Converts an index `0..3` into a [`ComputeTier`].
+    #[must_use]
+    pub const fn from_index(index: usize) -> Option<Self> {
+        match index {
+            0 => Some(Self::Fast),
+            1 => Some(Self::Standard),
+            2 => Some(Self::Deep),
+            _ => None,
+        }
+    }
+
+    /// Canonical binary code for snapshot / event encoding.
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        match self {
+            Self::Fast => 0,
+            Self::Standard => 1,
+            Self::Deep => 2,
+        }
+    }
+
+    /// Decodes a canonical binary code into a [`ComputeTier`].
+    #[must_use]
+    pub const fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(Self::Fast),
+            1 => Some(Self::Standard),
+            2 => Some(Self::Deep),
+            _ => None,
+        }
+    }
+
+    /// Applies the deterministic `ODAR` epistemic escalation floor:
+    /// - If `p_verify >= 0.70 || epistemic_uncertainty >= 0.35`, escalates `Fast -> Standard`.
+    /// - If `p_verify >= 0.85 || epistemic_uncertainty >= 0.55`, escalates `Standard -> Deep`.
+    #[must_use]
+    pub fn escalate_with_odar(self, p_verify: Option<f32>, epistemic_uncertainty: f32) -> Self {
+        let mut tier = self;
+        let pv = p_verify.filter(|v| v.is_finite()).unwrap_or(0.0);
+        let unc = if epistemic_uncertainty.is_finite() {
+            epistemic_uncertainty
+        } else {
+            0.0
+        };
+        if tier == Self::Fast && (pv >= 0.70 || unc >= 0.35) {
+            tier = Self::Standard;
+        }
+        if tier == Self::Standard && (pv >= 0.85 || unc >= 0.55) {
+            tier = Self::Deep;
+        }
+        tier
     }
 }

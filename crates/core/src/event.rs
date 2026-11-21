@@ -544,6 +544,8 @@ pub enum EventDetail {
         answered: f64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         channel: Option<ChannelId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        peer_expertise_margin: Option<f32>,
     },
     Withheld {
         target_event_id: EventId,
@@ -1480,8 +1482,17 @@ fn encode_opt_detail(w: &mut BinWriter, detail: Option<&EventDetail>) {
                 }
                 match trace {
                     Some(tr) => {
-                        w.u8(1);
-                        encode_decision_trace(w, tr);
+                        let has_v22 = !tr.neural.h_actor_next.is_empty()
+                            || tr.neural.compute_tier_probs.is_some()
+                            || tr.neural.compute_tier.is_some()
+                            || tr.neural.p_user_correction.is_some();
+                        if has_v22 {
+                            w.u8(2);
+                            encode_decision_trace(w, tr, true);
+                        } else {
+                            w.u8(1);
+                            encode_decision_trace(w, tr, false);
+                        }
                     }
                     None => w.u8(0),
                 }
@@ -1496,8 +1507,9 @@ fn encode_opt_detail(w: &mut BinWriter, detail: Option<&EventDetail>) {
             is_dyadic_chat,
             answered,
             channel,
+            peer_expertise_margin,
         } => {
-            w.u8(13);
+            w.u8(if peer_expertise_margin.is_some() { 42 } else { 13 });
             w.u32(addressees.len() as u32);
             for a in addressees {
                 w.str(a.as_str());
@@ -1521,6 +1533,9 @@ fn encode_opt_detail(w: &mut BinWriter, detail: Option<&EventDetail>) {
             w.u8(u8::from(*is_dyadic_chat));
             w.f64(*answered);
             w.opt_str(channel.as_ref().map(ChannelId::as_str));
+            if let Some(margin) = peer_expertise_margin {
+                w.f32(*margin);
+            }
         }
         EventDetail::Withheld {
             target_event_id,
@@ -2389,7 +2404,8 @@ fn decode_opt_detail(r: &mut BinReader<'_>) -> Result<Option<EventDetail>, Event
             };
             let trace = match r.u8()? {
                 0 => None,
-                1 => Some(Box::new(decode_decision_trace(r)?)),
+                1 => Some(Box::new(decode_decision_trace(r, false)?)),
+                2 => Some(Box::new(decode_decision_trace(r, true)?)),
                 tag => {
                     return Err(EventFormatError::MalformedRecord(format!(
                         "invalid opt decision trace tag {tag}"
@@ -2407,7 +2423,7 @@ fn decode_opt_detail(r: &mut BinReader<'_>) -> Result<Option<EventDetail>, Event
                 trace,
             }))
         }
-        12 | 13 => {
+        12 | 13 | 42 => {
             let addr_len = r.u32()? as usize;
             let mut addressees = Vec::with_capacity(addr_len.min(256));
             for _ in 0..addr_len {
@@ -2442,11 +2458,12 @@ fn decode_opt_detail(r: &mut BinReader<'_>) -> Result<Option<EventDetail>, Event
             }
             let is_dyadic_chat = r.u8()? != 0;
             let answered = r.f64()?;
-            let channel = if tag == 13 {
+            let channel = if tag == 13 || tag == 42 {
                 r.opt_string()?.map(ChannelId::new)
             } else {
                 None
             };
+            let peer_expertise_margin = if tag == 42 { Some(r.f32()?) } else { None };
             Ok(Some(EventDetail::PerceptMeta {
                 addressees,
                 named,
@@ -2456,6 +2473,7 @@ fn decode_opt_detail(r: &mut BinReader<'_>) -> Result<Option<EventDetail>, Event
                 is_dyadic_chat,
                 answered,
                 channel,
+                peer_expertise_margin,
             }))
         }
         14 => {
@@ -3434,7 +3452,7 @@ fn decode_opt_f32(r: &mut BinReader<'_>) -> Result<Option<f32>, EventFormatError
     }
 }
 
-fn encode_decision_trace(w: &mut BinWriter, tr: &DecisionTrace) {
+fn encode_decision_trace(w: &mut BinWriter, tr: &DecisionTrace, include_v22: bool) {
     let n = &tr.neural;
     for &x in &n.gate_logits {
         w.f32(x);
@@ -3480,9 +3498,35 @@ fn encode_decision_trace(w: &mut BinWriter, tr: &DecisionTrace) {
     w.f64(tr.probability);
     w.u8(tr.outcome.code());
     w.u8(tr.reason.code());
+    if include_v22 {
+        w.u32(n.h_actor_next.len() as u32);
+        for &x in &n.h_actor_next {
+            w.f32(x);
+        }
+        match n.compute_tier_probs {
+            Some(probs) => {
+                w.u8(1);
+                for x in probs {
+                    w.f32(x);
+                }
+            }
+            None => w.u8(0),
+        }
+        match n.compute_tier {
+            Some(tier) => {
+                w.u8(1);
+                w.u8(tier.code());
+            }
+            None => w.u8(0),
+        }
+        encode_opt_f32(w, n.p_user_correction);
+    }
 }
 
-fn decode_decision_trace(r: &mut BinReader<'_>) -> Result<DecisionTrace, EventFormatError> {
+fn decode_decision_trace(
+    r: &mut BinReader<'_>,
+    include_v22: bool,
+) -> Result<DecisionTrace, EventFormatError> {
     let mut gate_logits = [0.0_f32; 4];
     for slot in &mut gate_logits {
         *slot = r.f32()?;
@@ -3563,6 +3607,41 @@ fn decode_decision_trace(r: &mut BinReader<'_>) -> Result<DecisionTrace, EventFo
         EventFormatError::MalformedRecord(format!("invalid trace reason code {rsn_code}"))
     })?;
 
+    let (h_actor_next, compute_tier_probs, compute_tier, p_user_correction) = if include_v22 {
+        let ha_len = r.u32()? as usize;
+        let mut ha = Vec::with_capacity(ha_len.min(512));
+        for _ in 0..ha_len {
+            ha.push(r.f32()?);
+        }
+        let ct_probs = match r.u8()? {
+            0 => None,
+            1 => Some([r.f32()?, r.f32()?, r.f32()?]),
+            tag => {
+                return Err(EventFormatError::MalformedRecord(format!(
+                    "invalid opt compute_tier_probs tag {tag}"
+                )));
+            }
+        };
+        let ct = match r.u8()? {
+            0 => None,
+            1 => {
+                let c = r.u8()?;
+                Some(crate::neural::ComputeTier::from_code(c).ok_or_else(|| {
+                    EventFormatError::MalformedRecord(format!("invalid compute_tier code {c}"))
+                })?)
+            }
+            tag => {
+                return Err(EventFormatError::MalformedRecord(format!(
+                    "invalid opt compute_tier tag {tag}"
+                )));
+            }
+        };
+        let p_corr = decode_opt_f32(r)?;
+        (ha, ct_probs, ct, p_corr)
+    } else {
+        (Vec::new(), None, None, None)
+    };
+
     Ok(DecisionTrace {
         neural: NeuralOutputs {
             gate_logits,
@@ -3572,10 +3651,14 @@ fn decode_decision_trace(r: &mut BinReader<'_>) -> Result<DecisionTrace, EventFo
             epistemic_uncertainty,
             cic_abstain,
             h_next,
+            h_actor_next,
             p_uncertainty,
             p_verify,
             p_encode_importance,
             p_memory_relevance,
+            compute_tier_probs,
+            compute_tier,
+            p_user_correction,
             model_blake3: neural_model_blake3,
             feature_schema_version: neural_schema_version,
             is_neutral_fallback,
@@ -4044,6 +4127,7 @@ mod tests {
                 is_dyadic_chat: true,
                 answered: 0.0,
                 channel: None,
+                peer_expertise_margin: Some(0.25),
             },
             EventDetail::Withheld {
                 target_event_id: EventId::new(2),
