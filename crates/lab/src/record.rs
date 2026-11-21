@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use monoagens_core::{ModelPurpose, Switches};
+use monoagens_core::ModelPurpose;
 use serde::{Deserialize, Serialize};
 
 use crate::LabError;
@@ -151,16 +151,17 @@ pub struct RunRecord {
     pub schema_version: String,
     pub run_id: String,
     pub core_version: String,
-    pub prior_content_version: String,
-    pub prior_format_version: u32,
-    pub prior_digest: String,
+    pub config_format_version: u32,
+    pub config_digest: String,
+    #[serde(default)]
+    pub model_blake3: Option<String>,
+    #[serde(default)]
+    pub online_adaptation: bool,
     /// Number of events `Core::open` appended before the first scenario input.
     pub open_offset: u64,
     pub model_id: String,
     pub embedder_id: String,
     pub door_rules: Vec<String>,
-    pub switches: Switches,
-    pub learning_switches: BTreeMap<String, bool>,
     pub seed: u64,
     pub scenario_id: String,
     pub scenario_set: ScenarioSet,
@@ -179,25 +180,11 @@ pub struct RunRecord {
 }
 
 impl RunRecord {
-    /// Derives the learning-switch summary map from [`Switches`].
-    #[must_use]
-    pub fn learning_switches_from(switches: &Switches) -> BTreeMap<String, bool> {
-        let mut map = BTreeMap::new();
-        map.insert("bounded_learning".to_owned(), switches.bounded_learning);
-        map.insert("credence".to_owned(), switches.credence);
-        map.insert(
-            "self_mechanics_guide".to_owned(),
-            switches.self_mechanics_guide,
-        );
-        map
-    }
-
     /// Returns `true` only for a live run that exercised the full MonoAgens: production prompt
-    /// rendering, all switches on, live history, and `monoagens_mode = "full"`.
+    /// rendering, live history, and `monoagens_mode = "full"`.
     #[must_use]
     pub fn is_full_monoagens(&self) -> bool {
         self.monoagens_mode.as_deref() == Some(MONOAGENS_MODE_FULL)
-            && self.switches == Switches::all_enabled()
             && self.history_reasoning_mode.as_deref() != Some("scripted_silent")
             && self
                 .dataset_provenance
@@ -229,9 +216,10 @@ impl RunRecord {
             "schema_version": self.schema_version,
             "run_id": self.run_id,
             "core_version": self.core_version,
-            "prior_content_version": self.prior_content_version,
-            "prior_format_version": self.prior_format_version,
-            "prior_digest": self.prior_digest,
+            "config_format_version": self.config_format_version,
+            "config_digest": self.config_digest,
+            "model_blake3": self.model_blake3,
+            "online_adaptation": self.online_adaptation,
             "open_offset": self.open_offset,
             "model_id": self.model_id,
             "embedder_id": self.embedder_id,

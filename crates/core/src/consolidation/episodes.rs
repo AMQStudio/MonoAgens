@@ -1,19 +1,20 @@
 //! `{open, provisional, sealed}` episode lifecycle per place, seamless reopening with
-//! `superseded_by` linkage (`A-05`), monotonic `min(trust)` taint propagation, and overlap-gated
-//! episode merging (`R-24`).
+//! `superseded_by` linkage, monotonic `min(trust)` taint propagation, and overlap-gated
+//! episode merging.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use monoagens_protocol::{ActorId, EventId, PlaceId, TaggedEmbedding, Taint, Time};
 use serde::{Deserialize, Serialize};
 
-use crate::consolidation::boundaries::{
-    BoundaryEvaluation, BoundaryInputs, PlaceBoundaryState, participant_jaccard,
-};
-use crate::prior::Prior;
-use crate::registry::Switches;
+use crate::config::CoreConfig;
 
-/// Three-state episode lifecycle (`A-05`).
+const DEFAULT_EPISODE_GAP_MS: u64 = 1_800_000;
+const DEFAULT_N_EP_MIN: usize = 3;
+const DEFAULT_MERGE_JACCARD_MIN: f64 = 0.5;
+const DEFAULT_MERGE_GAP_MS: u64 = 3_600_000;
+
+/// Three-state episode lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EpisodeState {
@@ -43,7 +44,18 @@ impl EpisodeState {
     }
 }
 
-/// Tracked episodic segment for one place (`A-05`, `R-24`).
+/// Computes Jaccard overlap `|A ∩ B| / |A ∪ B|` across participant sets (`0.0` if both empty).
+#[must_use]
+pub fn participant_jaccard(a: &BTreeSet<ActorId>, b: &BTreeSet<ActorId>) -> f64 {
+    if a.is_empty() && b.is_empty() {
+        return 0.0;
+    }
+    let inter = a.intersection(b).count() as f64;
+    let union = a.union(b).count() as f64;
+    if union <= 0.0 { 0.0 } else { inter / union }
+}
+
+/// Tracked episodic segment for one place.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EpisodeRecord {
     pub episode_id: EventId,
@@ -62,22 +74,19 @@ pub struct EpisodeRecord {
 }
 
 /// Outcome of admitting an event into [`EpisodeBook`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EpisodeEventOutcome {
     pub episode_id: EventId,
-    /// If a `Provisional` episode reopened smoothly, returns `(stale_gist_id, reopening_event_id)`.
     pub reopened_stale_gist: Option<(EventId, EventId)>,
-    /// If a prior `Open`/`Provisional` episode became `Sealed` on boundary, returns its ID.
     pub sealed_episode_id: Option<EventId>,
-    pub boundary_eval: BoundaryEvaluation,
+    pub is_boundary: bool,
 }
 
-/// Per-place episode manager and unconsolidated backlog tracker (`A-05`, `A-06`, `R-24`).
+/// Per-place episode manager and unconsolidated backlog tracker.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct EpisodeBook {
     pub episodes: BTreeMap<EventId, EpisodeRecord>,
     pub active_by_place: BTreeMap<PlaceId, EventId>,
-    pub boundary_states: BTreeMap<PlaceId, PlaceBoundaryState>,
     pub unconsolidated_events: BTreeSet<EventId>,
     pub consolidated_events: BTreeSet<EventId>,
 }
@@ -100,12 +109,12 @@ impl EpisodeBook {
         Self::default()
     }
 
-    /// Admits a recorded event into its place's episode stream (`A-05`, `A-06`).
+    /// Admits a recorded event into its place's episode stream using deterministic time-gap
+    /// and missed-expectation boundary segmentation.
     pub fn admit_event(
         &mut self,
         params: EpisodeAdmitParams<'_>,
-        prior: &Prior,
-        switches: &Switches,
+        config: &CoreConfig,
     ) -> EpisodeEventOutcome {
         let EpisodeAdmitParams {
             event_id,
@@ -121,25 +130,15 @@ impl EpisodeBook {
         }
 
         let current_ep_id = self.active_by_place.get(place).copied();
-        let boundary_state = self.boundary_states.entry(place.clone()).or_default();
-
         if let Some(ep_id) = current_ep_id
             && let Some(ep) = self.episodes.get(&ep_id)
         {
-            let inputs = BoundaryInputs {
-                timestamp_ms,
-                event_embeddings: embeddings,
-                episode_centroid: ep.centroid.as_ref(),
-                episode_len: ep.event_ids.len(),
-                event_participants: &participants,
-                episode_participants: &ep.participants,
-                resolved_response_embeddings: None,
-                missed_expectation,
-            };
+            let gap_ms = timestamp_ms.saturating_sub_ms(ep.end_ms);
+            let gap_threshold = DEFAULT_EPISODE_GAP_MS.max(config.sleep_idle_ms);
+            let is_boundary = missed_expectation
+                || (ep.event_ids.len() >= DEFAULT_N_EP_MIN && gap_ms > gap_threshold);
 
-            let eval = boundary_state.evaluate_and_record(&inputs, prior, switches);
-            if eval.is_boundary {
-                // Seal existing episode and start a new Open episode for `event_id`.
+            if is_boundary {
                 if let Some(prev) = self.episodes.get_mut(&ep_id) {
                     prev.state = EpisodeState::Sealed;
                 }
@@ -157,11 +156,10 @@ impl EpisodeBook {
                     episode_id: event_id,
                     reopened_stale_gist: None,
                     sealed_episode_id: Some(ep_id),
-                    boundary_eval: eval,
+                    is_boundary: true,
                 };
             }
 
-            // Smooth continuation: reopen `Provisional` -> `Open` or append to `Open`.
             let ep_mut = self.episodes.get_mut(&ep_id).expect("checked");
             let mut reopened_stale_gist = None;
             if ep_mut.state == EpisodeState::Provisional {
@@ -184,23 +182,10 @@ impl EpisodeBook {
                 episode_id: ep_id,
                 reopened_stale_gist,
                 sealed_episode_id: None,
-                boundary_eval: eval,
+                is_boundary: false,
             };
         }
 
-        // First event for this place: record into causal window and start an Open episode.
-        let empty_set = BTreeSet::new();
-        let inputs = BoundaryInputs {
-            timestamp_ms,
-            event_embeddings: embeddings,
-            episode_centroid: None,
-            episode_len: 0,
-            event_participants: &participants,
-            episode_participants: &empty_set,
-            resolved_response_embeddings: None,
-            missed_expectation,
-        };
-        let eval = boundary_state.evaluate_and_record(&inputs, prior, switches);
         let new_ep = create_episode(
             event_id,
             place.clone(),
@@ -215,42 +200,26 @@ impl EpisodeBook {
             episode_id: event_id,
             reopened_stale_gist: None,
             sealed_episode_id: None,
-            boundary_eval: eval,
+            is_boundary: false,
         }
     }
 
-    /// Soft-closes qualifying `Open` tails at `t_snapshot` into `Provisional` (`A-05`).
-    ///
-    /// Returns the IDs of episodes transitioned to `Provisional`.
-    pub fn soft_close_idle_tails(&mut self, t_snapshot: Time, prior: &Prior) -> Vec<EventId> {
-        if !prior.provisional_close {
-            return Vec::new();
-        }
+    /// Soft-closes qualifying `Open` tails at `t_snapshot` into `Provisional`.
+    pub fn soft_close_idle_tails(&mut self, t_snapshot: Time, config: &CoreConfig) -> Vec<EventId> {
         let mut transitioned = Vec::new();
-        let k_stale_ms = (prior.k_stale_sleep * (prior.t_idle_sleep_ms as f64)).round() as u64;
-
         let active_ids: Vec<(PlaceId, EventId)> = self
             .active_by_place
             .iter()
             .map(|(p, &eid)| (p.clone(), eid))
             .collect();
 
-        for (place, ep_id) in active_ids {
-            let p95_place = self
-                .boundary_states
-                .get(&place)
-                .and_then(PlaceBoundaryState::p95_gap_ms)
-                .unwrap_or(0);
-            let tau_stale_ms = p95_place.max(k_stale_ms);
-
+        for (_place, ep_id) in active_ids {
             if let Some(ep) = self.episodes.get_mut(&ep_id)
                 && ep.state == EpisodeState::Open
                 && ep.end_ms <= t_snapshot
             {
                 let dt_place = t_snapshot.saturating_sub_ms(ep.end_ms);
-                let len_ok = ep.event_ids.len() >= prior.n_ep_min;
-                let stale_ok = dt_place > tau_stale_ms;
-                if len_ok || stale_ok {
+                if ep.event_ids.len() >= DEFAULT_N_EP_MIN || dt_place > config.sleep_idle_ms {
                     ep.state = EpisodeState::Provisional;
                     ep.consolidated = false;
                     transitioned.push(ep_id);
@@ -274,8 +243,7 @@ impl EpisodeBook {
             .collect()
     }
 
-    /// Marks an episode as consolidated with its resulting `gist_id` (clearing `dirty` and
-    /// draining its events from `unconsolidated_events` so no spin loop occurs).
+    /// Marks an episode as consolidated with its resulting `gist_id`.
     pub fn mark_episode_consolidated(&mut self, episode_id: EventId, gist_id: EventId) {
         if let Some(ep) = self.episodes.get_mut(&episode_id) {
             ep.gist_id = Some(gist_id);
@@ -288,24 +256,20 @@ impl EpisodeBook {
         }
     }
 
-    /// Attempts to merge two episodes strictly when `place` matches, `Jaccard(participants) >= J`,
-    /// and time intervals overlap or fall within `merge_gap_ms` (`R-24`).
-    ///
-    /// Semantic vector similarity alone NEVER merges episodes.
+    /// Attempts to merge two episodes when `place` matches, `Jaccard(participants) >= min`,
+    /// and time intervals overlap or fall within `merge_gap_ms`.
     #[must_use]
-    pub fn can_merge(a: &EpisodeRecord, b: &EpisodeRecord, prior: &Prior) -> bool {
+    pub fn can_merge(a: &EpisodeRecord, b: &EpisodeRecord) -> bool {
         if a.episode_id == b.episode_id || a.place != b.place {
             return false;
         }
         if a.state == EpisodeState::Open || b.state == EpisodeState::Open {
             return false;
         }
-        let jac = participant_jaccard(&a.participants, &b.participants);
-        if jac < prior.merge_jaccard_min {
+        if participant_jaccard(&a.participants, &b.participants) < DEFAULT_MERGE_JACCARD_MIN {
             return false;
         }
-        let overlap = a.start_ms <= b.end_ms && b.start_ms <= a.end_ms;
-        if overlap {
+        if a.start_ms <= b.end_ms && b.start_ms <= a.end_ms {
             return true;
         }
         let gap_ms = if a.end_ms < b.start_ms {
@@ -313,12 +277,11 @@ impl EpisodeBook {
         } else {
             a.start_ms.saturating_sub_ms(b.end_ms)
         };
-        gap_ms <= prior.merge_gap_ms
+        gap_ms <= DEFAULT_MERGE_GAP_MS
     }
 
-    /// Merges adjacent/overlapping qualifying episodes per place (`R-24`), returning pairs
-    /// `(merged_into_id, absorbed_id)` and updating `min(trust)` taint & provenance.
-    pub fn merge_eligible_episodes(&mut self, prior: &Prior) -> Vec<(EventId, EventId)> {
+    /// Merges adjacent/overlapping qualifying episodes per place.
+    pub fn merge_eligible_episodes(&mut self) -> Vec<(EventId, EventId)> {
         let mut merges = Vec::new();
         let mut by_place: BTreeMap<PlaceId, Vec<EventId>> = BTreeMap::new();
         for ep in self.episodes.values() {
@@ -344,7 +307,7 @@ impl EpisodeBook {
                 while j < ids.len() {
                     let id_b = ids[j];
                     let can = match (self.episodes.get(&id_a), self.episodes.get(&id_b)) {
-                        (Some(a), Some(b)) => Self::can_merge(a, b, prior),
+                        (Some(a), Some(b)) => Self::can_merge(a, b),
                         _ => false,
                     };
                     if can {
@@ -380,7 +343,7 @@ impl EpisodeBook {
         merges
     }
 
-    /// Removes erased events/actors from episodes on `hard_forget` (`R-34`).
+    /// Removes erased events/actors from episodes on `hard_forget`.
     pub fn forget(&mut self, erased_events: &[EventId], erased_actors: &[ActorId]) {
         let ev_set: BTreeSet<EventId> = erased_events.iter().copied().collect();
         let actor_set: BTreeSet<ActorId> = erased_actors.iter().cloned().collect();
@@ -410,11 +373,6 @@ impl EpisodeBook {
         }
         self.active_by_place
             .retain(|_, ep_id| self.episodes.contains_key(ep_id));
-        for bs in self.boundary_states.values_mut() {
-            for actor in &actor_set {
-                bs.last_participants.remove(actor);
-            }
-        }
     }
 }
 

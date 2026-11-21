@@ -351,7 +351,7 @@ pub fn rewrite_shard_without(
         })
         .map_err(map_sqlite_err)?;
 
-    let prior_kind_code = i64::from(monoagens_core::EventKind::PriorLoaded.code());
+    let prior_kind_code = i64::from(monoagens_core::EventKind::ConfigLoaded.code());
     let mut surviving_rows = Vec::new();
     let mut erased_events = Vec::new();
     let mut surviving_raw = Vec::new();

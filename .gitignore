@@ -25,3 +25,10 @@ __pycache__/
 *.pyc
 node_modules/
 .pytest_cache/
+
+# Neural controller offline training cache & large binaries
+training/.venv/
+training/cache/
+training/artifacts/*.safetensors
+training/artifacts/*.pt
+training/artifacts/*.ckpt

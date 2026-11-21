@@ -4,14 +4,26 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use monoagens_protocol::{ActorId, DomainId, EventId, PlaceId, Taint, Time};
+use monoagens_protocol::{ActorId, Audience, DomainId, EventId, PlaceId, Taint, Time};
 use serde::{Deserialize, Serialize};
 
-use crate::beliefs::domains::{CredenceRebaseRecord, DomainTransitionKind, DomainTransitionRecord};
 use crate::event::LogSeq;
-use crate::prior::Prior;
 use crate::recall::{MemoryBasis, MemoryEntry};
-use crate::registry::Switches;
+
+/// Default domain identifier when no explicit domain is supplied.
+pub const DEFAULT_DOMAIN_ID: &str = "general";
+
+const CREDENCE_LAMBDA_DOMAIN: f64 = 0.98;
+const CREDENCE_PERIOD_MS: u64 = 86_400_000;
+const DEFAULT_K_CORROB: usize = 2;
+const CONV_VICARIOUS_DISCOUNT: f64 = 0.25;
+const CONV_PEER_FLOOR: f64 = 0.2;
+const CONV_ALPHA_0: f64 = 1.0;
+const CONV_BETA_0: f64 = 1.0;
+const CONV_LAMBDA: f64 = 0.95;
+const CONV_TAU: f64 = 4.0;
+const CONV_KAPPA: f64 = 1.0;
+const CONV_BIAS_MAX: f64 = 0.5;
 
 /// Anchored Beta-Bernoulli credence `(alpha, beta)` with continuous-time relaxation toward `(alpha_0, beta_0)`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -125,7 +137,7 @@ impl BetaCredence {
     }
 }
 
-/// Stored belief entry with basis provenance, absolute validity bounds, and credence (`§7`, `R-17`, `R-43`).
+/// Stored belief entry with basis provenance, visibility audience, validity bounds, and credence.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BeliefRecord {
     pub belief_id: EventId,
@@ -135,6 +147,7 @@ pub struct BeliefRecord {
     pub basis_downgraded: bool,
     pub source_actor: Option<ActorId>,
     pub corroborating_actors: BTreeSet<ActorId>,
+    pub audience: Audience,
     pub taint: Taint,
     pub domain: DomainId,
     pub source_event_ids: Vec<EventId>,
@@ -173,6 +186,8 @@ pub enum BeliefLogEntry {
         basis: MemoryBasis,
         basis_downgraded: bool,
         source_actor: Option<ActorId>,
+        #[serde(default)]
+        audience: Audience,
         domain: DomainId,
         source_event_ids: Vec<EventId>,
         taint: Taint,
@@ -196,49 +211,36 @@ pub enum BeliefLogEntry {
         place: Option<PlaceId>,
         pattern_id: Option<String>,
     },
-    DomainsRebased {
-        event_id: EventId,
-        timestamp_ms: Time,
-        seq: LogSeq,
-        transitions: Vec<DomainTransitionRecord>,
-        credence_rebased: Vec<CredenceRebaseRecord>,
-    },
 }
 
 impl BeliefLogEntry {
     #[must_use]
     pub const fn timestamp_ms(&self) -> Time {
         match self {
-            Self::BeliefRecorded { timestamp_ms, .. }
-            | Self::EvidenceApplied { timestamp_ms, .. }
-            | Self::DomainsRebased { timestamp_ms, .. } => *timestamp_ms,
+            Self::BeliefRecorded { timestamp_ms, .. } | Self::EvidenceApplied { timestamp_ms, .. } => {
+                *timestamp_ms
+            }
         }
     }
 
     #[must_use]
     pub const fn seq(&self) -> LogSeq {
         match self {
-            Self::BeliefRecorded { seq, .. }
-            | Self::EvidenceApplied { seq, .. }
-            | Self::DomainsRebased { seq, .. } => *seq,
+            Self::BeliefRecorded { seq, .. } | Self::EvidenceApplied { seq, .. } => *seq,
         }
     }
 
     #[must_use]
     pub const fn event_id(&self) -> EventId {
         match self {
-            Self::BeliefRecorded { event_id, .. }
-            | Self::EvidenceApplied { event_id, .. }
-            | Self::DomainsRebased { event_id, .. } => *event_id,
+            Self::BeliefRecorded { event_id, .. } | Self::EvidenceApplied { event_id, .. } => {
+                *event_id
+            }
         }
     }
 }
 
-/// Checks reasoning's claimed [`MemoryBasis`] against actual memory provenance (`beliefs/spec.md`, `R-17`).
-///
-/// - Mind inferences (`is_mind_inference`) are always stored as `Inferred`.
-/// - `Observed` claims whose links reach no witnessed `Observed`/`SelfCaused` percept are
-///   downgraded to `Inferred` with `downgraded = true`.
+/// Checks reasoning's claimed [`MemoryBasis`] against actual memory provenance.
 #[must_use]
 pub fn verify_claimed_basis(
     requested: MemoryBasis,
@@ -254,7 +256,6 @@ pub fn verify_claimed_basis(
         return (requested, false);
     }
 
-    // Bounded BFS over `used_ids` -> `source_ids` checking for a witnessed percept.
     let mut visited = BTreeSet::new();
     let mut frontier: Vec<EventId> = used_ids.to_vec();
     let mut steps = 0usize;
@@ -300,7 +301,7 @@ pub fn parse_basis_str(raw: &str) -> Option<MemoryBasis> {
 }
 
 /// Complete projection of beliefs, `(alpha, beta)` credences, `(source, domain)` reliabilities,
-/// and `R-32` discounted place conventions, strictly rebuildable from the event log.
+/// and discounted place conventions, strictly rebuildable from the event log.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct BeliefBook {
     pub beliefs: BTreeMap<EventId, BeliefRecord>,
@@ -346,7 +347,6 @@ impl BeliefBook {
         actor: &ActorId,
         domain: &DomainId,
         now_ms: Time,
-        prior: &Prior,
     ) -> BetaCredence {
         let (a0, b0) = self.actor_prior(actor);
         let mut cred = self
@@ -354,47 +354,25 @@ impl BeliefBook {
             .get(&(actor.clone(), domain.clone()))
             .copied()
             .unwrap_or_else(|| BetaCredence::from_prior(a0, b0, now_ms));
-        cred.decay_toward_prior(
-            now_ms,
-            prior.credence_lambda_domain,
-            prior.credence_period_ms,
-        );
+        cred.decay_toward_prior(now_ms, CREDENCE_LAMBDA_DOMAIN, CREDENCE_PERIOD_MS);
         cred
     }
 
     /// Computes an item's Beta credence decayed to `now_ms` (without mutating state).
     #[must_use]
-    pub fn item_credence_at(
-        &self,
-        item_id: EventId,
-        now_ms: Time,
-        prior: &Prior,
-    ) -> Option<BetaCredence> {
+    pub fn item_credence_at(&self, item_id: EventId, now_ms: Time) -> Option<BetaCredence> {
         let mut cred = self
             .beliefs
             .get(&item_id)
             .and_then(|b| b.credence)
             .or_else(|| self.item_credences.get(&item_id).copied())?;
-        cred.decay_toward_prior(
-            now_ms,
-            prior.credence_lambda_domain,
-            prior.credence_period_ms,
-        );
+        cred.decay_toward_prior(now_ms, CREDENCE_LAMBDA_DOMAIN, CREDENCE_PERIOD_MS);
         Some(cred)
     }
 
-    /// Computes `R-32` discounted convention preference bias `Delta b_{p, pi} in [-B_conv, +B_conv]`.
+    /// Computes discounted convention preference bias in `[-CONV_BIAS_MAX, +CONV_BIAS_MAX]`.
     #[must_use]
-    pub fn convention_bias_at(
-        &self,
-        place: &PlaceId,
-        pattern_id: &str,
-        now_ms: Time,
-        prior: &Prior,
-    ) -> f64 {
-        if prior.conv_vicarious_discount <= 0.0 || prior.conv_bias_max <= 0.0 {
-            return 0.0;
-        }
+    pub fn convention_bias_at(&self, place: &PlaceId, pattern_id: &str, now_ms: Time) -> f64 {
         let Some(mut cred) = self
             .conventions
             .get(&(place.clone(), pattern_id.to_owned()))
@@ -402,26 +380,20 @@ impl BeliefBook {
         else {
             return 0.0;
         };
-        cred.decay_toward_prior(now_ms, prior.conv_lambda, prior.credence_period_ms);
+        cred.decay_toward_prior(now_ms, CONV_LAMBDA, CREDENCE_PERIOD_MS);
         let mu = cred.expected().clamp(1e-6, 1.0 - 1e-6);
         let n_eff = cred.effective_evidence();
-        let nu = n_eff / (n_eff + prior.conv_tau.max(1e-6));
-        let raw = prior.conv_kappa * nu * (mu / (1.0 - mu)).ln();
+        let nu = n_eff / (n_eff + CONV_TAU);
+        let raw = CONV_KAPPA * nu * (mu / (1.0 - mu)).ln();
         if raw.is_finite() {
-            raw.clamp(-prior.conv_bias_max, prior.conv_bias_max)
+            raw.clamp(-CONV_BIAS_MAX, CONV_BIAS_MAX)
         } else {
             0.0
         }
     }
 
     /// Applies a single `BeliefLogEntry` deterministically onto the projection maps.
-    pub fn apply_log_entry(
-        &mut self,
-        entry: BeliefLogEntry,
-        prior: &Prior,
-        switches: &Switches,
-        record_in_log: bool,
-    ) {
+    pub fn apply_log_entry(&mut self, entry: BeliefLogEntry, record_in_log: bool) {
         if record_in_log {
             self.log_entries.push(entry.clone());
         }
@@ -434,6 +406,7 @@ impl BeliefBook {
                 basis,
                 basis_downgraded,
                 source_actor,
+                audience,
                 domain,
                 source_event_ids,
                 taint,
@@ -445,7 +418,6 @@ impl BeliefBook {
                 is_mind_inference,
                 ..
             } => {
-                // Check whether an existing active belief exists for `claim_key`.
                 if let Some(&prev_id) = self.active_claims.get(&claim_key)
                     && prev_id != event_id
                     && let Some(prev_belief) = self.beliefs.get_mut(&prev_id)
@@ -453,10 +425,8 @@ impl BeliefBook {
                     let prev_is_direct = prev_belief.basis == MemoryBasis::Observed
                         || prev_belief.basis == MemoryBasis::SelfCaused;
                     let new_is_uncorroborated_told = basis == MemoryBasis::Told
-                        && (taint != Taint::Trusted || prior.k_corrob > 1);
+                        && (taint != Taint::Trusted || DEFAULT_K_CORROB > 1);
 
-                    // Skeptical corroboration (`R-43`): if a single untrusted `told` claim
-                    // repeats/conflicts with an existing direct observation, it NEVER overrides it!
                     if prev_is_direct && new_is_uncorroborated_told {
                         let cred = if matches!(basis, MemoryBasis::Told | MemoryBasis::Inferred) {
                             Some(self.init_belief_credence(
@@ -465,7 +435,6 @@ impl BeliefBook {
                                 alpha_0,
                                 beta_0,
                                 timestamp_ms,
-                                prior,
                             ))
                         } else {
                             None
@@ -487,6 +456,7 @@ impl BeliefBook {
                                 basis_downgraded,
                                 source_actor,
                                 corroborating_actors: corr,
+                                audience,
                                 taint,
                                 domain,
                                 source_event_ids,
@@ -501,7 +471,6 @@ impl BeliefBook {
                         return;
                     }
 
-                    // If same `claim_key` is corroborated by another distinct source on an existing Told belief:
                     if prev_belief.basis == MemoryBasis::Told
                         && basis == MemoryBasis::Told
                         && replaced_by.is_none()
@@ -510,11 +479,9 @@ impl BeliefBook {
                         && !prev_belief.corroborating_actors.contains(sa)
                     {
                         prev_belief.corroborating_actors.insert(sa.clone());
-                        // Keep `min(trust)` taint across corroborating sources (`R-43`).
                         prev_belief.taint = prev_belief.taint.combine(taint);
                     }
 
-                    // Explicit replacement or observation superseding prior belief without deleting old record.
                     if !prev_is_direct
                         || basis == MemoryBasis::Observed
                         || basis == MemoryBasis::SelfCaused
@@ -524,7 +491,6 @@ impl BeliefBook {
                     }
                 }
 
-                // Cleanly separate Observed/SelfCaused direct evidence from Told/Inferred credence (`10.1`).
                 let credence = if matches!(basis, MemoryBasis::Told | MemoryBasis::Inferred) {
                     let c = self.init_belief_credence(
                         source_actor.as_ref(),
@@ -532,7 +498,6 @@ impl BeliefBook {
                         alpha_0,
                         beta_0,
                         timestamp_ms,
-                        prior,
                     );
                     self.item_credences.insert(event_id, c);
                     Some(c)
@@ -545,7 +510,6 @@ impl BeliefBook {
                     corroborating_actors.insert(sa.clone());
                 }
 
-                // Collect prior corroborating distinct actors and `min(trust)` taint for same `claim_key`.
                 let mut combined_taint = taint;
                 for existing in self.beliefs.values() {
                     if !existing.erased
@@ -567,6 +531,7 @@ impl BeliefBook {
                     basis_downgraded,
                     source_actor,
                     corroborating_actors,
+                    audience,
                     taint: combined_taint,
                     domain,
                     source_event_ids,
@@ -594,44 +559,31 @@ impl BeliefBook {
                 pattern_id,
                 ..
             } => {
-                if !switches.credence {
-                    return;
-                }
                 if is_convention {
                     if let (Some(pl), Some(pat)) = (place, pattern_id) {
-                        // `R-32`: vicarious peer observation strictly discounted (`lambda_vic < 1.0`).
                         let peer_rel = source_actor
                             .as_ref()
-                            .map(|a| {
-                                self.source_reliability_at(a, &domain, timestamp_ms, prior)
-                                    .expected()
-                            })
+                            .map(|a| self.source_reliability_at(a, &domain, timestamp_ms).expected())
                             .unwrap_or(1.0);
                         let w_obs = if source_actor.is_some() {
-                            prior.conv_vicarious_discount
-                                * peer_rel.clamp(prior.conv_peer_floor, 1.0)
+                            CONV_VICARIOUS_DISCOUNT * peer_rel.clamp(CONV_PEER_FLOOR, 1.0)
                         } else {
                             1.0
                         };
                         let conv = self.conventions.entry((pl, pat)).or_insert_with(|| {
-                            BetaCredence::from_prior(
-                                prior.conv_alpha_0,
-                                prior.conv_beta_0,
-                                timestamp_ms,
-                            )
+                            BetaCredence::from_prior(CONV_ALPHA_0, CONV_BETA_0, timestamp_ms)
                         });
                         conv.apply_evidence(
                             w_obs * positive,
                             w_obs * negative,
                             timestamp_ms,
-                            prior.conv_lambda,
-                            prior.credence_period_ms,
+                            CONV_LAMBDA,
+                            CREDENCE_PERIOD_MS,
                         );
                     }
                     return;
                 }
 
-                // Update cited item's credence (`10.1`: ONLY cited items move!).
                 if target_id.as_u64() != 0 {
                     if let Some(belief) = self.beliefs.get_mut(&target_id)
                         && let Some(cred) = &mut belief.credence
@@ -640,8 +592,8 @@ impl BeliefBook {
                             positive,
                             negative,
                             timestamp_ms,
-                            prior.credence_lambda_domain,
-                            prior.credence_period_ms,
+                            CREDENCE_LAMBDA_DOMAIN,
+                            CREDENCE_PERIOD_MS,
                         );
                         self.item_credences.insert(target_id, *cred);
                     } else {
@@ -653,13 +605,12 @@ impl BeliefBook {
                             positive,
                             negative,
                             timestamp_ms,
-                            prior.credence_lambda_domain,
-                            prior.credence_period_ms,
+                            CREDENCE_LAMBDA_DOMAIN,
+                            CREDENCE_PERIOD_MS,
                         );
                     }
                 }
 
-                // Update `(source, domain)` reliability when attributed to a source actor.
                 if let Some(actor) = source_actor {
                     let (a0, b0) = self.actor_prior(&actor);
                     let rel = self
@@ -670,39 +621,9 @@ impl BeliefBook {
                         positive,
                         negative,
                         timestamp_ms,
-                        prior.credence_lambda_domain,
-                        prior.credence_period_ms,
+                        CREDENCE_LAMBDA_DOMAIN,
+                        CREDENCE_PERIOD_MS,
                     );
-                }
-            }
-            BeliefLogEntry::DomainsRebased {
-                timestamp_ms,
-                transitions,
-                credence_rebased,
-                ..
-            } => {
-                if !switches.credence {
-                    return;
-                }
-                if !credence_rebased.is_empty() {
-                    for rb in credence_rebased {
-                        if rb.from_domain != rb.to_domain {
-                            self.source_reliability
-                                .remove(&(rb.actor.clone(), rb.from_domain.clone()));
-                        }
-                        self.source_reliability.insert(
-                            (rb.actor, rb.to_domain),
-                            BetaCredence::with_counts(
-                                rb.alpha_0,
-                                rb.beta_0,
-                                rb.new_alpha,
-                                rb.new_beta,
-                                timestamp_ms,
-                            ),
-                        );
-                    }
-                } else {
-                    self.apply_domain_transitions(&transitions, timestamp_ms, prior);
                 }
             }
         }
@@ -715,22 +636,11 @@ impl BeliefBook {
         explicit_alpha_0: f64,
         explicit_beta_0: f64,
         now_ms: Time,
-        prior: &Prior,
     ) -> BetaCredence {
         if let Some(actor) = source_actor {
-            // If the source has an existing `(actor, domain)` reliability entry, initialize `told`
-            // from that domain reliability; otherwise use `(explicit_alpha_0, explicit_beta_0)`
-            // or the source's `(alpha_0, beta_0)` prior (`A-01`, `beliefs/spec.md` L60-63 & L86-88).
-            if let Some(rel) = self
-                .source_reliability
-                .get(&(actor.clone(), domain.clone()))
-            {
+            if let Some(rel) = self.source_reliability.get(&(actor.clone(), domain.clone())) {
                 let mut c = *rel;
-                c.decay_toward_prior(
-                    now_ms,
-                    prior.credence_lambda_domain,
-                    prior.credence_period_ms,
-                );
+                c.decay_toward_prior(now_ms, CREDENCE_LAMBDA_DOMAIN, CREDENCE_PERIOD_MS);
                 return c;
             }
             let (pa, pb) = self.actor_prior(actor);
@@ -755,152 +665,12 @@ impl BeliefBook {
         BetaCredence::from_prior(explicit_alpha_0, explicit_beta_0, now_ms)
     }
 
-    /// Computes Jøsang drift/merge/split credence transitions across `source_reliability` (`A-12`).
-    pub fn compute_rebase_records(
-        &self,
-        transitions: &[DomainTransitionRecord],
-        now_ms: Time,
-        prior: &Prior,
-    ) -> Vec<CredenceRebaseRecord> {
-        let mut out = Vec::new();
-        let gamma = prior.domain_gamma_drift.max(0.0);
-
-        for tr in transitions {
-            let sim = tr.similarity.clamp(0.0, 1.0);
-            let retain = if gamma == 0.0 { 1.0 } else { sim.powf(gamma) };
-            match tr.kind {
-                DomainTransitionKind::Continued => {
-                    if let Some(did) = &tr.old_domain {
-                        for ((actor, dom), cred) in &self.source_reliability {
-                            if dom == did {
-                                let mut c = *cred;
-                                c.decay_toward_prior(
-                                    now_ms,
-                                    prior.credence_lambda_domain,
-                                    prior.credence_period_ms,
-                                );
-                                let da = (c.alpha - c.alpha_0).max(0.0) * retain;
-                                let db = (c.beta - c.beta_0).max(0.0) * retain;
-                                out.push(CredenceRebaseRecord {
-                                    actor: actor.clone(),
-                                    from_domain: did.clone(),
-                                    to_domain: did.clone(),
-                                    new_alpha: c.alpha_0 + da,
-                                    new_beta: c.beta_0 + db,
-                                    alpha_0: c.alpha_0,
-                                    beta_0: c.beta_0,
-                                });
-                            }
-                        }
-                    }
-                }
-                DomainTransitionKind::Merged => {
-                    if let (Some(dead), Some(surv)) = (&tr.old_domain, &tr.new_domain) {
-                        for ((actor, dom), dead_cred) in &self.source_reliability {
-                            if dom == dead {
-                                let mut dc = *dead_cred;
-                                dc.decay_toward_prior(
-                                    now_ms,
-                                    prior.credence_lambda_domain,
-                                    prior.credence_period_ms,
-                                );
-                                let da_dead = (dc.alpha - dc.alpha_0).max(0.0) * retain;
-                                let db_dead = (dc.beta - dc.beta_0).max(0.0) * retain;
-
-                                let (a0, b0) = self.actor_prior(actor);
-                                let mut sc = self
-                                    .source_reliability
-                                    .get(&(actor.clone(), surv.clone()))
-                                    .copied()
-                                    .unwrap_or_else(|| BetaCredence::from_prior(a0, b0, now_ms));
-                                sc.decay_toward_prior(
-                                    now_ms,
-                                    prior.credence_lambda_domain,
-                                    prior.credence_period_ms,
-                                );
-                                out.push(CredenceRebaseRecord {
-                                    actor: actor.clone(),
-                                    from_domain: dead.clone(),
-                                    to_domain: surv.clone(),
-                                    new_alpha: sc.alpha + da_dead,
-                                    new_beta: sc.beta + db_dead,
-                                    alpha_0: sc.alpha_0,
-                                    beta_0: sc.beta_0,
-                                });
-                            }
-                        }
-                    }
-                }
-                DomainTransitionKind::Split => {
-                    if let (Some(old_id), Some(new_id)) = (&tr.old_domain, &tr.new_domain)
-                        && prior.domain_rho_split > 0.0
-                    {
-                        for ((actor, dom), old_cred) in &self.source_reliability {
-                            if dom == old_id {
-                                let mut oc = *old_cred;
-                                oc.decay_toward_prior(
-                                    now_ms,
-                                    prior.credence_lambda_domain,
-                                    prior.credence_period_ms,
-                                );
-                                let frac = (prior.domain_rho_split * retain).clamp(0.0, 0.5);
-                                let da_move = (oc.alpha - oc.alpha_0).max(0.0) * frac;
-                                let db_move = (oc.beta - oc.beta_0).max(0.0) * frac;
-                                out.push(CredenceRebaseRecord {
-                                    actor: actor.clone(),
-                                    from_domain: old_id.clone(),
-                                    to_domain: new_id.clone(),
-                                    new_alpha: oc.alpha_0 + da_move,
-                                    new_beta: oc.beta_0 + db_move,
-                                    alpha_0: oc.alpha_0,
-                                    beta_0: oc.beta_0,
-                                });
-                                out.push(CredenceRebaseRecord {
-                                    actor: actor.clone(),
-                                    from_domain: old_id.clone(),
-                                    to_domain: old_id.clone(),
-                                    new_alpha: oc.alpha - da_move,
-                                    new_beta: oc.beta - db_move,
-                                    alpha_0: oc.alpha_0,
-                                    beta_0: oc.beta_0,
-                                });
-                            }
-                        }
-                    }
-                }
-                DomainTransitionKind::Birth | DomainTransitionKind::Retired => {}
-            }
-        }
-        out
-    }
-
-    fn apply_domain_transitions(
-        &mut self,
-        transitions: &[DomainTransitionRecord],
-        now_ms: Time,
-        prior: &Prior,
-    ) {
-        let rebased = self.compute_rebase_records(transitions, now_ms, prior);
-        for rb in rebased {
-            if rb.from_domain != rb.to_domain {
-                self.source_reliability
-                    .remove(&(rb.actor.clone(), rb.from_domain.clone()));
-            }
-            self.source_reliability.insert(
-                (rb.actor, rb.to_domain),
-                BetaCredence::with_counts(rb.alpha_0, rb.beta_0, rb.new_alpha, rb.new_beta, now_ms),
-            );
-        }
-    }
-
     /// Recomputes all `(alpha, beta)` credence and `(source, domain)` reliability projections cleanly
-    /// from surviving log entries after an authorized `hard_forget` erasure (`R-34`, `10.4`).
+    /// from surviving log entries after an authorized `hard_forget` erasure.
     pub fn recompute_after_forget(
         &mut self,
         target_event_ids: &[EventId],
         target_actor_ids: &[ActorId],
-        prior: &Prior,
-        switches: &Switches,
     ) {
         let erased_events: BTreeSet<EventId> = target_event_ids.iter().copied().collect();
         let erased_actors: BTreeSet<ActorId> = target_actor_ids.iter().cloned().collect();
@@ -909,7 +679,6 @@ impl BeliefBook {
             self.actor_priors.remove(actor);
         }
 
-        // Compute exclusive dependency closure across logged beliefs/evidence.
         let mut expanded_erased = erased_events;
         let mut changed = true;
         while changed {
@@ -952,6 +721,7 @@ impl BeliefBook {
                     basis,
                     basis_downgraded,
                     source_actor,
+                    audience,
                     domain,
                     mut source_event_ids,
                     taint,
@@ -984,6 +754,7 @@ impl BeliefBook {
                         basis,
                         basis_downgraded,
                         source_actor,
+                        audience,
                         domain,
                         source_event_ids,
                         taint,
@@ -1034,25 +805,6 @@ impl BeliefBook {
                         pattern_id,
                     });
                 }
-                BeliefLogEntry::DomainsRebased {
-                    event_id,
-                    timestamp_ms,
-                    seq,
-                    transitions,
-                    mut credence_rebased,
-                } => {
-                    if expanded_erased.contains(&event_id) {
-                        continue;
-                    }
-                    credence_rebased.retain(|rb| !erased_actors.contains(&rb.actor));
-                    surviving_entries.push(BeliefLogEntry::DomainsRebased {
-                        event_id,
-                        timestamp_ms,
-                        seq,
-                        transitions,
-                        credence_rebased,
-                    });
-                }
             }
         }
 
@@ -1063,7 +815,6 @@ impl BeliefBook {
                 .then_with(|| a.event_id().cmp(&b.event_id()))
         });
 
-        // Clear all derived projections and refold cleanly from surviving log entries.
         self.beliefs.clear();
         self.active_claims.clear();
         self.source_reliability.clear();
@@ -1071,13 +822,13 @@ impl BeliefBook {
         self.conventions.clear();
 
         for entry in surviving_entries {
-            self.apply_log_entry(entry, prior, switches, true);
+            self.apply_log_entry(entry, true);
         }
     }
 
     /// Rebuilds an identical `BeliefBook` strictly by replaying its `log_entries` and `actor_priors`.
     #[must_use]
-    pub fn rebuild_from_log(&self, prior: &Prior, switches: &Switches) -> Self {
+    pub fn rebuild_from_log(&self) -> Self {
         let mut rebuilt = Self {
             actor_priors: self.actor_priors.clone(),
             ..Self::default()
@@ -1090,7 +841,7 @@ impl BeliefBook {
                 .then_with(|| a.event_id().cmp(&b.event_id()))
         });
         for entry in ordered {
-            rebuilt.apply_log_entry(entry, prior, switches, true);
+            rebuilt.apply_log_entry(entry, true);
         }
         rebuilt
     }

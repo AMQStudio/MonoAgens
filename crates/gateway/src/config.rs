@@ -6,7 +6,10 @@ use std::path::{Path, PathBuf};
 
 use monoagens_protocol::{ActorId, BodyId, CURRENT_PROTOCOL_VERSION, ProtocolVersion};
 use monoagens_reason::{EMBEDDING_GEMMA_2_DIM, EMBEDDING_GEMMA_2_VER, ProviderSecrets};
-use monoagens_store::{LoadedPrior, PriorLoadError, load_prior_or_default};
+use monoagens_core::blake3;
+use monoagens_store::{
+    ConfigLoadError, LoadedCoreConfig, load_core_config_or_default,
+};
 use toml_edit::{DocumentMut, Item, Table, TableLike, value};
 
 use crate::cues::{DEFAULT_PROGRESS_NOTE_MS, DEFAULT_WORKING_CUE_MS};
@@ -124,7 +127,10 @@ impl Default for ModelConfig {
 pub struct SoulConfig {
     pub name: String,
     pub seed: u64,
-    pub prior: Option<PathBuf>,
+    pub core_config: Option<PathBuf>,
+    pub model_path: Option<PathBuf>,
+    pub expected_blake3: Option<String>,
+    pub online_adaptation: Option<bool>,
 }
 
 impl Default for SoulConfig {
@@ -132,7 +138,10 @@ impl Default for SoulConfig {
         Self {
             name: "MonoAgens".to_owned(),
             seed: 1,
-            prior: None,
+            core_config: None,
+            model_path: None,
+            expected_blake3: None,
+            online_adaptation: None,
         }
     }
 }
@@ -296,10 +305,59 @@ impl Default for GatewayConfig {
 }
 
 impl GatewayConfig {
-    /// Loads and strictly validates `[soul] prior` (or returns the built-in default when absent)
-    /// using the shared `monoagens-store` prior loader.
-    pub fn load_prior(&self) -> Result<LoadedPrior, PriorLoadError> {
-        load_prior_or_default(self.soul.prior.as_deref())
+    /// Parses a 64-character lowercase/uppercase hex `BLAKE3` digest into `[u8; 32]`.
+    pub fn parse_blake3_hex(raw: &str) -> Result<[u8; 32], ConfigError> {
+        let s = raw.trim();
+        let bytes = s.as_bytes();
+        if bytes.len() != 64 {
+            return Err(ConfigError::InvalidValue {
+                key: "soul.expected_blake3".to_owned(),
+                value: raw.to_owned(),
+                expected: "64-hex-char BLAKE3 digest",
+            });
+        }
+        let mut out = [0_u8; 32];
+        for i in 0..32 {
+            let pair = std::str::from_utf8(&bytes[i * 2..i * 2 + 2]).map_err(|_| {
+                ConfigError::InvalidValue {
+                    key: "soul.expected_blake3".to_owned(),
+                    value: raw.to_owned(),
+                    expected: "64-hex-char BLAKE3 digest",
+                }
+            })?;
+            out[i] = u8::from_str_radix(pair, 16).map_err(|_| ConfigError::InvalidValue {
+                key: "soul.expected_blake3".to_owned(),
+                value: raw.to_owned(),
+                expected: "64-hex-char BLAKE3 digest",
+            })?;
+        }
+        Ok(out)
+    }
+
+    /// Loads and strictly validates `[soul] core_config` (or returns the built-in default when absent)
+    /// using the shared `monoagens-store` loader and merges gateway `[soul]` overrides.
+    pub fn load_core_config(&self) -> Result<LoadedCoreConfig, ConfigLoadError> {
+        let mut loaded = load_core_config_or_default(self.soul.core_config.as_deref())?;
+        loaded.config.seed = self.soul.seed;
+        if let Some(mp) = &self.soul.model_path {
+            loaded.config.model_path = Some(mp.display().to_string());
+        }
+        if let Some(hex) = &self.soul.expected_blake3 {
+            let parsed = Self::parse_blake3_hex(hex).map_err(|e| ConfigLoadError::Parse {
+                path: None,
+                detail: e.to_string(),
+            })?;
+            loaded.config.expected_blake3 = Some(parsed);
+        }
+        if let Some(on) = self.soul.online_adaptation {
+            loaded.config.online_adaptation = on;
+            loaded.config.adapt.online_adaptation = on;
+        }
+        loaded.config.validate()?;
+        let digest = monoagens_store::compute_config_digest(&loaded.config)?;
+        loaded.digest = digest;
+        let _ = blake3::hash(b"");
+        Ok(loaded)
     }
 }
 
@@ -554,8 +612,17 @@ pub fn default_config_document(cfg: &GatewayConfig) -> DocumentMut {
     let mut soul = Table::new();
     soul["name"] = value(cfg.soul.name.clone());
     soul["seed"] = value(cfg.soul.seed as i64);
-    if let Some(prior_path) = &cfg.soul.prior {
-        soul["prior"] = value(prior_path.display().to_string());
+    if let Some(cfg_path) = &cfg.soul.core_config {
+        soul["core_config"] = value(cfg_path.display().to_string());
+    }
+    if let Some(model_path) = &cfg.soul.model_path {
+        soul["model_path"] = value(model_path.display().to_string());
+    }
+    if let Some(hex) = &cfg.soul.expected_blake3 {
+        soul["expected_blake3"] = value(hex.clone());
+    }
+    if let Some(adapt) = cfg.soul.online_adaptation {
+        soul["online_adaptation"] = value(adapt);
     }
     doc["soul"] = Item::Table(soul);
 
@@ -736,15 +803,32 @@ fn parse_config_document(doc: &DocumentMut) -> Result<GatewayConfig, ConfigError
                 range: "0..=9223372036854775807",
             })?;
         }
-        if let Some(prior_str) = get_opt_str(soul_tbl, "prior", "soul.prior")? {
-            if prior_str.trim().is_empty() {
+        if let Some(cfg_str) = get_opt_str(soul_tbl, "core_config", "soul.core_config")? {
+            if cfg_str.trim().is_empty() {
                 return Err(ConfigError::InvalidValue {
-                    key: "soul.prior".to_owned(),
-                    value: prior_str,
-                    expected: "non-empty prior file path",
+                    key: "soul.core_config".to_owned(),
+                    value: cfg_str,
+                    expected: "non-empty CoreConfig JSON file path",
                 });
             }
-            cfg.soul.prior = Some(PathBuf::from(prior_str));
+            cfg.soul.core_config = Some(PathBuf::from(cfg_str));
+        }
+        if let Some(model_str) = get_opt_str(soul_tbl, "model_path", "soul.model_path")? {
+            if model_str.trim().is_empty() {
+                return Err(ConfigError::InvalidValue {
+                    key: "soul.model_path".to_owned(),
+                    value: model_str,
+                    expected: "non-empty safetensors model path",
+                });
+            }
+            cfg.soul.model_path = Some(PathBuf::from(model_str));
+        }
+        if let Some(hex_str) = get_opt_str(soul_tbl, "expected_blake3", "soul.expected_blake3")? {
+            let _ = GatewayConfig::parse_blake3_hex(&hex_str)?;
+            cfg.soul.expected_blake3 = Some(hex_str);
+        }
+        if let Some(adapt) = get_opt_bool(soul_tbl, "online_adaptation", "soul.online_adaptation")? {
+            cfg.soul.online_adaptation = Some(adapt);
         }
     }
 

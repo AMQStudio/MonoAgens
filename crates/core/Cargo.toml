@@ -10,6 +10,7 @@ tck-hooks = []
 
 [dependencies]
 monoagens-protocol = { workspace = true }
+safetensors = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]

@@ -6,8 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use monoagens_core::{
-    AdaptiveWeightsAnchor, CoreState, EpochAnchor, EventDetail, EventKind, EventRecord, LogSeq,
-    NumericFeatures, SnapshotCheckpoint, StoreError,
+    CoreState, EventDetail, EventKind, EventRecord, LogSeq, NumericFeatures, SnapshotCheckpoint,
+    StoreError,
 };
 use monoagens_protocol::{
     ActorId, Audience, EventId, OpaquePayload, OriginActor, PlaceId, Taint, Time,
@@ -403,7 +403,7 @@ fn collect_hot_matching_events(
     erase_events: &BTreeSet<EventId>,
     erase_actors: &BTreeSet<ActorId>,
 ) -> Result<HotMatchScan, StoreError> {
-    let prior_kind_code = i64::from(EventKind::PriorLoaded.code());
+    let prior_kind_code = i64::from(EventKind::ConfigLoaded.code());
     let mut stmt = hot_conn
         .prepare(
             "SELECT event_id, kind_code, actor, origin_actor, raw_bytes FROM events ORDER BY seq ASC",
@@ -514,21 +514,18 @@ fn build_clean_post_forget_state(
     tombstone: Option<&EventRecord>,
 ) -> Result<CoreState, StoreError> {
     let mut state = CoreState::new();
-
-    // Preserve prior adaptive weight snapshot anchor if one existed before erasure (R-34).
-    let preserved_weights: Option<AdaptiveWeightsAnchor> = prior_checkpoint
-        .and_then(|ckpt| CoreState::decode_snapshot(&ckpt.bytes).ok())
-        .map(|prev| {
-            prev.epoch_anchor
-                .frozen_weights
-                .unwrap_or(prev.adaptive_weights)
-        });
+    if let Some(prev) =
+        prior_checkpoint.and_then(|ckpt| CoreState::decode_snapshot(&ckpt.bytes).ok())
+    {
+        state.place_memory = prev.place_memory;
+        state.place_adapt = prev.place_adapt;
+    }
 
     let all_shards = shards::list_shards(hot_conn)?;
     for shard in &all_shards {
         let shard_events = shards::read_shard_after_seq(&shard.path(shards_dir), None, usize::MAX)?;
         for rec in shard_events {
-            if rec.kind == EventKind::PriorLoaded
+            if rec.kind == EventKind::ConfigLoaded
                 || (!erased_events.contains(&rec.id)
                     && !erased_actors.contains(&rec.actor)
                     && !erased_actors.contains(rec.origin_actor.actor_id()))
@@ -545,7 +542,7 @@ fn build_clean_post_forget_state(
         {
             continue;
         }
-        if rec.kind == EventKind::PriorLoaded
+        if rec.kind == EventKind::ConfigLoaded
             || (!erased_events.contains(&rec.id)
                 && !erased_actors.contains(&rec.actor)
                 && !erased_actors.contains(rec.origin_actor.actor_id()))
@@ -562,14 +559,6 @@ fn build_clean_post_forget_state(
     if cursor_seq > state.last_seq {
         state.last_seq = cursor_seq;
     }
-    let anchor_weights = preserved_weights.unwrap_or(state.adaptive_weights);
-    state.adaptive_weights = anchor_weights;
-    state.epoch_anchor = EpochAnchor {
-        epoch: new_epoch,
-        anchor_seq: cursor_seq,
-        frozen: true,
-        frozen_weights: Some(anchor_weights),
-    };
 
     for actor in erased_actors {
         state.actor_facts.remove(actor);

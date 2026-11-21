@@ -1,109 +1,92 @@
-//! Deterministic `Two-Epoch Replay` and bit-for-bit decision verification (`R-34`).
+//! Trace-Pinned deterministic replay from verified snapshots + log tail (`tasks.md` 4.4).
 //!
-//! Replays a log from a snapshot cursor (or from the beginning when `None`), recomputing
-//! gate decisions and comparing them bit-for-bit (`to_bits()`) against recorded decisions,
-//! reporting the first divergence with both recorded and recomputed values.
-//!
-//! Post `hard_forget`, pre-forget adaptive weights remain frozen at the surviving epoch
-//! snapshot anchor unless [`ReplayMode::FullReplay`] is selected.
+//! Slim Core V2 replay reconstructs [`CoreState`] from a verified snapshot (or empty state) and
+//! applies all subsequent log records in [`LogSeq`] order, verifying every recorded
+//! [`EventKind::Decision`] trace (`model_blake3`, `feature_schema_version`, `online_adaptation_applied`,
+//! finite calibrated neural outputs, `outcome`, and `reason`) without requiring bit-exact
+//! floating-point neural re-execution across different CPU/SIMD targets.
 
-use std::collections::BTreeMap;
-
-use monoagens_protocol::EventId;
-use serde::{Deserialize, Serialize};
-
-use crate::CoreError;
 use crate::blake3;
+use crate::config::CoreConfig;
 use crate::event::{DecisionOutcome, EventDetail, EventKind, LogSeq};
-use crate::gate::{DecisionReason, GateOutcome};
+use crate::gate::DecisionReason;
+use crate::neural::FEATURE_SCHEMA_VERSION;
 use crate::ports::{SnapshotCheckpoint, Store};
-use crate::prior::Prior;
-use crate::registry::Switches;
 use crate::state::CoreState;
+use crate::{CoreError, RecoveryReport};
 
-/// Controls how `Two-Epoch Replay` treats pre-forget adaptive weights after `hard_forget`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// Replay mode controlling pinned model digest verification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ReplayMode {
-    /// Post `hard_forget`, freeze pre-forget adaptive weights at the surviving epoch snapshot anchor.
+    /// Verifies `model_blake3` pins match `expected_model_blake3` (when both are present).
     #[default]
-    TwoEpochFrozen,
-    /// Re-evaluate using current `Prior`/`Switches` across the entire replayed span without freezing.
-    FullReplay,
+    Pinned,
+    /// Verifies recorded traces without enforcing a single `expected_model_blake3` across model upgrades.
+    Unpinned,
 }
 
-/// Comparable snapshot of a decision's numeric and categorical outputs.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct RecomputedDecisionValue {
+/// Recorded values extracted from a [`EventKind::Decision`] log event.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordedDecisionValue {
+    pub seq: LogSeq,
+    pub event_id: monoagens_protocol::EventId,
+    pub target_event_id: monoagens_protocol::EventId,
     pub outcome: DecisionOutcome,
-    pub salience: f64,
-    pub threshold: f64,
     pub probability: f64,
     pub draw: f64,
     pub reason: Option<DecisionReason>,
+    pub model_blake3: Option<[u8; 32]>,
+    pub feature_schema_version: Option<u16>,
+    pub online_adaptation_applied: bool,
 }
 
-/// First bit-for-bit divergence encountered during log replay.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ReplayDivergence {
-    pub decision_event_id: EventId,
-    pub target_event_id: EventId,
+/// First Trace-Pinned divergence detected during [`replay_from_checkpoint`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReplayMismatch {
     pub seq: LogSeq,
+    pub event_id: monoagens_protocol::EventId,
+    pub target_event_id: monoagens_protocol::EventId,
     pub field: String,
-    pub recorded: RecomputedDecisionValue,
-    pub recomputed: RecomputedDecisionValue,
+    pub recorded: RecordedDecisionValue,
+    pub detail: String,
 }
 
-/// Outcome summary of a [`replay_from_checkpoint`] or [`replay_log`] run.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Summary report returned by [`replay_log`] and [`replay_from_checkpoint`].
+#[derive(Debug, Clone, PartialEq)]
 pub struct ReplayReport {
-    pub snapshot_cursor: Option<LogSeq>,
-    pub epoch: u64,
-    pub anchor_preserved: bool,
-    pub replayed_events: usize,
-    pub matched_decisions: usize,
-    pub first_divergence: Option<ReplayDivergence>,
+    pub state: CoreState,
+    pub recovery: RecoveryReport,
+    pub verified_decisions: usize,
+    pub mismatches: Vec<ReplayMismatch>,
+    pub active_config: CoreConfig,
 }
 
 impl ReplayReport {
-    /// Returns `true` if every replayed decision matched bit-for-bit with zero divergences.
+    /// Returns `true` when all recorded decisions passed Trace-Pinned verification.
     #[must_use]
-    pub const fn is_bit_identical(&self) -> bool {
-        self.first_divergence.is_none()
+    pub fn is_exact(&self) -> bool {
+        self.mismatches.is_empty()
     }
 }
 
-/// Replays `store` starting from `store.latest_checkpoint()` (if present) using [`ReplayMode::TwoEpochFrozen`].
-///
-/// The prior in effect is taken strictly from the log's `prior_loaded` events (or `Prior::default()`
-/// prior to the first `prior_loaded` event), never from the caller.
+/// Replays the full log from seq `0` in `mode`.
 pub fn replay_log<S: Store>(
     store: &S,
-    switches: &Switches,
-    seed: u64,
+    mode: ReplayMode,
+    expected_model_blake3: Option<[u8; 32]>,
 ) -> Result<ReplayReport, CoreError> {
-    let ckpt = store.latest_checkpoint()?;
-    replay_from_checkpoint(
-        store,
-        ckpt.as_ref(),
-        switches,
-        seed,
-        ReplayMode::TwoEpochFrozen,
-    )
+    replay_from_checkpoint(store, None, mode, expected_model_blake3)
 }
 
-/// Replays `store` from an explicit `checkpoint` cursor (or full log when `None`) under `mode`,
-/// comparing every replayed `Percept` decision bit-for-bit against the recorded `Decision` event.
-///
-/// The prior in effect at every log position comes strictly from `prior_loaded` events (and
-/// snapshot state for checkpointed prefixes), never from the caller.
+/// Replays from optional verified `checkpoint` + subsequent log tail in [`LogSeq`] order,
+/// performing Trace-Pinned validation on every recorded `Decision` event.
 pub fn replay_from_checkpoint<S: Store>(
     store: &S,
     checkpoint: Option<&SnapshotCheckpoint>,
-    switches: &Switches,
-    seed: u64,
     mode: ReplayMode,
+    expected_model_blake3: Option<[u8; 32]>,
 ) -> Result<ReplayReport, CoreError> {
-    let (mut state, snapshot_cursor, mut active_prior) = match checkpoint {
+    let (mut state, snapshot_cursor, mut active_config) = match checkpoint {
         Some(ckpt) => {
             let actual = blake3::hash(&ckpt.bytes);
             if actual != ckpt.blake3 {
@@ -113,34 +96,26 @@ pub fn replay_from_checkpoint<S: Store>(
                     actual: blake3::to_hex(&actual),
                 });
             }
-            let mut decoded = CoreState::decode_snapshot(&ckpt.bytes)?;
-            decoded.map_switches = switches.clone();
-            let resolved_prior = match decoded.recorded_prior.clone() {
-                Some(p) => p,
-                None => find_latest_prior_up_to(store, ckpt.cursor)?,
+            let decoded = CoreState::decode_snapshot(&ckpt.bytes)?;
+            let resolved_cfg = match decoded.recorded_config.clone() {
+                Some(cfg) => cfg,
+                None => find_latest_config_up_to(store, ckpt.cursor)?,
             };
-            resolved_prior.validate()?;
-            decoded.theta_ex = resolved_prior.theta_ex;
-            decoded.m_ex = resolved_prior.m_ex;
-            decoded.habituation_gamma = resolved_prior.habituation_gamma();
-            decoded.patience_decay_rho = resolved_prior.patience_decay_rho;
-            decoded.map_prior = resolved_prior.clone();
-            (decoded, Some(ckpt.cursor), resolved_prior)
+            resolved_cfg.validate()?;
+            (decoded, Some(ckpt.cursor), resolved_cfg)
         }
         None => {
-            let default_prior = Prior::default();
+            let default_cfg = CoreConfig::default();
             let mut st = CoreState::new();
-            st.sync_prior(&default_prior, switches);
-            (st, None, default_prior)
+            st.sync_config(&default_cfg);
+            (st, None, default_cfg)
         }
     };
 
-    let use_frozen_anchor = matches!(mode, ReplayMode::TwoEpochFrozen);
     let mut cursor = snapshot_cursor;
     let mut replayed_events = 0usize;
-    let mut matched_decisions = 0usize;
-    let mut first_divergence: Option<ReplayDivergence> = None;
-    let mut pending_expected: BTreeMap<EventId, GateOutcome> = BTreeMap::new();
+    let mut verified_decisions = 0usize;
+    let mut mismatches = Vec::new();
 
     loop {
         let batch = store.read_after_seq(cursor, 256)?;
@@ -149,126 +124,200 @@ pub fn replay_from_checkpoint<S: Store>(
         }
         for rec in batch {
             cursor = Some(rec.seq);
-            replayed_events += 1;
 
             match rec.kind {
-                EventKind::PriorLoaded => {
-                    if let Some(EventDetail::PriorLoaded {
-                        prior: loaded_prior,
-                    }) = &rec.detail
-                    {
-                        loaded_prior.validate()?;
-                        active_prior = (**loaded_prior).clone();
+                EventKind::ConfigLoaded => {
+                    if let Some(EventDetail::ConfigLoaded { config, .. }) = &rec.detail {
+                        config.validate()?;
+                        active_config = (**config).clone();
                     }
                     state.apply_event(&rec);
-                }
-                EventKind::Percept => {
-                    let expected = state.appraise_percept_record(
-                        &rec,
-                        &active_prior,
-                        switches,
-                        seed,
-                        use_frozen_anchor,
-                    );
-                    pending_expected.insert(rec.id, expected);
-                    state.apply_event(&rec);
+                    replayed_events += 1;
+                    continue;
                 }
                 EventKind::Decision => {
                     if let Some(EventDetail::Decision {
                         target_event_id,
                         outcome,
                         salience,
-                        threshold,
                         probability,
                         draw,
                         reason,
+                        trace: Some(tr),
                         ..
                     }) = &rec.detail
                         && *outcome != DecisionOutcome::DoorBlocked
                         && *outcome != DecisionOutcome::Processed
-                        && let Some(recomp) = pending_expected.remove(target_event_id)
                     {
-                        let recorded_val = RecomputedDecisionValue {
+                        verified_decisions += 1;
+                        let recorded_val = RecordedDecisionValue {
+                            seq: rec.seq,
+                            event_id: rec.id,
+                            target_event_id: *target_event_id,
                             outcome: *outcome,
-                            salience: *salience,
-                            threshold: *threshold,
                             probability: *probability,
                             draw: *draw,
                             reason: *reason,
-                        };
-                        let recomputed_val = RecomputedDecisionValue {
-                            outcome: recomp.outcome,
-                            salience: recomp.effective_salience,
-                            threshold: recomp.threshold,
-                            probability: recomp.probability,
-                            draw: recomp.draw,
-                            reason: Some(recomp.reason),
+                            model_blake3: tr.model_blake3,
+                            feature_schema_version: Some(tr.feature_schema_version),
+                            online_adaptation_applied: tr.online_adaptation_applied,
                         };
 
-                        if let Some(field) = find_first_mismatch(&recorded_val, &recomputed_val) {
-                            if first_divergence.is_none() {
-                                first_divergence = Some(ReplayDivergence {
-                                    decision_event_id: rec.id,
-                                    target_event_id: *target_event_id,
-                                    seq: rec.seq,
-                                    field: field.to_owned(),
-                                    recorded: recorded_val,
-                                    recomputed: recomputed_val,
-                                });
-                            }
-                        } else {
-                            matched_decisions += 1;
+                        if (*salience - tr.probability).abs() > 1e-12 && mismatches.is_empty() {
+                            mismatches.push(ReplayMismatch {
+                                seq: rec.seq,
+                                event_id: rec.id,
+                                target_event_id: *target_event_id,
+                                field: "salience".to_owned(),
+                                recorded: recorded_val,
+                                detail: format!(
+                                    "event salience={} != trace probability={}",
+                                    salience, tr.probability
+                                ),
+                            });
+                        } else if let Some((field, detail)) = verify_trace_pinned(
+                            &recorded_val,
+                            tr,
+                            mode,
+                            expected_model_blake3,
+                            &active_config,
+                        ) && mismatches.is_empty()
+                        {
+                            mismatches.push(ReplayMismatch {
+                                seq: rec.seq,
+                                event_id: rec.id,
+                                target_event_id: *target_event_id,
+                                field,
+                                recorded: recorded_val,
+                                detail,
+                            });
                         }
                     }
-                    state.apply_event(&rec);
                 }
-                _ => {
-                    state.apply_event(&rec);
-                }
+                _ => {}
             }
+
+            state.apply_event(&rec);
+            replayed_events += 1;
         }
     }
 
-    let anchor_preserved = state.epoch == 0
-        || (state.epoch_anchor.frozen && state.epoch_anchor.frozen_weights.is_some());
-
     Ok(ReplayReport {
-        snapshot_cursor,
-        epoch: state.epoch,
-        anchor_preserved,
-        replayed_events,
-        matched_decisions,
-        first_divergence,
+        state,
+        recovery: RecoveryReport {
+            snapshot_cursor,
+            replayed_events,
+            resumed_inputs: Vec::new(),
+        },
+        verified_decisions,
+        mismatches,
+        active_config,
     })
 }
 
-fn find_first_mismatch(
-    recorded: &RecomputedDecisionValue,
-    recomputed: &RecomputedDecisionValue,
-) -> Option<&'static str> {
-    if recorded.outcome != recomputed.outcome {
-        return Some("outcome");
+fn verify_trace_pinned(
+    rec: &RecordedDecisionValue,
+    tr: &crate::gate::DecisionTrace,
+    mode: ReplayMode,
+    expected_model_blake3: Option<[u8; 32]>,
+    active_config: &CoreConfig,
+) -> Option<(String, String)> {
+    if rec.outcome != tr.outcome {
+        return Some((
+            "outcome".to_owned(),
+            format!("event outcome {:?} != trace outcome {:?}", rec.outcome, tr.outcome),
+        ));
     }
-    if recorded.salience.to_bits() != recomputed.salience.to_bits() {
-        return Some("salience");
+    if rec.reason.is_some_and(|r| r != tr.reason) {
+        return Some((
+            "reason".to_owned(),
+            format!("event reason {:?} != trace reason {:?}", rec.reason, tr.reason),
+        ));
     }
-    if recorded.threshold.to_bits() != recomputed.threshold.to_bits() {
-        return Some("threshold");
+    if (rec.probability - tr.probability).abs() > 1e-12 {
+        return Some((
+            "probability".to_owned(),
+            format!("event p={} != trace p={}", rec.probability, tr.probability),
+        ));
     }
-    if recorded.probability.to_bits() != recomputed.probability.to_bits() {
-        return Some("probability");
+    if (rec.draw - tr.draw).abs() > 1e-12 {
+        return Some((
+            "draw".to_owned(),
+            format!("event draw={} != trace draw={}", rec.draw, tr.draw),
+        ));
     }
-    if recorded.draw.to_bits() != recomputed.draw.to_bits() {
-        return Some("draw");
+    if tr.feature_schema_version != FEATURE_SCHEMA_VERSION {
+        return Some((
+            "feature_schema_version".to_owned(),
+            format!(
+                "trace schema {} != {}",
+                tr.feature_schema_version, FEATURE_SCHEMA_VERSION
+            ),
+        ));
     }
-    if recorded.reason.is_some() && recorded.reason != recomputed.reason {
-        return Some("reason");
+    if !tr.neural.gate_logits.iter().all(|v| v.is_finite())
+        || !tr
+            .neural
+            .gate_probs
+            .iter()
+            .all(|v| v.is_finite() && *v >= 0.0)
+    {
+        return Some((
+            "neural.gate_probs".to_owned(),
+            "non-finite or negative neural gate outputs in trace".to_owned(),
+        ));
+    }
+    let sum: f32 = tr.neural.gate_probs.iter().sum();
+    if (sum - 1.0).abs() > 1e-3 {
+        return Some((
+            "neural.gate_probs".to_owned(),
+            format!("gate_probs sum {sum} not normalized"),
+        ));
+    }
+    if tr.reason == DecisionReason::Commitment
+        && (!tr.commitment_bypass || tr.outcome != DecisionOutcome::Go)
+    {
+        return Some((
+            "commitment_bypass".to_owned(),
+            "commitment decision must have commitment_bypass=true and outcome=Go".to_owned(),
+        ));
+    }
+    if tr.reason == DecisionReason::NeutralFallback
+        && (!tr.neural.is_neutral_fallback || tr.model_blake3.is_some())
+    {
+        return Some((
+            "neutral_fallback".to_owned(),
+            "neutral fallback must have is_neutral_fallback=true and model_blake3=None".to_owned(),
+        ));
+    }
+    if tr.online_adaptation_applied && !active_config.online_adaptation {
+        return Some((
+            "online_adaptation_applied".to_owned(),
+            "trace applied online adaptation while active CoreConfig disabled it".to_owned(),
+        ));
+    }
+    if mode == ReplayMode::Pinned
+        && let Some(expected) = expected_model_blake3
+        && let Some(actual) = tr.model_blake3
+        && actual != expected
+    {
+        return Some((
+            "model_blake3".to_owned(),
+            format!(
+                "pinned digest mismatch: recorded={}, expected={}",
+                blake3::to_hex(&actual),
+                blake3::to_hex(&expected)
+            ),
+        ));
     }
     None
 }
 
-fn find_latest_prior_up_to<S: Store>(store: &S, max_seq: LogSeq) -> Result<Prior, CoreError> {
-    let mut found: Option<Prior> = None;
+fn find_latest_config_up_to<S: Store>(
+    store: &S,
+    max_seq: LogSeq,
+) -> Result<CoreConfig, CoreError> {
+    let mut found: Option<CoreConfig> = None;
     let mut cursor: Option<LogSeq> = None;
     loop {
         let batch = store.read_after_seq(cursor, 256)?;
@@ -280,10 +329,10 @@ fn find_latest_prior_up_to<S: Store>(store: &S, max_seq: LogSeq) -> Result<Prior
                 return Ok(found.unwrap_or_default());
             }
             cursor = Some(rec.seq);
-            if rec.kind == EventKind::PriorLoaded
-                && let Some(EventDetail::PriorLoaded { prior }) = &rec.detail
+            if rec.kind == EventKind::ConfigLoaded
+                && let Some(EventDetail::ConfigLoaded { config, .. }) = &rec.detail
             {
-                found = Some((**prior).clone());
+                found = Some((**config).clone());
             }
         }
     }

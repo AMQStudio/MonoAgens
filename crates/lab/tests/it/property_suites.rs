@@ -1,12 +1,12 @@
 //! Property-based `proptest` suites (Task 17.1) and payload-independence verification (Task 17.2).
 
 use monoagens_core::{
-    Core, EventDetail, EventKind, HabituationBook, MemStore, NoopDoors, Prior, ReplayMode, Store,
-    Switches, petrov_from_timestamps, petrov_summary,
+    Core, CoreConfig, EventDetail, EventKind, MemStore, NoopDoors, ReplayMode, Store,
+    petrov_from_timestamps, petrov_summary,
 };
 use monoagens_protocol::{
     ActorId, Audience, BodyId, CapabilityDescriptor, CapabilityFlags, CapabilityId,
-    CapabilitySchemaHash, ChannelId, EmbeddingTag, EventId, OpaquePayload, Percept, PlaceId,
+    CapabilitySchemaHash, EmbeddingTag, EventId, OpaquePayload, Percept, PlaceId,
     TaggedEmbedding, Time, VisibleScope,
 };
 use monoagens_store::{BruteForceFlatIndex, IdBitmap, SegmentedStore, StoreConfig, VectorIndex};
@@ -103,27 +103,22 @@ proptest! {
             events,
             scripted_model: Vec::new(),
             checks: Vec::new(),
-            switches: Some(Switches::all_enabled()),
+            core_config: None,
+            model_path: None,
+            online_adaptation: None,
             cost_guard: None,
-            prior: None,
             annotations: Default::default(),
         };
 
-        let run1 = run_scenario(MemStore::new(), Prior::default(), &scenario, seed).unwrap();
-        let run2 = run_scenario(MemStore::new(), Prior::default(), &scenario, seed).unwrap();
+        let run1 = run_scenario(MemStore::new(), CoreConfig::default(), &scenario, seed).unwrap();
+        let run2 = run_scenario(MemStore::new(), CoreConfig::default(), &scenario, seed).unwrap();
 
         let bytes1: Vec<Vec<u8>> = run1.events.iter().map(|e| e.encode_bytes()).collect();
         let bytes2: Vec<Vec<u8>> = run2.events.iter().map(|e| e.encode_bytes()).collect();
         prop_assert_eq!(bytes1, bytes2);
 
-        let replay = replay_events_offline(
-            &Switches::all_enabled(),
-            seed,
-            &run1.events,
-            ReplayMode::FullReplay,
-        )
-        .unwrap();
-        prop_assert!(replay.is_bit_identical(), "divergence: {:?}", replay.first_divergence);
+        let replay = replay_events_offline(&run1.events, ReplayMode::Pinned, None).unwrap();
+        prop_assert!(replay.is_exact(), "divergence: {:?}", replay.mismatches);
     }
 
     /// 17.1: `VisibleScope` non-interference (`Delta_NI == 0`) over random private/public interleavings.
@@ -134,10 +129,12 @@ proptest! {
         public_count in 1_usize..6,
         interleave_bits in prop::collection::vec(any::<bool>(), 2..12),
     ) {
-        let prior = Prior::default();
-        let switches = Switches::all_enabled();
-        let mut core_with_private = Core::open(MemStore::new(), prior.clone(), switches.clone(), seed).unwrap();
-        let mut core_empty_private = Core::open(MemStore::new(), prior, switches, seed).unwrap();
+        let cfg = CoreConfig {
+            seed,
+            ..CoreConfig::default()
+        };
+        let mut core_with_private = Core::open(MemStore::new(), cfg.clone(), None).unwrap();
+        let mut core_empty_private = Core::open(MemStore::new(), cfg, None).unwrap();
         let mut doors = NoopDoors;
 
         let tag = EmbeddingTag {
@@ -258,7 +255,7 @@ proptest! {
         prop_assert!(b_sum.is_finite());
     }
 
-    /// 17.1: Delimiter-safe `HabituationKey` / `source_channel_for` collision resistance on colon-bearing actor IDs.
+    /// 17.1: Delimiter-safe `(PlaceId, ActorId)` key collision resistance on colon-bearing IDs.
     #[test]
     fn prop_delimiter_safe_identity_keys_no_collisions(
         a1 in "[a-z0-9:_-]{1,12}",
@@ -266,24 +263,12 @@ proptest! {
         p1 in "[a-z0-9:_-]{1,12}",
         p2 in "[a-z0-9:_-]{1,12}",
     ) {
-        let ch1 = HabituationBook::source_channel_for(None, &ActorId::new(&a1));
-        let ch2 = HabituationBook::source_channel_for(None, &ActorId::new(&a2));
-        if a1 != a2 {
+        let ch1 = (PlaceId::new(&p1), ActorId::new(&a1));
+        let ch2 = (PlaceId::new(&p2), ActorId::new(&a2));
+        if (p1.as_str(), a1.as_str()) != (p2.as_str(), a2.as_str()) {
             prop_assert_ne!(ch1, ch2);
         } else {
             prop_assert_eq!(ch1, ch2);
-        }
-
-        let k1 = monoagens_core::HabituationKey {
-            place: PlaceId::new(&p1),
-            source_channel: ChannelId::new(format!("actor:{a1}")),
-        };
-        let k2 = monoagens_core::HabituationKey {
-            place: PlaceId::new(&p2),
-            source_channel: ChannelId::new(format!("actor:{a2}")),
-        };
-        if (p1, a1) != (p2, a2) {
-            prop_assert_ne!(k1, k2);
         }
     }
 }
@@ -311,7 +296,15 @@ fn payload_independence_gate_expectations_and_recall_invariant() {
 
     let build_run = |dir: &std::path::Path, payloads: [&[u8]; 3]| {
         let store = SegmentedStore::open(StoreConfig::new(dir)).unwrap();
-        let mut core = Core::open(store, Prior::default(), Switches::all_enabled(), 42).unwrap();
+        let mut core = Core::open(
+            store,
+            CoreConfig {
+                seed: 42,
+                ..CoreConfig::default()
+            },
+            None,
+        )
+        .unwrap();
         let mut doors = NoopDoors;
         let place = PlaceId::new("room:indep");
         let alice = ActorId::new("alice");

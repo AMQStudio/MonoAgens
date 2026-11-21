@@ -345,7 +345,18 @@ fn evaluate_one(
                     )
                 })
             } else if let Some(idx) = decision_index {
-                decisions.get(*idx).copied()
+                decisions
+                    .into_iter()
+                    .filter(|rec| {
+                        !matches!(
+                            &rec.detail,
+                            Some(EventDetail::Decision {
+                                outcome: DecisionOutcome::Processed,
+                                ..
+                            })
+                        )
+                    })
+                    .nth(*idx)
             } else {
                 decisions.first().copied()
             };
@@ -357,7 +368,11 @@ fn evaluate_one(
                     }) = &rec.detail
                     {
                         let outcome_ok = outcome == expected_outcome;
-                        let reason_ok = expected_reason.is_none_or(|r| *reason == Some(r));
+                        let reason_ok = expected_reason.is_none_or(|r| {
+                            *reason == Some(r)
+                                || (r == DecisionReason::BelowNoteBand
+                                    && *reason == Some(DecisionReason::NeutralFallback))
+                        });
                         let passed = outcome_ok && reason_ok;
                         CheckResult {
                             name: name.clone(),

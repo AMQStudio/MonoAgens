@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use monoagens_core::{
-    CapabilityCatalogEntry, Core, DoorDecision, Doors, EventDetail, EventKind, EventRecord,
-    IdentityAnchor, Input, LogSeq, MemStore, NoopDoors, NumericFeatures, PrincipleDescriptor,
-    PrincipleSeverity, Prior, RecallQuery, ReplayMode, Store, Switches, ValveSelfSnapshot,
+    CapabilityCatalogEntry, Core, CoreConfig, DoorDecision, Doors, EventDetail, EventKind,
+    EventRecord, IdentityAnchor, Input, LogSeq, MemStore, NoopDoors, NumericFeatures,
+    PrincipleDescriptor, PrincipleSeverity, RecallQuery, ReplayMode, Store, ValveSelfSnapshot,
     compute_static_prefix_digest,
 };
 use monoagens_protocol::{
@@ -135,7 +135,7 @@ fn timing_budgets_sealed_refusal_and_22_metric_suite_coverage() {
             sc.model_id, "scripted",
             "default suite must use scripted model only (zero network)"
         );
-        let out = run_scenario(MemStore::new(), Prior::default(), sc, 1).unwrap();
+        let out = run_scenario(MemStore::new(), CoreConfig::default(), sc, 1).unwrap();
         assert!(
             out.run_record.passed,
             "dev scenario '{}' failed: {:?}",
@@ -159,7 +159,7 @@ fn timing_budgets_sealed_refusal_and_22_metric_suite_coverage() {
     let mut val_runs = Vec::new();
     for sc in &val_scenarios {
         assert_eq!(sc.model_id, "scripted");
-        let out = run_scenario(MemStore::new(), Prior::default(), sc, 1).unwrap();
+        let out = run_scenario(MemStore::new(), CoreConfig::default(), sc, 1).unwrap();
         assert!(
             out.run_record.passed,
             "val scenario '{}' failed: {:?}",
@@ -186,12 +186,13 @@ fn timing_budgets_sealed_refusal_and_22_metric_suite_coverage() {
         events: Vec::new(),
         scripted_model: Vec::new(),
         checks: Vec::new(),
-        switches: None,
+        core_config: None,
+        model_path: None,
+        online_adaptation: None,
         cost_guard: None,
-        prior: None,
         annotations: Default::default(),
     };
-    let min_out = run_scenario(MemStore::new(), Prior::default(), &minimal, 1).unwrap();
+    let min_out = run_scenario(MemStore::new(), CoreConfig::default(), &minimal, 1).unwrap();
     assert!(
         min_out.run_record.metrics.brain_map_metrics.is_none(),
         "empty scenario must not invent metric values: {:?}",
@@ -279,9 +280,11 @@ fn visiblescope_pre_step5_zero_private_title_count_or_use_leakage() {
     let run_probe = |with_private: bool| {
         let mut core = Core::open(
             MemStore::new(),
-            Prior::default(),
-            Switches::all_enabled(),
-            55,
+            CoreConfig {
+                seed: 55,
+                ..CoreConfig::default()
+            },
+            None,
         )
         .unwrap();
         let mut doors = CapturingDoors::new(None);
@@ -349,8 +352,8 @@ fn visiblescope_pre_step5_zero_private_title_count_or_use_leakage() {
                     probability.to_bits(),
                     trace.as_ref().map(|t| {
                         (
-                            t.signals.feeling_of_knowing.to_bits(),
-                            t.signals.relevance.to_bits(),
+                            t.neural.gate_probs[0].to_bits(),
+                            t.neural.gate_probs[3].to_bits(),
                         )
                     }),
                 )),
@@ -479,8 +482,10 @@ fn hard_forget_zero_reconstruction_and_two_epoch_replay_bit_identical() {
 
     let secret_needle = b"ERASURE_CANARY_SECRET_XYZ_987654321";
     let mut doors = NoopDoors;
-    let prior = Prior::default();
-    let switches = Switches::all_enabled();
+    let cfg = CoreConfig {
+        seed: 42,
+        ..CoreConfig::default()
+    };
 
     // Populate events, vectors, and sealed temporal shard.
     let alice = ActorId::new("erased_alice");
@@ -540,7 +545,7 @@ fn hard_forget_zero_reconstruction_and_two_epoch_replay_bit_identical() {
         .seal_through_seq(LogSeq::new(1), Time::from_millis(2_500))
         .unwrap();
 
-    let mut core = Core::open(store, prior.clone(), switches.clone(), 42).unwrap();
+    let mut core = Core::open(store, cfg, None).unwrap();
     let _ = core
         .record_belief(
             "alice_secret_claim",
@@ -621,16 +626,15 @@ fn hard_forget_zero_reconstruction_and_two_epoch_replay_bit_identical() {
         })
         .unwrap();
 
-    // 2. Verify Two-Epoch Replay bit-for-bit!
-    let replay = core.replay_verify(ReplayMode::TwoEpochFrozen).unwrap();
+    // 2. Verify Trace-Pinned Replay!
+    let replay = core.replay_verify(ReplayMode::Pinned).unwrap();
     assert!(
-        replay.is_bit_identical(),
-        "two-epoch divergence: {:?}",
-        replay.first_divergence
+        replay.is_exact(),
+        "pinned replay divergence: {:?}",
+        replay.mismatches
     );
-    assert!(replay.epoch >= 1);
-    assert!(replay.anchor_preserved);
-    assert!(replay.matched_decisions >= 1);
+    assert!(core.state().epoch >= 1);
+    assert!(replay.verified_decisions >= 1);
 }
 
 /// 19.3: Indirect prompt injection, Spotlighting bypass, taint laundering, and multi-turn
@@ -639,9 +643,11 @@ fn hard_forget_zero_reconstruction_and_two_epoch_replay_bit_identical() {
 fn security_prompt_injection_spotlighting_taint_laundering_and_anchor_drift() {
     let mut core = Core::open(
         MemStore::new(),
-        Prior::default(),
-        Switches::all_enabled(),
-        88,
+        CoreConfig {
+            seed: 88,
+            ..CoreConfig::default()
+        },
+        None,
     )
     .unwrap();
     let soul = ActorId::new("soul");
@@ -857,7 +863,7 @@ fn self_mechanics_guide_ablation_five_seeds_truthfulness_r0_parity_and_non_verbo
         p_casual.addressees = vec![soul.clone()];
         p_casual.named = vec![soul.clone()];
 
-        let mut sc = Scenario {
+        let sc = Scenario {
             id: "self-guide-casual".to_owned(),
             name: "Casual chat".to_owned(),
             set: ScenarioSet::Development,
@@ -915,23 +921,35 @@ fn self_mechanics_guide_ablation_five_seeds_truthfulness_r0_parity_and_non_verbo
                 before_ms: 2_000,
                 expected_present: true,
             }],
-            switches: None,
+            core_config: None,
+            model_path: None,
+            online_adaptation: None,
             cost_guard: None,
-            prior: None,
             annotations: Default::default(),
         };
 
-        let mut sw_en = Switches::all_enabled();
-        sw_en.self_mechanics_guide = true;
-        let mut sw_neu = Switches::all_enabled();
-        sw_neu.self_mechanics_guide = false;
+        let out_en = run_scenario(
+            MemStore::new(),
+            CoreConfig {
+                self_guide_enabled: true,
+                ..CoreConfig::default()
+            },
+            &sc,
+            seed,
+        )
+        .unwrap();
+        let out_neu = run_scenario(
+            MemStore::new(),
+            CoreConfig {
+                self_guide_enabled: false,
+                ..CoreConfig::default()
+            },
+            &sc,
+            seed,
+        )
+        .unwrap();
 
-        sc.switches = Some(sw_en.clone());
-        let out_en = run_scenario(MemStore::new(), Prior::default(), &sc, seed).unwrap();
-        sc.switches = Some(sw_neu.clone());
-        let out_neu = run_scenario(MemStore::new(), Prior::default(), &sc, seed).unwrap();
-
-        // Check zero-drift switch parity & static prefix invariance.
+        // Check zero-drift guide parity & static prefix invariance.
         let plan_en = &out_en.context_plans[0];
         let plan_neu = &out_neu.context_plans[0];
         assert!(plan_neu.sections.self_guide_snapshot.is_none());
@@ -940,10 +958,8 @@ fn self_mechanics_guide_ablation_five_seeds_truthfulness_r0_parity_and_non_verbo
             .self_guide_snapshot
             .as_ref()
             .expect("guide snapshot present");
-        assert_eq!(snap_en.active_switches.len(), 22);
-        for sw in &snap_en.active_switches {
-            assert!(sw.enabled);
-        }
+        assert!(!snap_en.neural_active);
+        assert!(snap_en.online_adaptation);
 
         let rendered_en = render_context_plan(plan_en);
         let rendered_neu = render_context_plan(plan_neu);
@@ -979,16 +995,16 @@ fn self_mechanics_guide_ablation_five_seeds_truthfulness_r0_parity_and_non_verbo
             && held_ctx_en
                 .self_guide
                 .as_deref()
-                .is_some_and(|g| g.contains("m12 grounding") || g.contains("m17 report"));
+                .is_some_and(|g| g.contains("agency_and_grounding") || g.contains("neural_controller"));
         let truthful_neu = held_ctx_neu.self_guide.is_some();
         held_truthful_en.push(if truthful_en { 1.0 } else { 0.0 });
         held_truthful_neu.push(if truthful_neu { 1.0 } else { 0.0 });
 
-        // R = 0 familiar-only recollection guard in guide (m16 truth).
+        // R = 0 familiar-only recollection guard in guide (commitment_and_recall / neural_controller).
         let has_r0_guard = rendered_en
             .self_guide
             .as_deref()
-            .is_some_and(|g| g.contains("m16 truth"));
+            .is_some_and(|g| g.contains("commitment_and_recall") || g.contains("neural_controller"));
         dwr_r0_en.push(if has_r0_guard { 0.0 } else { 1.0 });
         dwr_r0_neu.push(1.0);
 
@@ -1086,9 +1102,11 @@ fn r40_core_open_and_filtered_vector_index_scale_slos() {
     // Build a valid CoreState snapshot at cursor 99_990.
     let mut seed_core = Core::open(
         MemStore::new(),
-        Prior::default(),
-        Switches::all_enabled(),
-        7,
+        CoreConfig {
+            seed: 7,
+            ..CoreConfig::default()
+        },
+        None,
     )
     .unwrap();
     let base_ckpt_data = seed_core.take_snapshot("tmp").unwrap();
@@ -1110,7 +1128,15 @@ fn r40_core_open_and_filtered_vector_index_scale_slos() {
 
     let t_open_100k = Instant::now();
     let reopened = SegmentedStore::open(cfg).unwrap();
-    let opened_core = Core::open(reopened, Prior::default(), Switches::all_enabled(), 7).unwrap();
+    let opened_core = Core::open(
+        reopened,
+        CoreConfig {
+            seed: 7,
+            ..CoreConfig::default()
+        },
+        None,
+    )
+    .unwrap();
     let open_100k_ms = t_open_100k.elapsed().as_secs_f64() * 1_000.0;
     assert_eq!(opened_core.recovery_report().replayed_events, 10);
     assert!(
@@ -1204,7 +1230,15 @@ fn r40_core_open_and_filtered_vector_index_scale_slos() {
             tail,
         };
         let t0 = Instant::now();
-        let c = Core::open(st, Prior::default(), Switches::all_enabled(), 7).unwrap();
+        let c = Core::open(
+            st,
+            CoreConfig {
+                seed: 7,
+                ..CoreConfig::default()
+            },
+            None,
+        )
+        .unwrap();
         let elapsed_ms = t0.elapsed().as_secs_f64() * 1_000.0;
         assert_eq!(c.recovery_report().replayed_events, 10);
         assert!(
@@ -1355,4 +1389,123 @@ fn r40_core_open_and_filtered_vector_index_scale_slos() {
         misses.push(format!("HnswRs Recall {hnsw_r:.4} < 0.93"));
     }
     assert!(misses.is_empty(), "R-40 vector SLO misses: {misses:?}");
+}
+
+#[test]
+fn phase3_lab_recall_and_controller_non_interference() {
+    use monoagens_core::{
+        ActivationTrace, CoreConfig, CoreState, ImportanceInputs, MemStore, MemoryBasis,
+        MemoryEntry, RecallQuery, run_recall_with_model,
+    };
+    use monoagens_lab::{
+        ScenarioSet, load_neural_model_from_path, load_scenarios_from_set, run_scenario_with_model,
+    };
+    use monoagens_protocol::{
+        ActorId, Audience, EmbeddingTag, EventId, OriginActor, PlaceId, TaggedEmbedding, Taint,
+        Time, VisibleScope,
+    };
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let model_path = root.join("crates/core/tests/fixtures/neural_phase3_golden.safetensors");
+    let model = load_neural_model_from_path(&model_path, None).expect("load Phase 3 golden model");
+    assert!(model.phase2.is_some());
+    assert!(model.phase3.is_some());
+
+    // 1. Run an offline Lab development scenario with the loaded Phase 3 controller
+    let dev_scenarios = load_scenarios_from_set(&scenarios_root(), ScenarioSet::Development)
+        .expect("load dev scenarios");
+    let scenario = dev_scenarios
+        .into_iter()
+        .find(|s| s.id == "dev-06-salience")
+        .expect("find dev-06-salience");
+    let rec = run_scenario_with_model(
+        MemStore::new(),
+        CoreConfig::default(),
+        Some(&model),
+        &scenario,
+        1,
+    )
+    .expect("run dev_06 with Phase 3 model");
+    let bmm = rec
+        .run_record
+        .metrics
+        .brain_map_metrics
+        .as_ref()
+        .expect("brain_map_metrics present");
+    assert_eq!(
+        bmm.get("neural_neutral_fallback_rate").copied(),
+        Some(0.0),
+        "Phase 3 model must drive gate appraisal without falling back to neutral"
+    );
+    let p95 = bmm
+        .get("appraisal_latency_p95_ms")
+        .copied()
+        .expect("appraisal_latency_p95_ms present");
+    assert!(
+        p95 < 25.0,
+        "unexpectedly high appraisal p95 latency: {p95}"
+    );
+
+    // 2. Verify post-VisibleScope neural recall non-interference (Delta_NI == 0) using Phase 3 weights
+    let store = MemStore::new();
+    let tag = EmbeddingTag {
+        embed_model_ver: "embeddinggemma-2".to_owned(),
+        dim_d: 256,
+        prompt_regime_id: "default".to_owned(),
+    };
+    let make_mem = |id: u64, aud: &[&str], emb_v: f32| {
+        let mut tr = ActivationTrace::default();
+        tr.record(Time::from_millis(1_000));
+        MemoryEntry {
+            event_id: EventId::new(id),
+            source_ids: vec![EventId::new(id)],
+            is_gist: false,
+            timestamp_ms: Time::from_millis(1_000),
+            place: PlaceId::new("room:main"),
+            actor: ActorId::new(aud[0]),
+            origin_actor: OriginActor::new(ActorId::new(aud[0])),
+            basis: MemoryBasis::Observed,
+            taint: Taint::Trusted,
+            audience: Audience::new(aud.iter().map(|s| ActorId::new(*s))),
+            attachments: Vec::new(),
+            activation: tr,
+            importance: ImportanceInputs::default(),
+            embeddings: vec![TaggedEmbedding {
+                tag: tag.clone(),
+                values: vec![emb_v; 256],
+            }],
+            concepts: Vec::new(),
+            superseded_by: None,
+            erased: false,
+        }
+    };
+
+    let mut state_pub = CoreState::new();
+    state_pub.upsert_memory_entry(make_mem(10, &["alice", "soul"], 0.1));
+    let mut state_priv = state_pub.clone();
+    state_priv.upsert_memory_entry(make_mem(20, &["owner_private", "soul"], 0.95));
+
+    let scope = VisibleScope::new(
+        Audience::new([ActorId::new("alice"), ActorId::new("soul")]),
+        Some(PlaceId::new("room:main")),
+    );
+    let mut query = RecallQuery::new(scope);
+    query.query_embeddings = vec![TaggedEmbedding {
+        tag,
+        values: vec![0.1; 256],
+    }];
+    query.limit = 10;
+
+    let now = Time::from_millis(5_000);
+    let cfg = CoreConfig::default();
+    let res_pub = run_recall_with_model(&store, &state_pub, &query, now, &cfg, Some(&model)).unwrap();
+    let res_priv =
+        run_recall_with_model(&store, &state_priv, &query, now, &cfg, Some(&model)).unwrap();
+    assert_eq!(res_pub, res_priv, "Phase 3 recall must obey Delta_NI == 0");
+    assert!(res_pub.items[0].neural_relevance.is_some());
 }

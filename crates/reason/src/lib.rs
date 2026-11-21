@@ -44,7 +44,7 @@ pub use render::{
     RenderExtras, RenderedContext, SELF_GUIDE_MAX_TOKENS, apply_selected_tools,
     build_model_request_from_plan, escape_spotlight_payload, estimate_prompt_tokens,
     format_absolute_utc, render_context_plan, render_context_plan_with, render_segment,
-    render_self_guide, self_guide_mechanism_line, spotlight_delimiters,
+    render_self_guide, self_guide_section_line, spotlight_delimiters,
 };
 pub use secrets::{
     ConfigSourceKind, ENV_EMBED_API_KEY, ENV_EMBED_ENDPOINT, ENV_MODEL_API_KEY, ENV_MODEL_ENDPOINT,

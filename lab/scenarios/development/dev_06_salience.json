@@ -195,7 +195,7 @@
       "check": "decision_is",
       "name": "salient_percept_go",
       "kind": "structural",
-      "target_event_id": 3,
+      "decision_index": 1,
       "expected_outcome": "go"
     }
   ],

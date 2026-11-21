@@ -33,6 +33,7 @@ rusqlite = { version = "0.43", features = ["bundled"] }
 usearch = "2.26"
 hnsw_rs = "0.3"
 blake3 = "1.8"
+safetensors = "0.8.0"
 postcard = { version = "1.1", features = ["use-std"] }
 tempfile = "3.27"
 proptest = "1.12"

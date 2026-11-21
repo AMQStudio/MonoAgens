@@ -520,7 +520,9 @@ fn suite_options(tmp: &TempDir, proxy_url: String, phase: MemoryPhase) -> Memory
         datasets_dir: workspace_root().join("lab/datasets"),
         manifest_path: Some(workspace_root().join("lab/datasets.manifest.toml")),
         run_dir: tmp.path().join("run"),
-        prior: monoagens_store::load_prior_or_default(None).unwrap().prior,
+        core_config: monoagens_store::load_core_config_or_default(None)
+            .unwrap()
+            .config,
         seed: 1,
         phase,
         live: true,
@@ -1215,15 +1217,14 @@ fn fixture_record() -> RunRecord {
         schema_version: "1.0".to_owned(),
         run_id: "fixture".to_owned(),
         core_version: "test".to_owned(),
-        prior_content_version: "1".to_owned(),
-        prior_format_version: 1,
-        prior_digest: "digest".to_owned(),
+        config_format_version: 1,
+        config_digest: "digest".to_owned(),
+        model_blake3: None,
+        online_adaptation: true,
         open_offset: 0,
         model_id: "deepseek-v4.1-flash".to_owned(),
         embedder_id: "none".to_owned(),
         door_rules: Vec::new(),
-        switches: monoagens_core::Switches::all_enabled(),
-        learning_switches: BTreeMap::new(),
         seed: 1,
         scenario_id: "locomo".to_owned(),
         scenario_set: ScenarioSet::External,
@@ -1508,12 +1509,13 @@ fn registered_capability_yields_dispatched_speak_answer_and_configured_timeout()
         seen_timeout: Arc::new(AtomicUsize::new(0)),
         seen_capability: Arc::new(AtomicUsize::new(0)),
     };
-    let prior = monoagens_store::load_prior_or_default(None).unwrap().prior;
+    let cfg = monoagens_store::load_core_config_or_default(None)
+        .unwrap()
+        .config;
     let mut guard = monoagens_lab::CostGuard::default();
     let exec = execute_external_item_with_embedder(
         &item,
-        &prior,
-        &monoagens_core::Switches::all_enabled(),
+        &cfg,
         1,
         &provider,
         "mock-capability",
@@ -1643,7 +1645,9 @@ fn mock_history_prompts_carry_trigger_and_capability() {
         }
     }
 
-    let prior = monoagens_store::load_prior_or_default(None).unwrap().prior;
+    let cfg = monoagens_store::load_core_config_or_default(None)
+        .unwrap()
+        .config;
     for dataset in ["locomo", "longmemeval"] {
         let provider = RecordingProvider {
             seen: Mutex::new(Vec::new()),
@@ -1651,8 +1655,7 @@ fn mock_history_prompts_carry_trigger_and_capability() {
         let mut guard = monoagens_lab::CostGuard::default();
         let exec = execute_external_item_with_embedder(
             &item(dataset),
-            &prior,
-            &monoagens_core::Switches::all_enabled(),
+            &cfg,
             1,
             &provider,
             "mock-recording",
@@ -1826,8 +1829,10 @@ fn render_dry_run_blocks_live_run_on_empty_trigger_or_no_capabilities() {
         }],
     };
     let dir = tempfile::tempdir().expect("tempdir");
-    let prior = monoagens_store::load_prior_or_default(None).unwrap().prior;
-    let written = run_render_dry_run_gate(&[("locomo".to_owned(), &item)], dir.path(), &prior, 1)
+    let cfg = monoagens_store::load_core_config_or_default(None)
+        .unwrap()
+        .config;
+    let written = run_render_dry_run_gate(&[("locomo".to_owned(), &item)], dir.path(), &cfg, 1)
         .expect("valid item passes dry run");
     assert_eq!(written.len(), 1);
     assert!(written[0].exists());
@@ -2087,11 +2092,13 @@ fn render_dry_run_renders_classify_with_event_and_condition_text() {
     };
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let prior = monoagens_store::load_prior_or_default(None).unwrap().prior;
+    let cfg = monoagens_store::load_core_config_or_default(None)
+        .unwrap()
+        .config;
     let written = run_render_dry_run_gate_with_embedder(
         &[("locomo".to_owned(), &item)],
         dir.path(),
-        &prior,
+        &cfg,
         1,
         Some(&embedder),
     )

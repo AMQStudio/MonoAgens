@@ -22,12 +22,22 @@ use crate::event::{
     encode_expect_kind, encode_opt_promise_meta, encode_opt_recurrence_spec,
     encode_opt_sensed_effect, encode_tagged_embeddings_bin, encode_taint, encode_term_reason,
 };
-use crate::gate::patience::{
-    PATIENCE_NUM_BUCKETS, bucket_midpoint_ms, bucket_upper_ms, normal_cdf,
+pub mod patience_sketch;
+
+pub use patience_sketch::{
+    LatencySketch, PATIENCE_NUM_BUCKETS, bucket_midpoint_ms, bucket_upper_ms, normal_cdf,
 };
-use crate::gate::{ExpectationCue, LatencySketch, PromiseSummary, cosine_similarity};
-use crate::prior::Prior;
-use crate::registry::Switches;
+use crate::gate::{ExpectationCue, PromiseSummary, cosine_similarity};
+
+const DEFAULT_LATENCY_SIGMA_LN: f64 = 1.2;
+const DEFAULT_LATENCY_PRIOR_N0: f64 = 4.0;
+const DEFAULT_LATENCY_PLACE_N0: f64 = 4.0;
+const DEFAULT_WAKE_GATE_LO: f64 = 0.35;
+const DEFAULT_WAKE_GATE_MARGIN: f64 = 0.05;
+const DEFAULT_WAKE_GATE_HI_EPSILON: f64 = 0.06;
+const DEFAULT_AGENCY_TOLERANCE_K: f64 = 2.5;
+const DEFAULT_CONTENT_MISS_Z_THRESHOLD: f64 = 2.0;
+const DEFAULT_CONTENT_MISS_MIN_SAMPLES: usize = 3;
 
 /// Physical/sensor effect prediction metadata attached to an [`ExpectKind::Effect`] record (`R-09`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -329,13 +339,8 @@ impl ResponseLatencyTracker {
         medium: &ChannelId,
         body_declared_ms: u64,
         quantile: f64,
-        prior: &Prior,
-        switches: &Switches,
     ) -> u64 {
         let declared = body_declared_ms.max(1);
-        if !switches.prediction_and_grounding {
-            return declared;
-        }
 
         let (w_med, cdf_med) = self
             .by_medium
@@ -351,9 +356,9 @@ impl ResponseLatencyTracker {
         }
 
         let ln_l_typ = (declared as f64).ln();
-        let sigma_ln = prior.patience_sigma_ln.max(1e-3);
-        let n0_global = prior.patience_prior_n0.max(0.0);
-        let n0_place = prior.patience_place_n0.max(0.0);
+        let sigma_ln = DEFAULT_LATENCY_SIGMA_LN;
+        let n0_global = DEFAULT_LATENCY_PRIOR_N0;
+        let n0_place = DEFAULT_LATENCY_PLACE_N0;
         let q = quantile.clamp(0.01, 0.99);
 
         let mut chosen_bucket = PATIENCE_NUM_BUCKETS - 1;
@@ -464,7 +469,7 @@ pub struct WakeGateCalibrator {
 impl Default for WakeGateCalibrator {
     fn default() -> Self {
         Self {
-            wake_gate_lo: Prior::default().wake_gate_lo,
+            wake_gate_lo: DEFAULT_WAKE_GATE_LO,
             wake_gate_hi: None,
             verdicts: Vec::new(),
         }
@@ -491,7 +496,6 @@ impl WakeGateCalibrator {
         expectation_id: EventId,
         similarity: f64,
         met: bool,
-        prior: &Prior,
     ) {
         if !similarity.is_finite() {
             return;
@@ -516,10 +520,11 @@ impl WakeGateCalibrator {
         if !positives.is_empty() {
             positives.sort_by(f64::total_cmp);
             let idx = ((positives.len() as f64 - 1.0) * 0.10).floor().max(0.0) as usize;
-            let q10 = (positives[idx] - prior.wake_gate_margin).clamp(0.0, 1.0);
+            let q10 = (positives[idx] - DEFAULT_WAKE_GATE_MARGIN).clamp(0.0, 1.0);
             let n = positives.len() as f64;
-            let n0 = prior.patience_prior_n0.max(1.0);
-            self.wake_gate_lo = ((n0 * prior.wake_gate_lo + n * q10) / (n0 + n)).clamp(0.0, 1.0);
+            let n0 = DEFAULT_LATENCY_PRIOR_N0;
+            self.wake_gate_lo =
+                ((n0 * DEFAULT_WAKE_GATE_LO + n * q10) / (n0 + n)).clamp(0.0, 1.0);
         }
     }
 
@@ -527,11 +532,11 @@ impl WakeGateCalibrator {
     ///
     /// Succeeds ONLY if at least `ceil(3 / epsilon)` verdicts with `similarity >= candidate_hi`
     /// have been recorded AND none of them were negative (`met == false`).
-    pub fn try_adopt_upper_band(&mut self, candidate_hi: f64, prior: &Prior) -> bool {
+    pub fn try_adopt_upper_band(&mut self, candidate_hi: f64) -> bool {
         if !candidate_hi.is_finite() || !(0.0..=1.0).contains(&candidate_hi) {
             return false;
         }
-        let required = Self::rule_of_three_required(prior.wake_gate_hi_epsilon);
+        let required = Self::rule_of_three_required(DEFAULT_WAKE_GATE_HI_EPSILON);
         let mut above_count = 0usize;
         for v in &self.verdicts {
             if v.similarity >= candidate_hi {
@@ -704,12 +709,7 @@ impl ExpectationBook {
         &self,
         percept: &EventRecord,
         soul_id: &ActorId,
-        prior: &Prior,
-        switches: &Switches,
     ) -> Option<EventId> {
-        if !switches.agency {
-            return None;
-        }
         let (corr_id, channel, reply_to) = match &percept.detail {
             Some(EventDetail::PerceptMeta {
                 correlation_id,
@@ -759,7 +759,7 @@ impl ExpectationBook {
         if !delta_obs.is_finite() {
             return None;
         }
-        let k_tol = prior.agency_tolerance_k.max(0.0);
+        let k_tol = DEFAULT_AGENCY_TOLERANCE_K;
         for (&eid, exp) in &self.expectations {
             if exp.kind != ExpectKind::Effect || !exp.is_active() {
                 continue;
@@ -914,7 +914,6 @@ impl ExpectationBook {
         exp_id: EventId,
         reply: &EventRecord,
         reply_embeddings: &[TaggedEmbedding],
-        prior: &Prior,
     ) -> Option<ContentMissReport> {
         let exp = self.expectations.get(&exp_id)?;
         let spec = exp.response_spec.as_ref()?;
@@ -944,7 +943,7 @@ impl ExpectationBook {
                     timing_delta_ms,
                     distance: 1.0,
                     usual_distance: self.place_distances.get(&place).map_or(0.0, |s| s.mean),
-                    z_score: prior.content_miss_z_threshold + 1.0,
+                    z_score: DEFAULT_CONTENT_MISS_Z_THRESHOLD + 1.0,
                 });
             }
             return None;
@@ -960,15 +959,15 @@ impl ExpectationBook {
                 timing_delta_ms,
                 distance,
                 usual_distance: usual,
-                z_score: prior.content_miss_z_threshold + 1.0,
+                z_score: DEFAULT_CONTENT_MISS_Z_THRESHOLD + 1.0,
             });
         }
 
         let stats = self.place_distances.entry(place).or_default();
         if let Some((usual, z_score)) = stats.check_miss(
             distance,
-            prior.content_miss_z_threshold,
-            prior.content_miss_min_samples,
+            DEFAULT_CONTENT_MISS_Z_THRESHOLD,
+            DEFAULT_CONTENT_MISS_MIN_SAMPLES,
         ) {
             return Some(ContentMissReport {
                 expectation_id: exp_id,
@@ -1828,11 +1827,12 @@ fn decode_sketch(r: &mut BinReader<'_>) -> Result<LatencySketch, EventFormatErro
 #[cfg(test)]
 mod tests {
     use super::{
-        PlaceDistanceStats, ResponseLatencyTracker, WakeGateCalibrator, advance_recurrence_schedule,
+        PlaceDistanceStats, ResponseLatencyTracker, WakeGateCalibrator,
+        advance_recurrence_schedule,
     };
-    use crate::prior::Prior;
-    use crate::registry::Switches;
     use monoagens_protocol::{ChannelId, EventId, PlaceId, RecurrenceSchedule, Time};
+
+    const DEFAULT_RESPONSE_EXPIRY_QUANTILE: f64 = 0.90;
 
     #[test]
     fn interval_and_cron_recurrence_advance_without_storms() {
@@ -1866,62 +1866,46 @@ mod tests {
 
     #[test]
     fn rule_of_three_blocks_premature_upper_band_and_negative_verdict() {
-        let prior = Prior::default();
         let mut gate = WakeGateCalibrator::default();
         assert_eq!(WakeGateCalibrator::rule_of_three_required(0.06), 50);
 
         for i in 1..=49 {
-            gate.record_verdict(EventId::new(i), EventId::new(1), 0.95, true, &prior);
+            gate.record_verdict(EventId::new(i), EventId::new(1), 0.95, true);
         }
         assert!(
-            !gate.try_adopt_upper_band(0.90, &prior),
+            !gate.try_adopt_upper_band(0.90),
             "49 verdicts < 50 must not adopt upper band"
         );
 
         // One negative verdict above 0.90 blocks adoption even at 50+.
-        gate.record_verdict(EventId::new(50), EventId::new(1), 0.92, false, &prior);
-        assert!(!gate.try_adopt_upper_band(0.90, &prior));
+        gate.record_verdict(EventId::new(50), EventId::new(1), 0.92, false);
+        assert!(!gate.try_adopt_upper_band(0.90));
 
         // Clean 50 verdicts above 0.96 -> allowed.
         let mut clean = WakeGateCalibrator::default();
         for i in 1..=50 {
-            clean.record_verdict(EventId::new(i), EventId::new(1), 0.97, true, &prior);
+            clean.record_verdict(EventId::new(i), EventId::new(1), 0.97, true);
         }
-        assert!(clean.try_adopt_upper_band(0.96, &prior));
+        assert!(clean.try_adopt_upper_band(0.96));
         assert_eq!(clean.wake_gate_hi, Some(0.96));
     }
 
     #[test]
     fn response_latency_uses_declared_on_new_place_and_learns_slow_place() {
-        let prior = Prior::default();
-        let sw = Switches::all_enabled();
         let mut tracker = ResponseLatencyTracker::default();
         let place = PlaceId::new("slow_email");
         let med = ChannelId::new("email");
 
         assert_eq!(
-            tracker.estimate_window_ms(
-                &place,
-                &med,
-                12_000,
-                prior.response_expiry_quantile,
-                &prior,
-                &sw
-            ),
+            tracker.estimate_window_ms(&place, &med, 12_000, DEFAULT_RESPONSE_EXPIRY_QUANTILE),
             12_000
         );
 
         for _ in 0..15 {
             tracker.observe_response(&place, &med, 7_200_000, 1.0); // 2 hours
         }
-        let learned = tracker.estimate_window_ms(
-            &place,
-            &med,
-            12_000,
-            prior.response_expiry_quantile,
-            &prior,
-            &sw,
-        );
+        let learned =
+            tracker.estimate_window_ms(&place, &med, 12_000, DEFAULT_RESPONSE_EXPIRY_QUANTILE);
         assert!(
             learned >= 3_600_000,
             "slow place must learn hour-scale duration, got {learned} ms"

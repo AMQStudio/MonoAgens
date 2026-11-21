@@ -1,11 +1,12 @@
 //! Sans-IO cognitive core for MonoAgens.
 //!
-//! `monoagens-core` depends strictly on `monoagens-protocol` and `serde`, performing
-//! no filesystem, network, clock, or process IO directly.
+//! `monoagens-core` depends strictly on `monoagens-protocol`, `serde`, and `safetensors`,
+//! performing no filesystem, network, clock, or process IO directly.
 
 #![forbid(unsafe_code)]
 
 use core::fmt;
+use std::sync::Arc;
 
 use monoagens_protocol::{
     Action, ActionId, ActorFacts, ActorId, Audience, BodyState, ClassificationVerdict,
@@ -18,22 +19,20 @@ use serde::{Deserialize, Serialize};
 pub mod activation;
 pub mod beliefs;
 pub mod blake3;
+pub mod config;
 pub mod consolidation;
 pub mod context;
 pub mod event;
 pub mod expectations;
 pub mod gate;
-pub mod learn;
 pub mod ledger;
 pub mod r#loop;
-pub mod map;
 pub mod mem_store;
+pub mod neural;
 pub mod ports;
-pub mod prior;
 pub mod privacy;
 pub mod recall;
 pub use recall as memory;
-pub mod registry;
 pub mod replay;
 pub mod rng;
 pub mod state;
@@ -42,56 +41,50 @@ pub mod tck_hooks;
 pub mod turn;
 
 pub use activation::{
-    ActivationTrace, MIN_AGE_HOURS, closeness_from_trace, context_base_level, decay_exponent,
-    petrov_from_timestamps, petrov_summary, place_familiarity, sigmoid,
+    ActivationTrace, DEFAULT_PETROV_D, MIN_AGE_HOURS, closeness_from_trace, context_base_level,
+    decay_exponent, petrov_from_timestamps, petrov_summary, place_familiarity, sigmoid,
 };
 pub use beliefs::{
-    BeliefBook, BeliefLogEntry, BeliefRecord, BetaCredence, CredenceRebaseRecord,
-    DEFAULT_DOMAIN_ID, DomainCentroid, DomainClusterBook, DomainClusterUpdate,
-    DomainTransitionKind, DomainTransitionRecord, hungarian_min_cost, parse_basis_str,
+    BeliefBook, BeliefLogEntry, BeliefRecord, BetaCredence, DEFAULT_DOMAIN_ID, parse_basis_str,
     verify_claimed_basis,
 };
+pub use config::{CURRENT_CORE_CONFIG_VERSION, ConfigError, CoreConfig};
 pub use consolidation::{
-    BoundaryEvaluation, BoundaryInputs, EpisodeAdmitParams, EpisodeBook, EpisodeEventOutcome,
-    EpisodeRecord, EpisodeState, ExtractProcedureParams, FadeCandidate, FailureEpisodeRecord,
-    LessonEntry, PendingSleepRun, PlaceBoundaryState, ProcedureLifecycleState,
-    ProcedureMonitorOutcome, RecordLessonParams, RegisterProcedureParams, SkillBook,
-    SleepTriggerStatus, SuccessEpisodeRecord, TrackedProcedure, compute_procedure_schema_hash,
-    empirical_bayes_moments, evaluate_sleep_trigger, join_episode_taint, participant_jaccard,
+    EpisodeAdmitParams, EpisodeBook, EpisodeEventOutcome, EpisodeRecord, EpisodeState,
+    ExtractProcedureParams, FadeCandidate, FailureEpisodeRecord, LessonEntry, PendingSleepRun,
+    ProcedureLifecycleState, ProcedureMonitorOutcome, RecordLessonParams, RegisterProcedureParams,
+    SkillBook, SleepTriggerStatus, SuccessEpisodeRecord, TrackedProcedure,
+    compute_procedure_schema_hash, evaluate_sleep_trigger, join_episode_taint, participant_jaccard,
     remaining_unconsolidated_episodes, schema_matches_catalog, select_fade_candidates,
 };
 pub use context::{
     AutoRecallTriggerState, CapabilityCatalogEntry, CommitmentSlotItem, ContextSections,
     ContextSegment, ContextSlotKind, CoreSelfCard, CoreSelfSnapshot, DroppedContextItem,
-    IdentityAnchor, MechanismSwitchState, ModelTask, PrincipleAuditVerdict, PrincipleDescriptor,
-    PrincipleSeverity, ProcedureEntry, SelectedToolSet, SelfGuideTemplateEntry, SourceLedgerCard,
+    IdentityAnchor, ModelTask, PrincipleAuditVerdict, PrincipleDescriptor, PrincipleSeverity,
+    ProcedureEntry, SelectedToolSet, SelfGuideTemplateEntry, SourceLedgerCard,
     ToolSelectionBudget, TrustSegmentKind, ValveSelfSnapshot, VisibleScopeSummary,
     calibrate_confidence_0_20, classify_trust_segment, compute_report_threshold,
     compute_static_prefix_digest, enforce_context_budget, estimate_record_bytes,
-    segment_from_event, segment_from_recalled, select_tools_for_context, self_guide_template_for,
+    segment_from_event, segment_from_recalled, select_tools_for_context,
     self_guide_template_table,
 };
 pub use event::{
-    DecisionOutcome, DoorKind, EventDetail, EventFormat, EventFormatError, EventKind, EventRecord,
-    EventRecordV1, ExpectationLifecycleState, LogSeq, NumericFeatures,
+    CredenceRebaseRecord, DecisionOutcome, DomainTransitionKind, DomainTransitionRecord,
+    DoorKind, EventDetail, EventFormat, EventFormatError, EventKind, EventRecord, EventRecordV1,
+    ExpectationLifecycleState, LogSeq, NumericFeatures,
 };
 pub use expectations::{
     ConditionVerdictRecord, ContentMissReport, DeferredDependentAct, EffectPredictionSpec,
-    ExpectationBook, ExpectationRecord, MonitorState, PendingClassifyKind, PlaceDistanceStats,
-    PromiseConflict, ResponseLatencyTracker, ResponsePredictionSpec, WakeGateCalibrator,
-    advance_recurrence_schedule, is_fulfilled_state, is_positive_verdict_label, is_terminal_state,
-    map_resolve_outcome,
+    ExpectationBook, ExpectationRecord, LatencySketch, MonitorState, PendingClassifyKind,
+    PlaceDistanceStats, PromiseConflict, ResponseLatencyTracker, ResponsePredictionSpec,
+    WakeGateCalibrator, advance_recurrence_schedule, is_fulfilled_state, is_positive_verdict_label,
+    is_terminal_state, map_resolve_outcome,
 };
 pub use gate::{
-    BacklogEventInput, BacklogScheduleResult, CommitmentInputs, DecisionReason, DecisionTrace,
-    DegEvaluation, EffortControl, FrozenDialogueActHead, GateOutcome, GateSignals, HabituationBook,
-    HabituationEntry, HabituationKey, LatencySketch, MAX_CHUNKS_PER_WAKE, OpenWait,
-    PatienceEstimator, PendingBeliefSummary, PlaceBacklogChunk, PromiseSummary, RecomputedTrace,
-    SalienceEvaluation, SalienceWeights, SwitchingBudget, ThresholdTerms,
-};
-pub use learn::{
-    BoundedLearner, LearningEpochCheckpoint, LearningOutcomeKind, LearningSample,
-    LearningStepResult, calibrate_wake_gate_lo, clip_ips_weight,
+    BacklogEventInput, BacklogScheduleResult, CandidateMemory, CommitmentInputs, DecisionReason,
+    DecisionTrace, ExpectationCue, FrozenDialogueActHead, GateOutcome, MAX_CHUNKS_PER_WAKE,
+    OpenWait, PlaceBacklogChunk, PlaceHistoryEntry, PromiseSummary, chunk_place_backlog,
+    cosine_similarity, decide_gate, is_backlog_event, schedule_backlog_chunks,
 };
 pub use ledger::{
     ActorCard, CapabilityHealthStats, FalseBeliefFlag, OpenRequestItem, PerceptionLedger,
@@ -102,27 +95,30 @@ pub use r#loop::{
     CLASS_A_CAPACITY, CLASS_B_CAPACITY, CLASS_C_CAPACITY, QueueClass, QueueOverflow,
     ThreeClassQueue,
 };
-pub use map::{CoOccurrenceEdge, CognitiveMap, MapVertex};
 pub use mem_store::MemStore;
+pub use neural::{
+    AdaptConfig, AdaptFeedback, CellType, DEFAULT_EMB_DIM, DEFAULT_H_DIM, DEFAULT_NUM_FEATURES,
+    FEATURE_SCHEMA_VERSION, GateArm, GateClass, NeuralError, NeuralModel, NeuralModelConfig,
+    NeuralOutputs, NumericFeatureInputs, Phase2HeadWeights, Phase3HeadWeights, PlaceAdaptState,
+    RecurrentCellWeights, SwiGluBlockWeights, extract_embedding_for_model,
+    extract_features_from_state, extract_x_num, forward_step, neutral_outputs,
+};
 pub use ports::{
     ContextPlan, DoorDecision, Doors, ModelPurpose, NoopDoors, SnapshotCheckpoint, Store,
     StoreError,
 };
-pub use prior::{CURRENT_PRIOR_FORMAT_VERSION, Prior, PriorError};
 pub use recall::{
     ContextMatchTag, ImportanceInputs, MemoryBasis, MemoryEntry, RecallQuery, RecallResult,
     RecalledItem, RecollectionConstraint, SourceEventFact, classify_context_match,
-    compute_importance, evaluate_familiarity, run_recall, verify_recollection,
-};
-pub use registry::{
-    MechanismEntry, MechanismId, NeutralValue, RegistryError, Switches, brain_map_registry,
+    compute_importance, evaluate_familiarity, run_recall, run_recall_with_model,
+    verify_recollection,
 };
 pub use replay::{
-    RecomputedDecisionValue, ReplayDivergence, ReplayMode, ReplayReport, replay_from_checkpoint,
+    RecordedDecisionValue, ReplayMismatch, ReplayMode, ReplayReport, replay_from_checkpoint,
     replay_log,
 };
 pub use rng::{GateDraw, SeededRng};
-pub use state::{AdaptiveWeightsAnchor, CoreState, EpochAnchor};
+pub use state::{ActorFactsEntry, CoreState, InFlightAction, PendingApprovalEntry, WakeSnapshotRecord};
 
 /// All synchronous inputs admitted into [`Core::step`] and [`Core::enqueue`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -180,8 +176,8 @@ pub enum CoreError {
     Store(StoreError),
     Protocol(ProtocolError),
     EventFormat(EventFormatError),
-    Prior(PriorError),
-    Registry(RegistryError),
+    Config(ConfigError),
+    Neural(NeuralError),
     QueueOverflow(QueueOverflow),
     DuplicateReceipt(ActionId),
     SnapshotChecksumMismatch {
@@ -198,8 +194,8 @@ impl fmt::Display for CoreError {
             Self::Store(err) => write!(f, "{err}"),
             Self::Protocol(err) => write!(f, "{err}"),
             Self::EventFormat(err) => write!(f, "{err}"),
-            Self::Prior(err) => write!(f, "{err}"),
-            Self::Registry(err) => write!(f, "{err}"),
+            Self::Config(err) => write!(f, "{err}"),
+            Self::Neural(err) => write!(f, "{err}"),
             Self::QueueOverflow(err) => write!(f, "{err}"),
             Self::DuplicateReceipt(action_id) => {
                 write!(f, "duplicate terminal receipt for action '{action_id}'")
@@ -237,15 +233,15 @@ impl From<EventFormatError> for CoreError {
     }
 }
 
-impl From<PriorError> for CoreError {
-    fn from(err: PriorError) -> Self {
-        Self::Prior(err)
+impl From<ConfigError> for CoreError {
+    fn from(err: ConfigError) -> Self {
+        Self::Config(err)
     }
 }
 
-impl From<RegistryError> for CoreError {
-    fn from(err: RegistryError) -> Self {
-        Self::Registry(err)
+impl From<NeuralError> for CoreError {
+    fn from(err: NeuralError) -> Self {
+        Self::Neural(err)
     }
 }
 
@@ -255,38 +251,38 @@ impl From<QueueOverflow> for CoreError {
     }
 }
 
-/// Sans-IO deterministic state machine driving the MonoAgens cognitive loop.
+/// Sans-IO deterministic state machine driving the Slim Core V2 cognitive loop.
 #[derive(Debug)]
 pub struct Core<S: Store> {
     store: S,
-    prior: Prior,
-    switches: Switches,
-    seed: u64,
+    config: CoreConfig,
+    model: Option<Arc<NeuralModel>>,
     state: CoreState,
     queue: ThreeClassQueue<Input>,
     recovery_report: RecoveryReport,
 }
 
 impl<S: Store> Core<S> {
-    /// Opens a `Core` over `store`, verifying any `blake3` snapshot, replaying the tail in
-    /// [`LogSeq`] order, and resuming interrupted inputs deterministically before admitting new ingress.
-    pub fn open(store: S, prior: Prior, switches: Switches, seed: u64) -> Result<Self, CoreError> {
-        turn::open_core(store, prior, switches, seed)
+    /// Opens a `Core` over `store` with validated [`CoreConfig`] and optional loaded [`NeuralModel`].
+    pub fn open(
+        store: S,
+        config: CoreConfig,
+        model: Option<Arc<NeuralModel>>,
+    ) -> Result<Self, CoreError> {
+        turn::open_core(store, config, model)
     }
 
     pub(crate) fn from_parts(
         store: S,
-        prior: Prior,
-        switches: Switches,
-        seed: u64,
+        config: CoreConfig,
+        model: Option<Arc<NeuralModel>>,
         state: CoreState,
         recovery_report: RecoveryReport,
     ) -> Self {
         Self {
             store,
-            prior,
-            switches,
-            seed,
+            config,
+            model,
             state,
             queue: ThreeClassQueue::new(),
             recovery_report,
@@ -347,23 +343,12 @@ impl<S: Store> Core<S> {
     pub fn next_due(&self) -> Option<Time> {
         let wait_due = self.state.open_waits.values().map(|w| w.due_ms).min();
         let exp_due = self.state.expectation_book.next_due();
-        let sleep_due = if self.switches.consolidation_and_merge
-            && self.state.pending_sleep_run.is_none()
-            && self.state.unconsolidated_count >= self.prior.n_min_sleep
+        let sleep_due = if self.state.pending_sleep_run.is_none()
+            && self.state.unconsolidated_count >= self.config.sleep_min_episodes
         {
-            self.state.last_global_activity_ms.map(|last_act| {
-                let wake_elapsed = self
-                    .state
-                    .last_sleep_ms
-                    .map_or(0, |s| last_act.saturating_sub_ms(s));
-                let d_sleep = gate::sleep_pressure(
-                    self.state.unconsolidated_count,
-                    wake_elapsed,
-                    &self.prior,
-                );
-                let eff_idle = gate::effective_idle_trigger_ms(self.prior.t_idle_sleep_ms, d_sleep);
-                last_act.saturating_add_ms(eff_idle)
-            })
+            self.state
+                .last_global_activity_ms
+                .map(|last_act| last_act.saturating_add_ms(self.config.sleep_idle_ms))
         } else {
             None
         };
@@ -424,7 +409,7 @@ impl<S: Store> Core<S> {
         self.state
             .expectation_book
             .wake_gate
-            .try_adopt_upper_band(candidate_hi, &self.prior)
+            .try_adopt_upper_band(candidate_hi)
     }
 
     /// Checks whether a candidate `PromiseMeta` conflicts with active promises in the expectation book.
@@ -442,13 +427,13 @@ impl<S: Store> Core<S> {
     /// Executes hybrid `VisibleScope`-filtered memory recall against the underlying [`Store`]
     /// and projected [`CoreState`], optionally recording `MemoryUsed` ONLY for visible returned items.
     pub fn recall(&mut self, query: &RecallQuery, now: Time) -> Result<RecallResult, CoreError> {
-        let result = run_recall(
+        let result = run_recall_with_model(
             &self.store,
             &self.state,
             query,
             now,
-            &self.prior,
-            &self.switches,
+            &self.config,
+            self.model.as_deref(),
         )?;
         if query.record_uses && !result.used_event_ids.is_empty() {
             let place = query
@@ -543,22 +528,40 @@ impl<S: Store> Core<S> {
         &mut self.store
     }
 
-    /// Returns the active [`Prior`].
+    /// Returns the active [`CoreConfig`].
     #[must_use]
-    pub fn prior(&self) -> &Prior {
-        &self.prior
+    pub fn config(&self) -> &CoreConfig {
+        &self.config
     }
 
-    /// Returns the active [`Switches`].
+    /// Returns the loaded [`NeuralModel`] (if any).
     #[must_use]
-    pub fn switches(&self) -> &Switches {
-        &self.switches
+    pub fn neural_model(&self) -> Option<&NeuralModel> {
+        self.model.as_deref()
+    }
+
+    /// Swaps or clears the loaded [`NeuralModel`] at runtime (`None` engages neutral fallback).
+    pub fn set_neural_model(&mut self, model: Option<Arc<NeuralModel>>) {
+        self.model = model;
+    }
+
+    /// Records bounded per-place online adaptation feedback (no-op when `config.online_adaptation == false`).
+    pub fn record_place_feedback(&mut self, place: &PlaceId, feedback: AdaptFeedback) {
+        let adapt_cfg = self.config.effective_adapt_config();
+        if !adapt_cfg.online_adaptation {
+            return;
+        }
+        self.state
+            .place_adapt
+            .entry(place.clone())
+            .or_default()
+            .record_feedback(feedback, &adapt_cfg);
     }
 
     /// Returns the deterministic PRNG root seed.
     #[must_use]
     pub const fn seed(&self) -> u64 {
-        self.seed
+        self.config.seed
     }
 
     /// Returns the projected [`CoreState`].
@@ -633,10 +636,11 @@ impl<S: Store> Core<S> {
         self.state.auto_recall_states.get(&trigger_id)
     }
 
-    /// Runs `Two-Epoch Replay` verification over the underlying store from the latest snapshot.
+    /// Runs Trace-Pinned Replay verification over the underlying store from the latest snapshot.
     pub fn replay_verify(&self, mode: ReplayMode) -> Result<ReplayReport, CoreError> {
         let ckpt = self.store.latest_checkpoint()?;
-        replay::replay_from_checkpoint(&self.store, ckpt.as_ref(), &self.switches, self.seed, mode)
+        let expected_hash = self.model.as_ref().map(|m| m.blake3);
+        replay::replay_from_checkpoint(&self.store, ckpt.as_ref(), mode, expected_hash)
     }
 
     /// Records a belief with basis verification (`Observed` -> `Inferred` downgrade if ungrounded),
@@ -754,10 +758,7 @@ impl<S: Store> Core<S> {
         &mut self,
         now: Time,
     ) -> Result<Vec<LessonEntry>, CoreError> {
-        let extracted =
-            self.state
-                .skill_book
-                .cluster_contrastive_lessons(now, &self.prior, &self.switches);
+        let extracted = self.state.skill_book.cluster_contrastive_lessons(now);
         for lesson in &extracted {
             let mut rec = EventRecord::new_root(
                 EventKind::LearningChange,
@@ -806,12 +807,10 @@ impl<S: Store> Core<S> {
         &mut self,
         params: ExtractProcedureParams,
     ) -> Option<TrackedProcedure> {
-        let tp = self.state.skill_book.extract_procedure_from_goal_chain(
-            params,
-            &self.state.capability_catalog,
-            &self.prior,
-            &self.switches,
-        )?;
+        let tp = self
+            .state
+            .skill_book
+            .extract_procedure_from_goal_chain(params, &self.state.capability_catalog)?;
         self.state.register_procedure(tp.to_context_entry());
         Some(tp)
     }
@@ -829,7 +828,6 @@ impl<S: Store> Core<S> {
             outcome,
             termination_reason,
             now,
-            &self.prior,
         );
         if let Some(tp) = self.state.skill_book.procedures.get(&procedure_id) {
             self.state
@@ -852,7 +850,6 @@ impl<S: Store> Core<S> {
             belief_id,
             predicate.into(),
             timestamp_ms,
-            &self.prior,
         );
     }
 
@@ -871,22 +868,16 @@ impl<S: Store> Core<S> {
             predicate,
             supported,
             timestamp_ms,
-            &self.prior,
         );
     }
 
-    /// Builds `source_cards` using an explicit `Switches` override (`15.1`, `18.2`).
+    /// Builds `source_cards` for the given `participants`.
     #[must_use]
-    pub fn build_source_cards_with_switches(
-        &self,
-        participants: &[ActorId],
-        switches: &Switches,
-    ) -> Vec<SourceLedgerCard> {
+    pub fn build_source_cards(&self, participants: &[ActorId]) -> Vec<SourceLedgerCard> {
         self.state.ledger.build_source_cards(
             participants,
             &self.state.expectation_book,
             &self.state.soul_actor_id,
-            switches,
             |_| 0.0,
         )
     }
@@ -944,110 +935,12 @@ impl<S: Store> Core<S> {
         Ok(id)
     }
 
-    /// Evaluates and records a bounded learning step (`16.1`, `16.2`), returning full step diagnostics.
-    pub fn record_learning_outcome(
-        &mut self,
-        sample: &LearningSample,
-    ) -> Result<LearningStepResult, CoreError> {
-        let mut weights = self.state.adaptive_weights;
-        let res =
-            self.state
-                .learner
-                .apply_outcome(&mut weights, sample, &self.prior, &self.switches);
-        if res.applied {
-            self.state.adaptive_weights = weights;
-            if let Some(epoch_id) = res.epoch_id {
-                let dw = res.delta_weights;
-                let mut rec = EventRecord::new_root(
-                    EventKind::LearningChange,
-                    sample.timestamp_ms,
-                    ActorId::new("core"),
-                    PlaceId::new("core:learn"),
-                    Audience::new([self.state.soul_actor_id.clone()]),
-                    OriginActor::new(self.state.soul_actor_id.clone()),
-                    Taint::Trusted,
-                    NumericFeatures::default(),
-                    OpaquePayload::default(),
-                    Vec::new(),
-                    Some(EventDetail::LearningUpdate {
-                        epoch_id,
-                        source_event_id: sample.source_event_id,
-                        outcome_code: sample.outcome_kind.code(),
-                        delta_w: [
-                            dw.w_own_name,
-                            dw.w_info,
-                            dw.w_fok,
-                            dw.w_rel,
-                            dw.w_commitment,
-                            dw.w_sc,
-                        ],
-                        delta_theta_0: res.delta_theta_0,
-                        ips_weight: res.ips_weight,
-                        signed_error: res.signed_error,
-                    }),
-                );
-                let id = self.store.append(rec.clone())?;
-                rec.id = id;
-                self.state.apply_event(&rec);
-            }
-        }
-        Ok(res)
-    }
-
-    /// Rolls back adaptive weights to their exact pre-update checkpoint prior to the latest update
-    /// (or a specific `epoch_id`) and appends an [`EventKind::Rollback`] audit record (`16.4`).
-    pub fn rollback_learning(
-        &mut self,
-        epoch_id: Option<u64>,
-        reason: impl Into<String>,
-        now: Time,
-    ) -> Result<Option<LearningEpochCheckpoint>, CoreError> {
-        let reason_str = reason.into();
-        let mut weights = self.state.adaptive_weights;
-        let restored = match epoch_id {
-            Some(eid) => self.state.learner.rollback_to_epoch(&mut weights, eid),
-            None => self.state.learner.rollback_to_previous(&mut weights),
-        };
-        if let Some(cp) = restored {
-            self.state.adaptive_weights = weights;
-            let mut rec = EventRecord::new_root(
-                EventKind::Rollback,
-                now,
-                ActorId::new("core"),
-                PlaceId::new("core:learn"),
-                Audience::new([self.state.soul_actor_id.clone()]),
-                OriginActor::new(self.state.soul_actor_id.clone()),
-                Taint::Trusted,
-                NumericFeatures::default(),
-                OpaquePayload::default(),
-                Vec::new(),
-                Some(EventDetail::WeightRollback {
-                    restored_epoch_id: cp.epoch_id,
-                    reason: reason_str,
-                }),
-            );
-            let id = self.store.append(rec.clone())?;
-            rec.id = id;
-            self.state.apply_event(&rec);
-            Ok(Some(cp))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Recomputes and applies shrunk empirical `q_0.10` `wake_gate_lo` calibration (`16.3`).
-    pub fn calibrate_wake_gate_lo(&mut self, positive_similarities: &[f64]) -> f64 {
-        let updated = calibrate_wake_gate_lo(positive_similarities, &self.prior);
-        self.state.expectation_book.wake_gate.wake_gate_lo = updated;
-        updated
-    }
-
     /// Returns recalibrated `[0, 1]` confidence adjusted by shrunk empirical calibration bias (`15.2`).
     #[must_use]
     pub fn recalibrated_confidence(&self, raw_conf_0_20: u8) -> f64 {
         self.state
             .ledger
             .calibration
-            .recalibrated_confidence(raw_conf_0_20, &self.prior)
+            .recalibrated_confidence(raw_conf_0_20)
     }
 }

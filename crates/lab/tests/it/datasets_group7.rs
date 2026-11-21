@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use monoagens_core::Prior;
+use monoagens_core::CoreConfig;
 use monoagens_lab::benchmark::{BenchmarkSuiteReport, standard_benchmark_registry};
 use monoagens_lab::datasets::{
     BenchmarkExecutionOptions, CapaConverter, CapaScorer, ChecksumsRecorded, ConvertedDataset,
@@ -1024,7 +1024,7 @@ fn sampling_defaults_and_cluster_bootstrap_across_benchmarks() {
             &datasets_dir,
             None,
             false,
-            &Prior::default(),
+            &CoreConfig::default(),
             &opts,
         )
         .unwrap_or_else(|e| panic!("category suite {category} failed: {e}"));
@@ -1040,7 +1040,7 @@ fn sampling_defaults_and_cluster_bootstrap_across_benchmarks() {
         &datasets_dir,
         None,
         true,
-        &Prior::default(),
+        &CoreConfig::default(),
         &opts,
     )
     .expect("standard index over all category runs succeeds");

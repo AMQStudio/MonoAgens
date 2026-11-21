@@ -2,8 +2,8 @@ use tokio::process::Command;
 
 use cedar_policy_symcc::solver::LocalSolver;
 use monoagens_core::{
-    ContextPlan, ContextSegment, ContextSlotKind, Core, DoorDecision, Doors, Effect, EventDetail,
-    EventKind, Input, LogSeq, MemStore, ModelPurpose, Prior, Store, Switches, TrustSegmentKind,
+    ContextPlan, ContextSegment, ContextSlotKind, Core, CoreConfig, DoorDecision, Doors, Effect,
+    EventDetail, EventKind, Input, LogSeq, MemStore, ModelPurpose, Store, TrustSegmentKind,
 };
 use monoagens_protocol::{
     Action, ActionId, ActorId, Audience, CapabilityDescriptor, CapabilityFlags, CapabilityId,
@@ -818,18 +818,13 @@ fn core_step_integrates_valve_context_snapshot_and_records_door_verdicts() {
     let snap = base_snapshot();
     let mut valve = Valve::with_default_policies(ValveConfig::default(), snap).expect("v");
 
-    let switches = Switches {
-        self_mechanics_guide: true,
-        ..Default::default()
-    };
-    let prior = Prior {
-        talkativeness: 1.0,
-        spontaneity: 1.0,
-        restraint: 0.0,
+    let cfg = CoreConfig {
+        seed: 7,
+        self_guide_enabled: true,
         ..Default::default()
     };
 
-    let mut core = Core::open(MemStore::new(), prior, switches, 7).expect("core open");
+    let mut core = Core::open(MemStore::new(), cfg, None).expect("core open");
     let mut p = make_percept(
         "person:alice",
         "room:main",
@@ -854,6 +849,17 @@ fn core_step_integrates_valve_context_snapshot_and_records_door_verdicts() {
         .expect("reason model effect");
     assert!(plan.valve_self_snapshot.is_some());
     assert_eq!(plan.valve_self_snapshot.unwrap().valve_mode, "enforcing");
+
+    // Step an unattested inbound percept so Valve records a real DoorVerdict in Core's log.
+    let p_stranger = make_percept(
+        "person:unattested_stranger",
+        "room:main",
+        &["soul", "person:unattested_stranger"],
+        b"hello without presence",
+    );
+    let _ = core
+        .step(Input::Percept(Box::new(p_stranger)), t_ms(1_000_005), &mut valve)
+        .expect("step stranger");
 
     let events = core.store().read_in_order(None, 100).expect("read");
     assert!(events.iter().any(|ev| ev.kind == EventKind::DoorVerdict

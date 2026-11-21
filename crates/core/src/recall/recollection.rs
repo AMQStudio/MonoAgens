@@ -7,7 +7,6 @@ use monoagens_protocol::{
 use serde::{Deserialize, Serialize};
 
 use crate::activation::{ActivationTrace, MS_PER_HOUR, sigmoid};
-use crate::prior::Prior;
 use crate::privacy::ScopedCandidate;
 use crate::recall::importance::{ImportanceInputs, compute_importance};
 
@@ -127,11 +126,12 @@ pub struct RecollectionConstraint {
 }
 
 /// Computes continuous dual-process familiarity `F in [0, 1]` from total activation `A` and
-/// optional matching cosine similarity, with no fixed 30-day cutoff (`A-09`).
+/// optional matching cosine similarity.
 #[must_use]
-pub fn evaluate_familiarity(total_activation: f64, cosine: Option<f64>, prior: &Prior) -> f64 {
-    let scale = prior.fok_scale_norm.max(1e-6);
-    let a_norm = sigmoid((total_activation - prior.fok_threshold) / scale);
+pub fn evaluate_familiarity(total_activation: f64, cosine: Option<f64>) -> f64 {
+    let scale = 1.0_f64;
+    let fok_threshold = 0.25_f64;
+    let a_norm = sigmoid((total_activation - fok_threshold) / scale);
     match cosine {
         Some(c) if c.is_finite() => c.clamp(0.0, 1.0).max(a_norm).clamp(0.0, 1.0),
         _ => a_norm.clamp(0.0, 1.0),

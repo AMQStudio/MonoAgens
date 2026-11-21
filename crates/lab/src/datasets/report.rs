@@ -1064,7 +1064,7 @@ fn render_simple_bar_svg(title: &str, bars: &[(String, f64)]) -> String {
 
 struct ReproInfo {
     git_commit: String,
-    prior_digest: String,
+    config_digest: String,
     manifest_digest: String,
     model_id: String,
     provider_host: String,
@@ -1101,7 +1101,7 @@ fn build_repro_info(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "unknown".to_owned());
 
-    let mut prior_digests = BTreeSet::new();
+    let mut config_digests = BTreeSet::new();
     let mut manifest_digests = BTreeSet::new();
     let mut models = BTreeSet::new();
     let mut hosts = BTreeSet::new();
@@ -1121,7 +1121,7 @@ fn build_repro_info(
 
     for loaded in by_ds.values() {
         let r = &loaded.record;
-        prior_digests.insert(r.prior_digest.clone());
+        config_digests.insert(r.config_digest.clone());
         if r.model_id != "none" {
             models.insert(r.model_id.clone());
         }
@@ -1191,7 +1191,7 @@ fn build_repro_info(
 
     ReproInfo {
         git_commit,
-        prior_digest: join_or(prior_digests, "unknown"),
+        config_digest: join_or(config_digests, "unknown"),
         manifest_digest: join_or(manifest_digests, "unknown"),
         model_id: join_or(models, "none"),
         provider_host: join_or(hosts, "unspecified"),
@@ -1281,7 +1281,7 @@ fn render_markdown_report(
     md.push_str("| Field | Value |\n|---|---|\n");
     let _ = writeln!(md, "| Git commit | `{}` |", repro.git_commit);
     let _ = writeln!(md, "| Lab version | `{}` |", repro.lab_version);
-    let _ = writeln!(md, "| Prior digest | `{}` |", repro.prior_digest);
+    let _ = writeln!(md, "| Config digest | `{}` |", repro.config_digest);
     let _ = writeln!(md, "| Manifest digest | `{}` |", repro.manifest_digest);
     let _ = writeln!(
         md,
@@ -1583,7 +1583,7 @@ fn render_html_report(
             ),
         ),
         ("Git commit", repro.git_commit.clone()),
-        ("Prior digest", repro.prior_digest.clone()),
+        ("Config digest", repro.config_digest.clone()),
         ("Manifest digest", repro.manifest_digest.clone()),
         (
             "Soul model & effort",

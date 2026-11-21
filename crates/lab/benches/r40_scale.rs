@@ -5,8 +5,8 @@ use std::hint::black_box;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use monoagens_core::{
-    Core, EventKind, EventRecord, LogSeq, MemStore, NumericFeatures, Prior, SnapshotCheckpoint,
-    Store, StoreError, Switches,
+    Core, CoreConfig, EventKind, EventRecord, LogSeq, MemStore, NumericFeatures,
+    SnapshotCheckpoint, Store, StoreError,
 };
 use monoagens_protocol::{
     ActorId, Audience, EmbeddingTag, EventId, OpaquePayload, OriginActor, PlaceId, Taint, Time,
@@ -95,9 +95,11 @@ impl Store for BenchSnapshotStore {
 fn bench_core_open(c: &mut Criterion) {
     let mut seed_core = Core::open(
         MemStore::new(),
-        Prior::default(),
-        Switches::all_enabled(),
-        42,
+        CoreConfig {
+            seed: 42,
+            ..CoreConfig::default()
+        },
+        None,
     )
     .unwrap();
     let base_ckpt = seed_core.take_snapshot("bench-base").unwrap();
@@ -144,8 +146,15 @@ fn bench_core_open(c: &mut Criterion) {
                 b.iter_batched(
                     || tmpl.clone(),
                     |st| {
-                        let core =
-                            Core::open(st, Prior::default(), Switches::all_enabled(), 42).unwrap();
+                        let core = Core::open(
+                            st,
+                            CoreConfig {
+                                seed: 42,
+                                ..CoreConfig::default()
+                            },
+                            None,
+                        )
+                        .unwrap();
                         black_box(core.recovery_report().replayed_events)
                     },
                     BatchSize::SmallInput,

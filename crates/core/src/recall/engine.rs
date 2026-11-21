@@ -11,19 +11,25 @@ use monoagens_protocol::{
 use serde::{Deserialize, Serialize};
 
 use crate::CoreError;
-use crate::activation::ActivationTrace;
+use crate::activation::{ActivationTrace, DEFAULT_PETROV_D};
+use crate::config::CoreConfig;
 use crate::event::{EventDetail, EventKind, EventRecord};
 use crate::gate::cosine_similarity;
-use crate::map::MapVertex;
+use crate::neural::{
+    NeuralModel, NumericFeatureInputs, extract_x_num, forward_step,
+};
 use crate::ports::Store;
-use crate::prior::Prior;
 use crate::recall::importance::ImportanceInputs;
 use crate::recall::recollection::{
     ContextMatchTag, MemoryBasis, MemoryEntry, RecollectionConstraint, SourceEventFact,
     classify_context_match, evaluate_familiarity, verify_recollection,
 };
-use crate::registry::Switches;
 use crate::state::CoreState;
+
+const RECALL_WEIGHT_BASE: f64 = 0.35;
+const RECALL_WEIGHT_CONTEXT: f64 = 0.50;
+const RECALL_WEIGHT_IMPORTANCE: f64 = 0.15;
+const RECALL_NEURAL_BLEND_WEIGHT: f64 = 0.35;
 
 /// Default vector candidate retrieval limit (`design.md` §7).
 pub const DEFAULT_VECTOR_TOP_K: usize = 40;
@@ -92,6 +98,9 @@ pub struct RecalledItem {
     pub context_match: ContextMatchTag,
     pub superseded_by: Option<EventId>,
     pub is_current: bool,
+    /// Optional Phase 3 post-`VisibleScope` neural memory relevance score in `[0.0, 1.0]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub neural_relevance: Option<f64>,
 }
 
 /// Result of [`run_recall`]; contains strictly post-`VisibleScope` visible items (`Δ_NI = 0`).
@@ -108,16 +117,32 @@ pub fn run_recall<S: Store>(
     state: &CoreState,
     query: &RecallQuery,
     now_ms: Time,
-    prior: &Prior,
-    switches: &Switches,
+    config: &CoreConfig,
+) -> Result<RecallResult, CoreError> {
+    run_recall_with_model(store, state, query, now_ms, config, None)
+}
+
+/// Executes hybrid memory recall with optional Phase 3 post-`VisibleScope` neural reranking.
+///
+/// When `model` is `None` or lacks Phase 3 heads (`model.phase3.is_none()`), ranking falls back
+/// deterministically to `0.35 * B + 0.50 * cos + 0.15 * imp`. Neural scoring runs strictly
+/// AFTER `VisibleScope` projection so private/out-of-scope entries never influence visible items
+/// (`Delta_NI = 0`).
+pub fn run_recall_with_model<S: Store>(
+    store: &S,
+    state: &CoreState,
+    query: &RecallQuery,
+    now_ms: Time,
+    config: &CoreConfig,
+    model: Option<&NeuralModel>,
 ) -> Result<RecallResult, CoreError> {
     let active_tag = query
         .partition_tag
         .as_ref()
         .or_else(|| query.query_embeddings.first().map(|e| &e.tag));
 
-    let vec_limit = prior.recall_vector_top_k.max(1);
-    let text_limit = prior.recall_text_top_k.max(1);
+    let vec_limit = config.recall_vector_top_k.max(1);
+    let text_limit = config.recall_text_top_k.max(1);
 
     let mut candidate_ids: BTreeSet<EventId> = BTreeSet::new();
     let mut store_cosines: BTreeMap<EventId, f64> = BTreeMap::new();
@@ -155,36 +180,7 @@ pub fn run_recall<S: Store>(
         }
     }
 
-    // 3. Bounded Successor-Representation / Co-occurrence cognitive map candidates.
-    let mut seeds: Vec<MapVertex> = Vec::new();
-    if let Some(place) = &query.wake_place {
-        seeds.push(MapVertex::Place(place.clone()));
-    }
-    for actor in &query.wake_people {
-        seeds.push(MapVertex::Actor(actor.clone()));
-    }
-    for concept in &query.seed_concepts {
-        seeds.push(MapVertex::Concept(concept.clone()));
-    }
-    let hop_budget = query
-        .hop_budget_override
-        .unwrap_or(prior.map_hop_budget)
-        .min(
-            prior
-                .map_hop_budget
-                .max(query.hop_budget_override.unwrap_or(0)),
-        );
-    let map_scores = state
-        .cognitive_map
-        .spread_activation(&seeds, hop_budget, prior);
-    for (eid, _) in state
-        .cognitive_map
-        .candidate_events_for_activation(&map_scores, vec_limit)
-    {
-        if Some(eid) != query.query_event_id {
-            candidate_ids.insert(eid);
-        }
-    }
+    // Step 3 (V1 cognitive map) pruned in Slim Core V2.
 
     // Include in-memory indexed entries whose embeddings match the active partition or
     // when no query vectors exist (in case store vector index wasn't separately populated).
@@ -219,14 +215,8 @@ pub fn run_recall<S: Store>(
         visible_entries.push(entry);
     }
 
-    // 5. Rank strictly visible candidates using A = w_B * B + context_weight * cos + importance_weight * imp + w_map * r_map.
-    let d = prior.petrov_d();
-    let w_b = if switches.activation_recall {
-        prior.w_b
-    } else {
-        0.0
-    };
-    let w_map = prior.map_w_map;
+    // 5. Rank strictly visible candidates using A = w_B * B + w_context * cos + w_importance * imp.
+    let d = DEFAULT_PETROV_D;
 
     let mut ranked: Vec<RecalledItem> = Vec::with_capacity(visible_entries.len());
     for entry in &visible_entries {
@@ -250,14 +240,28 @@ pub fn run_recall<S: Store>(
 
         let b_val = entry.activation.base_level(now_ms, d);
         let imp_val = entry.importance_score();
-        let r_map = state.cognitive_map.score_event(entry.event_id, &map_scores);
+        let r_map = 0.0_f64;
 
-        let total_score = w_b * b_val
-            + prior.context_weight * cos_val
-            + prior.importance_weight * imp_val
-            + w_map * r_map;
+        let base_total_score =
+            RECALL_WEIGHT_BASE * b_val + RECALL_WEIGHT_CONTEXT * cos_val + RECALL_WEIGHT_IMPORTANCE * imp_val;
 
-        let familiarity = evaluate_familiarity(total_score, best_cos, prior);
+        let neural_relevance = score_visible_candidate_relevance(
+            model,
+            entry,
+            active_tag,
+            cos_val,
+            query,
+            now_ms,
+        );
+        let total_score = match neural_relevance {
+            Some(rel) => {
+                (1.0 - RECALL_NEURAL_BLEND_WEIGHT) * base_total_score
+                    + RECALL_NEURAL_BLEND_WEIGHT * rel
+            }
+            None => base_total_score,
+        };
+
+        let familiarity = evaluate_familiarity(total_score, best_cos);
         let recollected =
             verify_recollection(entry, query.recollection_constraint.as_ref(), |src_id| {
                 resolve_source_fact(store, state, src_id)
@@ -271,11 +275,7 @@ pub fn run_recall<S: Store>(
             24.0,
         );
 
-        let is_current = if switches.memory_truth {
-            entry.superseded_by.is_none()
-        } else {
-            true
-        };
+        let is_current = entry.superseded_by.is_none();
 
         ranked.push(RecalledItem {
             event_id: entry.event_id,
@@ -302,6 +302,7 @@ pub fn run_recall<S: Store>(
             context_match,
             superseded_by: entry.superseded_by,
             is_current,
+            neural_relevance,
         });
     }
 
@@ -322,6 +323,69 @@ pub fn run_recall<S: Store>(
         items: ranked,
         used_event_ids,
     })
+}
+
+/// Evaluates Phase 3 `p_memory_relevance` on a single post-`VisibleScope` candidate memory.
+///
+/// Strictly read-only and scoped solely to the visible `entry` + `query`, using zero initial
+/// hidden state so private/invisible memories can never alter any visible candidate's score.
+fn score_visible_candidate_relevance(
+    model: Option<&NeuralModel>,
+    entry: &MemoryEntry,
+    active_tag: Option<&EmbeddingTag>,
+    cos_val: f64,
+    query: &RecallQuery,
+    now_ms: Time,
+) -> Option<f64> {
+    let m = model?;
+    m.phase3.as_ref()?;
+
+    let d_emb = m.config.d_in_emb;
+    let mut cand_emb = vec![0.0_f32; d_emb];
+    let matched_emb = active_tag
+        .and_then(|tag| entry.embeddings.iter().find(|e| &e.tag == tag))
+        .or_else(|| entry.embeddings.first());
+    if let Some(te) = matched_emb {
+        let take = d_emb.min(te.values.len());
+        for (dst, &src) in cand_emb[..take].iter_mut().zip(&te.values[..take]) {
+            if src.is_finite() {
+                *dst = src;
+            }
+        }
+    }
+
+    let age_s = now_ms
+        .as_millis()
+        .saturating_sub(entry.timestamp_ms.as_millis()) as f64
+        / 1000.0;
+    let same_place_or_person = query.wake_place.as_ref() == Some(&entry.place)
+        || query.wake_people.contains(&entry.actor);
+    let x_num = extract_x_num(&NumericFeatureInputs {
+        is_named_soul: false,
+        is_explicit_addressee: false,
+        is_reply_or_expect_link: same_place_or_person,
+        is_dyadic_place: entry.audience.len() <= 2,
+        active_participant_count: entry.audience.len().max(1),
+        dt_since_last_place_event_s: age_s,
+        dt_since_last_soul_act_s: 86_400.0,
+        dt_since_sender_last_act_s: age_s,
+        soul_acts_window: 0,
+        total_acts_window: 1,
+        sender_exchange_count: 1,
+        place_event_count: 1,
+        budget_used_ratio: 0.0,
+        imminent_promise_debt: 0.0,
+        max_visible_mem_cos: cos_val.clamp(0.0, 1.0),
+        max_visible_mem_age_s: age_s,
+        pending_belief_uncertainty: if entry.superseded_by.is_some() { 1.0 } else { 0.0 },
+        backlog_queue_depth: 0,
+        asr_conf_or_one: 1.0,
+    });
+    let zero_h = vec![0.0_f32; m.config.h_dim];
+    let out = forward_step(Some(m), &cand_emb, &x_num, &zero_h, None).ok()?;
+    out.p_memory_relevance
+        .filter(|v| v.is_finite())
+        .map(|v| f64::from(v.clamp(0.0, 1.0)))
 }
 
 fn resolve_memory_entry<S: Store>(
@@ -403,4 +467,174 @@ pub(crate) fn memory_entry_from_record(
         superseded_by: None,
         erased: false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::MemStore;
+    use monoagens_protocol::{CURRENT_PROTOCOL_VERSION, EmbeddingTag};
+    use safetensors::tensor::{Dtype, TensorView, serialize};
+    use std::collections::HashMap;
+
+    fn build_synthetic_phase3_model(d_in_emb: usize, d_model: usize) -> NeuralModel {
+        let d_in_num = 18;
+        let n_freq = 4;
+        let d_e = 16;
+        let d_n = 8;
+        let d_ff = 16;
+        let k = 2;
+        let h_dim = 8;
+        let plr_in = d_in_num * 2 * n_freq;
+        let fusion_in = d_e + d_n + h_dim;
+
+        let mut meta = HashMap::new();
+        meta.insert("feature_schema_version".to_owned(), "1".to_owned());
+        meta.insert("d_in_emb".to_owned(), d_in_emb.to_string());
+        meta.insert("d_in_num".to_owned(), d_in_num.to_string());
+        meta.insert("plr_n_frequencies".to_owned(), n_freq.to_string());
+        meta.insert("d_e".to_owned(), d_e.to_string());
+        meta.insert("d_n".to_owned(), d_n.to_string());
+        meta.insert("d_model".to_owned(), d_model.to_string());
+        meta.insert("d_ff".to_owned(), d_ff.to_string());
+        meta.insert("n_layers".to_owned(), "1".to_owned());
+        meta.insert("tabm_k".to_owned(), k.to_string());
+        meta.insert("h_dim".to_owned(), h_dim.to_string());
+        meta.insert("cell_type".to_owned(), "mingru".to_owned());
+        meta.insert("temperature".to_owned(), "1.0".to_owned());
+        meta.insert("cic_threshold".to_owned(), "0.5".to_owned());
+        meta.insert("max_wait_ms".to_owned(), "30000.0".to_owned());
+        meta.insert("has_phase2_heads".to_owned(), "true".to_owned());
+        meta.insert("has_phase3_heads".to_owned(), "true".to_owned());
+
+        let mut raw: Vec<(String, Vec<usize>, Vec<u8>)> = Vec::new();
+        let mut push = |name: &str, shape: Vec<usize>, fill: f32| {
+            let n: usize = shape.iter().product();
+            let mut bytes = Vec::with_capacity(n * 4);
+            for i in 0..n {
+                let v = fill + (i as f32) * 0.001;
+                bytes.extend_from_slice(&v.to_le_bytes());
+            }
+            raw.push((name.to_owned(), shape, bytes));
+        };
+
+        push("stem.emb.linear.weight", vec![d_e, d_in_emb], 0.01);
+        push("stem.emb.linear.bias", vec![d_e], 0.0);
+        push("stem.emb.norm.weight", vec![d_e], 1.0);
+        push("stem.emb.norm.bias", vec![d_e], 0.0);
+        push("stem.plr.freqs", vec![d_in_num, n_freq], 0.1);
+        push("stem.plr.linear.weight", vec![d_n, plr_in], 0.01);
+        push("stem.plr.linear.bias", vec![d_n], 0.0);
+        push("stem.fusion.weight", vec![d_model, fusion_in], 0.01);
+        push("stem.fusion.bias", vec![d_model], 0.0);
+        push("trunk.tabm_in_scale", vec![k, d_model], 1.0);
+        push("trunk.blocks.0.norm.weight", vec![d_model], 1.0);
+        push("trunk.blocks.0.norm.bias", vec![d_model], 0.0);
+        push("trunk.blocks.0.w_gate.weight", vec![d_ff, d_model], 0.01);
+        push("trunk.blocks.0.w_up.weight", vec![d_ff, d_model], 0.01);
+        push("trunk.blocks.0.w_down.weight", vec![d_model, d_ff], 0.01);
+        push("trunk.blocks.0.tabm_r", vec![k, d_model], 1.0);
+        push("trunk.blocks.0.tabm_s", vec![k, d_model], 1.0);
+        push("trunk.final_norm.weight", vec![d_model], 1.0);
+        push("trunk.final_norm.bias", vec![d_model], 0.0);
+        push("memory.mingru.w_z.weight", vec![h_dim, d_model], 0.01);
+        push("memory.mingru.w_z.bias", vec![h_dim], 0.0);
+        push("memory.mingru.w_h.weight", vec![h_dim, d_model], 0.01);
+        push("memory.mingru.w_h.bias", vec![h_dim], 0.0);
+        push("head.gate_4.weight", vec![4, d_model], 0.01);
+        push("head.gate_4.bias", vec![4], 0.0);
+        push("head.wait_delta_t.weight", vec![1, d_model], 0.01);
+        push("head.wait_delta_t.bias", vec![1], 0.0);
+        push("head.p_uncertainty.weight", vec![1, d_model], 0.02);
+        push("head.p_uncertainty.bias", vec![1], 0.0);
+        push("head.p_verify.weight", vec![1, d_model], 0.02);
+        push("head.p_verify.bias", vec![1], 0.0);
+        push("head.p_encode_importance.weight", vec![1, d_model], 0.03);
+        push("head.p_encode_importance.bias", vec![1], 0.1);
+        push("head.p_memory_relevance.weight", vec![1, d_model], 0.05);
+        push("head.p_memory_relevance.bias", vec![1], 0.25);
+
+        let views: Vec<(&str, TensorView<'_>)> = raw
+            .iter()
+            .map(|(n, s, b)| (n.as_str(), TensorView::new(Dtype::F32, s.clone(), b).unwrap()))
+            .collect();
+        let bytes = serialize(views, Some(meta)).unwrap();
+        NeuralModel::from_safetensors_bytes(&bytes, None).unwrap()
+    }
+
+    fn make_entry(id: u64, aud: &[&str], emb_val: f32) -> MemoryEntry {
+        let mut trace = ActivationTrace::default();
+        trace.record(Time::from_millis(1_000));
+        MemoryEntry {
+            event_id: EventId::new(id),
+            source_ids: vec![EventId::new(id)],
+            is_gist: false,
+            timestamp_ms: Time::from_millis(1_000),
+            place: PlaceId::new("room:main"),
+            actor: ActorId::new(aud[0]),
+            origin_actor: OriginActor::new(ActorId::new(aud[0])),
+            basis: MemoryBasis::Observed,
+            taint: Taint::Trusted,
+            audience: Audience::new(aud.iter().map(|s| ActorId::new(*s))),
+            attachments: Vec::new(),
+            activation: trace,
+            importance: ImportanceInputs::default(),
+            embeddings: vec![TaggedEmbedding {
+                tag: EmbeddingTag {
+                    embed_model_ver: "gemma2".to_owned(),
+                    dim_d: 256,
+                    prompt_regime_id: "default".to_owned(),
+                },
+                values: vec![emb_val; 256],
+            }],
+            concepts: Vec::new(),
+            superseded_by: None,
+            erased: false,
+        }
+    }
+
+    #[test]
+    fn phase3_recall_reranks_strictly_post_visible_scope_with_zero_interference() {
+        let store = MemStore::new();
+        let mut state_only_pub = CoreState::new();
+        state_only_pub.upsert_memory_entry(make_entry(10, &["alice", "soul"], 0.1));
+
+        let mut state_with_priv = state_only_pub.clone();
+        state_with_priv.upsert_memory_entry(make_entry(20, &["bob_private", "soul"], 0.9));
+
+        let model = build_synthetic_phase3_model(256, 16);
+        let scope = VisibleScope::new(
+            Audience::new([ActorId::new("alice"), ActorId::new("soul")]),
+            Some(PlaceId::new("room:main")),
+        );
+        let mut query = RecallQuery::new(scope);
+        query.query_embeddings = vec![TaggedEmbedding {
+            tag: EmbeddingTag {
+                embed_model_ver: "gemma2".to_owned(),
+                dim_d: 256,
+                prompt_regime_id: "default".to_owned(),
+            },
+            values: vec![0.1; 256],
+        }];
+        query.limit = 10;
+
+        let now = Time::from_millis(5_000);
+        let cfg = CoreConfig::default();
+
+        // Neutral fallback (None) leaves neural_relevance = None
+        let neutral = run_recall_with_model(&store, &state_only_pub, &query, now, &cfg, None).unwrap();
+        assert_eq!(neutral.items.len(), 1);
+        assert!(neutral.items[0].neural_relevance.is_none());
+
+        // Phase 3 model scores visible items identically whether private item 20 exists or not (Delta_NI == 0)
+        let r_pub =
+            run_recall_with_model(&store, &state_only_pub, &query, now, &cfg, Some(&model)).unwrap();
+        let r_priv =
+            run_recall_with_model(&store, &state_with_priv, &query, now, &cfg, Some(&model)).unwrap();
+        assert_eq!(r_pub, r_priv, "private entries must cause zero interference (Delta_NI = 0)");
+        assert!(r_pub.items[0].neural_relevance.is_some());
+        let rel = r_pub.items[0].neural_relevance.unwrap();
+        assert!((0.0..=1.0).contains(&rel) && rel.is_finite());
+        let _ = CURRENT_PROTOCOL_VERSION;
+    }
 }

@@ -16,6 +16,9 @@ pub const MS_PER_HOUR: f64 = 3_600_000.0;
 /// Default exact recent-uses count `k` in Petrov's hybrid (`R-04`).
 pub const DEFAULT_PETROV_K: usize = 1;
 
+/// Default ACT-R/Petrov power-law decay exponent `d = 0.5`.
+pub const DEFAULT_PETROV_D: f64 = 0.5;
+
 /// Maps `memory_persistence` in `[0.0, 1.0]` to ACT-R/Petrov decay exponent `d` in `[0.3, 0.7]`.
 ///
 /// `0.0 -> 0.7` (faster fade), `0.5 -> 0.5` (ACT-R default), `1.0 -> 0.3` (slower fade).

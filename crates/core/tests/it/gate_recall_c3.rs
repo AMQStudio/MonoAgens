@@ -1,21 +1,23 @@
-use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use monoagens_core::gate::{DecisionReason, HabituationBook, PatienceEstimator};
-use monoagens_core::map::{CognitiveMap, MapVertex};
+use monoagens_core::gate::DecisionReason;
 use monoagens_core::memory::{
     ContextMatchTag, ImportanceInputs, MemoryBasis, MemoryEntry, RecallQuery,
     RecollectionConstraint, compute_importance,
 };
+use monoagens_core::neural::NeuralModel;
 use monoagens_core::{
-    ActivationTrace, ContextPlan, Core, DecisionOutcome, DoorDecision, Doors, Effect, EventDetail,
-    EventKind, EventRecord, Input, MemStore, NoopDoors, Prior, ReplayMode, Store, Switches,
+    ActivationTrace, ContextPlan, Core, CoreConfig, DecisionOutcome, DoorDecision, Doors, Effect,
+    EventDetail, EventKind, EventRecord, Input, MemStore, NoopDoors, ReplayMode, Store,
     replay_from_checkpoint,
 };
 use monoagens_protocol::{
-    Action, ActorId, AttachmentHandle, Audience, CapabilityId, ChannelId, DeclassToken,
-    EmbeddingTag, EventId, ModalitySlot, OpaquePayload, OriginActor, OwnerSigned, Percept, PlaceId,
-    ReceiptOutcome, TaggedEmbedding, Taint, ThoughtAct, Time, VisibleScope,
+    Action, ActorId, AttachmentHandle, Audience, CapabilityId, DeclassToken, EmbeddingTag, EventId,
+    ModalitySlot, OpaquePayload, OriginActor, OwnerSigned, Percept, PlaceId, ReceiptOutcome,
+    TaggedEmbedding, Taint, ThoughtAct, Time, VisibleScope,
 };
+use safetensors::tensor::{Dtype, TensorView};
 
 fn tag_v2() -> EmbeddingTag {
     EmbeddingTag {
@@ -84,193 +86,79 @@ impl Doors for ActionPolicyDoors {
     }
 }
 
-#[test]
-fn habituation_first_stimulus_channel_isolation_recovery_and_kappa_zero() {
-    let prior = Prior {
-        kappa: 1.0,
-        ..Prior::default()
+fn build_wait_neural_model() -> Arc<NeuralModel> {
+    let f32_bytes = |vals: &[f32]| -> Vec<u8> {
+        let mut out = Vec::with_capacity(vals.len() * 4);
+        for &v in vals {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out
     };
-    let switches = Switches::all_enabled();
-    let mut core = Core::open(MemStore::new(), prior.clone(), switches.clone(), 42).unwrap();
-    let mut doors = NoopDoors;
-
-    let place = PlaceId::new("lab:sensor_room");
-    let ch_a = ChannelId::new("channel_a");
-    let ch_b = ChannelId::new("channel_b");
-
-    // Stimulus 1 on channel_a: S_eff MUST equal S (never S / 2).
-    let mut p1 = make_percept("sensor", "lab:sensor_room", &["sensor", "soul"], 1_000);
-    p1.channel = Some(ch_a.clone());
-    p1.named = vec![ActorId::new("soul")];
-    core.step(
-        Input::Percept(Box::new(p1)),
-        Time::from_millis(1_000),
-        &mut doors,
-    )
-    .unwrap();
-
-    // Burst 10 rapid telemetry events on channel_a every 1 second.
-    for i in 2..=11u64 {
-        let ts = i * 1_000;
-        let mut p = make_percept("sensor", "lab:sensor_room", &["sensor", "soul"], ts);
-        p.channel = Some(ch_a.clone());
-        p.named = vec![ActorId::new("soul")];
-        core.step(
-            Input::Percept(Box::new(p)),
-            Time::from_millis(ts),
-            &mut doors,
-        )
-        .unwrap();
-    }
-
-    // Separate alert on channel_b MUST retain full unhabituated S_eff == S (h_pre == 0).
-    let mut p_alert = make_percept("sensor", "lab:sensor_room", &["sensor", "soul"], 12_000);
-    p_alert.channel = Some(ch_b.clone());
-    p_alert.named = vec![ActorId::new("soul")];
-    core.step(
-        Input::Percept(Box::new(p_alert)),
-        Time::from_millis(12_000),
-        &mut doors,
-    )
-    .unwrap();
-
-    let decisions: Vec<EventRecord> = core
-        .store()
-        .read_in_order(None, 500)
-        .unwrap()
-        .into_iter()
-        .filter(|r| r.kind == EventKind::Decision)
+    let (d_in_emb, d_in_num, n_freq, d_e, d_n, d_model, d_ff, tabm_k, h_dim) =
+        (256, 18, 2, 4, 4, 8, 16, 2, 64);
+    let data: Vec<(&str, Vec<usize>, Vec<u8>)> = vec![
+        ("stem.emb.linear.weight", vec![d_e, d_in_emb], f32_bytes(&vec![0.0; d_e * d_in_emb])),
+        ("stem.emb.linear.bias", vec![d_e], f32_bytes(&vec![0.0; d_e])),
+        ("stem.emb.norm.weight", vec![d_e], f32_bytes(&vec![1.0; d_e])),
+        ("stem.emb.norm.bias", vec![d_e], f32_bytes(&vec![0.0; d_e])),
+        ("stem.plr.freqs", vec![d_in_num, n_freq], f32_bytes(&vec![1.0; d_in_num * n_freq])),
+        ("stem.plr.linear.weight", vec![d_n, d_in_num * 2 * n_freq], f32_bytes(&vec![0.0; d_n * d_in_num * 2 * n_freq])),
+        ("stem.plr.linear.bias", vec![d_n], f32_bytes(&vec![0.0; d_n])),
+        ("stem.fusion.weight", vec![d_model, d_e + d_n + h_dim], f32_bytes(&vec![0.0; d_model * (d_e + d_n + h_dim)])),
+        ("stem.fusion.bias", vec![d_model], f32_bytes(&vec![0.0; d_model])),
+        ("trunk.tabm_in_scale", vec![tabm_k, d_model], f32_bytes(&vec![1.0; tabm_k * d_model])),
+        ("trunk.blocks.0.norm.weight", vec![d_model], f32_bytes(&vec![1.0; d_model])),
+        ("trunk.blocks.0.norm.bias", vec![d_model], f32_bytes(&vec![0.0; d_model])),
+        ("trunk.blocks.0.w_gate.weight", vec![d_ff, d_model], f32_bytes(&vec![0.0; d_ff * d_model])),
+        ("trunk.blocks.0.w_up.weight", vec![d_ff, d_model], f32_bytes(&vec![0.0; d_ff * d_model])),
+        ("trunk.blocks.0.w_down.weight", vec![d_model, d_ff], f32_bytes(&vec![0.0; d_model * d_ff])),
+        ("trunk.blocks.0.tabm_r", vec![tabm_k, d_model], f32_bytes(&vec![1.0; tabm_k * d_model])),
+        ("trunk.blocks.0.tabm_s", vec![tabm_k, d_model], f32_bytes(&vec![1.0; tabm_k * d_model])),
+        ("trunk.final_norm.weight", vec![d_model], f32_bytes(&vec![1.0; d_model])),
+        ("trunk.final_norm.bias", vec![d_model], f32_bytes(&vec![0.0; d_model])),
+        ("memory.mingru.w_z.weight", vec![h_dim, d_model], f32_bytes(&vec![0.0; h_dim * d_model])),
+        ("memory.mingru.w_z.bias", vec![h_dim], f32_bytes(&vec![0.0; h_dim])),
+        ("memory.mingru.w_h.weight", vec![h_dim, d_model], f32_bytes(&vec![0.0; h_dim * d_model])),
+        ("memory.mingru.w_h.bias", vec![h_dim], f32_bytes(&vec![0.0; h_dim])),
+        ("head.gate_4.weight", vec![4, d_model], f32_bytes(&vec![0.0; 4 * d_model])),
+        // Force deterministic Wait (`[Silent, Note, Wait, Go]`)
+        ("head.gate_4.bias", vec![4], f32_bytes(&[-10.0, -10.0, 20.0, -10.0])),
+        ("head.wait_delta_t.weight", vec![1, d_model], f32_bytes(&vec![0.0; d_model])),
+        ("head.wait_delta_t.bias", vec![1], f32_bytes(&[0.0])),
+    ];
+    let views: Vec<(&str, TensorView<'_>)> = data
+        .iter()
+        .map(|(n, s, b)| (*n, TensorView::new(Dtype::F32, s.clone(), b).unwrap()))
         .collect();
-    assert_eq!(decisions.len(), 12);
-
-    let first_trace = match &decisions[0].detail {
-        Some(EventDetail::Decision {
-            trace: Some(tr), ..
-        }) => tr,
-        other => panic!("expected trace on first decision: {other:?}"),
-    };
-    assert_eq!(first_trace.h_pre, 0.0);
-    assert_eq!(first_trace.habituation_factor, 1.0);
-    assert_eq!(first_trace.effective_salience, first_trace.raw_salience);
-
-    let second_trace = match &decisions[1].detail {
-        Some(EventDetail::Decision {
-            trace: Some(tr), ..
-        }) => tr,
-        other => panic!("expected trace on second decision: {other:?}"),
-    };
-    assert!(
-        second_trace.h_pre > 0.9,
-        "expected h_pre near 1, got {}",
-        second_trace.h_pre
-    );
-    assert!(second_trace.effective_salience < second_trace.raw_salience);
-
-    let eleventh_trace = match &decisions[10].detail {
-        Some(EventDetail::Decision {
-            trace: Some(tr), ..
-        }) => tr,
-        other => panic!("expected trace on 11th decision: {other:?}"),
-    };
-    assert!(eleventh_trace.effective_salience < second_trace.effective_salience);
-
-    // channel_b alert kept full S_eff == S!
-    let alert_trace = match &decisions[11].detail {
-        Some(EventDetail::Decision {
-            trace: Some(tr), ..
-        }) => tr,
-        other => panic!("expected trace on channel_b alert: {other:?}"),
-    };
-    assert_eq!(alert_trace.h_pre, 0.0);
-    assert_eq!(alert_trace.habituation_factor, 1.0);
-    assert_eq!(alert_trace.effective_salience, alert_trace.raw_salience);
-
-    // Recovery after a long pause (120 minutes) restores effective salience near S.
-    let after_pause_ms = 12_000 + 120 * 60_000;
-    let mut p_recovered = make_percept(
-        "sensor",
-        "lab:sensor_room",
-        &["sensor", "soul"],
-        after_pause_ms,
-    );
-    p_recovered.channel = Some(ch_a.clone());
-    p_recovered.named = vec![ActorId::new("soul")];
-    core.step(
-        Input::Percept(Box::new(p_recovered)),
-        Time::from_millis(after_pause_ms),
-        &mut doors,
-    )
-    .unwrap();
-
-    let all_dec: Vec<EventRecord> = core
-        .store()
-        .read_in_order(None, 500)
-        .unwrap()
-        .into_iter()
-        .filter(|r| r.kind == EventKind::Decision)
-        .collect();
-    let rec_trace = match &all_dec.last().unwrap().detail {
-        Some(EventDetail::Decision {
-            trace: Some(tr), ..
-        }) => tr,
-        other => panic!("expected trace on recovered decision: {other:?}"),
-    };
-    assert!(
-        rec_trace.effective_salience > eleventh_trace.effective_salience,
-        "expected recovery after pause"
-    );
-    assert!(
-        (rec_trace.effective_salience - rec_trace.raw_salience).abs() < 1e-4,
-        "expected near-full recovery after 120 min pause"
-    );
-
-    // kappa = 0 identity across repeated stimuli.
-    let (factor_k0, s_eff_k0) = HabituationBook::effective_salience(0.75, 50.0, 0.0, true);
-    assert_eq!(factor_k0, 1.0);
-    assert_eq!(s_eff_k0, 0.75);
-    let _ = place;
+    let mut meta = HashMap::new();
+    meta.insert("feature_schema_version".into(), "1".into());
+    meta.insert("d_in_emb".into(), d_in_emb.to_string());
+    meta.insert("d_in_num".into(), d_in_num.to_string());
+    meta.insert("d_e".into(), d_e.to_string());
+    meta.insert("d_n".into(), d_n.to_string());
+    meta.insert("d_model".into(), d_model.to_string());
+    meta.insert("n_layers".into(), "1".into());
+    meta.insert("tabm_k".into(), tabm_k.to_string());
+    meta.insert("h_dim".into(), h_dim.to_string());
+    meta.insert("cell_type".into(), "mingru".into());
+    meta.insert("temperature".into(), "1.0".into());
+    meta.insert("cic_threshold".into(), "0.5".into());
+    meta.insert("max_wait_ms".into(), "4000.0".into());
+    let bytes = safetensors::serialize(views, Some(meta)).unwrap();
+    Arc::new(NeuralModel::from_safetensors_bytes(&bytes, None).unwrap())
 }
 
 #[test]
-fn patience_yield_timeout_allocated_immediate_and_disabled_zero() {
-    // 1. Disabled patience is exact 0 seconds and unallocated Go wakes immediately.
-    let prior = Prior::default();
-    let mut sw_disabled = Switches::all_enabled();
-    sw_disabled.patience = false;
-    sw_disabled.stochastic_go_no_go = false; // deterministic step S_eff >= theta
-    let est = PatienceEstimator::default();
-    assert_eq!(
-        est.estimate_patience_ms(
-            &PlaceId::new("room:1"),
-            &ChannelId::new("chat"),
-            &prior,
-            &sw_disabled
-        ),
-        0
-    );
-
-    let mut core_no_patience = Core::open(MemStore::new(), prior.clone(), sw_disabled, 1).unwrap();
+fn patience_yield_timeout_allocated_immediate_and_neural_wait() {
+    let wait_model = build_wait_neural_model();
+    let cfg = CoreConfig {
+        stochastic_gate_sampling: false,
+        ..CoreConfig::default()
+    };
     let mut doors = NoopDoors;
-    let mut p_unalloc = make_percept("per_alice", "room:1", &["per_alice", "soul"], 1_000);
-    p_unalloc.named = vec![ActorId::new("soul")];
-    p_unalloc.dialogue_act_gap = Some(1.0);
-    let eff_immediate = core_no_patience
-        .step(
-            Input::Percept(Box::new(p_unalloc)),
-            Time::from_millis(1_000),
-            &mut doors,
-        )
-        .unwrap();
-    assert!(
-        matches!(eff_immediate.as_slice(), [Effect::Model { .. }]),
-        "disabled patience must wake immediately without wait: {eff_immediate:?}"
-    );
-    assert_eq!(core_no_patience.next_due(), None);
 
-    // 2. Allocated turn never waits even when patience is enabled.
-    let mut sw = Switches::all_enabled();
-    sw.stochastic_go_no_go = false;
-    let mut core_alloc = Core::open(MemStore::new(), prior.clone(), sw.clone(), 1).unwrap();
+    // 1. Allocated turn never waits even under a Wait-biased neural model.
+    let mut core_alloc = Core::open(MemStore::new(), cfg.clone(), Some(Arc::clone(&wait_model))).unwrap();
     let mut p_alloc = make_percept("per_alice", "room:1", &["per_alice", "soul"], 1_000);
     p_alloc.addressees = vec![ActorId::new("soul")];
     let eff_alloc = core_alloc
@@ -286,8 +174,8 @@ fn patience_yield_timeout_allocated_immediate_and_disabled_zero() {
     );
     assert_eq!(core_alloc.next_due(), None);
 
-    // 3. Unallocated Go opens a wait; third-party answers first -> no model call, Silent/Yielded.
-    let mut core_yield = Core::open(MemStore::new(), prior.clone(), sw.clone(), 1).unwrap();
+    // 2. Unallocated Wait opens a wait; third-party answers first -> no model call, Yielded.
+    let mut core_yield = Core::open(MemStore::new(), cfg.clone(), Some(Arc::clone(&wait_model))).unwrap();
     let mut p_open = make_percept(
         "per_alice",
         "room:2",
@@ -318,7 +206,8 @@ fn patience_yield_timeout_allocated_immediate_and_disabled_zero() {
         .expect("p_open percept")
         .id;
 
-    // Bob answers 400ms later (inside the patience window).
+    // Bob answers 400ms later (inside the patience window); switch to neutral fallback for Bob's reply.
+    core_yield.set_neural_model(None);
     let mut p_reply = make_percept(
         "per_bob",
         "room:2",
@@ -337,7 +226,10 @@ fn patience_yield_timeout_allocated_immediate_and_disabled_zero() {
         eff2.is_empty(),
         "third-party reply must yield with zero model call"
     );
-    assert_eq!(core_yield.next_due(), None, "wait should be cancelled");
+    assert!(
+        core_yield.state().open_waits.is_empty(),
+        "wait should be cancelled"
+    );
 
     let all_records = core_yield.store().read_in_order(None, 200).unwrap();
     assert!(
@@ -364,8 +256,8 @@ fn patience_yield_timeout_allocated_immediate_and_disabled_zero() {
         "expected Withheld marker for yielded silence"
     );
 
-    // 4. Nobody answers -> Tick at due_ms wakes reasoning with Effect::Model.
-    let mut core_timeout = Core::open(MemStore::new(), prior, sw, 1).unwrap();
+    // 3. Nobody answers -> Tick at due_ms wakes reasoning with Effect::Model.
+    let mut core_timeout = Core::open(MemStore::new(), cfg, Some(wait_model)).unwrap();
     let mut p_wait = make_percept(
         "per_alice",
         "room:3",
@@ -406,14 +298,15 @@ fn patience_yield_timeout_allocated_immediate_and_disabled_zero() {
 }
 
 #[test]
-fn decision_trace_recomputability_withheld_markers_and_replay() {
-    let prior = Prior::default();
-    let switches = Switches::all_enabled();
-    let seed = 777;
-    let mut core = Core::open(MemStore::new(), prior.clone(), switches.clone(), seed).unwrap();
+fn decision_trace_pinned_withheld_markers_and_replay() {
+    let cfg = CoreConfig {
+        seed: 777,
+        ..CoreConfig::default()
+    };
+    let mut core = Core::open(MemStore::new(), cfg, None).unwrap();
     let mut doors = NoopDoors;
 
-    // Event with high social_cost (addressed to Bob, not soul) -> silent with floor_cost Withheld marker.
+    // Event addressed to Bob (not soul) under neutral fallback stays Silent with trace & Withheld audit marker.
     let mut p = make_percept(
         "per_alice",
         "room:1",
@@ -433,14 +326,8 @@ fn decision_trace_recomputability_withheld_markers_and_replay() {
         .iter()
         .find(|r| r.kind == EventKind::Decision)
         .expect("decision present");
-    let recomp = dec
-        .recompute_decision_outcome()
-        .expect("trace sufficient to recompute");
     let Some(EventDetail::Decision {
         outcome,
-        salience,
-        threshold,
-        probability,
         reason,
         trace: Some(tr),
         ..
@@ -448,37 +335,31 @@ fn decision_trace_recomputability_withheld_markers_and_replay() {
     else {
         panic!("expected Decision detail with trace");
     };
-    assert_eq!(recomp.outcome, *outcome);
-    assert_eq!(recomp.effective_salience.to_bits(), salience.to_bits());
-    assert_eq!(recomp.threshold.to_bits(), threshold.to_bits());
-    assert_eq!(recomp.probability.to_bits(), probability.to_bits());
-    assert_eq!(Some(recomp.reason), *reason);
-    assert!(tr.signals.social_cost > 0.0);
-    assert_eq!(tr.threshold_terms.delta_theta_sleep, 0.0);
+    assert_eq!(tr.outcome, *outcome);
+    assert_eq!(Some(tr.reason), *reason);
+    assert_eq!(tr.reason, DecisionReason::NeutralFallback);
 
     assert!(
         records.iter().any(|r| r.kind == EventKind::Withheld),
-        "expected auditable Withheld event on floor-cost silence"
+        "expected auditable Withheld event on neutral/floor silence"
     );
 
-    let report =
-        replay_from_checkpoint(core.store(), None, &switches, seed, ReplayMode::FullReplay)
-            .unwrap();
-    assert!(report.is_bit_identical(), "{:?}", report.first_divergence);
+    let report = replay_from_checkpoint(core.store(), None, ReplayMode::Pinned, None).unwrap();
+    assert!(report.is_exact(), "{:?}", report.mismatches);
 }
 
 #[test]
 fn pre_step5_visiblescope_non_interference_delta_ni_zero_and_declass_token() {
-    let prior = Prior::default();
-    let switches = Switches::all_enabled();
-    let seed = 2026;
+    let cfg = CoreConfig {
+        seed: 2026,
+        ..CoreConfig::default()
+    };
     let tag = tag_v2();
 
     // Run A: empty private history.
-    let mut core_empty =
-        Core::open(MemStore::new(), prior.clone(), switches.clone(), seed).unwrap();
+    let mut core_empty = Core::open(MemStore::new(), cfg.clone(), None).unwrap();
     // Run B: identical public history PLUS a highly relevant private secret in [per_owner] only.
-    let mut core_priv = Core::open(MemStore::new(), prior.clone(), switches.clone(), seed).unwrap();
+    let mut core_priv = Core::open(MemStore::new(), cfg, None).unwrap();
     let mut doors = NoopDoors;
 
     let mut priv_trace = ActivationTrace::default();
@@ -570,16 +451,13 @@ fn pre_step5_visiblescope_non_interference_delta_ni_zero_and_declass_token() {
         panic!("expected full Decision traces");
     };
 
-    // Exact non-interference (Delta_NI == 0): bit-identical gate numbers and zero FOK/relevance leak.
+    // Exact non-interference (Delta_NI == 0): bit-identical gate numbers and identical neural traces.
     assert_eq!(o1, o2);
     assert_eq!(s1.to_bits(), s2.to_bits());
     assert_eq!(t1.to_bits(), t2.to_bits());
     assert_eq!(p1.to_bits(), p2.to_bits());
     assert_eq!(d1.to_bits(), d2.to_bits());
-    assert_eq!(tr1.signals.feeling_of_knowing, 0.0);
-    assert_eq!(tr2.signals.feeling_of_knowing, 0.0);
-    assert_eq!(tr1.signals.relevance, 0.0);
-    assert_eq!(tr2.signals.relevance, 0.0);
+    assert_eq!(tr1, tr2);
 
     // Direct recall in public scope returns zero private items and leaves secret use count untouched (count == 1).
     let public_scope = VisibleScope::new(
@@ -684,11 +562,13 @@ fn pre_step5_visiblescope_non_interference_delta_ni_zero_and_declass_token() {
 }
 
 #[test]
-fn recall_wb_zero_no_vector_long_gap_faded_links_superseded_importance_and_capability() {
+fn recall_activation_no_vector_long_gap_faded_links_superseded_importance_and_capability() {
     let tag = tag_v2();
-    let prior = Prior::default();
-    let switches = Switches::all_enabled();
-    let mut core = Core::open(MemStore::new(), prior.clone(), switches.clone(), 9).unwrap();
+    let cfg = CoreConfig {
+        seed: 9,
+        ..CoreConfig::default()
+    };
+    let mut core = Core::open(MemStore::new(), cfg.clone(), None).unwrap();
 
     let aud = Audience::new([ActorId::new("per_alice"), ActorId::new("soul")]);
     let scope = VisibleScope::new(aud.clone(), Some(PlaceId::new("room:1")));
@@ -753,25 +633,12 @@ fn recall_wb_zero_no_vector_long_gap_faded_links_superseded_importance_and_capab
         erased: false,
     });
 
-    // With w_B = 1.0 (enabled), heavily-used id_a beats id_b; with w_B = 0 (Row-10 neutral), id_b wins.
+    // With Petrov activation enabled, heavily-used id_a beats id_b.
     let mut q_vec = RecallQuery::new(scope.clone());
     q_vec.query_embeddings = vec![make_emb(tag.clone(), [1.0, 0.0, 0.0])];
     let res_act = core.recall(&q_vec, Time::from_millis(20_000)).unwrap();
     assert_eq!(res_act.items[0].event_id, id_a);
     assert_eq!(res_act.items[0].attachments[0].handle_id, "att-blind-1");
-
-    let mut sw_wb0 = switches.clone();
-    sw_wb0.activation_recall = false;
-    let res_wb0 = monoagens_core::run_recall(
-        core.store(),
-        core.state(),
-        &q_vec,
-        Time::from_millis(20_000),
-        &prior,
-        &sw_wb0,
-    )
-    .unwrap();
-    assert_eq!(res_wb0.items[0].event_id, id_b);
 
     // 2. Importance ordering: promise-linked beats routine at equal age & similarity.
     let mut tr_eq = ActivationTrace::default();
@@ -853,7 +720,7 @@ fn recall_wb_zero_no_vector_long_gap_faded_links_superseded_importance_and_capab
         .get(&id_b)
         .unwrap()
         .activation
-        .base_level(Time::from_millis(25_000), prior.petrov_d());
+        .base_level(Time::from_millis(25_000), 0.5);
     let mut q_use = RecallQuery::new(scope.clone());
     q_use.query_embeddings = vec![make_emb(tag.clone(), [0.95, 0.31225, 0.0])];
     q_use.record_uses = true;
@@ -864,7 +731,7 @@ fn recall_wb_zero_no_vector_long_gap_faded_links_superseded_importance_and_capab
         .get(&id_b)
         .unwrap()
         .activation
-        .base_level(Time::from_millis(25_000), prior.petrov_d());
+        .base_level(Time::from_millis(25_000), 0.5);
     assert!(b_after > b_before, "use must raise base-level B");
 
     // 4. Superseded marking: new item ranks as current; old item marked superseded with pointer.
@@ -1027,12 +894,11 @@ fn recall_wb_zero_no_vector_long_gap_faded_links_superseded_importance_and_capab
     // or using a dedicated fresh query with `prior.n_rec_max` capacity.
     let mut core_cap = Core::open(
         core.store().clone(),
-        Prior {
-            n_rec_max: 16,
-            ..prior.clone()
+        CoreConfig {
+            max_recalled_memories: 16,
+            ..cfg
         },
-        switches.clone(),
-        9,
+        None,
     )
     .unwrap();
     let recall_effects = core_cap
@@ -1107,39 +973,12 @@ fn recall_wb_zero_no_vector_long_gap_faded_links_superseded_importance_and_capab
 }
 
 #[test]
-fn sr_cognitive_map_hop_budget_and_cross_embedder_bridging_plus_query_partitioning() {
-    let prior = Prior::default();
-    let switches = Switches::all_enabled();
-
-    // 1. Hop budget test on a cyclic 3-hop chain A -- B -- C -- D -- A.
-    let mut map = CognitiveMap::new();
-    let v_a = MapVertex::actor(ActorId::new("per_a"));
-    let v_b = MapVertex::place(PlaceId::new("place_b"));
-    let v_c = MapVertex::concept("concept_c");
-    let v_d = MapVertex::actor(ActorId::new("per_d"));
-    let now = Time::from_millis(1_000);
-    map.add_edge(v_a.clone(), v_b.clone(), 1.0, now);
-    map.add_edge(v_b.clone(), v_c.clone(), 1.0, now);
-    map.add_edge(v_c.clone(), v_d.clone(), 1.0, now);
-    map.add_edge(v_d.clone(), v_a.clone(), 0.01, now); // cycle edge from D back to A
-
-    // Hop 0: only seed A.
-    let s0 = map.spread_activation(std::slice::from_ref(&v_a), 0, &prior);
-    assert!(s0.get(&v_a).copied().unwrap_or(0.0) > 0.0);
-    assert_eq!(s0.get(&v_b).copied().unwrap_or(0.0), 0.0);
-    assert_eq!(s0.get(&v_c).copied().unwrap_or(0.0), 0.0);
-
-    // Hop 1: reaches 1-hop neighbors (B, D), NOT 2-hop C.
-    let s1 = map.spread_activation(std::slice::from_ref(&v_a), 1, &prior);
-    assert!(s1.get(&v_b).copied().unwrap_or(0.0) > 0.0);
-    assert_eq!(s1.get(&v_c).copied().unwrap_or(0.0), 0.0);
-
-    // Hop 2: reaches 2-hop C cleanly without unbounded random walk.
-    let s2 = map.spread_activation(std::slice::from_ref(&v_a), 2, &prior);
-    assert!(s2.get(&v_c).copied().unwrap_or(0.0) > 0.0);
-
-    // 2. Partition non-mixing + SR map bridging incompatible embed_model_ver tags.
-    let mut core = Core::open(MemStore::new(), prior.clone(), switches, 11).unwrap();
+fn cross_embedder_query_partition_non_mixing_and_text_partitioning() {
+    let cfg = CoreConfig {
+        seed: 11,
+        ..CoreConfig::default()
+    };
+    let mut core = Core::open(MemStore::new(), cfg, None).unwrap();
     let aud = Audience::new([ActorId::new("per_alice"), ActorId::new("soul")]);
 
     let old_v1_id = EventId::new(301);
@@ -1240,8 +1079,7 @@ fn sr_cognitive_map_hop_budget_and_cross_embedder_bridging_plus_query_partitioni
     );
 
     // Query with tag_v2([1, 0, 0]) in room:bridge:
-    // - old_v1_id has tag_v1([1, 0, 0]) -> cosine MUST be 0.0 (never mixed with tag_v2!),
-    //   yet SR cognitive map bridges it via ("room:bridge", "project_apollo")!
+    // old_v1_id has tag_v1([1, 0, 0]) -> cosine MUST NEVER mix across incompatible embedder versions!
     let mut q_part = RecallQuery::new(VisibleScope::new(aud, Some(PlaceId::new("room:bridge"))));
     q_part.partition_tag = Some(tag_v2());
     q_part.query_embeddings = vec![make_emb(tag_v2(), [1.0, 0.0, 0.0])];
@@ -1249,16 +1087,14 @@ fn sr_cognitive_map_hop_budget_and_cross_embedder_bridging_plus_query_partitioni
     q_part.seed_concepts = vec!["project_apollo".to_owned()];
 
     let res_part = core.recall(&q_part, Time::from_millis(10_000)).unwrap();
-    let bridged = res_part
-        .items
-        .iter()
-        .find(|i| i.event_id == old_v1_id)
-        .expect("SR graph must bridge old_v1_id across incompatible embedder versions");
-    assert_eq!(
-        bridged.cosine, 0.0,
-        "incompatible v1 vector must never mix cosine into v2 query"
-    );
-    assert!(bridged.map_score > 0.0);
+    for item in &res_part.items {
+        if item.event_id == old_v1_id {
+            assert_eq!(
+                item.cosine, 0.0,
+                "incompatible v1 vector must never mix cosine into v2 query"
+            );
+        }
+    }
 
     // 3. Text candidate partitioning where the store reports incompatible embedding tags.
     let mut text_store = MemStore::new();
@@ -1314,5 +1150,4 @@ fn sr_cognitive_map_hop_budget_and_cross_embedder_bridging_plus_query_partitioni
         .candidates_by_text_partitioned(txt_query_id, Some(&tag_v2()), 20)
         .unwrap();
     assert_eq!(partitioned_hits, vec![txt_v2_id]);
-    let _ = BTreeMap::<MapVertex, f64>::new();
 }

@@ -15,15 +15,14 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use monoagens_body_kit::{EmittedCue, PersistentBodyRuntime};
 use monoagens_conformance::{ConformanceLevel, run_body_conformance, run_core_conformance};
 use monoagens_core::{
-    DecisionOutcome, DecisionTrace, EventDetail, EventKind, EventRecord, Input, ReplayMode, Store,
-    Switches,
+    DecisionOutcome, DecisionTrace, EventDetail, EventKind, EventRecord, Input, MemStore,
+    ReplayMode, Store,
 };
 use monoagens_gateway::{
     Clock, CueRecorder, DiagnosticSink, DoorsAdapter, GatewayConfig, GatewayOptions,
     GatewayRuntime, GatewaySeams, IdentityResolver, LifecycleCueKind, LoadedGatewayEnv,
     SystemClock, load_or_init_gateway_env, resolve_paths,
 };
-use monoagens_lab::replay_events_offline;
 use monoagens_protocol::{
     Action, ActionCanonicalInput, ActionId, ActorId, BodyId, EventId, HAct, PlaceId,
     ReceiptOutcome, Time,
@@ -106,8 +105,10 @@ pub struct LogArgs {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum ReplayModeArg {
-    TwoEpoch,
-    Full,
+    #[value(alias = "two-epoch")]
+    Pinned,
+    #[value(alias = "full")]
+    Unpinned,
 }
 
 #[derive(Debug, Args)]
@@ -115,8 +116,8 @@ pub struct ReplayArgs {
     /// Override PRNG seed (defaults to `soul.seed` in config, or 1).
     #[arg(long)]
     pub seed: Option<u64>,
-    /// Replay mode (`two-epoch` or `full`).
-    #[arg(long, value_enum, default_value_t = ReplayModeArg::TwoEpoch)]
+    /// Replay mode (`pinned` or `unpinned`; legacy aliases `two-epoch` and `full` accepted).
+    #[arg(long, value_enum, default_value_t = ReplayModeArg::Pinned)]
     pub mode: ReplayModeArg,
     /// Optional JSON file containing an array of EventRecord values to replay offline.
     #[arg(long)]
@@ -386,11 +387,10 @@ fn cmd_chat(
         let cues = CueRecorder::new();
         let mut cue_rx = cues.subscribe();
 
-        let runtime = GatewayRuntime::start_segmented_with_configured_prior(
+        let runtime = GatewayRuntime::start_segmented_with_configured_core(
             cfg,
             &loaded.secrets,
             store_dir,
-            Switches::default(),
             DoorsAdapter(valve),
             GatewayOptions {
                 clock: clock.clone(),
@@ -782,8 +782,14 @@ fn render_explain_event(
         if let Some(t) = trace {
             writeln!(
                 out,
-                "  habituation_factor={:.6} raw_salience={:.6} effective_salience={:.6} signals={:?} threshold_terms={:?}",
-                t.habituation_factor, t.raw_salience, t.effective_salience, t.signals, t.threshold_terms
+                "  schema_v={} online_adapt={} commitment_bypass={} cic_abstain={} wait_delta_ms={} gate_probs={:?} gate_logits={:?}",
+                t.feature_schema_version,
+                t.online_adaptation_applied,
+                t.commitment_bypass,
+                t.neural.cic_abstain,
+                t.neural.wait_delta_ms,
+                t.neural.gate_probs,
+                t.neural.gate_logits,
             )
             .map_err(|e| e.to_string())?;
         }
@@ -807,7 +813,7 @@ fn cmd_replay(
     err: &mut dyn Write,
 ) -> Result<u8, String> {
     let (cfg_opt, paths) = load_paths(config_path)?;
-    let seed = args
+    let _seed = args
         .seed
         .or_else(|| cfg_opt.as_ref().map(|c| c.soul.seed))
         .unwrap_or(1);
@@ -825,20 +831,25 @@ fn cmd_replay(
     };
 
     let mode = match args.mode {
-        ReplayModeArg::TwoEpoch => ReplayMode::TwoEpochFrozen,
-        ReplayModeArg::Full => ReplayMode::FullReplay,
+        ReplayModeArg::Pinned => ReplayMode::Pinned,
+        ReplayModeArg::Unpinned => ReplayMode::Unpinned,
     };
 
-    let report = replay_events_offline(&Switches::default(), seed, &events, mode)
+    let mut mem = MemStore::new();
+    for rec in &events {
+        mem.append(rec.clone())
+            .map_err(|e| format!("offline replay store build failed: {e}"))?;
+    }
+    let report = monoagens_core::replay_log(&mem, mode, None)
         .map_err(|e| format!("offline replay failed: {e}"))?;
 
-    if report.is_bit_identical() {
+    if report.is_exact() {
         if json_mode {
             let payload = json!({
                 "status": "ok",
                 "message": "all decisions reproduced",
-                "replayed_events": report.replayed_events,
-                "matched_decisions": report.matched_decisions,
+                "replayed_events": report.recovery.replayed_events,
+                "matched_decisions": report.verified_decisions,
                 "first_divergence": serde_json::Value::Null,
             });
             writeln!(
@@ -851,31 +862,33 @@ fn cmd_replay(
             writeln!(
                 out,
                 "all decisions reproduced (matched={}, replayed={})",
-                report.matched_decisions, report.replayed_events
+                report.verified_decisions, report.recovery.replayed_events
             )
             .map_err(|e| e.to_string())?;
         }
         Ok(0)
     } else {
-        let div = report
-            .first_divergence
-            .as_ref()
-            .expect("divergence present");
+        let div = report.mismatches.first().expect("mismatch present");
         let div_msg = format!(
-            "replay divergence at seq={} decision_event={} target_event={} field={}: recorded={:?} recomputed={:?}",
+            "replay divergence at seq={} decision_event={} target_event={} field={}: {}",
             div.seq.as_u64(),
-            div.decision_event_id.as_u64(),
+            div.event_id.as_u64(),
             div.target_event_id.as_u64(),
             div.field,
-            div.recorded,
-            div.recomputed
+            div.detail
         );
         if json_mode {
             let payload = json!({
                 "status": "diverged",
-                "replayed_events": report.replayed_events,
-                "matched_decisions": report.matched_decisions,
-                "first_divergence": div,
+                "replayed_events": report.recovery.replayed_events,
+                "matched_decisions": report.verified_decisions,
+                "first_divergence": {
+                    "seq": div.seq.as_u64(),
+                    "decision_event_id": div.event_id.as_u64(),
+                    "target_event_id": div.target_event_id.as_u64(),
+                    "field": div.field,
+                    "detail": div.detail,
+                },
             });
             writeln!(
                 out,

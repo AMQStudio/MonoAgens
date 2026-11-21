@@ -12,12 +12,67 @@ use monoagens_protocol::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::beliefs::{CredenceRebaseRecord, DomainTransitionKind, DomainTransitionRecord};
-use crate::gate::{
-    DecisionReason, DecisionTrace, GateSignals, RecomputedTrace, SalienceWeights, ThresholdTerms,
-};
-use crate::prior::{Prior, decode_prior, encode_prior};
+use crate::config::{CURRENT_CORE_CONFIG_VERSION, CoreConfig};
+use crate::gate::{DecisionReason, DecisionTrace};
+use crate::neural::{GateClass, NeuralOutputs};
 use crate::recall::MemoryBasis;
+
+/// Historical domain transition kind preserved strictly for wire tag `31` log decoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DomainTransitionKind {
+    Initial,
+    Continued,
+    Switched,
+    Split,
+    Merged,
+}
+
+impl DomainTransitionKind {
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        match self {
+            Self::Initial => 1,
+            Self::Continued => 2,
+            Self::Switched => 3,
+            Self::Split => 4,
+            Self::Merged => 5,
+        }
+    }
+
+    #[must_use]
+    pub const fn from_code(code: u8) -> Option<Self> {
+        match code {
+            1 => Some(Self::Initial),
+            2 => Some(Self::Continued),
+            3 => Some(Self::Switched),
+            4 => Some(Self::Split),
+            5 => Some(Self::Merged),
+            _ => None,
+        }
+    }
+}
+
+/// Historical domain transition record preserved strictly for wire tag `31` log decoding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DomainTransitionRecord {
+    pub kind: DomainTransitionKind,
+    pub old_domain: Option<DomainId>,
+    pub new_domain: Option<DomainId>,
+    pub similarity: f64,
+}
+
+/// Historical credence rebase record preserved strictly for wire tag `31` log decoding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CredenceRebaseRecord {
+    pub actor: ActorId,
+    pub from_domain: DomainId,
+    pub to_domain: DomainId,
+    pub new_alpha: f64,
+    pub new_beta: f64,
+    pub alpha_0: f64,
+    pub beta_0: f64,
+}
 
 /// Monotonic total-order log position assigned by [`crate::ports::Store::append`].
 #[derive(
@@ -82,7 +137,7 @@ pub enum EventKind {
     Tick,
     Failure,
     HardForget,
-    PriorLoaded,
+    ConfigLoaded,
 }
 
 impl EventKind {
@@ -117,7 +172,7 @@ impl EventKind {
         Self::Tick,
         Self::Failure,
         Self::HardForget,
-        Self::PriorLoaded,
+        Self::ConfigLoaded,
     ];
 
     /// Canonical snake_case format name stored in data.
@@ -153,7 +208,7 @@ impl EventKind {
             Self::Tick => "tick",
             Self::Failure => "failure",
             Self::HardForget => "hard_forget",
-            Self::PriorLoaded => "prior_loaded",
+            Self::ConfigLoaded => "config_loaded",
         }
     }
 
@@ -190,7 +245,7 @@ impl EventKind {
             Self::Tick => 27,
             Self::Failure => 28,
             Self::HardForget => 29,
-            Self::PriorLoaded => 30,
+            Self::ConfigLoaded => 30,
         }
     }
 
@@ -227,7 +282,7 @@ impl EventKind {
             27 => Some(Self::Tick),
             28 => Some(Self::Failure),
             29 => Some(Self::HardForget),
-            30 => Some(Self::PriorLoaded),
+            30 => Some(Self::ConfigLoaded),
             _ => None,
         }
     }
@@ -762,8 +817,9 @@ pub enum EventDetail {
         used: f64,
         limit: f64,
     },
-    PriorLoaded {
-        prior: Box<Prior>,
+    ConfigLoaded {
+        config: Box<CoreConfig>,
+        config_blake3: [u8; 32],
     },
 }
 
@@ -954,15 +1010,16 @@ impl EventRecord {
     }
 
     /// Recomputes a `Decision` outcome strictly from the numbers stored inside this event record.
+    /// Returns the recorded [`DecisionTrace`] attached to this `Decision` event, if any.
     #[must_use]
-    pub fn recompute_decision_outcome(&self) -> Option<RecomputedTrace> {
+    pub fn decision_trace(&self) -> Option<&DecisionTrace> {
         let Some(EventDetail::Decision {
             trace: Some(trace), ..
         }) = &self.detail
         else {
             return None;
         };
-        Some(trace.recompute())
+        Some(trace)
     }
 
     /// Validates `format_version` and upcasts an older supported [`EventRecordV1`] in memory.
@@ -2119,9 +2176,13 @@ fn encode_opt_detail(w: &mut BinWriter, detail: Option<&EventDetail>) {
             w.f64(*used);
             w.f64(*limit);
         }
-        EventDetail::PriorLoaded { prior } => {
+        EventDetail::ConfigLoaded {
+            config,
+            config_blake3,
+        } => {
             w.u8(40);
-            encode_prior(w, prior);
+            encode_core_config(w, config);
+            w.raw(config_blake3);
         }
     }
 }
@@ -2923,9 +2984,17 @@ fn decode_opt_detail(r: &mut BinReader<'_>) -> Result<Option<EventDetail>, Event
             used: r.f64()?,
             limit: r.f64()?,
         })),
-        40 => Ok(Some(EventDetail::PriorLoaded {
-            prior: Box::new(decode_prior(r)?),
-        })),
+        40 => {
+            let config = Box::new(decode_core_config(r)?);
+            let mut config_blake3 = [0_u8; 32];
+            for slot in &mut config_blake3 {
+                *slot = r.u8()?;
+            }
+            Ok(Some(EventDetail::ConfigLoaded {
+                config,
+                config_blake3,
+            }))
+        }
         other => Err(EventFormatError::MalformedRecord(format!(
             "invalid detail tag {other}"
         ))),
@@ -3178,108 +3247,266 @@ fn decode_body_status_ev(code: u8) -> Result<BodyStatus, EventFormatError> {
     }
 }
 
+pub(crate) fn encode_core_config(w: &mut BinWriter, c: &CoreConfig) {
+    w.u16(c.format_version);
+    w.u64(c.seed);
+    w.f64(c.daily_budget_limit);
+    w.u64(c.max_queue_class_a as u64);
+    w.u64(c.max_queue_class_b as u64);
+    w.u64(c.max_queue_class_c as u64);
+    w.u64(c.max_backlog_chunks_per_wake as u64);
+    w.u64(c.backlog_gap_ms);
+    w.f32(c.max_wait_ms);
+    w.u8(u8::from(c.stochastic_gate_sampling));
+    w.u8(u8::from(c.online_adaptation));
+    w.f32(c.adapt.max_adapt_delta);
+    w.f32(c.adapt.ucb_c);
+    w.f32(c.adapt.learning_rate);
+    w.f32(c.adapt.warm_start_prior_weight);
+    w.f32(c.adapt.delayed_negative_decay);
+    w.opt_str(c.model_path.as_deref());
+    match c.expected_blake3 {
+        Some(hash) => {
+            w.u8(1);
+            w.raw(&hash);
+        }
+        None => w.u8(0),
+    }
+    w.u64(c.max_context_bytes as u64);
+    w.u64(c.max_recalled_memories as u64);
+    w.u64(c.recall_vector_top_k as u64);
+    w.u64(c.recall_text_top_k as u64);
+    w.u8(u8::from(c.auto_recall_enabled));
+    w.u64(c.sleep_min_episodes as u64);
+    w.u64(c.sleep_idle_ms);
+    w.f64(c.vector_fade_threshold);
+    w.u8(u8::from(c.self_guide_enabled));
+    w.f64(c.certainty_bar);
+}
+
+pub(crate) fn decode_core_config(r: &mut BinReader<'_>) -> Result<CoreConfig, EventFormatError> {
+    let format_version = r.u16()?;
+    if format_version != CURRENT_CORE_CONFIG_VERSION {
+        return Err(EventFormatError::MalformedRecord(format!(
+            "unsupported CoreConfig version {format_version}"
+        )));
+    }
+    let seed = r.u64()?;
+    let daily_budget_limit = r.f64()?;
+    let max_queue_class_a = r.u64()? as usize;
+    let max_queue_class_b = r.u64()? as usize;
+    let max_queue_class_c = r.u64()? as usize;
+    let max_backlog_chunks_per_wake = r.u64()? as usize;
+    let backlog_gap_ms = r.u64()?;
+    let max_wait_ms = r.f32()?;
+    let stochastic_gate_sampling = r.u8()? != 0;
+    let online_adaptation = r.u8()? != 0;
+    let max_adapt_delta = r.f32()?;
+    let ucb_c = r.f32()?;
+    let learning_rate = r.f32()?;
+    let warm_start_prior_weight = r.f32()?;
+    let delayed_negative_decay = r.f32()?;
+    let model_path = r.opt_string()?;
+    let expected_blake3 = match r.u8()? {
+        0 => None,
+        1 => {
+            let mut hash = [0_u8; 32];
+            for slot in &mut hash {
+                *slot = r.u8()?;
+            }
+            Some(hash)
+        }
+        tag => {
+            return Err(EventFormatError::MalformedRecord(format!(
+                "invalid expected_blake3 tag {tag}"
+            )));
+        }
+    };
+    let max_context_bytes = r.u64()? as usize;
+    let max_recalled_memories = r.u64()? as usize;
+    let recall_vector_top_k = r.u64()? as usize;
+    let recall_text_top_k = r.u64()? as usize;
+    let auto_recall_enabled = r.u8()? != 0;
+    let sleep_min_episodes = r.u64()? as usize;
+    let sleep_idle_ms = r.u64()?;
+    let vector_fade_threshold = r.f64()?;
+    let self_guide_enabled = r.u8()? != 0;
+    let certainty_bar = r.f64()?;
+    Ok(CoreConfig {
+        format_version,
+        seed,
+        daily_budget_limit,
+        max_queue_class_a,
+        max_queue_class_b,
+        max_queue_class_c,
+        max_backlog_chunks_per_wake,
+        backlog_gap_ms,
+        max_wait_ms,
+        stochastic_gate_sampling,
+        online_adaptation,
+        adapt: crate::neural::AdaptConfig {
+            online_adaptation,
+            max_adapt_delta,
+            ucb_c,
+            learning_rate,
+            warm_start_prior_weight,
+            delayed_negative_decay,
+        },
+        model_path,
+        expected_blake3,
+        max_context_bytes,
+        max_recalled_memories,
+        recall_vector_top_k,
+        recall_text_top_k,
+        auto_recall_enabled,
+        sleep_min_episodes,
+        sleep_idle_ms,
+        vector_fade_threshold,
+        self_guide_enabled,
+        certainty_bar,
+    })
+}
+
+fn encode_opt_f32(w: &mut BinWriter, v: Option<f32>) {
+    match v {
+        Some(x) => {
+            w.u8(1);
+            w.f32(x);
+        }
+        None => w.u8(0),
+    }
+}
+
+fn decode_opt_f32(r: &mut BinReader<'_>) -> Result<Option<f32>, EventFormatError> {
+    match r.u8()? {
+        0 => Ok(None),
+        1 => Ok(Some(r.f32()?)),
+        tag => Err(EventFormatError::MalformedRecord(format!(
+            "invalid opt f32 tag {tag}"
+        ))),
+    }
+}
+
 fn encode_decision_trace(w: &mut BinWriter, tr: &DecisionTrace) {
-    w.f64(tr.signals.own_name);
-    w.f64(tr.signals.dialogue_act_gap);
-    w.f64(tr.signals.asr_clarification_boost);
-    w.f64(tr.signals.info_gap);
-    w.f64(tr.signals.own_info_gap);
-    w.f64(tr.signals.feeling_of_knowing);
-    w.f64(tr.signals.relevance);
-    w.f64(tr.signals.commitment);
-    w.f64(tr.signals.deg_soul);
-    w.f64(tr.signals.max_deg_other);
-    w.f64(tr.signals.sum_deg_listeners);
-    w.f64(tr.signals.answered);
-    w.f64(tr.signals.closeness_sender);
-    w.f64(tr.signals.social_cost);
+    let n = &tr.neural;
+    for &x in &n.gate_logits {
+        w.f32(x);
+    }
+    for &x in &n.gate_probs {
+        w.f32(x);
+    }
+    w.u8(n.predicted_class as u8);
+    w.f32(n.wait_delta_ms);
+    w.f32(n.epistemic_uncertainty);
+    w.u8(u8::from(n.cic_abstain));
+    w.u32(n.h_next.len() as u32);
+    for &x in &n.h_next {
+        w.f32(x);
+    }
+    encode_opt_f32(w, n.p_uncertainty);
+    encode_opt_f32(w, n.p_verify);
+    encode_opt_f32(w, n.p_encode_importance);
+    encode_opt_f32(w, n.p_memory_relevance);
+    match n.model_blake3 {
+        Some(hash) => {
+            w.u8(1);
+            w.raw(&hash);
+        }
+        None => w.u8(0),
+    }
+    w.u16(n.feature_schema_version);
+    w.u8(u8::from(n.is_neutral_fallback));
+    w.u8(u8::from(n.online_adaptation_applied));
 
-    w.f64(tr.weights.w_own_name);
-    w.f64(tr.weights.w_info);
-    w.f64(tr.weights.w_fok);
-    w.f64(tr.weights.w_rel);
-    w.f64(tr.weights.w_commitment);
-    w.f64(tr.weights.w_sc);
-
-    w.f64(tr.raw_salience);
-    w.f64(tr.h_pre);
-    w.f64(tr.kappa);
-    w.f64(tr.habituation_factor);
-    w.f64(tr.effective_salience);
-
-    w.f64(tr.threshold_terms.theta_0);
-    w.f64(tr.threshold_terms.a);
-    w.f64(tr.threshold_terms.talk_rate);
-    w.f64(tr.threshold_terms.b);
-    w.f64(tr.threshold_terms.budget_used);
-    w.f64(tr.threshold_terms.c);
-    w.f64(tr.threshold_terms.promise_debt);
-    w.f64(tr.threshold_terms.r);
-    w.f64(tr.threshold_terms.familiarity);
-    w.f64(tr.threshold_terms.delta_theta_init);
-    w.f64(tr.threshold_terms.delta_theta_sleep);
-    w.f64(tr.threshold_terms.theta);
-
-    w.f64(tr.tau);
-    w.f64(tr.note_band);
-    w.u8(u8::from(tr.stochastic_enabled));
+    match tr.model_blake3 {
+        Some(hash) => {
+            w.u8(1);
+            w.raw(&hash);
+        }
+        None => w.u8(0),
+    }
+    w.u16(tr.feature_schema_version);
+    w.u8(u8::from(tr.online_adaptation_applied));
     w.u8(u8::from(tr.commitment_bypass));
-    w.f64(tr.probability);
+    w.u8(u8::from(tr.self_caused));
     w.f64(tr.draw);
+    w.f64(tr.probability);
     w.u8(tr.outcome.code());
     w.u8(tr.reason.code());
 }
 
 fn decode_decision_trace(r: &mut BinReader<'_>) -> Result<DecisionTrace, EventFormatError> {
-    let signals = GateSignals {
-        own_name: r.f64()?,
-        dialogue_act_gap: r.f64()?,
-        asr_clarification_boost: r.f64()?,
-        info_gap: r.f64()?,
-        own_info_gap: r.f64()?,
-        feeling_of_knowing: r.f64()?,
-        relevance: r.f64()?,
-        commitment: r.f64()?,
-        deg_soul: r.f64()?,
-        max_deg_other: r.f64()?,
-        sum_deg_listeners: r.f64()?,
-        answered: r.f64()?,
-        closeness_sender: r.f64()?,
-        social_cost: r.f64()?,
+    let mut gate_logits = [0.0_f32; 4];
+    for slot in &mut gate_logits {
+        *slot = r.f32()?;
+    }
+    let mut gate_probs = [0.0_f32; 4];
+    for slot in &mut gate_probs {
+        *slot = r.f32()?;
+    }
+    let predicted_class = match r.u8()? {
+        0 => GateClass::Silent,
+        1 => GateClass::Note,
+        2 => GateClass::Wait,
+        3 => GateClass::Go,
+        code => {
+            return Err(EventFormatError::MalformedRecord(format!(
+                "invalid gate_class code {code}"
+            )));
+        }
     };
-    let weights = SalienceWeights {
-        w_own_name: r.f64()?,
-        w_info: r.f64()?,
-        w_fok: r.f64()?,
-        w_rel: r.f64()?,
-        w_commitment: r.f64()?,
-        w_sc: r.f64()?,
+    let wait_delta_ms = r.f32()?;
+    let epistemic_uncertainty = r.f32()?;
+    let cic_abstain = r.u8()? != 0;
+    let h_len = r.u32()? as usize;
+    let mut h_next = Vec::with_capacity(h_len.min(1024));
+    for _ in 0..h_len {
+        h_next.push(r.f32()?);
+    }
+    let p_uncertainty = decode_opt_f32(r)?;
+    let p_verify = decode_opt_f32(r)?;
+    let p_encode_importance = decode_opt_f32(r)?;
+    let p_memory_relevance = decode_opt_f32(r)?;
+    let neural_model_blake3 = match r.u8()? {
+        0 => None,
+        1 => {
+            let mut hash = [0_u8; 32];
+            for slot in &mut hash {
+                *slot = r.u8()?;
+            }
+            Some(hash)
+        }
+        tag => {
+            return Err(EventFormatError::MalformedRecord(format!(
+                "invalid neural model_blake3 tag {tag}"
+            )));
+        }
     };
-    let raw_salience = r.f64()?;
-    let h_pre = r.f64()?;
-    let kappa = r.f64()?;
-    let habituation_factor = r.f64()?;
-    let effective_salience = r.f64()?;
-    let threshold_terms = ThresholdTerms {
-        theta_0: r.f64()?,
-        a: r.f64()?,
-        talk_rate: r.f64()?,
-        b: r.f64()?,
-        budget_used: r.f64()?,
-        c: r.f64()?,
-        promise_debt: r.f64()?,
-        r: r.f64()?,
-        familiarity: r.f64()?,
-        delta_theta_init: r.f64()?,
-        delta_theta_sleep: r.f64()?,
-        theta: r.f64()?,
+    let neural_schema_version = r.u16()?;
+    let is_neutral_fallback = r.u8()? != 0;
+    let neural_online_adapt = r.u8()? != 0;
+
+    let model_blake3 = match r.u8()? {
+        0 => None,
+        1 => {
+            let mut hash = [0_u8; 32];
+            for slot in &mut hash {
+                *slot = r.u8()?;
+            }
+            Some(hash)
+        }
+        tag => {
+            return Err(EventFormatError::MalformedRecord(format!(
+                "invalid model_blake3 tag {tag}"
+            )));
+        }
     };
-    let tau = r.f64()?;
-    let note_band = r.f64()?;
-    let stochastic_enabled = r.u8()? != 0;
+    let feature_schema_version = r.u16()?;
+    let online_adaptation_applied = r.u8()? != 0;
     let commitment_bypass = r.u8()? != 0;
-    let probability = r.f64()?;
+    let self_caused = r.u8()? != 0;
     let draw = r.f64()?;
+    let probability = r.f64()?;
     let out_code = r.u8()?;
     let outcome = DecisionOutcome::from_code(out_code).ok_or_else(|| {
         EventFormatError::MalformedRecord(format!("invalid trace outcome code {out_code}"))
@@ -3288,21 +3515,32 @@ fn decode_decision_trace(r: &mut BinReader<'_>) -> Result<DecisionTrace, EventFo
     let reason = DecisionReason::from_code(rsn_code).ok_or_else(|| {
         EventFormatError::MalformedRecord(format!("invalid trace reason code {rsn_code}"))
     })?;
+
     Ok(DecisionTrace {
-        signals,
-        weights,
-        raw_salience,
-        h_pre,
-        kappa,
-        habituation_factor,
-        effective_salience,
-        threshold_terms,
-        tau,
-        note_band,
-        stochastic_enabled,
+        neural: NeuralOutputs {
+            gate_logits,
+            gate_probs,
+            predicted_class,
+            wait_delta_ms,
+            epistemic_uncertainty,
+            cic_abstain,
+            h_next,
+            p_uncertainty,
+            p_verify,
+            p_encode_importance,
+            p_memory_relevance,
+            model_blake3: neural_model_blake3,
+            feature_schema_version: neural_schema_version,
+            is_neutral_fallback,
+            online_adaptation_applied: neural_online_adapt,
+        },
+        model_blake3,
+        feature_schema_version,
+        online_adaptation_applied,
         commitment_bypass,
-        probability,
+        self_caused,
         draw,
+        probability,
         outcome,
         reason,
     })
@@ -3577,7 +3815,7 @@ mod tests {
             EventKind::Tick => 26,
             EventKind::Failure => 27,
             EventKind::HardForget => 28,
-            EventKind::PriorLoaded => 29,
+            EventKind::ConfigLoaded => 29,
         }
     }
 
@@ -3783,13 +4021,13 @@ mod tests {
                 epoch: 1,
                 reason: "erasure".to_owned(),
             },
-            EventDetail::PriorLoaded {
-                prior: Box::new(crate::prior::Prior {
-                    talkativeness: 0.77,
-                    speaking_bar: 4,
-                    content_version: "2026-11-17.2".to_owned(),
-                    ..crate::prior::Prior::default()
+            EventDetail::ConfigLoaded {
+                config: Box::new(crate::config::CoreConfig {
+                    seed: 42,
+                    self_guide_enabled: true,
+                    ..crate::config::CoreConfig::default()
                 }),
+                config_blake3: [0xAB; 32],
             },
         ];
         for detail in details {
@@ -3813,14 +4051,14 @@ mod tests {
     }
 
     #[test]
-    fn prior_loaded_v1_upcasts_and_rejects_future_version() {
+    fn config_loaded_v1_upcasts_and_rejects_future_version() {
         let v1 = EventRecordV1 {
             id: EventId::new(9),
-            kind: EventKind::PriorLoaded,
+            kind: EventKind::ConfigLoaded,
             format_version: 1,
             timestamp_ms: Time::from_millis(1_000),
             actor: ActorId::new("core"),
-            place: PlaceId::new("core:prior"),
+            place: PlaceId::new("core:config"),
             audience: Audience::new([ActorId::new("core")]),
             origin_actor: OriginActor::new(ActorId::new("core")),
             taint: Taint::Trusted,
@@ -3828,23 +4066,23 @@ mod tests {
             payload: OpaquePayload::default(),
         };
         let raw_v1 = EventRecord::encode_v1_bytes(&v1);
-        let upcasted = EventRecord::decode_and_upcast(&raw_v1).expect("upcast prior_loaded v1");
-        assert_eq!(upcasted.kind, EventKind::PriorLoaded);
+        let upcasted = EventRecord::decode_and_upcast(&raw_v1).expect("upcast config_loaded v1");
+        assert_eq!(upcasted.kind, EventKind::ConfigLoaded);
         assert_eq!(
             upcasted.format_version,
-            EventKind::PriorLoaded.current_version()
+            EventKind::ConfigLoaded.current_version()
         );
 
         let future =
-            EventRecord::encode_with_version_for_test(EventKind::PriorLoaded, 99, EventId::new(10));
+            EventRecord::encode_with_version_for_test(EventKind::ConfigLoaded, 99, EventId::new(10));
         let err = EventRecord::decode_and_upcast(&future)
-            .expect_err("must reject future prior_loaded version");
+            .expect_err("must reject future config_loaded version");
         assert!(matches!(
             err,
             EventFormatError::UnsupportedFutureVersion { .. }
         ));
         let msg = err.to_string();
-        assert!(msg.contains("prior_loaded"), "msg={msg}");
+        assert!(msg.contains("config_loaded"), "msg={msg}");
         assert!(msg.contains("99"), "msg={msg}");
     }
 }

@@ -5,8 +5,7 @@ use std::sync::Arc;
 
 use monoagens_cli::{ChatArgs, canonical_h_act_details, run_chat_with_provider};
 use monoagens_core::{
-    Core, EventDetail, EventKind, EventRecord, Input, NoopDoors, NumericFeatures, Prior, Store,
-    Switches,
+    Core, CoreConfig, EventDetail, EventKind, EventRecord, Input, NoopDoors, NumericFeatures, Store,
 };
 use monoagens_protocol::{
     Action, ActionCanonicalInput, ActionId, ActorId, Audience, CapabilityId, OpaquePayload,
@@ -41,7 +40,15 @@ fn write_scripted_config(home: &std::path::Path) -> PathBuf {
 
 fn seed_sample_store_with_held_action(data_dir: &std::path::Path) -> (u64, Action) {
     let store = SegmentedStore::open(StoreConfig::new(data_dir.to_path_buf())).expect("open store");
-    let mut core = Core::open(store, Prior::default(), Switches::default(), 7).expect("core open");
+    let mut core = Core::open(
+        store,
+        CoreConfig {
+            seed: 7,
+            ..CoreConfig::default()
+        },
+        None,
+    )
+    .expect("core open");
 
     let mut p1 = Percept::minimal(
         ActorId::new("per_alice"),
@@ -265,8 +272,8 @@ fn cli_log_explain_and_filters_emit_pure_json() {
         String::from_utf8_lossy(&out.stderr)
     );
     let parsed: Value = serde_json::from_slice(&out.stdout).expect("pure JSON stdout");
-    assert!(parsed["trace"]["threshold_terms"].is_object());
-    assert!(parsed["trace"]["signals"].is_object());
+    assert!(parsed["trace"]["neural"]["gate_probs"].is_array());
+    assert!(parsed["trace"]["commitment_bypass"].is_boolean());
     assert!(parsed["draw"].is_number());
     assert!(parsed["probability"].is_number());
     assert_eq!(
@@ -571,30 +578,23 @@ fn cli_two_session_prior_change_and_offline_replay_reproduces_both_sessions() {
     .expect("session 1 chat");
     assert_eq!(code1, 0, "stderr1={}", String::from_utf8_lossy(&stderr1));
 
-    // Edit [soul] prior in monoagens.toml to an edited prior file.
-    let edited_prior_path = tmp.path().join("edited_prior.json");
+    // Edit [soul] core_config in monoagens.toml to an edited config file.
+    let edited_cfg_path = tmp.path().join("edited_core_config.json");
     fs::write(
-        &edited_prior_path,
+        &edited_cfg_path,
         r#"{
-          "version": 1,
-          "content_version": "2026-11-17.session2",
-          "talkativeness": 0.95,
-          "spontaneity": 0.5,
-          "memory_persistence": 0.5,
-          "helpfulness": 0.5,
-          "restraint": 0.1,
-          "boredom_with_repeats": 0.5,
-          "certainty_bar": 0.5,
-          "speaking_bar": 3
+          "format_version": 1,
+          "certainty_bar": 0.72,
+          "online_adaptation": false
         }"#,
     )
     .unwrap();
     let cfg_toml = format!(
-        "version = 1\ndata_dir = \"{}\"\n\n[soul]\nname = \"MonoTest\"\nseed = 1\nprior = \"{}\"\n\n[model]\nprovider = \"scripted\"\nmodel = \"scripted-test\"\ndaily_token_budget = 10000\n\n[valve]\nmode = \"enforcing\"\nmax_chain_wakes = 8\n",
+        "version = 1\ndata_dir = \"{}\"\n\n[soul]\nname = \"MonoTest\"\nseed = 1\ncore_config = \"{}\"\n\n[model]\nprovider = \"scripted\"\nmodel = \"scripted-test\"\ndaily_token_budget = 10000\n\n[valve]\nmode = \"enforcing\"\nmax_chain_wakes = 8\n",
         data_dir.display(),
-        edited_prior_path.display()
+        edited_cfg_path.display()
     );
-    fs::write(&cfg_path, cfg_toml).expect("update config with edited prior");
+    fs::write(&cfg_path, cfg_toml).expect("update config with edited core_config");
 
     let act_reply_2 = json!({
         "protocol_version": { "major": 1, "minor": 0 },
@@ -615,7 +615,7 @@ fn cli_two_session_prior_change_and_offline_replay_reproduces_both_sessions() {
     })
     .to_string();
 
-    // Session 2 under edited prior.
+    // Session 2 under edited config.
     let mut stdout2 = Vec::new();
     let mut stderr2 = Vec::new();
     let code2 = run_chat_with_provider(
@@ -634,26 +634,26 @@ fn cli_two_session_prior_change_and_offline_replay_reproduces_both_sessions() {
     .expect("session 2 chat");
     assert_eq!(code2, 0, "stderr2={}", String::from_utf8_lossy(&stderr2));
 
-    // Verify log holds two prior_loaded events (default, then edited).
+    // Verify log holds two config_loaded events (default, then edited).
     let store = SegmentedStore::open(StoreConfig::new(data_dir)).expect("open store");
     let events = store.read_in_order(None, usize::MAX).expect("read events");
-    let prior_events: Vec<_> = events
+    let cfg_events: Vec<_> = events
         .iter()
-        .filter(|e| e.kind == EventKind::PriorLoaded)
+        .filter(|e| e.kind == EventKind::ConfigLoaded)
         .collect();
-    assert_eq!(prior_events.len(), 2, "expected 2 prior_loaded events");
-    match &prior_events[0].detail {
-        Some(EventDetail::PriorLoaded { prior }) => {
-            assert_eq!(prior.as_ref(), &Prior::default());
+    assert_eq!(cfg_events.len(), 2, "expected 2 config_loaded events");
+    match &cfg_events[0].detail {
+        Some(EventDetail::ConfigLoaded { config, .. }) => {
+            assert_eq!(config.as_ref(), &CoreConfig::default());
         }
-        other => panic!("unexpected first prior detail: {other:?}"),
+        other => panic!("unexpected first config detail: {other:?}"),
     }
-    match &prior_events[1].detail {
-        Some(EventDetail::PriorLoaded { prior }) => {
-            assert_eq!(prior.content_version, "2026-11-17.session2");
-            assert!((prior.talkativeness - 0.95).abs() < 1e-12);
+    match &cfg_events[1].detail {
+        Some(EventDetail::ConfigLoaded { config, .. }) => {
+            assert!((config.certainty_bar - 0.72).abs() < 1e-12);
+            assert!(!config.online_adaptation);
         }
-        other => panic!("unexpected second prior detail: {other:?}"),
+        other => panic!("unexpected second config detail: {other:?}"),
     }
 
     // Run `monoagens replay` against the store and verify both sessions reproduce cleanly.
@@ -675,17 +675,17 @@ fn cli_two_session_prior_change_and_offline_replay_reproduces_both_sessions() {
 }
 
 #[test]
-fn cli_chat_fails_startup_when_soul_prior_is_missing_or_invalid() {
+fn cli_chat_fails_startup_when_soul_core_config_is_missing_or_invalid() {
     let tmp = TempDir::new().expect("tempdir");
     let cfg_path = tmp.path().join("monoagens.toml");
     let data_dir = tmp.path().join("data");
     fs::create_dir_all(&data_dir).unwrap();
-    let missing_prior = tmp.path().join("nonexistent_prior.json");
+    let missing_cfg = tmp.path().join("nonexistent_core_config.json");
 
     let cfg_toml = format!(
-        "version = 1\ndata_dir = \"{}\"\n\n[soul]\nname = \"MonoTest\"\nseed = 1\nprior = \"{}\"\n\n[model]\nprovider = \"scripted\"\nmodel = \"scripted-test\"\ndaily_token_budget = 10000\n",
+        "version = 1\ndata_dir = \"{}\"\n\n[soul]\nname = \"MonoTest\"\nseed = 1\ncore_config = \"{}\"\n\n[model]\nprovider = \"scripted\"\nmodel = \"scripted-test\"\ndaily_token_budget = 10000\n",
         data_dir.display(),
-        missing_prior.display()
+        missing_cfg.display()
     );
     fs::write(&cfg_path, cfg_toml).unwrap();
 
@@ -702,6 +702,6 @@ fn cli_chat_fails_startup_when_soul_prior_is_missing_or_invalid() {
         &mut stdout,
         &mut stderr,
     )
-    .expect_err("chat must fail when [soul] prior path is missing");
-    assert!(err.contains("nonexistent_prior.json"), "err={err}");
+    .expect_err("chat must fail when [soul] core_config path is missing");
+    assert!(err.contains("nonexistent_core_config.json"), "err={err}");
 }

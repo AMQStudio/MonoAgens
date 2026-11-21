@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use monoagens_core::{Prior, Switches};
+use monoagens_core::CoreConfig;
 use monoagens_lab::datasets::{
     ChecksumsRecorded, ContaminationRisk, ConvertedDataset, Converter, CoreApplicability,
     DatasetAvailability, DatasetLane, DatasetLicense, DatasetManifestEntry, EmbedderProbe,
@@ -308,18 +308,19 @@ fn calibration_rejects_external_inputs_with_error() {
         events: Vec::new(),
         scripted_model: Vec::new(),
         checks: Vec::new(),
-        switches: None,
+        core_config: None,
+        model_path: None,
+        online_adaptation: None,
         cost_guard: None,
-        prior: None,
         annotations: ScenarioAnnotations::default(),
     };
-    let out = run_scenario(monoagens_core::MemStore::new(), Prior::default(), &sc, 1).unwrap();
+    let out = run_scenario(monoagens_core::MemStore::new(), CoreConfig::default(), &sc, 1).unwrap();
     let recs: Vec<RunRecord> = vec![out.run_record];
     let err_rec =
         calibrate_from_run_records(&recs).expect_err("calibrate_from_run_records must fail");
     assert!(err_rec.to_string().contains("External"));
 
-    let err_sc = calibrate_from_scenarios(&[sc], &Prior::default(), 1)
+    let err_sc = calibrate_from_scenarios(&[sc], &CoreConfig::default(), 1)
         .expect_err("calibrate_from_scenarios must fail on External");
     assert!(err_sc.to_string().contains("External"));
 
@@ -343,14 +344,15 @@ fn calibration_rejects_external_inputs_with_error() {
         }],
         scripted_model: Vec::new(),
         checks: Vec::new(),
-        switches: None,
+        core_config: None,
+        model_path: None,
+        online_adaptation: None,
         cost_guard: None,
-        prior: None,
         annotations: ScenarioAnnotations::default(),
     };
     let err_op = run_scenario(
         monoagens_core::MemStore::new(),
-        Prior::default(),
+        CoreConfig::default(),
         &bad_sc,
         1,
     )
@@ -359,7 +361,7 @@ fn calibration_rejects_external_inputs_with_error() {
 
     // Positive control: Development set succeeds.
     bad_sc.set = ScenarioSet::Development;
-    let cal_ok = calibrate_from_scenarios(&[bad_sc], &Prior::default(), 1)
+    let cal_ok = calibrate_from_scenarios(&[bad_sc], &CoreConfig::default(), 1)
         .expect("development calibration must succeed");
     assert_eq!(cal_ok.scenario_count, 1);
 }
@@ -444,8 +446,7 @@ fn reference_converter_cache_isolation_visiblescope_and_scorer_parity() {
     for item in &conv_a.items {
         let exec = execute_external_item(
             item,
-            &Prior::default(),
-            &Switches::all_enabled(),
+            &CoreConfig::default(),
             7,
             &probe_provider,
             "scripted",
@@ -752,8 +753,7 @@ fn live_probe_uses_core_rendered_sections_and_dispatched_act_payload() {
     let mut guard = CostGuard::default();
     let exec = execute_external_item(
         &item,
-        &Prior::default(),
-        &Switches::all_enabled(),
+        &CoreConfig::default(),
         1,
         &provider,
         "mock-live-model",

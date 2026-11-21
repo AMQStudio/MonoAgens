@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use monoagens_core::{DecisionOutcome, EventDetail, MemStore, Prior};
+use monoagens_core::{CoreConfig, DecisionOutcome, EventDetail, MemStore};
 use monoagens_protocol::{Percept, Time};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
@@ -251,7 +251,7 @@ pub fn run_baseline_adapter(
     kind: BaselineKind,
     adapter_script: &Path,
     scenario: &Scenario,
-    prior: &Prior,
+    config: &CoreConfig,
     seed: u64,
     sealed_mode: bool,
     restart_at_percept_idx: Option<usize>,
@@ -266,7 +266,7 @@ pub fn run_baseline_adapter(
     }
 
     // Run MonoAgens on the exact same scenario for symmetric NOOP token parity.
-    let mono_out = run_scenario(MemStore::new(), prior.clone(), scenario, seed)?;
+    let mono_out = run_scenario(MemStore::new(), config.clone(), scenario, seed)?;
     let mono_gate_suppressions = mono_out
         .events
         .iter()

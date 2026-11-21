@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use monoagens_core::{
-    CapabilityCatalogEntry, Core, MemStore, NoopDoors, Prior, Store, Switches, ToolSelectionBudget,
+    CapabilityCatalogEntry, Core, CoreConfig, MemStore, NoopDoors, Store, ToolSelectionBudget,
     select_tools_for_context,
 };
 use monoagens_protocol::{
@@ -348,7 +348,7 @@ pub fn verify_required_datasets_present(
 
 /// Executes the in-tree `Tool RAG` scaling measurement across `N_caps = 50, 100, 150, 200` (`R-38`).
 #[must_use]
-pub fn run_tool_rag_scaling_eval(prior: &Prior) -> Vec<ToolRagScalePoint> {
+pub fn run_tool_rag_scaling_eval(config: &CoreConfig) -> Vec<ToolRagScalePoint> {
     let place = PlaceId::new("room:tools");
     let soul = ActorId::new("soul");
     let alice = ActorId::new("alice");
@@ -389,7 +389,7 @@ pub fn run_tool_rag_scaling_eval(prior: &Prior) -> Vec<ToolRagScalePoint> {
                     embedding: None,
                 });
             }
-            let budget = ToolSelectionBudget::from_prior(prior, n_caps);
+            let budget = ToolSelectionBudget::from_config(config, n_caps);
             let selected =
                 select_tools_for_context(&query_terms, &[], &catalog, &[], &scope, now, budget);
             let selected_total = selected.static_core.len() + selected.dynamic_caps.len();
@@ -405,7 +405,7 @@ pub fn run_tool_rag_scaling_eval(prior: &Prior) -> Vec<ToolRagScalePoint> {
 }
 
 /// Verifies `Arm T` mid-task restart parity on `Core` (decisions and state survive restart cleanly).
-pub fn run_arm_t_restart_parity_check(prior: &Prior) -> Result<bool, LabError> {
+pub fn run_arm_t_restart_parity_check(config: &CoreConfig) -> Result<bool, LabError> {
     let mem = MemStore::new();
     let place = PlaceId::new("room:restart");
     let alice = ActorId::new("alice");
@@ -423,7 +423,14 @@ pub fn run_arm_t_restart_parity_check(prior: &Prior) -> Result<bool, LabError> {
     p1.addressees = vec![soul.clone()];
     p1.named = vec![soul.clone()];
 
-    let mut core1 = Core::open(mem, prior.clone(), Switches::all_enabled(), 17)?;
+    let mut core1 = Core::open(
+        mem,
+        CoreConfig {
+            seed: 17,
+            ..config.clone()
+        },
+        None,
+    )?;
     let _ = core1.step(
         monoagens_core::Input::Percept(Box::new(p1.clone())),
         Time::from_millis(1_000),
@@ -437,7 +444,14 @@ pub fn run_arm_t_restart_parity_check(prior: &Prior) -> Result<bool, LabError> {
     }
     monoagens_core::Store::snapshot(&mut mem_reopen, ckpt)?;
 
-    let mut core2 = Core::open(mem_reopen, prior.clone(), Switches::all_enabled(), 17)?;
+    let mut core2 = Core::open(
+        mem_reopen,
+        CoreConfig {
+            seed: 17,
+            ..config.clone()
+        },
+        None,
+    )?;
     let mut p2 = Percept::minimal(
         alice,
         place,
@@ -461,14 +475,14 @@ pub fn run_benchmark_suite(
     suite: &str,
     datasets_dir: &Path,
     pareto_input: Option<&ParetoScorecardInput>,
-    prior: &Prior,
+    config: &CoreConfig,
 ) -> Result<BenchmarkSuiteReport, LabError> {
     run_benchmark_suite_with_options(
         suite,
         datasets_dir,
         pareto_input,
         false,
-        prior,
+        config,
         &BenchmarkExecutionOptions::default(),
     )
 }
@@ -480,7 +494,7 @@ pub fn run_benchmark_suite_with_options(
     datasets_dir: &Path,
     pareto_input: Option<&ParetoScorecardInput>,
     compute_pareto_from_scorecard: bool,
-    prior: &Prior,
+    config: &CoreConfig,
     opts: &BenchmarkExecutionOptions<'_>,
 ) -> Result<BenchmarkSuiteReport, LabError> {
     ensure_not_sealed_path(datasets_dir)?;
@@ -517,7 +531,7 @@ pub fn run_benchmark_suite_with_options(
                 &manifest_path,
                 datasets_dir,
                 &full_registry,
-                prior,
+                config,
                 opts,
             )?;
             (
@@ -541,7 +555,7 @@ pub fn run_benchmark_suite_with_options(
                 &manifest_path,
                 datasets_dir,
                 &active_registry,
-                prior,
+                config,
                 opts,
             )?;
             (
@@ -558,8 +572,8 @@ pub fn run_benchmark_suite_with_options(
             )));
         };
 
-    let tool_rag_scaling = run_tool_rag_scaling_eval(prior);
-    let arm_t_ok = run_arm_t_restart_parity_check(prior)?;
+    let tool_rag_scaling = run_tool_rag_scaling_eval(config);
+    let arm_t_ok = run_arm_t_restart_parity_check(config)?;
     let scorecard_pareto_input = scorecard_rows_to_pareto_input(
         &scorecard,
         pareto_input

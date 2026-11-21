@@ -7,9 +7,9 @@ use std::fmt::Write as _;
 
 use monoagens_core::{
     AutoRecallTriggerState, CommitmentSlotItem, ContextPlan, ContextSections, ContextSegment,
-    ContextSlotKind, CoreSelfCard, CoreSelfSnapshot, MechanismId, MemoryBasis, ModelPurpose,
-    PrincipleSeverity, ProcedureEntry, SourceLedgerCard, Store, StoreError, TrustSegmentKind,
-    ValveSelfSnapshot, self_guide_template_for, self_guide_template_table,
+    ContextSlotKind, CoreSelfCard, CoreSelfSnapshot, MemoryBasis, ModelPurpose, PrincipleSeverity,
+    ProcedureEntry, SourceLedgerCard, Store, StoreError, TrustSegmentKind, ValveSelfSnapshot,
+    self_guide_template_table,
 };
 use monoagens_protocol::{
     CapabilityDescriptor, CapabilityId, CapabilitySchemaHash, EventId, ExpectKind, Receipt,
@@ -154,45 +154,25 @@ fn sanitize_single_line(s: &str) -> String {
     neutralize_control_tags(cleaned.trim())
 }
 
-/// Exhaustive compile-time switch -> `[SELF_GUIDE]` prose template mapping over all 22 [`MechanismId`]s.
+/// Maps each V2 [`self_guide_template_table`] `stable_id` to its `[SELF_GUIDE]` prose line.
 ///
-/// Adding a mechanism to [`MechanismId`] without adding its template arm here is a compile error.
 /// Contains zero tunable thresholds, formula symbols (`theta`, `P_rc`, `beta`), or policy internals.
 #[must_use]
-pub const fn self_guide_mechanism_line(id: MechanismId) -> &'static str {
-    let _entry = self_guide_template_for(id);
-    match id {
-        MechanismId::Salience => "- m01 salience: signal wake gating",
-        MechanismId::FloorCost => "- m02 floor: turn restraint",
-        MechanismId::Habituation => "- m03 habituation: damp repeats",
-        MechanismId::DriveThreshold => "- m04 drive: wake pacing",
-        MechanismId::FamiliarityReserve => "- m05 reserve: new-place caution",
-        MechanismId::StochasticGoNoGo => "- m06 go_nogo: seeded wake draw",
-        MechanismId::CommitmentBreaker => "- m07 breaker: due-turn bypass",
-        MechanismId::Patience => "- m08 patience: wait before reply",
-        MechanismId::ReportBarOnThought => "- m09 bars: speak and certainty bars",
-        MechanismId::ActivationRecall => "- m10 recall: activation ranking",
-        MechanismId::VectorFade => "- m11 fade: stale vector release",
-        MechanismId::PredictionAndGrounding => "- m12 grounding: outcome checks",
-        MechanismId::ProspectiveMemory => "- m13 promises: track and CommitCheck",
-        MechanismId::Credence => "- m14 credence: source reliability",
-        MechanismId::BoundedLearning => "- m15 learning: outcome updates",
-        MechanismId::MemoryTruth => "- m16 truth: basis, R/F, validity",
-        MechanismId::ReportControl => "- m17 report: auto-recall or abstain",
-        MechanismId::ConsolidationAndMerge => "- m18 sleep: gists and skills",
-        MechanismId::PerceptionLedger => "- m19 ledger: self and actor cards",
-        MechanismId::Agency => "- m20 agency: self-effect check",
-        MechanismId::EventBoundaries => "- m21 boundaries: episode splits",
-        MechanismId::BacklogChunking => "- m22 backlog: downtime batches",
+pub fn self_guide_section_line(stable_id: &str) -> &'static str {
+    match stable_id {
+        "neural_controller" => "- neural_controller: unified turn gate and recurrent memory",
+        "visible_scope" => "- visible_scope: strict audience and place isolation",
+        "commitment_and_recall" => "- commitment_and_recall: commitments and memory recall",
+        "agency_and_grounding" => "- agency_and_grounding: self-effect check and outcome grounding",
+        _ => "- core_invariant: deterministic safety invariant",
     }
 }
 
 /// Compiles [`CoreSelfSnapshot`] and optional [`ValveSelfSnapshot`] into the cacheable
 /// `[SELF_GUIDE]` prefix block (`<= 250` tokens).
 ///
-/// Neutral mechanisms (`enabled == false`), disabled Valve modes (`"off"`/`"disabled"`/empty),
-/// and inactive Valve rules (`quiet_hours_active == false`, `taint_gating_active == false`, etc.)
-/// are omitted completely.
+/// Disabled Valve modes (`"off"`/`"disabled"`/empty) and inactive Valve rules
+/// (`quiet_hours_active == false`, `taint_gating_active == false`, etc.) are omitted completely.
 #[must_use]
 pub fn render_self_guide(guide: &CoreSelfSnapshot, valve: Option<&ValveSelfSnapshot>) -> String {
     let mut out = String::with_capacity(512);
@@ -202,6 +182,22 @@ pub fn render_self_guide(guide: &CoreSelfSnapshot, valve: Option<&ValveSelfSnaps
         "protocol: v{}.{}",
         guide.protocol_version.major, guide.protocol_version.minor
     );
+    let _ = write!(
+        out,
+        "neural: mode={}",
+        if guide.neural_active {
+            "active"
+        } else {
+            "fallback"
+        }
+    );
+    if let Some(prefix) = &guide.model_blake3_prefix {
+        let _ = write!(out, " model={}", sanitize_single_line(prefix));
+    }
+    if guide.online_adaptation {
+        out.push_str(" adapt=on");
+    }
+    out.push('\n');
 
     let _ = write!(
         out,
@@ -253,15 +249,8 @@ pub fn render_self_guide(guide: &CoreSelfSnapshot, valve: Option<&ValveSelfSnaps
     }
 
     for entry in self_guide_template_table() {
-        let enabled = guide
-            .active_switches
-            .iter()
-            .find(|sw| sw.id == entry.id)
-            .is_some_and(|sw| sw.enabled);
-        if enabled {
-            out.push_str(self_guide_mechanism_line(entry.id));
-            out.push('\n');
-        }
+        out.push_str(self_guide_section_line(entry.stable_id));
+        out.push('\n');
     }
 
     out.push_str("[/SELF_GUIDE]");

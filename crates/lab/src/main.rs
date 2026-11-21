@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::time::Duration;
 
-use monoagens_core::{MechanismId, MemStore, ReplayMode, Switches, brain_map_registry};
+use monoagens_core::{CoreConfig, MemStore, ReplayMode};
 use monoagens_lab::reason_seam::embed::{
     EmbedInput, Embedder, EmbeddingGemma2Config, EmbeddingGemma2Embedder,
 };
@@ -18,15 +18,16 @@ use monoagens_lab::reason_seam::secrets::SecretString;
 use monoagens_lab::{
     BaselineKind, ParetoScorecardInput, Scenario, ScenarioSet, ScriptedActionRule, TestBody,
     TestBodySpec, aggregate_metrics_across_seeds, compute_convex_pareto, datasets,
-    ensure_not_sealed_path, format_metrics_table, load_scenarios_from_set, replay_events_offline,
-    run_ablation_compare_scenarios, run_baseline_adapter, run_benchmark_suite_with_options,
-    run_scenario, standard_benchmark_registry,
+    ensure_not_sealed_path, format_metrics_table, load_neural_model_from_path,
+    load_scenarios_from_set, replay_events_offline, run_ablation_compare_scenarios,
+    run_baseline_adapter, run_benchmark_suite_with_options, run_scenario,
+    standard_benchmark_registry,
 };
 use monoagens_protocol::{
     BodyId, CapabilityDescriptor, CapabilityFlags, CapabilityId, CapabilitySchemaHash, PlaceId,
     ReceiptOutcome, TerminationReason,
 };
-use monoagens_store::load_prior_or_default;
+use monoagens_store::load_core_config_or_default;
 
 fn main() -> ExitCode {
     match run_cli(env::args().skip(1).collect()) {
@@ -48,26 +49,63 @@ fn run_cli(args: Vec<String>) -> Result<ExitCode, String> {
             println!("{}", usage());
             Ok(ExitCode::SUCCESS)
         }
-        "mechanisms" => {
-            let json = args[1..].iter().any(|a| a == "--json");
-            let unknown: Vec<&String> = args[1..].iter().filter(|a| *a != "--json").collect();
-            if !unknown.is_empty() {
-                return Err(format!(
-                    "unknown argument(s) for mechanisms: {}",
-                    unknown[0]
-                ));
+        "controller" => {
+            let mut model_path: Option<PathBuf> = None;
+            let mut json = false;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--model" => {
+                        i += 1;
+                        model_path = Some(PathBuf::from(
+                            args.get(i).ok_or("--model requires a path")?,
+                        ));
+                    }
+                    "--json" => json = true,
+                    other => {
+                        return Err(format!("unknown argument for controller: {other}"));
+                    }
+                }
+                i += 1;
             }
-            let entries = brain_map_registry().map_err(|e| e.to_string())?;
-            if json {
-                let out = serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())?;
-                println!("{out}");
-            } else {
-                for entry in &entries {
+            if let Some(path) = model_path {
+                let model = load_neural_model_from_path(&path, None).map_err(|e| e.to_string())?;
+                let blake3_hex = monoagens_core::blake3::to_hex(&model.blake3);
+                if json {
                     println!(
-                        "{:02}. {} ({}) — neutral: {}",
-                        entry.row, entry.stable_id, entry.function_name, entry.neutral_description
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "mode": "neural",
+                            "blake3": blake3_hex,
+                            "config": model.config,
+                        }))
+                        .map_err(|e| e.to_string())?
+                    );
+                } else {
+                    println!(
+                        "controller=neural blake3={} cell_type={:?} d_model={} n_layers={} tabm_k={}",
+                        blake3_hex,
+                        model.config.cell_type,
+                        model.config.d_model,
+                        model.config.n_layers,
+                        model.config.tabm_k,
                     );
                 }
+            } else if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "mode": "neutral_fallback",
+                        "feature_schema_version": monoagens_core::FEATURE_SCHEMA_VERSION,
+                        "default_config": CoreConfig::default(),
+                    }))
+                    .map_err(|e| e.to_string())?
+                );
+            } else {
+                println!(
+                    "controller=neutral_fallback feature_schema_version={}",
+                    monoagens_core::FEATURE_SCHEMA_VERSION
+                );
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -87,7 +125,7 @@ fn run_cli(args: Vec<String>) -> Result<ExitCode, String> {
 
 fn run_single_cmd(args: &[String]) -> Result<ExitCode, String> {
     let mut scenario_path: Option<PathBuf> = None;
-    let mut prior_path: Option<PathBuf> = None;
+    let mut config_path: Option<PathBuf> = None;
     let mut seed: u64 = 1;
     let mut json = false;
     let mut record_out: Option<PathBuf> = None;
@@ -100,10 +138,10 @@ fn run_single_cmd(args: &[String]) -> Result<ExitCode, String> {
                 let val = args.get(i).ok_or("--scenario requires a path")?;
                 scenario_path = Some(PathBuf::from(val));
             }
-            "--prior" => {
+            "--config" | "--prior" => {
                 i += 1;
-                let val = args.get(i).ok_or("--prior requires a path")?;
-                prior_path = Some(PathBuf::from(val));
+                let val = args.get(i).ok_or("--config requires a path")?;
+                config_path = Some(PathBuf::from(val));
             }
             "--seed" => {
                 i += 1;
@@ -127,7 +165,8 @@ fn run_single_cmd(args: &[String]) -> Result<ExitCode, String> {
         i += 1;
     }
 
-    let loaded_prior = load_prior_or_default(prior_path.as_deref()).map_err(|e| e.to_string())?;
+    let loaded_cfg =
+        load_core_config_or_default(config_path.as_deref()).map_err(|e| e.to_string())?;
     let path = scenario_path.ok_or("run requires --scenario <path>")?;
     ensure_not_sealed_path(&path).map_err(|e| e.to_string())?;
     let raw = fs::read_to_string(&path)
@@ -135,7 +174,7 @@ fn run_single_cmd(args: &[String]) -> Result<ExitCode, String> {
     let scenario: Scenario = serde_json::from_str(&raw)
         .map_err(|e| format!("failed to parse scenario '{}': {e}", path.display()))?;
 
-    let output = run_scenario(MemStore::new(), loaded_prior.prior, &scenario, seed)
+    let output = run_scenario(MemStore::new(), loaded_cfg.config, &scenario, seed)
         .map_err(|e| format!("scenario run failed: {e}"))?;
 
     if let Some(out_path) = record_out {
@@ -184,7 +223,7 @@ fn run_suite_cmd(args: &[String]) -> Result<ExitCode, String> {
     let mut root = PathBuf::from("lab/scenarios");
     let mut set = ScenarioSet::Development;
     let mut seeds: Vec<u64> = vec![1];
-    let mut prior_path: Option<PathBuf> = None;
+    let mut config_path: Option<PathBuf> = None;
     let mut json = false;
 
     let mut i = 0;
@@ -199,9 +238,9 @@ fn run_suite_cmd(args: &[String]) -> Result<ExitCode, String> {
                 let val = args.get(i).ok_or("--set requires development|validation")?;
                 set = parse_non_sealed_set(val)?;
             }
-            "--prior" => {
+            "--config" | "--prior" => {
                 i += 1;
-                prior_path = Some(PathBuf::from(args.get(i).ok_or("--prior requires a path")?));
+                config_path = Some(PathBuf::from(args.get(i).ok_or("--config requires a path")?));
             }
             "--seeds" => {
                 i += 1;
@@ -221,7 +260,8 @@ fn run_suite_cmd(args: &[String]) -> Result<ExitCode, String> {
         i += 1;
     }
 
-    let loaded_prior = load_prior_or_default(prior_path.as_deref()).map_err(|e| e.to_string())?;
+    let loaded_cfg =
+        load_core_config_or_default(config_path.as_deref()).map_err(|e| e.to_string())?;
     let scenarios = load_scenarios_from_set(&root, set).map_err(|e| e.to_string())?;
     let mut all_passed = true;
     let mut records = Vec::new();
@@ -229,7 +269,7 @@ fn run_suite_cmd(args: &[String]) -> Result<ExitCode, String> {
 
     for sc in &scenarios {
         for &seed in &seeds {
-            let out = run_scenario(MemStore::new(), loaded_prior.prior.clone(), sc, seed)
+            let out = run_scenario(MemStore::new(), loaded_cfg.config.clone(), sc, seed)
                 .map_err(|e| e.to_string())?;
             all_passed &= out.run_record.passed;
             metric_runs.push(out.run_record.metrics.clone());
@@ -291,8 +331,9 @@ fn run_compare_cmd(args: &[String]) -> Result<ExitCode, String> {
     let mut set_opt: Option<ScenarioSet> = None;
     let mut root = PathBuf::from("lab/scenarios");
     let mut out_dir: Option<PathBuf> = None;
-    let mut prior_path: Option<PathBuf> = None;
-    let mut mech_name: Option<String> = None;
+    let mut config_path: Option<PathBuf> = None;
+    let mut model_path: Option<PathBuf> = None;
+    let mut ablation_kind = "neutral".to_owned();
     let mut seeds: Vec<u64> = vec![1, 2, 3, 4, 5];
     let mut json = false;
 
@@ -320,17 +361,20 @@ fn run_compare_cmd(args: &[String]) -> Result<ExitCode, String> {
                     args.get(i).ok_or("--out-dir requires a directory path")?,
                 ));
             }
-            "--prior" => {
+            "--config" | "--prior" => {
                 i += 1;
-                prior_path = Some(PathBuf::from(args.get(i).ok_or("--prior requires a path")?));
+                config_path = Some(PathBuf::from(args.get(i).ok_or("--config requires a path")?));
             }
-            "--mechanism" => {
+            "--model" => {
                 i += 1;
-                mech_name = Some(
-                    args.get(i)
-                        .ok_or("--mechanism requires a mechanism id or 'self_mechanics_guide'")?
-                        .clone(),
-                );
+                model_path = Some(PathBuf::from(args.get(i).ok_or("--model requires a path")?));
+            }
+            "--ablation" => {
+                i += 1;
+                ablation_kind = args
+                    .get(i)
+                    .ok_or("--ablation requires neutral|online_adapt")?
+                    .clone();
             }
             "--seeds" => {
                 i += 1;
@@ -353,7 +397,8 @@ fn run_compare_cmd(args: &[String]) -> Result<ExitCode, String> {
     if seeds.len() < 5 {
         return Err("compare requires at least 5 seeds per side (specs/lab/spec.md)".to_owned());
     }
-    let loaded_prior = load_prior_or_default(prior_path.as_deref()).map_err(|e| e.to_string())?;
+    let loaded_cfg =
+        load_core_config_or_default(config_path.as_deref()).map_err(|e| e.to_string())?;
     let scenarios: Vec<Scenario> = match (scenario_path, set_opt) {
         (Some(_), Some(_)) => {
             return Err("compare accepts either --scenario or --set, not both".to_owned());
@@ -371,26 +416,50 @@ fn run_compare_cmd(args: &[String]) -> Result<ExitCode, String> {
         }
         (None, Some(set)) => load_scenarios_from_set(&root, set).map_err(|e| e.to_string())?,
     };
-    let mech = mech_name.ok_or("compare requires --mechanism <id>")?;
 
-    let mut enabled = Switches::all_enabled();
-    let mut neutral = Switches::all_enabled();
-    if mech == "self_mechanics_guide" {
-        enabled.self_mechanics_guide = true;
-        neutral.self_mechanics_guide = false;
-    } else {
-        let id = MechanismId::ALL
-            .into_iter()
-            .find(|m| m.stable_id() == mech || format!("{m:?}").eq_ignore_ascii_case(&mech))
-            .ok_or_else(|| format!("unknown mechanism '{mech}'"))?;
-        neutral.set_neutral(id);
-    }
+    let loaded_model = match model_path
+        .as_deref()
+        .or_else(|| loaded_cfg.config.model_path.as_deref().map(std::path::Path::new))
+    {
+        Some(p) => Some(
+            load_neural_model_from_path(p, loaded_cfg.config.expected_blake3)
+                .map_err(|e| e.to_string())?,
+        ),
+        None => None,
+    };
+
+    let (cfg_a, model_a, cfg_b, model_b) = match ablation_kind.as_str() {
+        "neutral" => (
+            loaded_cfg.config.clone(),
+            loaded_model.as_ref(),
+            loaded_cfg.config.clone(),
+            None,
+        ),
+        "online_adapt" => (
+            CoreConfig {
+                online_adaptation: true,
+                ..loaded_cfg.config.clone()
+            },
+            loaded_model.as_ref(),
+            CoreConfig {
+                online_adaptation: false,
+                ..loaded_cfg.config.clone()
+            },
+            loaded_model.as_ref(),
+        ),
+        other => {
+            return Err(format!(
+                "unknown --ablation '{other}' (expected 'neutral' or 'online_adapt')"
+            ));
+        }
+    };
 
     let deltas = run_ablation_compare_scenarios(
         &scenarios,
-        &loaded_prior.prior,
-        enabled,
-        neutral,
+        cfg_a,
+        model_a,
+        cfg_b,
+        model_b,
         &seeds,
         out_dir.as_deref(),
     )
@@ -403,7 +472,7 @@ fn run_compare_cmd(args: &[String]) -> Result<ExitCode, String> {
         );
     } else {
         println!(
-            "ablation mechanism={mech} scenarios={} seeds={}",
+            "ablation={ablation_kind} scenarios={} seeds={}",
             scenarios.len(),
             seeds.len()
         );
@@ -427,7 +496,7 @@ fn run_compare_cmd(args: &[String]) -> Result<ExitCode, String> {
 
 fn run_replay_cmd(args: &[String]) -> Result<ExitCode, String> {
     let mut scenario_path: Option<PathBuf> = None;
-    let mut prior_path: Option<PathBuf> = None;
+    let mut config_path: Option<PathBuf> = None;
     let mut seed: u64 = 1;
     let mut json = false;
 
@@ -440,9 +509,9 @@ fn run_replay_cmd(args: &[String]) -> Result<ExitCode, String> {
                     args.get(i).ok_or("--scenario requires a path")?,
                 ));
             }
-            "--prior" => {
+            "--config" | "--prior" => {
                 i += 1;
-                prior_path = Some(PathBuf::from(args.get(i).ok_or("--prior requires a path")?));
+                config_path = Some(PathBuf::from(args.get(i).ok_or("--config requires a path")?));
             }
             "--seed" => {
                 i += 1;
@@ -457,33 +526,40 @@ fn run_replay_cmd(args: &[String]) -> Result<ExitCode, String> {
         i += 1;
     }
 
-    let loaded_prior = load_prior_or_default(prior_path.as_deref()).map_err(|e| e.to_string())?;
+    let loaded_cfg =
+        load_core_config_or_default(config_path.as_deref()).map_err(|e| e.to_string())?;
     let path = scenario_path.ok_or("replay requires --scenario <path>")?;
     ensure_not_sealed_path(&path).map_err(|e| e.to_string())?;
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let scenario: Scenario = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
 
-    let out = run_scenario(MemStore::new(), loaded_prior.prior, &scenario, seed)
+    let out = run_scenario(MemStore::new(), loaded_cfg.config, &scenario, seed)
         .map_err(|e| e.to_string())?;
-    let switches = scenario.switches.clone().unwrap_or_default();
-    let report = replay_events_offline(&switches, seed, &out.events, ReplayMode::FullReplay)
+    let report = replay_events_offline(&out.events, ReplayMode::Pinned, None)
         .map_err(|e| e.to_string())?;
 
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+            serde_json::to_string_pretty(&serde_json::json!({
+                "scenario": scenario.id,
+                "events": report.recovery.replayed_events,
+                "matched_decisions": report.verified_decisions,
+                "exact": report.is_exact(),
+                "mismatch_count": report.mismatches.len(),
+            }))
+            .map_err(|e| e.to_string())?
         );
     } else {
         println!(
-            "replay scenario={} events={} matched_decisions={} bit_identical={}",
+            "replay scenario={} events={} matched_decisions={} exact={}",
             scenario.id,
-            report.replayed_events,
-            report.matched_decisions,
-            report.is_bit_identical()
+            report.recovery.replayed_events,
+            report.verified_decisions,
+            report.is_exact()
         );
     }
-    if report.is_bit_identical() {
+    if report.is_exact() {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(1))
@@ -579,7 +655,7 @@ fn run_test_body_stdio(args: &[String]) -> Result<ExitCode, String> {
 fn run_baseline_cmd(args: &[String]) -> Result<ExitCode, String> {
     let mut adapter: Option<BaselineKind> = None;
     let mut scenario_path: Option<PathBuf> = None;
-    let mut prior_path: Option<PathBuf> = None;
+    let mut config_path: Option<PathBuf> = None;
     let mut seed: u64 = 1;
     let mut sealed = false;
     let mut timeout_s: u64 = 5;
@@ -599,9 +675,9 @@ fn run_baseline_cmd(args: &[String]) -> Result<ExitCode, String> {
                     args.get(i).ok_or("--scenario requires a path")?,
                 ));
             }
-            "--prior" => {
+            "--config" | "--prior" => {
                 i += 1;
-                prior_path = Some(PathBuf::from(args.get(i).ok_or("--prior requires a path")?));
+                config_path = Some(PathBuf::from(args.get(i).ok_or("--config requires a path")?));
             }
             "--seed" => {
                 i += 1;
@@ -624,7 +700,8 @@ fn run_baseline_cmd(args: &[String]) -> Result<ExitCode, String> {
         i += 1;
     }
 
-    let loaded_prior = load_prior_or_default(prior_path.as_deref()).map_err(|e| e.to_string())?;
+    let loaded_cfg =
+        load_core_config_or_default(config_path.as_deref()).map_err(|e| e.to_string())?;
     let kind = adapter.ok_or("baseline requires --adapter <slug>")?;
     let path = scenario_path.ok_or("baseline requires --scenario <path>")?;
     if !sealed {
@@ -639,7 +716,7 @@ fn run_baseline_cmd(args: &[String]) -> Result<ExitCode, String> {
         kind,
         &script,
         &scenario,
-        &loaded_prior.prior,
+        &loaded_cfg.config,
         seed,
         sealed,
         None,
@@ -675,7 +752,7 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
     let mut suite = "standard".to_owned();
     let mut datasets_dir = PathBuf::from("lab/datasets");
     let mut manifest_path: Option<PathBuf> = None;
-    let mut prior_path: Option<PathBuf> = None;
+    let mut config_path: Option<PathBuf> = None;
     let mut pareto_flag = false;
     let mut pareto_input_path: Option<PathBuf> = None;
     let mut only_ids: Option<Vec<String>> = None;
@@ -730,9 +807,9 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
                     args.get(i).ok_or("--manifest requires a path")?,
                 ));
             }
-            "--prior" => {
+            "--config" | "--prior" => {
                 i += 1;
-                prior_path = Some(PathBuf::from(args.get(i).ok_or("--prior requires a path")?));
+                config_path = Some(PathBuf::from(args.get(i).ok_or("--config requires a path")?));
             }
             "--profile" => {
                 i += 1;
@@ -958,7 +1035,8 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
         None => None,
     };
 
-    let loaded_prior = load_prior_or_default(prior_path.as_deref()).map_err(|e| e.to_string())?;
+    let loaded_cfg =
+        load_core_config_or_default(config_path.as_deref()).map_err(|e| e.to_string())?;
     let pareto_input: Option<ParetoScorecardInput> = match pareto_input_path {
         Some(p) => {
             ensure_not_sealed_path(&p).map_err(|e| e.to_string())?;
@@ -1170,7 +1248,7 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
                 datasets_dir: datasets_dir.clone(),
                 manifest_path: manifest_path.clone(),
                 run_dir: run_dir.clone(),
-                prior: loaded_prior.prior.clone(),
+                core_config: loaded_cfg.config.clone(),
                 seed,
                 phase,
                 live: false,
@@ -1221,7 +1299,7 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
             datasets_dir: datasets_dir.clone(),
             manifest_path: manifest_path.clone(),
             run_dir: run_dir.clone(),
-            prior: loaded_prior.prior.clone(),
+            core_config: loaded_cfg.config.clone(),
             seed,
             phase,
             live,
@@ -1304,7 +1382,7 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
         &datasets_dir,
         pareto_input.as_ref(),
         pareto_flag,
-        &loaded_prior.prior,
+        &loaded_cfg.config,
         &opts,
     )
     .map_err(|e| e.to_string())?;
@@ -1908,5 +1986,5 @@ fn extract_endpoint_host(endpoint: &str) -> Option<String> {
 }
 
 fn usage() -> String {
-    "Usage:\n  monoagens-lab run --scenario <path> [--prior <path>] [--seed <u64>] [--json] [--record-out <path>]\n  monoagens-lab suite [--root <dir>] [--set development|validation] [--prior <path>] [--seeds 1,2] [--json]\n  monoagens-lab compare (--scenario <path> | --set development|validation [--root <dir>]) --mechanism <id> [--prior <path>] [--seeds 1,2,3,4,5] [--out-dir <dir>] [--json]\n  monoagens-lab replay --scenario <path> [--prior <path>] [--seed <u64>] [--json]\n  monoagens-lab baseline --adapter <slug> --scenario <path> [--prior <path>] [--seed <u64>] [--sealed] [--timeout-s <u64>] [--json]\n  monoagens-lab benchmark --suite <standard|in_tree_only|memory|prospective|timing|group|tom|indonesian|security> [--datasets-dir <path>] [--prior <path>] [--pareto] [--pareto-input <path>] [--report] [--json]\n  monoagens-lab report --run <dir> [--out <dir>] [--manifest <path>] [--note <text>] [--json]\n  monoagens-lab datasets <init|list|pin|fetch|verify> [ids...] [--manifest <path>] [--datasets-dir <path>] [--record-checksums] [--json]\n  monoagens-lab pareto --input <scorecard.json> [--json]\n  monoagens-lab mechanisms [--json]\n  monoagens-lab test-body [--state-dir <path>]".to_owned()
+    "Usage:\n  monoagens-lab run --scenario <path> [--config <path>] [--seed <u64>] [--json] [--record-out <path>]\n  monoagens-lab suite [--root <dir>] [--set development|validation] [--config <path>] [--seeds 1,2] [--json]\n  monoagens-lab compare (--scenario <path> | --set development|validation [--root <dir>]) [--ablation neutral|online_adapt] [--model <path>] [--config <path>] [--seeds 1,2,3,4,5] [--out-dir <dir>] [--json]\n  monoagens-lab replay --scenario <path> [--config <path>] [--seed <u64>] [--json]\n  monoagens-lab baseline --adapter <slug> --scenario <path> [--config <path>] [--seed <u64>] [--sealed] [--timeout-s <u64>] [--json]\n  monoagens-lab benchmark --suite <standard|in_tree_only|memory|prospective|timing|group|tom|indonesian|security> [--datasets-dir <path>] [--config <path>] [--pareto] [--pareto-input <path>] [--report] [--json]\n  monoagens-lab report --run <dir> [--out <dir>] [--manifest <path>] [--note <text>] [--json]\n  monoagens-lab datasets <init|list|pin|fetch|verify> [ids...] [--manifest <path>] [--datasets-dir <path>] [--record-checksums] [--json]\n  monoagens-lab pareto --input <scorecard.json> [--json]\n  monoagens-lab controller [--model <path>] [--json]\n  monoagens-lab test-body [--state-dir <path>]".to_owned()
 }

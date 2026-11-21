@@ -564,7 +564,7 @@
       "check": "decision_is",
       "name": "unaddressed_downtime_silent",
       "kind": "structural",
-      "target_event_id": 46,
+      "target_event_id": 45,
       "expected_outcome": "silent",
       "expected_reason": "below_note_band"
     },

@@ -8,7 +8,7 @@ use std::io;
 use monoagens_core::{CoreError, StoreError};
 /// Re-export seam for `monoagens-reason` (real LLM/embedder providers land in later milestones).
 pub use monoagens_reason as reason_seam;
-use monoagens_store::PriorLoadError;
+use monoagens_store::ConfigLoadError;
 
 pub mod baseline;
 pub mod benchmark;
@@ -40,14 +40,15 @@ pub use checks::{
 pub use clock::VirtualClock;
 pub use driver::{
     CalibrationReport, SimOutput, calibrate_from_run_records, calibrate_from_scenarios,
-    ensure_calibration_set_allowed, replay_events_offline, run_ablation_compare,
-    run_ablation_compare_scenarios, run_scenario,
+    ensure_calibration_set_allowed, load_neural_model_from_path, replay_events_offline,
+    run_ablation_compare, run_ablation_compare_scenarios, run_scenario, run_scenario_with_model,
 };
 pub use guard::{CostGuard, GuardRefusal};
 pub use metrics::{
-    DetailedMetricsReport, MetricReportEntry, PairedAblationDelta, RunMetricInputs,
-    RunMetricsSummary, SeedAggregate, aggregate_metrics_across_seeds, compare_paired_ablation,
-    compute_run_metrics, compute_run_metrics_full, format_metrics_table, wasserstein_1d_ms,
+    DetailedMetricsReport, MetricReportEntry, NeuralCalibrationMetrics, PairedAblationDelta,
+    RunMetricInputs, RunMetricsSummary, SeedAggregate, aggregate_metrics_across_seeds,
+    compare_paired_ablation, compute_neural_calibration_metrics, compute_run_metrics,
+    compute_run_metrics_full, format_metrics_table, wasserstein_1d_ms,
 };
 pub use pareto::{
     CONFIRMATORY_SCENARIO_MIN, CONFIRMATORY_SCENARIO_TARGET, ConvexParetoReport,
@@ -71,7 +72,7 @@ pub enum LabError {
     Io(io::Error),
     Core(CoreError),
     Store(StoreError),
-    Prior(PriorLoadError),
+    Config(ConfigLoadError),
     Serialization(String),
     Protocol(String),
 }
@@ -82,7 +83,7 @@ impl fmt::Display for LabError {
             Self::Io(err) => write!(f, "I/O error: {err}"),
             Self::Core(err) => write!(f, "core error: {err}"),
             Self::Store(err) => write!(f, "store error: {err}"),
-            Self::Prior(err) => write!(f, "prior error: {err}"),
+            Self::Config(err) => write!(f, "core_config error: {err}"),
             Self::Serialization(msg) => write!(f, "serialization error: {msg}"),
             Self::Protocol(msg) => write!(f, "protocol error: {msg}"),
         }
@@ -109,8 +110,8 @@ impl From<StoreError> for LabError {
     }
 }
 
-impl From<PriorLoadError> for LabError {
-    fn from(err: PriorLoadError) -> Self {
-        Self::Prior(err)
+impl From<ConfigLoadError> for LabError {
+    fn from(err: ConfigLoadError) -> Self {
+        Self::Config(err)
     }
 }

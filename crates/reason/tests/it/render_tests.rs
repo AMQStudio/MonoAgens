@@ -4,10 +4,10 @@ use std::thread;
 
 use monoagens_core::{
     AutoRecallTriggerState, CommitmentSlotItem, ContextPlan, ContextSections, ContextSegment,
-    ContextSlotKind, Core, CoreSelfCard, CoreSelfSnapshot, Effect, IdentityAnchor, Input, LogSeq,
-    MechanismId, MemStore, MemoryBasis, ModelPurpose, NoopDoors, PrincipleDescriptor,
-    PrincipleSeverity, Prior, ProcedureEntry, RecollectionConstraint, SourceLedgerCard, Switches,
-    TrustSegmentKind, ValveSelfSnapshot, VisibleScopeSummary,
+    ContextSlotKind, Core, CoreConfig, CoreSelfCard, CoreSelfSnapshot, Effect, IdentityAnchor,
+    Input, LogSeq, MemStore, MemoryBasis, ModelPurpose, NoopDoors, PrincipleDescriptor,
+    PrincipleSeverity, ProcedureEntry, RecollectionConstraint, SourceLedgerCard, TrustSegmentKind,
+    ValveSelfSnapshot, VisibleScopeSummary, self_guide_template_table,
 };
 use monoagens_protocol::{
     ActionId, ActorId, Audience, BodyId, BodyState, BodyStatus, CURRENT_PROTOCOL_VERSION,
@@ -21,7 +21,7 @@ use monoagens_reason::{
     ScriptedReply, SecretString, ToolSelectionBudget, apply_selected_tools,
     build_model_request_from_plan, format_absolute_utc, render_context_plan,
     render_context_plan_with, render_segment, render_self_guide, select_tools,
-    self_guide_mechanism_line, spotlight_delimiters,
+    self_guide_section_line, spotlight_delimiters,
 };
 use serde_json::{Value, json};
 
@@ -72,18 +72,16 @@ fn sample_plan(with_guide: bool, with_valve: Option<ValveSelfSnapshot>) -> Conte
         1_700_000_000_100,
     );
 
-    let switches = Switches {
-        self_mechanics_guide: with_guide,
-        ..Switches::all_enabled()
-    };
     let scope = VisibleScope::new(
         Audience::new([ActorId::new("soul"), ActorId::new("alice")]),
         Some(PlaceId::new("room:main")),
     );
+    let digest = [0xAB_u8; 32];
     let self_guide_snapshot = if with_guide {
         Some(CoreSelfSnapshot::build(
             CURRENT_PROTOCOL_VERSION,
-            &switches,
+            Some(&digest),
+            true,
             &scope,
             AutoRecallTriggerState::default(),
             Vec::new(),
@@ -320,14 +318,12 @@ fn identical_plan_renders_byte_identical_and_preserves_structural_slot_order() {
 
 #[test]
 fn tight_budget_core_plan_keeps_slot0_anchor_overdue_commitment_and_trigger() {
-    let prior = Prior {
-        talkativeness: 1.0,
-        spontaneity: 1.0,
-        restraint: 0.0,
-        context_budget_bytes: 600,
-        ..Prior::default()
+    let cfg = CoreConfig {
+        max_context_bytes: 600,
+        seed: 7,
+        ..CoreConfig::default()
     };
-    let mut core = Core::open(MemStore::new(), prior, Switches::default(), 7).expect("open core");
+    let mut core = Core::open(MemStore::new(), cfg, None).expect("open core");
     let mut doors = NoopDoors;
 
     core.step(
@@ -579,69 +575,34 @@ fn self_guide_zero_drift_parity_baseline_and_single_switch_flip_for_all_22_mecha
         "neutral self_mechanics_guide=false must reproduce baseline prompt byte-for-byte"
     );
 
-    // 2. Flipping each single mechanism switch changes ONLY that mechanism's single line
+    // 2. Neural mode & V2 self-guide sections render deterministically without touching dynamic_context.
     let all_on_plan = sample_plan(true, None);
     let all_on_rendered = render_context_plan(&all_on_plan);
-    let all_on_lines: Vec<&str> = all_on_rendered.full_prompt.lines().collect();
+    let guide_str = all_on_rendered.self_guide.as_deref().expect("guide");
+    for entry in self_guide_template_table() {
+        let expected_line = self_guide_section_line(entry.stable_id);
+        assert!(
+            guide_str.contains(expected_line),
+            "missing V2 guide section {expected_line}"
+        );
+    }
 
     let scope = VisibleScope::new(
         Audience::new([ActorId::new("soul"), ActorId::new("alice")]),
         Some(PlaceId::new("room:main")),
     );
-
-    for mech in MechanismId::ALL {
-        let mut flipped_switches = Switches {
-            self_mechanics_guide: true,
-            ..Switches::all_enabled()
-        };
-        flipped_switches.set_neutral(mech);
-
-        let mut flipped_plan = all_on_plan.clone();
-        flipped_plan.sections.self_guide_snapshot = Some(CoreSelfSnapshot::build(
-            CURRENT_PROTOCOL_VERSION,
-            &flipped_switches,
-            &scope,
-            AutoRecallTriggerState::default(),
-            Vec::new(),
-        ));
-        let flipped_rendered = render_context_plan(&flipped_plan);
-        assert_eq!(
-            all_on_rendered.dynamic_context, flipped_rendered.dynamic_context,
-            "flipping switch {mech} must not alter dynamic_context"
-        );
-
-        let flipped_lines: Vec<&str> = flipped_rendered.full_prompt.lines().collect();
-        assert_eq!(
-            all_on_lines.len(),
-            flipped_lines.len() + 1,
-            "disabling {mech} must remove exactly 1 line"
-        );
-
-        // Find the exact single removed line and confirm every other line matches identically
-        let expected_line = self_guide_mechanism_line(mech);
-        let mut matched_removed = false;
-        let mut i = 0;
-        let mut j = 0;
-        while i < all_on_lines.len() {
-            if j < flipped_lines.len() && all_on_lines[i] == flipped_lines[j] {
-                i += 1;
-                j += 1;
-            } else {
-                assert!(
-                    !matched_removed,
-                    "more than one line differed when flipping {mech}: extra line '{}'",
-                    all_on_lines[i]
-                );
-                assert_eq!(all_on_lines[i], expected_line);
-                matched_removed = true;
-                i += 1;
-            }
-        }
-        assert!(
-            matched_removed,
-            "expected line '{expected_line}' to be removed"
-        );
-    }
+    let mut fallback_plan = all_on_plan.clone();
+    fallback_plan.sections.self_guide_snapshot = Some(CoreSelfSnapshot::build(
+        CURRENT_PROTOCOL_VERSION,
+        None,
+        false,
+        &scope,
+        AutoRecallTriggerState::default(),
+        Vec::new(),
+    ));
+    let fallback_rendered = render_context_plan(&fallback_plan);
+    assert_eq!(all_on_rendered.dynamic_context, fallback_rendered.dynamic_context);
+    assert!(fallback_rendered.self_guide.as_deref().unwrap().contains("neural: mode=fallback"));
 }
 
 #[test]
@@ -653,7 +614,9 @@ fn disabled_valve_rules_disappear_immediately_on_next_render() {
     };
     let guide = CoreSelfSnapshot {
         protocol_version: CURRENT_PROTOCOL_VERSION,
-        active_switches: Vec::new(),
+        neural_active: false,
+        model_blake3_prefix: None,
+        online_adaptation: false,
         visible_scope_summary: scope_summary,
         auto_recall_state: AutoRecallTriggerState::default(),
         recent_receipt_cues: Vec::new(),
@@ -902,17 +865,12 @@ fn sixty_capabilities_render_at_most_8_dynamic_stable_prefix_and_exclude_drifted
 fn scripted_and_mock_openai_providers_consume_rendered_context_plan_identically() {
     let mut core = Core::open(
         MemStore::new(),
-        Prior {
-            talkativeness: 1.0,
-            spontaneity: 1.0,
-            restraint: 0.0,
-            ..Prior::default()
+        CoreConfig {
+            seed: 17,
+            self_guide_enabled: true,
+            ..CoreConfig::default()
         },
-        Switches {
-            self_mechanics_guide: true,
-            ..Switches::default()
-        },
-        17,
+        None,
     )
     .expect("open core");
     let mut doors = NoopDoors;
@@ -1107,11 +1065,7 @@ fn render_contract_reason_classify_and_consolidate_all_carry_trigger_and_capabil
         values: vals.to_vec(),
     };
 
-    let prior = Prior {
-        wake_gate_lo: 0.25,
-        ..Prior::default()
-    };
-    let mut core = Core::open(MemStore::new(), prior, Switches::all_enabled(), 1).unwrap();
+    let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).unwrap();
     let mut doors = NoopDoors;
 
     core.step(

@@ -63,9 +63,9 @@ crosses.
 
 ### Core
 
-The core is the mind and the subject of the research. It is built as a closed list of brain
-functions (the brain map). Each function is one mechanism with a measurable claim: what gets
-worse without it.
+The core is the mind and the subject of the research. It is built from minimal deterministic
+harness primitives paired with one unified Neural Cognitive Controller. Each capability has a
+measurable claim against held-out Lab evaluations: what gets worse without it.
 
 The core:
 - records every event;
@@ -86,9 +86,9 @@ doors, where the valve sits.
 reads an event's raw content or its labels, and has no notion of person, owner, group, role,
 platform, plugin or model provider. Speaking is a capability like any other, never hard-coded.
 
-**Architecture invariant:** every mechanism has a neutral value at which it has no effect and
-the loop still runs. Switching a mechanism off means moving it to that value, never choosing
-another code path. The loop stays one loop whatever is switched off.
+**Architecture invariant:** the neural controller has a mandatory neutral fallback (`None`) so
+the single cognitive loop still runs deterministically without loaded weights, never choosing
+an alternate control-flow branch. The loop stays one loop whether weights are loaded or absent.
 
 **Architecture invariant:** the inside of the core changes only with evidence from the Lab. A
 mechanism whose removal changes nothing measurable is removed.
@@ -266,5 +266,6 @@ the loop.
 
 ### Complexity budget
 
-The core holds a small, fixed number of primitives: books, thought acts, doors, signals, drives
-and one gate formula. A new primitive must replace an existing one or be refused.
+The core holds a small, fixed number of deterministic primitives (event log, privacy projection,
+commitments, self-echo agency, books, thought acts, doors) and one versioned neural controller
+interface. A new primitive must replace an existing one or be refused.

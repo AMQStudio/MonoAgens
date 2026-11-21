@@ -12,11 +12,11 @@ use std::collections::BTreeSet;
 
 use monoagens_core::event::{EventDetail, EventKind, EventRecord};
 use monoagens_core::{
-    CapabilityCatalogEntry, Core, CoreError, DoorDecision, Doors, Effect, Input, MechanismId,
-    MemStore, ModelPurpose, NoopDoors, PrincipleDescriptor, PrincipleSeverity, Prior,
-    ProcedureEntry, Store, Switches, ToolSelectionBudget, TrustSegmentKind, ValveSelfSnapshot,
-    calibrate_confidence_0_20, classify_trust_segment, compute_report_threshold,
-    select_tools_for_context, self_guide_template_for, self_guide_template_table,
+    CapabilityCatalogEntry, Core, CoreConfig, CoreError, DoorDecision, Doors, Effect, Input,
+    MemStore, ModelPurpose, NoopDoors, PrincipleDescriptor, PrincipleSeverity, ProcedureEntry,
+    Store, ToolSelectionBudget, TrustSegmentKind, ValveSelfSnapshot, calibrate_confidence_0_20,
+    classify_trust_segment, compute_report_threshold, select_tools_for_context,
+    self_guide_template_table,
 };
 use monoagens_protocol::{
     Action, ActorFacts, ActorId, Audience, BodyId, BodyState, BodyStatus, CURRENT_PROTOCOL_VERSION,
@@ -81,12 +81,10 @@ fn basic_percept(
     p
 }
 
-fn unit_prior_low_bar() -> Prior {
-    Prior {
-        talkativeness: 1.0,
-        spontaneity: 1.0,
-        restraint: 0.0,
-        ..Prior::default()
+fn unit_cfg_low_bar(seed: u64) -> CoreConfig {
+    CoreConfig {
+        seed,
+        ..CoreConfig::default()
     }
 }
 
@@ -112,12 +110,9 @@ impl Doors for ValveAttachingDoors {
 #[test]
 fn slot_0_anchor_principles_trigger_and_overdue_commitments_survive_tight_budget_over_1000_events()
 -> Result<(), CoreError> {
-    let mut prior = unit_prior_low_bar();
-    prior.context_budget_bytes = 2_400;
-    prior.place_tail_limit = 64;
-    prior.working_set_full_obs_limit = 6;
-    let switches = Switches::default();
-    let mut core = Core::open(MemStore::new(), prior, switches, 42)?;
+    let mut cfg = unit_cfg_low_bar(42);
+    cfg.max_context_bytes = 2_400;
+    let mut core = Core::open(MemStore::new(), cfg, None)?;
     let mut doors = NoopDoors;
 
     // Anchor + HardLine principle in Slot 0
@@ -298,12 +293,7 @@ fn slot_0_anchor_principles_trigger_and_overdue_commitments_survive_tight_budget
 
 #[test]
 fn static_prefix_digest_is_byte_identical_across_unrelated_wakes() -> Result<(), CoreError> {
-    let mut core = Core::open(
-        MemStore::new(),
-        unit_prior_low_bar(),
-        Switches::default(),
-        7,
-    )?;
+    let mut core = Core::open(MemStore::new(), unit_cfg_low_bar(7), None)?;
     let mut doors = NoopDoors;
 
     core.step(
@@ -378,12 +368,7 @@ fn static_prefix_digest_is_byte_identical_across_unrelated_wakes() -> Result<(),
 
 #[test]
 fn monotonic_taint_propagation_unforgeable_origin_and_spotlighting() -> Result<(), CoreError> {
-    let mut core = Core::open(
-        MemStore::new(),
-        unit_prior_low_bar(),
-        Switches::default(),
-        11,
-    )?;
+    let mut core = Core::open(MemStore::new(), unit_cfg_low_bar(11), None)?;
     let mut doors = NoopDoors;
 
     // 1. Untrusted external percept with instruction-like bytes ("mallory") -> Spotlighting must classify as UntrustedQuoted
@@ -521,12 +506,7 @@ fn monotonic_taint_propagation_unforgeable_origin_and_spotlighting() -> Result<(
 #[test]
 fn pre_act_guards_block_anchor_principle_commit_citation_unknown_cap_and_immutable_revise()
 -> Result<(), CoreError> {
-    let mut core = Core::open(
-        MemStore::new(),
-        unit_prior_low_bar(),
-        Switches::default(),
-        19,
-    )?;
+    let mut core = Core::open(MemStore::new(), unit_cfg_low_bar(19), None)?;
     let mut doors = NoopDoors;
 
     // Register Identity + Principles + Body capabilities
@@ -790,21 +770,50 @@ fn report_control_formula_auto_recall_coarser_grain_and_allocated_vs_unallocated
     let c_cal = calibrate_confidence_0_20(15, 0.0);
     assert!((c_cal - 0.75).abs() < 1e-12);
 
-    let mut prior = unit_prior_low_bar();
-    prior.auto_recall_max = 2;
-    prior.certainty_bar = 0.50;
-    prior.speaking_bar = 3;
-    prior.theta_alloc = 0.90;
-    prior.own_name_weight = 1.0;
-    let switches = Switches {
-        patience: false,
-        stochastic_go_no_go: false,
-        ..Switches::default()
-    };
-    let mut core = Core::open(MemStore::new(), prior, switches, 23)?;
+    let mut cfg = unit_cfg_low_bar(23);
+    cfg.auto_recall_enabled = true;
+    cfg.certainty_bar = 0.50;
+    let mut core = Core::open(MemStore::new(), cfg, None)?;
     let mut doors = NoopDoors;
 
-    // 1. Unallocated turn (`addressees: []`, `deg_soul < theta_alloc`) with low motivation (1 < speaking_bar 3) -> Withheld!
+    // Seed an active chain event so an unallocated reply wakes via commitment (`continues_active_chain`)
+    // while `turn_allocated` stays `false` (`addressees: []`, `orient = 0.2 < 0.5`).
+    let seed_p = basic_percept("bob", "room:chat", &["soul", "bob", "carol"], &["soul"], b"hi soul", 50, vec![]);
+    let eff_seed = core.step(Input::Percept(Box::new(seed_p)), t(50), &mut doors)?;
+    let seed_id = eff_seed
+        .iter()
+        .find_map(|e| match e {
+            Effect::Model { purpose: ModelPurpose::Reason, plan } => plan.trigger_event_id,
+            _ => None,
+        })
+        .expect("seed wake");
+    core.step(
+        Input::ModelResult {
+            request_id: seed_id,
+            acts: vec![ThoughtAct::Act {
+                capability_id: CapabilityId::new("chat.send"),
+                places: vec![PlaceId::new("room:chat")],
+                people: vec![ActorId::new("bob")],
+                payload: OpaquePayload::from_bytes(b"hello bob"),
+                motivation: 4,
+                confidence_0_20: 18,
+                used_ids: vec![seed_id],
+                expected: None,
+                domain: None,
+            }],
+        },
+        t(60),
+        &mut doors,
+    )?;
+    let chain_id = core
+        .state()
+        .active_chains
+        .iter()
+        .copied()
+        .next()
+        .expect("active chain");
+
+    // 1. Unallocated turn (`addressees: []`, `deg_soul < 0.5`) with low motivation (1 < speaking_bar 2) -> Withheld!
     let mut p_unalloc = basic_percept(
         "bob",
         "room:chat",
@@ -814,10 +823,11 @@ fn report_control_formula_auto_recall_coarser_grain_and_allocated_vs_unallocated
         100,
         vec![],
     );
+    p_unalloc.reply_to = Some(chain_id);
     p_unalloc.named = vec![ActorId::new("soul")];
     p_unalloc.orient = vec![monoagens_protocol::OrientScore {
         actor: ActorId::new("soul"),
-        score: 0.9,
+        score: 0.2,
     }];
     let eff_u = core.step(Input::Percept(Box::new(p_unalloc)), t(100), &mut doors)?;
     let wake_u = eff_u
@@ -1043,10 +1053,10 @@ fn report_control_formula_auto_recall_coarser_grain_and_allocated_vs_unallocated
     )?;
     assert!(out_cleared.iter().any(|e| matches!(e, Effect::Dispatch(_))));
 
-    // 4. Embodied capability below P_rc after auto_recall_max withholds immediately (no coarser grain)
-    let mut prior_e = unit_prior_low_bar();
-    prior_e.auto_recall_max = 0;
-    let mut core_e = Core::open(MemStore::new(), prior_e, Switches::default(), 29)?;
+    // 4. Embodied capability below P_rc with auto_recall_enabled=false withholds immediately (no coarser grain)
+    let mut cfg_e = unit_cfg_low_bar(29);
+    cfg_e.auto_recall_enabled = false;
+    let mut core_e = Core::open(MemStore::new(), cfg_e, None)?;
     core_e.step(
         Input::BodyState(BodyState {
             protocol_version: CURRENT_PROTOCOL_VERSION,
@@ -1203,8 +1213,8 @@ fn tool_rag_caps_at_4_static_8_dynamic_validates_schema_hash_and_neutral_ablatio
         },
     ];
 
-    let prior = Prior::default();
-    let budget = ToolSelectionBudget::from_prior(&prior, caps.len());
+    let cfg = CoreConfig::default();
+    let budget = ToolSelectionBudget::from_config(&cfg, caps.len());
     let selected = select_tools_for_context(
         &["calendar".to_owned(), "schedule".to_owned()],
         &[],
@@ -1226,10 +1236,8 @@ fn tool_rag_caps_at_4_static_8_dynamic_validates_schema_hash_and_neutral_ablatio
     assert_eq!(selected.procedures[0].procedure_id, EventId::new(10));
     assert_eq!(selected.excluded_stale_procedures, 1);
 
-    // Neutral ablation: `tool_rag_enabled = false` -> k_cap = |C_avail|, k_proc = 0
-    let mut neutral_prior = prior;
-    neutral_prior.tool_rag_enabled = false;
-    let neutral_budget = ToolSelectionBudget::from_prior(&neutral_prior, caps.len());
+    // Neutral budget: k_cap = |C_avail|, k_proc = 0
+    let neutral_budget = ToolSelectionBudget::neutral(54);
     let neutral_sel = select_tools_for_context(
         &["calendar".to_owned()],
         &[],
@@ -1244,22 +1252,20 @@ fn tool_rag_caps_at_4_static_8_dynamic_validates_schema_hash_and_neutral_ablatio
 }
 
 #[test]
-fn self_mechanics_guide_neutral_omits_slot_valve_slot_attaches_and_table_covers_22_mechanisms()
+fn self_mechanics_guide_neutral_omits_slot_valve_slot_attaches_and_table_covers_v2_sections()
 -> Result<(), CoreError> {
-    // 1. Exhaustive 22-mechanism template table check
+    // 1. Exhaustive V2 self-guide template table check
     let table = self_guide_template_table();
-    assert_eq!(table.len(), 22);
-    assert_eq!(MechanismId::ALL.len(), 22);
-    let ids: BTreeSet<MechanismId> = table.iter().map(|e| e.id).collect();
-    for m in MechanismId::ALL {
-        assert!(ids.contains(&m));
-        assert_eq!(self_guide_template_for(m).id, m);
-    }
+    assert_eq!(table.len(), 4);
+    let ids: BTreeSet<&str> = table.iter().map(|e| e.stable_id).collect();
+    assert_eq!(ids.len(), 4);
+    assert!(ids.contains("neural_controller"));
+    assert!(ids.contains("visible_scope"));
 
-    // 2. Neutral `self_mechanics_guide = false` omits `self_guide_snapshot` while preserving baseline `static_prefix_digest`
-    let mut switches = Switches::default();
-    assert!(!switches.self_mechanics_guide);
-    let mut core_neutral = Core::open(MemStore::new(), unit_prior_low_bar(), switches.clone(), 31)?;
+    // 2. Neutral `self_guide_enabled = false` omits `self_guide_snapshot` while preserving baseline `static_prefix_digest`
+    let mut cfg_neutral = unit_cfg_low_bar(31);
+    cfg_neutral.self_guide_enabled = false;
+    let mut core_neutral = Core::open(MemStore::new(), cfg_neutral.clone(), None)?;
     let mut noop_doors = NoopDoors;
     core_neutral.step(
         Input::Identity(owner_signed(OpaquePayload::from_bytes(b"id-guide"), 10)),
@@ -1292,9 +1298,9 @@ fn self_mechanics_guide_neutral_omits_slot_valve_slot_attaches_and_table_covers_
     assert!(plan_neutral.sections.self_guide_snapshot.is_none());
     assert!(plan_neutral.valve_self_snapshot.is_none());
 
-    // 3. Enabled `self_mechanics_guide = true` + `Doors::context` attaches `ValveSelfSnapshot`
-    switches.self_mechanics_guide = true;
-    let mut core_guided = Core::open(MemStore::new(), unit_prior_low_bar(), switches, 31)?;
+    // 3. Enabled `self_guide_enabled = true` + `Doors::context` attaches `ValveSelfSnapshot`
+    cfg_neutral.self_guide_enabled = true;
+    let mut core_guided = Core::open(MemStore::new(), cfg_neutral, None)?;
     let mut valve_doors = ValveAttachingDoors {
         snapshot: Some(ValveSelfSnapshot {
             valve_mode: "normal".to_owned(),
@@ -1344,13 +1350,7 @@ fn self_mechanics_guide_neutral_omits_slot_valve_slot_attaches_and_table_covers_
 
 #[test]
 fn place_tail_holds_only_conversation_never_core_bookkeeping() {
-    let mut core = Core::open(
-        MemStore::new(),
-        Prior::default(),
-        Switches::all_enabled(),
-        7,
-    )
-    .unwrap();
+    let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).unwrap();
     let mut doors = NoopDoors;
     let aud = ["alice", "bob", "soul"];
     // Two turns between alice and bob that the soul observes (decisions, withholds and

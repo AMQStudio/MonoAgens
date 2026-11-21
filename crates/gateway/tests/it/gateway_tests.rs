@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use monoagens_core::{
-    ContextPlan, DoorDecision, Doors, EventDetail, EventKind, Input, MemStore, ModelPurpose,
-    NoopDoors, Prior, QueueClass, Switches,
+    ContextPlan, CoreConfig, DoorDecision, Doors, EventDetail, EventKind, Input, MemStore,
+    ModelPurpose, NoopDoors, QueueClass,
 };
 use monoagens_gateway::{
     AsyncGatewayHook, Clock, ConfigError, CueRecorder, DiagnosticSink, DoorsAdapter, GatewayConfig,
@@ -399,8 +399,7 @@ async fn same_thread_core_ownership_serializes_concurrent_submissions() {
         cfg,
         &secrets,
         || Ok(MemStore::new()),
-        Prior::default(),
-        Switches::all_neutral(),
+        CoreConfig::default(),
         DoorsAdapter(doors),
         GatewayOptions {
             clock: clock.clone(),
@@ -418,13 +417,14 @@ async fn same_thread_core_ownership_serializes_concurrent_submissions() {
     for idx in 0..32 {
         let h = handle.clone();
         joins.push(tokio::spawn(async move {
-            let p = make_percept(
+            let mut p = make_percept(
                 &format!("per_{idx}"),
                 "room:concurrent",
                 &["per_owner", "soul"],
                 1_000_000 + idx as u64,
                 format!("msg-{idx}").as_bytes(),
             );
+            p.addressees.clear();
             h.submit_and_wait(Input::Percept(Box::new(p)))
                 .await
                 .expect("submit succeeds");
@@ -506,8 +506,7 @@ async fn next_due_timer_fires_tick_and_noop_tick_records_nothing() {
         cfg,
         &secrets,
         || Ok(MemStore::new()),
-        Prior::default(),
-        Switches::default(),
+        CoreConfig::default(),
         NoopDoors,
         GatewayOptions {
             clock: clock.clone(),
@@ -522,14 +521,14 @@ async fn next_due_timer_fires_tick_and_noop_tick_records_nothing() {
 
     let handle = rt.handle();
 
-    // No-op tick when nothing is due appends zero events (only initial prior_loaded exists).
+    // No-op tick when nothing is due appends zero events (only initial config_loaded exists).
     handle
         .submit_and_wait(Input::Tick)
         .await
         .expect("noop tick");
     let before = handle.read_events().await.expect("read events");
     assert!(
-        before.iter().all(|e| e.kind == EventKind::PriorLoaded),
+        before.iter().all(|e| e.kind == EventKind::ConfigLoaded),
         "no-op tick must append nothing: {before:?}"
     );
 
@@ -653,8 +652,7 @@ async fn crash_and_timeout_settle_once_as_unknown_while_sibling_runs_and_late_re
         cfg,
         &secrets,
         || Ok(MemStore::new()),
-        Prior::default(),
-        Switches::default(),
+        CoreConfig::default(),
         NoopDoors,
         GatewayOptions {
             clock: clock.clone(),
@@ -932,8 +930,7 @@ async fn slow_model_call_does_not_block_percept_ingress() {
         cfg,
         &secrets,
         || Ok(MemStore::new()),
-        Prior::default(),
-        Switches::default(),
+        CoreConfig::default(),
         NoopDoors,
         GatewayOptions {
             clock: clock.clone(),
@@ -1205,8 +1202,7 @@ async fn mock_http_provider_sends_store_false_tracks_usage_and_redacts_canary_on
         env.config,
         &env.secrets,
         || Ok(MemStore::new()),
-        Prior::default(),
-        Switches::default(),
+        CoreConfig::default(),
         NoopDoors,
         GatewayOptions {
             clock: clock.clone(),
@@ -1350,8 +1346,7 @@ async fn scripted_provider_drives_full_loop_offline_via_body() {
         cfg,
         &secrets,
         || Ok(MemStore::new()),
-        Prior::default(),
-        Switches::default(),
+        CoreConfig::default(),
         NoopDoors,
         GatewayOptions {
             clock: clock.clone(),
@@ -1565,8 +1560,7 @@ async fn hanging_hook_times_out_under_hook_timeout_ms_without_stalling_loop() {
         cfg,
         &secrets,
         || Ok(MemStore::new()),
-        Prior::default(),
-        Switches::all_neutral(),
+        CoreConfig::default(),
         NoopDoors,
         GatewayOptions {
             clock: clock.clone(),
@@ -1620,41 +1614,42 @@ async fn hanging_hook_times_out_under_hook_timeout_ms_without_stalling_loop() {
 }
 
 #[tokio::test]
-async fn soul_prior_config_loads_and_rejects_unknown_key_out_of_range_and_missing_path() {
+async fn soul_core_config_and_neural_model_load_with_blake3_and_reject_bad_inputs() {
     let dir = TempDir::new().expect("tempdir");
-    let valid_prior_path = dir.path().join("custom_prior.json");
+    let valid_cfg_path = dir.path().join("custom_core.json");
     std::fs::write(
-        &valid_prior_path,
+        &valid_cfg_path,
         r#"{
-          "version": 1,
-          "content_version": "2026-11-17.gw",
-          "talkativeness": 0.91,
-          "spontaneity": 0.5,
-          "memory_persistence": 0.5,
-          "helpfulness": 0.5,
-          "restraint": 0.5,
-          "boredom_with_repeats": 0.5,
-          "certainty_bar": 0.5,
-          "speaking_bar": 3
+          "format_version": 1,
+          "certainty_bar": 0.72,
+          "online_adaptation": false
         }"#,
     )
     .unwrap();
 
+    // Also point [soul] model_path at the golden phase-1 safetensors fixture with verified BLAKE3.
+    let fixture_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../core/tests/fixtures/neural_phase1_golden.safetensors");
+    let model_bytes = std::fs::read(&fixture_path).expect("read golden fixture");
+    let model_blake3_hex =
+        monoagens_core::blake3::to_hex(&monoagens_core::blake3::hash(&model_bytes));
+
     let cfg_path = dir.path().join("monoagens.toml");
     let secrets_path = dir.path().join("secrets.toml");
     let toml = format!(
-        "version = 1\n\n[soul]\nname = \"MonoTest\"\nseed = 1\nprior = \"{}\"\n\n[model]\nprovider = \"scripted\"\nmodel = \"scripted-test\"\ndaily_token_budget = 10000\n",
-        valid_prior_path.display()
+        "version = 1\n\n[soul]\nname = \"MonoTest\"\nseed = 1\ncore_config = \"{}\"\nmodel_path = \"{}\"\nexpected_blake3 = \"{}\"\nonline_adaptation = false\n\n[model]\nprovider = \"scripted\"\nmodel = \"scripted-test\"\ndaily_token_budget = 10000\n",
+        valid_cfg_path.display(),
+        fixture_path.display(),
+        model_blake3_hex,
     );
     let parsed_cfg = monoagens_gateway::parse_config_str(&toml, &cfg_path, &secrets_path)
-        .expect("parse [soul] prior");
-    assert_eq!(parsed_cfg.soul.prior, Some(valid_prior_path));
+        .expect("parse [soul] core_config");
+    assert_eq!(parsed_cfg.soul.core_config, Some(valid_cfg_path));
 
-    let rt = GatewayRuntime::start_with_configured_prior(
+    let rt = GatewayRuntime::start_with_configured_core(
         parsed_cfg,
         &ProviderSecrets::default(),
         || Ok(MemStore::new()),
-        Switches::all_enabled(),
         NoopDoors,
         GatewayOptions {
             clock: Arc::new(VirtualClock::new(Time::from_millis(1_000))),
@@ -1665,31 +1660,30 @@ async fn soul_prior_config_loads_and_rejects_unknown_key_out_of_range_and_missin
         },
     )
     .await
-    .expect("start gateway with configured prior");
+    .expect("start gateway with configured core_config and safetensors model");
 
     let events = rt.handle().read_events().await.expect("read events");
     let loaded_ev = events
         .iter()
-        .find(|e| e.kind == EventKind::PriorLoaded)
-        .expect("prior_loaded event recorded");
+        .find(|e| e.kind == EventKind::ConfigLoaded)
+        .expect("config_loaded event recorded");
     match &loaded_ev.detail {
-        Some(monoagens_core::EventDetail::PriorLoaded { prior }) => {
-            assert_eq!(prior.content_version, "2026-11-17.gw");
-            assert!((prior.talkativeness - 0.91).abs() < 1e-12);
+        Some(monoagens_core::EventDetail::ConfigLoaded { config, .. }) => {
+            assert!((config.certainty_bar - 0.72).abs() < 1e-12);
+            assert!(!config.online_adaptation);
         }
         other => panic!("unexpected detail {other:?}"),
     }
     rt.shutdown().await;
 
-    // Missing path fails start-up naming the path.
-    let mut bad_cfg = default_test_config(ModelProviderKind::Scripted);
-    let missing_path = dir.path().join("missing_prior.json");
-    bad_cfg.soul.prior = Some(missing_path);
-    let err_missing = match GatewayRuntime::start_with_configured_prior(
-        bad_cfg,
+    // BLAKE3 mismatch fails startup loudly.
+    let mut bad_hash_cfg = default_test_config(ModelProviderKind::Scripted);
+    bad_hash_cfg.soul.model_path = Some(fixture_path);
+    bad_hash_cfg.soul.expected_blake3 = Some("0".repeat(64));
+    let err_hash = match GatewayRuntime::start_with_configured_core(
+        bad_hash_cfg,
         &ProviderSecrets::default(),
         || Ok(MemStore::new()),
-        Switches::all_enabled(),
         NoopDoors,
         GatewayOptions {
             clock: Arc::new(VirtualClock::new(Time::from_millis(1_000))),
@@ -1701,40 +1695,54 @@ async fn soul_prior_config_loads_and_rejects_unknown_key_out_of_range_and_missin
     )
     .await
     {
-        Ok(_) => panic!("missing prior path must fail"),
+        Ok(_) => panic!("mismatched BLAKE3 must fail"),
         Err(e) => e,
     };
     assert!(
-        err_missing.to_string().contains("missing_prior.json"),
+        err_hash.to_string().contains("BLAKE3") || err_hash.to_string().contains("mismatch"),
+        "err={err_hash}"
+    );
+
+    // Missing core_config path fails start-up naming the path.
+    let mut bad_cfg = default_test_config(ModelProviderKind::Scripted);
+    let missing_path = dir.path().join("missing_core_cfg.json");
+    bad_cfg.soul.core_config = Some(missing_path);
+    let err_missing = match GatewayRuntime::start_with_configured_core(
+        bad_cfg,
+        &ProviderSecrets::default(),
+        || Ok(MemStore::new()),
+        NoopDoors,
+        GatewayOptions {
+            clock: Arc::new(VirtualClock::new(Time::from_millis(1_000))),
+            provider: Some(Arc::new(ScriptedModelProvider::new())),
+            diagnostics: DiagnosticSink::new(&ProviderSecrets::default()),
+            cues: CueRecorder::new(),
+            seams: GatewaySeams::default(),
+        },
+    )
+    .await
+    {
+        Ok(_) => panic!("missing core_config path must fail"),
+        Err(e) => e,
+    };
+    assert!(
+        err_missing.to_string().contains("missing_core_cfg.json"),
         "err={err_missing}"
     );
 
     // Unknown key fails start-up naming the unknown key.
-    let unknown_path = dir.path().join("unknown_prior.json");
+    let unknown_path = dir.path().join("unknown_core_cfg.json");
     std::fs::write(
         &unknown_path,
-        r#"{
-          "version": 1,
-          "content_version": "2026-11-16.1",
-          "talkativeness": 0.5,
-          "spontaneity": 0.5,
-          "memory_persistence": 0.5,
-          "helpfulness": 0.5,
-          "restraint": 0.5,
-          "boredom_with_repeats": 0.5,
-          "certainty_bar": 0.5,
-          "speaking_bar": 3,
-          "unknown_gw_key": 0.4
-        }"#,
+        r#"{ "format_version": 1, "unknown_gw_key": 0.4 }"#,
     )
     .unwrap();
     let mut unknown_cfg = default_test_config(ModelProviderKind::Scripted);
-    unknown_cfg.soul.prior = Some(unknown_path);
-    let err_unknown = match GatewayRuntime::start_with_configured_prior(
+    unknown_cfg.soul.core_config = Some(unknown_path);
+    let err_unknown = match GatewayRuntime::start_with_configured_core(
         unknown_cfg,
         &ProviderSecrets::default(),
         || Ok(MemStore::new()),
-        Switches::all_enabled(),
         NoopDoors,
         GatewayOptions {
             clock: Arc::new(VirtualClock::new(Time::from_millis(1_000))),
@@ -1754,31 +1762,19 @@ async fn soul_prior_config_loads_and_rejects_unknown_key_out_of_range_and_missin
         "err={err_unknown}"
     );
 
-    // Out-of-range value fails start-up naming disposition and range.
-    let range_path = dir.path().join("range_prior.json");
+    // Out-of-range value fails start-up naming the invalid field.
+    let range_path = dir.path().join("range_core_cfg.json");
     std::fs::write(
         &range_path,
-        r#"{
-          "version": 1,
-          "content_version": "2026-11-16.1",
-          "talkativeness": 0.5,
-          "spontaneity": 0.5,
-          "memory_persistence": 0.5,
-          "helpfulness": 0.5,
-          "restraint": 0.5,
-          "boredom_with_repeats": 0.5,
-          "certainty_bar": 0.5,
-          "speaking_bar": 9
-        }"#,
+        r#"{ "format_version": 1, "max_wait_ms": 0.0 }"#,
     )
     .unwrap();
     let mut range_cfg = default_test_config(ModelProviderKind::Scripted);
-    range_cfg.soul.prior = Some(range_path);
-    let err_range = match GatewayRuntime::start_with_configured_prior(
+    range_cfg.soul.core_config = Some(range_path);
+    let err_range = match GatewayRuntime::start_with_configured_core(
         range_cfg,
         &ProviderSecrets::default(),
         || Ok(MemStore::new()),
-        Switches::all_enabled(),
         NoopDoors,
         GatewayOptions {
             clock: Arc::new(VirtualClock::new(Time::from_millis(1_000))),
@@ -1794,7 +1790,7 @@ async fn soul_prior_config_loads_and_rejects_unknown_key_out_of_range_and_missin
         Err(e) => e,
     };
     assert!(
-        err_range.to_string().contains("speaking_bar") && err_range.to_string().contains("[1, 5]"),
+        err_range.to_string().contains("max_wait_ms"),
         "err={err_range}"
     );
 }

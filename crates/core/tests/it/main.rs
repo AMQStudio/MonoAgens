@@ -6,4 +6,5 @@ mod expectations_c4;
 mod gate_c2;
 mod gate_recall_c3;
 mod learning_tck_c7;
+mod neural_parity;
 mod prior_loaded;

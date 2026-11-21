@@ -9,9 +9,9 @@
 use std::env;
 use std::io::{self, BufRead, BufWriter, Write};
 
-use monoagens_core::tck_hooks::{TckHarness, switches_all_neutral, verify_hard_forget_erasure};
+use monoagens_core::tck_hooks::{TckHarness, verify_hard_forget_erasure};
 use monoagens_core::{
-    Core, EventDetail, EventKind, Input, NoopDoors, Prior, ReplayMode, Store, Switches,
+    Core, CoreConfig, EventDetail, EventKind, Input, NoopDoors, ReplayMode, Store,
 };
 use monoagens_protocol::{
     ActorId, Audience, EmbeddingTag, OpaquePayload, Percept, PlaceId, ReceiptOutcome,
@@ -133,13 +133,12 @@ fn tag() -> EmbeddingTag {
 }
 
 fn run_probe_scope(mode: FaultMode) -> Value {
-    let prior = Prior::default();
-    let switches = Switches::all_enabled();
-    let mut with_priv = match TckHarness::open(prior.clone(), switches.clone(), 42) {
+    let cfg = CoreConfig::default();
+    let mut with_priv = match TckHarness::open(cfg.clone(), None) {
         Ok(h) => h,
         Err(e) => return json!({ "ok": false, "error": e.to_string() }),
     };
-    let mut without_priv = match TckHarness::open(prior, switches, 42) {
+    let mut without_priv = match TckHarness::open(cfg, None) {
         Ok(h) => h,
         Err(e) => return json!({ "ok": false, "error": e.to_string() }),
     };
@@ -276,7 +275,13 @@ fn run_probe_forget(mode: FaultMode) -> Value {
     };
 
     // 1. In-memory C1-C7 hard_forget audit + post-erasure reopen/replay.
-    let mut h = match TckHarness::open(Prior::default(), Switches::all_enabled(), 77) {
+    let mut h = match TckHarness::open(
+        CoreConfig {
+            seed: 77,
+            ..CoreConfig::default()
+        },
+        None,
+    ) {
         Ok(h) => h,
         Err(e) => return json!({ "ok": false, "error": e.to_string() }),
     };
@@ -303,8 +308,8 @@ fn run_probe_forget(mode: FaultMode) -> Value {
     };
     let post_forget_replay_ok = h
         .core
-        .replay_verify(ReplayMode::FullReplay)
-        .map(|r| r.first_divergence.is_none())
+        .replay_verify(ReplayMode::Pinned)
+        .map(|r| r.is_exact())
         .unwrap_or(false);
 
     // 2. SegmentedStore disk/FTS5/snapshot/raw-byte erasure verification.
@@ -313,7 +318,14 @@ fn run_probe_forget(mode: FaultMode) -> Value {
         Ok(s) => s,
         Err(e) => return json!({ "ok": false, "error": e.to_string() }),
     };
-    let mut disk_core = match Core::open(store, Prior::default(), Switches::all_enabled(), 77) {
+    let mut disk_core = match Core::open(
+        store,
+        CoreConfig {
+            seed: 77,
+            ..CoreConfig::default()
+        },
+        None,
+    ) {
         Ok(c) => c,
         Err(e) => return json!({ "ok": false, "error": e.to_string() }),
     };
@@ -364,8 +376,14 @@ fn run_probe_forget(mode: FaultMode) -> Value {
 }
 
 fn run_single_deterministic_trace(seed: u64) -> Result<(Vec<Vec<u8>>, bool), String> {
-    let mut h = TckHarness::open(Prior::default(), Switches::all_enabled(), seed)
-        .map_err(|e| e.to_string())?;
+    let mut h = TckHarness::open(
+        CoreConfig {
+            seed,
+            ..CoreConfig::default()
+        },
+        None,
+    )
+    .map_err(|e| e.to_string())?;
     h.register_default_body("chat.speak", "blake3:tck0", 500)
         .map_err(|e| e.to_string())?;
     for step in 0..4_u64 {
@@ -376,7 +394,7 @@ fn run_single_deterministic_trace(seed: u64) -> Result<(Vec<Vec<u8>>, bool), Str
     }
     let replay = h
         .core
-        .replay_verify(ReplayMode::FullReplay)
+        .replay_verify(ReplayMode::Pinned)
         .map_err(|e| e.to_string())?;
     let events = h
         .core
@@ -384,7 +402,7 @@ fn run_single_deterministic_trace(seed: u64) -> Result<(Vec<Vec<u8>>, bool), Str
         .read_after_seq(None, usize::MAX)
         .map_err(|e| e.to_string())?;
     let encoded = events.into_iter().map(|e| e.encode_bytes()).collect();
-    Ok((encoded, replay.first_divergence.is_none()))
+    Ok((encoded, replay.is_exact()))
 }
 
 fn run_probe_replay(mode: FaultMode) -> Value {
@@ -408,7 +426,13 @@ fn run_probe_replay(mode: FaultMode) -> Value {
 }
 
 fn run_probe_soak(mode: FaultMode) -> Value {
-    let mut h = match TckHarness::open(Prior::default(), switches_all_neutral(), 11) {
+    let mut h = match TckHarness::open(
+        CoreConfig {
+            seed: 11,
+            ..CoreConfig::default()
+        },
+        None,
+    ) {
         Ok(h) => h,
         Err(e) => return json!({ "ok": false, "error": e.to_string() }),
     };
@@ -428,9 +452,12 @@ fn run_probe_soak(mode: FaultMode) -> Value {
         Ok(d) => d,
         Err(e) => return json!({ "ok": false, "error": e.to_string() }),
     };
-    let w = dump.adaptive_weights;
-    let mut weights_finite = [w.theta_0, w.a, w.b, w.c, w.r]
-        .iter()
+    let mut weights_finite = h
+        .core
+        .state()
+        .place_memory
+        .values()
+        .flatten()
         .all(|v| v.is_finite());
     if mode == FaultMode::SoakNaN {
         weights_finite = false;
@@ -444,7 +471,13 @@ fn run_probe_soak(mode: FaultMode) -> Value {
 }
 
 fn run_probe_queue_order() -> Value {
-    let mut h = match TckHarness::open(Prior::default(), Switches::all_enabled(), 21) {
+    let mut h = match TckHarness::open(
+        CoreConfig {
+            seed: 21,
+            ..CoreConfig::default()
+        },
+        None,
+    ) {
         Ok(h) => h,
         Err(e) => return json!({ "ok": false, "error": e.to_string() }),
     };
@@ -468,13 +501,19 @@ fn run_probe_queue_order() -> Value {
 }
 
 fn run_probe_preempt() -> Value {
-    let mut h = match TckHarness::open(Prior::default(), Switches::all_enabled(), 31) {
+    let mut h = match TckHarness::open(
+        CoreConfig {
+            seed: 31,
+            ..CoreConfig::default()
+        },
+        None,
+    ) {
         Ok(h) => h,
         Err(e) => return json!({ "ok": false, "error": e.to_string() }),
     };
     let _ = h.register_default_body("chat.speak", "blake3:tck0", 500);
     let _ = h.inject_percept("alice", "room:tck", &["alice", "soul"], 1_000, None);
-    let dump_before = h.dump().expect("dump before");
+    let before_count = h.core.state().place_adapt.len();
     let _ = h.inject_receipt(
         "act-preempt-1",
         "chat.speak",
@@ -482,12 +521,12 @@ fn run_probe_preempt() -> Value {
         Some(TerminationReason::PreemptedExternal),
         1_200,
     );
-    let dump_after = h.dump().expect("dump after");
+    let after_count = h.core.state().place_adapt.len();
     json!({
         "ok": true,
-        "preemption_non_penalty": dump_after.rollbacks == dump_before.rollbacks,
-        "rollbacks_before": dump_before.rollbacks,
-        "rollbacks_after": dump_after.rollbacks,
+        "preemption_non_penalty": after_count == before_count,
+        "rollbacks_before": before_count,
+        "rollbacks_after": after_count,
     })
 }
 
@@ -503,7 +542,14 @@ fn run_probe_crash_recovery() -> Value {
             Ok(s) => s,
             Err(e) => return json!({ "ok": false, "error": e.to_string() }),
         };
-        let mut core = match Core::open(store, Prior::default(), Switches::all_enabled(), 55) {
+        let mut core = match Core::open(
+            store,
+            CoreConfig {
+                seed: 55,
+                ..CoreConfig::default()
+            },
+            None,
+        ) {
             Ok(c) => c,
             Err(e) => return json!({ "ok": false, "error": e.to_string() }),
         };
@@ -530,7 +576,14 @@ fn run_probe_crash_recovery() -> Value {
         Ok(s) => s,
         Err(e) => return json!({ "ok": false, "error": e.to_string() }),
     };
-    let core2 = match Core::open(reopened, Prior::default(), Switches::all_enabled(), 55) {
+    let core2 = match Core::open(
+        reopened,
+        CoreConfig {
+            seed: 55,
+            ..CoreConfig::default()
+        },
+        None,
+    ) {
         Ok(c) => c,
         Err(e) => return json!({ "ok": false, "error": e.to_string() }),
     };
@@ -549,7 +602,13 @@ fn run_probe_crash_recovery() -> Value {
 }
 
 fn run_probe_pre_step5_scope() -> Value {
-    let mut h = match TckHarness::open(Prior::default(), Switches::all_enabled(), 65) {
+    let mut h = match TckHarness::open(
+        CoreConfig {
+            seed: 65,
+            ..CoreConfig::default()
+        },
+        None,
+    ) {
         Ok(h) => h,
         Err(e) => return json!({ "ok": false, "error": e.to_string() }),
     };

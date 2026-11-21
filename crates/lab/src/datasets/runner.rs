@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use monoagens_core::{ModelPurpose, Prior, Switches};
+use monoagens_core::{CoreConfig, ModelPurpose};
 use monoagens_reason::embed::Embedder;
 use monoagens_reason::model::{
     CallOutcome, ModelCallFailure, ModelCallRecord, ModelCallSuccess, ModelProvider, ModelRequest,
@@ -99,7 +99,6 @@ pub fn suite_domain(suite: &str) -> Option<BenchmarkDomain> {
 pub fn derive_monoagens_mode(
     live: bool,
     provider_is_live: bool,
-    switches: &Switches,
     history_reasoning_mode: Option<&str>,
     prompt_source: Option<&str>,
 ) -> &'static str {
@@ -107,7 +106,6 @@ pub fn derive_monoagens_mode(
         return MONOAGENS_MODE_OFFLINE;
     }
     let full = provider_is_live
-        && switches == &Switches::all_enabled()
         && history_reasoning_mode != Some("scripted_silent")
         && prompt_source == Some(PROMPT_SOURCE_CORE_RENDER);
     if full {
@@ -198,8 +196,7 @@ pub struct PreflightEstimate {
 /// simulation BEFORE any paid call runs.
 pub fn estimate_live_preflight(
     converted_by_id: &[(String, Vec<ExternalItem>)],
-    prior: &Prior,
-    switches: &Switches,
+    config: &CoreConfig,
     seed: u64,
     max_cost_usd: f64,
 ) -> Result<PreflightEstimate, LabError> {
@@ -231,8 +228,7 @@ pub fn estimate_live_preflight(
             probe_calls = probe_calls.saturating_add(item.probes.len() as u64);
             let exec = execute_external_item(
                 item,
-                prior,
-                switches,
+                config,
                 seed,
                 &silent_probe,
                 "preflight-scripted",
@@ -518,7 +514,7 @@ pub fn execute_external_datasets(
     manifest_path: &Path,
     datasets_dir: &Path,
     registry: &[BenchmarkDatasetSpec],
-    prior: &Prior,
+    config: &CoreConfig,
     opts: &BenchmarkExecutionOptions<'_>,
 ) -> Result<ExternalExecutionResult, LabError> {
     if opts.live && opts.max_cost_usd.is_none() {
@@ -552,7 +548,7 @@ pub fn execute_external_datasets(
 
     let manifest_raw = fs::read(manifest_path).unwrap_or_default();
     let manifest_digest = format!("sha256:{}", sha256_hex(&manifest_raw));
-    let loaded_prior = monoagens_store::LoadedPrior::from_prior(prior.clone())?;
+    let loaded_config = monoagens_store::LoadedCoreConfig::from_config(config.clone())?;
 
     let suite_scope = suite_domain(suite);
     let external_specs: Vec<&BenchmarkDatasetSpec> = registry
@@ -633,8 +629,7 @@ pub fn execute_external_datasets(
         let cap = opts.max_cost_usd.unwrap_or(1_000_000.0);
         let est = estimate_live_preflight(
             &preflight_inputs,
-            prior,
-            &Switches::all_enabled(),
+            config,
             opts.seed,
             cap,
         )?;
@@ -796,7 +791,7 @@ pub fn execute_external_datasets(
                         &spec.id,
                         entry,
                         &manifest_digest,
-                        &loaded_prior,
+                        &loaded_config,
                         opts.seed,
                         "none",
                         opts.embedder
@@ -864,7 +859,7 @@ pub fn execute_external_datasets(
                         &spec.id,
                         entry,
                         &manifest_digest,
-                        &loaded_prior,
+                        &loaded_config,
                         opts.seed,
                         "none",
                         &embed_model_ver,
@@ -965,7 +960,6 @@ pub fn execute_external_datasets(
             continue;
         };
 
-        let switches = Switches::all_enabled();
         let ds_start = Instant::now();
         let started_at_utc = utc_iso_now();
         let mut predictions = Vec::new();
@@ -993,8 +987,7 @@ pub fn execute_external_datasets(
             }
             let exec = execute_external_item_with_embedder(
                 item,
-                prior,
-                &switches,
+                config,
                 opts.seed,
                 probe_provider,
                 &opts.probe_model_name,
@@ -1137,7 +1130,6 @@ pub fn execute_external_datasets(
         let monoagens_mode = derive_monoagens_mode(
             opts.live,
             provider_is_live,
-            &switches,
             history_mode_recorded.as_deref(),
             prompt_source,
         );
@@ -1162,7 +1154,7 @@ pub fn execute_external_datasets(
             &spec.id,
             entry,
             &manifest_digest,
-            loaded_prior_ref(&loaded_prior),
+            loaded_config_ref(&loaded_config),
             opts.seed,
             &opts.probe_model_name,
             active_embedder
@@ -1485,8 +1477,8 @@ fn flatten_toml_strings(val: &toml::Value, prefix: &str, out: &mut BTreeMap<Stri
     }
 }
 
-fn loaded_prior_ref(lp: &monoagens_store::LoadedPrior) -> &monoagens_store::LoadedPrior {
-    lp
+fn loaded_config_ref(lc: &monoagens_store::LoadedCoreConfig) -> &monoagens_store::LoadedCoreConfig {
+    lc
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1494,7 +1486,7 @@ fn build_external_run_record(
     dataset_id: &str,
     entry: &crate::datasets::manifest::DatasetManifestEntry,
     manifest_digest: &str,
-    loaded_prior: &monoagens_store::LoadedPrior,
+    loaded_config: &monoagens_store::LoadedCoreConfig,
     seed: u64,
     model_id: &str,
     embedder_id: &str,
@@ -1511,7 +1503,6 @@ fn build_external_run_record(
     monoagens_mode: &str,
     prompt_source: Option<&str>,
 ) -> RunRecord {
-    let switches = Switches::all_enabled();
     let pinned_revision = entry
         .sources
         .iter()
@@ -1522,15 +1513,18 @@ fn build_external_run_record(
         schema_version: "1.0".to_owned(),
         run_id: format!("ext-{dataset_id}-seed-{seed}"),
         core_version: env!("CARGO_PKG_VERSION").to_owned(),
-        prior_content_version: loaded_prior.prior.content_version.clone(),
-        prior_format_version: loaded_prior.prior.version,
-        prior_digest: loaded_prior.digest.clone(),
+        config_format_version: u32::from(loaded_config.config.format_version),
+        config_digest: loaded_config.digest.clone(),
+        model_blake3: loaded_config
+            .config
+            .expected_blake3
+            .as_ref()
+            .map(monoagens_core::blake3::to_hex),
+        online_adaptation: loaded_config.config.online_adaptation,
         open_offset: 0,
         model_id: model_id.to_owned(),
         embedder_id: embedder_id.to_owned(),
         door_rules,
-        switches: switches.clone(),
-        learning_switches: RunRecord::learning_switches_from(&switches),
         seed,
         scenario_id: dataset_id.to_owned(),
         scenario_set: ScenarioSet::External,

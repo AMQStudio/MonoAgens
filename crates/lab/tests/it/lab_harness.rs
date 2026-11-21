@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Instant;
 
-use monoagens_core::{DecisionOutcome, DecisionReason, EventKind, MemStore, Prior, Switches};
+use monoagens_core::{CoreConfig, DecisionOutcome, DecisionReason, EventKind, MemStore};
 use monoagens_lab::{
     CheckKind, ExpectationCheck, RunRecord, Scenario, ScenarioSet, ScriptedActionRule,
     ScriptedEvent, ScriptedEventKind, ScriptedFollowUpPercept, ScriptedModelResponse, SoulDir,
@@ -540,14 +540,15 @@ fn virtual_clock_runs_30_days_in_milliseconds_without_sleeping() {
             text: "day 30".to_owned(),
             expected_present: true,
         }],
-        switches: Some(Switches::all_enabled()),
+        core_config: None,
+        model_path: None,
+        online_adaptation: None,
         cost_guard: None,
-        prior: None,
         annotations: Default::default(),
     };
 
     let started = Instant::now();
-    let out = run_scenario(MemStore::new(), Prior::default(), &scenario, 42).expect("run ok");
+    let out = run_scenario(MemStore::new(), CoreConfig::default(), &scenario, 42).expect("run ok");
     let elapsed = started.elapsed();
 
     assert!(
@@ -705,13 +706,14 @@ fn slow_scripted_model_lets_earlier_events_be_appraised_first_and_runs_waist2_de
                 expected_present: true,
             },
         ],
-        switches: Some(Switches::all_enabled()),
+        core_config: None,
+        model_path: None,
+        online_adaptation: None,
         cost_guard: None,
-        prior: None,
         annotations: Default::default(),
     };
 
-    let out = run_scenario(MemStore::new(), Prior::default(), &scenario, 99).expect("run ok");
+    let out = run_scenario(MemStore::new(), CoreConfig::default(), &scenario, 99).expect("run ok");
     assert!(out.run_record.passed, "checks: {:?}", out.run_record.checks);
 
     // Verify p2 decision at t=2_000 appears BEFORE p1's Thought/Action at t=6_000.
@@ -783,14 +785,15 @@ fn deterministic_double_run_produces_identical_serialized_logs_and_postcard_roun
             fail_reason: None,
         }],
         checks: Vec::new(),
-        switches: Some(Switches::all_enabled()),
+        core_config: None,
+        model_path: None,
+        online_adaptation: None,
         cost_guard: None,
-        prior: None,
         annotations: Default::default(),
     };
 
-    let run1 = run_scenario(MemStore::new(), Prior::default(), &scenario, 777).expect("run1");
-    let run2 = run_scenario(MemStore::new(), Prior::default(), &scenario, 777).expect("run2");
+    let run1 = run_scenario(MemStore::new(), CoreConfig::default(), &scenario, 777).expect("run1");
+    let run2 = run_scenario(MemStore::new(), CoreConfig::default(), &scenario, 777).expect("run2");
 
     let log1: Vec<Vec<u8>> = run1.events.iter().map(|e| e.encode_bytes()).collect();
     let log2: Vec<Vec<u8>> = run2.events.iter().map(|e| e.encode_bytes()).collect();
@@ -800,7 +803,7 @@ fn deterministic_double_run_produces_identical_serialized_logs_and_postcard_roun
     let tmp = TempDir::new().expect("tempdir");
     let soul_dir = SoulDir::open_or_init(tmp.path(), "soul-det", 777).expect("soul_dir");
     let seg_store = soul_dir.open_store().expect("open segmented store");
-    let seg_run = run_scenario(seg_store, Prior::default(), &scenario, 777).expect("seg run");
+    let seg_run = run_scenario(seg_store, CoreConfig::default(), &scenario, 777).expect("seg run");
     let log3: Vec<Vec<u8>> = seg_run.events.iter().map(|e| e.encode_bytes()).collect();
     assert_eq!(log1, log3);
 
@@ -847,9 +850,10 @@ fn lab_cli_json_stdout_is_pure_json_and_errors_exit_nonzero_on_stderr() {
             before_ms: 1_000,
             expected_present: false,
         }],
-        switches: None,
+        core_config: None,
+        model_path: None,
+        online_adaptation: None,
         cost_guard: None,
-        prior: None,
         annotations: Default::default(),
     };
     fs::write(
@@ -930,16 +934,17 @@ fn sealed_set_redacts_checks_and_cost_guard_refuses_over_budget_wakes() {
             text: "secret sealed text".to_owned(),
             expected_present: true,
         }],
-        switches: None,
+        core_config: None,
+        model_path: None,
+        online_adaptation: None,
         cost_guard: Some(monoagens_lab::CostGuardConfig {
             max_tokens: Some(0),
             max_chain_wakes: None,
         }),
-        prior: None,
         annotations: Default::default(),
     };
 
-    let out = run_scenario(MemStore::new(), Prior::default(), &scenario, 11).expect("run");
+    let out = run_scenario(MemStore::new(), CoreConfig::default(), &scenario, 11).expect("run");
     assert_eq!(out.guard_refusals.len(), 1);
     assert!(out.run_record.sealed);
 

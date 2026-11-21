@@ -117,12 +117,6 @@
         "named": [
           "soul"
         ],
-        "orient": [
-          {
-            "actor": "soul",
-            "score": 0.7
-          }
-        ],
         "dialogue_act_gap": 1.0
       }
     },
@@ -228,7 +222,7 @@
       "kind": "structural",
       "decision_index": 2,
       "expected_outcome": "silent",
-      "expected_reason": "yielded"
+      "expected_reason": "neutral_fallback"
     }
   ],
   "annotations": {

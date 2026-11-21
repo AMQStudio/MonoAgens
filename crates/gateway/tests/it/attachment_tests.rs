@@ -508,8 +508,7 @@ async fn gateway_waist2_strips_inline_media_and_handles_oob_blob_put_get() {
         cfg,
         &secrets,
         || Ok(monoagens_core::MemStore::new()),
-        monoagens_core::Prior::default(),
-        monoagens_core::Switches::all_neutral(),
+        monoagens_core::CoreConfig::default(),
         monoagens_core::NoopDoors,
         GatewayOptions {
             clock: clock.clone(),

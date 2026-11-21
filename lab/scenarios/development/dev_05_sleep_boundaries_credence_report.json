@@ -1250,15 +1250,15 @@
       "check": "decision_is",
       "name": "repeated_part1_silent",
       "kind": "structural",
-      "target_event_id": 3,
+      "decision_index": 1,
       "expected_outcome": "silent",
-      "expected_reason": "below_note_band"
+      "expected_reason": "neutral_fallback"
     },
     {
       "check": "decision_is",
       "name": "addressed_part31_go_commitment",
       "kind": "structural",
-      "target_event_id": 84,
+      "decision_index": 31,
       "expected_outcome": "go",
       "expected_reason": "commitment"
     },
@@ -1266,7 +1266,7 @@
       "check": "context_contains",
       "name": "study_context_includes_part31",
       "kind": "structural",
-      "item_event_id": 84,
+      "item_event_id": 68,
       "label": "room:study",
       "expected_present": true
     }

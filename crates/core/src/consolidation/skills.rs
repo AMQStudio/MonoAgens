@@ -11,8 +11,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::beliefs::BetaCredence;
 use crate::context::{CapabilityCatalogEntry, ProcedureEntry};
-use crate::prior::Prior;
-use crate::registry::Switches;
+
+const LESSON_MIN_EPISODES: usize = 2;
+const LESSON_MAX_CONTRASTS: usize = 3;
+const CREDENCE_LAMBDA_DOMAIN: f64 = 0.98;
+const CREDENCE_PERIOD_MS: u64 = 86_400_000;
+const PROC_GAMMA_BETA: f64 = 0.95;
+const PROC_CUSUM_N_MIN_LOCK: u64 = 5;
+const PROC_CUSUM_K_DRIFT: f64 = 0.1;
+const PROC_CUSUM_H_WARN: f64 = 2.0;
+const PROC_CUSUM_H_RETIRE: f64 = 4.0;
+const PROC_THETA_RETIRE: f64 = 0.35;
 
 /// Lifecycle state of an extracted skill procedure (`R-40`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -229,10 +238,10 @@ impl SkillBook {
         Self::default()
     }
 
-    /// Returns whether chat-habit bypass is permitted under `prior` (`false` by default).
+    /// Returns whether chat-habit bypass is permitted (`false` by default).
     #[must_use]
-    pub const fn chat_habit_bypass_allowed(prior: &Prior) -> bool {
-        prior.allow_chat_habit_bypass
+    pub const fn chat_habit_bypass_allowed() -> bool {
+        false
     }
 
     fn alloc_id(&mut self, hint: Option<EventId>) -> EventId {
@@ -275,15 +284,7 @@ impl SkillBook {
     /// Requires at least `prior.lesson_min_episodes` matching failures with the same
     /// normalized error signature (`single error` never produces a lesson), and attaches
     /// at most `prior.lesson_max_contrasts` matching success contrasts.
-    pub fn cluster_contrastive_lessons(
-        &mut self,
-        now_ms: Time,
-        prior: &Prior,
-        switches: &Switches,
-    ) -> Vec<LessonEntry> {
-        if !switches.consolidation_and_merge {
-            return Vec::new();
-        }
+    pub fn cluster_contrastive_lessons(&mut self, now_ms: Time) -> Vec<LessonEntry> {
         let mut by_sig: BTreeMap<String, Vec<FailureEpisodeRecord>> = BTreeMap::new();
         for f in &self.failure_episodes {
             if f.signature_key.trim().is_empty() {
@@ -299,11 +300,10 @@ impl SkillBook {
         let success_snapshot = self.success_episodes.clone();
         for (sig, mut failures) in by_sig {
             failures.sort_by_key(|f| (f.timestamp_ms.as_millis(), f.episode_id.as_u64()));
-            if failures.len() < prior.lesson_min_episodes {
+            if failures.len() < LESSON_MIN_EPISODES {
                 continue;
             }
             let failure_ids: Vec<EventId> = failures.iter().map(|f| f.episode_id).collect();
-            // Avoid duplicating an existing active lesson for the exact same failure signature.
             if self
                 .lessons
                 .values()
@@ -312,7 +312,6 @@ impl SkillBook {
                 continue;
             }
 
-            // Pick up to `lesson_max_contrasts` matching successful traces.
             let mut contrasts: Vec<&SuccessEpisodeRecord> = success_snapshot
                 .iter()
                 .filter(|s| {
@@ -324,7 +323,7 @@ impl SkillBook {
                 })
                 .collect();
             contrasts.sort_by_key(|s| (s.timestamp_ms.as_millis(), s.episode_id.as_u64()));
-            contrasts.truncate(prior.lesson_max_contrasts);
+            contrasts.truncate(LESSON_MAX_CONTRASTS);
 
             let mut taint = Taint::Trusted;
             let mut actor_set: BTreeSet<ActorId> = BTreeSet::new();
@@ -344,11 +343,9 @@ impl SkillBook {
             }
 
             let mut credence = BetaCredence::from_prior(1.0, 1.0, now_ms);
-            if switches.credence {
-                let supporting = failures.len() + contrastive_success_ids.len();
-                credence.alpha = 1.0 + (supporting as f64);
-                credence.last_updated_ms = now_ms;
-            }
+            let supporting = failures.len() + contrastive_success_ids.len();
+            credence.alpha = 1.0 + (supporting as f64);
+            credence.last_updated_ms = now_ms;
 
             let domain = failures.iter().find_map(|f| f.domain.clone());
             let lesson_id = self.alloc_id(failures.first().map(|f| {
@@ -377,12 +374,7 @@ impl SkillBook {
 
     /// Records a lesson explicitly proposed by `ThoughtAct::Consolidate { output: Lesson { .. } }`,
     /// enforcing the minimum-failure-episodes and bounded-contrasts invariants (`14.1`).
-    pub fn record_consolidated_lesson(
-        &mut self,
-        params: RecordLessonParams,
-        prior: &Prior,
-        switches: &Switches,
-    ) -> Option<LessonEntry> {
+    pub fn record_consolidated_lesson(&mut self, params: RecordLessonParams) -> Option<LessonEntry> {
         let RecordLessonParams {
             lesson_id,
             pattern,
@@ -393,16 +385,14 @@ impl SkillBook {
             taint,
             now_ms,
         } = params;
-        if !switches.consolidation_and_merge || failure_ids.len() < prior.lesson_min_episodes {
+        if failure_ids.len() < LESSON_MIN_EPISODES {
             return None;
         }
-        contrastive_success_ids.truncate(prior.lesson_max_contrasts);
+        contrastive_success_ids.truncate(LESSON_MAX_CONTRASTS);
         let id = self.alloc_id(lesson_id);
         let mut credence = BetaCredence::from_prior(1.0, 1.0, now_ms);
-        if switches.credence {
-            credence.alpha = 1.0 + ((failure_ids.len() + contrastive_success_ids.len()) as f64);
-            credence.last_updated_ms = now_ms;
-        }
+        credence.alpha = 1.0 + ((failure_ids.len() + contrastive_success_ids.len()) as f64);
+        credence.last_updated_ms = now_ms;
         let entry = LessonEntry {
             lesson_id: id,
             pattern,
@@ -428,11 +418,9 @@ impl SkillBook {
         supported: bool,
         weight: f64,
         now_ms: Time,
-        prior: &Prior,
-        switches: &Switches,
     ) -> Option<f64> {
         let lesson = self.lessons.get_mut(&lesson_id)?;
-        if !switches.credence || !weight.is_finite() || weight <= 0.0 {
+        if !weight.is_finite() || weight <= 0.0 {
             return Some(lesson.credence.expected());
         }
         let (pos, neg) = if supported {
@@ -444,23 +432,18 @@ impl SkillBook {
             pos,
             neg,
             now_ms,
-            prior.credence_lambda_domain,
-            prior.credence_period_ms,
+            CREDENCE_LAMBDA_DOMAIN,
+            CREDENCE_PERIOD_MS,
         );
         lesson.updated_at_ms = now_ms;
         Some(lesson.credence.expected())
     }
 
     /// Extracts a new procedure from a reached cross-place goal chain (`A-11`, `14.2`).
-    ///
-    /// Returns `None` if consolidation is disabled, steps are empty, schema mismatches current
-    /// capability descriptors, or fewer than 2 distinct places were traversed (`cross-place` guard).
     pub fn extract_procedure_from_goal_chain(
         &mut self,
         params: ExtractProcedureParams,
         capability_catalog: &BTreeMap<CapabilityId, CapabilityCatalogEntry>,
-        prior: &Prior,
-        switches: &Switches,
     ) -> Option<TrackedProcedure> {
         let ExtractProcedureParams {
             procedure_id,
@@ -477,16 +460,14 @@ impl SkillBook {
             taint,
             now_ms,
         } = params;
-        if !switches.consolidation_and_merge || steps.is_empty() {
+        if steps.is_empty() {
             return None;
         }
-        // Anti-bypass guard: chat-only 1-place sequences cannot form a skill shortcut unless
-        // `allow_chat_habit_bypass` is explicitly enabled and capabilities are non-empty.
         let distinct_places: BTreeSet<&str> = places.iter().map(|p| p.as_str()).collect();
         if distinct_places.len() < 2 {
             return None;
         }
-        if required_cap_ids.is_empty() && !Self::chat_habit_bypass_allowed(prior) {
+        if required_cap_ids.is_empty() && !Self::chat_habit_bypass_allowed() {
             return None;
         }
 
@@ -537,8 +518,6 @@ impl SkillBook {
         &mut self,
         params: RegisterProcedureParams,
         capability_catalog: &BTreeMap<CapabilityId, CapabilityCatalogEntry>,
-        prior: &Prior,
-        switches: &Switches,
     ) -> Option<TrackedProcedure> {
         let RegisterProcedureParams {
             procedure_id,
@@ -551,10 +530,10 @@ impl SkillBook {
             taint,
             now_ms,
         } = params;
-        if !switches.consolidation_and_merge || steps.is_empty() {
+        if steps.is_empty() {
             return None;
         }
-        if required_cap_ids.is_empty() && !Self::chat_habit_bypass_allowed(prior) {
+        if required_cap_ids.is_empty() && !Self::chat_habit_bypass_allowed() {
             return None;
         }
         let matches = schema_matches_catalog(
@@ -643,7 +622,6 @@ impl SkillBook {
         outcome: ReceiptOutcome,
         termination_reason: Option<TerminationReason>,
         now_ms: Time,
-        prior: &Prior,
     ) -> ProcedureMonitorOutcome {
         if matches!(
             termination_reason,
@@ -662,7 +640,7 @@ impl SkillBook {
             return ProcedureMonitorOutcome::IgnoredCanceledOrPreempted;
         }
         let succeeded = matches!(outcome, ReceiptOutcome::Done);
-        let gamma = prior.proc_gamma_beta.clamp(0.0, 1.0);
+        let gamma = PROC_GAMMA_BETA;
         proc_entry.alpha =
             1.0 + gamma * (proc_entry.alpha - 1.0) + if succeeded { 1.0 } else { 0.0 };
         proc_entry.beta = 1.0 + gamma * (proc_entry.beta - 1.0) + if succeeded { 0.0 } else { 1.0 };
@@ -674,31 +652,27 @@ impl SkillBook {
         let previous_state = proc_entry.state;
         let posterior_mean = proc_entry.posterior_mean();
 
-        // Phase 1: lock baseline p0 once at least `proc_cusum_n_min_lock` trials are observed.
         if proc_entry.cusum_baseline_p0.is_none()
-            && proc_entry.trial_count >= (prior.proc_cusum_n_min_lock as u64)
+            && proc_entry.trial_count >= PROC_CUSUM_N_MIN_LOCK
         {
             let emp = (proc_entry.success_count as f64) / (proc_entry.trial_count as f64);
-            // Clamp baseline away from trivial 0 so downward drift remains sensitive.
             proc_entry.cusum_baseline_p0 = Some(emp.clamp(0.5, 0.99));
             proc_entry.cusum_stat = 0.0;
         } else if let Some(p0) = proc_entry.cusum_baseline_p0 {
             let y_t = if succeeded { 1.0 } else { 0.0 };
-            let increment = p0 - prior.proc_cusum_k_drift - y_t;
+            let increment = p0 - PROC_CUSUM_K_DRIFT - y_t;
             proc_entry.cusum_stat = (proc_entry.cusum_stat + increment).max(0.0);
 
-            if proc_entry.cusum_stat >= prior.proc_cusum_h_retire
-                || posterior_mean < prior.proc_theta_retire
-            {
+            if proc_entry.cusum_stat >= PROC_CUSUM_H_RETIRE || posterior_mean < PROC_THETA_RETIRE {
                 proc_entry.state = ProcedureLifecycleState::Retired;
-                let reason = if proc_entry.cusum_stat >= prior.proc_cusum_h_retire {
+                let reason = if proc_entry.cusum_stat >= PROC_CUSUM_H_RETIRE {
                     "cusum_accuracy_decay"
                 } else {
                     "posterior_reliability_below_retire"
                 };
                 proc_entry.retired_reason = Some(reason.to_owned());
                 proc_entry.retired_at_ms = Some(now_ms);
-            } else if proc_entry.cusum_stat >= prior.proc_cusum_h_warn {
+            } else if proc_entry.cusum_stat >= PROC_CUSUM_H_WARN {
                 proc_entry.state = ProcedureLifecycleState::Warned;
                 proc_entry.warn_count = proc_entry.warn_count.saturating_add(1);
             } else {

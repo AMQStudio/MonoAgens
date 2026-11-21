@@ -5,13 +5,14 @@ use core::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use monoagens_core::neural::NeuralModel;
 use monoagens_core::{
-    Core, CoreError, Effect, EventRecord, Input, Prior, QueueClass, QueueOverflow, Store,
-    StoreError, Switches, ThreeClassQueue,
+    Core, CoreConfig, CoreError, Effect, EventRecord, Input, QueueClass, QueueOverflow, Store,
+    StoreError, ThreeClassQueue,
 };
 use monoagens_protocol::{BodyId, Time};
 use monoagens_reason::ModelProvider;
-use monoagens_store::{PriorLoadError, SegmentedStore, StoreConfig};
+use monoagens_store::{ConfigLoadError, SegmentedStore, StoreConfig};
 use tokio::sync::{Notify, mpsc, oneshot};
 
 use crate::clock::Clock;
@@ -37,7 +38,8 @@ pub enum GatewayError {
     QueueOverflow(QueueOverflow),
     Core(String),
     Store(String),
-    Prior(String),
+    CoreConfig(String),
+    NeuralModel(String),
     OwnerExited,
     ProviderInit(String),
 }
@@ -48,7 +50,8 @@ impl fmt::Display for GatewayError {
             Self::QueueOverflow(ov) => write!(f, "{ov}"),
             Self::Core(msg) => write!(f, "core error: {msg}"),
             Self::Store(msg) => write!(f, "store error: {msg}"),
-            Self::Prior(msg) => write!(f, "prior error: {msg}"),
+            Self::CoreConfig(msg) => write!(f, "core config error: {msg}"),
+            Self::NeuralModel(msg) => write!(f, "neural model error: {msg}"),
             Self::OwnerExited => f.write_str("core owner task exited"),
             Self::ProviderInit(msg) => write!(f, "provider init error: {msg}"),
         }
@@ -75,9 +78,9 @@ impl From<StoreError> for GatewayError {
     }
 }
 
-impl From<PriorLoadError> for GatewayError {
-    fn from(err: PriorLoadError) -> Self {
-        Self::Prior(err.to_string())
+impl From<ConfigLoadError> for GatewayError {
+    fn from(err: ConfigLoadError) -> Self {
+        Self::CoreConfig(err.to_string())
     }
 }
 
@@ -378,8 +381,7 @@ impl GatewayRuntime {
         config: GatewayConfig,
         secrets: &monoagens_reason::ProviderSecrets,
         open_store: F,
-        prior: Prior,
-        switches: Switches,
+        core_config: CoreConfig,
         doors: D,
         mut options: GatewayOptions,
     ) -> Result<Self, GatewayError>
@@ -388,6 +390,10 @@ impl GatewayRuntime {
         F: FnOnce() -> Result<S, StoreError> + Send + 'static,
         D: DoorController + 'static,
     {
+        core_config
+            .validate()
+            .map_err(|e| GatewayError::CoreConfig(e.to_string()))?;
+        let neural_model = load_neural_model_at_edge(&config, &core_config)?;
         options.diagnostics.register_secrets(secrets);
 
         if options.seams.identity.is_none() && !config.persons.is_empty() {
@@ -455,7 +461,6 @@ impl GatewayRuntime {
         let ownership_stats = OwnershipStats::default();
 
         let owner_ctx = OwnerTaskContext {
-            config: config.clone(),
             doors,
             ingress: ingress.clone(),
             control_rx,
@@ -469,7 +474,7 @@ impl GatewayRuntime {
         };
 
         let owner_join = tokio::spawn(async move {
-            run_core_owner_task(open_store, prior, switches, owner_ctx, ready_tx).await;
+            run_core_owner_task(open_store, core_config, neural_model, owner_ctx, ready_tx).await;
         });
 
         ready_rx.await.map_err(|_| GatewayError::OwnerExited)??;
@@ -498,8 +503,7 @@ impl GatewayRuntime {
         config: GatewayConfig,
         secrets: &monoagens_reason::ProviderSecrets,
         store_dir: std::path::PathBuf,
-        prior: Prior,
-        switches: Switches,
+        core_config: CoreConfig,
         doors: D,
         options: GatewayOptions,
     ) -> Result<Self, GatewayError>
@@ -510,21 +514,19 @@ impl GatewayRuntime {
             config,
             secrets,
             move || SegmentedStore::open(StoreConfig::new(store_dir)),
-            prior,
-            switches,
+            core_config,
             doors,
             options,
         )
         .await
     }
 
-    /// Starts the Gateway loading `[soul] prior` (or the built-in default when absent)
-    /// via the shared `monoagens-store` prior loader, failing start-up on invalid/unreadable priors.
-    pub async fn start_with_configured_prior<S, F, D>(
+    /// Starts the Gateway loading `[soul] core_config` and `[soul] model_path` at the edge,
+    /// failing startup on invalid config, missing `.safetensors`, or `BLAKE3` mismatch.
+    pub async fn start_with_configured_core<S, F, D>(
         config: GatewayConfig,
         secrets: &monoagens_reason::ProviderSecrets,
         open_store: F,
-        switches: Switches,
         doors: D,
         options: GatewayOptions,
     ) -> Result<Self, GatewayError>
@@ -533,43 +535,24 @@ impl GatewayRuntime {
         F: FnOnce() -> Result<S, StoreError> + Send + 'static,
         D: DoorController + 'static,
     {
-        let loaded_prior = config.load_prior()?;
-        Self::start(
-            config,
-            secrets,
-            open_store,
-            loaded_prior.prior,
-            switches,
-            doors,
-            options,
-        )
-        .await
+        let loaded_cfg = config.load_core_config()?;
+        Self::start(config, secrets, open_store, loaded_cfg.config, doors, options).await
     }
 
     /// Convenience starter opening a durable [`SegmentedStore`] rooted at `store_dir` and
-    /// loading `[soul] prior` via the shared `monoagens-store` prior loader.
-    pub async fn start_segmented_with_configured_prior<D>(
+    /// loading `[soul] core_config` + optional `.safetensors` weights at the edge.
+    pub async fn start_segmented_with_configured_core<D>(
         config: GatewayConfig,
         secrets: &monoagens_reason::ProviderSecrets,
         store_dir: std::path::PathBuf,
-        switches: Switches,
         doors: D,
         options: GatewayOptions,
     ) -> Result<Self, GatewayError>
     where
         D: DoorController + 'static,
     {
-        let loaded_prior = config.load_prior()?;
-        Self::start_segmented(
-            config,
-            secrets,
-            store_dir,
-            loaded_prior.prior,
-            switches,
-            doors,
-            options,
-        )
-        .await
+        let loaded_cfg = config.load_core_config()?;
+        Self::start_segmented(config, secrets, store_dir, loaded_cfg.config, doors, options).await
     }
 
     /// Returns a cloneable [`GatewayHandle`].
@@ -588,7 +571,6 @@ impl GatewayRuntime {
 }
 
 struct OwnerTaskContext<D: DoorController> {
-    config: GatewayConfig,
     doors: D,
     ingress: IngressQueue,
     control_rx: mpsc::UnboundedReceiver<ControlCommand>,
@@ -601,10 +583,40 @@ struct OwnerTaskContext<D: DoorController> {
     pre_queue_service: Option<Arc<PreQueueService>>,
 }
 
+fn load_neural_model_at_edge(
+    gateway_cfg: &GatewayConfig,
+    core_cfg: &CoreConfig,
+) -> Result<Option<Arc<NeuralModel>>, GatewayError> {
+    let model_path = gateway_cfg
+        .soul
+        .model_path
+        .clone()
+        .or_else(|| core_cfg.model_path.as_ref().map(std::path::PathBuf::from));
+    let Some(path) = model_path else {
+        return Ok(None);
+    };
+    let expected = match &gateway_cfg.soul.expected_blake3 {
+        Some(hex) => Some(
+            GatewayConfig::parse_blake3_hex(hex)
+                .map_err(|e| GatewayError::NeuralModel(e.to_string()))?,
+        ),
+        None => core_cfg.expected_blake3,
+    };
+    let bytes = std::fs::read(&path).map_err(|e| {
+        GatewayError::NeuralModel(format!(
+            "failed to read safetensors model '{}': {e}",
+            path.display()
+        ))
+    })?;
+    let model = NeuralModel::from_safetensors_bytes(&bytes, expected)
+        .map_err(|e| GatewayError::NeuralModel(e.to_string()))?;
+    Ok(Some(Arc::new(model)))
+}
+
 async fn run_core_owner_task<S, F, D>(
     open_store: F,
-    prior: Prior,
-    switches: Switches,
+    core_config: CoreConfig,
+    neural_model: Option<Arc<NeuralModel>>,
     mut ctx: OwnerTaskContext<D>,
     ready_tx: oneshot::Sender<Result<(), GatewayError>>,
 ) where
@@ -620,7 +632,7 @@ async fn run_core_owner_task<S, F, D>(
         }
     };
 
-    let mut core = match Core::open(store, prior, switches, ctx.config.soul.seed) {
+    let mut core = match Core::open(store, core_config, neural_model) {
         Ok(c) => c,
         Err(err) => {
             let _ = ready_tx.send(Err(GatewayError::Core(err.to_string())));

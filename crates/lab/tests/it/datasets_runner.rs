@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use monoagens_core::{Prior, Switches};
+use monoagens_core::CoreConfig;
 use monoagens_lab::datasets::{
     BenchmarkExecutionOptions, ChecksumsRecorded, ConvertedDataset, Converter, CoreApplicability,
     DatasetAvailability, DatasetHandlerRegistry, DatasetLane, DatasetManifestEntry,
@@ -330,7 +330,7 @@ fn standard_suite_fails_before_run_on_missing_and_checksum_mismatch() {
         &datasets_dir,
         None,
         false,
-        &Prior::default(),
+        &CoreConfig::default(),
         &opts,
     )
     .expect_err("checksum mismatch must fail --suite memory before any run");
@@ -348,7 +348,7 @@ fn standard_suite_fails_before_run_on_missing_and_checksum_mismatch() {
         &datasets_dir,
         None,
         false,
-        &Prior::default(),
+        &CoreConfig::default(),
         &opts,
     )
     .expect_err("missing dataset must fail --suite memory");
@@ -569,7 +569,7 @@ fn scorecard_covers_all_statuses_lanes_and_pareto_gaps_without_imputation() {
         &datasets_dir,
         None,
         true,
-        &Prior::default(),
+        &CoreConfig::default(),
         &opts,
     )
     .expect("in_tree_only scorecard run");
@@ -695,7 +695,7 @@ fn live_preflight_budget_cap_silent_history_and_judge_substitution_policy() {
         &datasets_dir,
         None,
         false,
-        &Prior::default(),
+        &CoreConfig::default(),
         &opts_no_cap,
     )
     .expect_err("--live without --max-cost-usd must fail");
@@ -738,7 +738,7 @@ fn live_preflight_budget_cap_silent_history_and_judge_substitution_policy() {
         &datasets_dir,
         None,
         false,
-        &Prior::default(),
+        &CoreConfig::default(),
         &opts_too_small,
     )
     .expect_err("over-budget preflight must abort before any paid call");
@@ -767,7 +767,7 @@ fn live_preflight_budget_cap_silent_history_and_judge_substitution_policy() {
         &datasets_dir,
         None,
         false,
-        &Prior::default(),
+        &CoreConfig::default(),
         &opts_official,
     )
     .expect("official judge live path");
@@ -821,7 +821,7 @@ fn live_preflight_budget_cap_silent_history_and_judge_substitution_policy() {
         &datasets_dir,
         None,
         false,
-        &Prior::default(),
+        &CoreConfig::default(),
         &opts_rename,
     )
     .expect("renamed judge path");
@@ -870,7 +870,7 @@ fn live_preflight_budget_cap_silent_history_and_judge_substitution_policy() {
         &datasets_dir,
         None,
         false,
-        &Prior::default(),
+        &CoreConfig::default(),
         &opts_strict_fail,
     )
     .expect_err("StrictFail must refuse non-official judge");
@@ -1095,7 +1095,7 @@ fn capa_live_judge_uses_rust_openai_provider_secrets_cost_guard_and_substitution
         &datasets_dir,
         None,
         false,
-        &Prior::default(),
+        &CoreConfig::default(),
         &opts,
     )
     .expect("live CAPA with Rust OpenAiModelProvider must succeed");
@@ -1151,7 +1151,7 @@ fn capa_live_judge_uses_rust_openai_provider_secrets_cost_guard_and_substitution
         &datasets_dir,
         None,
         false,
-        &Prior::default(),
+        &CoreConfig::default(),
         &opts_budget_halt,
     )
     .expect_err("CostGuard must halt 2nd judge call once USD cap is exceeded");
@@ -1229,7 +1229,7 @@ fn task_10_2_and_10_3_and_10_5_live_options_embedder_and_report_parity() {
         &datasets_dir,
         None,
         false,
-        &Prior::default(),
+        &CoreConfig::default(),
         &BenchmarkExecutionOptions {
             manifest_path: Some(manifest_path.clone()),
             only_ids: Some(vec!["capa".to_owned()]),
@@ -1389,7 +1389,7 @@ fn task_10_2_and_10_3_and_10_5_live_options_embedder_and_report_parity() {
         &datasets_dir,
         None,
         false,
-        &Prior::default(),
+        &CoreConfig::default(),
         &opts,
     )
     .expect("live run with provider options and 256d embedder must succeed");
@@ -1569,7 +1569,7 @@ fn live_deviation_is_recorded_invalid_and_excluded_from_reports() {
         &datasets_dir,
         None,
         false,
-        &Prior::default(),
+        &CoreConfig::default(),
         &opts,
     )
     .expect("deviating live run still records an invalid record");
@@ -1586,28 +1586,14 @@ fn live_deviation_is_recorded_invalid_and_excluded_from_reports() {
     assert_eq!(row.status, ScorecardStatus::NotScored);
     assert_eq!(row.reason.as_deref(), Some("invalid: not full MonoAgens"));
 
-    // A switch off is always invalid; a non-live run is explicitly offline, never invalid.
-    let mut switches_off = Switches::all_enabled();
-    switches_off.credence = false;
     assert_eq!(
-        derive_monoagens_mode(true, true, &switches_off, Some("live"), Some("core_render")),
-        MONOAGENS_MODE_INVALID
-    );
-    assert_eq!(
-        derive_monoagens_mode(
-            true,
-            false,
-            &Switches::all_enabled(),
-            Some("live"),
-            Some("core_render")
-        ),
+        derive_monoagens_mode(true, false, Some("live"), Some("core_render")),
         MONOAGENS_MODE_INVALID
     );
     assert_eq!(
         derive_monoagens_mode(
             false,
             false,
-            &Switches::all_enabled(),
             Some("scripted_silent"),
             Some("core_render")
         ),
@@ -1765,7 +1751,7 @@ fn report_marks_records_without_monoagens_mode_invalid() {
         &datasets_dir,
         None,
         false,
-        &Prior::default(),
+        &CoreConfig::default(),
         &BenchmarkExecutionOptions {
             manifest_path: Some(manifest_path.clone()),
             only_ids: Some(vec!["longmemeval".to_owned()]),

@@ -1,10 +1,9 @@
 use std::collections::BTreeSet;
 
 use monoagens_core::{
-    BoundaryInputs, Core, DomainClusterBook, DomainTransitionKind, Effect, EpisodeBook,
-    EpisodeState, EventDetail, EventKind, EventRecord, Input, MemStore, MemoryBasis, MemoryEntry,
-    ModelPurpose, NoopDoors, NumericFeatures, PlaceBoundaryState, Prior, RecallQuery, ReplayMode,
-    Store, Switches, hungarian_min_cost,
+    Core, CoreConfig, Effect, EpisodeBook, EpisodeState, EventDetail, EventKind, EventRecord,
+    Input, MemStore, MemoryBasis, MemoryEntry, ModelPurpose, NoopDoors, NumericFeatures,
+    RecallQuery, ReplayMode, Store,
 };
 use monoagens_protocol::{
     ActorFacts, ActorId, Audience, CURRENT_PROTOCOL_VERSION, ClassificationVerdict,
@@ -63,13 +62,13 @@ fn make_percept(
     }
 }
 
-fn open_test_core(prior: Prior) -> Core<MemStore> {
-    Core::open(MemStore::new(), prior, Switches::all_enabled(), 42).expect("open core")
+fn open_test_core(config: CoreConfig) -> Core<MemStore> {
+    Core::open(MemStore::new(), config, None).expect("open core")
 }
 
 #[test]
 fn basis_downgrade_validity_and_mind_inference() {
-    let mut core = open_test_core(Prior::default());
+    let mut core = open_test_core(CoreConfig::default());
     let mut doors = NoopDoors;
 
     // 1. A source asserts something: percept itself is recorded, while what it said is `Told`.
@@ -209,7 +208,7 @@ fn basis_downgrade_validity_and_mind_inference() {
 
 #[test]
 fn told_credence_cited_vs_uncited_decay_robustness_and_domain_isolation() {
-    let mut core = open_test_core(Prior::default());
+    let mut core = open_test_core(CoreConfig::default());
     let mut doors = NoopDoors;
 
     // Register prior (alpha_0=4, beta_0=1) for `alice`, and leave `stranger` with no prior (uniform 1,1).
@@ -311,7 +310,7 @@ fn told_credence_cited_vs_uncited_decay_robustness_and_domain_isolation() {
     let decayed = core
         .state()
         .belief_book
-        .item_credence_at(b_alice, thirty_days, core.prior())
+        .item_credence_at(b_alice, thirty_days)
         .expect("decayed");
     assert!(decayed.alpha < c_alice_confirmed.alpha);
     assert!(decayed.alpha > decayed.alpha_0);
@@ -382,10 +381,7 @@ fn told_credence_cited_vs_uncited_decay_robustness_and_domain_isolation() {
     );
 
     // Rebuild from log matches identically.
-    let rebuilt = core
-        .state()
-        .belief_book
-        .rebuild_from_log(core.prior(), core.switches());
+    let rebuilt = core.state().belief_book.rebuild_from_log();
     assert_eq!(rebuilt.beliefs, core.state().belief_book.beliefs);
     assert_eq!(
         rebuilt.source_reliability,
@@ -395,7 +391,7 @@ fn told_credence_cited_vs_uncited_decay_robustness_and_domain_isolation() {
 
 #[test]
 fn k_corrob_taint_never_upgrades_and_conventions_discounted() {
-    let mut core = open_test_core(Prior::default());
+    let mut core = open_test_core(CoreConfig::default());
     let mut doors = NoopDoors;
 
     // Direct observation establishes truth on `claim:door_locked`.
@@ -470,7 +466,7 @@ fn k_corrob_taint_never_upgrades_and_conventions_discounted() {
     );
     assert!(
         core.state().belief_book.beliefs[&echo2]
-            .is_uncorroborated_stranger_claim(core.prior().k_corrob)
+            .is_uncorroborated_stranger_claim(2)
     );
 
     // Distinct independent actors for a novel claim (`bob` + `carol`) meet `k_corrob = 2`,
@@ -527,13 +523,11 @@ fn k_corrob_taint_never_upgrades_and_conventions_discounted() {
         Time::from_millis(4_000),
     )
     .unwrap();
-    let bias = core.state().belief_book.convention_bias_at(
-        &place,
-        "fast_reply",
-        Time::from_millis(4_100),
-        core.prior(),
-    );
-    assert!(bias > 0.0 && bias <= core.prior().conv_bias_max);
+    let bias =
+        core.state()
+            .belief_book
+            .convention_bias_at(&place, "fast_reply", Time::from_millis(4_100));
+    assert!(bias > 0.0 && bias <= 0.15);
     let conv_cred = core.state().belief_book.conventions[&(place, "fast_reply".to_owned())];
     assert!(
         conv_cred.effective_evidence() < 1.0,
@@ -543,7 +537,7 @@ fn k_corrob_taint_never_upgrades_and_conventions_discounted() {
 
 #[test]
 fn verbatim_vs_gist_supersession_and_min_trust_taint() {
-    let mut core = open_test_core(Prior::default());
+    let mut core = open_test_core(CoreConfig::default());
     let mut doors = NoopDoors;
 
     let e_src = vec_emb([1.0, 0.0, 0.0, 0.0]);
@@ -675,13 +669,13 @@ fn verbatim_vs_gist_supersession_and_min_trust_taint() {
 
 #[test]
 fn sleep_n_min_boundary_live_event_delta_theta_zero_and_provisional_reopen_no_spin() {
-    let prior = Prior {
-        n_min_sleep: 4,
-        n_ep_min: 4,
-        t_idle_sleep_ms: 60_000,
-        ..Prior::default()
+    let cfg = CoreConfig {
+        sleep_min_episodes: 4,
+        sleep_idle_ms: 60_000,
+        seed: 42,
+        ..CoreConfig::default()
     };
-    let mut core = open_test_core(prior.clone());
+    let mut core = open_test_core(cfg.clone());
     let mut doors = NoopDoors;
 
     // 1. `N_min - 1` = 3 events: even after long idle, sleep MUST NOT trigger (`>= N_min`, not `>`).
@@ -768,7 +762,7 @@ fn sleep_n_min_boundary_live_event_delta_theta_zero_and_provisional_reopen_no_sp
     );
 
     // Compare threshold recorded on `p_live` against a fresh non-sleeping core: identical!
-    let mut fresh_core = open_test_core(prior);
+    let mut fresh_core = open_test_core(cfg);
     let p_live_cmp = make_percept(
         "bob",
         "room2",
@@ -873,13 +867,13 @@ fn sleep_n_min_boundary_live_event_delta_theta_zero_and_provisional_reopen_no_sp
 
 #[test]
 fn interrupted_sleep_resumes_without_duplicating_gists() {
-    let prior = Prior {
-        n_min_sleep: 8,
-        n_ep_min: 4,
-        t_idle_sleep_ms: 60_000,
-        ..Prior::default()
+    let cfg = CoreConfig {
+        sleep_min_episodes: 8,
+        sleep_idle_ms: 60_000,
+        seed: 42,
+        ..CoreConfig::default()
     };
-    let mut core = open_test_core(prior.clone());
+    let mut core = open_test_core(cfg.clone());
     let mut doors = NoopDoors;
 
     for i in 0..4 {
@@ -952,7 +946,7 @@ fn interrupted_sleep_resumes_without_duplicating_gists() {
     let store = core.store().clone();
     drop(core);
 
-    let mut resumed = Core::open(store, prior, Switches::all_enabled(), 42).unwrap();
+    let mut resumed = Core::open(store, cfg, None).unwrap();
     let _ = ckpt;
     assert!(resumed.state().pending_sleep_run.is_some());
 
@@ -1003,53 +997,8 @@ fn interrupted_sleep_resumes_without_duplicating_gists() {
 }
 
 #[test]
-fn em_llm_normalized_boundary_shrinkage_and_episode_merge_guards() {
-    let prior = Prior::default();
-    let switches = Switches::all_enabled();
-    let mut bs = PlaceBoundaryState::default();
-    let mut ep_p = BTreeSet::new();
-    ep_p.insert(ActorId::new("alice"));
-    let cent = vec_emb([1.0, 0.0, 0.0, 0.0]);
-
-    // Warm up 10 smooth events -> Empirical-Bayes shrinkage prevents false cold-start triggers.
-    for i in 0..10 {
-        let e = vec_emb([0.99, 0.14, 0.0, 0.0]);
-        let ev = bs.evaluate_and_record(
-            &BoundaryInputs {
-                timestamp_ms: Time::from_millis(1_000 + i * 5_000),
-                event_embeddings: std::slice::from_ref(&e),
-                episode_centroid: Some(&cent),
-                episode_len: (i + 1) as usize,
-                event_participants: &ep_p,
-                episode_participants: &ep_p,
-                resolved_response_embeddings: None,
-                missed_expectation: false,
-            },
-            &prior,
-            &switches,
-        );
-        assert!(ev.s_t >= 0.0 && ev.s_t <= 1.0);
-        assert!(!ev.is_boundary, "smooth stream must not cold-start split");
-    }
-
-    // Orthogonal topic shift + long temporal gap -> spike triggers normalized boundary.
-    let shift = vec_emb([0.0, 1.0, 0.0, 0.0]);
-    let spike = bs.evaluate_and_record(
-        &BoundaryInputs {
-            timestamp_ms: Time::from_millis(5_000_000),
-            event_embeddings: std::slice::from_ref(&shift),
-            episode_centroid: Some(&cent),
-            episode_len: 11,
-            event_participants: &ep_p,
-            episode_participants: &ep_p,
-            resolved_response_embeddings: None,
-            missed_expectation: false,
-        },
-        &prior,
-        &switches,
-    );
-    assert!(spike.s_t >= 0.99 && spike.s_t <= 1.0);
-    assert!(spike.is_boundary);
+fn episode_merge_guards_preserve_people_and_place_boundaries() {
+    let cfg = CoreConfig::default();
 
     // Episode merge (`R-24`): same vector similarity with different people or places MUST NOT merge!
     let mut book = EpisodeBook::new();
@@ -1069,8 +1018,7 @@ fn em_llm_normalized_boundary_shrinkage_and_episode_merge_guards() {
             embeddings: &same_vec,
             missed_expectation: false,
         },
-        &prior,
-        &switches,
+        &cfg,
     );
     book.episodes.get_mut(&EventId::new(1)).unwrap().state = EpisodeState::Sealed;
     book.active_by_place.remove(&PlaceId::new("room1"));
@@ -1086,11 +1034,10 @@ fn em_llm_normalized_boundary_shrinkage_and_episode_merge_guards() {
             embeddings: &same_vec,
             missed_expectation: false,
         },
-        &prior,
-        &switches,
+        &cfg,
     );
     book.episodes.get_mut(&EventId::new(2)).unwrap().state = EpisodeState::Sealed;
-    assert!(book.merge_eligible_episodes(&prior).is_empty());
+    assert!(book.merge_eligible_episodes().is_empty());
 
     // Different place, same people, adjacent time -> refused.
     book.admit_event(
@@ -1103,11 +1050,10 @@ fn em_llm_normalized_boundary_shrinkage_and_episode_merge_guards() {
             embeddings: &same_vec,
             missed_expectation: false,
         },
-        &prior,
-        &switches,
+        &cfg,
     );
     book.episodes.get_mut(&EventId::new(3)).unwrap().state = EpisodeState::Sealed;
-    assert!(book.merge_eligible_episodes(&prior).is_empty());
+    assert!(book.merge_eligible_episodes().is_empty());
 
     // Same place, same people, adjacent time -> merges!
     book.active_by_place.remove(&PlaceId::new("room1"));
@@ -1121,120 +1067,22 @@ fn em_llm_normalized_boundary_shrinkage_and_episode_merge_guards() {
             embeddings: &same_vec,
             missed_expectation: false,
         },
-        &prior,
-        &switches,
+        &cfg,
     );
     book.episodes.get_mut(&EventId::new(4)).unwrap().state = EpisodeState::Sealed;
-    let merges = book.merge_eligible_episodes(&prior);
+    let merges = book.merge_eligible_episodes();
     assert_eq!(merges.len(), 1);
 }
 
 #[test]
-fn hungarian_domain_id_continuity_and_domains_updated() {
-    // Direct Hungarian unit check.
-    let cost = vec![vec![0.9, 0.05], vec![0.05, 0.9]];
-    let assign = hungarian_min_cost(&cost);
-    assert_eq!(assign, vec![Some(1), Some(0)]);
-
-    let prior = Prior {
-        domain_clusters_k: 4,
-        domain_m_min: 3,
-        ..Prior::default()
-    };
-    let mut book = DomainClusterBook::new();
-
-    // Two clearly separated clusters (6 vectors total -> K_eff = 2).
-    let mut vecs_1 = Vec::new();
-    for i in 1..=3 {
-        vecs_1.push((EventId::new(i), vec_emb([0.99, 0.14, 0.0, 0.0])));
-    }
-    for i in 4..=6 {
-        vecs_1.push((EventId::new(i), vec_emb([0.0, 0.14, 0.99, 0.0])));
-    }
-    let u1 = book.update_clusters(&vecs_1, 7, 1, &prior);
-    assert_eq!(u1.centroids.len(), 2);
-    let id_topic_a = u1.assignments[&EventId::new(1)].clone();
-    let id_topic_b = u1.assignments[&EventId::new(4)].clone();
-    assert_ne!(id_topic_a, id_topic_b);
-
-    // Slight drift on snapshot 2: Hungarian matching preserves exact domain IDs!
-    let mut vecs_2 = Vec::new();
-    for i in 1..=3 {
-        vecs_2.push((EventId::new(i), vec_emb([0.97, 0.24, 0.0, 0.0])));
-    }
-    for i in 4..=6 {
-        vecs_2.push((EventId::new(i), vec_emb([0.0, 0.24, 0.97, 0.0])));
-    }
-    let u2 = book.update_clusters(&vecs_2, 7, 2, &prior);
-    assert_eq!(u2.assignments[&EventId::new(1)], id_topic_a);
-    assert_eq!(u2.assignments[&EventId::new(4)], id_topic_b);
-    assert!(
-        u2.transitions
-            .iter()
-            .all(|t| t.kind == DomainTransitionKind::Continued)
-    );
-
-    // Integration via sleep run emits `DomainsUpdated`.
-    let sp_prior = Prior {
-        n_min_sleep: 6,
-        n_ep_min: 6,
-        t_idle_sleep_ms: 60_000,
-        domain_m_min: 3,
-        domain_clusters_k: 4,
-        ..Prior::default()
-    };
-    let mut core = open_test_core(sp_prior);
-    let mut doors = NoopDoors;
-    for i in 0..3 {
-        let p = make_percept(
-            "alice",
-            "r1",
-            Taint::Trusted,
-            1_000 + i * 1_000,
-            "topic alpha",
-            vec![vec_emb([1.0, 0.0, 0.0, 0.0])],
-        );
-        core.step(
-            Input::Percept(Box::new(p)),
-            Time::from_millis(1_000 + i * 1_000),
-            &mut doors,
-        )
-        .unwrap();
-    }
-    for i in 3..6 {
-        let p = make_percept(
-            "alice",
-            "r1",
-            Taint::Trusted,
-            10_000 + i * 1_000,
-            "topic beta",
-            vec![vec_emb([0.0, 0.0, 1.0, 0.0])],
-        );
-        core.step(
-            Input::Percept(Box::new(p)),
-            Time::from_millis(10_000 + i * 1_000),
-            &mut doors,
-        )
-        .unwrap();
-    }
-    let due = core.next_due().unwrap();
-    core.step(Input::Tick, due, &mut doors).unwrap();
-    let logs = core.store().read_in_order(None, 200).unwrap();
-    assert!(
-        logs.iter().any(|r| r.kind == EventKind::DomainsUpdated),
-        "sleep must emit DomainsUpdated"
-    );
-}
-
-#[test]
 fn petrov_fade_releases_vector_keeps_text_and_gist_links() {
-    let prior = Prior {
-        n_min_sleep: 2,
-        n_ep_min: 2,
-        t_idle_sleep_ms: 60_000,
-        ..Prior::default()
+    let cfg = CoreConfig {
+        sleep_min_episodes: 2,
+        sleep_idle_ms: 60_000,
+        seed: 42,
+        ..CoreConfig::default()
     };
-    let mut core = open_test_core(prior);
+    let mut core = open_test_core(cfg);
     let mut doors = NoopDoors;
 
     let e1 = vec_emb([1.0, 0.0, 0.0, 0.0]);
@@ -1357,7 +1205,7 @@ fn petrov_fade_releases_vector_keeps_text_and_gist_links() {
 
 #[test]
 fn hard_forget_recomputes_credence_and_preserves_two_epoch_replay() {
-    let mut core = open_test_core(Prior::default());
+    let mut core = open_test_core(CoreConfig::default());
     let mut doors = NoopDoors;
 
     // Pre-forget percepts (so Two-Epoch Replay has gate decisions before and after erasure).
@@ -1491,8 +1339,7 @@ fn hard_forget_recomputes_credence_and_preserves_two_epoch_replay() {
         &mut doors,
     )
     .unwrap();
-    let report = core.replay_verify(ReplayMode::TwoEpochFrozen).unwrap();
-    assert!(report.is_bit_identical());
-    assert!(report.anchor_preserved);
-    assert!(report.epoch >= 1);
+    let report = core.replay_verify(ReplayMode::Pinned).unwrap();
+    assert!(report.is_exact());
+    assert!(core.state().identity_anchor.is_none());
 }

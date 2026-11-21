@@ -5,13 +5,20 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use monoagens_protocol::{
     ActorId, CapabilityId, EventId, ExpectKind, PlaceId, ReceiptOutcome, TerminationReason, Time,
+    VisibleScope,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::context::{CoreSelfCard, SourceLedgerCard};
 use crate::expectations::{ExpectationBook, is_terminal_state};
-use crate::prior::Prior;
-use crate::registry::Switches;
+
+const LEDGER_MAX_ITEMS_PER_CARD: usize = 64;
+const SELF_CARD_CAL_N0: f64 = 10.0;
+const SELF_CARD_KAPPA_BIAS: f64 = 0.25;
+const SELF_CARD_CAP_MIN_TRIALS: u64 = 5;
+const SELF_CARD_CAP_Z: f64 = 1.645;
+const SELF_CARD_CAP_DEG_THRESHOLD: f64 = 0.6;
+const SELF_CARD_CAP_CONSEC_FAIL: u32 = 3;
 
 /// Summary of an item witnessed with a specific actor (`R-25`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -268,24 +275,23 @@ impl SelfCalibrationStats {
         centered * weight
     }
 
-    /// Shrunk calibration bias applied to recalibrate reported confidence (`R-35`).
+    /// Shrunk calibration bias applied to recalibrate reported confidence.
     #[must_use]
-    pub fn shrunk_bias(&self, prior: &Prior) -> f64 {
-        let denom = (self.samples as f64) + prior.self_card_cal_n0.max(0.5);
+    pub fn shrunk_bias(&self) -> f64 {
+        let denom = (self.samples as f64) + SELF_CARD_CAL_N0;
         let raw_bias = if denom > 0.0 {
             self.signed_error_sum / denom
         } else {
             0.0
         };
-        let cap = prior.self_card_kappa_bias.max(0.0);
-        raw_bias.clamp(-cap, cap)
+        raw_bias.clamp(-SELF_CARD_KAPPA_BIAS, SELF_CARD_KAPPA_BIAS)
     }
 
     /// Applies shrunk calibration adjustment to raw `[0, 20]` confidence.
     #[must_use]
-    pub fn recalibrated_confidence(&self, raw_conf_0_20: u8, prior: &Prior) -> f64 {
+    pub fn recalibrated_confidence(&self, raw_conf_0_20: u8) -> f64 {
         let raw_prob = (raw_conf_0_20.min(20) as f64) / 20.0;
-        let bias = self.shrunk_bias(prior);
+        let bias = self.shrunk_bias();
         (raw_prob - bias).clamp(0.0, 1.0)
     }
 }
@@ -377,7 +383,6 @@ impl PerceptionLedger {
         event_id: EventId,
         place: PlaceId,
         timestamp_ms: Time,
-        prior: &Prior,
     ) {
         let card = self
             .actors
@@ -389,7 +394,7 @@ impl PerceptionLedger {
                 place,
                 timestamp_ms,
             });
-            card.trim(prior.ledger_max_items_per_card);
+            card.trim(LEDGER_MAX_ITEMS_PER_CARD);
         }
     }
 
@@ -400,7 +405,6 @@ impl PerceptionLedger {
         belief_id: EventId,
         predicate: String,
         timestamp_ms: Time,
-        prior: &Prior,
     ) {
         let card = self
             .actors
@@ -414,7 +418,7 @@ impl PerceptionLedger {
                 corroborated: false,
                 refuted: false,
             });
-            card.trim(prior.ledger_max_items_per_card);
+            card.trim(LEDGER_MAX_ITEMS_PER_CARD);
         }
     }
 
@@ -427,7 +431,6 @@ impl PerceptionLedger {
         predicate: &str,
         supported: bool,
         timestamp_ms: Time,
-        prior: &Prior,
     ) {
         let card = self
             .actors
@@ -454,11 +457,11 @@ impl PerceptionLedger {
                 }
             }
         }
-        card.trim(prior.ledger_max_items_per_card);
+        card.trim(LEDGER_MAX_ITEMS_PER_CARD);
     }
 
-    /// Synchronizes open request/promise counts per participant from the active [`ExpectationBook`] (`15.1`).
-    pub fn sync_open_requests(&mut self, book: &ExpectationBook, prior: &Prior) {
+    /// Synchronizes open request/promise counts per participant from the active [`ExpectationBook`].
+    pub fn sync_open_requests(&mut self, book: &ExpectationBook) {
         for card in self.actors.values_mut() {
             card.open_requests.clear();
         }
@@ -486,14 +489,12 @@ impl PerceptionLedger {
                     .entry(actor.clone())
                     .or_insert_with(|| ActorCard::new(actor, 1.0, 1.0, false));
                 card.open_requests.push(item.clone());
-                card.trim(prior.ledger_max_items_per_card);
+                card.trim(LEDGER_MAX_ITEMS_PER_CARD);
             }
         }
     }
 
-    /// Records a capability receipt outcome into Pillar 1 health stats and checks for degradation change (`15.2`, `15.3`).
-    ///
-    /// `CanceledByCore` and `PreemptedExternal` NEVER penalize capability health.
+    /// Records a capability receipt outcome into Pillar 1 health stats and checks for degradation change.
     pub fn record_capability_receipt(
         &mut self,
         capability_id: CapabilityId,
@@ -501,7 +502,6 @@ impl PerceptionLedger {
         termination_reason: Option<TerminationReason>,
         latency_ms: Option<u64>,
         now_ms: Time,
-        prior: &Prior,
     ) -> bool {
         if matches!(
             termination_reason,
@@ -534,12 +534,12 @@ impl PerceptionLedger {
         }
         stat.last_updated_ms = now_ms;
 
-        if stat.trials >= (prior.self_card_cap_min_trials as u64) {
-            let lcb = stat.conservative_lower_bound(prior.self_card_cap_z);
-            stat.degraded = lcb < prior.self_card_cap_deg_threshold
-                || stat.consec_fail >= prior.self_card_cap_consec_fail;
+        if stat.trials >= SELF_CARD_CAP_MIN_TRIALS {
+            let lcb = stat.conservative_lower_bound(SELF_CARD_CAP_Z);
+            stat.degraded =
+                lcb < SELF_CARD_CAP_DEG_THRESHOLD || stat.consec_fail >= SELF_CARD_CAP_CONSEC_FAIL;
         } else {
-            stat.degraded = stat.consec_fail >= prior.self_card_cap_consec_fail;
+            stat.degraded = stat.consec_fail >= SELF_CARD_CAP_CONSEC_FAIL;
         }
 
         prev_degraded != stat.degraded
@@ -581,14 +581,9 @@ impl PerceptionLedger {
         self.last_recalibration_ms = Some(now_ms);
     }
 
-    /// Builds [`CoreSelfCard`] from audited log projections (`15.2`).
-    ///
-    /// Returns an empty zeroed neutral card when `!switches.perception_ledger`.
+    /// Builds [`CoreSelfCard`] from audited log projections.
     #[must_use]
-    pub fn build_self_card(&self, prior: &Prior, switches: &Switches) -> CoreSelfCard {
-        if !switches.perception_ledger {
-            return CoreSelfCard::default();
-        }
+    pub fn build_self_card(&self) -> CoreSelfCard {
         let mut alpha_sum = 1.0;
         let mut beta_sum = 1.0;
         let mut lat_sum: u128 = 0;
@@ -625,32 +620,51 @@ impl PerceptionLedger {
             contradiction_flags: self.contradiction_flags,
             calibration_ece: self.calibration.ece(),
             calibration_auroc_2: self.calibration.auroc_2(),
-            calibration_meta_d_prime: self.calibration.meta_d_prime(prior.self_card_cal_n0),
-            calibration_bias: self.calibration.shrunk_bias(prior),
+            calibration_meta_d_prime: self.calibration.meta_d_prime(SELF_CARD_CAL_N0),
+            calibration_bias: self.calibration.shrunk_bias(),
             degraded_capabilities,
         }
     }
 
     /// Builds compact `source_cards` covering triggering participants, visible scope members,
-    /// AND all `people`/`promisee_ids` from active expectations (including promises & goals on ticks) (`15.1`).
-    ///
-    /// Returns an empty vector when `!switches.perception_ledger`.
+    /// AND all `people`/`promisee_ids` from active expectations.
     #[must_use]
     pub fn build_source_cards<F>(
         &self,
         participants: &[ActorId],
         expectations: &ExpectationBook,
         soul_id: &ActorId,
-        switches: &Switches,
         closeness_fn: F,
     ) -> Vec<SourceLedgerCard>
     where
         F: Fn(&ActorId) -> f64,
     {
-        if !switches.perception_ledger {
-            return Vec::new();
-        }
-        let actor_set = collect_source_card_actors(participants, expectations, soul_id);
+        self.build_source_cards_in_scope(participants, expectations, soul_id, None, &[], closeness_fn)
+    }
+
+    /// Builds compact `source_cards` strictly filtered by `VisibleScope` (`Δ_NI = 0`) when provided.
+    /// Expectations explicitly listed in `always_include_expectation_ids` (e.g. the woken
+    /// expectation itself) remain visible even if its synthetic trigger carried an empty audience.
+    #[must_use]
+    pub fn build_source_cards_in_scope<F>(
+        &self,
+        participants: &[ActorId],
+        expectations: &ExpectationBook,
+        soul_id: &ActorId,
+        scope: Option<(&VisibleScope, Time)>,
+        always_include_expectation_ids: &[EventId],
+        closeness_fn: F,
+    ) -> Vec<SourceLedgerCard>
+    where
+        F: Fn(&ActorId) -> f64,
+    {
+        let actor_set = collect_source_card_actors_in_scope(
+            participants,
+            expectations,
+            soul_id,
+            scope,
+            always_include_expectation_ids,
+        );
         let mut out = Vec::with_capacity(actor_set.len());
         for actor in actor_set {
             let (
@@ -668,8 +682,13 @@ impl PerceptionLedger {
                         .iter()
                         .filter(|t| !t.corroborated && !t.refuted)
                         .count();
-                    let open_exp = count_actor_open_expectations(expectations, &actor)
-                        .max(card.open_requests.len());
+                    let open_exp = count_actor_open_expectations(
+                        expectations,
+                        &actor,
+                        scope,
+                        always_include_expectation_ids,
+                    )
+                    .max(card.open_requests.len());
                     (
                         card.reliability_alpha,
                         card.reliability_beta,
@@ -685,7 +704,12 @@ impl PerceptionLedger {
                     1.0,
                     false,
                     0,
-                    count_actor_open_expectations(expectations, &actor),
+                    count_actor_open_expectations(
+                        expectations,
+                        &actor,
+                        scope,
+                        always_include_expectation_ids,
+                    ),
                     0,
                     0,
                 ),
@@ -719,6 +743,18 @@ pub fn collect_source_card_actors(
     expectations: &ExpectationBook,
     soul_id: &ActorId,
 ) -> BTreeSet<ActorId> {
+    collect_source_card_actors_in_scope(participants, expectations, soul_id, None, &[])
+}
+
+/// Collects non-soul participants for `source_cards`, gating active expectations through `VisibleScope`.
+#[must_use]
+pub fn collect_source_card_actors_in_scope(
+    participants: &[ActorId],
+    expectations: &ExpectationBook,
+    soul_id: &ActorId,
+    scope: Option<(&VisibleScope, Time)>,
+    always_include_expectation_ids: &[EventId],
+) -> BTreeSet<ActorId> {
     let mut actors = BTreeSet::new();
     for actor in participants {
         if actor != soul_id {
@@ -727,6 +763,12 @@ pub fn collect_source_card_actors(
     }
     for exp in expectations.expectations.values() {
         if is_terminal_state(exp.state) {
+            continue;
+        }
+        if !always_include_expectation_ids.contains(&exp.expectation_id)
+            && let Some((vis_scope, now)) = scope
+            && !vis_scope.allows(&exp.audience, Some(exp.origin_event_id), now)
+        {
             continue;
         }
         for person in &exp.people {
@@ -745,12 +787,21 @@ pub fn collect_source_card_actors(
     actors
 }
 
-fn count_actor_open_expectations(expectations: &ExpectationBook, actor: &ActorId) -> usize {
+fn count_actor_open_expectations(
+    expectations: &ExpectationBook,
+    actor: &ActorId,
+    scope: Option<(&VisibleScope, Time)>,
+    always_include_expectation_ids: &[EventId],
+) -> usize {
     expectations
         .expectations
         .values()
         .filter(|exp| {
             !is_terminal_state(exp.state)
+                && (always_include_expectation_ids.contains(&exp.expectation_id)
+                    || scope.is_none_or(|(vis_scope, now)| {
+                        vis_scope.allows(&exp.audience, Some(exp.origin_event_id), now)
+                    }))
                 && (exp.people.iter().any(|p| p == actor)
                     || exp
                         .promise_meta

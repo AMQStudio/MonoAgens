@@ -1,0 +1,22 @@
+{
+  "artifact": "training/artifacts/neural_phase1_best.safetensors",
+  "blake3": "f303c399171723adc98b90c4c7cf048512fdfb483a564e3e65a76a00443917f0",
+  "winner": {
+    "scale": "3m",
+    "cell_type": "mingru",
+    "param_count": 3170661,
+    "train_seconds": 45.29,
+    "temperature": 1.235999,
+    "cic_threshold": 0.25,
+    "nll_before_ts": 0.498596,
+    "nll_after_ts": 0.488796,
+    "test_macro_f1": 0.518729,
+    "test_accuracy": 0.808024,
+    "test_ece": 0.036109,
+    "test_tc_ece": 0.037214,
+    "test_brier": 0.237123,
+    "test_aurc": 0.039906,
+    "test_cic_coverage": 1.0,
+    "test_cic_selective_risk": 0.191976
+  }
+}

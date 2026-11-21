@@ -1,10 +1,9 @@
 use std::collections::BTreeSet;
 
 use monoagens_core::{
-    CLASS_A_CAPACITY, CLASS_B_CAPACITY, CLASS_C_CAPACITY, ContextPlan, Core, CoreError,
+    CLASS_A_CAPACITY, CLASS_B_CAPACITY, CLASS_C_CAPACITY, ContextPlan, Core, CoreConfig, CoreError,
     DoorDecision, Doors, Effect, EventFormatError, EventKind, EventRecord, EventRecordV1, Input,
-    LogSeq, MechanismEntry, MechanismId, MemStore, NeutralValue, NoopDoors, NumericFeatures, Prior,
-    QueueClass, QueueOverflow, RegistryError, Store, StoreError, Switches, brain_map_registry,
+    LogSeq, MemStore, NoopDoors, NumericFeatures, QueueClass, QueueOverflow, Store, StoreError,
 };
 use monoagens_protocol::{
     Action, ActorFacts, ActorId, Audience, BodyId, BodyState, BodyStatus, CapabilityId, EventId,
@@ -80,7 +79,7 @@ fn assert_exhaustive_kind(kind: EventKind) -> &'static str {
         EventKind::Tick => "tick",
         EventKind::Failure => "failure",
         EventKind::HardForget => "hard_forget",
-        EventKind::PriorLoaded => "prior_loaded",
+        EventKind::ConfigLoaded => "config_loaded",
     }
 }
 
@@ -132,7 +131,7 @@ fn upcast_older_version_never_rewrites_bytes_and_newer_version_fails_loudly() {
         EventRecord::encode_with_version_for_test(EventKind::Decision, 77, EventId::new(11));
     future_store.insert_raw_record_bytes(EventId::new(11), raw_future);
 
-    let err = Core::open(future_store, Prior::default(), Switches::default(), 1)
+    let err = Core::open(future_store, CoreConfig::default(), None)
         .expect_err("future format version must fail Core::open");
     assert!(matches!(
         err,
@@ -151,8 +150,7 @@ fn upcast_older_version_never_rewrites_bytes_and_newer_version_fails_loudly() {
 
 #[test]
 fn log_seq_total_order_across_interleaved_bodies() {
-    let mut core =
-        Core::open(MemStore::new(), Prior::default(), Switches::default(), 7).expect("open");
+    let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).expect("open");
     let mut doors = NoopDoors;
 
     // Interleave inputs from two different bodies / places.
@@ -223,8 +221,7 @@ fn log_seq_total_order_across_interleaved_bodies() {
 
 #[test]
 fn record_first_failed_append_emits_zero_effects_and_zero_dispatches() {
-    let mut core =
-        Core::open(MemStore::new(), Prior::default(), Switches::default(), 99).expect("open");
+    let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).expect("open");
     let seq_before = core.state().last_seq;
     let len_before = core.store().len();
     core.store_mut().fail_next_append("simulated disk error");
@@ -298,8 +295,7 @@ fn three_class_queue_priority_overflow_and_single_preemption_receipt() {
     assert_eq!(CLASS_B_CAPACITY, 512);
     assert_eq!(CLASS_C_CAPACITY, 256);
 
-    let mut core =
-        Core::open(MemStore::new(), Prior::default(), Switches::default(), 5).expect("open");
+    let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).expect("open");
     let mut doors = NoopDoors;
 
     // Enqueue a percept and dispatch an action so it becomes in-flight.
@@ -458,13 +454,7 @@ fn three_class_queue_priority_overflow_and_single_preemption_receipt() {
 
 #[test]
 fn core_open_verifies_blake3_replays_tail_and_resumes_interrupted_input_once() {
-    let mut core = Core::open(
-        MemStore::new(),
-        Prior::default(),
-        Switches::all_neutral(),
-        123,
-    )
-    .expect("open");
+    let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).expect("open");
     let mut doors = NoopDoors;
 
     // Phase 1: run initial events and take a blake3-verified snapshot.
@@ -504,32 +494,17 @@ fn core_open_verifies_blake3_replays_tail_and_resumes_interrupted_input_once() {
         store_full_replay.append(ev).unwrap();
     }
 
-    let reopened_tail = Core::open(
-        store_with_snapshot.clone(),
-        Prior::default(),
-        Switches::all_neutral(),
-        123,
-    )
-    .expect("reopen with snapshot + tail");
-    let reopened_full = Core::open(
-        store_full_replay,
-        Prior::default(),
-        Switches::all_neutral(),
-        123,
-    )
-    .expect("reopen full replay");
+    let reopened_tail = Core::open(store_with_snapshot.clone(), CoreConfig::default(), None)
+        .expect("reopen with snapshot + tail");
+    let reopened_full =
+        Core::open(store_full_replay, CoreConfig::default(), None).expect("reopen full replay");
     assert_eq!(reopened_tail.state(), reopened_full.state());
 
     // Corrupted snapshot must fail loudly naming the snapshot.
     let mut corrupted_store = store_with_snapshot.clone();
     assert!(corrupted_store.corrupt_latest_snapshot_byte(0));
-    let corrupt_err = Core::open(
-        corrupted_store,
-        Prior::default(),
-        Switches::all_neutral(),
-        123,
-    )
-    .expect_err("corrupted snapshot must fail");
+    let corrupt_err = Core::open(corrupted_store, CoreConfig::default(), None)
+        .expect_err("corrupted snapshot must fail");
     assert!(matches!(
         corrupt_err,
         CoreError::SnapshotChecksumMismatch { .. }
@@ -571,7 +546,7 @@ fn core_open_verifies_blake3_replays_tail_and_resumes_interrupted_input_once() {
     let id_later = crash_store.append(p_later_ts).unwrap();
     let id_earlier = crash_store.append(p_earlier_ts).unwrap();
 
-    let recovered = Core::open(crash_store, Prior::default(), Switches::all_neutral(), 123)
+    let recovered = Core::open(crash_store, CoreConfig::default(), None)
         .expect("recover interrupted inputs");
     // Resumed in timestamp-then-LogSeq order: id_earlier (300ms) before id_later (400ms).
     assert_eq!(
@@ -582,67 +557,29 @@ fn core_open_verifies_blake3_replays_tail_and_resumes_interrupted_input_once() {
     assert!(recovered.state().in_flight_actions.is_empty());
 
     // Reopening again must NOT re-resume already-resumed inputs.
-    let reopened_again = Core::open(
-        recovered.store().clone(),
-        Prior::default(),
-        Switches::all_neutral(),
-        123,
-    )
-    .expect("second reopen");
+    let reopened_again = Core::open(recovered.store().clone(), CoreConfig::default(), None)
+        .expect("second reopen");
     assert!(reopened_again.recovery_report().resumed_inputs.is_empty());
 }
 
 #[test]
-fn registry_has_22_entries_neutral_construction_and_rejects_missing_claim_or_neutral() {
-    let entries = brain_map_registry().expect("registry");
-    assert_eq!(entries.len(), 22);
-    for entry in &entries {
-        assert!(!entry.stable_id.is_empty());
-        assert!(!entry.function_name.is_empty());
-        assert!(!entry.research_section.is_empty());
-        assert!(!entry.causal_claim.is_empty());
-        assert!(!entry.neutral_description.is_empty());
-    }
+fn config_validation_and_neutral_neural_fallback_work_cleanly() {
+    let default_cfg = CoreConfig::default();
+    assert!(default_cfg.validate().is_ok());
 
-    let neutral = Switches::all_neutral();
-    for id in MechanismId::ALL {
-        assert!(neutral.is_neutral(id));
-    }
+    let bad_cfg = CoreConfig {
+        max_wait_ms: 0.0,
+        ..default_cfg.clone()
+    };
+    assert!(matches!(bad_cfg.validate(), Err(monoagens_core::ConfigError::OutOfRange { .. })));
 
-    let no_claim = MechanismEntry::try_build(
-        MechanismId::Salience,
-        1,
-        "m01_salience",
-        "Salience",
-        "weighted signals -> S",
-        "RESEARCH.md §2, §3",
-        None,
-        Some(NeutralValue::Float(0.0)),
-        Some("all w_k = 0"),
-    );
-    assert!(matches!(no_claim, Err(RegistryError::MissingClaim { .. })));
-
-    let no_neutral = MechanismEntry::try_build(
-        MechanismId::Patience,
-        8,
-        "m08_patience",
-        "Patience",
-        "shrunk quantile wait",
-        "RESEARCH.md §4",
-        Some("double answers / floor collisions"),
-        None,
-        Some("0 s"),
-    );
-    assert!(matches!(
-        no_neutral,
-        Err(RegistryError::MissingNeutralValue { .. })
-    ));
+    let open_err = Core::open(MemStore::new(), bad_cfg, None).expect_err("invalid config must fail");
+    assert!(matches!(open_err, CoreError::Config(_)));
 }
 
 #[test]
 fn model_result_inherits_origin_actor_and_min_taint_monotonically() {
-    let mut core =
-        Core::open(MemStore::new(), Prior::default(), Switches::default(), 1).expect("open");
+    let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).expect("open");
     let mut doors = NoopDoors;
 
     let mut untrusted_percept = make_percept("per_eve", "chat:group", 50, b"prompt injection");

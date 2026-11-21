@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use monoagens_core::{
-    Core, DoorDecision, Input, MemStore, ModelPurpose, NoopDoors, Prior, Switches,
+    Core, CoreConfig, DoorDecision, Input, MemStore, ModelPurpose, NoopDoors,
 };
 use monoagens_protocol::{
     ActorId, AttachmentHandle, Audience, CapabilityDescriptor, CapabilityFlags, CapabilityId,
@@ -551,9 +551,11 @@ fn http_failure_classification_timeout_and_zero_secret_leakage_keep_loop_alive()
 
     let mut core = Core::open(
         MemStore::new(),
-        Prior::default(),
-        Switches::all_enabled(),
-        42,
+        CoreConfig {
+            seed: 42,
+            ..CoreConfig::default()
+        },
+        None,
     )
     .expect("open core");
     let mut doors = NoopDoors;
@@ -647,9 +649,11 @@ fn embedder_backends_partition_non_mixing_and_startup_model_path_checks() {
 
     let mut core = Core::open(
         MemStore::new(),
-        Prior::default(),
-        Switches::all_enabled(),
-        7,
+        CoreConfig {
+            seed: 7,
+            ..CoreConfig::default()
+        },
+        None,
     )
     .expect("open core");
     let mut doors = NoopDoors;

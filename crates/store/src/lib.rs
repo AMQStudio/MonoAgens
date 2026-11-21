@@ -28,8 +28,8 @@ pub mod vectors;
 
 pub use forget::{ByteScanHit, ForgetReport, ForgetSelector, raw_byte_scan_dir};
 pub use prior_file::{
-    LoadedPrior, PriorLoadError, compute_prior_digest, default_loaded_prior, load_prior_file,
-    load_prior_from_str, load_prior_or_default,
+    ConfigLoadError, LoadedCoreConfig, compute_config_digest, default_loaded_core_config,
+    load_core_config_file, load_core_config_from_str, load_core_config_or_default,
 };
 pub use schema::{
     HOT_DB_FILENAME, SHARDS_DIR_NAME, SNAPSHOTS_DIR_NAME, STORE_SCHEMA_VERSION, StoreConfig,

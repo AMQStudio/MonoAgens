@@ -3,9 +3,9 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use monoagens_core::{Prior, Switches};
+use monoagens_core::CoreConfig;
 use monoagens_protocol::{
     ActionId, ActorFacts, ActorId, Audience, BodyId, BodyState, CapabilityDescriptor, CapabilityId,
     ChannelId, OpaquePayload, OwnerSigned, Percept, PlaceId, ReceiptOutcome, TerminationReason,
@@ -268,11 +268,13 @@ pub struct Scenario {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checks: Vec<ExpectationCheck>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub switches: Option<Switches>,
+    pub core_config: Option<CoreConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub online_adaptation: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_guard: Option<CostGuardConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prior: Option<Prior>,
     #[serde(default)]
     pub annotations: ScenarioAnnotations,
 }

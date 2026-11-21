@@ -91,6 +91,9 @@
           48
         ],
         "taint": "untrusted",
+        "addressees": [
+          "soul"
+        ],
         "named": [
           "soul"
         ],
@@ -411,7 +414,7 @@
       "check": "decision_is",
       "name": "first_stimulus_go",
       "kind": "structural",
-      "target_event_id": 3,
+      "decision_index": 1,
       "expected_outcome": "go"
     },
     {

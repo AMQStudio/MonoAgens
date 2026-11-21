@@ -1,12 +1,11 @@
-//! Guarded Petrov archive/fade pruning (`B < -3.29`, `A-01`, `13.3`).
+//! Guarded Petrov archive/fade pruning (`B < fade_threshold`).
 
 use std::collections::BTreeMap;
 
 use monoagens_protocol::{EventId, Time};
 
-use crate::prior::Prior;
+use crate::config::CoreConfig;
 use crate::recall::MemoryEntry;
-use crate::registry::Switches;
 
 /// Candidate memory selected for vector release via Petrov base-level fade (`B < fade_threshold`).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -17,21 +16,20 @@ pub struct FadeCandidate {
 }
 
 /// Identifies non-erased memories with stored vectors whose guarded Petrov base-level
-/// activation `B` falls strictly below `prior.fade_threshold` (`-3.29` default, `-inf` when neutral).
+/// activation `B` falls strictly below `config.vector_fade_threshold`.
 ///
-/// Never evaluates total `A` and never drops `hard_forget` tombstones (`A-01`).
+/// Never drops `hard_forget` tombstones.
 #[must_use]
 pub fn select_fade_candidates(
     memories: &BTreeMap<EventId, MemoryEntry>,
     t_snapshot: Time,
-    prior: &Prior,
-    switches: &Switches,
+    config: &CoreConfig,
 ) -> Vec<FadeCandidate> {
-    if !switches.vector_fade {
+    let d = 0.5_f64;
+    let threshold = config.vector_fade_threshold;
+    if !threshold.is_finite() {
         return Vec::new();
     }
-    let d = prior.petrov_d();
-    let threshold = prior.fade_threshold;
     let mut out = Vec::new();
 
     for (&eid, entry) in memories {

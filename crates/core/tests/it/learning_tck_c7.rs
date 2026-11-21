@@ -1,10 +1,10 @@
-use monoagens_core::gate::GateSignals;
+use monoagens_core::neural::{AdaptFeedback, GateArm};
 use monoagens_core::{
-    CapabilityCatalogEntry, Core, CoreSelfCard, Doors, EventDetail, EventKind, EventRecord,
-    ExtractProcedureParams, FailureEpisodeRecord, Input, LearningOutcomeKind, LearningSample,
-    MechanismId, MemStore, Prior, ProcedureLifecycleState, ProcedureMonitorOutcome, ReplayMode,
-    SkillBook, Store, SuccessEpisodeRecord, Switches, ToolSelectionBudget, calibrate_wake_gate_lo,
-    clip_ips_weight, compute_procedure_schema_hash, select_tools_for_context,
+    CapabilityCatalogEntry, Core, CoreConfig, CoreSelfCard, Doors, EventDetail, EventKind,
+    EventRecord, ExtractProcedureParams, FailureEpisodeRecord, Input, MemStore,
+    ProcedureLifecycleState, ProcedureMonitorOutcome, ReplayMode, SkillBook, Store,
+    SuccessEpisodeRecord, ToolSelectionBudget, compute_procedure_schema_hash,
+    select_tools_for_context,
 };
 use monoagens_protocol::{
     ActionId, ActorId, Audience, BodyId, BodyState, BodyStatus, CapabilityDescriptor,
@@ -61,9 +61,8 @@ fn body_event(cap_name: &str, schema_hash: &str, ts_ms: u64) -> BodyState {
 
 #[test]
 fn two_matching_errors_plus_contrast_produce_lesson_with_credence_and_single_error_does_not() {
-    let prior = Prior::default();
-    let switches = Switches::all_enabled();
-    let mut core = Core::open(MemStore::new(), prior.clone(), switches, 7).expect("open core");
+    let cfg = CoreConfig::default();
+    let mut core = Core::open(MemStore::new(), cfg, None).expect("open core");
 
     // 1. Single failure episode must NOT form a lesson (< lesson_min_episodes = 2).
     core.record_failure_episode(FailureEpisodeRecord {
@@ -114,21 +113,17 @@ fn two_matching_errors_plus_contrast_produce_lesson_with_credence_and_single_err
     assert_eq!(lessons.len(), 1);
     let lesson = &lessons[0];
     assert_eq!(lesson.failure_ids.len(), 2);
-    assert_eq!(
-        lesson.contrastive_success_ids.len(),
-        prior.lesson_max_contrasts
-    );
+    assert_eq!(lesson.contrastive_success_ids.len(), 3);
     assert!(lesson.credence.expected() > 0.5);
 
-    let replay = core.replay_verify(ReplayMode::FullReplay).expect("replay");
-    assert!(replay.first_divergence.is_none());
+    let replay = core.replay_verify(ReplayMode::Pinned).expect("replay");
+    assert!(replay.is_exact());
 }
 
 #[test]
 fn cross_place_goal_extracts_procedure_and_schema_drift_retires_without_deleting() {
-    let prior = Prior::default();
-    let switches = Switches::all_enabled();
-    let mut core = Core::open(MemStore::new(), prior.clone(), switches, 11).expect("open");
+    let cfg = CoreConfig::default();
+    let mut core = Core::open(MemStore::new(), cfg.clone(), None).expect("open");
     let mut doors = RecordingContextDoors::default();
     core.step(
         Input::BodyState(body_event("cap.deploy", "schema_v1", 500)),
@@ -138,7 +133,7 @@ fn cross_place_goal_extracts_procedure_and_schema_drift_retires_without_deleting
     .expect("body v1");
 
     // Chat-habit bypass is disabled by default (`allow_chat_habit_bypass == false`).
-    assert!(!SkillBook::chat_habit_bypass_allowed(&prior));
+    assert!(!SkillBook::chat_habit_bypass_allowed());
 
     // Single-place sequence does NOT qualify as a cross-place procedure.
     let single_place_hash = compute_procedure_schema_hash([(
@@ -194,7 +189,7 @@ fn cross_place_goal_extracts_procedure_and_schema_drift_retires_without_deleting
         &procs,
         &scope,
         Time::from_millis(800),
-        ToolSelectionBudget::from_prior(&prior, caps.len()),
+        ToolSelectionBudget::from_config(&cfg, caps.len()),
     );
     assert_eq!(selected_before.procedures.len(), 1);
     assert_eq!(selected_before.excluded_stale_procedures, 0);
@@ -228,7 +223,7 @@ fn cross_place_goal_extracts_procedure_and_schema_drift_retires_without_deleting
         &procs_after,
         &scope,
         Time::from_millis(1_100),
-        ToolSelectionBudget::from_prior(&prior, caps_after.len()),
+        ToolSelectionBudget::from_config(&cfg, caps_after.len()),
     );
     assert!(selected_after.procedures.is_empty());
     assert_eq!(procs_after.len(), 1);
@@ -237,9 +232,7 @@ fn cross_place_goal_extracts_procedure_and_schema_drift_retires_without_deleting
 
 #[test]
 fn cusum_accuracy_decay_retires_procedure_and_cancellations_do_not_penalize() {
-    let prior = Prior::default();
-    let switches = Switches::all_enabled();
-    let mut core = Core::open(MemStore::new(), prior, switches, 13).expect("open");
+    let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).expect("open");
 
     let proc_id = EventId::new(901);
     let schema = compute_procedure_schema_hash([(
@@ -323,12 +316,15 @@ fn cusum_accuracy_decay_retires_procedure_and_cancellations_do_not_penalize() {
 
 #[test]
 fn promisee_aware_source_cards_cover_tick_and_wake_participants() {
-    let prior = Prior {
-        talkativeness: 1.0,
-        ..Prior::default()
-    };
-    let switches = Switches::all_enabled();
-    let mut core = Core::open(MemStore::new(), prior, switches, 17).expect("open");
+    let mut core = Core::open(
+        MemStore::new(),
+        CoreConfig {
+            seed: 17,
+            ..CoreConfig::default()
+        },
+        None,
+    )
+    .expect("open");
     let mut doors = RecordingContextDoors::default();
 
     // Open an explicit promise expectation via log + checkpoint reopen so tick wakes directly on due promise.
@@ -414,12 +410,11 @@ fn promisee_aware_source_cards_cover_tick_and_wake_participants() {
     let store = core.store().clone();
     let mut core = Core::open(
         store,
-        Prior {
-            talkativeness: 1.0,
-            ..Prior::default()
+        CoreConfig {
+            seed: 17,
+            ..CoreConfig::default()
         },
-        Switches::all_enabled(),
-        17,
+        None,
     )
     .expect("reopen");
 
@@ -457,23 +452,20 @@ fn promisee_aware_source_cards_cover_tick_and_wake_participants() {
     assert!(charlie_card.open_requests_count >= 1);
     assert_eq!(charlie_card.false_belief_count, 1);
     assert!(charlie_card.reliability_beta > charlie_card.reliability_alpha);
-
-    // Neutral `!switches.perception_ledger` omits source_cards (`absent`).
-    let mut sw_off = Switches::all_enabled();
-    sw_off.perception_ledger = false;
-    let neutral_cards = core.build_source_cards_with_switches(&[ActorId::new("charlie")], &sw_off);
-    assert!(neutral_cards.is_empty());
+    assert!(!core.build_source_cards(&[ActorId::new("charlie")]).is_empty());
 }
 
 #[test]
 fn four_pillar_self_card_and_recalibration_preserve_owner_signed_identity() {
-    let prior = Prior {
-        self_card_cap_min_trials: 3,
-        self_card_cap_consec_fail: 3,
-        ..Prior::default()
-    };
-    let switches = Switches::all_enabled();
-    let mut core = Core::open(MemStore::new(), prior, switches, 19).expect("open");
+    let mut core = Core::open(
+        MemStore::new(),
+        CoreConfig {
+            seed: 19,
+            ..CoreConfig::default()
+        },
+        None,
+    )
+    .expect("open");
     let mut doors = RecordingContextDoors::default();
 
     // Register immutable OwnerSigned identity anchor.
@@ -547,263 +539,99 @@ fn four_pillar_self_card_and_recalibration_preserve_owner_signed_identity() {
     assert_eq!(core.state().identity.as_ref(), Some(&signed_id));
     assert_eq!(core.state().identity_anchor, anchor_before);
 
-    let replay = core.replay_verify(ReplayMode::FullReplay).expect("replay");
-    assert!(replay.first_divergence.is_none());
+    let replay = core.replay_verify(ReplayMode::Pinned).expect("replay");
+    assert!(replay.is_exact());
 }
 
 #[test]
-fn bounded_learning_polarities_ips_clip_non_penalty_wake_gate_and_rollback() {
-    let prior = Prior {
-        learn_ips_clip_m: 10.0,
-        learn_daily_max_delta: 0.05,
-        learn_wake_gate_n0: 5.0,
-        learn_wake_gate_quantile: 0.10,
-        ..Prior::default()
+fn online_adaptation_place_equalizer_bounds_and_toggle_isolation() {
+    let place = PlaceId::new("room:adapt");
+    let mut cfg_on = CoreConfig {
+        seed: 23,
+        online_adaptation: true,
+        ..CoreConfig::default()
     };
-    let switches = Switches::all_enabled();
-    let mut core = Core::open(MemStore::new(), prior.clone(), switches, 23).expect("open");
+    cfg_on.adapt.online_adaptation = true;
 
-    let signals = GateSignals {
-        own_name: 0.5,
-        info_gap: 0.8,
-        feeling_of_knowing: 0.4,
-        relevance: 0.9,
-        commitment: 0.6,
-        social_cost: 0.5,
-        ..GateSignals::default()
-    };
-
-    // 1. IPS clipping bounds at M_ips = 10.0 (`rho = 0.01 -> 10.0`, `rho = 0.25 -> 4.0`).
-    assert!((clip_ips_weight(Some(0.01), prior.learn_ips_clip_m) - 10.0).abs() < 1e-9);
-    assert!((clip_ips_weight(Some(0.25), prior.learn_ips_clip_m) - 4.0).abs() < 1e-9);
-
-    // 2. External/core cancellation causes ZERO weight movement.
-    let w_start = core.state().adaptive_weights;
-    for reason in [
-        TerminationReason::CanceledByCore,
-        TerminationReason::PreemptedExternal,
-    ] {
-        let skipped = core
-            .record_learning_outcome(&LearningSample {
-                source_event_id: EventId::new(0),
-                outcome_kind: LearningOutcomeKind::BadAct,
-                prob_go: 0.5,
-                signals: signals.clone(),
-                sample_propensity: None,
-                teacher_reliability: 1.0,
-                termination_reason: Some(reason),
-                timestamp_ms: Time::from_millis(1_000),
-            })
-            .expect("skip");
-        assert!(!skipped.applied);
-    }
-    assert_eq!(core.state().adaptive_weights, w_start);
-
-    // 3. Polarity 1: GoodAct -> weights UP, w_sc less negative, theta_0 DOWN.
-    let good = core
-        .record_learning_outcome(&LearningSample {
-            source_event_id: EventId::new(10),
-            outcome_kind: LearningOutcomeKind::GoodAct,
-            prob_go: 0.5,
-            signals: signals.clone(),
-            sample_propensity: None,
-            teacher_reliability: 1.0,
-            termination_reason: Some(TerminationReason::Normal),
-            timestamp_ms: Time::from_millis(2_000),
-        })
-        .expect("good");
-    assert!(good.applied);
-    assert!(good.delta_weights.w_info > 0.0);
-    assert!(good.delta_weights.w_sc > 0.0);
-    assert!(good.delta_theta_0 < 0.0);
-    let w_after_good = core.state().adaptive_weights;
-
-    // 4. Polarity 2: BadAct -> weights DOWN, theta_0 UP.
-    let bad = core
-        .record_learning_outcome(&LearningSample {
-            source_event_id: EventId::new(11),
-            outcome_kind: LearningOutcomeKind::BadAct,
-            prob_go: 0.5,
-            signals: signals.clone(),
-            sample_propensity: None,
-            teacher_reliability: 1.0,
-            termination_reason: Some(TerminationReason::Normal),
-            timestamp_ms: Time::from_millis(2_100),
-        })
-        .expect("bad");
-    assert!(bad.applied);
-    assert!(bad.delta_weights.w_info < 0.0);
-    assert!(bad.delta_weights.w_sc < 0.0);
-    assert!(bad.delta_theta_0 > 0.0);
-
-    // 5. Exact epoch rollback restores bit-for-bit `w_after_good` (and then `w_start`).
-    core.rollback_learning(bad.epoch_id, "revert_bad", Time::from_millis(2_200))
-        .expect("rollback bad");
-    assert_eq!(core.state().adaptive_weights, w_after_good);
-    core.rollback_learning(None, "revert_good", Time::from_millis(2_300))
-        .expect("rollback good");
-    assert_eq!(core.state().adaptive_weights, w_start);
-
-    // 6. Polarity 3: MissedSilence (clipped IPS) -> UP.
-    let missed = core
-        .record_learning_outcome(&LearningSample {
-            source_event_id: EventId::new(12),
-            outcome_kind: LearningOutcomeKind::MissedSilence,
-            prob_go: 0.4,
-            signals: signals.clone(),
-            sample_propensity: Some(0.05),
-            teacher_reliability: 1.0,
-            termination_reason: None,
-            timestamp_ms: Time::from_millis(3_000),
-        })
-        .expect("missed");
-    assert!(missed.applied);
-    assert!((missed.ips_weight - 10.0).abs() < 1e-9);
-    assert!(missed.delta_weights.w_info > 0.0);
-    assert!(missed.delta_theta_0 < 0.0);
-
-    // Verify daily cap `<= learn_daily_max_delta` (0.05) per parameter across saturated steps!
-    for idx in 0..10u64 {
-        let _ = core
-            .record_learning_outcome(&LearningSample {
-                source_event_id: EventId::new(30 + idx),
-                outcome_kind: LearningOutcomeKind::MissedSilence,
-                prob_go: 0.1,
-                signals: signals.clone(),
-                sample_propensity: Some(0.01),
-                teacher_reliability: 1.0,
-                termination_reason: None,
-                timestamp_ms: Time::from_millis(3_100 + idx),
-            })
-            .expect("saturated step");
-    }
-    for (&k, &used) in &core.state().learner.daily_usage_map() {
-        assert!(
-            used <= prior.learn_daily_max_delta + 1e-12,
-            "daily cap violated for {k}: {used}"
+    let mut core_on = Core::open(MemStore::new(), cfg_on.clone(), None).expect("open adapt on");
+    for _ in 0..20 {
+        core_on.record_place_feedback(
+            &place,
+            AdaptFeedback {
+                arm: GateArm::Go,
+                reward: 100.0,
+                is_delayed_one_sided: false,
+                context_hint: [1.0, 0.5],
+            },
         );
     }
+    let st = core_on
+        .state()
+        .place_adapt
+        .get(&place)
+        .expect("adapt state created");
+    let bound = cfg_on.adapt.max_adapt_delta;
+    assert!(st.logit_offsets.iter().all(|v| v.abs() <= bound + 1e-6));
+    assert!(st.film_scale_deltas.iter().all(|v| v.abs() <= bound + 1e-6));
+    assert!(st.film_shift_deltas.iter().all(|v| v.abs() <= bound + 1e-6));
 
-    // 7. Polarity 4: AnsweredSilence (next day) -> DOWN.
-    let answered = core
-        .record_learning_outcome(&LearningSample {
-            source_event_id: EventId::new(13),
-            outcome_kind: LearningOutcomeKind::AnsweredSilence,
-            prob_go: 0.6,
-            signals,
-            sample_propensity: Some(0.5),
-            teacher_reliability: 1.0,
-            termination_reason: None,
-            timestamp_ms: Time::from_millis(86_400_000 + 1_000),
-        })
-        .expect("answered");
-    assert!(answered.applied);
-    assert!(answered.delta_weights.w_info < 0.0);
-    assert!(answered.delta_theta_0 > 0.0);
-
-    // 8. Shrunk q_0.10 wake_gate_lo calibration (`16.3`).
-    let calibrated = calibrate_wake_gate_lo(
-        &[0.70, 0.72, 0.78, 0.80, 0.85, 0.88, 0.90, 0.92, 0.95, 0.97],
-        &prior,
+    // When online_adaptation = false, feedback does not create or mutate place_adapt.
+    let mut cfg_off = CoreConfig {
+        seed: 23,
+        online_adaptation: false,
+        ..CoreConfig::default()
+    };
+    cfg_off.adapt.online_adaptation = false;
+    let mut core_off = Core::open(MemStore::new(), cfg_off, None).expect("open adapt off");
+    core_off.record_place_feedback(
+        &place,
+        AdaptFeedback {
+            arm: GateArm::Go,
+            reward: 1.0,
+            is_delayed_one_sided: false,
+            context_hint: [1.0, 0.5],
+        },
     );
-    let updated =
-        core.calibrate_wake_gate_lo(&[0.70, 0.72, 0.78, 0.80, 0.85, 0.88, 0.90, 0.92, 0.95, 0.97]);
-    assert!((calibrated - updated).abs() < 1e-12);
-    assert!(updated > prior.wake_gate_lo && updated < 0.70);
+    assert!(core_off.state().place_adapt.is_empty());
 }
 
 #[test]
-fn neutral_parity_loop_runs_single_loop_over_every_mechanism_switch() {
-    assert_eq!(MechanismId::ALL.len(), 22);
-    let prior = Prior::default();
+fn neutral_fallback_single_loop_runs_and_replays_cleanly() {
+    let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).expect("open");
     let mut doors = RecordingContextDoors::default();
-
-    for id in MechanismId::ALL {
-        let mut sw = Switches::all_enabled();
-        match id {
-            MechanismId::Salience => sw.salience = false,
-            MechanismId::FloorCost => sw.floor_cost = false,
-            MechanismId::Habituation => sw.habituation = false,
-            MechanismId::DriveThreshold => sw.drive_threshold = false,
-            MechanismId::FamiliarityReserve => sw.familiarity_reserve = false,
-            MechanismId::StochasticGoNoGo => sw.stochastic_go_no_go = false,
-            MechanismId::CommitmentBreaker => sw.commitment_breaker = false,
-            MechanismId::Patience => sw.patience = false,
-            MechanismId::ReportBarOnThought => sw.report_bar_on_thought = false,
-            MechanismId::ActivationRecall => sw.activation_recall = false,
-            MechanismId::VectorFade => sw.vector_fade = false,
-            MechanismId::PredictionAndGrounding => sw.prediction_and_grounding = false,
-            MechanismId::ProspectiveMemory => sw.prospective_memory = false,
-            MechanismId::Credence => sw.credence = false,
-            MechanismId::BoundedLearning => sw.bounded_learning = false,
-            MechanismId::MemoryTruth => sw.memory_truth = false,
-            MechanismId::ReportControl => sw.report_control = false,
-            MechanismId::ConsolidationAndMerge => sw.consolidation_and_merge = false,
-            MechanismId::PerceptionLedger => sw.perception_ledger = false,
-            MechanismId::Agency => sw.agency = false,
-            MechanismId::EventBoundaries => sw.event_boundaries = false,
-            MechanismId::BacklogChunking => sw.backlog_chunking = false,
-        }
-        let mut core = Core::open(MemStore::new(), prior.clone(), sw, 99).expect("open");
-        let p = Percept::minimal(
-            ActorId::new("alice"),
-            PlaceId::new("room:tck"),
-            Audience::new([ActorId::new("alice"), ActorId::new("soul")]),
+    let p = Percept::minimal(
+        ActorId::new("alice"),
+        PlaceId::new("room:tck"),
+        Audience::new([ActorId::new("alice"), ActorId::new("soul")]),
+        Time::from_millis(1_000),
+        OpaquePayload::from_bytes(b"neutral_probe"),
+    );
+    let _ = core
+        .step(
+            Input::Percept(Box::new(p)),
             Time::from_millis(1_000),
-            OpaquePayload::from_bytes(b"neutral_probe"),
-        );
-        let _ = core
-            .step(
-                Input::Percept(Box::new(p)),
-                Time::from_millis(1_000),
-                &mut doors,
-            )
-            .expect("step");
-        let replay = core.replay_verify(ReplayMode::FullReplay).expect("replay");
-        assert!(
-            replay.first_divergence.is_none(),
-            "neutral switch replay diverged for {}",
-            id.stable_id()
-        );
-    }
+            &mut doors,
+        )
+        .expect("step");
+    let replay = core.replay_verify(ReplayMode::Pinned).expect("replay");
+    assert!(replay.is_exact());
 }
 
 #[cfg(feature = "tck-hooks")]
 #[test]
-fn tck_hooks_feature_builds_and_verifies_neutral_parities_and_erasure() {
+fn tck_hooks_feature_builds_and_verifies_neutral_fallback_and_erasure() {
     use monoagens_core::tck_hooks::{
-        TckHarness, run_neutral_parity_probe, switches_with_only_neutral,
-        verify_all_22_neutral_parities, verify_hard_forget_erasure,
+        TckHarness, run_neutral_fallback_probe, verify_hard_forget_erasure,
     };
     use monoagens_protocol::{EmbeddingTag, TaggedEmbedding};
 
-    let prior = Prior::default();
-    let reports = verify_all_22_neutral_parities(&prior, 99).expect("neutral 22 parity");
-    assert_eq!(reports.len(), 23);
-    for r in &reports {
-        assert!(r.replay_ok, "replay failed for {}", r.stable_id);
-        assert!(
-            r.weights_unchanged_under_neutral_learning,
-            "neutral learning moved weights for {}",
-            r.stable_id
-        );
-        assert!(
-            r.decision_count >= 3,
-            "missing decisions for {}",
-            r.stable_id
-        );
-    }
+    let cfg = CoreConfig::default();
+    let report = run_neutral_fallback_probe(&cfg).expect("neutral probe");
+    assert!(report.replay_ok);
+    assert!(report.adapt_state_untouched_when_disabled);
+    assert!(report.decision_count >= 3);
 
-    let r_bl = run_neutral_parity_probe(
-        Some(MechanismId::BoundedLearning),
-        switches_with_only_neutral(MechanismId::BoundedLearning),
-        &prior,
-        5,
-    )
-    .expect("bl probe");
-    assert!(r_bl.replay_ok && r_bl.weights_unchanged_under_neutral_learning);
-
-    let mut h = TckHarness::open(prior, Switches::all_enabled(), 42).expect("open");
+    let mut h = TckHarness::open(cfg, None).expect("open");
     h.register_default_body("chat.speak", "blake3:s0", 100)
         .expect("body");
     let _ = h

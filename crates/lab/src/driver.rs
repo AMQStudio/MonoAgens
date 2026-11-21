@@ -7,8 +7,8 @@ use std::path::Path;
 use std::time::Instant;
 
 use monoagens_core::{
-    ContextPlan, Core, Effect, EventKind, EventRecord, Input, MemStore, ModelPurpose, Prior,
-    ReplayMode, ReplayReport, Store, Switches, replay_from_checkpoint,
+    ContextPlan, Core, CoreConfig, Effect, EventKind, EventRecord, Input, MemStore, ModelPurpose,
+    NeuralModel, ReplayMode, ReplayReport, Store, blake3, replay_log,
 };
 use monoagens_protocol::{
     Action, ActionExecuteParams, ActionExecuteResult, ActionId, ActionReceiptParams, ActorId,
@@ -26,7 +26,7 @@ use crate::metrics::{
     compute_run_metrics_full,
 };
 use crate::record::{PurposeCost, RunRecord};
-use crate::scenario::{Scenario, ScenarioSet, ScriptedEventKind, ScriptedModelResponse};
+use crate::scenario::{Scenario, ScenarioSet, ScriptedEventKind, ScriptedModelResponse, ensure_not_sealed_path};
 use crate::test_body::TestBody;
 
 /// Complete output of running a [`Scenario`] in the Lab driver.
@@ -121,24 +121,66 @@ impl ScriptedProvider {
     }
 }
 
+/// Loads a `.safetensors` Neural Controller from disk and verifies optional `BLAKE3` digest.
+pub fn load_neural_model_from_path(
+    path: &Path,
+    expected_blake3: Option<[u8; 32]>,
+) -> Result<NeuralModel, LabError> {
+    ensure_not_sealed_path(path)?;
+    let bytes = fs::read(path)?;
+    NeuralModel::from_safetensors_bytes(&bytes, expected_blake3)
+        .map_err(|e| LabError::Protocol(format!("neural model load '{}': {e}", path.display())))
+}
+
 /// Executes `scenario` deterministically against `Core` over `store` using virtual time and
 /// canonical `monoagens.body.v1` JSON-RPC framing for all `TestBody` communication.
 pub fn run_scenario<S: Store>(
     store: S,
-    prior: Prior,
+    config: CoreConfig,
+    scenario: &Scenario,
+    seed: u64,
+) -> Result<SimOutput, LabError> {
+    let mut effective = scenario.core_config.clone().unwrap_or(config);
+    if let Some(oa) = scenario.online_adaptation {
+        effective.online_adaptation = oa;
+    }
+    let model_path = scenario
+        .model_path
+        .as_deref()
+        .or_else(|| effective.model_path.as_deref().map(Path::new));
+    let loaded_model = match model_path {
+        Some(path) => Some(load_neural_model_from_path(
+            path,
+            effective.expected_blake3,
+        )?),
+        None => None,
+    };
+    run_scenario_with_model(store, effective, loaded_model.as_ref(), scenario, seed)
+}
+
+/// Executes `scenario` with an explicit optional [`NeuralModel`] (`None` runs neutral fallback).
+pub fn run_scenario_with_model<S: Store>(
+    store: S,
+    config: CoreConfig,
+    model: Option<&NeuralModel>,
     scenario: &Scenario,
     seed: u64,
 ) -> Result<SimOutput, LabError> {
     let wall_start = Instant::now();
-    let effective_prior = scenario.prior.clone().unwrap_or(prior);
-    let loaded_effective = monoagens_store::LoadedPrior::from_prior(effective_prior)?;
-    let switches = scenario.switches.clone().unwrap_or_default();
-    let prior_content_version = loaded_effective.prior.content_version.clone();
-    let prior_format_version = loaded_effective.prior.version;
-    let prior_digest = loaded_effective.digest;
+    let loaded_effective = monoagens_store::LoadedCoreConfig::from_config(config)?;
+    let config_format_version = u32::from(loaded_effective.config.format_version);
+    let config_digest = loaded_effective.digest;
+    let online_adaptation = loaded_effective.config.online_adaptation;
+    let model_blake3 = model.map(|m| blake3::to_hex(&m.blake3));
+    let mut core_cfg = loaded_effective.config;
+    core_cfg.seed = seed;
 
     let pre_open_event_count = store.read_in_order(None, usize::MAX)?.len() as u64;
-    let mut core = Core::open(store, loaded_effective.prior, switches.clone(), seed)?;
+    let mut core = Core::open(
+        store,
+        core_cfg,
+        model.cloned().map(std::sync::Arc::new),
+    )?;
     let post_open_event_count = core.store().read_in_order(None, usize::MAX)?.len() as u64;
     let open_offset = post_open_event_count.saturating_sub(pre_open_event_count);
     let mut guard = CostGuard::from_config(scenario.cost_guard.as_ref());
@@ -569,15 +611,14 @@ pub fn run_scenario<S: Store>(
         schema_version: "1.0".to_owned(),
         run_id: format!("{}-seed-{}", scenario.id, seed),
         core_version: env!("CARGO_PKG_VERSION").to_owned(),
-        prior_content_version,
-        prior_format_version,
-        prior_digest,
+        config_format_version,
+        config_digest,
+        model_blake3,
+        online_adaptation,
         open_offset,
         model_id: scenario.model_id.clone(),
         embedder_id: scenario.embedder_id.clone(),
         door_rules,
-        switches: switches.clone(),
-        learning_switches: RunRecord::learning_switches_from(&switches),
         seed,
         scenario_id: scenario.id.clone(),
         scenario_set: scenario.set,
@@ -620,7 +661,7 @@ pub fn ensure_calibration_set_allowed(set: ScenarioSet) -> Result<(), LabError> 
             "calibration refuses ScenarioSet::Sealed; calibrate on development only".to_owned(),
         )),
         ScenarioSet::External => Err(LabError::Protocol(
-            "calibration refuses ScenarioSet::External; external results never tune the prior"
+            "calibration refuses ScenarioSet::External; external results never tune CoreConfig"
                 .to_owned(),
         )),
     }
@@ -659,7 +700,7 @@ pub fn calibrate_from_run_records(records: &[RunRecord]) -> Result<CalibrationRe
 /// Runs development scenarios and computes calibrated values, rejecting any non-development scenario.
 pub fn calibrate_from_scenarios(
     scenarios: &[Scenario],
-    prior: &Prior,
+    config: &CoreConfig,
     seed: u64,
 ) -> Result<CalibrationReport, LabError> {
     for sc in scenarios {
@@ -667,55 +708,56 @@ pub fn calibrate_from_scenarios(
     }
     let mut records = Vec::with_capacity(scenarios.len());
     for sc in scenarios {
-        let out = run_scenario(MemStore::new(), prior.clone(), sc, seed)?;
+        let out = run_scenario(MemStore::new(), config.clone(), sc, seed)?;
         records.push(out.run_record);
     }
     calibrate_from_run_records(&records)
 }
 
-/// Replays a recorded event log offline with zero model calls and compares every decision bit-for-bit.
-///
-/// Takes the active prior from `prior_loaded` events inside `events`, never from the caller.
+/// Replays a recorded event log offline via Trace-Pinned verification with zero model calls.
 pub fn replay_events_offline(
-    switches: &Switches,
-    seed: u64,
     events: &[EventRecord],
     mode: ReplayMode,
+    expected_model_blake3: Option<[u8; 32]>,
 ) -> Result<ReplayReport, LabError> {
     let mut mem = MemStore::new();
     for rec in events {
         mem.append(rec.clone())?;
     }
-    let report = replay_from_checkpoint(&mem, None, switches, seed, mode)?;
+    let report = replay_log(&mem, mode, expected_model_blake3)?;
     Ok(report)
 }
 
-/// Runs paired ablation across `seeds` (`>= 5` recommended) comparing `enabled_switches` against
-/// `neutral_switches`, returning per-metric paired deltas and 95% confidence intervals.
+/// Runs paired V2 ablation across `seeds` (`>= 5` recommended) comparing `(config_a, model_a)`
+/// against `(config_b, model_b)` (e.g., Neural Controller vs `None` neutral fallback, or
+/// `online_adaptation = true` vs `false`), returning per-metric paired deltas and 95% CIs.
 pub fn run_ablation_compare(
     scenario: &Scenario,
-    prior: &Prior,
-    enabled_switches: Switches,
-    neutral_switches: Switches,
+    config_a: CoreConfig,
+    model_a: Option<&NeuralModel>,
+    config_b: CoreConfig,
+    model_b: Option<&NeuralModel>,
     seeds: &[u64],
 ) -> Result<Vec<PairedAblationDelta>, LabError> {
     run_ablation_compare_scenarios(
         std::slice::from_ref(scenario),
-        prior,
-        enabled_switches,
-        neutral_switches,
+        config_a,
+        model_a,
+        config_b,
+        model_b,
         seeds,
         None,
     )
 }
 
-/// Runs paired ablation over `scenarios` across `seeds`, optionally writing one postcard
+/// Runs paired V2 ablation over `scenarios` across `seeds`, optionally writing one postcard
 /// [`RunRecord`] per `(scenario, side, seed)` into `out_dir`.
 pub fn run_ablation_compare_scenarios(
     scenarios: &[Scenario],
-    prior: &Prior,
-    enabled_switches: Switches,
-    neutral_switches: Switches,
+    config_a: CoreConfig,
+    model_a: Option<&NeuralModel>,
+    config_b: CoreConfig,
+    model_b: Option<&NeuralModel>,
     seeds: &[u64],
     out_dir: Option<&Path>,
 ) -> Result<Vec<PairedAblationDelta>, LabError> {
@@ -723,8 +765,8 @@ pub fn run_ablation_compare_scenarios(
         fs::create_dir_all(dir)?;
     }
     let total = scenarios.len().saturating_mul(seeds.len());
-    let mut enabled_metrics: Vec<RunMetricsSummary> = Vec::with_capacity(total);
-    let mut neutral_metrics: Vec<RunMetricsSummary> = Vec::with_capacity(total);
+    let mut metrics_a: Vec<RunMetricsSummary> = Vec::with_capacity(total);
+    let mut metrics_b: Vec<RunMetricsSummary> = Vec::with_capacity(total);
 
     for scenario in scenarios {
         let safe_id: String = scenario
@@ -739,27 +781,25 @@ pub fn run_ablation_compare_scenarios(
             })
             .collect();
         for &seed in seeds {
-            let mut sc_en = scenario.clone();
-            sc_en.switches = Some(enabled_switches.clone());
-            let out_en = run_scenario(MemStore::new(), prior.clone(), &sc_en, seed)?;
+            let out_a =
+                run_scenario_with_model(MemStore::new(), config_a.clone(), model_a, scenario, seed)?;
             if let Some(dir) = out_dir {
-                let path = dir.join(format!("{safe_id}__enabled__seed-{seed}.postcard"));
-                fs::write(path, out_en.run_record.encode_postcard()?)?;
+                let path = dir.join(format!("{safe_id}__side_a__seed-{seed}.postcard"));
+                fs::write(path, out_a.run_record.encode_postcard()?)?;
             }
-            enabled_metrics.push(out_en.run_record.metrics);
+            metrics_a.push(out_a.run_record.metrics);
 
-            let mut sc_neu = scenario.clone();
-            sc_neu.switches = Some(neutral_switches.clone());
-            let out_neu = run_scenario(MemStore::new(), prior.clone(), &sc_neu, seed)?;
+            let out_b =
+                run_scenario_with_model(MemStore::new(), config_b.clone(), model_b, scenario, seed)?;
             if let Some(dir) = out_dir {
-                let path = dir.join(format!("{safe_id}__neutral__seed-{seed}.postcard"));
-                fs::write(path, out_neu.run_record.encode_postcard()?)?;
+                let path = dir.join(format!("{safe_id}__side_b__seed-{seed}.postcard"));
+                fs::write(path, out_b.run_record.encode_postcard()?)?;
             }
-            neutral_metrics.push(out_neu.run_record.metrics);
+            metrics_b.push(out_b.run_record.metrics);
         }
     }
 
-    Ok(compare_paired_ablation(&enabled_metrics, &neutral_metrics))
+    Ok(compare_paired_ablation(&metrics_a, &metrics_b))
 }
 
 #[allow(clippy::too_many_arguments)]

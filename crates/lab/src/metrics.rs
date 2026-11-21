@@ -46,6 +46,238 @@ pub struct MetricReportEntry {
     pub formula: String,
 }
 
+/// Neural Cognitive Controller calibration, selective-risk (`CIC`), and fallback metrics (`V2`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NeuralCalibrationMetrics {
+    /// Number of non-blocked/non-processed decisions evaluated.
+    pub n_decisions: usize,
+    /// Number of labeled decisions matched against `Scenario.annotations`.
+    pub n_labeled: usize,
+    /// 10-bin Expected Calibration Error on `p_go` vs warranted `Speak`.
+    pub ece: Option<f64>,
+    /// 10-bin Top-Confidence Calibration Error on `max_c p_c` vs argmax correctness.
+    pub tc_ece: Option<f64>,
+    /// Mean Brier score `(p_go - y)^2` over labeled decisions.
+    pub brier: Option<f64>,
+    /// Area Under Risk-Coverage Curve (`AURC`) sorting by top-class confidence descending.
+    pub aurc: Option<f64>,
+    /// Fraction of evaluated neural decisions where `cic_abstain == true`.
+    pub cic_abstention_rate: f64,
+    /// Fraction of evaluated neural decisions accepted (`!cic_abstain`).
+    pub cic_coverage: f64,
+    /// 0-1 error rate on labeled non-abstained decisions (`None` if 0 covered labeled items).
+    pub cic_selective_risk: Option<f64>,
+    /// Fraction of evaluated decisions that ran under neutral fallback (`model = None`).
+    pub neutral_fallback_rate: f64,
+    /// Fraction of evaluated decisions where bounded online adaptation shifted logits.
+    pub online_adaptation_applied_rate: f64,
+}
+
+/// Computes V2 neural calibration (`ECE`, `TC-ECE`, `Brier`, `AURC`) and `CIC` coverage/risk metrics.
+#[must_use]
+pub fn compute_neural_calibration_metrics(
+    events: &[EventRecord],
+    scenario: Option<&Scenario>,
+) -> Option<NeuralCalibrationMetrics> {
+    let mut warranted_by_idx: BTreeMap<EventId, WarrantedReply> = BTreeMap::new();
+    if let Some(sc) = scenario {
+        let mut percept_seq = Vec::new();
+        for ev in events {
+            if ev.kind == EventKind::Percept {
+                percept_seq.push(ev.id);
+            }
+        }
+        // Map annotations keyed by scripted Percept event index in order of appearance when available.
+        let mut scripted_percept_indices = Vec::new();
+        for (idx, sev) in sc.events.iter().enumerate() {
+            if matches!(sev.event, crate::scenario::ScriptedEventKind::Percept(_)) {
+                scripted_percept_indices.push(idx);
+            }
+        }
+        for (pos, &script_idx) in scripted_percept_indices.iter().enumerate() {
+            if let Some(&eid) = percept_seq.get(pos)
+                && let Some(ann) = sc.annotations.event_annotations.get(&script_idx)
+                && let Some(w) = ann.warranted
+            {
+                warranted_by_idx.insert(eid, w);
+            }
+        }
+    }
+
+    let mut n_decisions = 0usize;
+    let mut cic_abstained = 0usize;
+    let mut neutral_count = 0usize;
+    let mut adapted_count = 0usize;
+    // (p_go, top_conf, argmax_is_go, y_speak)
+    let mut labeled: Vec<(f64, f64, bool, bool)> = Vec::new();
+
+    for ev in events {
+        if ev.kind != EventKind::Decision {
+            continue;
+        }
+        let Some(EventDetail::Decision {
+            target_event_id,
+            outcome,
+            trace: Some(tr),
+            ..
+        }) = &ev.detail
+        else {
+            continue;
+        };
+        if matches!(
+            outcome,
+            DecisionOutcome::DoorBlocked | DecisionOutcome::Processed
+        ) {
+            continue;
+        }
+        n_decisions += 1;
+        if tr.neural.cic_abstain {
+            cic_abstained += 1;
+        }
+        if tr.neural.is_neutral_fallback {
+            neutral_count += 1;
+        }
+        if tr.online_adaptation_applied {
+            adapted_count += 1;
+        }
+
+        if let Some(&w) = warranted_by_idx.get(target_event_id) {
+            let p_go = f64::from(tr.neural.gate_probs[3]).clamp(0.0, 1.0);
+            let (best_idx, best_p) = tr
+                .neural
+                .gate_probs
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.total_cmp(b.1))
+                .map_or((0, 0.25), |(i, &v)| (i, f64::from(v).clamp(0.0, 1.0)));
+            let y_speak = w == WarrantedReply::Speak;
+            let _pred_go = best_idx == 3;
+            labeled.push((p_go, best_p, *outcome == DecisionOutcome::Go, y_speak));
+        }
+    }
+
+    if n_decisions == 0 {
+        return None;
+    }
+
+    let n_labeled = labeled.len();
+    let (ece, tc_ece, brier, aurc, cic_selective_risk) = if n_labeled == 0 {
+        (None, None, None, None, None)
+    } else {
+        const BINS: usize = 10;
+        let mut go_bin_count = [0usize; BINS];
+        let mut go_bin_p = [0.0_f64; BINS];
+        let mut go_bin_y = [0.0_f64; BINS];
+
+        let mut tc_bin_count = [0usize; BINS];
+        let mut tc_bin_p = [0.0_f64; BINS];
+        let mut tc_bin_acc = [0.0_f64; BINS];
+
+        let mut brier_sum = 0.0_f64;
+        for &(p_go, top_conf, pred_go, y_speak) in &labeled {
+            let y = if y_speak { 1.0 } else { 0.0 };
+            brier_sum += (p_go - y).powi(2);
+
+            let go_bin = ((p_go * BINS as f64).floor() as usize).min(BINS - 1);
+            go_bin_count[go_bin] += 1;
+            go_bin_p[go_bin] += p_go;
+            go_bin_y[go_bin] += y;
+
+            let tc_bin = ((top_conf * BINS as f64).floor() as usize).min(BINS - 1);
+            tc_bin_count[tc_bin] += 1;
+            tc_bin_p[tc_bin] += top_conf;
+            tc_bin_acc[tc_bin] += if pred_go == y_speak { 1.0 } else { 0.0 };
+        }
+
+        let n_f = n_labeled as f64;
+        let ece_val: f64 = (0..BINS)
+            .filter(|&b| go_bin_count[b] > 0)
+            .map(|b| {
+                let c = go_bin_count[b] as f64;
+                ((go_bin_p[b] - go_bin_y[b]).abs()) / n_f
+                    + 0.0 * c // keeps bin contribution weighted by c/n_f
+            })
+            .sum();
+        let tc_ece_val: f64 = (0..BINS)
+            .filter(|&b| tc_bin_count[b] > 0)
+            .map(|b| (tc_bin_p[b] - tc_bin_acc[b]).abs() / n_f)
+            .sum();
+
+        // AURC: sort labeled items by top confidence descending.
+        let mut by_conf: Vec<(f64, f64)> = labeled
+            .iter()
+            .map(|&(_p_go, top_conf, pred_go, y_speak)| {
+                let err = if pred_go == y_speak { 0.0 } else { 1.0 };
+                (top_conf, err)
+            })
+            .collect();
+        by_conf.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let mut cum_err = 0.0_f64;
+        let mut risk_sum = 0.0_f64;
+        for (idx, &(_conf, err)) in by_conf.iter().enumerate() {
+            cum_err += err;
+            risk_sum += cum_err / ((idx + 1) as f64);
+        }
+        let aurc_val = risk_sum / n_f;
+
+        // CIC selective risk across non-abstained labeled decisions.
+        let covered_errs: Vec<f64> = events
+            .iter()
+            .filter_map(|ev| {
+                let Some(EventDetail::Decision {
+                    target_event_id,
+                    outcome,
+                    trace: Some(tr),
+                    ..
+                }) = &ev.detail
+                else {
+                    return None;
+                };
+                if tr.neural.cic_abstain {
+                    return None;
+                }
+                let &w = warranted_by_idx.get(target_event_id)?;
+                let y_speak = w == WarrantedReply::Speak;
+                let pred_go = *outcome == DecisionOutcome::Go;
+                Some(if pred_go == y_speak { 0.0 } else { 1.0 })
+            })
+            .collect();
+        let cic_risk = if covered_errs.is_empty() {
+            None
+        } else {
+            Some(covered_errs.iter().sum::<f64>() / covered_errs.len() as f64)
+        };
+
+        (
+            Some(ece_val),
+            Some(tc_ece_val),
+            Some(brier_sum / n_f),
+            Some(aurc_val),
+            cic_risk,
+        )
+    };
+
+    let n_dec_f = n_decisions as f64;
+    let cic_abstention_rate = cic_abstained as f64 / n_dec_f;
+    let cic_coverage = 1.0 - cic_abstention_rate;
+    let neutral_fallback_rate = neutral_count as f64 / n_dec_f;
+    let online_adaptation_applied_rate = adapted_count as f64 / n_dec_f;
+
+    Some(NeuralCalibrationMetrics {
+        n_decisions,
+        n_labeled,
+        ece,
+        tc_ece,
+        brier,
+        aurc,
+        cic_abstention_rate,
+        cic_coverage,
+        cic_selective_risk,
+        neutral_fallback_rate,
+        online_adaptation_applied_rate,
+    })
+}
+
 /// Complete 22-row + safety metric report for a single run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct DetailedMetricsReport {
@@ -1338,6 +1570,73 @@ pub fn compute_run_metrics_full(
         "requires >= 2 wakes with ContextPlan static_prefix_digest",
         "count(consecutive wakes with identical static_prefix_digest) / (wakes - 1)",
     );
+
+    if let Some(nc) = compute_neural_calibration_metrics(events, scenario) {
+        record_entry(
+            &mut detailed.entries,
+            "neural_ece",
+            None,
+            nc.ece,
+            "no labeled decisions for ECE",
+            "10-bin |mean(p_go) - mean(y)| weighted by bin fraction",
+        );
+        record_entry(
+            &mut detailed.entries,
+            "neural_tc_ece",
+            None,
+            nc.tc_ece,
+            "no labeled decisions for TC-ECE",
+            "10-bin |mean(max_c p_c) - mean(acc)| weighted by bin fraction",
+        );
+        record_entry(
+            &mut detailed.entries,
+            "neural_brier",
+            None,
+            nc.brier,
+            "no labeled decisions for Brier",
+            "mean((p_go - y)^2)",
+        );
+        record_entry(
+            &mut detailed.entries,
+            "neural_aurc",
+            None,
+            nc.aurc,
+            "no labeled decisions for AURC",
+            "mean cumulative selective risk sorted by top-class confidence",
+        );
+        record_entry(
+            &mut detailed.entries,
+            "neural_cic_coverage",
+            None,
+            Some(nc.cic_coverage),
+            "no neural decisions",
+            "1 - (cic_abstain / n_decisions)",
+        );
+        record_entry(
+            &mut detailed.entries,
+            "neural_cic_selective_risk",
+            None,
+            nc.cic_selective_risk,
+            "no covered labeled decisions for CIC selective risk",
+            "errors(!cic_abstain) / covered_labeled_decisions",
+        );
+        record_entry(
+            &mut detailed.entries,
+            "neural_neutral_fallback_rate",
+            None,
+            Some(nc.neutral_fallback_rate),
+            "no neural decisions",
+            "neutral_fallback_decisions / n_decisions",
+        );
+        record_entry(
+            &mut detailed.entries,
+            "neural_online_adapt_rate",
+            None,
+            Some(nc.online_adaptation_applied_rate),
+            "no neural decisions",
+            "online_adapted_decisions / n_decisions",
+        );
+    }
 
     let mut populated = BTreeMap::new();
     for (k, entry) in &detailed.entries {

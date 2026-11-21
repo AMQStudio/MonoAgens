@@ -9,8 +9,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use monoagens_core::{
-    CapabilityCatalogEntry, Core, DecisionOutcome, Effect, EventDetail, EventKind, Input, LogSeq,
-    MemStore, ModelPurpose, Prior, Store, Switches,
+    CapabilityCatalogEntry, Core, CoreConfig, DecisionOutcome, Effect, EventDetail, EventKind,
+    Input, LogSeq, MemStore, ModelPurpose, Store,
 };
 use monoagens_protocol::{
     ActorId, Audience, CURRENT_PROTOCOL_VERSION, CapabilityDescriptor, CapabilityId, EmbeddingTag,
@@ -610,8 +610,7 @@ pub struct ExternalItemExecution {
 #[allow(clippy::too_many_arguments)]
 pub fn execute_external_item(
     item: &ExternalItem,
-    prior: &Prior,
-    switches: &Switches,
+    config: &CoreConfig,
     seed: u64,
     probe_provider: &dyn ModelProvider,
     probe_model_name: &str,
@@ -620,8 +619,7 @@ pub fn execute_external_item(
 ) -> Result<ExternalItemExecution, LabError> {
     execute_external_item_with_embedder(
         item,
-        prior,
-        switches,
+        config,
         seed,
         probe_provider,
         probe_model_name,
@@ -644,8 +642,7 @@ pub fn execute_external_item(
 #[allow(clippy::too_many_arguments)]
 pub fn execute_external_item_with_embedder(
     item: &ExternalItem,
-    prior: &Prior,
-    switches: &Switches,
+    config: &CoreConfig,
     seed: u64,
     probe_provider: &dyn ModelProvider,
     probe_model_name: &str,
@@ -656,7 +653,11 @@ pub fn execute_external_item_with_embedder(
     request_timeout_ms: Option<u64>,
     max_output_tokens: Option<u32>,
 ) -> Result<ExternalItemExecution, LabError> {
-    let mut core = Core::open(MemStore::new(), prior.clone(), switches.clone(), seed)?;
+    let cfg = CoreConfig {
+        seed,
+        ..config.clone()
+    };
+    let mut core = Core::open(MemStore::new(), cfg, None)?;
     register_item_capabilities(&mut core, item);
     let silent_provider = {
         let mut p = ScriptedModelProvider::new();
@@ -921,9 +922,13 @@ pub fn execute_external_item_with_embedder(
             cloned_last_seq = Some(last_rec.seq);
         }
         cloned_store.snapshot(checkpoint.clone())?;
-        let mut probe_core = Core::open(cloned_store, prior.clone(), switches.clone(), seed)?;
+        let probe_cfg = CoreConfig {
+            seed,
+            ..config.clone()
+        };
+        let mut probe_core = Core::open(cloned_store, probe_cfg, None)?;
         register_item_capabilities(&mut probe_core, item);
-        // Advance cursor past any PriorLoaded/Open events appended by Core::open
+        // Advance cursor past any ConfigLoaded/Open events appended by Core::open
         let open_tail = probe_core
             .store()
             .read_after_seq(cloned_last_seq, usize::MAX)?;

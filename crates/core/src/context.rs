@@ -15,11 +15,10 @@ use monoagens_protocol::{
 use serde::{Deserialize, Serialize};
 
 use crate::blake3;
+use crate::config::CoreConfig;
 use crate::event::{EventRecord, LogSeq};
 use crate::expectations::max_matching_cosine;
-use crate::prior::Prior;
 use crate::recall::{MemoryBasis, RecalledItem, RecollectionConstraint};
-use crate::registry::{MechanismId, Switches};
 
 /// Opaque owner-signed identity anchor pinned in Slot 0 of [`crate::ports::ContextPlan`] (`R-48`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -246,18 +245,13 @@ pub struct ToolSelectionBudget {
 }
 
 impl ToolSelectionBudget {
-    /// Builds selection budget from `prior`, switching to exact neutral `(k_cap = |C_avail|, k_proc = 0)`
-    /// when `!prior.tool_rag_enabled`.
+    /// Builds selection budget from `config`.
     #[must_use]
-    pub fn from_prior(prior: &Prior, available_caps: usize) -> Self {
-        if prior.tool_rag_enabled {
-            Self {
-                max_static_core: prior.tool_rag_max_static_core,
-                k_cap: prior.tool_rag_k_cap,
-                k_proc: prior.tool_rag_k_proc,
-            }
-        } else {
-            Self::neutral(available_caps)
+    pub fn from_config(config: &CoreConfig, available_caps: usize) -> Self {
+        Self {
+            max_static_core: 4,
+            k_cap: available_caps.clamp(1, config.max_recalled_memories.clamp(4, 8)),
+            k_proc: 4,
         }
     }
 
@@ -451,14 +445,6 @@ fn bm25_like_score(query_tokens: &BTreeSet<String>, id: &str, text: &str) -> f64
     sum / (query_tokens.len() as f64)
 }
 
-/// Typed switch state entry inside [`CoreSelfSnapshot`] (zero prose, zero tunable constants).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MechanismSwitchState {
-    pub id: MechanismId,
-    pub stable_id: String,
-    pub enabled: bool,
-}
-
 /// Typed summary of active `VisibleScope` inside [`CoreSelfSnapshot`].
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct VisibleScopeSummary {
@@ -477,40 +463,41 @@ pub struct AutoRecallTriggerState {
     pub last_reason: Option<String>,
 }
 
-/// Typed read-only snapshot emitted by Core when `Switches::self_mechanics_guide` is `true` (`R-48`, `7.6`).
+/// Typed read-only snapshot emitted by Core when `config.self_guide_enabled` is `true` (`R-48`).
 ///
-/// Contains strictly typed flags, scope summaries, trigger states, and protocol version —
-/// zero prose and zero tunable formula constants.
+/// Contains strictly typed flags, controller status, scope summaries, trigger states, and protocol
+/// version — zero prose and zero tunable formula constants.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CoreSelfSnapshot {
     pub protocol_version: ProtocolVersion,
-    pub active_switches: Vec<MechanismSwitchState>,
+    pub neural_active: bool,
+    pub model_blake3_prefix: Option<String>,
+    pub online_adaptation: bool,
     pub visible_scope_summary: VisibleScopeSummary,
     pub auto_recall_state: AutoRecallTriggerState,
     pub recent_receipt_cues: Vec<String>,
 }
 
 impl CoreSelfSnapshot {
-    /// Builds a content-blind [`CoreSelfSnapshot`] from active `switches`, `scope`, and `auto_recall`.
+    /// Builds a content-blind [`CoreSelfSnapshot`] from runtime config, neural state, `scope`, and `auto_recall`.
     #[must_use]
     pub fn build(
         protocol_version: ProtocolVersion,
-        switches: &Switches,
+        neural_blake3: Option<&[u8; 32]>,
+        online_adaptation: bool,
         scope: &VisibleScope,
         auto_recall_state: AutoRecallTriggerState,
         recent_receipt_cues: Vec<String>,
     ) -> Self {
-        let active_switches = MechanismId::ALL
-            .iter()
-            .map(|&id| MechanismSwitchState {
-                id,
-                stable_id: id.stable_id().to_owned(),
-                enabled: switches.is_enabled(id),
-            })
-            .collect();
+        let model_blake3_prefix = neural_blake3.map(|d| {
+            let hex = blake3::to_hex(d);
+            hex[..12.min(hex.len())].to_owned()
+        });
         Self {
             protocol_version,
-            active_switches,
+            neural_active: neural_blake3.is_some(),
+            model_blake3_prefix,
+            online_adaptation,
             visible_scope_summary: VisibleScopeSummary {
                 audience_count: scope.audience.len(),
                 target_place: scope.target_place.clone(),
@@ -536,183 +523,38 @@ pub struct ValveSelfSnapshot {
     pub opaque_tags: Vec<String>,
 }
 
-/// Documented extension-point row mapping each [`MechanismId`] exhaustively to a renderer template key (`7.6`).
-///
-/// `crates/reason/src/render.rs` consumes [`self_guide_template_table`] exhaustively over all 22
-/// brain-map mechanisms without storing prose or hidden formula constants in `Core`.
+/// Typed extension-point row for V2 Self-Guide sections rendered by `crates/reason/src/render.rs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SelfGuideTemplateEntry {
-    pub id: MechanismId,
     pub stable_id: &'static str,
     pub template_key: &'static str,
     pub summary_tag: &'static str,
 }
 
-/// Exhaustive compile-time switch -> template mapping for one [`MechanismId`].
+/// V2 deterministic self-guide sections rendered without tunable constants.
 #[must_use]
-pub const fn self_guide_template_for(id: MechanismId) -> SelfGuideTemplateEntry {
-    match id {
-        MechanismId::Salience => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m01_salience",
-            template_key: "guide.m01.salience",
-            summary_tag: "salience_gating",
-        },
-        MechanismId::FloorCost => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m02_floor_cost",
-            template_key: "guide.m02.floor_cost",
-            summary_tag: "conversational_floor_restraint",
-        },
-        MechanismId::Habituation => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m03_habituation",
-            template_key: "guide.m03.habituation",
-            summary_tag: "repeat_stimulus_habituation",
-        },
-        MechanismId::DriveThreshold => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m04_drive_threshold",
-            template_key: "guide.m04.drive_threshold",
-            summary_tag: "homeostatic_threshold_drives",
-        },
-        MechanismId::FamiliarityReserve => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m05_familiarity_reserve",
-            template_key: "guide.m05.familiarity_reserve",
-            summary_tag: "unfamiliar_place_reserve",
-        },
-        MechanismId::StochasticGoNoGo => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m06_stochastic_go_no_go",
-            template_key: "guide.m06.stochastic_go_no_go",
-            summary_tag: "seeded_stochastic_wake",
-        },
-        MechanismId::CommitmentBreaker => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m07_commitment_breaker",
-            template_key: "guide.m07.commitment_breaker",
-            summary_tag: "commitment_circuit_breaker",
-        },
-        MechanismId::Patience => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m08_patience",
-            template_key: "guide.m08.patience",
-            summary_tag: "third_party_patience_wait",
-        },
-        MechanismId::ReportBarOnThought => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m09_report_bar_on_thought",
-            template_key: "guide.m09.report_bar_on_thought",
-            summary_tag: "motivation_and_certainty_bars",
-        },
-        MechanismId::ActivationRecall => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m10_activation_recall",
-            template_key: "guide.m10.activation_recall",
-            summary_tag: "petrov_activation_recall",
-        },
-        MechanismId::VectorFade => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m11_vector_fade",
-            template_key: "guide.m11.vector_fade",
-            summary_tag: "vector_fade_archival",
-        },
-        MechanismId::PredictionAndGrounding => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m12_prediction_and_grounding",
-            template_key: "guide.m12.prediction_and_grounding",
-            summary_tag: "response_and_silence_grounding",
-        },
-        MechanismId::ProspectiveMemory => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m13_prospective_memory",
-            template_key: "guide.m13.prospective_memory",
-            summary_tag: "promises_monitors_commit_check",
-        },
-        MechanismId::Credence => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m14_credence",
-            template_key: "guide.m14.credence",
-            summary_tag: "beta_source_credence",
-        },
-        MechanismId::BoundedLearning => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m15_bounded_learning",
-            template_key: "guide.m15.bounded_learning",
-            summary_tag: "ips_bounded_delta_learning",
-        },
-        MechanismId::MemoryTruth => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m16_memory_truth",
-            template_key: "guide.m16.memory_truth",
-            summary_tag: "dual_process_basis_and_validity",
-        },
-        MechanismId::ReportControl => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m17_report_control",
-            template_key: "guide.m17.report_control",
-            summary_tag: "calibrated_p_rc_and_auto_recall",
-        },
-        MechanismId::ConsolidationAndMerge => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m18_consolidation_and_merge",
-            template_key: "guide.m18.consolidation_and_merge",
-            summary_tag: "sleep_consolidation_and_procedures",
-        },
-        MechanismId::PerceptionLedger => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m19_perception_ledger",
-            template_key: "guide.m19.perception_ledger",
-            summary_tag: "perception_ledger_and_self_card",
-        },
-        MechanismId::Agency => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m20_agency",
-            template_key: "guide.m20.agency",
-            summary_tag: "effect_self_caused_comparator",
-        },
-        MechanismId::EventBoundaries => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m21_event_boundaries",
-            template_key: "guide.m21.event_boundaries",
-            summary_tag: "normalized_event_boundaries",
-        },
-        MechanismId::BacklogChunking => SelfGuideTemplateEntry {
-            id,
-            stable_id: "m22_backlog_chunking",
-            template_key: "guide.m22.backlog_chunking",
-            summary_tag: "downtime_backlog_chunking",
-        },
-    }
-}
-
-/// Exhaustive 22-row switch -> template extension table consumed by `crates/reason/src/render.rs`.
-#[must_use]
-pub fn self_guide_template_table() -> [SelfGuideTemplateEntry; 22] {
+pub fn self_guide_template_table() -> [SelfGuideTemplateEntry; 4] {
     [
-        self_guide_template_for(MechanismId::Salience),
-        self_guide_template_for(MechanismId::FloorCost),
-        self_guide_template_for(MechanismId::Habituation),
-        self_guide_template_for(MechanismId::DriveThreshold),
-        self_guide_template_for(MechanismId::FamiliarityReserve),
-        self_guide_template_for(MechanismId::StochasticGoNoGo),
-        self_guide_template_for(MechanismId::CommitmentBreaker),
-        self_guide_template_for(MechanismId::Patience),
-        self_guide_template_for(MechanismId::ReportBarOnThought),
-        self_guide_template_for(MechanismId::ActivationRecall),
-        self_guide_template_for(MechanismId::VectorFade),
-        self_guide_template_for(MechanismId::PredictionAndGrounding),
-        self_guide_template_for(MechanismId::ProspectiveMemory),
-        self_guide_template_for(MechanismId::Credence),
-        self_guide_template_for(MechanismId::BoundedLearning),
-        self_guide_template_for(MechanismId::MemoryTruth),
-        self_guide_template_for(MechanismId::ReportControl),
-        self_guide_template_for(MechanismId::ConsolidationAndMerge),
-        self_guide_template_for(MechanismId::PerceptionLedger),
-        self_guide_template_for(MechanismId::Agency),
-        self_guide_template_for(MechanismId::EventBoundaries),
-        self_guide_template_for(MechanismId::BacklogChunking),
+        SelfGuideTemplateEntry {
+            stable_id: "neural_controller",
+            template_key: "guide.v2.neural_controller",
+            summary_tag: "neural_cognitive_controller",
+        },
+        SelfGuideTemplateEntry {
+            stable_id: "visible_scope",
+            template_key: "guide.v2.visible_scope",
+            summary_tag: "strict_visible_scope",
+        },
+        SelfGuideTemplateEntry {
+            stable_id: "commitment_and_recall",
+            template_key: "guide.v2.commitment_and_recall",
+            summary_tag: "deterministic_commitments_and_recall",
+        },
+        SelfGuideTemplateEntry {
+            stable_id: "agency_and_grounding",
+            template_key: "guide.v2.agency_and_grounding",
+            summary_tag: "agency_and_expectation_grounding",
+        },
     ]
 }
 
@@ -834,7 +676,7 @@ pub fn calibrate_confidence_0_20(confidence_0_20: u8, domain_offset: f64) -> f64
 /// Computes a deterministic BLAKE3 digest over the cacheable static prefix of [`ContextSections`]
 /// and optional [`ValveSelfSnapshot`].
 ///
-/// When `Switches::self_mechanics_guide` is `false`, `self_guide_snapshot` is `None` and writes zero
+/// When `config.self_guide_enabled` is `false`, `self_guide_snapshot` is `None` and writes zero
 /// bytes so baseline static prefixes stay bit-identical.
 #[must_use]
 pub fn compute_static_prefix_digest(
@@ -879,10 +721,13 @@ pub fn compute_static_prefix_digest(
         buf.push(1);
         buf.extend_from_slice(&guide.protocol_version.major.to_le_bytes());
         buf.extend_from_slice(&guide.protocol_version.minor.to_le_bytes());
-        buf.extend_from_slice(&(guide.active_switches.len() as u32).to_le_bytes());
-        for sw in &guide.active_switches {
-            push_str(&mut buf, &sw.stable_id);
-            buf.push(u8::from(sw.enabled));
+        buf.push(u8::from(guide.neural_active));
+        buf.push(u8::from(guide.online_adaptation));
+        if let Some(prefix) = &guide.model_blake3_prefix {
+            buf.push(1);
+            push_str(&mut buf, prefix);
+        } else {
+            buf.push(0);
         }
         buf.extend_from_slice(&(guide.visible_scope_summary.audience_count as u32).to_le_bytes());
         if let Some(place) = &guide.visible_scope_summary.target_place {

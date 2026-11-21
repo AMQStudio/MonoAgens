@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use monoagens_core::{Prior, Switches};
+use monoagens_core::CoreConfig;
 use monoagens_protocol::{
     CapabilityDescriptor, CapabilityFlags, CapabilityId, CapabilitySchemaHash, OpaquePayload,
 };
@@ -79,7 +79,7 @@ pub struct MemorySuiteOptions {
     pub datasets_dir: PathBuf,
     pub manifest_path: Option<PathBuf>,
     pub run_dir: PathBuf,
-    pub prior: Prior,
+    pub core_config: CoreConfig,
     pub seed: u64,
     pub phase: MemoryPhase,
     pub live: bool,
@@ -768,7 +768,7 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
     let mut pilot_ids_by_dataset: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     if opts.live || opts.render_dry_run {
-        let dry_prior = monoagens_store::load_prior_or_default(None)?.prior;
+        let dry_config = monoagens_store::load_core_config_or_default(None)?.config;
         let mut dry_samples: Vec<(String, crate::datasets::ExternalItem)> = Vec::new();
         for (dataset_id, converter, instruction) in &datasets {
             if opts
@@ -802,7 +802,7 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
         let dry_paths = run_render_dry_run_gate_with_embedder(
             &dry_refs,
             &opts.run_dir,
-            &dry_prior,
+            &dry_config,
             opts.seed,
             opts.embedder.as_deref(),
         )?;
@@ -916,8 +916,7 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
             executed_any = true;
             let exec = execute_external_item_with_embedder(
                 item,
-                &opts.prior,
-                &Switches::all_enabled(),
+                &opts.core_config,
                 opts.seed,
                 provider.as_ref(),
                 &profile_model,
@@ -1058,7 +1057,7 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
             "silence".to_owned(),
             BTreeMap::from([("silence_rate".to_owned(), score.silence_rate)]),
         );
-        let loaded_prior = monoagens_store::LoadedPrior::from_prior(opts.prior.clone())?;
+        let loaded_cfg = monoagens_store::LoadedCoreConfig::from_config(opts.core_config.clone())?;
         let pinned_revision = manifest
             .get(dataset_id)
             .map(|e| {
@@ -1073,7 +1072,6 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
         let monoagens_mode = derive_monoagens_mode(
             opts.live,
             provider.provider_name() != "scripted",
-            &Switches::all_enabled(),
             Some("live"),
             Some(PROMPT_SOURCE_CORE_RENDER),
         );
@@ -1081,9 +1079,14 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
             schema_version: "1.0".to_owned(),
             run_id: format!("memory-p0-{dataset_id}-seed-{}", opts.seed),
             core_version: env!("CARGO_PKG_VERSION").to_owned(),
-            prior_content_version: loaded_prior.prior.content_version.clone(),
-            prior_format_version: loaded_prior.prior.version,
-            prior_digest: loaded_prior.digest.clone(),
+            config_format_version: u32::from(loaded_cfg.config.format_version),
+            config_digest: loaded_cfg.digest.clone(),
+            model_blake3: loaded_cfg
+                .config
+                .expected_blake3
+                .as_ref()
+                .map(monoagens_core::blake3::to_hex),
+            online_adaptation: loaded_cfg.config.online_adaptation,
             open_offset: 0,
             model_id: profile_model.clone(),
             embedder_id: opts
@@ -1093,8 +1096,6 @@ pub fn run_memory_suite(opts: &MemorySuiteOptions) -> Result<MemorySuiteOutcome,
                 .unwrap_or("none")
                 .to_owned(),
             door_rules: guard.rule_names(),
-            switches: Switches::all_enabled(),
-            learning_switches: RunRecord::learning_switches_from(&Switches::all_enabled()),
             seed: opts.seed,
             scenario_id: (*dataset_id).to_owned(),
             scenario_set: ScenarioSet::External,
@@ -1498,10 +1499,10 @@ pub fn validate_rendered_dry_run_request(
 pub fn run_render_dry_run_gate(
     samples: &[(String, &crate::datasets::ExternalItem)],
     run_dir: &Path,
-    prior: &monoagens_core::Prior,
+    config: &monoagens_core::CoreConfig,
     seed: u64,
 ) -> Result<Vec<PathBuf>, LabError> {
-    run_render_dry_run_gate_with_embedder(samples, run_dir, prior, seed, None)
+    run_render_dry_run_gate_with_embedder(samples, run_dir, config, seed, None)
 }
 
 struct DryRunScriptedProvider {
@@ -1678,7 +1679,7 @@ struct DryRunExample {
 pub fn run_render_dry_run_gate_with_embedder(
     samples: &[(String, &crate::datasets::ExternalItem)],
     run_dir: &Path,
-    prior: &monoagens_core::Prior,
+    config: &monoagens_core::CoreConfig,
     seed: u64,
     embedder: Option<&dyn Embedder>,
 ) -> Result<Vec<PathBuf>, LabError> {
@@ -1688,7 +1689,6 @@ pub fn run_render_dry_run_gate_with_embedder(
     let dry_dir = run_dir.join("dry_run");
     fs::create_dir_all(&dry_dir)?;
     let mut written = Vec::new();
-    let switches = monoagens_core::Switches::all_enabled();
     let mut counts_by_dataset: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     let mut examples_by_purpose: BTreeMap<String, DryRunExample> = BTreeMap::new();
 
@@ -1706,8 +1706,7 @@ pub fn run_render_dry_run_gate_with_embedder(
         let mut guard = crate::CostGuard::default();
         let exec = execute_external_item_with_embedder(
             item,
-            prior,
-            &switches,
+            config,
             seed,
             &provider,
             "dry-run-scripted",

@@ -4,8 +4,9 @@
 //! Runs strictly sans-IO (`MemStore`, zero sleeps, zero network, zero filesystem).
 
 use monoagens_core::{
-    Core, DecisionReason, DoorDecision, Doors, Effect, EventDetail, ExpectationLifecycleState,
-    Input, MemStore, ModelPurpose, NoopDoors, Prior, Store, Switches, replay_log,
+    Core, CoreConfig, DecisionReason, DoorDecision, Doors, Effect, EventDetail,
+    ExpectationLifecycleState, Input, MemStore, ModelPurpose, NoopDoors, ReplayMode, Store,
+    replay_log,
 };
 use monoagens_protocol::{
     Action, ActorId, Audience, BodyId, BodyState, BodyStatus, CapabilityDescriptor,
@@ -113,10 +114,7 @@ fn open_promise_via_model<S: monoagens_core::Store>(
 
 #[test]
 fn multi_place_multi_person_promise_rides_across_places_and_revises_without_early_wake() {
-    let prior = Prior::default();
-    let mut sw = Switches::all_enabled();
-    sw.stochastic_go_no_go = false;
-    let mut core = Core::open(MemStore::new(), prior, sw, 1).unwrap();
+    let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).unwrap();
     let mut doors = NoopDoors;
 
     let (exp_id, _) = open_promise_via_model(
@@ -213,14 +211,15 @@ fn multi_place_multi_person_promise_rides_across_places_and_revises_without_earl
 
 #[test]
 fn downtime_recovery_wakes_once_per_place_and_coalesces_recurring_monitors_without_storm() {
-    let prior = Prior::default();
-    let mut sw = Switches::all_enabled();
-    sw.stochastic_go_no_go = false;
+    let cfg = CoreConfig {
+        seed: 7,
+        ..CoreConfig::default()
+    };
     let mut store = MemStore::new();
     let mut doors = NoopDoors;
 
     {
-        let mut core = Core::open(store, prior.clone(), sw.clone(), 7).unwrap();
+        let mut core = Core::open(store, cfg.clone(), None).unwrap();
         let mut p1 = make_percept("per_alice", "room:a", &["per_alice", "soul"], 1_000);
         p1.addressees = vec![ActorId::new("soul")];
         let eff = core
@@ -317,7 +316,7 @@ fn downtime_recovery_wakes_once_per_place_and_coalesces_recurring_monitors_witho
     }
 
     // Reopen after long downtime (now = 25_500 -> 21 missed monitor slots!).
-    let mut core = Core::open(store, prior, sw, 7).unwrap();
+    let mut core = Core::open(store, cfg, None).unwrap();
     let effects = core
         .step(Input::Tick, Time::from_millis(25_500), &mut doors)
         .unwrap();
@@ -354,14 +353,11 @@ fn downtime_recovery_wakes_once_per_place_and_coalesces_recurring_monitors_witho
 
 #[test]
 fn backoff_retry_then_kept_late_never_conflated_with_kept() {
-    let prior = Prior {
-        promise_retry_base_ms: 1_000,
-        promise_retry_max: 3,
-        ..Prior::default()
+    let cfg = CoreConfig {
+        seed: 2,
+        ..CoreConfig::default()
     };
-    let mut sw = Switches::all_enabled();
-    sw.stochastic_go_no_go = false;
-    let mut core = Core::open(MemStore::new(), prior, sw, 2).unwrap();
+    let mut core = Core::open(MemStore::new(), cfg, None).unwrap();
     let mut doors = NoopDoors;
 
     let (exp_id, _) = open_promise_via_model(
@@ -496,10 +492,7 @@ impl Doors for HoldWithHActDoors {
 
 #[test]
 fn held_parks_once_pinned_to_h_act_without_duplicate_prompts_or_retries() {
-    let prior = Prior::default();
-    let mut sw = Switches::all_enabled();
-    sw.stochastic_go_no_go = false;
-    let mut core = Core::open(MemStore::new(), prior, sw, 3).unwrap();
+    let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).unwrap();
     let mut noop = NoopDoors;
 
     let (exp_id, _) = open_promise_via_model(
@@ -574,10 +567,7 @@ fn held_parks_once_pinned_to_h_act_without_duplicate_prompts_or_retries() {
 
 #[test]
 fn preempted_external_and_canceled_by_core_stop_cleanly_with_zero_retries() {
-    let prior = Prior::default();
-    let mut sw = Switches::all_enabled();
-    sw.stochastic_go_no_go = false;
-    let mut core = Core::open(MemStore::new(), prior, sw, 4).unwrap();
+    let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).unwrap();
     let mut doors = NoopDoors;
 
     let (exp_id, _) = open_promise_via_model(
@@ -663,10 +653,7 @@ fn preempted_external_and_canceled_by_core_stop_cleanly_with_zero_retries() {
 
 #[test]
 fn promise_meta_conflict_flags_reasoning_and_depends_on_orders_execution() {
-    let prior = Prior::default();
-    let mut sw = Switches::all_enabled();
-    sw.stochastic_go_no_go = false;
-    let mut core = Core::open(MemStore::new(), prior, sw, 5).unwrap();
+    let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).unwrap();
     let mut doors = NoopDoors;
 
     // 1. Open promise A with conflict_key = "exclusive:calendar:10am".
@@ -801,10 +788,7 @@ fn promise_meta_conflict_flags_reasoning_and_depends_on_orders_execution() {
 
 #[test]
 fn promise_debt_remains_undiluted_with_ten_distant_promises() {
-    let prior = Prior::default(); // H_debt = 3_600_000 ms (1 hour)
-    let mut sw = Switches::all_enabled();
-    sw.stochastic_go_no_go = false;
-    let mut core = Core::open(MemStore::new(), prior.clone(), sw, 6).unwrap();
+    let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).unwrap();
     let mut doors = NoopDoors;
 
     // 1 imminent promise due in 10 minutes.
@@ -822,17 +806,15 @@ fn promise_debt_remains_undiluted_with_ten_distant_promises() {
         },
         &mut doors,
     );
-    let debt_one = monoagens_core::gate::compute_promise_debt(
-        &core
-            .state()
-            .open_promises
-            .values()
-            .cloned()
-            .collect::<Vec<_>>(),
+    let mut probe_one = make_percept("per_alice", "room:1", &["per_alice", "soul"], 1_000);
+    probe_one.addressees = vec![ActorId::new("soul")];
+    let debt_one = monoagens_core::neural::extract_features_from_state(
+        core.state(),
+        &probe_one,
         Time::from_millis(1_000),
-        prior.promise_debt_horizon_ms,
-    );
-    assert!((debt_one - 1.0).abs() < 1e-9);
+        0,
+    )[12];
+    assert!(debt_one > 0.05, "imminent promise urgency should be non-trivial: {debt_one}");
 
     // Add 10 distant promises due next week.
     for i in 0..10 {
@@ -852,32 +834,23 @@ fn promise_debt_remains_undiluted_with_ten_distant_promises() {
             &mut doors,
         );
     }
-    let debt_with_distant = monoagens_core::gate::compute_promise_debt(
-        &core
-            .state()
-            .open_promises
-            .values()
-            .cloned()
-            .collect::<Vec<_>>(),
+    let mut probe_many = make_percept("per_alice", "room:1", &["per_alice", "soul"], 2_010);
+    probe_many.addressees = vec![ActorId::new("soul")];
+    let debt_with_distant = monoagens_core::neural::extract_features_from_state(
+        core.state(),
+        &probe_many,
         Time::from_millis(2_010),
-        prior.promise_debt_horizon_ms,
-    );
+        0,
+    )[12];
     assert!(
-        (debt_with_distant - 1.0).abs() < 1e-9,
-        "10 distant promises must not dilute urgent promise_debt: {debt_with_distant}"
+        debt_with_distant >= debt_one && (debt_with_distant - debt_one).abs() < 1e-3,
+        "10 distant promises must not dilute urgent promise_debt: one={debt_one}, many={debt_with_distant}"
     );
 }
 
 #[test]
 fn response_prediction_answered_expired_content_miss_and_slow_place_duration() {
-    let prior = Prior {
-        content_miss_min_samples: 3,
-        content_miss_z_threshold: 2.0,
-        ..Prior::default()
-    };
-    let mut sw = Switches::all_enabled();
-    sw.stochastic_go_no_go = false;
-    let mut core = Core::open(MemStore::new(), prior, sw, 8).unwrap();
+    let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).unwrap();
     let mut doors = NoopDoors;
 
     // Register body with slow_room typical latency = 5_000 ms.
@@ -1084,10 +1057,7 @@ fn response_prediction_answered_expired_content_miss_and_slow_place_duration() {
 
 #[test]
 fn agency_self_caused_echo_vs_person_reply_vs_unrelated_sensor_change() {
-    let prior = Prior::default();
-    let mut sw = Switches::all_enabled();
-    sw.stochastic_go_no_go = false;
-    let mut core = Core::open(MemStore::new(), prior, sw, 9).unwrap();
+    let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).unwrap();
     let mut doors = NoopDoors;
 
     // 1. Unrelated sensor change with no open effect prediction -> external and appraised.
@@ -1197,14 +1167,13 @@ fn agency_self_caused_echo_vs_person_reply_vs_unrelated_sensor_change() {
 
 #[test]
 fn judged_silence_seeded_sample_reproducible_missed_reask_and_sibling_answer() {
-    let prior = Prior {
-        silence_sample_rate: 0.25,
-        ..Prior::default()
+    let cfg = CoreConfig {
+        seed: 42,
+        ..CoreConfig::default()
     };
-    let sw = Switches::all_enabled();
 
     // 1. Seeded sampling across 40 silent/note events is reproducible on replay (no wall clock).
-    let mut core1 = Core::open(MemStore::new(), prior.clone(), sw.clone(), 42).unwrap();
+    let mut core1 = Core::open(MemStore::new(), cfg.clone(), None).unwrap();
     let mut doors = NoopDoors;
     for i in 0..40u64 {
         let mut p = make_percept(
@@ -1236,7 +1205,7 @@ fn judged_silence_seeded_sample_reproducible_missed_reask_and_sibling_answer() {
         .collect();
     assert!(!silences1.is_empty() && silences1.len() < 40);
 
-    let mut core2 = Core::open(MemStore::new(), prior.clone(), sw.clone(), 42).unwrap();
+    let mut core2 = Core::open(MemStore::new(), cfg, None).unwrap();
     for i in 0..40u64 {
         let mut p = make_percept(
             "per_alice",
@@ -1270,49 +1239,64 @@ fn judged_silence_seeded_sample_reproducible_missed_reask_and_sibling_answer() {
         "seeded silence sample must be deterministic"
     );
 
-    // Verify Two-Epoch Replay bit-exactness across the log.
-    let rep = replay_log(core1.store(), &sw, 42).unwrap();
-    assert!(
-        rep.is_bit_identical(),
-        "replay diverged: {:?}",
-        rep.first_divergence
-    );
+    // Verify Trace-Pinned replay across the log.
+    let rep = replay_log(core1.store(), ReplayMode::Unpinned, None).unwrap();
+    assert!(rep.is_exact(), "replay diverged: {:?}", rep.mismatches);
 
     // 2. Re-ask by sender triggers ONE Classify -> confirmed -> missed!
-    let prior_full = Prior {
-        silence_sample_rate: 1.0,
-        ..Prior::default()
-    };
-    let mut sw_det = Switches::all_enabled();
-    sw_det.stochastic_go_no_go = false;
-    let mut core_r = Core::open(MemStore::new(), prior_full, sw_det, 11).unwrap();
-
-    let mut q1 = make_percept(
-        "per_alice",
-        "room:2",
-        &["per_alice", "per_bob", "soul"],
-        1_000,
-    );
-    q1.embeddings = vec![emb([1.0, 0.0, 0.0])];
-    core_r
-        .step(
-            Input::Percept(Box::new(q1)),
-            Time::from_millis(1_000),
-            &mut doors,
-        )
-        .unwrap();
+    let mut core_r = Core::open(
+        MemStore::new(),
+        CoreConfig {
+            seed: 11,
+            ..CoreConfig::default()
+        },
+        None,
+    )
+    .unwrap();
+    let mut ts_r = 1_000u64;
+    for _ in 0..32 {
+        let mut q = make_percept(
+            "per_alice",
+            "room:2",
+            &["per_alice", "per_bob", "soul"],
+            ts_r,
+        );
+        q.embeddings = vec![emb([1.0, 0.0, 0.0])];
+        core_r
+            .step(
+                Input::Percept(Box::new(q)),
+                Time::from_millis(ts_r),
+                &mut doors,
+            )
+            .unwrap();
+        ts_r += 100;
+        if core_r
+            .state()
+            .expectation_book
+            .expectations
+            .values()
+            .any(|e| {
+                e.is_active()
+                    && e.response_spec
+                        .as_ref()
+                        .is_some_and(|s| s.is_judged_silence)
+            })
+        {
+            break;
+        }
+    }
 
     let mut q_again = make_percept(
         "per_alice",
         "room:2",
         &["per_alice", "per_bob", "soul"],
-        2_000,
+        ts_r,
     );
     q_again.embeddings = vec![emb([0.98, 0.19, 0.0])];
     let clf_eff = core_r
         .step(
             Input::Percept(Box::new(q_again)),
-            Time::from_millis(2_000),
+            Time::from_millis(ts_r),
             &mut doors,
         )
         .unwrap();
@@ -1336,7 +1320,7 @@ fn judged_silence_seeded_sample_reproducible_missed_reask_and_sibling_answer() {
                     rationale: None,
                 },
             },
-            Time::from_millis(2_100),
+            Time::from_millis(ts_r + 100),
             &mut doors,
         )
         .unwrap();
@@ -1353,41 +1337,55 @@ fn judged_silence_seeded_sample_reproducible_missed_reask_and_sibling_answer() {
     // 3. Answered by sibling participant -> missed = false!
     let mut core_sib = Core::open(
         MemStore::new(),
-        Prior {
-            silence_sample_rate: 1.0,
-            ..Prior::default()
+        CoreConfig {
+            seed: 12,
+            ..CoreConfig::default()
         },
-        Switches {
-            stochastic_go_no_go: false,
-            ..Switches::all_enabled()
-        },
-        12,
+        None,
     )
     .unwrap();
-    let q_s = make_percept(
-        "per_alice",
-        "room:3",
-        &["per_alice", "per_bob", "soul"],
-        1_000,
-    );
-    core_sib
-        .step(
-            Input::Percept(Box::new(q_s)),
-            Time::from_millis(1_000),
-            &mut doors,
-        )
-        .unwrap();
+    let mut ts_s = 1_000u64;
+    for _ in 0..32 {
+        let q_s = make_percept(
+            "per_alice",
+            "room:3",
+            &["per_alice", "per_bob", "soul"],
+            ts_s,
+        );
+        core_sib
+            .step(
+                Input::Percept(Box::new(q_s)),
+                Time::from_millis(ts_s),
+                &mut doors,
+            )
+            .unwrap();
+        ts_s += 100;
+        if core_sib
+            .state()
+            .expectation_book
+            .expectations
+            .values()
+            .any(|e| {
+                e.is_active()
+                    && e.response_spec
+                        .as_ref()
+                        .is_some_and(|s| s.is_judged_silence)
+            })
+        {
+            break;
+        }
+    }
     let mut sib_ans = make_percept(
         "per_bob",
         "room:3",
         &["per_alice", "per_bob", "soul"],
-        1_500,
+        ts_s,
     );
     sib_ans.addressees = vec![ActorId::new("per_alice")];
     core_sib
         .step(
             Input::Percept(Box::new(sib_ans)),
-            Time::from_millis(1_500),
+            Time::from_millis(ts_s),
             &mut doors,
         )
         .unwrap();
@@ -1404,14 +1402,15 @@ fn judged_silence_seeded_sample_reproducible_missed_reask_and_sibling_answer() {
 
 #[test]
 fn free_text_condition_bands_and_goal_reached_and_expiry() {
-    let prior = Prior {
-        wake_gate_lo: 0.50,
-        wake_gate_hi_epsilon: 0.25, // rule of three: ceil(3 / 0.25) = 12 verdicts
-        ..Prior::default()
-    };
-    let mut sw = Switches::all_enabled();
-    sw.stochastic_go_no_go = false;
-    let mut core = Core::open(MemStore::new(), prior, sw, 13).unwrap();
+    let mut core = Core::open(
+        MemStore::new(),
+        CoreConfig {
+            seed: 13,
+            ..CoreConfig::default()
+        },
+        None,
+    )
+    .unwrap();
     let mut doors = NoopDoors;
 
     // Open a free-text Monitor condition with embedding [1, 0, 0].
@@ -1647,13 +1646,7 @@ fn free_text_condition_bands_and_goal_reached_and_expiry() {
 
 #[test]
 fn classify_plans_carry_trigger_and_condition_across_silence_reask_goal_and_condition_paths() {
-    let prior = Prior {
-        wake_gate_lo: 0.25,
-        silence_sample_rate: 1.0,
-        ..Prior::default()
-    };
-
-    let mut core = Core::open(MemStore::new(), prior, Switches::all_enabled(), 1).unwrap();
+    let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).unwrap();
     let mut doors = NoopDoors;
 
     core.step(
@@ -1816,23 +1809,42 @@ fn classify_plans_carry_trigger_and_condition_across_silence_reask_goal_and_cond
     );
 
     // 2. SilenceReask path: silent percept from bob opens judged_silence, then follow-up triggers Classify.
-    let mut p_silent = make_percept("bob", "room:clf", &["bob", "soul"], 3_000);
-    p_silent.payload = OpaquePayload::from_bytes(b"bob whispers quietly");
-    p_silent.embeddings = vec![emb([0.0, 0.0, 1.0])];
-    let _ = core
-        .step(
-            Input::Percept(Box::new(p_silent)),
-            Time::from_millis(3_000),
-            &mut doors,
-        )
-        .unwrap();
-    let mut p_reask = make_percept("bob", "room:clf", &["bob", "soul"], 3_200);
+    let mut t_sil = 3_000u64;
+    for _ in 0..32 {
+        let mut p_silent = make_percept("bob", "room:clf", &["bob", "soul"], t_sil);
+        p_silent.payload = OpaquePayload::from_bytes(b"bob whispers quietly");
+        p_silent.embeddings = vec![emb([0.0, 0.0, 1.0])];
+        let _ = core
+            .step(
+                Input::Percept(Box::new(p_silent)),
+                Time::from_millis(t_sil),
+                &mut doors,
+            )
+            .unwrap();
+        t_sil += 100;
+        if core
+            .state()
+            .expectation_book
+            .expectations
+            .values()
+            .any(|e| {
+                e.is_active()
+                    && e.response_spec.as_ref().is_some_and(|s| {
+                        s.is_judged_silence
+                            && s.silence_sender.as_ref() == Some(&ActorId::new("bob"))
+                    })
+            })
+        {
+            break;
+        }
+    }
+    let mut p_reask = make_percept("bob", "room:clf", &["bob", "soul"], t_sil);
     p_reask.payload = OpaquePayload::from_bytes(b"hello? did you hear me?");
     p_reask.embeddings = vec![emb([0.0, 0.0, 1.0])];
     let eff_reask = core
         .step(
             Input::Percept(Box::new(p_reask)),
-            Time::from_millis(3_200),
+            Time::from_millis(t_sil),
             &mut doors,
         )
         .unwrap();
@@ -1868,12 +1880,7 @@ fn classify_plans_carry_trigger_and_condition_across_silence_reask_goal_and_cond
 
 #[test]
 fn classify_plan_refuses_when_condition_or_trigger_content_is_missing() {
-    let prior = Prior {
-        wake_gate_lo: 0.25,
-        ..Prior::default()
-    };
-
-    let mut core = Core::open(MemStore::new(), prior, Switches::all_enabled(), 1).unwrap();
+    let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).unwrap();
     let mut doors = NoopDoors;
 
     let mut seed_p = make_percept("alice", "room:clf", &["alice", "soul"], 1_000);

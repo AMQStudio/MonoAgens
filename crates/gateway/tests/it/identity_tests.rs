@@ -353,8 +353,7 @@ async fn gateway_waist2_percept_emit_resolves_canonical_kappa_actors() {
         cfg,
         &secrets,
         || Ok(monoagens_core::MemStore::new()),
-        monoagens_core::Prior::default(),
-        monoagens_core::Switches::all_neutral(),
+        monoagens_core::CoreConfig::default(),
         monoagens_core::NoopDoors,
         GatewayOptions {
             clock: clock.clone(),

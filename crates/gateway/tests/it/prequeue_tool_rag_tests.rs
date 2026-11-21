@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use monoagens_core::{EventDetail, EventKind, MemStore, NoopDoors, Prior, Switches};
+use monoagens_core::{CoreConfig, EventDetail, EventKind, MemStore, NoopDoors};
 use monoagens_gateway::{
     Clock, CueRecorder, DiagnosticSink, EmbedBackendKind, GatewayConfig, GatewayOptions,
     GatewayRuntime, GatewaySeams, ModelProviderKind, PreQueueService, ToolRagIndex, VirtualClock,
@@ -277,8 +277,7 @@ async fn run_percept_through_gateway_with_embedder(
         cfg,
         &secrets,
         || Ok(MemStore::new()),
-        Prior::default(),
-        Switches::all_neutral(),
+        CoreConfig::default(),
         NoopDoors,
         GatewayOptions {
             clock: clock.clone(),

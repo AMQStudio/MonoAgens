@@ -47,7 +47,9 @@ fn monoagens_core_depends_only_on_protocol_and_serde() {
         .as_array()
         .expect("monoagens-core.dependencies must be an array");
 
-    let allowed: BTreeSet<&str> = ["monoagens-protocol", "serde"].into_iter().collect();
+    let allowed: BTreeSet<&str> = ["monoagens-protocol", "safetensors", "serde"]
+        .into_iter()
+        .collect();
     let mut forbidden = Vec::new();
     let mut observed = BTreeSet::new();
 
@@ -69,7 +71,9 @@ fn monoagens_core_depends_only_on_protocol_and_serde() {
         "monoagens-core has forbidden non-dev dependencies: {forbidden:?} (allowed: {allowed:?})"
     );
     assert!(
-        observed.contains("monoagens-protocol") && observed.contains("serde"),
-        "expected monoagens-protocol and serde in monoagens-core dependencies, got: {observed:?}"
+        observed.contains("monoagens-protocol")
+            && observed.contains("safetensors")
+            && observed.contains("serde"),
+        "expected monoagens-protocol, safetensors, and serde in monoagens-core dependencies, got: {observed:?}"
     );
 }

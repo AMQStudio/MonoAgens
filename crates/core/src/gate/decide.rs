@@ -1,40 +1,46 @@
-//! Gate decision assembly: commitment breaker, `tau -> 0` deterministic step limit,
-//! seeded Bernoulli draw `(seed, event_id)`, and self-contained recomputable trace.
+//! Neural Cognitive Controller gate decision assembly:
+//! deterministic commitment breaker -> Pure-Rust neural forward step -> calibrated categorical/deterministic
+//! `[Silent, Note, Wait, Go]` + `CIC` abstention + neutral fallback + Trace-Pinned [`DecisionTrace`].
 
 use monoagens_protocol::EventId;
 use serde::{Deserialize, Serialize};
 
-use crate::activation::sigmoid;
+use crate::config::CoreConfig;
 use crate::event::DecisionOutcome;
-use crate::gate::salience::{SalienceEvaluation, SalienceWeights};
-use crate::gate::signals::GateSignals;
-use crate::gate::threshold::ThresholdTerms;
-use crate::prior::Prior;
-use crate::registry::Switches;
+use crate::neural::{
+    DEFAULT_H_DIM, FEATURE_SCHEMA_VERSION, GateClass, NeuralModel, NeuralOutputs, PlaceAdaptState,
+    forward_step, neutral_outputs,
+};
 use crate::rng::SeededRng;
 
-/// Canonical reason recorded on a gate decision (`specs/appraisal-gate/spec.md`).
+/// Canonical reason recorded on a Slim Core V2 gate decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DecisionReason {
-    /// Bypassed the draw because the turn is allocated, answers/fires an expectation, or continues an active chain.
+    /// Hard commitment breaker bypassed neural gating (`Go`).
     Commitment,
-    /// Stochastic draw `draw < P` yielded `Go`.
+    /// Stochastic categorical draw selected `Go`.
     StochasticDraw,
-    /// Deterministic `tau -> 0` step limit (`S_eff >= theta`) yielded `Go`.
-    ThresholdStep,
-    /// No-go with `P >= note_band` yielded `Note`.
+    /// Deterministic neural argmax selected `Go`.
+    NeuralGo,
+    /// Selected `Note` band.
     NoteBand,
-    /// No-go with `P < note_band` (or `tau -> 0` with `S_eff < theta`) yielded `Silent`.
+    /// Selected `Silent` (below `Go`/`Note`/`Wait`).
     BelowNoteBand,
     /// Inbound door held or refused the event.
     DoorBlocked,
     /// Crash recovery resumed an interrupted input without calling a model.
     Recovered,
-    /// Unallocated `Go` waited on patience and yielded when a third party answered first.
+    /// Open `wait` expectation yielded when a third party answered first.
     Yielded,
     /// Percept matched an open `Effect` prediction and was marked self-caused without appraisal.
     SelfCaused,
+    /// Neutral fallback (`model = None`) yielded deterministic `Silent`.
+    NeutralFallback,
+    /// Neural `CIC` selective abstention forced `Silent`.
+    CicAbstention,
+    /// Neural `Wait` selected deferred patience (`Silent` this turn + `OpenWait` armed).
+    WaitDeferral,
 }
 
 impl DecisionReason {
@@ -43,13 +49,16 @@ impl DecisionReason {
         match self {
             Self::Commitment => 1,
             Self::StochasticDraw => 2,
-            Self::ThresholdStep => 3,
+            Self::NeuralGo => 3,
             Self::NoteBand => 4,
             Self::BelowNoteBand => 5,
             Self::DoorBlocked => 6,
             Self::Recovered => 7,
             Self::Yielded => 8,
             Self::SelfCaused => 9,
+            Self::NeutralFallback => 10,
+            Self::CicAbstention => 11,
+            Self::WaitDeferral => 12,
         }
     }
 
@@ -58,22 +67,25 @@ impl DecisionReason {
         match code {
             1 => Some(Self::Commitment),
             2 => Some(Self::StochasticDraw),
-            3 => Some(Self::ThresholdStep),
+            3 => Some(Self::NeuralGo),
             4 => Some(Self::NoteBand),
             5 => Some(Self::BelowNoteBand),
             6 => Some(Self::DoorBlocked),
             7 => Some(Self::Recovered),
             8 => Some(Self::Yielded),
             9 => Some(Self::SelfCaused),
+            10 => Some(Self::NeutralFallback),
+            11 => Some(Self::CicAbstention),
+            12 => Some(Self::WaitDeferral),
             _ => None,
         }
     }
 }
 
-/// Commitment-breaker triggers (`specs/appraisal-gate/spec.md`).
+/// Deterministic commitment-breaker triggers (`CommitmentBreaker`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct CommitmentInputs {
-    /// Turn was allocated to the soul (`deg(e, soul) >= theta_alloc` or direct allocation).
+    /// Turn was explicitly allocated or directly addressed to the soul.
     pub turn_allocated: bool,
     /// Event fires or answers an open expectation / prediction.
     pub fires_or_answers_expectation: bool,
@@ -82,239 +94,214 @@ pub struct CommitmentInputs {
 }
 
 impl CommitmentInputs {
-    /// Returns `true` if any commitment trigger is active.
+    /// Returns `true` if any deterministic commitment trigger is active.
     #[must_use]
     pub const fn any(&self) -> bool {
         self.turn_allocated || self.fires_or_answers_expectation || self.continues_active_chain
     }
 }
 
-/// Self-contained decision trace stored on [`crate::event::EventDetail::Decision`] so every
-/// decision's salience, threshold, probability, and outcome can be recomputed from the log event alone.
+/// Self-contained Trace-Pinned decision record persisted on [`crate::event::EventDetail::Decision`].
+///
+/// Replay verifies recorded outcomes, pinned model `BLAKE3` digest, schema version, adaptation flag,
+/// and neural outputs directly without requiring bit-identical floating-point re-execution across CPUs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DecisionTrace {
-    pub signals: GateSignals,
-    pub weights: SalienceWeights,
-    pub raw_salience: f64,
-    pub h_pre: f64,
-    pub kappa: f64,
-    pub habituation_factor: f64,
-    pub effective_salience: f64,
-    pub threshold_terms: ThresholdTerms,
-    pub tau: f64,
-    pub note_band: f64,
-    pub stochastic_enabled: bool,
+    pub neural: NeuralOutputs,
+    pub model_blake3: Option<[u8; 32]>,
+    pub feature_schema_version: u16,
+    pub online_adaptation_applied: bool,
     pub commitment_bypass: bool,
-    pub probability: f64,
+    pub self_caused: bool,
     pub draw: f64,
+    pub probability: f64,
     pub outcome: DecisionOutcome,
     pub reason: DecisionReason,
 }
 
-/// Values recomputed solely from a stored [`DecisionTrace`].
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RecomputedTrace {
-    pub raw_salience: f64,
-    pub habituation_factor: f64,
-    pub effective_salience: f64,
-    pub threshold: f64,
-    pub probability: f64,
+/// Outcome of evaluating the V2 gate for one percept or backlog chunk.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GateOutcome {
     pub outcome: DecisionOutcome,
     pub reason: DecisionReason,
+    pub gate_class: GateClass,
+    pub wait_delta_ms: u64,
+    pub probability: f64,
+    pub draw: f64,
+    pub neural: NeuralOutputs,
+    pub trace: DecisionTrace,
 }
 
 impl DecisionTrace {
-    /// Recomputes `S`, `habituation_factor`, `S_eff`, `theta`, `P`, `outcome`, and `reason`
-    /// strictly from the numbers persisted in `self`.
-    #[must_use]
-    pub fn recompute(&self) -> RecomputedTrace {
-        let raw_salience = self.weights.evaluate(&self.signals);
-        let h_pre = if self.h_pre.is_finite() {
-            self.h_pre.max(0.0)
-        } else {
-            0.0
-        };
-        let kappa = if self.kappa.is_finite() {
-            self.kappa.max(0.0)
-        } else {
-            0.0
-        };
-        let habituation_factor = 1.0 / (1.0 + kappa * h_pre);
-        let effective_salience = (raw_salience * habituation_factor).clamp(0.0, 1.0);
-        let threshold = self.threshold_terms.recompute_theta();
-
-        if self.reason == DecisionReason::Yielded {
-            return RecomputedTrace {
-                raw_salience,
-                habituation_factor,
-                effective_salience,
-                threshold,
-                probability: self.probability,
-                outcome: DecisionOutcome::Silent,
-                reason: DecisionReason::Yielded,
-            };
-        }
-
-        if self.commitment_bypass {
-            return RecomputedTrace {
-                raw_salience,
-                habituation_factor,
-                effective_salience,
-                threshold,
-                probability: 1.0,
-                outcome: DecisionOutcome::Go,
-                reason: DecisionReason::Commitment,
-            };
-        }
-
-        if !self.stochastic_enabled || self.tau <= 1e-12 {
-            let passed = effective_salience >= threshold;
-            let probability = if passed { 1.0 } else { 0.0 };
-            let (outcome, reason) = if passed {
-                (DecisionOutcome::Go, DecisionReason::ThresholdStep)
-            } else {
-                (DecisionOutcome::Silent, DecisionReason::BelowNoteBand)
-            };
-            return RecomputedTrace {
-                raw_salience,
-                habituation_factor,
-                effective_salience,
-                threshold,
-                probability,
-                outcome,
-                reason,
-            };
-        }
-
-        let probability = sigmoid((effective_salience - threshold) / self.tau).clamp(0.0, 1.0);
-        let (outcome, reason) = if self.draw < probability {
-            (DecisionOutcome::Go, DecisionReason::StochasticDraw)
-        } else if probability >= self.note_band {
-            (DecisionOutcome::Note, DecisionReason::NoteBand)
-        } else {
-            (DecisionOutcome::Silent, DecisionReason::BelowNoteBand)
-        };
-
-        RecomputedTrace {
-            raw_salience,
-            habituation_factor,
-            effective_salience,
-            threshold,
-            probability,
-            outcome,
-            reason,
-        }
-    }
-
-    /// Returns an audit reason tag if this decision withheld speech for an auditable cause
-    /// (e.g., `note_band`, `yielded`, `habituated`, `floor_cost`, or `door_blocked`).
+    /// Returns an audit tag when speech was withheld for an inspectable reason.
     #[must_use]
     pub fn silence_audit_reason(&self) -> Option<&'static str> {
         match self.outcome {
             DecisionOutcome::Note => Some("note_band"),
             DecisionOutcome::DoorBlocked => Some("door_blocked"),
-            DecisionOutcome::Silent => {
-                if self.reason == DecisionReason::Yielded {
-                    Some("yielded")
-                } else if self.h_pre > 0.0
-                    && self.kappa > 0.0
-                    && self.raw_salience > self.effective_salience
-                    && self.raw_salience >= self.threshold_terms.theta
-                {
-                    Some("habituated")
-                } else if self.signals.social_cost > 0.0 && self.weights.w_sc < 0.0 {
-                    Some("floor_cost")
-                } else {
-                    None
-                }
-            }
+            DecisionOutcome::Silent => match self.reason {
+                DecisionReason::Yielded => Some("yielded"),
+                DecisionReason::CicAbstention => Some("cic_abstention"),
+                DecisionReason::NeutralFallback => Some("neutral_fallback"),
+                DecisionReason::WaitDeferral => Some("wait_deferral"),
+                _ => None,
+            },
             DecisionOutcome::Go | DecisionOutcome::Processed => None,
         }
     }
 }
 
-/// Result of evaluating the gate for one event or chunk.
-#[derive(Debug, Clone, PartialEq)]
-pub struct GateOutcome {
-    pub outcome: DecisionOutcome,
-    pub reason: DecisionReason,
-    pub effective_salience: f64,
-    pub threshold: f64,
-    pub probability: f64,
-    pub draw: f64,
-    pub trace: DecisionTrace,
-}
-
-/// Evaluates the full gate decision from `signals`, `salience`, `threshold_terms`, `h_pre`,
-/// `commitments`, `(seed, event_id)`, `prior`, and `switches`.
+/// Evaluates the V2 Neural Cognitive Controller gate for one visible event.
+///
+/// Even when `commitments.any()` triggers a hard `Go` bypass, if `model.is_some()` the forward pass
+/// still runs cleanly so `h_next` (the per-place 64d recurrent memory) advances without missing the turn.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn decide_gate(
     event_id: EventId,
-    seed: u64,
-    signals: GateSignals,
-    salience: SalienceEvaluation,
-    threshold_terms: ThresholdTerms,
-    h_pre: f64,
+    config: &CoreConfig,
+    model: Option<&NeuralModel>,
+    e_256: &[f32],
+    x_num: &[f32],
+    h_prev: &[f32],
+    place_adapt: Option<&PlaceAdaptState>,
     commitments: CommitmentInputs,
-    prior: &Prior,
-    switches: &Switches,
 ) -> GateOutcome {
-    let kappa = if switches.habituation {
-        prior.kappa
+    let adapt_cfg = config.effective_adapt_config();
+    let adapt_arg = if adapt_cfg.online_adaptation {
+        place_adapt.map(|st| (st, &adapt_cfg))
     } else {
-        0.0
+        None
     };
-    let h_pre_clean = if h_pre.is_finite() {
-        h_pre.max(0.0)
-    } else {
-        0.0
-    };
-    let habituation_factor = 1.0 / (1.0 + kappa * h_pre_clean);
-    let effective_salience = (salience.raw_salience * habituation_factor).clamp(0.0, 1.0);
-    let tau = prior.tau();
-    let stochastic_enabled = switches.stochastic_go_no_go && tau > 1e-12;
-    let commitment_bypass = switches.commitment_breaker && commitments.any();
 
-    let (probability, draw, outcome, reason) = if commitment_bypass {
-        (1.0, 0.0, DecisionOutcome::Go, DecisionReason::Commitment)
-    } else if !stochastic_enabled {
-        let passed = effective_salience >= threshold_terms.theta;
-        let p = if passed { 1.0 } else { 0.0 };
-        let (out, rsn) = if passed {
-            (DecisionOutcome::Go, DecisionReason::ThresholdStep)
+    let neural = forward_step(model, e_256, x_num, h_prev, adapt_arg).unwrap_or_else(|_| {
+        let zeros = vec![0.0_f32; h_prev.len().max(DEFAULT_H_DIM)];
+        neutral_outputs(&zeros)
+    });
+
+    let model_blake3 = model.map(|m| m.blake3);
+    let schema_ver = model.map_or(FEATURE_SCHEMA_VERSION, |m| {
+        m.config.feature_schema_version
+    });
+    let online_adaptation_applied = model.is_some() && adapt_cfg.online_adaptation && place_adapt.is_some();
+    let commitment_bypass = commitments.any();
+
+    let (gate_class, probability, draw, outcome, reason, wait_delta_ms) = if commitment_bypass {
+        (
+            GateClass::Go,
+            1.0_f64,
+            0.0_f64,
+            DecisionOutcome::Go,
+            DecisionReason::Commitment,
+            0_u64,
+        )
+    } else if model.is_none() {
+        (
+            GateClass::Silent,
+            f64::from(neural.gate_probs[3]),
+            0.0_f64,
+            DecisionOutcome::Silent,
+            DecisionReason::NeutralFallback,
+            0_u64,
+        )
+    } else if neural.cic_abstain {
+        (
+            GateClass::Silent,
+            f64::from(neural.gate_probs[3]),
+            0.0_f64,
+            DecisionOutcome::Silent,
+            DecisionReason::CicAbstention,
+            0_u64,
+        )
+    } else if config.stochastic_gate_sampling {
+        let d = SeededRng::draw_unit(config.seed, event_id);
+        let p_go = f64::from(neural.gate_probs[3]).clamp(0.0, 1.0);
+        let p_wait = f64::from(neural.gate_probs[2]).clamp(0.0, 1.0);
+        let p_note = f64::from(neural.gate_probs[1]).clamp(0.0, 1.0);
+        if d < p_go {
+            (
+                GateClass::Go,
+                p_go,
+                d,
+                DecisionOutcome::Go,
+                DecisionReason::StochasticDraw,
+                0_u64,
+            )
+        } else if d < p_go + p_wait {
+            (
+                GateClass::Wait,
+                p_go,
+                d,
+                DecisionOutcome::Silent,
+                DecisionReason::WaitDeferral,
+                neural.wait_delta_ms.round().max(1.0) as u64,
+            )
+        } else if d < p_go + p_wait + p_note {
+            (
+                GateClass::Note,
+                p_go,
+                d,
+                DecisionOutcome::Note,
+                DecisionReason::NoteBand,
+                0_u64,
+            )
         } else {
-            (DecisionOutcome::Silent, DecisionReason::BelowNoteBand)
-        };
-        (p, 0.0, out, rsn)
+            (
+                GateClass::Silent,
+                p_go,
+                d,
+                DecisionOutcome::Silent,
+                DecisionReason::BelowNoteBand,
+                0_u64,
+            )
+        }
     } else {
-        let p = sigmoid((effective_salience - threshold_terms.theta) / tau).clamp(0.0, 1.0);
-        let d = SeededRng::draw_unit(seed, event_id);
-        let (out, rsn) = if d < p {
-            (DecisionOutcome::Go, DecisionReason::StochasticDraw)
-        } else if p >= prior.note_band {
-            (DecisionOutcome::Note, DecisionReason::NoteBand)
-        } else {
-            (DecisionOutcome::Silent, DecisionReason::BelowNoteBand)
-        };
-        (p, d, out, rsn)
+        let p_go = f64::from(neural.gate_probs[3]).clamp(0.0, 1.0);
+        match neural.predicted_class {
+            GateClass::Go => (
+                GateClass::Go,
+                p_go,
+                0.0_f64,
+                DecisionOutcome::Go,
+                DecisionReason::NeuralGo,
+                0_u64,
+            ),
+            GateClass::Wait => (
+                GateClass::Wait,
+                p_go,
+                0.0_f64,
+                DecisionOutcome::Silent,
+                DecisionReason::WaitDeferral,
+                neural.wait_delta_ms.round().max(1.0) as u64,
+            ),
+            GateClass::Note => (
+                GateClass::Note,
+                p_go,
+                0.0_f64,
+                DecisionOutcome::Note,
+                DecisionReason::NoteBand,
+                0_u64,
+            ),
+            GateClass::Silent => (
+                GateClass::Silent,
+                p_go,
+                0.0_f64,
+                DecisionOutcome::Silent,
+                DecisionReason::BelowNoteBand,
+                0_u64,
+            ),
+        }
     };
 
     let trace = DecisionTrace {
-        signals,
-        weights: salience.weights,
-        raw_salience: salience.raw_salience,
-        h_pre: h_pre_clean,
-        kappa,
-        habituation_factor,
-        effective_salience,
-        threshold_terms,
-        tau,
-        note_band: prior.note_band,
-        stochastic_enabled,
+        neural: neural.clone(),
+        model_blake3,
+        feature_schema_version: schema_ver,
+        online_adaptation_applied,
         commitment_bypass,
-        probability,
+        self_caused: false,
         draw,
+        probability,
         outcome,
         reason,
     };
@@ -322,16 +309,11 @@ pub fn decide_gate(
     GateOutcome {
         outcome,
         reason,
-        effective_salience,
-        threshold: threshold_terms.theta,
+        gate_class,
+        wait_delta_ms,
         probability,
         draw,
+        neural,
         trace,
     }
-}
-
-/// Convenience helper for recomputing a [`DecisionTrace`] directly.
-#[must_use]
-pub fn recompute_decision_from_trace(trace: &DecisionTrace) -> RecomputedTrace {
-    trace.recompute()
 }
