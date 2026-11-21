@@ -22,6 +22,46 @@ GATE_NOTE = 1
 GATE_WAIT = 2
 GATE_GO = 3
 
+DEFAULT_EMBED_MODEL_VER = "egemma2-256"
+DEFAULT_PROMPT_REGIME_ID = "t_d"
+TASK_PREFIX_INSTRUCTIONS: dict[str, str] = {
+    "t_d": "title: none | text: ",
+    "t_q": "task: search result | query: ",
+    "t_sts": "task: sentence similarity | query: ",
+    "raw": "",
+}
+
+
+def format_embedding_text(
+    text: str,
+    prompt_regime_id: str = DEFAULT_PROMPT_REGIME_ID,
+) -> str:
+    """Applies the canonical EmbeddingGemma 2 task prefix for `prompt_regime_id`."""
+    if prompt_regime_id not in TASK_PREFIX_INSTRUCTIONS:
+        raise ValueError(
+            f"Unsupported prompt_regime_id={prompt_regime_id!r}; expected one of {sorted(TASK_PREFIX_INSTRUCTIONS)}"
+        )
+    prefix = TASK_PREFIX_INSTRUCTIONS[prompt_regime_id]
+    return f"{prefix}{text}" if prefix else text
+
+
+def versioned_shard_cache_path(
+    cache_path: Path,
+    prompt_regime_id: str = DEFAULT_PROMPT_REGIME_ID,
+    embed_model_ver: str = DEFAULT_EMBED_MODEL_VER,
+) -> Path:
+    """Returns a regime-versioned shard path so prefixed and unprefixed caches never collide."""
+    ver_tag = embed_model_ver.replace("/", "_").replace(" ", "_")
+    suffix_tag = f"{ver_tag}_{prompt_regime_id}"
+    stem = cache_path.stem
+    if suffix_tag in stem:
+        return cache_path
+    if stem.endswith("_shards"):
+        new_stem = f"{stem[:-7]}_{suffix_tag}_shards"
+    else:
+        new_stem = f"{stem}_{suffix_tag}"
+    return cache_path.with_name(f"{new_stem}{cache_path.suffix}")
+
 
 def _splitmix64(x: int) -> int:
     x = (x + 0x9E3779B97F4A7C15) & 0xFFFFFFFFFFFFFFFF
@@ -616,15 +656,22 @@ def precompute_phase1_shards(
     batch_size: int = 32,
     max_w2s_windows: int = 4500,
     force_recompute: bool = False,
+    prompt_regime_id: str = DEFAULT_PROMPT_REGIME_ID,
+    embed_model_ver: str = DEFAULT_EMBED_MODEL_VER,
 ) -> Path:
     """Encodes all episode turn texts via local EmbeddingGemma 2 (256d) and caches padded shards."""
-    if cache_path.is_file() and not force_recompute:
-        return cache_path
+    resolved_cache_path = versioned_shard_cache_path(
+        cache_path,
+        prompt_regime_id=prompt_regime_id,
+        embed_model_ver=embed_model_ver,
+    )
+    if resolved_cache_path.is_file() and not force_recompute:
+        return resolved_cache_path
 
     if embedder_dir is None:
         embedder_dir = repo_root / "lab" / "datasets" / "embedder_models" / "embeddinggemma-2"
     assert_safe_path(embedder_dir, repo_root=repo_root)
-    assert_safe_path(cache_path, repo_root=repo_root)
+    assert_safe_path(resolved_cache_path, repo_root=repo_root)
 
     episodes = build_phase1_episodes(repo_root, max_w2s_windows=max_w2s_windows)
     unique_texts: dict[str, int] = {}
@@ -645,7 +692,7 @@ def precompute_phase1_shards(
     model_kwargs = {"dtype": torch.bfloat16} if use_bf16 else {}
     st_model = SentenceTransformer(str(embedder_dir), device=device, model_kwargs=model_kwargs)
     st_model.max_seq_length = 512
-    text_inputs = [{"text": s} for s in ordered_texts]
+    text_inputs = [{"text": format_embedding_text(s, prompt_regime_id)} for s in ordered_texts]
     emb_matrix = st_model.encode(
         text_inputs,
         batch_size=batch_size,
@@ -692,9 +739,11 @@ def precompute_phase1_shards(
         arrays[f"{split_name}_mask"] = mask
         arrays[f"{split_name}_ds"] = ds_names
 
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(cache_path, **arrays)
-    return cache_path
+    arrays["prompt_regime_id"] = np.array([prompt_regime_id], dtype=str)
+    arrays["embed_model_ver"] = np.array([embed_model_ver], dtype=str)
+    resolved_cache_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(resolved_cache_path, **arrays)
+    return resolved_cache_path
 
 
 def load_cached_shards(cache_path: Path) -> dict[str, dict[str, np.ndarray]]:
@@ -1661,15 +1710,22 @@ def precompute_multitask_shards(
     max_seq_len: int = 24,
     batch_size: int = 64,
     force_recompute: bool = False,
+    prompt_regime_id: str = DEFAULT_PROMPT_REGIME_ID,
+    embed_model_ver: str = DEFAULT_EMBED_MODEL_VER,
 ) -> Path:
     """Encodes all episode turn/query texts via EmbeddingGemma 2 (256d) and caches multi-task shards."""
-    if cache_path.is_file() and not force_recompute:
-        return cache_path
+    resolved_cache_path = versioned_shard_cache_path(
+        cache_path,
+        prompt_regime_id=prompt_regime_id,
+        embed_model_ver=embed_model_ver,
+    )
+    if resolved_cache_path.is_file() and not force_recompute:
+        return resolved_cache_path
 
     if embedder_dir is None:
         embedder_dir = repo_root / "lab" / "datasets" / "embedder_models" / "embeddinggemma-2"
     assert_safe_path(embedder_dir, repo_root=repo_root)
-    assert_safe_path(cache_path, repo_root=repo_root)
+    assert_safe_path(resolved_cache_path, repo_root=repo_root)
 
     unique_texts: dict[str, int] = {}
     for ep in episodes:
@@ -1691,7 +1747,7 @@ def precompute_multitask_shards(
     model_kwargs = {"dtype": torch.bfloat16} if use_bf16 else {}
     st_model = SentenceTransformer(str(embedder_dir), device=device, model_kwargs=model_kwargs)
     st_model.max_seq_length = 512
-    text_inputs = [{"text": s} for s in ordered_texts]
+    text_inputs = [{"text": format_embedding_text(s, prompt_regime_id)} for s in ordered_texts]
     emb_matrix = st_model.encode(
         text_inputs,
         batch_size=batch_size,
@@ -1768,9 +1824,11 @@ def precompute_multitask_shards(
         arrays[f"{split_name}_mrel"] = m_rel
         arrays[f"{split_name}_ds"] = ds_names
 
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(cache_path, **arrays)
-    return cache_path
+    arrays["prompt_regime_id"] = np.array([prompt_regime_id], dtype=str)
+    arrays["embed_model_ver"] = np.array([embed_model_ver], dtype=str)
+    resolved_cache_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(resolved_cache_path, **arrays)
+    return resolved_cache_path
 
 
 def precompute_phase2_shards(
@@ -1781,9 +1839,16 @@ def precompute_phase2_shards(
     max_seq_len: int = 24,
     batch_size: int = 64,
     force_recompute: bool = False,
+    prompt_regime_id: str = DEFAULT_PROMPT_REGIME_ID,
+    embed_model_ver: str = DEFAULT_EMBED_MODEL_VER,
 ) -> Path:
-    if cache_path.is_file() and not force_recompute:
-        return cache_path
+    resolved_cache_path = versioned_shard_cache_path(
+        cache_path,
+        prompt_regime_id=prompt_regime_id,
+        embed_model_ver=embed_model_ver,
+    )
+    if resolved_cache_path.is_file() and not force_recompute:
+        return resolved_cache_path
     episodes = build_phase2_episodes(repo_root, max_seq_len=max_seq_len)
     return precompute_multitask_shards(
         repo_root=repo_root,
@@ -1794,6 +1859,8 @@ def precompute_phase2_shards(
         max_seq_len=max_seq_len,
         batch_size=batch_size,
         force_recompute=force_recompute,
+        prompt_regime_id=prompt_regime_id,
+        embed_model_ver=embed_model_ver,
     )
 
 
@@ -1805,9 +1872,16 @@ def precompute_phase3_shards(
     max_seq_len: int = 24,
     batch_size: int = 64,
     force_recompute: bool = False,
+    prompt_regime_id: str = DEFAULT_PROMPT_REGIME_ID,
+    embed_model_ver: str = DEFAULT_EMBED_MODEL_VER,
 ) -> Path:
-    if cache_path.is_file() and not force_recompute:
-        return cache_path
+    resolved_cache_path = versioned_shard_cache_path(
+        cache_path,
+        prompt_regime_id=prompt_regime_id,
+        embed_model_ver=embed_model_ver,
+    )
+    if resolved_cache_path.is_file() and not force_recompute:
+        return resolved_cache_path
     episodes = build_phase3_episodes(repo_root, max_seq_len=max_seq_len)
     return precompute_multitask_shards(
         repo_root=repo_root,
@@ -1818,6 +1892,8 @@ def precompute_phase3_shards(
         max_seq_len=max_seq_len,
         batch_size=batch_size,
         force_recompute=force_recompute,
+        prompt_regime_id=prompt_regime_id,
+        embed_model_ver=embed_model_ver,
     )
 
 

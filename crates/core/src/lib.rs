@@ -545,17 +545,46 @@ impl<S: Store> Core<S> {
         self.model = model;
     }
 
-    /// Records bounded per-place online adaptation feedback (no-op when `config.online_adaptation == false`).
+    /// Records bounded per-place online adaptation feedback via an audited `AdaptFeedbackApplied`
+    /// log event (no-op when `config.online_adaptation == false`).
     pub fn record_place_feedback(&mut self, place: &PlaceId, feedback: AdaptFeedback) {
         let adapt_cfg = self.config.effective_adapt_config();
         if !adapt_cfg.online_adaptation {
             return;
         }
-        self.state
-            .place_adapt
-            .entry(place.clone())
-            .or_default()
-            .record_feedback(feedback, &adapt_cfg);
+        let now = self
+            .state
+            .last_timestamp_ms
+            .unwrap_or_else(|| Time::from_millis(0));
+        let mut rec = EventRecord::new_root(
+            EventKind::Verdict,
+            now,
+            ActorId::new("core"),
+            place.clone(),
+            Audience::new([self.state.soul_actor_id.clone()]),
+            OriginActor::new(self.state.soul_actor_id.clone()),
+            Taint::Trusted,
+            NumericFeatures::default(),
+            OpaquePayload::default(),
+            Vec::new(),
+            Some(EventDetail::AdaptFeedbackApplied {
+                place: place.clone(),
+                arm: feedback.arm,
+                reward: feedback.reward,
+                is_delayed_one_sided: feedback.is_delayed_one_sided,
+                context_hint: feedback.context_hint,
+                source_taint: Taint::Trusted,
+            }),
+        );
+        if let Ok(id) = self.store.append(rec.clone()) {
+            if let Ok(Some(persisted)) = self.store.get(id) {
+                self.state.apply_event(&persisted);
+            } else {
+                rec.id = id;
+                rec.seq = LogSeq::new(self.state.last_seq.as_u64().saturating_add(1));
+                self.state.apply_event(&rec);
+            }
+        }
     }
 
     /// Returns the deterministic PRNG root seed.
@@ -758,14 +787,28 @@ impl<S: Store> Core<S> {
         &mut self,
         now: Time,
     ) -> Result<Vec<LessonEntry>, CoreError> {
-        let extracted = self.state.skill_book.cluster_contrastive_lessons(now);
-        for lesson in &extracted {
+        let mut extracted = self.state.skill_book.cluster_contrastive_lessons(now);
+        for lesson in &mut extracted {
+            if !lesson.audience.is_empty() && !lesson.audience.contains(&self.state.soul_actor_id) {
+                let mut members = lesson.audience.members.clone();
+                members.insert(self.state.soul_actor_id.clone());
+                lesson.audience = Audience::new(members);
+                if let Some(stored_lesson) = self.state.skill_book.lessons.get_mut(&lesson.lesson_id)
+                {
+                    stored_lesson.audience = lesson.audience.clone();
+                }
+            }
+            let event_audience = if lesson.audience.is_empty() {
+                Audience::new([self.state.soul_actor_id.clone()])
+            } else {
+                lesson.audience.clone()
+            };
             let mut rec = EventRecord::new_root(
                 EventKind::LearningChange,
                 now,
                 ActorId::new("core"),
                 PlaceId::new("core:skills"),
-                Audience::new([self.state.soul_actor_id.clone()]),
+                event_audience,
                 OriginActor::new(self.state.soul_actor_id.clone()),
                 lesson.taint,
                 NumericFeatures::default(),

@@ -8,12 +8,22 @@
 //! Setting `online_adaptation = false` completely isolates base-model behavior:
 //! adaptation state is neither applied during inference nor mutated on feedback.
 
+use monoagens_protocol::{Taint, Time};
 use serde::{Deserialize, Serialize};
 
 use crate::neural::{GateClass, NeuralError};
 
 /// Default maximum magnitude for any per-place adaptation offset or FiLM scalar.
 pub const DEFAULT_MAX_ADAPT_DELTA: f32 = 0.5;
+
+/// Default daily exponential decay factor for per-place adaptation (`0.90`; `1.0` disables decay).
+pub const DEFAULT_ADAPT_DAILY_LAMBDA: f32 = 0.90;
+
+const MS_PER_DAY_F64: f64 = 86_400_000.0;
+
+const fn default_adapt_daily_lambda() -> f32 {
+    DEFAULT_ADAPT_DAILY_LAMBDA
+}
 
 /// Arm alias for the 4 gate actions `[Silent, Note, Wait, Go]`.
 pub type GateArm = GateClass;
@@ -33,6 +43,9 @@ pub struct AdaptConfig {
     pub warm_start_prior_weight: f32,
     /// Discount weight in `(0, 1]` applied to delayed one-sided feedback (e.g. ignored message).
     pub delayed_negative_decay: f32,
+    /// Daily exponential relaxation factor in `(0, 1]` applied over event timestamps (`C-10`).
+    #[serde(default = "default_adapt_daily_lambda")]
+    pub adapt_daily_lambda: f32,
 }
 
 impl Default for AdaptConfig {
@@ -44,6 +57,7 @@ impl Default for AdaptConfig {
             learning_rate: 0.1,
             warm_start_prior_weight: 4.0,
             delayed_negative_decay: 0.5,
+            adapt_daily_lambda: DEFAULT_ADAPT_DAILY_LAMBDA,
         }
     }
 }
@@ -77,6 +91,14 @@ impl AdaptConfig {
         {
             return Err(NeuralError::InvalidAdaptConfig(
                 "delayed_negative_decay must be finite and in (0, 1]",
+            ));
+        }
+        if !self.adapt_daily_lambda.is_finite()
+            || self.adapt_daily_lambda <= 0.0
+            || self.adapt_daily_lambda > 1.0
+        {
+            return Err(NeuralError::InvalidAdaptConfig(
+                "adapt_daily_lambda must be finite and in (0, 1]",
             ));
         }
         Ok(())
@@ -114,6 +136,9 @@ pub struct PlaceAdaptState {
     pub arm_reward_sums: [f64; 4],
     /// Total observed outcomes across all arms for this place.
     pub total_pulls: u64,
+    /// Deterministic event timestamp (ms) of the last adaptation update or decay (`C-10`).
+    #[serde(default)]
+    pub last_updated_ms: Option<Time>,
 }
 
 impl Default for PlaceAdaptState {
@@ -133,7 +158,55 @@ impl PlaceAdaptState {
             arm_pulls: [0; 4],
             arm_reward_sums: [0.0; 4],
             total_pulls: 0,
+            last_updated_ms: None,
         }
+    }
+
+    /// Relaxes offsets, FiLM deltas, reward sums, and pull counts using deterministic
+    /// exponential decay over `now_ms - last_updated_ms` (`C-10`).
+    pub fn apply_time_decay(&mut self, now_ms: Time, config: &AdaptConfig) {
+        if !config.online_adaptation {
+            return;
+        }
+        let lambda = if config.adapt_daily_lambda.is_finite()
+            && config.adapt_daily_lambda > 0.0
+            && config.adapt_daily_lambda <= 1.0
+        {
+            config.adapt_daily_lambda
+        } else {
+            DEFAULT_ADAPT_DAILY_LAMBDA
+        };
+        if let Some(prev) = self.last_updated_ms
+            && now_ms > prev
+            && lambda < 1.0
+        {
+            let dt_days = (now_ms.saturating_sub_ms(prev) as f64) / MS_PER_DAY_F64;
+            let gamma = f64::from(lambda).powf(dt_days);
+            let gamma_f32 = gamma as f32;
+            for v in &mut self.logit_offsets {
+                *v *= gamma_f32;
+            }
+            for v in &mut self.film_scale_deltas {
+                *v *= gamma_f32;
+            }
+            for v in &mut self.film_shift_deltas {
+                *v *= gamma_f32;
+            }
+            for i in 0..4 {
+                self.arm_reward_sums[i] *= gamma;
+                self.arm_pulls[i] = ((self.arm_pulls[i] as f64) * gamma).floor() as u64;
+            }
+            self.total_pulls = self.arm_pulls.iter().sum();
+        }
+        self.last_updated_ms = Some(self.last_updated_ms.map_or(now_ms, |p| p.max(now_ms)));
+    }
+
+    /// Returns a cloned copy relaxed to `now_ms` without mutating `self`.
+    #[must_use]
+    pub fn decayed_at(&self, now_ms: Time, config: &AdaptConfig) -> Self {
+        let mut copy = self.clone();
+        copy.apply_time_decay(now_ms, config);
+        copy
     }
 
     /// Returns the effective clamped gate logit offsets `[Silent, Note, Wait, Go]`
@@ -201,11 +274,31 @@ impl PlaceAdaptState {
     ///
     /// When `config.online_adaptation` is `false`, returns without mutating any field.
     pub fn record_feedback(&mut self, feedback: AdaptFeedback, config: &AdaptConfig) {
+        self.record_feedback_at(feedback, config, None, Taint::Trusted);
+    }
+
+    /// Updates this place's adaptation state with explicit event timestamp (`C-10`) and
+    /// taint guard (`C-4`: untrusted negative/delayed social feedback cannot poison logits).
+    pub fn record_feedback_at(
+        &mut self,
+        feedback: AdaptFeedback,
+        config: &AdaptConfig,
+        now_ms: Option<Time>,
+        source_taint: Taint,
+    ) {
         if !config.online_adaptation {
             return;
         }
         if !feedback.reward.is_finite() {
             return;
+        }
+        if source_taint == Taint::Untrusted
+            && (feedback.reward < 0.0 || feedback.is_delayed_one_sided)
+        {
+            return;
+        }
+        if let Some(ts) = now_ms {
+            self.apply_time_decay(ts, config);
         }
         let max_d = if config.max_adapt_delta.is_finite() && config.max_adapt_delta > 0.0 {
             config.max_adapt_delta
@@ -443,5 +536,53 @@ mod tests {
         assert_eq!(base_out.gate_logits, isolated_out.gate_logits);
         assert_eq!(base_out.gate_probs, isolated_out.gate_probs);
         assert_eq!(model.blake3, digest_before);
+    }
+
+    #[test]
+    fn taint_guard_blocks_untrusted_negative_poisoning_and_time_decay_relaxes_offsets() {
+        let cfg = AdaptConfig::default();
+        let mut st = PlaceAdaptState::new();
+
+        // Untrusted negative / delayed feedback must be ignored (C-4).
+        st.record_feedback_at(
+            AdaptFeedback {
+                arm: GateArm::Go,
+                reward: -1.0,
+                is_delayed_one_sided: false,
+                context_hint: [0.8, -0.5],
+            },
+            &cfg,
+            Some(Time::from_millis(1_000)),
+            Taint::Untrusted,
+        );
+        assert_eq!(st.total_pulls, 0);
+        assert_eq!(st.logit_offsets, [0.0; 4]);
+
+        // Trusted feedback with non-zero context_hint moves FiLM scale deltas away from 0.0 (C-3).
+        st.record_feedback_at(
+            AdaptFeedback {
+                arm: GateArm::Go,
+                reward: 1.0,
+                is_delayed_one_sided: false,
+                context_hint: [0.8, -0.5],
+            },
+            &cfg,
+            Some(Time::from_millis(1_000)),
+            Taint::Trusted,
+        );
+        assert_eq!(st.total_pulls, 1);
+        assert!(st.logit_offsets[GateArm::Go as usize] > 0.0);
+        assert!(st.film_scale_deltas[0].abs() > 0.0);
+        assert!(st.film_scale_deltas[1].abs() > 0.0);
+
+        // 10 days later with adapt_daily_lambda = 0.90 -> offset decays by 0.90^10 (~0.3487) (C-10).
+        let ten_days_ms = 1_000 + 10 * 86_400_000;
+        let decayed = st.decayed_at(Time::from_millis(ten_days_ms), &cfg);
+        let ratio =
+            decayed.logit_offsets[GateArm::Go as usize] / st.logit_offsets[GateArm::Go as usize];
+        assert!(
+            (ratio - 0.90_f32.powi(10)).abs() < 1e-4,
+            "expected decay ratio ~0.3487, got {ratio}"
+        );
     }
 }

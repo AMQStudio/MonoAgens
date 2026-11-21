@@ -39,8 +39,9 @@ use crate::gate::{
 };
 use crate::ledger::PerceptionLedger;
 use crate::neural::{
-    DEFAULT_H_DIM, NeuralModel, PlaceAdaptState, extract_embedding_for_model,
-    extract_features_from_state,
+    AdaptConfig, AdaptFeedback, DEFAULT_H_DIM, NeuralModel, PlaceAdaptState,
+    extract_embedding_for_model, extract_embedding_for_model_config, extract_features_from_state,
+    forward_step,
 };
 use crate::privacy::build_visible_scope;
 use crate::recall::{ImportanceInputs, MemoryBasis, MemoryEntry};
@@ -171,6 +172,8 @@ pub struct CoreState {
 
     pub recorded_config: Option<CoreConfig>,
     pub config_loaded_count: u64,
+    #[serde(default)]
+    pub decision_neural_hints: BTreeMap<EventId, (Option<f32>, Option<f32>)>,
 }
 
 impl Default for CoreState {
@@ -250,7 +253,47 @@ impl CoreState {
             recalibration_pending: false,
             recorded_config: None,
             config_loaded_count: 0,
+            decision_neural_hints: BTreeMap::new(),
         }
+    }
+
+    /// Returns the effective [`AdaptConfig`] projected from the latest `ConfigLoaded` record
+    /// (or [`AdaptConfig::default`] before any config event has been applied).
+    #[must_use]
+    pub fn effective_adapt_config(&self) -> AdaptConfig {
+        self.recorded_config
+            .as_ref()
+            .map_or_else(AdaptConfig::default, CoreConfig::effective_adapt_config)
+    }
+
+    /// Computes a deterministic bounded 2-scalar numeric `context_hint` in `[-1.0, 1.0]` for
+    /// FiLM online adaptation from observable place participants and talk turns (`C-3`).
+    #[must_use]
+    pub fn compute_place_context_hint(&self, place: &PlaceId) -> [f32; 2] {
+        let non_soul_count = self
+            .place_participants
+            .get(place)
+            .map_or(1usize, |set| {
+                set.iter().filter(|a| *a != &self.soul_actor_id).count()
+            });
+        let dyadic_vs_group = if non_soul_count <= 1 {
+            0.8_f32
+        } else {
+            -((1.0_f32 - 1.0_f32 / (non_soul_count as f32)).clamp(0.2, 1.0))
+        };
+
+        let soul_share_centered = match self.talk_turns.get(place) {
+            Some(turns) if !turns.is_empty() => {
+                let soul_turns = turns.iter().filter(|(_, is_soul)| *is_soul).count() as f32;
+                let total = turns.len() as f32;
+                let share = (soul_turns / total).clamp(0.0, 1.0);
+                // Shift by 0.4 instead of 0.5 so balanced 50/50 conversations also emit non-zero signal.
+                ((share - 0.4) * 2.0).clamp(-1.0, 1.0)
+            }
+            _ => -0.5_f32,
+        };
+
+        [dyadic_vs_group, soul_share_centered]
     }
 
     /// Maps a log [`EventId`] to the key used for `(seed, event_id)` seeded draws, subtracting
@@ -562,7 +605,10 @@ impl CoreState {
             backlog_queue_depth,
         );
         let d_emb = model.map_or(256, |m| m.config.d_in_emb);
-        let e_256 = extract_embedding_for_model(&synthetic_percept, d_emb);
+        let e_256 = match model {
+            Some(m) => extract_embedding_for_model_config(&synthetic_percept, &m.config),
+            None => extract_embedding_for_model(&synthetic_percept, d_emb),
+        };
         let h_dim = model.map_or(DEFAULT_H_DIM, |m| m.config.h_dim);
         let h_prev = self
             .place_memory
@@ -570,7 +616,11 @@ impl CoreState {
             .filter(|v| v.len() == h_dim)
             .cloned()
             .unwrap_or_else(|| vec![0.0_f32; h_dim]);
-        let adapt = self.place_adapt.get(&percept.place);
+        let adapt_cfg = config.effective_adapt_config();
+        let decayed_adapt = self
+            .place_adapt
+            .get(&percept.place)
+            .map(|st| st.decayed_at(percept.timestamp_ms, &adapt_cfg));
 
         decide_gate(
             self.draw_key(percept.id),
@@ -579,9 +629,59 @@ impl CoreState {
             &e_256,
             &x_num,
             &h_prev,
-            adapt,
+            decayed_adapt.as_ref(),
             commitments,
         )
+    }
+
+    /// Computes a non-waking recurrent memory step (`h_next`) for a `SelfCaused` percept (`C-9`)
+    /// when a neural model is loaded, returning `None` under neutral fallback (`model = None`).
+    #[must_use]
+    pub fn step_self_caused_neural(
+        &self,
+        percept: &EventRecord,
+        model: Option<&NeuralModel>,
+    ) -> Option<DecisionTrace> {
+        let m = model?;
+        let embeddings = match &percept.detail {
+            Some(EventDetail::PerceptMeta { embeddings, .. }) => embeddings.as_slice(),
+            _ => &[][..],
+        };
+        let mut synthetic_percept = Percept::minimal(
+            percept.actor.clone(),
+            percept.place.clone(),
+            percept.audience.clone(),
+            percept.timestamp_ms,
+            percept.payload.clone(),
+        );
+        synthetic_percept.taint = percept.taint;
+        synthetic_percept.origin_actor = Some(percept.origin_actor.clone());
+        synthetic_percept.embeddings = embeddings.to_vec();
+        synthetic_percept.f_modal = percept.numeric_features.f_modal;
+
+        let x_num = extract_features_from_state(self, &synthetic_percept, percept.timestamp_ms, 0);
+        let e_256 = extract_embedding_for_model_config(&synthetic_percept, &m.config);
+        let h_dim = m.config.h_dim;
+        let h_prev = self
+            .place_memory
+            .get(&percept.place)
+            .filter(|v| v.len() == h_dim)
+            .cloned()
+            .unwrap_or_else(|| vec![0.0_f32; h_dim]);
+
+        let neural = forward_step(Some(m), &e_256, &x_num, &h_prev, None).ok()?;
+        Some(DecisionTrace {
+            neural,
+            model_blake3: Some(m.blake3),
+            feature_schema_version: m.config.feature_schema_version,
+            online_adaptation_applied: false,
+            commitment_bypass: false,
+            self_caused: true,
+            draw: 0.0,
+            probability: 0.0,
+            outcome: DecisionOutcome::Processed,
+            reason: DecisionReason::SelfCaused,
+        })
     }
 
     /// Deterministic projection of a single canonical log record onto `self`.
@@ -667,16 +767,29 @@ impl CoreState {
             }
             EventKind::Decision => {
                 if let Some(EventDetail::Decision {
+                    target_event_id,
                     outcome,
+                    reason,
                     trace: Some(tr),
                     ..
                 }) = &record.detail
-                    && !matches!(outcome, DecisionOutcome::DoorBlocked | DecisionOutcome::Processed)
-                    && !tr.neural.h_next.is_empty()
-                    && tr.neural.h_next.iter().all(|v| v.is_finite())
                 {
-                    self.place_memory
-                        .insert(record.place.clone(), tr.neural.h_next.clone());
+                    if (!matches!(outcome, DecisionOutcome::DoorBlocked | DecisionOutcome::Processed)
+                        || *reason == Some(DecisionReason::SelfCaused))
+                        && !tr.neural.h_next.is_empty()
+                        && tr.neural.h_next.iter().all(|v| v.is_finite())
+                    {
+                        self.place_memory
+                            .insert(record.place.clone(), tr.neural.h_next.clone());
+                    }
+                    if !tr.neural.is_neutral_fallback
+                        && (tr.neural.p_verify.is_some() || tr.neural.p_uncertainty.is_some())
+                    {
+                        self.decision_neural_hints.insert(
+                            *target_event_id,
+                            (tr.neural.p_verify, tr.neural.p_uncertainty),
+                        );
+                    }
                 }
             }
             EventKind::Action => {
@@ -1241,6 +1354,33 @@ impl CoreState {
                         self.recalibration_pending = true;
                     }
                 }
+                Some(EventDetail::AdaptFeedbackApplied {
+                    place,
+                    arm,
+                    reward,
+                    is_delayed_one_sided,
+                    context_hint,
+                    source_taint,
+                }) => {
+                    let adapt_cfg = self.effective_adapt_config();
+                    if adapt_cfg.online_adaptation
+                        && !(*source_taint == Taint::Untrusted
+                            && (*reward < 0.0 || *is_delayed_one_sided))
+                    {
+                        let st = self.place_adapt.entry(place.clone()).or_default();
+                        st.record_feedback_at(
+                            AdaptFeedback {
+                                arm: *arm,
+                                reward: *reward,
+                                is_delayed_one_sided: *is_delayed_one_sided,
+                                context_hint: *context_hint,
+                            },
+                            &adapt_cfg,
+                            Some(record.timestamp_ms),
+                            *source_taint,
+                        );
+                    }
+                }
                 _ => {}
             },
             EventKind::BodyState => {
@@ -1496,6 +1636,7 @@ impl CoreState {
                         self.memory_entries.remove(ev);
                         self.active_wake_snapshots.remove(ev);
                         self.auto_recall_states.remove(ev);
+                        self.decision_neural_hints.remove(ev);
                         self.procedures.remove(ev);
                     }
                     for (place, hist) in &self.place_history {
@@ -1551,7 +1692,10 @@ impl CoreState {
                     self.open_promises = self.expectation_book.promise_summaries();
                     self.procedures
                         .retain(|_, p| !target_actor_ids.iter().any(|a| p.audience.contains(a)));
+                    self.skill_book.forget(target_event_ids, target_actor_ids);
                     self.episode_book.forget(target_event_ids, target_actor_ids);
+                    self.episode_book
+                        .recompute_centroids_from_entries(&self.memory_entries);
                     self.belief_book
                         .recompute_after_forget(target_event_ids, target_actor_ids);
                     self.unconsolidated_count = self.episode_book.unconsolidated_events.len();
@@ -1585,6 +1729,7 @@ impl CoreState {
                                 failure_ids: failure_ids.clone(),
                                 contrastive_success_ids: contrastive_success_ids.clone(),
                                 domain: domain.clone(),
+                                audience: record.audience.clone(),
                                 taint: record.taint,
                                 now_ms: record.timestamp_ms,
                             },

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{CURRENT_CORE_CONFIG_VERSION, CoreConfig};
 use crate::gate::{DecisionReason, DecisionTrace};
-use crate::neural::{GateClass, NeuralOutputs};
+use crate::neural::{GateArm, GateClass, NeuralOutputs};
 use crate::recall::MemoryBasis;
 
 /// Historical domain transition kind preserved strictly for wire tag `31` log decoding.
@@ -820,6 +820,14 @@ pub enum EventDetail {
     ConfigLoaded {
         config: Box<CoreConfig>,
         config_blake3: [u8; 32],
+    },
+    AdaptFeedbackApplied {
+        place: PlaceId,
+        arm: GateArm,
+        reward: f32,
+        is_delayed_one_sided: bool,
+        context_hint: [f32; 2],
+        source_taint: Taint,
     },
 }
 
@@ -2184,6 +2192,23 @@ fn encode_opt_detail(w: &mut BinWriter, detail: Option<&EventDetail>) {
             encode_core_config(w, config);
             w.raw(config_blake3);
         }
+        EventDetail::AdaptFeedbackApplied {
+            place,
+            arm,
+            reward,
+            is_delayed_one_sided,
+            context_hint,
+            source_taint,
+        } => {
+            w.u8(41);
+            w.str(place.as_str());
+            w.u8(*arm as u8);
+            w.f32(*reward);
+            w.u8(u8::from(*is_delayed_one_sided));
+            w.f32(context_hint[0]);
+            w.f32(context_hint[1]);
+            w.u8(encode_taint(*source_taint));
+        }
     }
 }
 
@@ -2995,6 +3020,25 @@ fn decode_opt_detail(r: &mut BinReader<'_>) -> Result<Option<EventDetail>, Event
                 config_blake3,
             }))
         }
+        41 => {
+            let place = PlaceId::new(r.string()?);
+            let arm_code = r.u8()?;
+            let arm = GateArm::from_index(usize::from(arm_code)).ok_or_else(|| {
+                EventFormatError::MalformedRecord(format!("invalid gate arm code {arm_code}"))
+            })?;
+            let reward = r.f32()?;
+            let is_delayed_one_sided = r.u8()? != 0;
+            let context_hint = [r.f32()?, r.f32()?];
+            let source_taint = decode_taint(r.u8()?)?;
+            Ok(Some(EventDetail::AdaptFeedbackApplied {
+                place,
+                arm,
+                reward,
+                is_delayed_one_sided,
+                context_hint,
+                source_taint,
+            }))
+        }
         other => Err(EventFormatError::MalformedRecord(format!(
             "invalid detail tag {other}"
         ))),
@@ -3264,6 +3308,7 @@ pub(crate) fn encode_core_config(w: &mut BinWriter, c: &CoreConfig) {
     w.f32(c.adapt.learning_rate);
     w.f32(c.adapt.warm_start_prior_weight);
     w.f32(c.adapt.delayed_negative_decay);
+    w.f32(c.adapt.adapt_daily_lambda);
     w.opt_str(c.model_path.as_deref());
     match c.expected_blake3 {
         Some(hash) => {
@@ -3306,6 +3351,7 @@ pub(crate) fn decode_core_config(r: &mut BinReader<'_>) -> Result<CoreConfig, Ev
     let learning_rate = r.f32()?;
     let warm_start_prior_weight = r.f32()?;
     let delayed_negative_decay = r.f32()?;
+    let adapt_daily_lambda = r.f32()?;
     let model_path = r.opt_string()?;
     let expected_blake3 = match r.u8()? {
         0 => None,
@@ -3351,6 +3397,7 @@ pub(crate) fn decode_core_config(r: &mut BinReader<'_>) -> Result<CoreConfig, Ev
             learning_rate,
             warm_start_prior_weight,
             delayed_negative_decay,
+            adapt_daily_lambda,
         },
         model_path,
         expected_blake3,
@@ -4028,6 +4075,14 @@ mod tests {
                     ..crate::config::CoreConfig::default()
                 }),
                 config_blake3: [0xAB; 32],
+            },
+            EventDetail::AdaptFeedbackApplied {
+                place: PlaceId::new("chat:1"),
+                arm: crate::neural::GateArm::Go,
+                reward: -0.5,
+                is_delayed_one_sided: true,
+                context_hint: [0.8, -0.25],
+                source_taint: Taint::Trusted,
             },
         ];
         for detail in details {

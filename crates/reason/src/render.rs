@@ -726,13 +726,22 @@ fn procedure_schema_valid(
     if !proc_item.active || proc_item.retired || proc_item.required_cap_ids.is_empty() {
         return false;
     }
-    proc_item
-        .required_cap_ids
-        .iter()
-        .all(|req_id| match active_hashes.get(req_id.as_str()) {
-            Some(&active_hash) => active_hash == proc_item.capability_schema_hash.as_str(),
-            None => !require_known,
-        })
+    let mut pairs: Vec<(monoagens_protocol::CapabilityId, monoagens_protocol::CapabilitySchemaHash)> =
+        Vec::with_capacity(proc_item.required_cap_ids.len());
+    for req_id in &proc_item.required_cap_ids {
+        match active_hashes.get(req_id.as_str()) {
+            Some(&active_hash) => pairs.push((
+                req_id.clone(),
+                monoagens_protocol::CapabilitySchemaHash::new(active_hash.to_owned()),
+            )),
+            None if require_known => return false,
+            None => return true,
+        }
+    }
+    let computed = monoagens_core::compute_procedure_schema_hash(
+        pairs.iter().map(|(id, hash)| (id, hash)),
+    );
+    computed == proc_item.capability_schema_hash
 }
 
 fn render_self_card(card: &CoreSelfCard) -> String {

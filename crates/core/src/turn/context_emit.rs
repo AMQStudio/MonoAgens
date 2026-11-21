@@ -412,6 +412,18 @@ fn assemble_full_context_plan<S: Store>(
         },
     );
 
+    let (neural_p_verify, neural_p_uncertainty) = core
+        .state()
+        .decision_neural_hints
+        .get(&trigger_event_id)
+        .copied()
+        .or_else(|| {
+            trigger
+                .caused_by
+                .iter()
+                .find_map(|cid| core.state().decision_neural_hints.get(cid).copied())
+        })
+        .unwrap_or((None, None));
     let mut plan = ContextPlan {
         trigger_event_id: Some(trigger_event_id),
         place: Some(place.clone()),
@@ -421,6 +433,8 @@ fn assemble_full_context_plan<S: Store>(
         dropped_items,
         static_prefix_digest: [0u8; 32],
         valve_self_snapshot: None,
+        neural_p_verify,
+        neural_p_uncertainty,
     };
     plan.refresh_static_prefix_digest();
     Ok(plan)
@@ -1525,7 +1539,17 @@ pub(super) fn handle_classify_result<S: Store>(
                 );
                 let sj_stored = append_and_apply(core, sj)?;
                 let feedback_place = sj_stored.place.clone();
-                record_place_adapt_feedback(core, &feedback_place, GateArm::Silent, -0.5, true);
+                let source_taint = trigger_ev.as_ref().map_or(Taint::Trusted, |ev| ev.taint);
+                record_place_adapt_feedback(
+                    core,
+                    Some(&sj_stored),
+                    &feedback_place,
+                    GateArm::Silent,
+                    -0.5,
+                    true,
+                    source_taint,
+                    now,
+                )?;
                 let tr = EventRecord::new_root(
                     EventKind::ExpectationChanged,
                     now,

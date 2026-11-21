@@ -135,3 +135,26 @@ def test_procedural_timing_shards_cover_habituation_wait_and_vectorless():
     # Verify Wait examples carry positive wait_delta_ms
     wait_mask = active & (tr["y_gate"] == 2)
     assert np.all(tr["y_wait_ms"][wait_mask] >= 1500.0)
+
+
+def test_fit_cic_threshold_is_non_vacuous_above_simplex_floor():
+    from monoagens_train.calibrate import fit_cic_threshold
+
+    rng = np.random.default_rng(123)
+    n = 1000
+    labels = rng.integers(0, 4, size=n)
+    probs = np.full((n, 4), 0.12, dtype=np.float64)
+    # 78% accurate confident predictions, 22% near-uniform ambiguous predictions
+    for i in range(n):
+        if i < 780:
+            probs[i] = 0.05
+            probs[i, labels[i]] = 0.85
+        else:
+            wrong = (labels[i] + 1) % 4
+            probs[i] = 0.18
+            probs[i, wrong] = 0.46
+    tau, cov, _emp, upper = fit_cic_threshold(probs, labels, target_risk=0.05, delta=0.05)
+    assert tau > 0.25
+    assert tau >= 0.30
+    assert cov >= 0.20
+    assert upper <= 0.05

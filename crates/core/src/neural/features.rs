@@ -3,7 +3,7 @@
 
 use monoagens_protocol::{FModal, Percept, Time, VisibleScope};
 
-use crate::neural::{DEFAULT_EMB_DIM, DEFAULT_NUM_FEATURES};
+use crate::neural::{DEFAULT_EMB_DIM, DEFAULT_NUM_FEATURES, NeuralModelConfig};
 use crate::state::CoreState;
 
 /// Feature schema version emitted by [`extract_x_num`].
@@ -140,13 +140,45 @@ pub fn extract_x_num_with_fmodal(
 /// degrading cleanly to zeros (`[0.0; d_in_emb]`) when no matching embedding is present.
 #[must_use]
 pub fn extract_embedding_for_model(percept: &Percept, d_in_emb: usize) -> Vec<f32> {
+    extract_embedding_matching(percept, d_in_emb, None, None)
+}
+
+/// Extracts a finite embedding vector matching `config.d_in_emb` and preferring embeddings whose
+/// `(embed_model_ver, prompt_regime_id)` match `config`'s declared contract (`C-1`), falling back
+/// to dimension-matching / first embedding or zeros when absent.
+#[must_use]
+pub fn extract_embedding_for_model_config(
+    percept: &Percept,
+    config: &NeuralModelConfig,
+) -> Vec<f32> {
+    extract_embedding_matching(
+        percept,
+        config.d_in_emb,
+        config.expected_embed_model_ver.as_deref(),
+        config.expected_prompt_regime_id.as_deref(),
+    )
+}
+
+fn extract_embedding_matching(
+    percept: &Percept,
+    d_in_emb: usize,
+    expected_ver: Option<&str>,
+    expected_regime: Option<&str>,
+) -> Vec<f32> {
     if d_in_emb == 0 {
         return Vec::new();
     }
-    let candidate = percept
-        .embeddings
-        .iter()
-        .find(|e| e.values.len() == d_in_emb)
+    let exact_match = if expected_ver.is_some() || expected_regime.is_some() {
+        percept.embeddings.iter().find(|e| {
+            e.values.len() == d_in_emb
+                && expected_ver.is_none_or(|v| e.tag.embed_model_ver == v)
+                && expected_regime.is_none_or(|r| e.tag.prompt_regime_id == r)
+        })
+    } else {
+        None
+    };
+    let candidate = exact_match
+        .or_else(|| percept.embeddings.iter().find(|e| e.values.len() == d_in_emb))
         .or_else(|| percept.embeddings.first());
     let mut out = vec![0.0_f32; d_in_emb];
     if let Some(emb) = candidate {
@@ -460,5 +492,57 @@ mod tests {
         );
         assert_eq!(f_with, f_without);
         assert_eq!(f_with[13], 0.0);
+    }
+
+    #[test]
+    fn extract_embedding_for_model_config_prefers_matching_regime_and_version() {
+        let mut p = Percept::minimal(
+            ActorId::new("alice"),
+            PlaceId::new("room:a"),
+            Audience::new([ActorId::new("alice"), ActorId::new("soul")]),
+            Time::from_millis(1_000),
+            OpaquePayload::from_bytes(b"halo"),
+        );
+        p.embeddings = vec![
+            TaggedEmbedding {
+                tag: EmbeddingTag {
+                    embed_model_ver: "egemma2-256".to_owned(),
+                    dim_d: 4,
+                    prompt_regime_id: "t_q".to_owned(),
+                },
+                values: vec![0.1, 0.2, 0.3, 0.4],
+            },
+            TaggedEmbedding {
+                tag: EmbeddingTag {
+                    embed_model_ver: "egemma2-256".to_owned(),
+                    dim_d: 4,
+                    prompt_regime_id: "t_d".to_owned(),
+                },
+                values: vec![0.9, 0.8, 0.7, 0.6],
+            },
+        ];
+        let cfg = NeuralModelConfig {
+            feature_schema_version: 1,
+            d_in_emb: 4,
+            d_in_num: 18,
+            plr_n_frequencies: 8,
+            d_e: 8,
+            d_n: 8,
+            d_model: 16,
+            d_ff: 32,
+            n_layers: 1,
+            tabm_k: 2,
+            h_dim: 8,
+            cell_type: crate::neural::CellType::MinGru,
+            temperature: 1.0,
+            cic_threshold: 0.5,
+            max_wait_ms: 30_000.0,
+            has_phase2_heads: false,
+            has_phase3_heads: false,
+            expected_embed_model_ver: Some("egemma2-256".to_owned()),
+            expected_prompt_regime_id: Some("t_d".to_owned()),
+        };
+        let picked = extract_embedding_for_model_config(&p, &cfg);
+        assert_eq!(picked, vec![0.9, 0.8, 0.7, 0.6]);
     }
 }

@@ -62,6 +62,10 @@ pub struct NeuralModelConfig {
     pub max_wait_ms: f32,
     pub has_phase2_heads: bool,
     pub has_phase3_heads: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_embed_model_ver: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_prompt_regime_id: Option<String>,
 }
 
 /// One Pre-LN Residual SwiGLU block with `TabM` rank-1 ensemble adapters.
@@ -192,6 +196,10 @@ impl NeuralModel {
 
         let has_phase2_heads = parse_optional_bool(meta_map, "has_phase2_heads")?;
         let has_phase3_heads = parse_optional_bool(meta_map, "has_phase3_heads")?;
+        let expected_embed_model_ver =
+            parse_optional_nonempty_str(meta_map, "expected_embed_model_ver")?;
+        let expected_prompt_regime_id =
+            parse_optional_nonempty_str(meta_map, "expected_prompt_regime_id")?;
 
         // Infer or validate plr_n_frequencies from stem.plr.freqs.
         let freqs_view = tensors
@@ -259,6 +267,8 @@ impl NeuralModel {
             max_wait_ms,
             has_phase2_heads,
             has_phase3_heads,
+            expected_embed_model_ver,
+            expected_prompt_regime_id,
         };
 
         // Load & validate stem tensors.
@@ -574,6 +584,23 @@ fn parse_f32_unit_interval(
         });
     }
     Ok(val)
+}
+
+fn parse_optional_nonempty_str(
+    meta: &HashMap<String, String>,
+    key: &'static str,
+) -> Result<Option<String>, NeuralError> {
+    let Some(raw) = meta.get(key) else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(NeuralError::InvalidMetadata {
+            key,
+            detail: "must be non-empty when present".to_owned(),
+        });
+    }
+    Ok(Some(trimmed.to_owned()))
 }
 
 fn parse_optional_bool(
@@ -965,6 +992,45 @@ mod tests {
                 expected: vec![4],
                 actual: vec![3],
             }
+        );
+    }
+
+    #[test]
+    fn parses_optional_embedding_contract_metadata_and_keeps_v1_compat() {
+        let (mut meta, entries) = build_synthetic_tensors_map(
+            256,
+            18,
+            64,
+            32,
+            128,
+            192,
+            2,
+            8,
+            64,
+            8,
+            CellType::GatedDeltaNet2,
+            true,
+            true,
+        );
+        // Without optional keys -> None (legacy fixture compatibility)
+        let bytes_legacy = serialize_tensors_map(meta.clone(), entries.clone());
+        let m_legacy = NeuralModel::from_safetensors_bytes(&bytes_legacy, None).expect("legacy");
+        assert_eq!(m_legacy.config.expected_embed_model_ver, None);
+        assert_eq!(m_legacy.config.expected_prompt_regime_id, None);
+
+        // With expected_embed_model_ver & expected_prompt_regime_id -> parsed cleanly
+        meta.insert("expected_embed_model_ver".to_owned(), "egemma2-256".to_owned());
+        meta.insert("expected_prompt_regime_id".to_owned(), "t_d".to_owned());
+        let bytes_contract = serialize_tensors_map(meta, entries);
+        let m_contract =
+            NeuralModel::from_safetensors_bytes(&bytes_contract, None).expect("contract");
+        assert_eq!(
+            m_contract.config.expected_embed_model_ver.as_deref(),
+            Some("egemma2-256")
+        );
+        assert_eq!(
+            m_contract.config.expected_prompt_regime_id.as_deref(),
+            Some("t_d")
         );
     }
 }

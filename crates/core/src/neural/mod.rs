@@ -97,8 +97,8 @@ use serde::{Deserialize, Serialize};
 pub use adapt::{AdaptConfig, AdaptFeedback, GateArm, PlaceAdaptState};
 pub use features::{
     FEATURE_SCHEMA_VERSION, NumericFeatureInputs, cosine_similarity, extract_embedding_for_model,
-    extract_features_from_state, extract_fmodal, extract_x_num, extract_x_num_with_fmodal,
-    zero_embedding,
+    extract_embedding_for_model_config, extract_features_from_state, extract_fmodal,
+    extract_x_num, extract_x_num_with_fmodal, zero_embedding,
 };
 pub use forward::{NeuralOutputs, forward_step, neutral_outputs};
 pub use weights::{

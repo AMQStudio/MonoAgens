@@ -83,6 +83,12 @@ pub struct ContextPlan {
     /// Optional opaque `ValveSelfSnapshot` attached by `Doors::context` (`7.6`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub valve_self_snapshot: Option<ValveSelfSnapshot>,
+    /// Optional Phase 2 neural verification hint in `[0.0, 1.0]` (`C-4`; `None` under neutral fallback).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub neural_p_verify: Option<f32>,
+    /// Optional Phase 2 neural uncertainty hint in `[0.0, 1.0]` (`C-4`; `None` under neutral fallback).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub neural_p_uncertainty: Option<f32>,
 }
 
 impl ContextPlan {

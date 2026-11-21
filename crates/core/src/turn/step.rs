@@ -217,6 +217,9 @@ pub(crate) fn execute_turn<S: Store>(
                         }),
                     );
                     append_and_apply(core, eff_kept)?;
+                    let self_trace = core
+                        .state()
+                        .step_self_caused_neural(&stored, core.neural_model());
                     let self_dec = EventRecord::derived_from(
                         &stored,
                         EventKind::Decision,
@@ -236,7 +239,7 @@ pub(crate) fn execute_turn<S: Store>(
                             probability: 0.0,
                             draw: 0.0,
                             reason: Some(DecisionReason::SelfCaused),
-                            trace: None,
+                            trace: self_trace.map(Box::new),
                         }),
                     );
                     append_and_apply(core, self_dec)?;
@@ -330,7 +333,16 @@ pub(crate) fn execute_turn<S: Store>(
                         }),
                     );
                     append_and_apply(core, yield_dec)?;
-                    record_place_adapt_feedback(core, &wait.place, GateArm::Wait, 0.5, false);
+                    record_place_adapt_feedback(
+                        core,
+                        Some(&stored),
+                        &wait.place,
+                        GateArm::Wait,
+                        0.5,
+                        false,
+                        stored.taint,
+                        now,
+                    )?;
                 }
 
                 // Link incoming percepts that belong to an active Goal chain (reply_to / caused_by).
@@ -787,10 +799,7 @@ pub(crate) fn execute_turn<S: Store>(
                 )?;
             }
             match receipt.outcome {
-                ReceiptOutcome::Done => {
-                    let place_c = stored.place.clone();
-                    record_place_adapt_feedback(core, &place_c, GateArm::Go, 0.5, false);
-                }
+                ReceiptOutcome::Done | ReceiptOutcome::Held | ReceiptOutcome::Unknown => {}
                 ReceiptOutcome::Failed | ReceiptOutcome::Refused => {
                     let non_fault = matches!(
                         receipt.termination_reason,
@@ -801,10 +810,18 @@ pub(crate) fn execute_turn<S: Store>(
                     );
                     if !non_fault {
                         let place_c = stored.place.clone();
-                        record_place_adapt_feedback(core, &place_c, GateArm::Go, -0.5, false);
+                        record_place_adapt_feedback(
+                            core,
+                            Some(&stored),
+                            &place_c,
+                            GateArm::Go,
+                            -0.5,
+                            false,
+                            Taint::Trusted,
+                            now,
+                        )?;
                     }
                 }
-                ReceiptOutcome::Held | ReceiptOutcome::Unknown => {}
             }
             handle_receipt_expectations(core, &stored, &receipt, now, doors)
         }
@@ -1450,6 +1467,14 @@ pub(crate) fn execute_turn<S: Store>(
                                 continue;
                             }
 
+                            let gist_embeddings: Vec<monoagens_protocol::TaggedEmbedding> =
+                                matched_ep_id
+                                    .and_then(|ep_id| {
+                                        core.state().episode_book.episodes.get(&ep_id)
+                                    })
+                                    .and_then(|ep| ep.centroid.clone())
+                                    .into_iter()
+                                    .collect();
                             let mut trace = crate::activation::ActivationTrace::default();
                             trace.record(now);
                             let entry = MemoryEntry {
@@ -1466,7 +1491,7 @@ pub(crate) fn execute_turn<S: Store>(
                                 attachments: Vec::new(),
                                 activation: trace,
                                 importance: Default::default(),
-                                embeddings: Vec::new(),
+                                embeddings: gist_embeddings,
                                 concepts: people.into_iter().map(|p| p.into_inner()).collect(),
                                 superseded_by: None,
                                 erased: false,
@@ -1722,6 +1747,7 @@ pub(crate) fn execute_turn<S: Store>(
                                 failure_ids,
                                 contrastive_success_ids,
                                 domain,
+                                audience: stored_thought.audience.clone(),
                                 taint: stored_thought.taint,
                                 now_ms: now,
                             };
@@ -3111,7 +3137,17 @@ fn handle_due_expectations<S: Store>(
                     );
                     let sj_stored = append_and_apply(core, sj)?;
                     let place_c = sj_stored.place.clone();
-                    record_place_adapt_feedback(core, &place_c, GateArm::Silent, -0.5, true);
+                    let source_taint = sj_stored.taint;
+                    record_place_adapt_feedback(
+                        core,
+                        Some(&sj_stored),
+                        &place_c,
+                        GateArm::Silent,
+                        -0.5,
+                        true,
+                        source_taint,
+                        now,
+                    )?;
                     let tr = EventRecord::derived_from(
                         tick_rec,
                         EventKind::ExpectationChanged,
@@ -3265,7 +3301,17 @@ fn process_judged_silences_on_percept<S: Store>(
                 );
                 let sj_stored = append_and_apply(core, sj)?;
                 let place_c = sj_stored.place.clone();
-                record_place_adapt_feedback(core, &place_c, GateArm::Silent, 0.5, true);
+                let source_taint = sj_stored.taint;
+                record_place_adapt_feedback(
+                    core,
+                    Some(&sj_stored),
+                    &place_c,
+                    GateArm::Silent,
+                    0.5,
+                    true,
+                    source_taint,
+                    now,
+                )?;
                 let tr = EventRecord::derived_from(
                     stored,
                     EventKind::ExpectationChanged,

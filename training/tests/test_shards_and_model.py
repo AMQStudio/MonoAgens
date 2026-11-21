@@ -85,6 +85,26 @@ def test_model_presets_and_safetensors_export_roundtrip(tmp_path: Path):
                 loaded = load_file(str(out_file))
                 assert "stem.plr.freqs" in loaded
                 assert "head.gate_4.weight" in loaded
+                from safetensors import safe_open
+
+                with safe_open(str(out_file), framework="pt") as sf:
+                    meta = sf.metadata()
+                    assert meta["expected_embed_model_ver"] == "egemma2-256"
+                    assert meta["expected_prompt_regime_id"] == "t_d"
+
+
+def test_task_prefix_formatting_and_versioned_shard_paths(tmp_path: Path):
+    from monoagens_train.datasets import format_embedding_text, versioned_shard_cache_path
+
+    assert format_embedding_text("hello world", "t_d") == "title: none | text: hello world"
+    assert format_embedding_text("hello world", "raw") == "hello world"
+    p_base = tmp_path / "phase1_shards.npz"
+    p_td = versioned_shard_cache_path(p_base, prompt_regime_id="t_d")
+    p_raw = versioned_shard_cache_path(p_base, prompt_regime_id="raw")
+    assert p_td != p_raw
+    assert "t_d" in p_td.name
+    assert "raw" in p_raw.name
+    assert versioned_shard_cache_path(p_td, prompt_regime_id="t_d") == p_td
 
 
 def test_cached_shards_if_present_are_finite_and_valid():

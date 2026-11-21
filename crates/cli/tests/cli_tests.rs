@@ -705,3 +705,278 @@ fn cli_chat_fails_startup_when_soul_core_config_is_missing_or_invalid() {
     .expect_err("chat must fail when [soul] core_config path is missing");
     assert!(err.contains("nonexistent_core_config.json"), "err={err}");
 }
+
+fn build_export_learning_fixture_log(include_hard_forget: bool) -> Vec<EventRecord> {
+    use monoagens_core::{Core, CoreConfig, Input, MemStore, NoopDoors};
+    use monoagens_protocol::{
+        ActorId, Audience, ConsolidateOutput, OpaquePayload, Percept, PlaceId, Taint, ThoughtAct,
+        Time,
+    };
+
+    let cfg = CoreConfig {
+        sleep_min_episodes: 1,
+        sleep_idle_ms: 1_000,
+        ..CoreConfig::default()
+    };
+    let mut core = Core::open(MemStore::new(), cfg, None).unwrap();
+
+    // 1. Group message & lesson (multi-party audience: alice, bob, soul)
+    let mut p_group = Percept::minimal(
+        ActorId::new("per_alice"),
+        PlaceId::new("room:group"),
+        Audience::new([
+            ActorId::new("per_alice"),
+            ActorId::new("per_bob"),
+            ActorId::new("soul"),
+        ]),
+        Time::from_millis(1_000),
+        OpaquePayload::from_bytes(b"group discussion"),
+    );
+    p_group.named = vec![ActorId::new("soul")];
+    p_group.addressees = vec![ActorId::new("soul")];
+    p_group.taint = Taint::Trusted;
+    let eff_group = core
+        .step(
+            Input::Percept(Box::new(p_group)),
+            Time::from_millis(1_000),
+            &mut NoopDoors,
+        )
+        .unwrap();
+    let group_wake_id = match eff_group.as_slice() {
+        [monoagens_core::Effect::Model { plan, .. }] => plan.trigger_event_id.unwrap(),
+        other => panic!("expected group wake, got {other:?}"),
+    };
+    core.step(
+        Input::ModelResult {
+            request_id: group_wake_id,
+            acts: vec![
+                ThoughtAct::Think {
+                    thought: "group convention remembered".to_owned(),
+                    motivation: 3,
+                    confidence_0_20: 16,
+                    used_ids: vec![group_wake_id],
+                    importance: Some(0.8),
+                    basis: Some("observed".to_owned()),
+                    value: Some(1.0),
+                    cost: Some(0.1),
+                    domain: Some(monoagens_protocol::DomainId::new("ops")),
+                },
+                ThoughtAct::Consolidate {
+                    output: ConsolidateOutput::Lesson {
+                        pattern: "group_retry_guard".to_owned(),
+                        failure_signature: "sig_group".to_owned(),
+                        failure_ids: vec![group_wake_id, monoagens_protocol::EventId::new(999)],
+                        contrastive_success_ids: vec![],
+                        domain: Some(monoagens_protocol::DomainId::new("ops")),
+                    },
+                },
+            ],
+        },
+        Time::from_millis(1_100),
+        &mut NoopDoors,
+    )
+    .unwrap();
+
+    // 2. Private DM message & lesson (audience: secret_eve, soul)
+    let mut p_priv = Percept::minimal(
+        ActorId::new("per_secret_eve"),
+        PlaceId::new("dm:secret_eve"),
+        Audience::new([ActorId::new("per_secret_eve"), ActorId::new("soul")]),
+        Time::from_millis(2_000),
+        OpaquePayload::from_bytes(b"private dm"),
+    );
+    p_priv.named = vec![ActorId::new("soul")];
+    p_priv.addressees = vec![ActorId::new("soul")];
+    p_priv.taint = Taint::Trusted;
+    let eff_priv = core
+        .step(
+            Input::Percept(Box::new(p_priv)),
+            Time::from_millis(2_000),
+            &mut NoopDoors,
+        )
+        .unwrap();
+    let priv_wake_id = match eff_priv.as_slice() {
+        [monoagens_core::Effect::Model { plan, .. }] => plan.trigger_event_id.unwrap(),
+        other => panic!("expected private wake, got {other:?}"),
+    };
+    core.step(
+        Input::ModelResult {
+            request_id: priv_wake_id,
+            acts: vec![
+                ThoughtAct::Think {
+                    thought: "secret private belief".to_owned(),
+                    motivation: 3,
+                    confidence_0_20: 18,
+                    used_ids: vec![priv_wake_id],
+                    importance: Some(0.9),
+                    basis: Some("observed".to_owned()),
+                    value: Some(1.0),
+                    cost: Some(0.1),
+                    domain: Some(monoagens_protocol::DomainId::new("private_ops")),
+                },
+                ThoughtAct::Consolidate {
+                    output: ConsolidateOutput::Lesson {
+                        pattern: "secret_dm_lesson".to_owned(),
+                        failure_signature: "sig_secret_eve".to_owned(),
+                        failure_ids: vec![priv_wake_id, monoagens_protocol::EventId::new(998)],
+                        contrastive_success_ids: vec![],
+                        domain: Some(monoagens_protocol::DomainId::new("private_ops")),
+                    },
+                },
+            ],
+        },
+        Time::from_millis(2_100),
+        &mut NoopDoors,
+    )
+    .unwrap();
+
+    // Record bounded place adaptation for both group and private places.
+    core.record_place_feedback(
+        &PlaceId::new("room:group"),
+        monoagens_core::neural::AdaptFeedback {
+            arm: monoagens_core::neural::GateArm::Go,
+            reward: 1.0,
+            is_delayed_one_sided: false,
+            context_hint: [0.5, 0.25],
+        },
+    );
+    core.record_place_feedback(
+        &PlaceId::new("dm:secret_eve"),
+        monoagens_core::neural::AdaptFeedback {
+            arm: monoagens_core::neural::GateArm::Silent,
+            reward: 1.0,
+            is_delayed_one_sided: false,
+            context_hint: [0.8, 0.2],
+        },
+    );
+
+    if include_hard_forget {
+        core.hard_forget(
+            vec![priv_wake_id],
+            vec![ActorId::new("per_secret_eve")],
+            "gdpr_erasure",
+            Time::from_millis(5_000),
+        )
+        .unwrap();
+    }
+
+    let _ = Taint::Trusted;
+    core.store().read_in_order(None, usize::MAX).unwrap()
+}
+
+#[test]
+fn cli_export_learning_is_bit_identical_and_respects_privacy_and_hard_forget() {
+    let tmp = TempDir::new().expect("tempdir");
+    let cfg_path = tmp.path().join("monoagens.toml");
+    let data_dir = tmp.path().join("data");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(
+        &cfg_path,
+        format!(
+            "version = 1\ndata_dir = \"{}\"\n\n[soul]\nname = \"MonoTest\"\nseed = 1\n",
+            data_dir.display()
+        ),
+    )
+    .unwrap();
+
+    let events = build_export_learning_fixture_log(false);
+    let log_json_path = tmp.path().join("log.json");
+    fs::write(&log_json_path, serde_json::to_string_pretty(&events).unwrap()).unwrap();
+
+    // 1. Repeatability: two runs produce byte-identical Markdown and identical export_blake3.
+    let out_a = tmp.path().join("export_a.md");
+    let out_b = tmp.path().join("export_b.md");
+    let run_a = Command::new(monoagens_bin())
+        .args([
+            "--config",
+            cfg_path.to_str().unwrap(),
+            "--json",
+            "export-learning",
+            "--log-json",
+            log_json_path.to_str().unwrap(),
+            "--out",
+            out_a.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run export-learning A");
+    assert!(run_a.status.success(), "{}", String::from_utf8_lossy(&run_a.stderr));
+    let run_b = Command::new(monoagens_bin())
+        .args([
+            "--config",
+            cfg_path.to_str().unwrap(),
+            "--json",
+            "export-learning",
+            "--log-json",
+            log_json_path.to_str().unwrap(),
+            "--out",
+            out_b.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run export-learning B");
+    assert!(run_b.status.success(), "{}", String::from_utf8_lossy(&run_b.stderr));
+
+    let bytes_a = fs::read(&out_a).unwrap();
+    let bytes_b = fs::read(&out_b).unwrap();
+    assert_eq!(bytes_a, bytes_b, "repeated exports must be byte-identical");
+    let json_a: Value = serde_json::from_slice(&run_a.stdout).unwrap();
+    let json_b: Value = serde_json::from_slice(&run_b.stdout).unwrap();
+    assert_eq!(json_a["export_blake3"], json_b["export_blake3"]);
+
+    // 2. Privacy: default excludes private DM items; --include-private includes them with Audience labels.
+    let md_default = String::from_utf8(bytes_a).unwrap();
+    assert!(md_default.contains("group_retry_guard"));
+    assert!(md_default.contains("room:group"));
+    assert!(!md_default.contains("secret_dm_lesson"));
+    assert!(!md_default.contains("dm:secret_eve"));
+    assert!(!md_default.contains("per_secret_eve"));
+
+    let out_priv = tmp.path().join("export_priv.md");
+    let run_priv = Command::new(monoagens_bin())
+        .args([
+            "--config",
+            cfg_path.to_str().unwrap(),
+            "export-learning",
+            "--log-json",
+            log_json_path.to_str().unwrap(),
+            "--out",
+            out_priv.to_str().unwrap(),
+            "--include-private",
+        ])
+        .output()
+        .expect("run export-learning --include-private");
+    assert!(run_priv.status.success());
+    let md_priv = fs::read_to_string(&out_priv).unwrap();
+    assert!(md_priv.contains("secret_dm_lesson"));
+    assert!(md_priv.contains("dm:secret_eve"));
+    assert!(md_priv.contains("audience=[per_secret_eve,soul]"));
+
+    // 3. HardForget: after erasing per_secret_eve, even --include-private exports zero residual traces.
+    let forgotten_events = build_export_learning_fixture_log(true);
+    let forgotten_log_path = tmp.path().join("forgotten_log.json");
+    fs::write(
+        &forgotten_log_path,
+        serde_json::to_string_pretty(&forgotten_events).unwrap(),
+    )
+    .unwrap();
+    let out_forgotten = tmp.path().join("export_forgotten.md");
+    let run_forgotten = Command::new(monoagens_bin())
+        .args([
+            "--config",
+            cfg_path.to_str().unwrap(),
+            "export-learning",
+            "--log-json",
+            forgotten_log_path.to_str().unwrap(),
+            "--out",
+            out_forgotten.to_str().unwrap(),
+            "--include-private",
+        ])
+        .output()
+        .expect("run export-learning post hard_forget");
+    assert!(run_forgotten.status.success());
+    let md_forgotten = fs::read_to_string(&out_forgotten).unwrap();
+    assert!(md_forgotten.contains("group_retry_guard"));
+    assert!(!md_forgotten.contains("per_secret_eve"));
+    assert!(!md_forgotten.contains("dm:secret_eve"));
+    assert!(!md_forgotten.contains("secret_dm_lesson"));
+    assert!(!md_forgotten.contains("private_ops"));
+}

@@ -174,7 +174,7 @@ def train_and_evaluate_one(
     temperature, nll_before, nll_after = fit_temperature(cal_logits_k, cal_y)
     cal_probs = probs_from_logits_k(cal_logits_k, temperature)
     cic_threshold, _cal_cov, _cal_emp, _cal_up = fit_cic_threshold(
-        cal_probs, cal_y, target_risk=0.25, delta=0.05, min_coverage=0.25
+        cal_probs, cal_y, target_risk=0.05, delta=0.05, min_coverage=0.25
     )
 
     # Held-out test split evaluation
@@ -298,13 +298,15 @@ def run_phase1_sweep(
     cache_path = assert_safe_path(
         repo_root / "training" / "cache" / "phase1_shards.npz", repo_root=repo_root
     )
-    precompute_phase1_shards(
+    resolved_cache_path = precompute_phase1_shards(
         repo_root=repo_root,
         cache_path=cache_path,
         max_w2s_windows=max_w2s_windows,
         force_recompute=force_recompute_shards,
+        prompt_regime_id="t_d",
+        embed_model_ver="egemma2-256",
     )
-    shards = load_cached_shards(cache_path)
+    shards = load_cached_shards(resolved_cache_path)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     entries: list[SweepEntry] = []

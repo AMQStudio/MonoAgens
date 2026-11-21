@@ -1,0 +1,492 @@
+{
+  "embedder": "embeddinggemma-2",
+  "device": "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "counts": {
+    "indocollex_s471": 471,
+    "multilexnorm_all": 992,
+    "multilexnorm_ind": 861,
+    "multilexnorm_ind_eng": 131
+  },
+  "sweep": [
+    {
+      "dataset": "indocollex",
+      "prefix_regime": "t_q_t_d",
+      "dim_d": 768,
+      "n": 471,
+      "twin_r1_exact_idx": 0.4862,
+      "twin_r1_target_str": 0.526539,
+      "mean_pos_cosine": 0.823863,
+      "mean_margin": 0.002824
+    },
+    {
+      "dataset": "multilexnorm_all",
+      "prefix_regime": "t_q_t_d",
+      "dim_d": 768,
+      "n": 992,
+      "twin_r1_exact_idx": 0.892137,
+      "twin_r1_target_str": 0.897177,
+      "mean_pos_cosine": 0.874705,
+      "mean_margin": 0.088066
+    },
+    {
+      "dataset": "multilexnorm_ind",
+      "prefix_regime": "t_q_t_d",
+      "dim_d": 768,
+      "n": 861,
+      "twin_r1_exact_idx": 0.878049,
+      "twin_r1_target_str": 0.882695,
+      "mean_pos_cosine": 0.865018,
+      "mean_margin": 0.07207
+    },
+    {
+      "dataset": "multilexnorm_ind_eng",
+      "prefix_regime": "t_q_t_d",
+      "dim_d": 768,
+      "n": 131,
+      "twin_r1_exact_idx": 0.992366,
+      "twin_r1_target_str": 1.0,
+      "mean_pos_cosine": 0.938177,
+      "mean_margin": 0.210402
+    },
+    {
+      "dataset": "indocollex",
+      "prefix_regime": "t_q_t_d",
+      "dim_d": 512,
+      "n": 471,
+      "twin_r1_exact_idx": 0.4862,
+      "twin_r1_target_str": 0.526539,
+      "mean_pos_cosine": 0.826317,
+      "mean_margin": 0.002147
+    },
+    {
+      "dataset": "multilexnorm_all",
+      "prefix_regime": "t_q_t_d",
+      "dim_d": 512,
+      "n": 992,
+      "twin_r1_exact_idx": 0.891129,
+      "twin_r1_target_str": 0.897177,
+      "mean_pos_cosine": 0.87672,
+      "mean_margin": 0.086062
+    },
+    {
+      "dataset": "multilexnorm_ind",
+      "prefix_regime": "t_q_t_d",
+      "dim_d": 512,
+      "n": 861,
+      "twin_r1_exact_idx": 0.876887,
+      "twin_r1_target_str": 0.882695,
+      "mean_pos_cosine": 0.86719,
+      "mean_margin": 0.070366
+    },
+    {
+      "dataset": "multilexnorm_ind_eng",
+      "prefix_regime": "t_q_t_d",
+      "dim_d": 512,
+      "n": 131,
+      "twin_r1_exact_idx": 0.992366,
+      "twin_r1_target_str": 1.0,
+      "mean_pos_cosine": 0.939168,
+      "mean_margin": 0.207297
+    },
+    {
+      "dataset": "indocollex",
+      "prefix_regime": "t_q_t_d",
+      "dim_d": 256,
+      "n": 471,
+      "twin_r1_exact_idx": 0.473461,
+      "twin_r1_target_str": 0.511677,
+      "mean_pos_cosine": 0.839947,
+      "mean_margin": 5.7e-05
+    },
+    {
+      "dataset": "multilexnorm_all",
+      "prefix_regime": "t_q_t_d",
+      "dim_d": 256,
+      "n": 992,
+      "twin_r1_exact_idx": 0.885081,
+      "twin_r1_target_str": 0.891129,
+      "mean_pos_cosine": 0.887753,
+      "mean_margin": 0.077387
+    },
+    {
+      "dataset": "multilexnorm_ind",
+      "prefix_regime": "t_q_t_d",
+      "dim_d": 256,
+      "n": 861,
+      "twin_r1_exact_idx": 0.868757,
+      "twin_r1_target_str": 0.874564,
+      "mean_pos_cosine": 0.879167,
+      "mean_margin": 0.06301
+    },
+    {
+      "dataset": "multilexnorm_ind_eng",
+      "prefix_regime": "t_q_t_d",
+      "dim_d": 256,
+      "n": 131,
+      "twin_r1_exact_idx": 0.992366,
+      "twin_r1_target_str": 1.0,
+      "mean_pos_cosine": 0.944025,
+      "mean_margin": 0.190475
+    },
+    {
+      "dataset": "indocollex",
+      "prefix_regime": "t_q_t_d",
+      "dim_d": 128,
+      "n": 471,
+      "twin_r1_exact_idx": 0.454352,
+      "twin_r1_target_str": 0.4862,
+      "mean_pos_cosine": 0.894819,
+      "mean_margin": -0.005293
+    },
+    {
+      "dataset": "multilexnorm_all",
+      "prefix_regime": "t_q_t_d",
+      "dim_d": 128,
+      "n": 992,
+      "twin_r1_exact_idx": 0.862903,
+      "twin_r1_target_str": 0.870968,
+      "mean_pos_cosine": 0.923461,
+      "mean_margin": 0.049493
+    },
+    {
+      "dataset": "multilexnorm_ind",
+      "prefix_regime": "t_q_t_d",
+      "dim_d": 128,
+      "n": 861,
+      "twin_r1_exact_idx": 0.845528,
+      "twin_r1_target_str": 0.853659,
+      "mean_pos_cosine": 0.917835,
+      "mean_margin": 0.039524
+    },
+    {
+      "dataset": "multilexnorm_ind_eng",
+      "prefix_regime": "t_q_t_d",
+      "dim_d": 128,
+      "n": 131,
+      "twin_r1_exact_idx": 0.992366,
+      "twin_r1_target_str": 1.0,
+      "mean_pos_cosine": 0.960386,
+      "mean_margin": 0.127002
+    },
+    {
+      "dataset": "indocollex",
+      "prefix_regime": "t_sts",
+      "dim_d": 768,
+      "n": 471,
+      "twin_r1_exact_idx": 0.532909,
+      "twin_r1_target_str": 0.571125,
+      "mean_pos_cosine": 0.90619,
+      "mean_margin": 0.005568
+    },
+    {
+      "dataset": "multilexnorm_all",
+      "prefix_regime": "t_sts",
+      "dim_d": 768,
+      "n": 992,
+      "twin_r1_exact_idx": 0.93246,
+      "twin_r1_target_str": 0.941532,
+      "mean_pos_cosine": 0.949703,
+      "mean_margin": 0.070647
+    },
+    {
+      "dataset": "multilexnorm_ind",
+      "prefix_regime": "t_sts",
+      "dim_d": 768,
+      "n": 861,
+      "twin_r1_exact_idx": 0.923345,
+      "twin_r1_target_str": 0.932636,
+      "mean_pos_cosine": 0.944063,
+      "mean_margin": 0.061403
+    },
+    {
+      "dataset": "multilexnorm_ind_eng",
+      "prefix_regime": "t_sts",
+      "dim_d": 768,
+      "n": 131,
+      "twin_r1_exact_idx": 0.992366,
+      "twin_r1_target_str": 1.0,
+      "mean_pos_cosine": 0.986727,
+      "mean_margin": 0.142733
+    },
+    {
+      "dataset": "indocollex",
+      "prefix_regime": "t_sts",
+      "dim_d": 512,
+      "n": 471,
+      "twin_r1_exact_idx": 0.524416,
+      "twin_r1_target_str": 0.56051,
+      "mean_pos_cosine": 0.905991,
+      "mean_margin": 0.005422
+    },
+    {
+      "dataset": "multilexnorm_all",
+      "prefix_regime": "t_sts",
+      "dim_d": 512,
+      "n": 992,
+      "twin_r1_exact_idx": 0.931452,
+      "twin_r1_target_str": 0.940524,
+      "mean_pos_cosine": 0.950107,
+      "mean_margin": 0.069815
+    },
+    {
+      "dataset": "multilexnorm_ind",
+      "prefix_regime": "t_sts",
+      "dim_d": 512,
+      "n": 861,
+      "twin_r1_exact_idx": 0.923345,
+      "twin_r1_target_str": 0.932636,
+      "mean_pos_cosine": 0.944506,
+      "mean_margin": 0.06071
+    },
+    {
+      "dataset": "multilexnorm_ind_eng",
+      "prefix_regime": "t_sts",
+      "dim_d": 512,
+      "n": 131,
+      "twin_r1_exact_idx": 0.992366,
+      "twin_r1_target_str": 1.0,
+      "mean_pos_cosine": 0.986874,
+      "mean_margin": 0.141531
+    },
+    {
+      "dataset": "indocollex",
+      "prefix_regime": "t_sts",
+      "dim_d": 256,
+      "n": 471,
+      "twin_r1_exact_idx": 0.5138,
+      "twin_r1_target_str": 0.552017,
+      "mean_pos_cosine": 0.911736,
+      "mean_margin": 0.004114
+    },
+    {
+      "dataset": "multilexnorm_all",
+      "prefix_regime": "t_sts",
+      "dim_d": 256,
+      "n": 992,
+      "twin_r1_exact_idx": 0.933468,
+      "twin_r1_target_str": 0.943548,
+      "mean_pos_cosine": 0.954148,
+      "mean_margin": 0.064172
+    },
+    {
+      "dataset": "multilexnorm_ind",
+      "prefix_regime": "t_sts",
+      "dim_d": 256,
+      "n": 861,
+      "twin_r1_exact_idx": 0.926829,
+      "twin_r1_target_str": 0.937282,
+      "mean_pos_cosine": 0.949023,
+      "mean_margin": 0.055767
+    },
+    {
+      "dataset": "multilexnorm_ind_eng",
+      "prefix_regime": "t_sts",
+      "dim_d": 256,
+      "n": 131,
+      "twin_r1_exact_idx": 0.992366,
+      "twin_r1_target_str": 1.0,
+      "mean_pos_cosine": 0.987792,
+      "mean_margin": 0.130993
+    },
+    {
+      "dataset": "indocollex",
+      "prefix_regime": "t_sts",
+      "dim_d": 128,
+      "n": 471,
+      "twin_r1_exact_idx": 0.498938,
+      "twin_r1_target_str": 0.535032,
+      "mean_pos_cosine": 0.945726,
+      "mean_margin": 0.000203
+    },
+    {
+      "dataset": "multilexnorm_all",
+      "prefix_regime": "t_sts",
+      "dim_d": 128,
+      "n": 992,
+      "twin_r1_exact_idx": 0.916331,
+      "twin_r1_target_str": 0.927419,
+      "mean_pos_cosine": 0.970991,
+      "mean_margin": 0.037176
+    },
+    {
+      "dataset": "multilexnorm_ind",
+      "prefix_regime": "t_sts",
+      "dim_d": 128,
+      "n": 861,
+      "twin_r1_exact_idx": 0.904762,
+      "twin_r1_target_str": 0.916376,
+      "mean_pos_cosine": 0.967778,
+      "mean_margin": 0.031869
+    },
+    {
+      "dataset": "multilexnorm_ind_eng",
+      "prefix_regime": "t_sts",
+      "dim_d": 128,
+      "n": 131,
+      "twin_r1_exact_idx": 0.992366,
+      "twin_r1_target_str": 1.0,
+      "mean_pos_cosine": 0.99206,
+      "mean_margin": 0.080396
+    },
+    {
+      "dataset": "indocollex",
+      "prefix_regime": "unprefixed",
+      "dim_d": 768,
+      "n": 471,
+      "twin_r1_exact_idx": 0.40552,
+      "twin_r1_target_str": 0.43949,
+      "mean_pos_cosine": 0.860608,
+      "mean_margin": -0.009205
+    },
+    {
+      "dataset": "multilexnorm_all",
+      "prefix_regime": "unprefixed",
+      "dim_d": 768,
+      "n": 992,
+      "twin_r1_exact_idx": 0.818548,
+      "twin_r1_target_str": 0.827621,
+      "mean_pos_cosine": 0.920656,
+      "mean_margin": 0.059569
+    },
+    {
+      "dataset": "multilexnorm_ind",
+      "prefix_regime": "unprefixed",
+      "dim_d": 768,
+      "n": 861,
+      "twin_r1_exact_idx": 0.793264,
+      "twin_r1_target_str": 0.802555,
+      "mean_pos_cosine": 0.911544,
+      "mean_margin": 0.045431
+    },
+    {
+      "dataset": "multilexnorm_ind_eng",
+      "prefix_regime": "unprefixed",
+      "dim_d": 768,
+      "n": 131,
+      "twin_r1_exact_idx": 0.992366,
+      "twin_r1_target_str": 1.0,
+      "mean_pos_cosine": 0.980505,
+      "mean_margin": 0.167127
+    },
+    {
+      "dataset": "indocollex",
+      "prefix_regime": "unprefixed",
+      "dim_d": 512,
+      "n": 471,
+      "twin_r1_exact_idx": 0.40552,
+      "twin_r1_target_str": 0.43949,
+      "mean_pos_cosine": 0.864898,
+      "mean_margin": -0.009274
+    },
+    {
+      "dataset": "multilexnorm_all",
+      "prefix_regime": "unprefixed",
+      "dim_d": 512,
+      "n": 992,
+      "twin_r1_exact_idx": 0.821573,
+      "twin_r1_target_str": 0.831653,
+      "mean_pos_cosine": 0.9232,
+      "mean_margin": 0.057336
+    },
+    {
+      "dataset": "multilexnorm_ind",
+      "prefix_regime": "unprefixed",
+      "dim_d": 512,
+      "n": 861,
+      "twin_r1_exact_idx": 0.796748,
+      "twin_r1_target_str": 0.807201,
+      "mean_pos_cosine": 0.914372,
+      "mean_margin": 0.043705
+    },
+    {
+      "dataset": "multilexnorm_ind_eng",
+      "prefix_regime": "unprefixed",
+      "dim_d": 512,
+      "n": 131,
+      "twin_r1_exact_idx": 0.992366,
+      "twin_r1_target_str": 1.0,
+      "mean_pos_cosine": 0.981189,
+      "mean_margin": 0.162379
+    },
+    {
+      "dataset": "indocollex",
+      "prefix_regime": "unprefixed",
+      "dim_d": 256,
+      "n": 471,
+      "twin_r1_exact_idx": 0.407643,
+      "twin_r1_target_str": 0.437367,
+      "mean_pos_cosine": 0.877945,
+      "mean_margin": -0.009961
+    },
+    {
+      "dataset": "multilexnorm_all",
+      "prefix_regime": "unprefixed",
+      "dim_d": 256,
+      "n": 992,
+      "twin_r1_exact_idx": 0.813508,
+      "twin_r1_target_str": 0.822581,
+      "mean_pos_cosine": 0.930738,
+      "mean_margin": 0.050395
+    },
+    {
+      "dataset": "multilexnorm_ind",
+      "prefix_regime": "unprefixed",
+      "dim_d": 256,
+      "n": 861,
+      "twin_r1_exact_idx": 0.786295,
+      "twin_r1_target_str": 0.795587,
+      "mean_pos_cosine": 0.922812,
+      "mean_margin": 0.038027
+    },
+    {
+      "dataset": "multilexnorm_ind_eng",
+      "prefix_regime": "unprefixed",
+      "dim_d": 256,
+      "n": 131,
+      "twin_r1_exact_idx": 0.992366,
+      "twin_r1_target_str": 1.0,
+      "mean_pos_cosine": 0.982799,
+      "mean_margin": 0.146651
+    },
+    {
+      "dataset": "indocollex",
+      "prefix_regime": "unprefixed",
+      "dim_d": 128,
+      "n": 471,
+      "twin_r1_exact_idx": 0.382166,
+      "twin_r1_target_str": 0.409766,
+      "mean_pos_cosine": 0.921538,
+      "mean_margin": -0.009383
+    },
+    {
+      "dataset": "multilexnorm_all",
+      "prefix_regime": "unprefixed",
+      "dim_d": 128,
+      "n": 992,
+      "twin_r1_exact_idx": 0.78629,
+      "twin_r1_target_str": 0.795363,
+      "mean_pos_cosine": 0.953376,
+      "mean_margin": 0.031616
+    },
+    {
+      "dataset": "multilexnorm_ind",
+      "prefix_regime": "unprefixed",
+      "dim_d": 128,
+      "n": 861,
+      "twin_r1_exact_idx": 0.752613,
+      "twin_r1_target_str": 0.761905,
+      "mean_pos_cosine": 0.948093,
+      "mean_margin": 0.023618
+    },
+    {
+      "dataset": "multilexnorm_ind_eng",
+      "prefix_regime": "unprefixed",
+      "dim_d": 128,
+      "n": 131,
+      "twin_r1_exact_idx": 0.992366,
+      "twin_r1_target_str": 1.0,
+      "mean_pos_cosine": 0.988103,
+      "mean_margin": 0.094432
+    }
+  ]
+}

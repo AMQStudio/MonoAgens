@@ -15,7 +15,7 @@ use crate::consolidation::{
 use crate::context::{ContextSections, ModelTask};
 use crate::event::{DoorKind, EventDetail, EventKind, EventRecord, NumericFeatures};
 use crate::expectations::ExpectationRecord;
-use crate::neural::{AdaptFeedback, GateArm};
+use crate::neural::GateArm;
 use crate::ports::{ContextPlan, DoorDecision, Doors, ModelPurpose, Store};
 use crate::recall::MemoryBasis;
 use crate::{Core, CoreError, Effect};
@@ -613,32 +613,66 @@ fn emit_consolidate_effects_for_episodes<S: Store>(
 }
 
 /// Records a bounded Warm-Start UCB bandit feedback update on `place_adapt[place]`
-/// when `core.config().online_adaptation` is enabled. No-op when disabled.
+/// strictly via an event-sourced `AdaptFeedbackApplied` log record (`C-3`, `C-4`, `C-10`).
+/// No-op when `online_adaptation` is disabled or when negative/delayed feedback comes
+/// strictly from `Taint::Untrusted`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn record_place_adapt_feedback<S: Store>(
     core: &mut Core<S>,
+    cause: Option<&EventRecord>,
     place: &PlaceId,
     arm: GateArm,
     reward: f32,
     is_delayed_one_sided: bool,
-) {
+    source_taint: Taint,
+    now: Time,
+) -> Result<(), CoreError> {
     let adapt_cfg = core.config().effective_adapt_config();
     if !adapt_cfg.online_adaptation {
-        return;
+        return Ok(());
     }
-    let st = core
-        .state_mut()
-        .place_adapt
-        .entry(place.clone())
-        .or_default();
-    st.record_feedback(
-        AdaptFeedback {
-            arm,
-            reward,
-            is_delayed_one_sided,
-            context_hint: [0.0, 0.0],
-        },
-        &adapt_cfg,
-    );
+    if source_taint == Taint::Untrusted && (reward < 0.0 || is_delayed_one_sided) {
+        return Ok(());
+    }
+    let context_hint = core.state().compute_place_context_hint(place);
+    let detail = Some(EventDetail::AdaptFeedbackApplied {
+        place: place.clone(),
+        arm,
+        reward,
+        is_delayed_one_sided,
+        context_hint,
+        source_taint,
+    });
+    let ev = match cause {
+        Some(c) => EventRecord::derived_from(
+            c,
+            EventKind::Verdict,
+            now,
+            ActorId::new("core"),
+            place.clone(),
+            c.audience.clone(),
+            Some(source_taint),
+            NumericFeatures::default(),
+            OpaquePayload::default(),
+            Vec::new(),
+            detail,
+        ),
+        None => EventRecord::new_root(
+            EventKind::Verdict,
+            now,
+            ActorId::new("core"),
+            place.clone(),
+            Audience::new([core.state().soul_actor_id.clone()]),
+            OriginActor::new(core.state().soul_actor_id.clone()),
+            source_taint,
+            NumericFeatures::default(),
+            OpaquePayload::default(),
+            Vec::new(),
+            detail,
+        ),
+    };
+    let _ = append_and_apply(core, ev)?;
+    Ok(())
 }
 
 pub(super) fn tr_cause_fallback(exp: &ExpectationRecord) -> EventRecord {

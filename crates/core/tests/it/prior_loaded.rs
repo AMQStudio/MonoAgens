@@ -344,3 +344,353 @@ fn snapshot_persists_place_memory_h_t_and_place_adapt_across_restart() {
     let core_zero = Core::open(store_zero, cfg, None).unwrap();
     assert_eq!(core_zero.state().config_loaded_count, 0);
 }
+
+#[test]
+fn self_caused_percept_advances_h_t_without_waking_and_replays_identically() {
+    let (model, digest) = load_golden_model();
+    let cfg = CoreConfig {
+        seed: 77,
+        ..CoreConfig::default()
+    };
+    let mut core = Core::open(MemStore::new(), cfg, Some(Arc::clone(&model))).unwrap();
+    let place = PlaceId::new("room:self_h");
+
+    // 1. Incoming percept wakes reasoning.
+    let mut p1 = make_percept("per_alice", "room:self_h", 1_000, b"hi soul");
+    p1.addressees = vec![ActorId::new("soul")];
+    let eff1 = core
+        .step(
+            Input::Percept(Box::new(p1)),
+            Time::from_millis(1_000),
+            &mut NoopDoors,
+        )
+        .unwrap();
+    let trigger_id = match eff1.as_slice() {
+        [monoagens_core::Effect::Model { plan, .. }] => plan.trigger_event_id.unwrap(),
+        other => panic!("expected Reason wake, got {other:?}"),
+    };
+    let h_before_echo = core.state().place_memory.get(&place).cloned().expect("h1");
+
+    // Dispatch a chat reply (opens Effect expectation with correlation_id).
+    let act_eff = core
+        .step(
+            Input::ModelResult {
+                request_id: trigger_id,
+                acts: vec![monoagens_protocol::ThoughtAct::Act {
+                    capability_id: monoagens_protocol::CapabilityId::new("chat.speak"),
+                    places: vec![place.clone()],
+                    people: vec![ActorId::new("per_alice")],
+                    payload: OpaquePayload::from_bytes(b"hello back"),
+                    motivation: 4,
+                    confidence_0_20: 16,
+                    used_ids: vec![trigger_id],
+                    expected: None,
+                    domain: None,
+                }],
+            },
+            Time::from_millis(1_100),
+            &mut NoopDoors,
+        )
+        .unwrap();
+    let corr_id = match act_eff.as_slice() {
+        [monoagens_core::Effect::Dispatch(action)] => action.correlation_id.clone(),
+        other => panic!("expected Dispatch effect, got {other:?}"),
+    };
+
+    // 2. Echo percept matching the open Effect expectation -> SelfCaused, zero wakes, advances h_t!
+    let mut echo = make_percept("soul", "room:self_h", 1_200, b"hello back");
+    echo.named.clear();
+    echo.correlation_id = corr_id;
+    let echo_eff = core
+        .step(
+            Input::Percept(Box::new(echo)),
+            Time::from_millis(1_200),
+            &mut NoopDoors,
+        )
+        .unwrap();
+    assert!(
+        echo_eff.is_empty(),
+        "SelfCaused echo must never trigger a wake"
+    );
+    let h_after_echo = core.state().place_memory.get(&place).cloned().expect("h2");
+    assert_ne!(
+        h_before_echo, h_after_echo,
+        "C-9: SelfCaused percept must advance place_memory h_t"
+    );
+
+    // 3. Replay from event log reproduces identical h_t.
+    let rep = replay_log(core.store(), ReplayMode::Pinned, Some(digest)).expect("replay");
+    assert!(rep.is_exact());
+    assert_eq!(rep.state.place_memory.get(&place), Some(&h_after_echo));
+}
+
+#[test]
+fn consolidated_gist_attaches_episode_centroid_and_is_recalled_by_vector_partition() {
+    use monoagens_core::RecallQuery;
+    use monoagens_protocol::{EmbeddingTag, TaggedEmbedding, VisibleScope};
+
+    let cfg = CoreConfig {
+        sleep_min_episodes: 1,
+        sleep_idle_ms: 1_000,
+        ..CoreConfig::default()
+    };
+    let mut core = Core::open(MemStore::new(), cfg, None).unwrap();
+    let tag = EmbeddingTag {
+        embed_model_ver: "egemma2-256".to_owned(),
+        dim_d: 4,
+        prompt_regime_id: "t_d".to_owned(),
+    };
+    let emb = TaggedEmbedding {
+        tag: tag.clone(),
+        values: vec![0.8, 0.6, 0.0, 0.0],
+    };
+
+    for i in 0..3u64 {
+        let mut p = make_percept("per_alice", "room:gist", 1_000 + i * 100, b"topic turn");
+        p.named.clear();
+        p.embeddings = vec![emb.clone()];
+        core.step(
+            Input::Percept(Box::new(p)),
+            Time::from_millis(1_000 + i * 100),
+            &mut NoopDoors,
+        )
+        .unwrap();
+    }
+
+    // Trigger sleep consolidation -> emits Consolidate effect for the episode.
+    let sleep_eff = core
+        .run_sleep_if_due(Time::from_millis(50_000), &mut NoopDoors)
+        .unwrap();
+    let (req_id, ep_items) = sleep_eff
+        .iter()
+        .find_map(|e| match e {
+            monoagens_core::Effect::Model {
+                purpose: monoagens_core::ModelPurpose::Consolidate,
+                plan,
+            } => Some((plan.trigger_event_id.unwrap(), plan.items.clone())),
+            _ => None,
+        })
+        .expect("consolidate effect");
+
+    core.step(
+        Input::ModelResult {
+            request_id: req_id,
+            acts: vec![monoagens_protocol::ThoughtAct::Consolidate {
+                output: monoagens_protocol::ConsolidateOutput::Gist {
+                    summary: "summary of topic".to_owned(),
+                    about_ids: ep_items,
+                    places: vec![PlaceId::new("room:gist")],
+                    people: vec![ActorId::new("per_alice")],
+                    domain: None,
+                },
+            }],
+        },
+        Time::from_millis(50_100),
+        &mut NoopDoors,
+    )
+    .unwrap();
+
+    // Vector-partitioned recall must find the consolidated gist immediately (C-3).
+    let scope = VisibleScope::new(
+        Audience::new([ActorId::new("per_alice"), ActorId::new("soul")]),
+        Some(PlaceId::new("room:gist")),
+    );
+    let mut query = RecallQuery::new(scope);
+    query.partition_tag = Some(tag);
+    query.query_embeddings = vec![emb];
+    query.limit = 10;
+    let res = core.recall(&query, Time::from_millis(50_200)).unwrap();
+    assert!(
+        res.items.iter().any(|item| item.source_ids.len() >= 3),
+        "consolidated gist with episode centroid must appear in vector recall: {:?}",
+        res.items
+    );
+}
+
+#[test]
+fn phase2_p_verify_and_p_uncertainty_populate_context_plan_and_receipt_done_does_not_reward_go() {
+    use monoagens_core::{ContextPlan, DoorDecision, Doors};
+
+    #[derive(Default)]
+    struct CaptureDoors {
+        plans: Vec<ContextPlan>,
+    }
+    impl Doors for CaptureDoors {
+        fn inbound(&mut self, _percept: &mut Percept) -> DoorDecision {
+            DoorDecision::Allow
+        }
+        fn context(&mut self, plan: &mut ContextPlan) -> DoorDecision {
+            self.plans.push(plan.clone());
+            DoorDecision::Allow
+        }
+        fn action(&mut self, _action: &mut monoagens_protocol::Action) -> DoorDecision {
+            DoorDecision::Allow
+        }
+    }
+
+    // 1. Neutral fallback leaves neural_p_verify / neural_p_uncertainty as None.
+    let mut core_neutral = Core::open(MemStore::new(), CoreConfig::default(), None).unwrap();
+    let mut p_comm = make_percept("per_alice", "room:p2", 1_000, b"direct question");
+    p_comm.addressees = vec![ActorId::new("soul")];
+    let mut doors_neutral = CaptureDoors::default();
+    let _ = core_neutral
+        .step(
+            Input::Percept(Box::new(p_comm)),
+            Time::from_millis(1_000),
+            &mut doors_neutral,
+        )
+        .unwrap();
+    let neutral_plan = doors_neutral.plans.last().expect("neutral plan");
+    assert!(neutral_plan.neural_p_verify.is_none());
+    assert!(neutral_plan.neural_p_uncertainty.is_none());
+
+    // 2. Phase 2 model populates bounded neural_p_verify & neural_p_uncertainty on ContextPlan (C-4).
+    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let p2_bytes =
+        std::fs::read(manifest_dir.join("tests/fixtures/neural_phase2_golden.safetensors"))
+            .expect("read phase2 golden");
+    let p2_model = Arc::new(NeuralModel::from_safetensors_bytes(&p2_bytes, None).expect("p2 model"));
+    let mut core_p2 = Core::open(MemStore::new(), CoreConfig::default(), Some(p2_model)).unwrap();
+    let mut p_p2 = make_percept("per_alice", "room:p2_live", 2_000, b"wake with phase2");
+    p_p2.addressees = vec![ActorId::new("soul")];
+    let mut doors_p2 = CaptureDoors::default();
+    let eff = core_p2
+        .step(
+            Input::Percept(Box::new(p_p2)),
+            Time::from_millis(2_000),
+            &mut doors_p2,
+        )
+        .unwrap();
+    let req_id = match eff.as_slice() {
+        [monoagens_core::Effect::Model { plan, .. }] => {
+            assert!(plan.neural_p_verify.is_some());
+            assert!(plan.neural_p_uncertainty.is_some());
+            let pv = plan.neural_p_verify.unwrap();
+            let pu = plan.neural_p_uncertainty.unwrap();
+            assert!((0.0..=1.0).contains(&pv) && pv.is_finite());
+            assert!((0.0..=1.0).contains(&pu) && pu.is_finite());
+            plan.trigger_event_id.unwrap()
+        }
+        other => panic!("expected Model effect, got {other:?}"),
+    };
+
+    // 3. Dispatching an action and receiving ReceiptOutcome::Done must NOT prematurely reward Go +0.5 (C-10).
+    let place = PlaceId::new("room:p2_live");
+    let eff_act1 = core_p2
+        .step(
+            Input::ModelResult {
+                request_id: req_id,
+                acts: vec![monoagens_protocol::ThoughtAct::Act {
+                    capability_id: monoagens_protocol::CapabilityId::new("chat.speak"),
+                    places: vec![place.clone()],
+                    people: vec![ActorId::new("per_alice")],
+                    payload: OpaquePayload::from_bytes(b"reply"),
+                    motivation: 4,
+                    confidence_0_20: 16,
+                    used_ids: vec![req_id],
+                    expected: None,
+                    domain: None,
+                }],
+            },
+            Time::from_millis(2_100),
+            &mut NoopDoors,
+        )
+        .unwrap();
+    let action_id_1 = match eff_act1.as_slice() {
+        [monoagens_core::Effect::Dispatch(a)] => a.action_id.clone(),
+        other => panic!("expected Dispatch 1, got {other:?}"),
+    };
+    core_p2
+        .step(
+            Input::Receipt(monoagens_protocol::Receipt {
+                action_id: action_id_1,
+                capability_id: monoagens_protocol::CapabilityId::new("chat.speak"),
+                outcome: monoagens_protocol::ReceiptOutcome::Done,
+                reason_code: None,
+                detail: None,
+                termination_reason: Some(monoagens_protocol::TerminationReason::Normal),
+                progress: Some(1.0),
+                delivered_units: Some(1),
+                h_act: None,
+                timestamp_ms: Time::from_millis(2_200),
+            }),
+            Time::from_millis(2_200),
+            &mut NoopDoors,
+        )
+        .unwrap();
+    assert!(
+        core_p2
+            .state()
+            .place_adapt
+            .get(&place)
+            .is_none_or(|ad| ad.arm_pulls[monoagens_core::neural::GateArm::Go as usize] == 0),
+        "ReceiptOutcome::Done must not prematurely reward GateArm::Go"
+    );
+
+    // 4. Non-fault Failed receipt records event-sourced negative Go feedback & replays bit-identically (C-3, C-10).
+    let eff_act2 = core_p2
+        .step(
+            Input::ModelResult {
+                request_id: req_id,
+                acts: vec![monoagens_protocol::ThoughtAct::Act {
+                    capability_id: monoagens_protocol::CapabilityId::new("chat.speak"),
+                    places: vec![place.clone()],
+                    people: vec![ActorId::new("per_alice")],
+                    payload: OpaquePayload::from_bytes(b"reply2"),
+                    motivation: 4,
+                    confidence_0_20: 16,
+                    used_ids: vec![req_id],
+                    expected: None,
+                    domain: None,
+                }],
+            },
+            Time::from_millis(2_300),
+            &mut NoopDoors,
+        )
+        .unwrap();
+    let action_id_2 = match eff_act2.as_slice() {
+        [monoagens_core::Effect::Dispatch(a)] => a.action_id.clone(),
+        other => panic!("expected Dispatch 2, got {other:?}"),
+    };
+    core_p2
+        .step(
+            Input::Receipt(monoagens_protocol::Receipt {
+                action_id: action_id_2,
+                capability_id: monoagens_protocol::CapabilityId::new("chat.speak"),
+                outcome: monoagens_protocol::ReceiptOutcome::Failed,
+                reason_code: Some("timeout".to_owned()),
+                detail: None,
+                termination_reason: Some(monoagens_protocol::TerminationReason::TimedOut),
+                progress: None,
+                delivered_units: None,
+                h_act: None,
+                timestamp_ms: Time::from_millis(2_400),
+            }),
+            Time::from_millis(2_400),
+            &mut NoopDoors,
+        )
+        .unwrap();
+
+    let live_adapt = core_p2
+        .state()
+        .place_adapt
+        .get(&place)
+        .cloned()
+        .expect("place_adapt populated on failure");
+    assert_eq!(
+        live_adapt.arm_pulls[monoagens_core::neural::GateArm::Go as usize],
+        1
+    );
+    assert!(
+        live_adapt.film_scale_deltas[0].abs() > 0.0,
+        "non-zero context_hint must move FiLM scale deltas"
+    );
+
+    let rep = replay_log(core_p2.store(), ReplayMode::Pinned, None).expect("replay");
+    assert!(rep.is_exact());
+    assert_eq!(
+        rep.state.place_adapt.get(&place),
+        Some(&live_adapt),
+        "event-sourced PlaceAdaptState must replay bit-identically"
+    );
+}

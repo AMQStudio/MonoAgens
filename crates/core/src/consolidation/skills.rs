@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use monoagens_protocol::{
     ActorId, Audience, BodyId, CapabilityId, CapabilitySchemaHash, DomainId, EventId, PlaceId,
-    ReceiptOutcome, TaggedEmbedding, Taint, TerminationReason, Time,
+    ReceiptOutcome, TaggedEmbedding, Taint, TerminationReason, Time, VisibleScope,
 };
 use serde::{Deserialize, Serialize};
 
@@ -87,6 +87,8 @@ pub struct LessonEntry {
     pub failure_ids: Vec<EventId>,
     pub contrastive_success_ids: Vec<EventId>,
     pub actors: Vec<ActorId>,
+    #[serde(default)]
+    pub audience: Audience,
     pub credence: BetaCredence,
     pub taint: Taint,
     pub created_at_ms: Time,
@@ -196,6 +198,7 @@ pub struct RecordLessonParams {
     pub failure_ids: Vec<EventId>,
     pub contrastive_success_ids: Vec<EventId>,
     pub domain: Option<DomainId>,
+    pub audience: Audience,
     pub taint: Taint,
     pub now_ms: Time,
 }
@@ -327,20 +330,34 @@ impl SkillBook {
 
             let mut taint = Taint::Trusted;
             let mut actor_set: BTreeSet<ActorId> = BTreeSet::new();
+            let mut common_actors: Option<BTreeSet<ActorId>> = None;
             for f in &failures {
                 taint = taint.combine(f.taint);
+                let mut ep_actors = BTreeSet::new();
                 for a in &f.actors {
                     actor_set.insert(a.clone());
+                    ep_actors.insert(a.clone());
                 }
+                common_actors = Some(match common_actors {
+                    None => ep_actors,
+                    Some(prev) => prev.intersection(&ep_actors).cloned().collect(),
+                });
             }
             let mut contrastive_success_ids = Vec::with_capacity(contrasts.len());
             for c in &contrasts {
                 taint = taint.combine(c.taint);
                 contrastive_success_ids.push(c.episode_id);
+                let mut ep_actors = BTreeSet::new();
                 for a in &c.actors {
                     actor_set.insert(a.clone());
+                    ep_actors.insert(a.clone());
                 }
+                common_actors = Some(match common_actors {
+                    None => ep_actors,
+                    Some(prev) => prev.intersection(&ep_actors).cloned().collect(),
+                });
             }
+            let lesson_audience = Audience::new(common_actors.unwrap_or_default());
 
             let mut credence = BetaCredence::from_prior(1.0, 1.0, now_ms);
             let supporting = failures.len() + contrastive_success_ids.len();
@@ -360,6 +377,7 @@ impl SkillBook {
                 failure_ids,
                 contrastive_success_ids,
                 actors: actor_set.into_iter().collect(),
+                audience: lesson_audience,
                 credence,
                 taint,
                 created_at_ms: now_ms,
@@ -382,6 +400,7 @@ impl SkillBook {
             failure_ids,
             mut contrastive_success_ids,
             domain,
+            audience,
             taint,
             now_ms,
         } = params;
@@ -401,6 +420,7 @@ impl SkillBook {
             failure_ids,
             contrastive_success_ids,
             actors: Vec::new(),
+            audience,
             credence,
             taint,
             created_at_ms: now_ms,
@@ -700,16 +720,47 @@ impl SkillBook {
             .collect()
     }
 
+    /// Returns active lessons strictly permitted by `scope` at `now_ms` (`C-3`).
+    #[must_use]
+    pub fn visible_lessons(&self, scope: &VisibleScope, now_ms: Time) -> Vec<&LessonEntry> {
+        self.lessons
+            .values()
+            .filter(|l| l.active && scope.allows(&l.audience, Some(l.lesson_id), now_ms))
+            .collect()
+    }
+
+    /// Removes erased events and actors from episodes, lessons, and procedures for `hard_forget` (`C-3`).
+    pub fn forget(&mut self, erased_events: &[EventId], erased_actors: &[ActorId]) {
+        let ev_set: BTreeSet<EventId> = erased_events.iter().copied().collect();
+        let actor_set: BTreeSet<ActorId> = erased_actors.iter().cloned().collect();
+
+        self.failure_episodes.retain(|rec| {
+            !ev_set.contains(&rec.episode_id)
+                && !rec.actors.iter().any(|a| actor_set.contains(a))
+        });
+        self.success_episodes.retain(|rec| {
+            !ev_set.contains(&rec.episode_id)
+                && !rec.actors.iter().any(|a| actor_set.contains(a))
+        });
+        self.lessons.retain(|&lid, l| {
+            !ev_set.contains(&lid)
+                && !l.failure_ids.iter().any(|id| ev_set.contains(id))
+                && !l.contrastive_success_ids.iter().any(|id| ev_set.contains(id))
+                && !l.actors.iter().any(|a| actor_set.contains(a))
+                && !actor_set.iter().any(|a| l.audience.contains(a))
+        });
+        self.procedures.retain(|&pid, p| {
+            !ev_set.contains(&pid)
+                && p.source_goal_id.is_none_or(|gid| !ev_set.contains(&gid))
+                && !p.source_event_ids.iter().any(|id| ev_set.contains(id))
+                && !p.actors.iter().any(|a| actor_set.contains(a))
+                && !actor_set.iter().any(|a| p.audience.contains(a))
+        });
+    }
+
     /// Removes actor-scoped episodes, lessons, and procedures for `hard_forget`.
     pub fn remove_actor(&mut self, actor: &ActorId) {
-        self.failure_episodes
-            .retain(|rec| !rec.actors.iter().any(|a| a == actor));
-        self.success_episodes
-            .retain(|rec| !rec.actors.iter().any(|a| a == actor));
-        self.lessons
-            .retain(|_, l| !l.actors.iter().any(|a| a == actor));
-        self.procedures
-            .retain(|_, p| !p.actors.iter().any(|a| a == actor));
+        self.forget(&[], std::slice::from_ref(actor));
     }
 }
 
@@ -775,4 +826,64 @@ pub fn compute_procedure_schema_hash<'a>(
     CapabilitySchemaHash::new(crate::blake3::to_hex(&crate::blake3::hash(
         combined.as_bytes(),
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skill_book_forget_scrubs_events_and_visible_scope_gates_lesson_audience() {
+        let mut book = SkillBook::new();
+        let priv_aud = Audience::new([ActorId::new("alice"), ActorId::new("soul")]);
+        let pub_aud = Audience::new([
+            ActorId::new("alice"),
+            ActorId::new("bob"),
+            ActorId::new("soul"),
+        ]);
+
+        let priv_lesson = book
+            .record_consolidated_lesson(RecordLessonParams {
+                lesson_id: Some(EventId::new(100)),
+                pattern: "private_guard".to_owned(),
+                failure_signature: "sig_priv".to_owned(),
+                failure_ids: vec![EventId::new(10), EventId::new(11)],
+                contrastive_success_ids: vec![EventId::new(12)],
+                domain: None,
+                audience: priv_aud.clone(),
+                taint: Taint::Trusted,
+                now_ms: Time::from_millis(1_000),
+            })
+            .expect("priv lesson");
+        let pub_lesson = book
+            .record_consolidated_lesson(RecordLessonParams {
+                lesson_id: Some(EventId::new(200)),
+                pattern: "public_guard".to_owned(),
+                failure_signature: "sig_pub".to_owned(),
+                failure_ids: vec![EventId::new(20), EventId::new(21)],
+                contrastive_success_ids: vec![],
+                domain: None,
+                audience: pub_aud.clone(),
+                taint: Taint::Trusted,
+                now_ms: Time::from_millis(1_000),
+            })
+            .expect("pub lesson");
+
+        assert_eq!(priv_lesson.audience, priv_aud);
+        assert_eq!(pub_lesson.audience, pub_aud);
+
+        // VisibleScope for bob+soul sees only pub_lesson, never priv_lesson.
+        let bob_scope = VisibleScope::new(
+            Audience::new([ActorId::new("bob"), ActorId::new("soul")]),
+            Some(PlaceId::new("room:public")),
+        );
+        let visible_to_bob = book.visible_lessons(&bob_scope, Time::from_millis(2_000));
+        assert_eq!(visible_to_bob.len(), 1);
+        assert_eq!(visible_to_bob[0].lesson_id, EventId::new(200));
+
+        // Event-level hard-forget of failure_id=10 removes priv_lesson cleanly.
+        book.forget(&[EventId::new(10)], &[]);
+        assert!(!book.lessons.contains_key(&EventId::new(100)));
+        assert!(book.lessons.contains_key(&EventId::new(200)));
+    }
 }

@@ -83,12 +83,22 @@ fn run_cli(args: Vec<String>) -> Result<ExitCode, String> {
                     );
                 } else {
                     println!(
-                        "controller=neural blake3={} cell_type={:?} d_model={} n_layers={} tabm_k={}",
+                        "controller=neural blake3={} cell_type={:?} d_model={} n_layers={} tabm_k={} expected_embed_model_ver={} expected_prompt_regime_id={}",
                         blake3_hex,
                         model.config.cell_type,
                         model.config.d_model,
                         model.config.n_layers,
                         model.config.tabm_k,
+                        model
+                            .config
+                            .expected_embed_model_ver
+                            .as_deref()
+                            .unwrap_or("none"),
+                        model
+                            .config
+                            .expected_prompt_regime_id
+                            .as_deref()
+                            .unwrap_or("none"),
                     );
                 }
             } else if json {

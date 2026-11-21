@@ -37,6 +37,8 @@ class ControllerArchitecture:
     max_wait_ms: float = 30000.0
     has_phase2_heads: bool = False
     has_phase3_heads: bool = False
+    expected_embed_model_ver: str = "egemma2-256"
+    expected_prompt_regime_id: str = "t_d"
 
 
 def architecture_for_scale(
@@ -381,6 +383,8 @@ class MonoNeuralController(nn.Module):
         output_path: Path,
         temperature: float = 1.0,
         cic_threshold: float = 0.5,
+        expected_embed_model_ver: str | None = None,
+        expected_prompt_regime_id: str | None = None,
     ) -> str:
         """Exports weights and canonical metadata to `safetensors` and returns the BLAKE3 hex digest."""
         arch = self.arch
@@ -402,6 +406,8 @@ class MonoNeuralController(nn.Module):
             "max_wait_ms": f"{float(arch.max_wait_ms):.6f}",
             "has_phase2_heads": "true" if arch.has_phase2_heads else "false",
             "has_phase3_heads": "true" if arch.has_phase3_heads else "false",
+            "expected_embed_model_ver": expected_embed_model_ver or arch.expected_embed_model_ver,
+            "expected_prompt_regime_id": expected_prompt_regime_id or arch.expected_prompt_regime_id,
         }
         tensors = self.canonical_state_dict()
         output_path.parent.mkdir(parents=True, exist_ok=True)

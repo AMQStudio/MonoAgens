@@ -362,12 +362,11 @@ pub fn select_tools_for_context(
             excluded_hidden_items += 1;
             continue;
         }
-        let schema_ok = !proc_item.required_cap_ids.is_empty()
-            && proc_item.required_cap_ids.iter().all(|req_id| {
-                active_cap_hashes
-                    .get(req_id)
-                    .is_some_and(|h| **h == proc_item.capability_schema_hash)
-            });
+        let schema_ok = procedure_schema_matches_active_caps(
+            &proc_item.required_cap_ids,
+            &proc_item.capability_schema_hash,
+            &active_cap_hashes,
+        );
         if !schema_ok {
             excluded_stale_procedures += 1;
             continue;
@@ -398,6 +397,25 @@ pub fn select_tools_for_context(
         excluded_stale_procedures,
         excluded_hidden_items,
     }
+}
+
+fn procedure_schema_matches_active_caps(
+    required_cap_ids: &[CapabilityId],
+    procedure_hash: &CapabilitySchemaHash,
+    active_cap_hashes: &BTreeMap<&CapabilityId, &CapabilitySchemaHash>,
+) -> bool {
+    if required_cap_ids.is_empty() {
+        return false;
+    }
+    let mut pairs: Vec<(&CapabilityId, &CapabilitySchemaHash)> =
+        Vec::with_capacity(required_cap_ids.len());
+    for req_id in required_cap_ids {
+        let Some(&cap_hash) = active_cap_hashes.get(req_id) else {
+            return false;
+        };
+        pairs.push((req_id, cap_hash));
+    }
+    crate::consolidation::compute_procedure_schema_hash(pairs) == *procedure_hash
 }
 
 fn normalize_tokens(terms: &[String]) -> BTreeSet<String> {
@@ -932,4 +950,115 @@ pub fn enforce_context_budget(sections: &mut ContextSections) -> Vec<DroppedCont
 
     sections.total_estimated_bytes = compute_total(sections);
     dropped
+}
+
+#[cfg(test)]
+mod tests {
+    use monoagens_protocol::{CapabilityFlags, CapabilityId, CapabilitySchemaHash, Time, VisibleScope};
+
+    use super::*;
+    use crate::consolidation::compute_procedure_schema_hash;
+
+    fn make_cap_entry(id: &str, schema_hash: &str) -> CapabilityCatalogEntry {
+        CapabilityCatalogEntry {
+            descriptor: CapabilityDescriptor {
+                id: CapabilityId::new(id),
+                description: format!("cap {id}"),
+                places: vec![PlaceId::new("room:1")],
+                flags: CapabilityFlags {
+                    communicative: true,
+                    identity_changing: false,
+                    irreversible: false,
+                },
+                typical_latency_ms: 100,
+                capability_schema_hash: CapabilitySchemaHash::new(schema_hash),
+                sensed_effect: None,
+            },
+            is_static_core: false,
+            owner_signed: true,
+            active: true,
+            audience: Audience::default(),
+            embedding: None,
+        }
+    }
+
+    #[test]
+    fn select_tools_validates_single_and_multi_cap_procedure_schemas() {
+        let cap_a_id = CapabilityId::new("cap.alpha");
+        let cap_b_id = CapabilityId::new("cap.beta");
+        let hash_a = CapabilitySchemaHash::new("blake3:aaa");
+        let hash_b = CapabilitySchemaHash::new("blake3:bbb");
+
+        let single_hash = compute_procedure_schema_hash([(&cap_a_id, &hash_a)]);
+        let multi_hash =
+            compute_procedure_schema_hash([(&cap_a_id, &hash_a), (&cap_b_id, &hash_b)]);
+
+        let caps = vec![
+            make_cap_entry("cap.alpha", "blake3:aaa"),
+            make_cap_entry("cap.beta", "blake3:bbb"),
+        ];
+        let procs = vec![
+            ProcedureEntry {
+                procedure_id: EventId::new(1),
+                name: "single_proc".to_owned(),
+                steps: vec!["step1".to_owned()],
+                required_cap_ids: vec![cap_a_id.clone()],
+                capability_schema_hash: single_hash,
+                audience: Audience::new([ActorId::new("alice"), ActorId::new("soul")]),
+                domain: None,
+                active: true,
+                retired: false,
+                owner_signed: true,
+                embedding: None,
+            },
+            ProcedureEntry {
+                procedure_id: EventId::new(2),
+                name: "multi_proc".to_owned(),
+                steps: vec!["step1".to_owned(), "step2".to_owned()],
+                required_cap_ids: vec![cap_a_id.clone(), cap_b_id.clone()],
+                capability_schema_hash: multi_hash.clone(),
+                audience: Audience::new([ActorId::new("alice"), ActorId::new("soul")]),
+                domain: None,
+                active: true,
+                retired: false,
+                owner_signed: true,
+                embedding: None,
+            },
+        ];
+
+        let scope = VisibleScope::new(
+            Audience::new([ActorId::new("alice"), ActorId::new("soul")]),
+            Some(PlaceId::new("room:1")),
+        );
+        let budget = ToolSelectionBudget::from_config(&CoreConfig::default(), caps.len());
+        let selected = select_tools_for_context(
+            &["step1".to_owned()],
+            &[],
+            &caps,
+            &procs,
+            &scope,
+            Time::from_millis(1_000),
+            budget,
+        );
+        assert_eq!(selected.excluded_stale_procedures, 0);
+        assert_eq!(selected.procedures.len(), 2);
+
+        // Drift cap.beta -> multi_proc must be excluded while single_proc remains eligible.
+        let drifted_caps = vec![
+            make_cap_entry("cap.alpha", "blake3:aaa"),
+            make_cap_entry("cap.beta", "blake3:bbb_v2"),
+        ];
+        let after_drift = select_tools_for_context(
+            &["step1".to_owned()],
+            &[],
+            &drifted_caps,
+            &procs,
+            &scope,
+            Time::from_millis(1_000),
+            budget,
+        );
+        assert_eq!(after_drift.excluded_stale_procedures, 1);
+        assert_eq!(after_drift.procedures.len(), 1);
+        assert_eq!(after_drift.procedures[0].name, "single_proc");
+    }
 }

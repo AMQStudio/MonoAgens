@@ -184,3 +184,41 @@ Sesuai rekomendasi di atas, dilakukan satu iterasi perbaikan **100% offline (`0`
 1. **Uji End-to-End dengan LLM Nyata (`.env` → `deepseek-v4.1-flash`, butuh izin user):**
    - Jalankan **Opsi 2 (Mini Hemat, `~6–10` request API, `< $0.01`)**: `monoagens-lab benchmark --live --suite timing --pilot-items 3 --profile lab/profiles/deepseek-v4.1-flash-high.toml` memakai `EmbeddingGemma 2` + bobot baru `d169d7ee...` untuk menguji teks percakapan sungguhan.
 2. **Komit hasil perbaikan offline & laporan ini** setelah melewati gerbang wajib GitNexus (`detect-changes --scope all`).
+
+---
+
+## 8. Hasil Wave A (`wave-a-chat-foundation-fixes`): Train/Serve `t_d` Parity + Non-Vacuous CIC + Stage 4 DPO/KTO + `CFPO` (`$0` Offline `--release`)
+
+Setelah implementasi penuh seluruh perbaikan Core & Training Wave A (multi-cap procedure hash `C-2`, consolidated gist centroids `C-3`, partial `EpisodeBook::forget` & `SkillBook::forget` `C-8`, `SelfCaused` `h_t` stepping `C-9`, event-sourced `AdaptFeedbackApplied` + `Taint::Untrusted` guard + timestamp decay `C-10`, penghapusan bonus prematur `+0.5 Go` pada `ReceiptOutcome::Done`, `p_verify`/`p_uncertainty` pada `ContextPlan` `C-4`, `TaskPrefix::Document` `"title: none | text: "` train/serve parity `C-1`, non-vacuous `fit_cic_threshold` `target_risk=0.05` `delta=0.05`, serta Stage 4 `DPO/Margin` `T-DUR` + asimetris `KTO` `lambda_u=2.5 > lambda_d=1.0` + `CFPO` vectorless invariance `+0` params):
+
+### A. Verifikasi Model, Metadata & Paritas Wave A
+- **Artifact & Digest:** `training/artifacts/neural_phase3_best.safetensors` (`150k + minGRU`, `169,721` parameter) — `BLAKE3 = 82898fa437b4b229feeeefe4f718fc96872a0af49bbfb466f9b8827c17db792d` (terverifikasi identik di `monoagens-lab controller --json` & `manifest_phase3.json`).
+- **Kontrak Embedding & Kalibrasi Tertanam:** `expected_embed_model_ver = "egemma2-256"`, `expected_prompt_regime_id = "t_d"`, `temperature = 2.686029`, **`cic_threshold = 0.49` (`> 0.25`, non-vacuous; `cic_coverage = 0.8804`, `cic_selective_risk = 0.0260` di test shard)**, `has_phase2_heads = true`, `has_phase3_heads = true`.
+- **Metrik Held-Out Phase 3 + Stage 4 (`t_d`-prefixed shards, `phase3_report.json`):**
+  - `gate_macro_f1 = 0.803704` (naik dari `0.799011`), `gate_accuracy = 0.904018` (`+0.47%`), `phase1_gate_macro_f1 = 0.468967` (naik dari `0.446694`, `+0.0223`).
+  - `ece = 0.023925` (turun dari `0.039878`), `tc_ece = 0.024838` (turun dari `0.039533`), `brier = 0.113365` (turun dari `0.120592`).
+  - `p_uncertainty_mae = 0.008797`, `p_verify_f1 = 0.879473` (naik dari `0.845500`), `p_encode_importance_f1 = 0.988249`, `p_memory_relevance_f1 = 0.996917`, `p_memory_relevance_top1_acc = 1.0000`.
+  - `CFPO` vectorless JSD (`(e_256, x_num)` vs `(0_256, x_num)` pada sekuens timing) turun di seluruh kandidat (`150k:mingru`: `0.003092 → 0.002425`; `1m:gated_deltanet2`: `0.003501 → 0.002281`).
+- **Paritas Python ↔ Pure-Rust (`cargo test -p monoagens-core neural_parity`):** **3/3 PASS** (`Phase 1 = 1.192e-6`, `Phase 2 = 1.907e-6`, `Phase 3 = 4.292e-6`, seluruhnya `< 1e-5`).
+
+### B. Perbandingan Before vs After Wave A (5-Seed Offline `--release`, `seeds = [1..5]`)
+
+| Indikator | Pre-Wave A (`d169d7ee...`, `1M+GDN2`, `--release`) | Wave A Stage 4 (`82898fa4...`, `150k+minGRU`, `--release`) | Perubahan |
+|---|---:|---:|---|
+| **`validation` Suite** | **10/10 PASS** | **10/10 PASS** | Tetap sempurna (`val-01` 5/5, `val-02` 5/5) |
+| **`validation` `when_to_speak_f1`** | `1.0000` | **`1.0000`** | Tetap sempurna (`precision = 1.0`, `recall = 1.0`, `false_speaks = 0.0`) |
+| **`validation` `neural_brier`** *(↓ lebih baik)* | `0.00025` | **`0.0000577`** | **Membaik `~4.3×`** (vs netral `0.2500`) |
+| **`validation` `neural_ece`** *(↓ lebih baik)* | `0.0120` | **`0.00571`** | **Membaik `~2.1×`** (vs netral `0.1250`) |
+| **`validation` `neural_tc_ece`** *(↓ lebih baik)* | `0.0137` | **`0.02099`** | Tetap sangat tajam (`-0.7290` vs netral `0.7500`) |
+| **`dev-05-sleep-credence-report`** | `3/5 PASS` | **`4/5 PASS`** | **Naik +1 seed** (vs netral `1/5 PASS`) |
+| **`dev-08-patience` (`Wait → Yielded`)** | **`4/5 PASS`** | **`4/5 PASS`** | Tetap `4/5` (`false_speaks = 0.20`, `floor_violations = 0.0`) |
+| **`dev-07-habituation`** | `0/5 PASS` | `0/5 PASS` | Tetap bicara di `5010ms` pada stimulus berulang sintetis tanpa teks (`e_256 = 0`) |
+| **Total `development` Run Lulus** | `32/40` (`80.0%`) | **`33/40` (`82.5%`)** | **Naik `+1` run** (`+8` run vs baseline awal `25/40`) |
+| **`development` `neural_cic_coverage`** | `1.0000` | `0.9750` (`dev-08` `0.80`) | `CIC` non-vacuous (`τ = 0.49`) mulai menapis langkah ragu di `dev-08` |
+| **Latensi Appraise p95 (`val` / `dev`)** | `23.90 ms` / `15.49 ms` | **`1.04 ms` / `1.19 ms`** | **`~13–23×` lebih cepat** (`neural_online_adapt_rate = 53.4% val / 20.5% dev`) |
+| **Invarian Keras (`delta_ni`, `hard_forget`, `self_echo`, `recall_hit_*`, `false_belief_acc`)** | `0.0 / 0.0 / 0.0 / 1.0 / 1.0` | **`0.0 / 0.0 / 0.0 / 1.0 / 1.0`** | **100% aman tanpa regresi** |
+
+### C. Hasil Ablasi `online_adapt` Wave A (`--ablation online_adapt`, `--release`)
+- **`validation`:** `neural_online_adapt_rate = 0.5344` vs `0.0000`, `when_to_speak_f1 = 1.0000` (stabil tanpa regresi), `neural_brier` membaik tipis (`5.773e-5` vs `5.819e-5`), `neural_ece` membaik (`0.00571` vs `0.00573`).
+- **`development`:** `neural_online_adapt_rate = 0.2053` vs `0.0000`, `when_to_speak_f1 = 0.7778` (stabil), `delta_ni = 0.0`, `hard_forget_resurrection = 0.0`, `self_echo_rates = 0.0`, `appraisal_latency_p95_ms = 1.166 ms` (`online_adapt=true`) vs `1.208 ms`.
+

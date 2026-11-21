@@ -38,6 +38,10 @@ from monoagens_train.model import (
     ScalePreset,
     architecture_for_scale,
 )
+from monoagens_train.posttrain_preference import (
+    Stage4PreferenceConfig,
+    run_stage4_preference_posttrain,
+)
 
 
 @dataclass
@@ -237,6 +241,120 @@ def _binary_metrics(preds: np.ndarray, targets: np.ndarray, mask: np.ndarray) ->
     return bce, f1
 
 
+def evaluate_multitask_model(
+    model: MonoNeuralController,
+    phase: int,
+    scale: str,
+    cell_type: str,
+    param_count: int,
+    train_seconds: float,
+    shards: dict[str, dict[str, np.ndarray]],
+    phase1_test_split: dict[str, np.ndarray],
+    device: torch.device,
+) -> MultiTaskReportEntry:
+    """Calibrates temperature + non-vacuous CIC threshold and computes multi-task test metrics."""
+    arch = model.arch
+    cal_out = _collect_multitask_outputs(model, shards["calibration"], device)
+    cal_mask = shards["calibration"]["mask"] > 0.5
+    cal_logits_k = cal_out["logits_k"][cal_mask]
+    cal_y = shards["calibration"]["y_gate"][cal_mask]
+
+    temperature, nll_before, nll_after = fit_temperature(cal_logits_k, cal_y)
+    cal_probs = probs_from_logits_k(cal_logits_k, temperature)
+    cic_threshold, _cov, _emp, _up = fit_cic_threshold(
+        cal_probs, cal_y, target_risk=0.05, delta=0.05, min_coverage=0.25
+    )
+
+    test_dict = shards["test"]
+    test_out = _collect_multitask_outputs(model, test_dict, device)
+    bsz_t, seq_t, k_t, _ = test_out["logits_k"].shape
+    test_probs_seq = probs_from_logits_k(
+        test_out["logits_k"].reshape(-1, k_t, 4), temperature
+    ).reshape(bsz_t, seq_t, 4)
+
+    test_active = test_dict["mask"] > 0.5
+    test_probs = test_probs_seq[test_active]
+    test_y = test_dict["y_gate"][test_active]
+    preds = np.argmax(test_probs, axis=-1)
+    conf = np.max(test_probs, axis=-1)
+    accepted = conf >= cic_threshold
+    cic_cov = float(np.mean(accepted)) if len(accepted) > 0 else 0.0
+    cic_risk = float(np.mean(preds[accepted] != test_y[accepted])) if np.any(accepted) else 0.0
+
+    p1_out = _collect_multitask_outputs(model, phase1_test_split, device)
+    p1_bsz, p1_seq, p1_k, _ = p1_out["logits_k"].shape
+    p1_probs = probs_from_logits_k(
+        p1_out["logits_k"].reshape(-1, p1_k, 4), temperature
+    ).reshape(p1_bsz, p1_seq, 4)[phase1_test_split["mask"] > 0.5]
+    p1_y = phase1_test_split["y_gate"][phase1_test_split["mask"] > 0.5]
+    p1_f1 = compute_macro_f1(p1_probs, p1_y)
+
+    unc_mae = unc_brier = ver_bce = ver_f1 = enc_bce = enc_f1 = rel_bce = rel_f1 = rel_top1 = None
+    if arch.has_phase2_heads and np.any(test_dict["m_unc"] > 0.5):
+        mu = test_dict["m_unc"] > 0.5
+        pu = test_out["p_uncertainty"][mu]
+        yu = test_dict["y_unc"][mu]
+        unc_mae = round(float(np.mean(np.abs(pu - yu))), 6)
+        unc_brier = round(float(np.mean((pu - yu) ** 2)), 6)
+    if arch.has_phase2_heads and np.any(test_dict["m_ver"] > 0.5):
+        vb, vf = _binary_metrics(test_out["p_verify"], test_dict["y_ver"], test_dict["m_ver"])
+        ver_bce, ver_f1 = round(vb, 6), round(vf, 6)
+    if arch.has_phase3_heads and np.any(test_dict["m_enc"] > 0.5):
+        eb, ef = _binary_metrics(
+            test_out["p_encode_importance"], test_dict["y_enc"], test_dict["m_enc"]
+        )
+        enc_bce, enc_f1 = round(eb, 6), round(ef, 6)
+    if arch.has_phase3_heads and np.any(test_dict["m_rel"] > 0.5):
+        rb, rf = _binary_metrics(
+            test_out["p_memory_relevance"], test_dict["y_rel"], test_dict["m_rel"]
+        )
+        rel_bce, rel_f1 = round(rb, 6), round(rf, 6)
+        hits = []
+        rel_pred = test_out["p_memory_relevance"]
+        rel_true = test_dict["y_rel"]
+        rel_mask = test_dict["m_rel"]
+        for i in range(len(rel_true)):
+            m_i = rel_mask[i] > 0.5
+            if np.sum(m_i) < 2:
+                continue
+            ys = rel_true[i, m_i]
+            ps = rel_pred[i, m_i]
+            if np.max(ys) >= 0.9 and np.min(ys) <= 0.1:
+                best_idx = int(np.argmax(ps))
+                hits.append(1.0 if ys[best_idx] >= 0.5 else 0.0)
+        rel_top1 = round(float(np.mean(hits)) if hits else 0.0, 6)
+
+    return MultiTaskReportEntry(
+        phase=phase,
+        scale=scale,
+        cell_type=cell_type,
+        param_count=param_count,
+        train_seconds=round(train_seconds, 2),
+        temperature=round(temperature, 6),
+        cic_threshold=round(cic_threshold, 6),
+        nll_before_ts=round(nll_before, 6),
+        nll_after_ts=round(nll_after, 6),
+        gate_macro_f1=round(compute_macro_f1(test_probs, test_y), 6),
+        gate_accuracy=round(float(np.mean(preds == test_y)), 6),
+        phase1_gate_macro_f1=round(p1_f1, 6),
+        ece=round(compute_ece(test_probs, test_y), 6),
+        tc_ece=round(compute_tc_ece(test_probs_seq, test_dict["y_gate"], test_dict["mask"]), 6),
+        brier=round(compute_brier(test_probs, test_y), 6),
+        aurc=round(compute_aurc(test_probs, test_y), 6),
+        cic_coverage=round(cic_cov, 6),
+        cic_selective_risk=round(cic_risk, 6),
+        p_uncertainty_mae=unc_mae,
+        p_uncertainty_brier=unc_brier,
+        p_verify_bce=ver_bce,
+        p_verify_f1=ver_f1,
+        p_encode_importance_bce=enc_bce,
+        p_encode_importance_f1=enc_f1,
+        p_memory_relevance_bce=rel_bce,
+        p_memory_relevance_f1=rel_f1,
+        p_memory_relevance_top1_acc=rel_top1,
+    )
+
+
 def train_multitask_model(
     phase: int,
     scale: ScalePreset,
@@ -376,111 +494,16 @@ def train_multitask_model(
             optimizer.step()
         scheduler.step()
     train_seconds = time.perf_counter() - t0
-
-    # Calibration split: fit temperature + CIC threshold on gate_4
-    cal_out = _collect_multitask_outputs(model, shards["calibration"], device)
-    cal_mask = shards["calibration"]["mask"] > 0.5
-    cal_logits_k = cal_out["logits_k"][cal_mask]
-    cal_y = shards["calibration"]["y_gate"][cal_mask]
-
-    temperature, nll_before, nll_after = fit_temperature(cal_logits_k, cal_y)
-    cal_probs = probs_from_logits_k(cal_logits_k, temperature)
-    cic_threshold, _cov, _emp, _up = fit_cic_threshold(
-        cal_probs, cal_y, target_risk=0.25, delta=0.05, min_coverage=0.25
-    )
-
-    # Test split evaluation (multi-task)
-    test_dict = shards["test"]
-    test_out = _collect_multitask_outputs(model, test_dict, device)
-    bsz_t, seq_t, k_t, _ = test_out["logits_k"].shape
-    test_probs_seq = probs_from_logits_k(
-        test_out["logits_k"].reshape(-1, k_t, 4), temperature
-    ).reshape(bsz_t, seq_t, 4)
-
-    test_active = test_dict["mask"] > 0.5
-    test_probs = test_probs_seq[test_active]
-    test_y = test_dict["y_gate"][test_active]
-    preds = np.argmax(test_probs, axis=-1)
-    conf = np.max(test_probs, axis=-1)
-    accepted = conf >= cic_threshold
-    cic_cov = float(np.mean(accepted)) if len(accepted) > 0 else 0.0
-    cic_risk = float(np.mean(preds[accepted] != test_y[accepted])) if np.any(accepted) else 0.0
-
-    # Also measure Phase 1 test Macro-F1 to explicitly verify zero negative transfer on gate_4
-    p1_out = _collect_multitask_outputs(model, phase1_test_split, device)
-    p1_bsz, p1_seq, p1_k, _ = p1_out["logits_k"].shape
-    p1_probs = probs_from_logits_k(
-        p1_out["logits_k"].reshape(-1, p1_k, 4), temperature
-    ).reshape(p1_bsz, p1_seq, 4)[phase1_test_split["mask"] > 0.5]
-    p1_y = phase1_test_split["y_gate"][phase1_test_split["mask"] > 0.5]
-    p1_f1 = compute_macro_f1(p1_probs, p1_y)
-
-    # Optional head metrics
-    unc_mae = unc_brier = ver_bce = ver_f1 = enc_bce = enc_f1 = rel_bce = rel_f1 = rel_top1 = None
-    if arch.has_phase2_heads and np.any(test_dict["m_unc"] > 0.5):
-        mu = test_dict["m_unc"] > 0.5
-        pu = test_out["p_uncertainty"][mu]
-        yu = test_dict["y_unc"][mu]
-        unc_mae = round(float(np.mean(np.abs(pu - yu))), 6)
-        unc_brier = round(float(np.mean((pu - yu) ** 2)), 6)
-    if arch.has_phase2_heads and np.any(test_dict["m_ver"] > 0.5):
-        vb, vf = _binary_metrics(test_out["p_verify"], test_dict["y_ver"], test_dict["m_ver"])
-        ver_bce, ver_f1 = round(vb, 6), round(vf, 6)
-    if arch.has_phase3_heads and np.any(test_dict["m_enc"] > 0.5):
-        eb, ef = _binary_metrics(
-            test_out["p_encode_importance"], test_dict["y_enc"], test_dict["m_enc"]
-        )
-        enc_bce, enc_f1 = round(eb, 6), round(ef, 6)
-    if arch.has_phase3_heads and np.any(test_dict["m_rel"] > 0.5):
-        rb, rf = _binary_metrics(
-            test_out["p_memory_relevance"], test_dict["y_rel"], test_dict["m_rel"]
-        )
-        rel_bce, rel_f1 = round(rb, 6), round(rf, 6)
-        # Candidate top-1 retrieval accuracy across test episodes that have both positives and negatives
-        hits = []
-        rel_pred = test_out["p_memory_relevance"]
-        rel_true = test_dict["y_rel"]
-        rel_mask = test_dict["m_rel"]
-        for i in range(len(rel_true)):
-            m_i = rel_mask[i] > 0.5
-            # Exclude last query turn where pair doesn't discriminate candidates; check if both pos & neg exist
-            if np.sum(m_i) < 2:
-                continue
-            ys = rel_true[i, m_i]
-            ps = rel_pred[i, m_i]
-            if np.max(ys) >= 0.9 and np.min(ys) <= 0.1:
-                best_idx = int(np.argmax(ps))
-                hits.append(1.0 if ys[best_idx] >= 0.5 else 0.0)
-        rel_top1 = round(float(np.mean(hits)) if hits else 0.0, 6)
-
-    entry = MultiTaskReportEntry(
+    entry = evaluate_multitask_model(
+        model=model,
         phase=phase,
         scale=scale,
         cell_type=cell_type,
         param_count=param_count,
-        train_seconds=round(train_seconds, 2),
-        temperature=round(temperature, 6),
-        cic_threshold=round(cic_threshold, 6),
-        nll_before_ts=round(nll_before, 6),
-        nll_after_ts=round(nll_after, 6),
-        gate_macro_f1=round(compute_macro_f1(test_probs, test_y), 6),
-        gate_accuracy=round(float(np.mean(preds == test_y)), 6),
-        phase1_gate_macro_f1=round(p1_f1, 6),
-        ece=round(compute_ece(test_probs, test_y), 6),
-        tc_ece=round(compute_tc_ece(test_probs_seq, test_dict["y_gate"], test_dict["mask"]), 6),
-        brier=round(compute_brier(test_probs, test_y), 6),
-        aurc=round(compute_aurc(test_probs, test_y), 6),
-        cic_coverage=round(cic_cov, 6),
-        cic_selective_risk=round(cic_risk, 6),
-        p_uncertainty_mae=unc_mae,
-        p_uncertainty_brier=unc_brier,
-        p_verify_bce=ver_bce,
-        p_verify_f1=ver_f1,
-        p_encode_importance_bce=enc_bce,
-        p_encode_importance_f1=enc_f1,
-        p_memory_relevance_bce=rel_bce,
-        p_memory_relevance_f1=rel_f1,
-        p_memory_relevance_top1_acc=rel_top1,
+        train_seconds=train_seconds,
+        shards=shards,
+        phase1_test_split=phase1_test_split,
+        device=device,
     )
     return model.cpu(), entry
 
@@ -582,14 +605,26 @@ def run_phase2_and_phase3(
     epochs_p3: int = 10,
     force_recompute_shards: bool = False,
     phase3_only: bool = False,
+    stage4_preference: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     cache_dir = repo_root / "training" / "cache"
-    p1_cache = precompute_phase1_shards(repo_root, cache_dir / "phase1_shards.npz")
+    p1_cache = precompute_phase1_shards(
+        repo_root,
+        cache_dir / "phase1_shards.npz",
+        force_recompute=force_recompute_shards,
+        prompt_regime_id="t_d",
+    )
     p2_cache = precompute_phase2_shards(
-        repo_root, cache_dir / "phase2_shards.npz", force_recompute=force_recompute_shards
+        repo_root,
+        cache_dir / "phase2_shards.npz",
+        force_recompute=force_recompute_shards,
+        prompt_regime_id="t_d",
     )
     p3_cache = precompute_phase3_shards(
-        repo_root, cache_dir / "phase3_shards.npz", force_recompute=force_recompute_shards
+        repo_root,
+        cache_dir / "phase3_shards.npz",
+        force_recompute=force_recompute_shards,
+        prompt_regime_id="t_d",
     )
 
     p1_shards = load_multitask_shards(p1_cache)
@@ -728,6 +763,38 @@ def run_phase2_and_phase3(
             - 0.5 * r[1].ece
         ),
     )
+
+    stage4_diags: dict[str, dict[str, float]] = {}
+    if stage4_preference:
+        stage4_runs: list[tuple[MonoNeuralController, MultiTaskReportEntry]] = []
+        s4_cfg = Stage4PreferenceConfig()
+        for mdl, ent in p3_runs:
+            s4_mdl, s4_ent, s4_diag = run_stage4_preference_posttrain(
+                model=mdl,
+                shards=p123_merged,
+                phase1_test_split=p1_shards["test"],
+                device=device,
+                evaluate_fn=evaluate_multitask_model,
+                scale=ent.scale,
+                cell_type=ent.cell_type,
+                phase=3,
+                config=s4_cfg,
+                repo_root=repo_root,
+            )
+            stage4_runs.append((s4_mdl, s4_ent))
+            stage4_diags[f"{ent.scale}:{ent.cell_type}"] = s4_diag
+        p3_runs = stage4_runs
+        p3_best_mdl, p3_best_ent = max(
+            p3_runs,
+            key=lambda r: (
+                r[1].phase1_gate_macro_f1
+                + (r[1].p_memory_relevance_f1 or 0.0)
+                + (r[1].p_encode_importance_f1 or 0.0)
+                + (r[1].p_verify_f1 or 0.0)
+                - 0.5 * r[1].ece
+            ),
+        )
+
     p3_best_path = artifacts_dir / "neural_phase3_best.safetensors"
     p3_best_blake3 = p3_best_mdl.export_safetensors(
         p3_best_path, temperature=p3_best_ent.temperature, cic_threshold=p3_best_ent.cic_threshold
@@ -737,6 +804,9 @@ def run_phase2_and_phase3(
             {
                 "artifact": str(p3_best_path.relative_to(repo_root)),
                 "blake3": p3_best_blake3,
+                "expected_embed_model_ver": p3_best_mdl.arch.expected_embed_model_ver,
+                "expected_prompt_regime_id": p3_best_mdl.arch.expected_prompt_regime_id,
+                "stage4_preference": stage4_preference,
                 "winner": asdict(p3_best_ent),
             },
             indent=2,
@@ -759,6 +829,10 @@ def run_phase2_and_phase3(
             "longmemeval", "stale", "hi_tom", "dyntom",
             "group_mem_bench", "memory_agent_bench",
         ],
+        "expected_embed_model_ver": p3_best_mdl.arch.expected_embed_model_ver,
+        "expected_prompt_regime_id": p3_best_mdl.arch.expected_prompt_regime_id,
+        "stage4_preference": stage4_preference,
+        "stage4_diagnostics": stage4_diags,
         "split_counts": {k: int(len(v["e_256"])) for k, v in p123_merged.items()},
         "winner": asdict(p3_best_ent),
         "best_artifact_blake3": p3_best_blake3,
@@ -796,6 +870,7 @@ def main() -> None:
     parser.add_argument("--epochs-p3", type=int, default=10)
     parser.add_argument("--force-recompute-shards", action="store_true")
     parser.add_argument("--phase3-only", action="store_true")
+    parser.add_argument("--stage4-preference", action="store_true")
     args = parser.parse_args()
 
     p2_rep, p3_rep = run_phase2_and_phase3(
@@ -804,6 +879,7 @@ def main() -> None:
         epochs_p3=args.epochs_p3,
         force_recompute_shards=args.force_recompute_shards,
         phase3_only=args.phase3_only,
+        stage4_preference=args.stage4_preference,
     )
     print("PHASE 2 WINNER:", json.dumps(p2_rep["winner"], indent=2))
     print("PHASE 3 WINNER:", json.dumps(p3_rep["winner"], indent=2))

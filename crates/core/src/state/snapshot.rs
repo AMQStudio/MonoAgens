@@ -40,7 +40,7 @@ use crate::neural::PlaceAdaptState;
 use crate::recall::{ImportanceInputs, MemoryBasis, MemoryEntry};
 
 const SNAPSHOT_MAGIC: &[u8; 4] = b"MGSN";
-const SNAPSHOT_VERSION: u16 = 10;
+const SNAPSHOT_VERSION: u16 = 11;
 
 pub fn encode_snapshot(state: &CoreState) -> Vec<u8> {
     let mut w = BinWriter::new();
@@ -196,6 +196,7 @@ pub fn encode_snapshot(state: &CoreState) -> Vec<u8> {
             w.f64(v);
         }
         w.u64(ad.total_pulls);
+        w.opt_u64(ad.last_updated_ms.map(Time::as_millis));
     }
 
     w.u32(state.memory_candidates.len() as u32);
@@ -278,6 +279,24 @@ pub fn encode_snapshot(state: &CoreState) -> Vec<u8> {
         None => w.u8(0),
     }
     w.u64(state.config_loaded_count);
+    w.u32(state.decision_neural_hints.len() as u32);
+    for (&eid, &(p_verify, p_uncertainty)) in &state.decision_neural_hints {
+        w.u64(eid.as_u64());
+        match p_verify {
+            Some(v) => {
+                w.u8(1);
+                w.f32(v);
+            }
+            None => w.u8(0),
+        }
+        match p_uncertainty {
+            Some(v) => {
+                w.u8(1);
+                w.f32(v);
+            }
+            None => w.u8(0),
+        }
+    }
 
     w.finish()
 }
@@ -291,9 +310,9 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<CoreState, EventFormatError> {
         ));
     }
     let version = r.u16()?;
-    if version != SNAPSHOT_VERSION {
+    if version != 10 && version != SNAPSHOT_VERSION {
         return Err(EventFormatError::MalformedRecord(format!(
-            "unsupported snapshot version {version} (supported {SNAPSHOT_VERSION})"
+            "unsupported snapshot version {version} (supported 10..={SNAPSHOT_VERSION})"
         )));
     }
 
@@ -533,6 +552,11 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<CoreState, EventFormatError> {
             *s = r.f64()?;
         }
         let total_pulls = r.u64()?;
+        let last_updated_ms = if version >= 11 {
+            r.opt_u64()?.map(Time::from_millis)
+        } else {
+            None
+        };
         place_adapt.insert(
             place,
             PlaceAdaptState {
@@ -542,6 +566,7 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<CoreState, EventFormatError> {
                 arm_pulls,
                 arm_reward_sums,
                 total_pulls,
+                last_updated_ms,
             },
         );
     }
@@ -659,7 +684,7 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<CoreState, EventFormatError> {
     let expectation_book = ExpectationBook::decode(&mut r)?;
     let capability_descriptors = decode_capability_descriptors(&mut r)?;
 
-    let ctx_books = decode_context_and_books(&mut r)?;
+    let ctx_books = decode_context_and_books(&mut r, version)?;
 
     let recorded_config = match r.u8()? {
         0 => None,
@@ -671,6 +696,35 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<CoreState, EventFormatError> {
         }
     };
     let config_loaded_count = r.u64()?;
+    let decision_neural_hints = if version >= 11 {
+        let hint_len = r.u32()? as usize;
+        let mut hints = BTreeMap::new();
+        for _ in 0..hint_len {
+            let eid = EventId::new(r.u64()?);
+            let p_verify = match r.u8()? {
+                0 => None,
+                1 => Some(r.f32()?),
+                tag => {
+                    return Err(EventFormatError::MalformedRecord(format!(
+                        "invalid opt p_verify tag {tag}"
+                    )));
+                }
+            };
+            let p_uncertainty = match r.u8()? {
+                0 => None,
+                1 => Some(r.f32()?),
+                tag => {
+                    return Err(EventFormatError::MalformedRecord(format!(
+                        "invalid opt p_uncertainty tag {tag}"
+                    )));
+                }
+            };
+            hints.insert(eid, (p_verify, p_uncertainty));
+        }
+        hints
+    } else {
+        BTreeMap::new()
+    };
 
     let startup_recovery_pending = !unconsumed_inputs.is_empty();
     Ok(CoreState {
@@ -740,6 +794,7 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<CoreState, EventFormatError> {
         recalibration_pending: ctx_books.recalibration_pending,
         recorded_config,
         config_loaded_count,
+        decision_neural_hints,
     })
 }
 
@@ -923,7 +978,10 @@ fn encode_context_and_books(w: &mut BinWriter, state: &CoreState) {
     encode_perception_ledger(w, &state.ledger);
 }
 
-fn decode_context_and_books(r: &mut BinReader<'_>) -> Result<ContextAndBooks, EventFormatError> {
+fn decode_context_and_books(
+    r: &mut BinReader<'_>,
+    version: u16,
+) -> Result<ContextAndBooks, EventFormatError> {
     let identity_anchor = match r.u8()? {
         0 => None,
         1 => {
@@ -1162,7 +1220,7 @@ fn decode_context_and_books(r: &mut BinReader<'_>) -> Result<ContextAndBooks, Ev
     for _ in 0..pl_len {
         procedure_links.insert(ActionId::new(r.string()?), EventId::new(r.u64()?));
     }
-    let skill_book = decode_skill_book(r)?;
+    let skill_book = decode_skill_book(r, version)?;
     let ledger = decode_perception_ledger(r)?;
 
     Ok(ContextAndBooks {
@@ -1767,6 +1825,7 @@ fn encode_skill_book(w: &mut BinWriter, book: &SkillBook) {
         w.u64(l.created_at_ms.as_millis());
         w.u64(l.updated_at_ms.as_millis());
         w.u8(u8::from(l.active));
+        encode_audience(w, &l.audience);
     }
     w.u32(book.procedures.len() as u32);
     for (&pid, p) in &book.procedures {
@@ -1826,7 +1885,7 @@ fn encode_skill_book(w: &mut BinWriter, book: &SkillBook) {
     }
 }
 
-fn decode_skill_book(r: &mut BinReader<'_>) -> Result<SkillBook, EventFormatError> {
+fn decode_skill_book(r: &mut BinReader<'_>, version: u16) -> Result<SkillBook, EventFormatError> {
     let mut book = SkillBook::new();
     book.next_synthetic_id = r.u64()?;
     let fe_len = r.u32()? as usize;
@@ -1902,6 +1961,11 @@ fn decode_skill_book(r: &mut BinReader<'_>) -> Result<SkillBook, EventFormatErro
         let created_at_ms = Time::from_millis(r.u64()?);
         let updated_at_ms = Time::from_millis(r.u64()?);
         let active = r.u8()? != 0;
+        let audience = if version >= 11 {
+            decode_audience(r)?
+        } else {
+            Audience::default()
+        };
         book.lessons.insert(
             lesson_id,
             LessonEntry {
@@ -1912,6 +1976,7 @@ fn decode_skill_book(r: &mut BinReader<'_>) -> Result<SkillBook, EventFormatErro
                 failure_ids,
                 contrastive_success_ids,
                 actors,
+                audience,
                 credence: BetaCredence {
                     alpha,
                     beta,

@@ -317,3 +317,72 @@ pub fn decide_gate(
         trace,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::neural::CellType;
+    use crate::neural::weights::tests_support::{build_synthetic_tensors_map, serialize_tensors_map};
+
+    #[test]
+    fn commitment_inputs_strictly_precede_cic_abstain() {
+        let (mut meta, entries) = build_synthetic_tensors_map(
+            256,
+            18,
+            64,
+            32,
+            128,
+            192,
+            2,
+            8,
+            64,
+            8,
+            CellType::GatedDeltaNet2,
+            false,
+            false,
+        );
+        // Set cic_threshold near 0.99 so neural forward_step will always abstain (cic_abstain = true).
+        meta.insert("cic_threshold".to_owned(), "0.99".to_owned());
+        let bytes = serialize_tensors_map(meta, entries);
+        let model = NeuralModel::from_safetensors_bytes(&bytes, None).expect("model");
+
+        let e_256 = vec![0.1_f32; 256];
+        let x_num = vec![0.2_f32; 18];
+        let h_prev = vec![0.0_f32; 64];
+        let cfg = CoreConfig::default();
+
+        // Without commitment -> CicAbstention.
+        let no_comm = decide_gate(
+            EventId::new(1),
+            &cfg,
+            Some(&model),
+            &e_256,
+            &x_num,
+            &h_prev,
+            None,
+            CommitmentInputs::default(),
+        );
+        assert!(no_comm.neural.cic_abstain);
+        assert_eq!(no_comm.reason, DecisionReason::CicAbstention);
+        assert_eq!(no_comm.outcome, DecisionOutcome::Silent);
+
+        // With commitment -> Commitment Go strictly precedes cic_abstain.
+        let with_comm = decide_gate(
+            EventId::new(2),
+            &cfg,
+            Some(&model),
+            &e_256,
+            &x_num,
+            &h_prev,
+            None,
+            CommitmentInputs {
+                turn_allocated: true,
+                fires_or_answers_expectation: false,
+                continues_active_chain: false,
+            },
+        );
+        assert_eq!(with_comm.outcome, DecisionOutcome::Go);
+        assert_eq!(with_comm.reason, DecisionReason::Commitment);
+        assert!(with_comm.trace.commitment_bypass);
+    }
+}

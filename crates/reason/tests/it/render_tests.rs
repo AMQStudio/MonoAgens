@@ -242,6 +242,7 @@ fn sample_plan(with_guide: bool, with_valve: Option<ValveSelfSnapshot>) -> Conte
         dropped_items: Vec::new(),
         static_prefix_digest: [0u8; 32],
         valve_self_snapshot: with_valve,
+        ..ContextPlan::default()
     };
     plan.refresh_static_prefix_digest();
     plan

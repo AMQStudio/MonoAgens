@@ -68,11 +68,11 @@ def clopper_pearson_upper(k_errors: int, n_total: int, delta: float = 0.05) -> f
 def fit_cic_threshold(
     probs_cal: np.ndarray,
     labels_cal: np.ndarray,
-    target_risk: float = 0.25,
+    target_risk: float = 0.05,
     delta: float = 0.05,
     min_coverage: float = 0.20,
 ) -> tuple[float, float, float, float]:
-    """Finds lowest CIC confidence threshold satisfying finite-sample selective risk bound."""
+    """Finds lowest CIC confidence threshold strictly above 4-class simplex floor (0.25)."""
     conf = np.max(probs_cal, axis=-1)
     preds = np.argmax(probs_cal, axis=-1)
     errors = (preds != labels_cal).astype(np.int64)
@@ -83,7 +83,7 @@ def fit_cic_threshold(
     best_emp = 1.0
     best_upper = 1.0
 
-    candidates = np.linspace(0.25, 0.95, 71)
+    candidates = np.linspace(0.30, 0.98, 69)
     found_feasible = False
     for tau in candidates:
         sel = conf >= tau
