@@ -15,6 +15,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
+from monoagens_train.augment import build_procedural_timing_shards
 from monoagens_train.calibrate import (
     compute_aurc,
     compute_brier,
@@ -101,12 +102,18 @@ def _merge_splits(shard_dicts: list[dict[str, dict[str, np.ndarray]]], split: st
     return merged
 
 
-def _compute_class_weights(y: np.ndarray, mask: np.ndarray, device: torch.device) -> torch.Tensor:
+def _compute_class_weights(
+    y: np.ndarray,
+    mask: np.ndarray,
+    device: torch.device,
+    wait_boost: float = 1.4,
+) -> torch.Tensor:
     active = y[mask > 0.5]
     counts = np.bincount(active, minlength=4).astype(np.float64)
     counts = np.maximum(counts, 1.0)
     inv_sqrt = np.sqrt(np.max(counts) / counts)
-    inv_sqrt = np.clip(inv_sqrt, 0.5, 4.0)
+    inv_sqrt[2] *= wait_boost
+    inv_sqrt = np.clip(inv_sqrt, 0.5, 4.5)
     return torch.tensor(inv_sqrt, dtype=torch.float32, device=device)
 
 
@@ -243,6 +250,7 @@ def train_multitask_model(
     seed: int = 42,
     init_checkpoint: Path | None = None,
     use_pcgrad: bool = True,
+    modality_dropout_p: float = 0.15,
 ) -> tuple[MonoNeuralController, MultiTaskReportEntry]:
     _set_seed(seed)
     arch = architecture_for_scale(
@@ -304,6 +312,9 @@ def train_multitask_model(
             eb, xb, yb, wb, mb, y_u, m_u, y_v, m_v, y_e, m_e, y_r, m_r = [
                 t.to(device) for t in batch
             ]
+            if modality_dropout_p > 0.0:
+                drop_mask = (torch.rand((eb.shape[0], 1, 1), device=device) >= modality_dropout_p).to(eb.dtype)
+                eb = eb * drop_mask
             optimizer.zero_grad(set_to_none=True)
             out = model.forward_sequence(eb, xb, temperature=1.0)
 
@@ -570,6 +581,7 @@ def run_phase2_and_phase3(
     epochs_p2: int = 10,
     epochs_p3: int = 10,
     force_recompute_shards: bool = False,
+    phase3_only: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     cache_dir = repo_root / "training" / "cache"
     p1_cache = precompute_phase1_shards(repo_root, cache_dir / "phase1_shards.npz")
@@ -591,94 +603,99 @@ def run_phase2_and_phase3(
     reports_dir.mkdir(parents=True, exist_ok=True)
 
     # ---- PHASE 2: Joint Phase 1 + Phase 2 (`p_uncertainty`, `p_verify`) ----
-    p12_merged = {sp: _merge_splits([p1_shards, p2_shards], sp) for sp in ("train", "calibration", "test")}
-    p1_best = artifacts_dir / "neural_phase1_best.safetensors"
-
-    p2_runs: list[tuple[MonoNeuralController, MultiTaskReportEntry]] = []
-    # Train compact 150k minGRU & Gated DeltaNet-2 parity models + 1m/3m best model
-    for sc, ct, warm in (
-        ("150k", "mingru", None),
-        ("150k", "gated_deltanet2", None),
-        ("3m", "mingru", p1_best if p1_best.is_file() else None),
-        ("1m", "gated_deltanet2", None),
-    ):
-        mdl, ent = train_multitask_model(
-            phase=2,
-            scale=sc,  # type: ignore[arg-type]
-            cell_type=ct,  # type: ignore[arg-type]
-            shards=p12_merged,
-            phase1_test_split=p1_shards["test"],
-            device=device,
-            epochs=epochs_p2,
-            init_checkpoint=warm,
-            use_pcgrad=True,
-        )
-        p2_runs.append((mdl, ent))
-
-    p2_best_mdl, p2_best_ent = max(
-        p2_runs,
-        key=lambda r: (
-            r[1].phase1_gate_macro_f1
-            + (r[1].p_verify_f1 or 0.0)
-            - 0.5 * (r[1].p_uncertainty_brier or 0.0)
-            - 0.5 * r[1].ece
-        ),
-    )
     p2_best_path = artifacts_dir / "neural_phase2_best.safetensors"
-    p2_best_blake3 = p2_best_mdl.export_safetensors(
-        p2_best_path, temperature=p2_best_ent.temperature, cic_threshold=p2_best_ent.cic_threshold
-    )
-    (artifacts_dir / "manifest_phase2.json").write_text(
-        json.dumps(
-            {
-                "artifact": str(p2_best_path.relative_to(repo_root)),
-                "blake3": p2_best_blake3,
-                "winner": asdict(p2_best_ent),
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    if phase3_only and p2_best_path.is_file() and (reports_dir / "phase2_report.json").is_file():
+        p2_report = json.loads((reports_dir / "phase2_report.json").read_text(encoding="utf-8"))
+    else:
+        p12_merged = {sp: _merge_splits([p1_shards, p2_shards], sp) for sp in ("train", "calibration", "test")}
+        p1_best = artifacts_dir / "neural_phase1_best.safetensors"
 
-    p2_mg_mdl, p2_mg_ent = next(r for r in p2_runs if r[1].scale == "150k" and r[1].cell_type == "mingru")
-    p2_gdn_mdl, p2_gdn_ent = next(
-        r for r in p2_runs if r[1].scale == "150k" and r[1].cell_type == "gated_deltanet2"
-    )
-    p2_fix_hashes = export_multitask_parity_fixture(
-        2, p2_mg_mdl, p2_gdn_mdl, p2_mg_ent, p2_gdn_ent, fixtures_dir
-    )
+        p2_runs: list[tuple[MonoNeuralController, MultiTaskReportEntry]] = []
+        # Train compact 150k minGRU & Gated DeltaNet-2 parity models + 1m/3m best model
+        for sc, ct, warm in (
+            ("150k", "mingru", None),
+            ("150k", "gated_deltanet2", None),
+            ("3m", "mingru", p1_best if p1_best.is_file() else None),
+            ("1m", "gated_deltanet2", None),
+        ):
+            mdl, ent = train_multitask_model(
+                phase=2,
+                scale=sc,  # type: ignore[arg-type]
+                cell_type=ct,  # type: ignore[arg-type]
+                shards=p12_merged,
+                phase1_test_split=p1_shards["test"],
+                device=device,
+                epochs=epochs_p2,
+                init_checkpoint=warm,
+                use_pcgrad=True,
+            )
+            p2_runs.append((mdl, ent))
 
-    p2_report = {
-        "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
-        "datasets": ["when2speak", "ubuntu_irc", "proactive_bench", "capa", "longmemeval", "stale", "hi_tom", "dyntom"],
-        "split_counts": {k: int(len(v["e_256"])) for k, v in p12_merged.items()},
-        "winner": asdict(p2_best_ent),
-        "best_artifact_blake3": p2_best_blake3,
-        "fixture_blake3": p2_fix_hashes,
-        "runs": [asdict(r[1]) for r in p2_runs],
-    }
-    (reports_dir / "phase2_report.json").write_text(json.dumps(p2_report, indent=2), encoding="utf-8")
-    p2_md = [
-        "# Phase 2 Multi-Task Report (`gate_4` + `wait_delta_t` + `p_uncertainty` + `p_verify`)",
-        "",
-        f"- **Device:** `{p2_report['device']}`",
-        f"- **Split Sequences (P1+P2):** train={p2_report['split_counts']['train']}, cal={p2_report['split_counts']['calibration']}, test={p2_report['split_counts']['test']}",
-        f"- **Winner:** `{p2_best_ent.scale}` + `{p2_best_ent.cell_type}` (`blake3={p2_best_blake3}`)",
-        "",
-        "| Scale | Cell | Params | T | CIC τ | P1 F1 | Gate F1 | ECE | TC-ECE | AURC | Unc MAE | Unc Brier | Verify F1 |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
-    ]
-    for _m, e in p2_runs:
-        p2_md.append(
-            f"| {e.scale} | {e.cell_type} | {e.param_count:,} | {e.temperature:.3f} | {e.cic_threshold:.3f} | "
-            f"{e.phase1_gate_macro_f1:.4f} | {e.gate_macro_f1:.4f} | {e.ece:.4f} | {e.tc_ece:.4f} | "
-            f"{e.aurc:.4f} | {e.p_uncertainty_mae or 0.0:.4f} | {e.p_uncertainty_brier or 0.0:.4f} | {e.p_verify_f1 or 0.0:.4f} |"
+        p2_best_mdl, p2_best_ent = max(
+            p2_runs,
+            key=lambda r: (
+                r[1].phase1_gate_macro_f1
+                + (r[1].p_verify_f1 or 0.0)
+                - 0.5 * (r[1].p_uncertainty_brier or 0.0)
+                - 0.5 * r[1].ece
+            ),
         )
-    (reports_dir / "phase2_report.md").write_text("\n".join(p2_md) + "\n", encoding="utf-8")
+        p2_best_blake3 = p2_best_mdl.export_safetensors(
+            p2_best_path, temperature=p2_best_ent.temperature, cic_threshold=p2_best_ent.cic_threshold
+        )
+        (artifacts_dir / "manifest_phase2.json").write_text(
+            json.dumps(
+                {
+                    "artifact": str(p2_best_path.relative_to(repo_root)),
+                    "blake3": p2_best_blake3,
+                    "winner": asdict(p2_best_ent),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        p2_mg_mdl, p2_mg_ent = next(r for r in p2_runs if r[1].scale == "150k" and r[1].cell_type == "mingru")
+        p2_gdn_mdl, p2_gdn_ent = next(
+            r for r in p2_runs if r[1].scale == "150k" and r[1].cell_type == "gated_deltanet2"
+        )
+        p2_fix_hashes = export_multitask_parity_fixture(
+            2, p2_mg_mdl, p2_gdn_mdl, p2_mg_ent, p2_gdn_ent, fixtures_dir
+        )
+
+        p2_report = {
+            "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
+            "datasets": ["when2speak", "ubuntu_irc", "proactive_bench", "capa", "longmemeval", "stale", "hi_tom", "dyntom"],
+            "split_counts": {k: int(len(v["e_256"])) for k, v in p12_merged.items()},
+            "winner": asdict(p2_best_ent),
+            "best_artifact_blake3": p2_best_blake3,
+            "fixture_blake3": p2_fix_hashes,
+            "runs": [asdict(r[1]) for r in p2_runs],
+        }
+        (reports_dir / "phase2_report.json").write_text(json.dumps(p2_report, indent=2), encoding="utf-8")
+        p2_md = [
+            "# Phase 2 Multi-Task Report (`gate_4` + `wait_delta_t` + `p_uncertainty` + `p_verify`)",
+            "",
+            f"- **Device:** `{p2_report['device']}`",
+            f"- **Split Sequences (P1+P2):** train={p2_report['split_counts']['train']}, cal={p2_report['split_counts']['calibration']}, test={p2_report['split_counts']['test']}",
+            f"- **Winner:** `{p2_best_ent.scale}` + `{p2_best_ent.cell_type}` (`blake3={p2_best_blake3}`)",
+            "",
+            "| Scale | Cell | Params | T | CIC τ | P1 F1 | Gate F1 | ECE | TC-ECE | AURC | Unc MAE | Unc Brier | Verify F1 |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+        for _m, e in p2_runs:
+            p2_md.append(
+                f"| {e.scale} | {e.cell_type} | {e.param_count:,} | {e.temperature:.3f} | {e.cic_threshold:.3f} | "
+                f"{e.phase1_gate_macro_f1:.4f} | {e.gate_macro_f1:.4f} | {e.ece:.4f} | {e.tc_ece:.4f} | "
+                f"{e.aurc:.4f} | {e.p_uncertainty_mae or 0.0:.4f} | {e.p_uncertainty_brier or 0.0:.4f} | {e.p_verify_f1 or 0.0:.4f} |"
+            )
+        (reports_dir / "phase2_report.md").write_text("\n".join(p2_md) + "\n", encoding="utf-8")
 
     # ---- PHASE 3: Joint Phase 1 + 2 + 3 (`p_encode_importance`, `p_memory_relevance`) ----
+    seq_len = int(p1_shards["train"]["x_num"].shape[1])
+    proc_timing_shards = build_procedural_timing_shards(seq_len=seq_len)
     p123_merged = {
-        sp: _merge_splits([p1_shards, p2_shards, p3_shards], sp)
+        sp: _merge_splits([p1_shards, p2_shards, p3_shards, proc_timing_shards], sp)
         for sp in ("train", "calibration", "test")
     }
     p3_runs: list[tuple[MonoNeuralController, MultiTaskReportEntry]] = []
@@ -778,6 +795,7 @@ def main() -> None:
     parser.add_argument("--epochs-p2", type=int, default=10)
     parser.add_argument("--epochs-p3", type=int, default=10)
     parser.add_argument("--force-recompute-shards", action="store_true")
+    parser.add_argument("--phase3-only", action="store_true")
     args = parser.parse_args()
 
     p2_rep, p3_rep = run_phase2_and_phase3(
@@ -785,6 +803,7 @@ def main() -> None:
         epochs_p2=args.epochs_p2,
         epochs_p3=args.epochs_p3,
         force_recompute_shards=args.force_recompute_shards,
+        phase3_only=args.phase3_only,
     )
     print("PHASE 2 WINNER:", json.dumps(p2_rep["winner"], indent=2))
     print("PHASE 3 WINNER:", json.dumps(p3_rep["winner"], indent=2))

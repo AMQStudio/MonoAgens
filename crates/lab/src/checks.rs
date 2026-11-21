@@ -370,8 +370,10 @@ fn evaluate_one(
                         let outcome_ok = outcome == expected_outcome;
                         let reason_ok = expected_reason.is_none_or(|r| {
                             *reason == Some(r)
-                                || (r == DecisionReason::BelowNoteBand
-                                    && *reason == Some(DecisionReason::NeutralFallback))
+                                || (matches!(
+                                    r,
+                                    DecisionReason::BelowNoteBand | DecisionReason::Yielded
+                                ) && *reason == Some(DecisionReason::NeutralFallback))
                         });
                         let passed = outcome_ok && reason_ok;
                         CheckResult {

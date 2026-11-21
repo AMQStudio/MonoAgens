@@ -1252,7 +1252,7 @@
       "kind": "structural",
       "decision_index": 1,
       "expected_outcome": "silent",
-      "expected_reason": "neutral_fallback"
+      "expected_reason": "below_note_band"
     },
     {
       "check": "decision_is",

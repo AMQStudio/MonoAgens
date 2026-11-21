@@ -113,3 +113,25 @@ def test_phase2_and_phase3_heads_and_warmstart_roundtrip(tmp_path: Path):
         assert "head.p_verify.weight" in keys
         assert "head.p_encode_importance.weight" in keys
         assert "head.p_memory_relevance.weight" in keys
+
+
+def test_procedural_timing_shards_cover_habituation_wait_and_vectorless():
+    from monoagens_train.augment import build_procedural_timing_shards
+
+    shards = build_procedural_timing_shards(seq_len=24, n_train=64, n_cal=16, n_test=16)
+    tr = shards["train"]
+    assert tr["e_256"].shape == (64, 24, 256)
+    assert tr["x_num"].shape == (64, 24, 18)
+    assert np.all(np.isfinite(tr["e_256"]))
+    assert np.all(np.isfinite(tr["x_num"]))
+    assert np.all((tr["x_num"] >= 0.0) & (tr["x_num"] <= 1.0))
+
+    active = tr["mask"] > 0.5
+    classes = set(np.unique(tr["y_gate"][active]).tolist())
+    assert {0, 2, 3}.issubset(classes)
+    # Verify vectorless examples are well represented
+    row_norms = np.linalg.norm(tr["e_256"][active], axis=-1)
+    assert np.mean(row_norms == 0.0) > 0.4
+    # Verify Wait examples carry positive wait_delta_ms
+    wait_mask = active & (tr["y_gate"] == 2)
+    assert np.all(tr["y_wait_ms"][wait_mask] >= 1500.0)
