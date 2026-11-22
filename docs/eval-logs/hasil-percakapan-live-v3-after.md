@@ -1,5 +1,13 @@
 # Data Percakapan Lengkap — Uji Live Ulang MonoAgens V3 (Setelah `lab-live-eval-hygiene`)
 
+| Field | Detail |
+|---|---|
+| **Tanggal** | `2026-11-23` |
+| **Versi Otak** | `V3` (`training/artifacts/neural_v3_best.safetensors`, `feature_schema_version = 3`) |
+| **Model & Embedder** | `deepseek-v4.1-flash` (`reasoning_effort = medium`, `output_limits.reason = 8192`) + `EmbeddingGemma 2` (`egemma2-256`, CUDA `torch.bfloat16`) |
+| **Lingkup** | Pilot R2 4 domain setelah `lab-live-eval-hygiene` (`when2speak`, `proactive_bench`, `pm_bench`, `fantom`) |
+| **Status** | R2 (`0` failed items, `when2speak` `1/1 PASS`, `pm_bench` `1/1 PASS`, `fantom` `14/24`, `Answerability[Binary]` `5/6`) |
+
 Dokumen ini memuat hasil percakapan lengkap (beserta terjemahan bahasa Indonesia) dari uji live ulang 4 domain setelah perbaikan **`lab-live-eval-hygiene`**:
 - **Otak Sistem 1:** `training/artifacts/neural_v3_best.safetensors` (`feature_schema_version = 3`)
 - **LLM Sistem 2:** `deepseek-v4.1-flash` (`reasoning_effort = medium`, `output_limits.reason = 8192`)
@@ -58,7 +66,7 @@ Dokumen ini memuat hasil percakapan lengkap (beserta terjemahan bahasa Indonesia
 
 ## 4. `fantom` — Percakapan `fantom_conv_0` (`14/24 PASS`, `Answerability[Binary]` naik `0.333 → 0.833`)
 
-*(Histori 13 turn percakapan grup `Gianna`, `Sara`, dan `Javier` sama persis dengan yang tercatat lengkap pada Bagian 6.1 di `docs/hasil-percakapan-live-v3.md`: Gianna pamit keluar di `hist_0`, Sara & Javier membahas melatih **Bruno** dan **Snowflake** di `hist_3..5`, lalu Gianna masuk lagi di `hist_6` dan menyebut **Chirpy** di `hist_9`.)*
+*(Histori 13 turn percakapan grup `Gianna`, `Sara`, dan `Javier` sama persis dengan yang tercatat lengkap pada Bagian 6.1 di [`hasil-percakapan-live-v3.md`](hasil-percakapan-live-v3.md): Gianna pamit keluar di `hist_0`, Sara & Javier membahas melatih **Bruno** dan **Snowflake** di `hist_3..5`, lalu Gianna masuk lagi di `hist_6` dan menyebut **Chirpy** di `hist_9`.)*
 
 ### 4.1. Item `0-0-0` (13 Probe — Topik: *Siapa yang membahas melatih Bruno dan Snowflake*)
 

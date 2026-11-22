@@ -22,7 +22,7 @@ monoagens-store = { workspace = true }
 monoagens-valve = { path = "../../crates/valve" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "io-util", "sync", "time"] }
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "io-util", "sync", "time", "signal"] }
 toml_edit = "0.25.19"
 
 [dev-dependencies]

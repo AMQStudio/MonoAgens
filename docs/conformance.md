@@ -1,6 +1,6 @@
 # Waist-1 & Waist-2 Conformance (`monoagens-conformance`)
 
-> Source of truth: [`crates/conformance/src/lib.rs`](../crates/conformance/src/lib.rs), [`crates/conformance/src/main.rs`](../crates/conformance/src/main.rs), [`crates/conformance/tests/body_tck.rs`](../crates/conformance/tests/body_tck.rs), and [`crates/conformance/tests/core_tck.rs`](../crates/conformance/tests/core_tck.rs). (`15/15` tests passing in `monoagens-conformance`: `11` in `body_tck.rs`, `2` in `conformance_runner.rs`, `2` in `core_tck.rs`.)
+> Source of truth: [`crates/conformance/src/lib.rs`](../crates/conformance/src/lib.rs), [`crates/conformance/src/main.rs`](../crates/conformance/src/main.rs), [`crates/conformance/tests/it/body_tck.rs`](../crates/conformance/tests/it/body_tck.rs), and [`crates/conformance/tests/it/core_tck.rs`](../crates/conformance/tests/it/core_tck.rs). (`15/15` tests passing in `monoagens-conformance`: `11` in `body_tck.rs`, `2` in `conformance_runner.rs`, `2` in `core_tck.rs`.)
 
 `monoagens-conformance` is a black-box conformance runner that spawns a compiled Body or Core harness as a subprocess over real NDJSON `stdio` JSON-RPC 2.0 (with zero in-memory shortcuts), passes an isolated `MONOAGENS_BODY_STATE_DIR` or `MONOAGENS_CORE_STATE_DIR` temporary directory, and writes a deterministic `CompatibilityReport` JSON file.
 
@@ -83,7 +83,7 @@ Repeated runs against a conforming body produce byte-identical JSON output (`bod
 
 ## 4. Negative Fixtures & Anti-Regression Tests
 
-[`crates/conformance/tests/fixtures/mock_body.rs`](../crates/conformance/tests/fixtures/mock_body.rs) provides `good` plus 10 deliberately broken modes verified in [`crates/conformance/tests/body_tck.rs`](../crates/conformance/tests/body_tck.rs):
+[`crates/conformance/tests/fixtures/mock_body.rs`](../crates/conformance/tests/fixtures/mock_body.rs) provides `good` plus 10 deliberately broken modes verified in [`crates/conformance/tests/it/body_tck.rs`](../crates/conformance/tests/it/body_tck.rs):
 - `unsorted_discover` -> fails `B-MUST-01`
 - `duplicate_execution` -> fails `B-MUST-02`
 - `silent_crash` -> fails `B-MUST-03`

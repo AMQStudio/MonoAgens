@@ -1,5 +1,13 @@
 # Data Percakapan Lengkap — Uji Live MonoAgens V3 (R3: Chronological `[RECALLED]` + `all-roberta-large-v1`)
 
+| Field | Detail |
+|---|---|
+| **Tanggal** | `2026-11-23` |
+| **Versi Otak** | `V3` (`training/artifacts/neural_v3_best.safetensors`, `feature_schema_version = 3`) |
+| **Model & Embedder** | `deepseek-v4.1-flash` (`reasoning_effort = medium`, `output_limits.reason = 8192`) + `EmbeddingGemma 2` (`egemma2-256`, CUDA `torch.bfloat16`) + `fantom` `all-roberta-large-v1` |
+| **Lingkup** | Pilot R3 4 domain setelah `context-chronological-recall-and-hygiene` (`when2speak`, `proactive_bench`, `pm_bench`, `fantom`) |
+| **Status** | R3 (`0` failed items, `when2speak` `1/1 PASS`, `pm_bench` `1/1 PASS`, `fantom` `17/24` [`70.8%`], `Answerability[Binary]` `6/6`) |
+
 Dokumen ini memuat hasil percakapan lengkap (beserta terjemahan bahasa Indonesia) dari uji live 4 domain setelah dua rangkaian perbaikan:
 - `lab-live-eval-hygiene` (embedder GPU otomatis, `output_limits.reason = 8192`, format biner `[ANCHOR]`, scorer `when2speak`)
 - `context-chronological-recall-and-hygiene` (urutan kronologis `[RECALLED]` + deduplikasi `[PLACE_TAIL]`, normalisasi `people` vs `places`, jawaban ringkas `[ANCHOR]`, scorer `proactive_bench` `"SILENT"`, serta wiring outcome `fantom_all_star` memakai `all-roberta-large-v1`)

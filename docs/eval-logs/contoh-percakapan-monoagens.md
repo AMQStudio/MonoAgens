@@ -1,5 +1,13 @@
 # Contoh Percakapan Panjang MonoAgens
 
+| Field | Detail |
+|---|---|
+| **Tanggal** | `2026-11-21` |
+| **Versi Otak** | Desain Perilaku Referensi (S1 + S2 + Valve) |
+| **Model & Embedder** | Skenario ilustratif (non-live) |
+| **Lingkup** | 2 skenario percakapan (Tim TA + DM pribadi; Tim DevOps multi-bot, janji multi-hari, jebakan pesan palsu, HITL, `hard_forget`) |
+| **Status** | Referensi perilaku |
+
 Dua cerita percakapan sehari-hari ini menunjukkan bagaimana **Mono** (agen asisten di dalam chat) bersikap secara alami: tahu kapan harus diam, tahu kapan menunggu orang selesai mengetik, menjaga rahasia antar-ruangan, sadar saat dikoreksi, tidak ikut berisik bersama bot lain, ingat janji yang dibatalkan, dan selalu minta izin pemilik sebelum melakukan tindakan berisiko.
 
 ---

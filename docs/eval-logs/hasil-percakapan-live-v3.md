@@ -1,5 +1,13 @@
 # Data Percakapan Lengkap — Uji Live MonoAgens V3
 
+| Field | Detail |
+|---|---|
+| **Tanggal** | `2026-11-23` |
+| **Versi Otak** | `V3` (`training/artifacts/neural_v3_best.safetensors`, `feature_schema_version = 3`, `model_blake3 = 2e9e3794...`) |
+| **Model & Embedder** | `deepseek-v4.1-flash` + `EmbeddingGemma 2` (`egemma2-256`, CUDA `torch.bfloat16`) pada `smoke-id` & `chat`; `none` pada run `benchmark` R1 |
+| **Lingkup** | `smoke-id` (`3/3`), `monoagens chat` + `replay` (`5/5`), pilot R1 4 domain (`when2speak`, `proactive_bench`, `pm_bench`, `fantom`) |
+| **Status** | R1 Baseline (`smoke-id` `3/3 PASS`, `chat+replay` `5/5 PASS`, `fantom` `14/24`) |
+
 Dokumen ini merangkum seluruh percakapan nyata yang dijalankan pada sesi pengujian live menggunakan:
 - **Otak Sistem 1:** `training/artifacts/neural_v3_best.safetensors` (`feature_schema_version = 3`, `model_blake3 = 2e9e3794c79885e50a0f1081fdb454e80408f409da7ef7178ea1bdd61d4f0d4d`)
 - **LLM Sistem 2:** `deepseek-v4.1-flash` via OpenAI-compatible HTTP endpoint

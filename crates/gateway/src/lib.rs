@@ -54,8 +54,8 @@ pub use provider::{
     build_provider_from_config_async,
 };
 pub use runtime::{
-    GatewayError, GatewayHandle, GatewayOptions, GatewayRuntime, IngressQueue, OwnershipStats,
-    TurnOutcome,
+    BodyConnectOutcome, GatewayError, GatewayHandle, GatewayOptions, GatewayRuntime,
+    IngressQueue, OwnershipStats, TurnOutcome,
 };
 pub use seams::{
     AsyncGatewayHook, AttachmentCustodySeam, DoorController, DoorsAdapter, GatewaySeams,

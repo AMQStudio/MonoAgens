@@ -6,25 +6,27 @@ An autonomous agent runtime built around a tiny, inspectable four-layer core (`B
 
 ---
 
-## Architecture & Two-Change Split
+## Architecture & OpenSpec Layout
 
-MonoAgens follows a strict two-change design in [`openspec/changes/`](openspec/changes/):
-
-1. **[`core-and-lab`](openspec/changes/core-and-lab/proposal.md)** — Deterministic stateful **Core** (`crates/core`, `crates/store`), stateless LLM/embedder **Reason** (`crates/reason`), 22-mechanism ablation + Pareto **Lab** (`crates/lab`).
-2. **[`waist-valve-and-bodies`](openspec/changes/waist-valve-and-bodies/proposal.md)** — Canonical **Waist-2 (`monoagens.body.v1`)** protocol & JSON/OpenRPC contracts (`crates/protocol`), Cedar + SymCC policy **Valve** (`crates/valve`), runtime **Gateway** (`crates/gateway`), black-box **Conformance TCK** (`crates/conformance`), SDKs (`sdk/`), external **Bodies** (`bodies/`), and operator **CLI** (`crates/cli`).
+MonoAgens is governed by canonical behavior specifications in [`openspec/specs/`](openspec/specs/) (including archived V3 Neural Cognitive Controller `v3-synaptic-active-inference`, `cli-interactive-chat`, `proactive-group-embed-s1`, `lab-live-eval-hygiene`, `context-chronological-recall-and-hygiene`, `lab-e2e-conversation-samples`, `hitl-governance`, `multi-agent-coordination`, `multiday-chat-lab`, `neural-controller`, `neural-training-pipeline`, and `slim-core-harness`), while active feature and infrastructure changes go through [`openspec/changes/`](openspec/changes/) (including [`gateway-multi-body-daemon`](openspec/changes/gateway-multi-body-daemon/proposal.md) for WhatsApp/Telegram multi-body readiness, [`waist-valve-and-bodies`](openspec/changes/waist-valve-and-bodies/proposal.md), [`lab-datasets`](openspec/changes/lab-datasets/proposal.md), and [`lab-memory-comparison`](openspec/changes/lab-memory-comparison/proposal.md)).
 
 ```text
-Bodies / Adapters (bodies/, examples/, sdk/)
+Bodies / Adapters (bodies/, examples/, sdk/ — e.g. body-cli, WhatsApp/Telegram bridges)
    │  NDJSON JSON-RPC 2.0 (Waist-2: monoagens.body.v1)
    ▼
-Gateway (crates/gateway) ── kappa(b,a) identity · <=256 KiB strip · Tool RAG · Core-owner loop
+Gateway (crates/gateway) ── kappa(b,a) identity · <=256 KiB strip · Tool RAG · EmbeddingGemma 2 (256d)
    │  Four-Door Check (inbound / context / action / memory_write)
    ▼
 Valve (crates/valve)     ── Cedar + cvc5 UNSAT proof · H_act · taint quarantine · quiet hours
    │
    ▼
-Core + Store + Reason    ── Event-sourced SQLite WAL · Petrov/hybrid memory · Two-Epoch Replay
+Core + Store + Reason    ── Event-sourced SQLite WAL · V3 Neural Controller (36d, W_fast, world_pred) · Replay
 ```
+
+Key runtime capabilities:
+- **V3 Neural Cognitive Controller (`crates/core/src/neural/`)**: `36d` feature schema v3 (`feature_schema_version = 3`), `InfoGapClassifier`, `PlaceCosBaseline`, three-factor synaptic fast-weight plasticity (`W_fast`), and `head.world_pred` predictive world-state head.
+- **Local Semantic Embedder (`crates/reason/`, `crates/gateway/src/prequeue.rs`)**: Local `EmbeddingGemma 2` (`256d`) HTTP/stdio sidecar for pre-queue percept enrichment and hybrid BM25 + vector Tool RAG (with deterministic fallback).
+- **Operator CLI & Multi-Body Daemon (`crates/cli/`)**: Interactive terminal REPL (`monoagens chat --interactive`) and persistent multi-body daemon (`monoagens serve`) managing `[[bodies]]` adapters over Waist-2.
 
 ---
 
@@ -33,18 +35,18 @@ Core + Store + Reason    ── Event-sourced SQLite WAL · Petrov/hybrid memory
 | Directory | Contents |
 |---|---|
 | [`crates/protocol/`](crates/protocol/) | Waist-1 & Waist-2 (`monoagens.body.v1`) types, SemVer negotiation, [`openrpc/`](crates/protocol/openrpc/monoagens.body.v1.openrpc.json), [`jsonschema/`](crates/protocol/jsonschema/) |
-| [`crates/core/`](crates/core/) | Deterministic decision loop, `VisibleScope`, `Prior`, 22-mechanism registry, expectations, `Two-Epoch Replay` |
+| [`crates/core/`](crates/core/) | Deterministic decision loop, `VisibleScope`, V3 Neural Controller (`36d`, `W_fast`, `PlaceCosBaseline`, `head.world_pred`), expectations, `Two-Epoch Replay` |
 | [`crates/store/`](crates/store/) | SQLite `hot.db`, FTS5, `usearch` HNSW vectors, checksummed snapshots, synchronous `hard_forget` |
-| [`crates/reason/`](crates/reason/) | OpenAI-compatible & scripted providers, Spotlighting, `[SELF_GUIDE]` renderer, `EmbeddingGemma 2` embedders |
+| [`crates/reason/`](crates/reason/) | OpenAI-compatible & scripted providers, Spotlighting, `[SELF_GUIDE]` renderer, `EmbeddingGemma 2` (`256d`) & `InfoGapClassifier` |
 | [`crates/valve/`](crates/valve/) | Cedar + `cedar-policy-symcc` (`cvc5`) verification, `R_0..R_3` approvals, 3-door taint quarantine, DST quiet hours |
-| [`crates/gateway/`](crates/gateway/) | Single Core-owner runtime, `κ(b, a)` linking, `XChaCha20Poly1305` attachment store, Tool RAG pre-queue |
+| [`crates/gateway/`](crates/gateway/) | Single Core-owner runtime, `κ(b, a)` linking, `XChaCha20Poly1305` attachment store, Tool RAG pre-queue, attested OOB `approval/resolve`, dynamic place ownership |
 | [`crates/conformance/`](crates/conformance/) | Black-box `monoagens-conformance` runner (`B-MUST/SHOULD/MAY`, `C-MUST/SHOULD/MAY`) |
-| [`crates/lab/`](crates/lab/) | 22-row mechanism ablation, seeded offline replay, baseline adapters, Pareto scorecard |
-| [`crates/cli/`](crates/cli/) | `monoagens` operator CLI (`chat`, `log`, `replay`, `approvals`, `link`, `conformance`, `inspector`) |
+| [`crates/lab/`](crates/lab/) | 22-row mechanism ablation, seeded offline replay, external dataset converters, Pareto scorecard & live conversation sampling |
+| [`crates/cli/`](crates/cli/) | `monoagens` operator CLI (`chat [--interactive]`, `serve`, `log`, `replay`, `approvals`, `link`, `conformance`, `inspector`, `export-learning`) |
 | [`bodies/`](bodies/) | `body-kit`, `body-cli`, `body-mcp-bridge`, `body-sim-actuator`, `body-voice`, `plugin-a2a-bridge`, `plugin-ros2-bridge` |
 | [`sdk/`](sdk/) | Clean-room Waist-2 SDK shims for Rust (`sdk/rust`), TypeScript (`sdk/typescript`), and Python (`sdk/python`) |
 | [`examples/cleanroom-body/`](examples/cleanroom-body/) | 181 LOC clean-room Waist-2 body passing `monoagens-conformance body --level must` |
-| [`docs/`](docs/) | [`docs/waist2.md`](docs/waist2.md), [`docs/valve.md`](docs/valve.md), [`docs/conformance.md`](docs/conformance.md) |
+| [`docs/`](docs/) | [`docs/README.md`](docs/README.md), [`docs/messaging-bodies.md`](docs/messaging-bodies.md), [`docs/waist2.md`](docs/waist2.md), [`docs/valve.md`](docs/valve.md), [`docs/conformance.md`](docs/conformance.md), [`docs/lab-datasets.md`](docs/lab-datasets.md), and [`docs/eval-logs/`](docs/eval-logs/hasil-percakapan-live-v3-chrono.md) |
 
 ---
 
@@ -53,10 +55,10 @@ Core + Store + Reason    ── Event-sourced SQLite WAL · Petrov/hybrid memory
 ```sh
 source "$HOME/.cargo/env"
 
-# Core, Store, Reason, Protocol, Conformance, Lab suites
+# Core, Store, Reason, Protocol, Valve, Gateway, Conformance, Lab suites
 cargo test -p monoagens-protocol -p monoagens-store -p monoagens-reason -p monoagens-core
+cargo test -p monoagens-valve -p monoagens-gateway
 cargo test -p monoagens-conformance -p monoagens-lab
-cargo test -p monoagens-valve
 
 # Bodies, Clean-Room Example, and CLI tests + strict Clippy
 cargo test -p monoagens-body-kit -p body-cli -p body-mcp-bridge \
@@ -69,6 +71,10 @@ cargo clippy --all-targets -p monoagens-body-kit -p body-cli -p body-mcp-bridge 
 
 # Valve door verdict benchmark
 cargo bench -p monoagens-valve --bench door_verdict
+
+# Operator interactive REPL & multi-body daemon
+cargo run -p monoagens-cli -- chat --interactive
+cargo run -p monoagens-cli -- serve
 
 # Conformance checks (build binaries first)
 ./target/debug/monoagens-conformance core --target target/debug/tck-core-harness --level should
@@ -94,10 +100,15 @@ cargo bench -p monoagens-valve --bench door_verdict
 
 ## Observed Status
 
-- **Verified Green**: `monoagens-protocol` (`17/17`), `monoagens-core` (`81/81`), `monoagens-store` (`8/8`), `monoagens-reason` (`16/16`), `monoagens-valve` (`18/18`; `door_verdict` bench `[12.814 µs, 13.096 µs, 13.454 µs]`), `monoagens-conformance` (`15/15`, Core TCK `C-MUST-01..04` + `C-SHOULD-01..04`), `monoagens-lab` (`21/21`).
-- **Verified Bodies & CLI**: `body-cli`, `body-mcp-bridge`, `body-sim-actuator`, `plugin-a2a-bridge`, `body-voice`, and `cleanroom-body` (`181` LOC) pass `monoagens-conformance body --level must` (`B-MUST-01..07`); `monoagens-cli` tests pass.
-- **Partial / Unverified / Blocked Items**:
-  - `crates/gateway`: `24/25` tests pass; `gateway_tests::mock_http_provider_sends_store_false_tracks_usage_and_redacts_canary_on_429_and_500` failed on `Failed(RateLimit)` vs `Success`. Inbound Gateway `approval/resolve` returns `-32601` (`crates/gateway/src/waist2.rs:709-716`), so CLI `approvals grant|deny` reports blocked cleanly.
+- **Verified Workspace Suites**:
+  - `monoagens-protocol`, `monoagens-core`, `monoagens-store`, `monoagens-reason`, `monoagens-lab`, `monoagens-body-kit`, `body-cli`, `body-mcp-bridge`, `body-sim-actuator`, `plugin-a2a-bridge`, `body-voice`, `monoagens-cli`, and `cleanroom-body` pass unit/integration suites.
+  - `monoagens-valve`: **18/18 PASS**; `door_verdict` Criterion microbenchmark `[12.814 µs, 13.096 µs, 13.454 µs]`.
+  - `monoagens-gateway`: **30/30 PASS**; inbound `approval/resolve` is implemented via attested out-of-band control channel (`handle_approval_resolve` in [`crates/gateway/src/waist2.rs`](crates/gateway/src/waist2.rs), rejecting in-band chat bodies and accepting attested OOB bodies).
+  - `monoagens-conformance`: **15/15 PASS** (Core TCK `C-MUST-01..04` + `C-SHOULD-01..04`); `body-cli`, `body-mcp-bridge`, `body-sim-actuator`, `plugin-a2a-bridge`, `body-voice`, and `cleanroom-body` (`181` LOC) pass `monoagens-conformance body --level must` (`B-MUST-01..07`).
+- **V3 Live Verification Logs ([`docs/eval-logs/`](docs/eval-logs/hasil-percakapan-live-v3-chrono.md))**:
+  - `smoke-id` (Indonesian live suite): **3/3 PASS** (`id_01_grup_santai_silent`, `id_02_proactive_unanswered_question`, `id_03_dm_privacy_delta_ni_zero`) in [`hasil-percakapan-live-v3.md`](docs/eval-logs/hasil-percakapan-live-v3.md).
+  - `monoagens chat` + `monoagens replay --mode pinned`: **100% matched decisions** (`5/5` turns, `60` replayed events, `first_divergence = null`).
+  - 4-domain live pilot progression (`R1 -> R2 -> R3` across `when2speak`, `proactive_bench`, `pm_bench`, `fantom`): `0` failed items, `when2speak` `0/1 -> 1/1 PASS`, `pm_bench` `1/1 PASS`, `fantom` `14/24 -> 17/24` (`Answerability[Binary]` `2/6 -> 6/6`, `all-roberta-large-v1` wired) — documented in [`hasil-percakapan-live-v3-after.md`](docs/eval-logs/hasil-percakapan-live-v3-after.md) and [`hasil-percakapan-live-v3-chrono.md`](docs/eval-logs/hasil-percakapan-live-v3-chrono.md).
+- **Host-Absent Hardware Items (Unverified on Host)**:
   - `plugin-ros2-bridge` against live ROS 2 (`Lyrical Luth`) is **UNVERIFIED** (ROS 2 absent on host).
   - `body-voice` live Silero ONNX weights are **UNVERIFIED** (weights absent on host; verified using `webrtc-vad` fallback + `simulated_clock`).
-  - Live LLM Lab sweeps & comparative baseline scoreboards (`lab/runs/`) are unexecuted.

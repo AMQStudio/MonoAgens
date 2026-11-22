@@ -22,7 +22,7 @@ refactors.
 
 ## Gotchas
 
-- No code exists yet, and `cargo` is not installed (use `rustup`).
+- Load Rust toolchain with `source "$HOME/.cargo/env"` before running `cargo` commands.
 - Only the owner changes the invariants in `ARCHITECTURE.md`.
 - Never read `lab/scenarios/sealed/`.
 - Live Lab runs call a paid model. Run them only when asked.

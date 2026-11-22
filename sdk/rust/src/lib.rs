@@ -2,7 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{self, BufRead, Write};
 
 pub use monoagens_protocol::*;
@@ -44,6 +44,192 @@ pub fn verify_blob_get(result: &BlobGetResult, expected: Option<&str>) -> Result
         return Err(Waist2Error::hash_mismatch(exp, &result.sha256));
     }
     Ok(())
+}
+
+/// Classification of an inbound NDJSON frame on a bidirectional Waist-2 stream.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InboundFrame {
+    Request(Waist2Request<Value>),
+    Response(Waist2Response<Value>),
+}
+
+/// Parses one NDJSON line as either an inbound JSON-RPC request or a response
+/// to an outbound request, distinguishing them by the presence of `"method"`.
+pub fn parse_inbound_line(line: &str) -> Result<InboundFrame, serde_json::Error> {
+    let val: Value = serde_json::from_str(line)?;
+    if val.get("method").is_some() {
+        Ok(InboundFrame::Request(serde_json::from_value(val)?))
+    } else {
+        Ok(InboundFrame::Response(serde_json::from_value(val)?))
+    }
+}
+
+/// Ergonomic builder for outbound Waist-2 requests with monotonic `RpcId` and `idempotency_key`.
+#[derive(Debug, Clone)]
+pub struct OutboundBuilder {
+    prefix: String,
+    next_id: i64,
+    next_key: u64,
+}
+
+impl Default for OutboundBuilder {
+    fn default() -> Self {
+        Self::new("body")
+    }
+}
+
+impl OutboundBuilder {
+    /// Creates a new [`OutboundBuilder`] with the given `idempotency_key` prefix.
+    #[must_use]
+    pub fn new(prefix: impl Into<String>) -> Self {
+        Self {
+            prefix: prefix.into(),
+            next_id: 1,
+            next_key: 1,
+        }
+    }
+
+    /// Allocates the next monotonic numeric [`RpcId`].
+    pub fn next_rpc_id(&mut self) -> RpcId {
+        let id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        RpcId::Int(id)
+    }
+
+    /// Allocates the next monotonic `idempotency_key` tagged with `tag`.
+    pub fn next_idempotency_key(&mut self, tag: &str) -> String {
+        let seq = self.next_key;
+        self.next_key = self.next_key.saturating_add(1);
+        format!("{}-{tag}-{seq}", self.prefix)
+    }
+
+    /// Builds [`Waist2Headers`] for `CURRENT_PROTOCOL_VERSION` with a fresh `idempotency_key`.
+    pub fn next_headers(&mut self, tag: &str) -> Waist2Headers {
+        Waist2Headers::new(self.next_idempotency_key(tag))
+    }
+
+    /// Builds [`Waist2Headers`] with reverse-DNS `_meta` entries attached.
+    pub fn next_headers_with_meta(
+        &mut self,
+        tag: &str,
+        meta: BTreeMap<String, MetaValue>,
+    ) -> Waist2Headers {
+        let mut headers = self.next_headers(tag);
+        headers.meta = meta;
+        headers
+    }
+
+    /// Builds a `percept/emit` request, validating a non-empty `audience` (`-32006`).
+    pub fn percept_emit(
+        &mut self,
+        actor: ActorId,
+        place: PlaceId,
+        audience: Audience,
+        timestamp_ms: Time,
+        payload: OpaquePayload,
+    ) -> Result<Waist2Request<PerceptEmitParams>, Waist2Error> {
+        if audience.is_empty() {
+            return Err(Waist2Error::undeclared_audience());
+        }
+        let headers = self.next_headers("percept");
+        let percept = Percept::minimal(actor, place, audience, timestamp_ms, payload);
+        Ok(Waist2Request::new(
+            Some(self.next_rpc_id()),
+            Waist2Method::PerceptEmit,
+            PerceptEmitParams::from_percept(headers, percept),
+        ))
+    }
+
+    /// Wraps a full [`Percept`] as a `percept/emit` request, validating a non-empty `audience` (`-32006`).
+    pub fn percept_emit_from_percept(
+        &mut self,
+        percept: Percept,
+    ) -> Result<Waist2Request<PerceptEmitParams>, Waist2Error> {
+        if percept.audience.is_empty() {
+            return Err(Waist2Error::undeclared_audience());
+        }
+        let headers = self.next_headers("percept");
+        Ok(Waist2Request::new(
+            Some(self.next_rpc_id()),
+            Waist2Method::PerceptEmit,
+            PerceptEmitParams::from_percept(headers, percept),
+        ))
+    }
+
+    /// Builds an `action/receipt` request for asynchronous/event-driven receipt delivery.
+    pub fn action_receipt(&mut self, receipt: Receipt) -> Waist2Request<ActionReceiptParams> {
+        let headers = self.next_headers("receipt");
+        Waist2Request::new(
+            Some(self.next_rpc_id()),
+            Waist2Method::ActionReceipt,
+            ActionReceiptParams { headers, receipt },
+        )
+    }
+
+    /// Builds a `body/heartbeat` request.
+    pub fn heartbeat(
+        &mut self,
+        body_id: BodyId,
+        status: BodyStatus,
+        timestamp_ms: Time,
+    ) -> Waist2Request<BodyHeartbeatParams> {
+        let headers = self.next_headers("heartbeat");
+        Waist2Request::new(
+            Some(self.next_rpc_id()),
+            Waist2Method::BodyHeartbeat,
+            BodyHeartbeatParams {
+                headers,
+                body_id,
+                status,
+                timestamp_ms,
+            },
+        )
+    }
+
+    /// Builds a `blob/put` request, automatically computing SHA-256 and `byte_len`.
+    pub fn blob_put(
+        &mut self,
+        bytes: &[u8],
+        content_type: Option<&str>,
+        scope_id: Option<&str>,
+    ) -> Waist2Request<BlobPutParams> {
+        let mut meta = BTreeMap::new();
+        if let Some(ct) = content_type {
+            meta.insert("content_type".to_owned(), MetaValue::String(ct.to_owned()));
+        }
+        if let Some(scope) = scope_id {
+            meta.insert("scope_id".to_owned(), MetaValue::String(scope.to_owned()));
+        }
+        let headers = self.next_headers_with_meta("blob-put", meta);
+        Waist2Request::new(
+            Some(self.next_rpc_id()),
+            Waist2Method::BlobPut,
+            BlobPutParams {
+                headers,
+                sha256: sha256_hex(bytes),
+                byte_len: bytes.len() as u64,
+                inline_bytes: Some(OpaquePayload::from_bytes(bytes)),
+            },
+        )
+    }
+
+    /// Builds a `blob/get` request with optional `expected_sha256` verification digest.
+    pub fn blob_get(
+        &mut self,
+        blob_ref: impl Into<String>,
+        expected_sha256: Option<String>,
+    ) -> Waist2Request<BlobGetParams> {
+        let headers = self.next_headers("blob-get");
+        Waist2Request::new(
+            Some(self.next_rpc_id()),
+            Waist2Method::BlobGet,
+            BlobGetParams {
+                headers,
+                blob_ref: blob_ref.into(),
+                expected_sha256,
+            },
+        )
+    }
 }
 
 /// User-implemented body callbacks for Waist-2 RPCs.

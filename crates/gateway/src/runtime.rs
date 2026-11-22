@@ -18,7 +18,7 @@ use monoagens_store::{ConfigLoadError, SegmentedStore, StoreConfig};
 use tokio::sync::{Notify, mpsc, oneshot};
 
 use crate::clock::Clock;
-use crate::config::{EmbedBackendKind, GatewayConfig};
+use crate::config::{BodyPluginConfig, BodyTransportConfig, EmbedBackendKind, GatewayConfig};
 use crate::cues::CueRecorder;
 use crate::identity::IdentityResolver;
 use crate::logging::{DiagnosticSink, LogLevel};
@@ -32,6 +32,13 @@ use crate::waist2::{BodyRouter, BodyRpcError};
 pub struct TurnOutcome {
     pub effects_spawned: usize,
     pub next_due: Option<Time>,
+}
+
+/// Outcome of attempting to connect a single configured external body plugin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BodyConnectOutcome {
+    pub config_id: String,
+    pub result: Result<BodyId, BodyRpcError>,
 }
 
 /// Typed errors produced by the Gateway runtime and ingress queue.
@@ -279,6 +286,36 @@ impl GatewayHandle {
     /// Connects a configured Unix socket body.
     pub async fn connect_unix_body(&self, path: &std::path::Path) -> Result<BodyId, BodyRpcError> {
         self.router.connect_unix_socket(path).await
+    }
+
+    /// Connects all configured external body plugins with crash isolation: one failing
+    /// plugin logs a `Warn` diagnostic and never aborts startup of sibling bodies.
+    pub async fn connect_configured_bodies(
+        &self,
+        bodies: &[BodyPluginConfig],
+    ) -> Vec<BodyConnectOutcome> {
+        let mut outcomes = Vec::with_capacity(bodies.len());
+        for body in bodies {
+            let result = match &body.transport {
+                BodyTransportConfig::Stdio { command, args } => {
+                    self.connect_stdio_body(command, args).await
+                }
+                BodyTransportConfig::UnixSocket { path } => self.connect_unix_body(path).await,
+            };
+            if let Err(ref err) = result {
+                self.diagnostics.log(
+                    self.clock.now(),
+                    LogLevel::Warn,
+                    "gateway.body",
+                    &format!("failed to connect configured body '{}': {err}", body.id),
+                );
+            }
+            outcomes.push(BodyConnectOutcome {
+                config_id: body.id.clone(),
+                result,
+            });
+        }
+        outcomes
     }
 
     /// Reads all events currently persisted in Core's store via the owner task.

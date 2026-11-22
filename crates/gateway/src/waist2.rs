@@ -429,6 +429,22 @@ impl BodyRouter {
             .collect()
     }
 
+    /// Returns currently connected [`BodyId`]s.
+    #[must_use]
+    pub fn connected_bodies(&self) -> Vec<BodyId> {
+        self.registered_bodies()
+    }
+
+    /// Returns all [`PlaceId`]s currently owned by `body_id` (static + dynamically registered).
+    #[must_use]
+    pub fn owned_places(&self, body_id: &BodyId) -> Vec<PlaceId> {
+        let st = self.inner.lock().expect("router lock");
+        st.place_to_body
+            .iter()
+            .filter_map(|(place, owner)| (owner == body_id).then_some(place.clone()))
+            .collect()
+    }
+
     /// Returns all currently registered [`CapabilityDescriptor`]s across live bodies.
     #[must_use]
     pub fn all_capabilities(&self) -> Vec<CapabilityDescriptor> {
@@ -783,6 +799,43 @@ impl BodyRouter {
                 .ok();
             }
         };
+
+        // Dynamic place ownership registration + anti-hijack guard for authenticated bodies.
+        if let Some(bid) = body_id {
+            let mut st = self.inner.lock().expect("router lock");
+            match st.place_to_body.get(&percept.place) {
+                None => {
+                    st.place_to_body.insert(percept.place.clone(), bid.clone());
+                    if let Some(conn) = st.bodies.get_mut(bid)
+                        && !conn.places.contains(&percept.place)
+                    {
+                        conn.places.push(percept.place.clone());
+                    }
+                }
+                Some(existing_owner) if existing_owner != bid => {
+                    let owner = existing_owner.clone();
+                    drop(st);
+                    self.diagnostics.log(
+                        self.clock.now(),
+                        LogLevel::Warn,
+                        "gateway.waist2",
+                        &format!(
+                            "ERR_PLACE_OWNED_BY_OTHER_BODY: body '{bid}' attempted to claim place '{}' owned by '{owner}'",
+                            percept.place
+                        ),
+                    );
+                    return serialize_err_response(
+                        rpc_id,
+                        RPC_INVALID_PARAMS,
+                        &format!(
+                            "ERR_PLACE_OWNED_BY_OTHER_BODY: place '{}' is already owned by body '{owner}'",
+                            percept.place
+                        ),
+                    );
+                }
+                Some(_) => {}
+            }
+        }
 
         // Seam 4.3: canonical κ(b, a) identity resolution if wired.
         if let (Some(id_seam), Some(bid)) = (&self.seams.identity, body_id) {
