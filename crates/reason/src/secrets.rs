@@ -193,6 +193,73 @@ impl ProviderSecrets {
         }
     }
 
+    /// Resolves provider secrets and endpoints from a flat key-value map using canonical key precedence.
+    #[must_use]
+    pub fn from_flat_map(flat: &BTreeMap<String, String>) -> Self {
+        let pick = |keys: &[&str]| -> Option<String> {
+            keys.iter().find_map(|k| {
+                flat.get(*k)
+                    .map(|v| v.trim().to_owned())
+                    .filter(|v| !v.is_empty())
+            })
+        };
+
+        let model_api_key = pick(&[
+            "model.api_key",
+            "model_api_key",
+            ENV_MODEL_API_KEY,
+            "openai.api_key",
+            "openai_api_key",
+            ENV_OPENAI_API_KEY,
+            "api_key",
+        ])
+        .map(SecretString::new);
+        let model_endpoint = pick(&[
+            "model.endpoint",
+            "model.endpoint_url",
+            "model_endpoint",
+            ENV_MODEL_ENDPOINT,
+            "openai.base_url",
+            "openai_base_url",
+            ENV_OPENAI_BASE_URL,
+            "endpoint",
+        ]);
+        let embed_api_key = pick(&[
+            "embed.api_key",
+            "embed_api_key",
+            ENV_EMBED_API_KEY,
+            "model.api_key",
+            "model_api_key",
+            ENV_MODEL_API_KEY,
+            "openai.api_key",
+            "openai_api_key",
+            ENV_OPENAI_API_KEY,
+            "api_key",
+        ])
+        .map(SecretString::new);
+        let embed_endpoint = pick(&[
+            "embed.endpoint",
+            "embed.endpoint_url",
+            "embed_endpoint",
+            ENV_EMBED_ENDPOINT,
+            "model.endpoint",
+            "model.endpoint_url",
+            "model_endpoint",
+            ENV_MODEL_ENDPOINT,
+            "openai.base_url",
+            "openai_base_url",
+            ENV_OPENAI_BASE_URL,
+            "endpoint",
+        ]);
+
+        Self {
+            model_api_key,
+            model_endpoint,
+            embed_api_key,
+            embed_endpoint,
+        }
+    }
+
     /// Loads secrets and endpoints from a separate dedicated secrets file (JSON object or `KEY=VALUE` lines).
     pub fn from_secrets_file(path: &Path) -> Result<Self, SecretError> {
         let raw = std::fs::read_to_string(path).map_err(|err| SecretError::Io {
@@ -249,50 +316,7 @@ impl ProviderSecrets {
             }
         }
 
-        let pick =
-            |keys: &[&str]| -> Option<String> { keys.iter().find_map(|k| map.get(*k).cloned()) };
-
-        let model_api_key = pick(&[
-            "model_api_key",
-            ENV_MODEL_API_KEY,
-            "openai_api_key",
-            ENV_OPENAI_API_KEY,
-            "api_key",
-        ])
-        .map(SecretString::new);
-        let model_endpoint = pick(&[
-            "model_endpoint",
-            ENV_MODEL_ENDPOINT,
-            "openai_base_url",
-            ENV_OPENAI_BASE_URL,
-            "endpoint",
-        ]);
-        let embed_api_key = pick(&[
-            "embed_api_key",
-            ENV_EMBED_API_KEY,
-            "model_api_key",
-            ENV_MODEL_API_KEY,
-            "openai_api_key",
-            ENV_OPENAI_API_KEY,
-            "api_key",
-        ])
-        .map(SecretString::new);
-        let embed_endpoint = pick(&[
-            "embed_endpoint",
-            ENV_EMBED_ENDPOINT,
-            "model_endpoint",
-            ENV_MODEL_ENDPOINT,
-            "openai_base_url",
-            ENV_OPENAI_BASE_URL,
-            "endpoint",
-        ]);
-
-        Ok(Self {
-            model_api_key,
-            model_endpoint,
-            embed_api_key,
-            embed_endpoint,
-        })
+        Ok(Self::from_flat_map(&map))
     }
 
     /// Returns all contained secrets for output scrubbing.
@@ -491,4 +515,109 @@ fn scrub_bearer_tokens(input: &str) -> String {
     }
     final_out.push_str(rem);
     final_out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_flat_map_respects_precedence_and_skips_blank_values() {
+        let mut map = BTreeMap::new();
+        map.insert("api_key".to_owned(), "sk-bare".to_owned());
+        map.insert("endpoint".to_owned(), "https://bare.invalid/v1".to_owned());
+        let bare = ProviderSecrets::from_flat_map(&map);
+        assert_eq!(
+            bare.model_api_key.as_ref().map(SecretString::expose),
+            Some("sk-bare")
+        );
+        assert_eq!(bare.model_endpoint.as_deref(), Some("https://bare.invalid/v1"));
+        assert_eq!(
+            bare.embed_api_key.as_ref().map(SecretString::expose),
+            Some("sk-bare")
+        );
+        assert_eq!(bare.embed_endpoint.as_deref(), Some("https://bare.invalid/v1"));
+
+        // Higher-precedence keys override lower ones, while blank values are ignored.
+        map.insert(ENV_OPENAI_API_KEY.to_owned(), "sk-env-openai".to_owned());
+        map.insert("openai.api_key".to_owned(), "  sk-dot-openai  ".to_owned());
+        map.insert("model.api_key".to_owned(), "   ".to_owned());
+        map.insert("openai.base_url".to_owned(), "https://openai.invalid/v1".to_owned());
+        map.insert("model.endpoint_url".to_owned(), "  https://model.invalid/v1 ".to_owned());
+        map.insert("model.endpoint".to_owned(), "\t\n".to_owned());
+        let model_override = ProviderSecrets::from_flat_map(&map);
+        assert_eq!(
+            model_override.model_api_key.as_ref().map(SecretString::expose),
+            Some("sk-dot-openai")
+        );
+        assert_eq!(
+            model_override.model_endpoint.as_deref(),
+            Some("https://model.invalid/v1")
+        );
+        // Embed falls back to model.endpoint_url and openai.api_key when embed.* are absent.
+        assert_eq!(
+            model_override.embed_api_key.as_ref().map(SecretString::expose),
+            Some("sk-dot-openai")
+        );
+        assert_eq!(
+            model_override.embed_endpoint.as_deref(),
+            Some("https://model.invalid/v1")
+        );
+
+        // Explicit embed keys win for embed_* without disturbing model_*.
+        map.insert("model.api_key".to_owned(), "sk-model-top".to_owned());
+        map.insert("embed.api_key".to_owned(), "sk-embed-top".to_owned());
+        map.insert("embed.endpoint".to_owned(), "https://embed.invalid/v1".to_owned());
+        let full = ProviderSecrets::from_flat_map(&map);
+        assert_eq!(
+            full.model_api_key.as_ref().map(SecretString::expose),
+            Some("sk-model-top")
+        );
+        assert_eq!(
+            full.embed_api_key.as_ref().map(SecretString::expose),
+            Some("sk-embed-top")
+        );
+        assert_eq!(
+            full.embed_endpoint.as_deref(),
+            Some("https://embed.invalid/v1")
+        );
+    }
+
+    #[test]
+    fn parse_secrets_str_delegates_to_from_flat_map_for_json_and_kv() {
+        let json_body = r#"{
+            "model.api_key": " sk-json-model ",
+            "openai.base_url": "https://json-model.invalid/v1",
+            "embed_api_key": "sk-json-embed",
+            "empty_key": "   "
+        }"#;
+        let parsed_json = ProviderSecrets::parse_secrets_str(json_body).expect("parse json");
+        assert_eq!(
+            parsed_json.model_api_key.as_ref().map(SecretString::expose),
+            Some("sk-json-model")
+        );
+        assert_eq!(
+            parsed_json.model_endpoint.as_deref(),
+            Some("https://json-model.invalid/v1")
+        );
+        assert_eq!(
+            parsed_json.embed_api_key.as_ref().map(SecretString::expose),
+            Some("sk-json-embed")
+        );
+        assert_eq!(
+            parsed_json.embed_endpoint.as_deref(),
+            Some("https://json-model.invalid/v1")
+        );
+
+        let kv_body = "# comment\nmodel_api_key='sk-kv-model'\nembed.endpoint=\"https://kv-embed.invalid/v1\"\n";
+        let parsed_kv = ProviderSecrets::parse_secrets_str(kv_body).expect("parse kv");
+        assert_eq!(
+            parsed_kv.model_api_key.as_ref().map(SecretString::expose),
+            Some("sk-kv-model")
+        );
+        assert_eq!(
+            parsed_kv.embed_endpoint.as_deref(),
+            Some("https://kv-embed.invalid/v1")
+        );
+    }
 }

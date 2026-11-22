@@ -485,14 +485,7 @@ pub fn run_optional_python_helper(
     if !script.is_file() {
         return Ok(None);
     }
-    let py = std::env::var("MONOAGENS_ADAPTER_PYTHON").unwrap_or_else(|_| {
-        let venv_py = workspace_root.join("lab/adapters/.venv/bin/python");
-        if venv_py.is_file() {
-            venv_py.to_string_lossy().into_owned()
-        } else {
-            "python3".to_owned()
-        }
-    });
+    let py = monoagens_reason::resolve_adapter_python(workspace_root);
     let Ok(mut child) = Command::new(&py)
         .arg(&script)
         .env("HF_HUB_OFFLINE", "1")

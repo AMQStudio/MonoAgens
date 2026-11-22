@@ -11,24 +11,20 @@ use monoagens_core::{
     EventKind, EventRecord, Input, LogSeq,
 };
 use monoagens_gateway::{
-    Clock, CueRecorder, DiagnosticSink, DoorController, GatewayHandle, GatewayOptions,
-    GatewayRuntime, GatewaySeams, LifecycleCueEvent, LifecycleCueKind, LoadedGatewayEnv,
-    SystemClock, ValveDoorController, load_approval_secrets, load_or_init_gateway_env,
-    resolve_approval_mac_key,
+    Clock, DoorController, GatewayHandle, LifecycleCueEvent, LifecycleCueKind, ValveDoorController,
 };
 use monoagens_protocol::{
     Action, ActionId, ActorId, ApprovalResolveParams, ApprovalResolveResult, Audience, BodyId,
     CapabilityDescriptor, OriginActor, Percept, PlaceId, Receipt, Taint, Time, Waist2Error,
 };
 use monoagens_reason::ModelProvider;
-use monoagens_valve::{Valve, ValveSnapshot};
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as TokioBufReader};
 
 use crate::ChatArgs;
 use crate::common::{
-    build_valve_config, maybe_start_embed_sidecar, owner_actor_from_cfg, print_startup_not_ready,
-    write_json_pretty,
+    BootGatewayParams, BootedGateway, boot_gateway_runtime, load_ready_gateway_env,
+    owner_actor_from_cfg, write_json_pretty,
 };
 
 struct SharedChatSink {
@@ -498,67 +494,28 @@ pub(crate) fn cmd_chat(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<u8, String> {
-    let loaded: LoadedGatewayEnv = load_or_init_gateway_env(config_path, |k| std::env::var(k).ok())
-        .map_err(|e| e.to_string())?;
-
-    if provider_override.is_none()
-        && let Err(startup_err) = loaded.ensure_startup_ready()
-    {
-        print_startup_not_ready(&loaded, &startup_err, err);
+    let Some(loaded) = load_ready_gateway_env(config_path, provider_override.is_some(), err)?
+    else {
         return Ok(1);
-    }
+    };
 
     let owner_actor = owner_actor_from_cfg(Some(&loaded.config));
-    let valve_cfg = build_valve_config(&loaded.config);
-    let mut snapshot = ValveSnapshot {
-        owner_actor_id: Some(owner_actor.clone()),
-        t_now: SystemClock::new().now(),
-        ..ValveSnapshot::default()
-    };
-    snapshot.known_actors.insert(owner_actor.clone());
-    for actor in &args.actors {
-        let trimmed = actor.trim();
-        if !trimmed.is_empty() {
-            snapshot.known_actors.insert(ActorId::new(trimmed));
-        }
-    }
-
-    let approval_secrets =
-        load_approval_secrets(Some(&loaded.paths.secrets_path), |k| std::env::var(k).ok())
-            .map_err(|e| e.to_string())?;
-    let mac_key = resolve_approval_mac_key(&approval_secrets);
+    let known_actors: Vec<ActorId> = args
+        .actors
+        .iter()
+        .map(|a| a.trim())
+        .filter(|a| !a.is_empty())
+        .map(ActorId::new)
+        .collect();
 
     let dynamic_actors = Arc::new(Mutex::new(BTreeSet::new()));
     {
         let mut guard = dynamic_actors.lock().expect("dynamic actors lock");
-        guard.insert(owner_actor.clone());
-        for actor in &snapshot.known_actors {
+        guard.insert(owner_actor);
+        for actor in &known_actors {
             guard.insert(actor.clone());
         }
     }
-
-    // Build Valve (runs cedar-policy-symcc cvc5 verification) BEFORE entering Tokio runtime.
-    let mut valve = Valve::with_default_policies(valve_cfg, snapshot)
-        .map_err(|e| format!("valve policy verification failed: {e}"))?;
-    valve.set_approval_attestation_key(mac_key);
-    let door_controller = CliInteractiveDoorController {
-        inner: ValveDoorController::new(valve),
-        dynamic_actors: Arc::clone(&dynamic_actors),
-    };
-
-    let mut cfg = loaded.config.clone();
-    let store_dir = args
-        .data_dir
-        .unwrap_or_else(|| loaded.paths.data_dir.clone());
-    cfg.data_dir = Some(store_dir.clone());
-    if let Some(model_override) = args.model {
-        cfg.soul.model_path = Some(model_override);
-    }
-    let _embed_sidecar_guard = if provider_override.is_none() {
-        maybe_start_embed_sidecar(&mut cfg, json_mode, err)?
-    } else {
-        None
-    };
 
     let start_place = PlaceId::new(args.place.as_deref().unwrap_or("cli:terminal"));
     let is_interactive =
@@ -569,10 +526,6 @@ pub(crate) fn cmd_chat(
     } else {
         12_000
     }; // 500ms scripted vs 60s live LLM
-    let neural_model_label = cfg.soul.model_path.as_ref().map_or_else(
-        || "neutral (tanpa model)".to_owned(),
-        |p| p.display().to_string(),
-    );
 
     let batch_inputs: Vec<String> = if is_interactive {
         Vec::new()
@@ -598,27 +551,37 @@ pub(crate) fn cmd_chat(
     let rendered_clone = Arc::clone(&rendered_bubbles);
 
     let result: Result<(Vec<String>, Vec<EventRecord>), String> = rt.block_on(async {
-        let clock = Arc::new(SystemClock::new());
-        let diagnostics = DiagnosticSink::new(&loaded.secrets);
-        let cues = CueRecorder::new();
-        let mut cue_rx = cues.subscribe();
-
-        let runtime = GatewayRuntime::start_segmented_with_configured_core(
+        let dynamic_actors_for_doors = Arc::clone(&dynamic_actors);
+        let BootedGateway {
+            runtime,
+            owner_actor,
             cfg,
-            &loaded.secrets,
-            store_dir,
-            door_controller,
-            GatewayOptions {
-                clock: clock.clone(),
-                provider: provider_override,
-                diagnostics,
-                cues,
-                seams: GatewaySeams::default(),
+            clock,
+            cues,
+            _embed_sidecar,
+            ..
+        } = boot_gateway_runtime(
+            &loaded,
+            BootGatewayParams {
+                data_dir: args.data_dir,
+                model: args.model,
+                known_actors,
+                provider_override,
+                json_mode,
             },
+            move |inner| CliInteractiveDoorController {
+                inner,
+                dynamic_actors: dynamic_actors_for_doors,
+            },
+            err,
         )
-        .await
-        .map_err(|e| format!("gateway startup failed: {e}"))?;
+        .await?;
 
+        let mut cue_rx = cues.subscribe();
+        let neural_model_label = cfg.soul.model_path.as_ref().map_or_else(
+            || "neutral (tanpa model)".to_owned(),
+            |p| p.display().to_string(),
+        );
         let handle = runtime.handle();
 
         // Spawn in-process body-cli speaking canonical Waist-2 NDJSON over duplex pipe.
@@ -965,10 +928,10 @@ pub(crate) fn cmd_chat(
 mod repl_tests {
     use super::*;
     use monoagens_core::{ComputeTier, DecisionReason, GateClass, NeuralOutputs};
-    use monoagens_gateway::PreQueueService;
+    use monoagens_gateway::{DiagnosticSink, PreQueueService, SystemClock};
     use monoagens_protocol::Time;
     use monoagens_reason::{HashEmbedder, ProviderSecrets};
-    use monoagens_valve::ValveConfig;
+    use monoagens_valve::{Valve, ValveConfig, ValveSnapshot};
 
     #[test]
     fn repl_commands_switch_group_speaker_dm_and_brain_toggle() {

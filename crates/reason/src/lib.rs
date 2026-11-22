@@ -20,11 +20,12 @@ pub use attachments::{
 pub use embed::{
     EMBEDDING_GEMMA_2_CTX_TOKENS, EMBEDDING_GEMMA_2_DIM, EMBEDDING_GEMMA_2_VER,
     EMBEDDING_GEMMA_300M_CTX_TOKENS, EMBEDDING_GEMMA_300M_DEFAULT_DIM, EMBEDDING_GEMMA_300M_VER,
-    EmbedContent, EmbedError, EmbedInput, EmbedModality, Embedder, EmbeddingGemma2Backend,
-    EmbeddingGemma2Config, EmbeddingGemma2Embedder, EmbeddingGemma300mConfig,
-    EmbeddingGemma300mEmbedder, HashEmbedder, NoneEmbedder, OpenAiEmbedConfig, OpenAiEmbedder,
-    PartitionedSearchResult, ScriptedEmbedder, TaskPrefix, check_partition_match, is_l2_normalized,
-    l2_normalize, partitioned_cosine, same_partition, search_asymmetric_q_to_d, search_partitioned,
+    ENV_ADAPTER_PYTHON, EmbedContent, EmbedError, EmbedInput, EmbedModality, Embedder,
+    EmbeddingGemma2Backend, EmbeddingGemma2Config, EmbeddingGemma2Embedder,
+    EmbeddingGemma300mConfig, EmbeddingGemma300mEmbedder, HashEmbedder, LocalEmbedSidecar,
+    NoneEmbedder, OpenAiEmbedConfig, OpenAiEmbedder, PartitionedSearchResult, ScriptedEmbedder,
+    TaskPrefix, check_partition_match, is_l2_normalized, l2_normalize, partitioned_cosine,
+    resolve_adapter_python, same_partition, search_asymmetric_q_to_d, search_partitioned,
 };
 pub use info_gap_clf::{InfoGapClassifier, InfoGapError, InfoGapEvaluation};
 pub use model::{

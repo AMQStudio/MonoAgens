@@ -966,14 +966,7 @@ fn generate_charts(
 ) -> Result<Vec<String>, LabError> {
     let ws_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let script = ws_root.join("lab/adapters/eval_helpers/render_charts.py");
-    let py = std::env::var("MONOAGENS_ADAPTER_PYTHON").unwrap_or_else(|_| {
-        let venv_py = ws_root.join("lab/adapters/.venv/bin/python");
-        if venv_py.is_file() {
-            venv_py.to_string_lossy().into_owned()
-        } else {
-            "python3".to_owned()
-        }
-    });
+    let py = monoagens_reason::resolve_adapter_python(&ws_root);
 
     if !skip_python && script.is_file() {
         let payload = serde_json::json!({

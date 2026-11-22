@@ -14,10 +14,7 @@ use monoagens_reason::model::{
     CallOutcome, ModelCallFailure, ModelCallRecord, ModelCallSuccess, ModelProvider, ModelRequest,
     ProviderFailureClass, ScriptedModelProvider, ScriptedReply,
 };
-use monoagens_reason::secrets::{
-    ENV_EMBED_API_KEY, ENV_EMBED_ENDPOINT, ENV_MODEL_API_KEY, ENV_MODEL_ENDPOINT,
-    ENV_OPENAI_API_KEY, ENV_OPENAI_BASE_URL, ProviderSecrets, SecretString,
-};
+use monoagens_reason::secrets::ProviderSecrets;
 use serde::{Deserialize, Serialize};
 
 use crate::LabError;
@@ -1435,55 +1432,7 @@ fn parse_lab_secrets_toml(raw: &str) -> Result<ProviderSecrets, LabError> {
     let mut flat = BTreeMap::new();
     flatten_toml_strings(&val, "", &mut flat);
 
-    let pick =
-        |keys: &[&str]| -> Option<String> { keys.iter().find_map(|k| flat.get(*k).cloned()) };
-    Ok(ProviderSecrets {
-        model_api_key: pick(&[
-            "model.api_key",
-            "model_api_key",
-            ENV_MODEL_API_KEY,
-            "openai.api_key",
-            "openai_api_key",
-            ENV_OPENAI_API_KEY,
-            "api_key",
-        ])
-        .map(SecretString::new),
-        model_endpoint: pick(&[
-            "model.endpoint",
-            "model.endpoint_url",
-            "model_endpoint",
-            ENV_MODEL_ENDPOINT,
-            "openai.base_url",
-            "openai_base_url",
-            ENV_OPENAI_BASE_URL,
-            "endpoint",
-        ]),
-        embed_api_key: pick(&[
-            "embed.api_key",
-            "embed_api_key",
-            ENV_EMBED_API_KEY,
-            "model.api_key",
-            "model_api_key",
-            ENV_MODEL_API_KEY,
-            "openai_api_key",
-            ENV_OPENAI_API_KEY,
-            "api_key",
-        ])
-        .map(SecretString::new),
-        embed_endpoint: pick(&[
-            "embed.endpoint",
-            "embed.endpoint_url",
-            "embed_endpoint",
-            ENV_EMBED_ENDPOINT,
-            "model.endpoint",
-            "model.endpoint_url",
-            "model_endpoint",
-            ENV_MODEL_ENDPOINT,
-            "openai_base_url",
-            ENV_OPENAI_BASE_URL,
-            "endpoint",
-        ]),
-    })
+    Ok(ProviderSecrets::from_flat_map(&flat))
 }
 
 fn flatten_toml_strings(val: &toml::Value, prefix: &str, out: &mut BTreeMap<String, String>) {

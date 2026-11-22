@@ -1,9 +1,6 @@
 pub mod approvals;
 pub mod chat;
-pub mod conformance;
 pub mod export_learning;
-pub mod inspector;
+pub mod inspect;
 pub mod link;
-pub mod log;
-pub mod replay;
 pub mod serve;

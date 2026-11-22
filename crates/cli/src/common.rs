@@ -1,13 +1,17 @@
-use std::io::{BufRead, BufReader as StdBufReader, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 
 use monoagens_gateway::{
-    EmbedBackendKind, GatewayConfig, LoadedGatewayEnv, ResolvedPaths, resolve_paths,
+    Clock, CueRecorder, DiagnosticSink, DoorController, EmbedBackendKind, GatewayConfig,
+    GatewayOptions, GatewayRuntime, GatewaySeams, LoadedGatewayEnv, ResolvedPaths, SystemClock,
+    ValveDoorController, load_approval_secrets, load_or_init_gateway_env,
+    resolve_approval_mac_key, resolve_paths,
 };
 use monoagens_protocol::ActorId;
+use monoagens_reason::{LocalEmbedSidecar, ModelProvider};
 use monoagens_store::{SegmentedStore, StoreConfig};
-use monoagens_valve::{ValveConfig, ValveMode};
+use monoagens_valve::{Valve, ValveConfig, ValveMode, ValveSnapshot};
 use serde::Serialize;
 
 pub(crate) fn build_valve_config(cfg: &GatewayConfig) -> ValveConfig {
@@ -92,17 +96,6 @@ pub(crate) fn write_json_pretty<T: Serialize + ?Sized>(
     .map_err(|e| e.to_string())
 }
 
-pub(crate) struct CliSidecarGuard {
-    child: Child,
-}
-
-impl Drop for CliSidecarGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
 fn find_workspace_root_for_cli() -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     if manifest
@@ -125,7 +118,7 @@ pub(crate) fn maybe_start_embed_sidecar(
     cfg: &mut GatewayConfig,
     json_mode: bool,
     err: &mut dyn Write,
-) -> Result<Option<CliSidecarGuard>, String> {
+) -> Result<Option<LocalEmbedSidecar>, String> {
     if cfg.embed.backend != EmbedBackendKind::EmbeddingGemma2Http {
         return Ok(None);
     }
@@ -141,18 +134,17 @@ pub(crate) fn maybe_start_embed_sidecar(
 
     let ws_root = find_workspace_root_for_cli();
     let script = ws_root.join("lab/adapters/eval_helpers/embeddinggemma2_sidecar.py");
+    let model_dir = cfg
+        .embed
+        .model_path
+        .clone()
+        .unwrap_or_else(|| ws_root.join("lab/datasets/embedder_models/embeddinggemma-2"));
     if !script.is_file() {
         return Err(format!(
             "embeddinggemma2_http sidecar script not found at '{}'",
             script.display()
         ));
     }
-
-    let model_dir = cfg
-        .embed
-        .model_path
-        .clone()
-        .unwrap_or_else(|| ws_root.join("lab/datasets/embedder_models/embeddinggemma-2"));
     if !model_dir.is_dir() {
         return Err(format!(
             "embeddinggemma2_http requires embed.model_path pointing to an existing directory (missing '{}')",
@@ -160,18 +152,6 @@ pub(crate) fn maybe_start_embed_sidecar(
         ));
     }
     cfg.embed.model_path = Some(model_dir.clone());
-
-    let py = std::env::var("MONOAGENS_ADAPTER_PYTHON").unwrap_or_else(|_| {
-        for cand in [
-            ws_root.join("lab/adapters/.venv/bin/python"),
-            ws_root.join("training/.venv/bin/python"),
-        ] {
-            if cand.is_file() {
-                return cand.to_string_lossy().into_owned();
-            }
-        }
-        "python3".to_owned()
-    });
 
     if !json_mode {
         let _ = writeln!(
@@ -182,54 +162,130 @@ pub(crate) fn maybe_start_embed_sidecar(
         let _ = err.flush();
     }
 
-    let mut child = Command::new(&py)
-        .arg(&script)
-        .arg("--model-path")
-        .arg(&model_dir)
-        .arg("--port")
-        .arg("0")
-        .env("HF_HUB_OFFLINE", "1")
-        .env("TRANSFORMERS_OFFLINE", "1")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("failed to spawn EmbeddingGemma 2 sidecar via '{py}': {e}"))?;
-
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "EmbeddingGemma 2 sidecar stdout unavailable".to_owned())?;
-    let mut reader = StdBufReader::new(stdout);
-    let mut first_line = String::new();
-    reader
-        .read_line(&mut first_line)
-        .map_err(|e| format!("failed reading EmbeddingGemma 2 sidecar readiness line: {e}"))?;
-
-    if !first_line.starts_with("READY ") {
-        let _ = child.kill();
-        let out = child.wait_with_output().ok();
-        let stderr_msg = out
-            .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
-            .unwrap_or_default();
-        return Err(format!(
-            "EmbeddingGemma 2 sidecar failed to start (stdout='{}', stderr='{}')",
-            first_line.trim(),
-            stderr_msg.trim()
-        ));
-    }
-
-    let rest = first_line.trim().strip_prefix("READY ").unwrap_or("");
-    let mut parts = rest.splitn(2, ' ');
-    let url = parts.next().unwrap_or("").trim().to_owned();
-    let device_info = parts.next().unwrap_or("unknown").trim().to_owned();
-    if url.is_empty() {
-        let _ = child.kill();
-        return Err("EmbeddingGemma 2 sidecar returned empty URL".to_owned());
-    }
+    let sidecar = LocalEmbedSidecar::start(&script, &model_dir, &ws_root)?;
+    let url = sidecar.url().to_owned();
+    let device_info = sidecar.device_info().to_owned();
     cfg.embed.endpoint_url = Some(url.clone());
     if !json_mode {
         let _ = writeln!(err, "[embedder] EmbeddingGemma 2 siap ({device_info}) di {url}");
         let _ = err.flush();
     }
-    Ok(Some(CliSidecarGuard { child }))
+    Ok(Some(sidecar))
+}
+
+pub(crate) fn load_ready_gateway_env(
+    config_path: Option<&Path>,
+    has_provider_override: bool,
+    err: &mut dyn Write,
+) -> Result<Option<LoadedGatewayEnv>, String> {
+    let loaded =
+        load_or_init_gateway_env(config_path, |k| std::env::var(k).ok()).map_err(|e| e.to_string())?;
+    if !has_provider_override
+        && let Err(startup_err) = loaded.ensure_startup_ready()
+    {
+        print_startup_not_ready(&loaded, &startup_err, err);
+        return Ok(None);
+    }
+    Ok(Some(loaded))
+}
+
+pub(crate) struct BootGatewayParams {
+    pub data_dir: Option<PathBuf>,
+    pub model: Option<PathBuf>,
+    pub known_actors: Vec<ActorId>,
+    pub provider_override: Option<Arc<dyn ModelProvider>>,
+    pub json_mode: bool,
+}
+
+pub(crate) struct BootedGateway {
+    pub runtime: GatewayRuntime,
+    pub owner_actor: ActorId,
+    pub store_dir: PathBuf,
+    pub cfg: GatewayConfig,
+    pub clock: Arc<SystemClock>,
+    pub cues: CueRecorder,
+    pub _embed_sidecar: Option<LocalEmbedSidecar>,
+}
+
+/// Boots Valve (via `spawn_blocking` so `cedar-policy-symcc` can drive its internal runtime),
+/// optional local embedder sidecar, and [`GatewayRuntime`] with shared defaults.
+pub(crate) async fn boot_gateway_runtime<D, F>(
+    loaded: &LoadedGatewayEnv,
+    params: BootGatewayParams,
+    wrap_doors: F,
+    err: &mut dyn Write,
+) -> Result<BootedGateway, String>
+where
+    D: DoorController + 'static,
+    F: FnOnce(ValveDoorController) -> D,
+{
+    let owner_actor = owner_actor_from_cfg(Some(&loaded.config));
+    let valve_cfg = build_valve_config(&loaded.config);
+    let mut snapshot = ValveSnapshot {
+        owner_actor_id: Some(owner_actor.clone()),
+        t_now: SystemClock::new().now(),
+        ..ValveSnapshot::default()
+    };
+    snapshot.known_actors.insert(owner_actor.clone());
+    for actor in params.known_actors {
+        snapshot.known_actors.insert(actor);
+    }
+
+    let approval_secrets =
+        load_approval_secrets(Some(&loaded.paths.secrets_path), |k| std::env::var(k).ok())
+            .map_err(|e| e.to_string())?;
+    let mac_key = resolve_approval_mac_key(&approval_secrets);
+
+    // Build Valve (runs cedar-policy-symcc cvc5 verification) outside the async runtime context.
+    let mut valve =
+        tokio::task::spawn_blocking(move || Valve::with_default_policies(valve_cfg, snapshot))
+            .await
+            .map_err(|e| format!("valve policy verification task failed: {e}"))?
+            .map_err(|e| format!("valve policy verification failed: {e}"))?;
+    valve.set_approval_attestation_key(mac_key);
+    let door_controller = wrap_doors(ValveDoorController::new(valve));
+
+    let mut cfg = loaded.config.clone();
+    let store_dir = params
+        .data_dir
+        .unwrap_or_else(|| loaded.paths.data_dir.clone());
+    cfg.data_dir = Some(store_dir.clone());
+    if let Some(model_override) = params.model {
+        cfg.soul.model_path = Some(model_override);
+    }
+    let embed_sidecar = if params.provider_override.is_none() {
+        maybe_start_embed_sidecar(&mut cfg, params.json_mode, err)?
+    } else {
+        None
+    };
+
+    let clock = Arc::new(SystemClock::new());
+    let diagnostics = DiagnosticSink::new(&loaded.secrets);
+    let cues = CueRecorder::new();
+
+    let runtime = GatewayRuntime::start_segmented_with_configured_core(
+        cfg.clone(),
+        &loaded.secrets,
+        store_dir.clone(),
+        door_controller,
+        GatewayOptions {
+            clock: clock.clone(),
+            provider: params.provider_override,
+            diagnostics,
+            cues: cues.clone(),
+            seams: GatewaySeams::default(),
+        },
+    )
+    .await
+    .map_err(|e| format!("gateway startup failed: {e}"))?;
+
+    Ok(BootedGateway {
+        runtime,
+        owner_actor,
+        store_dir,
+        cfg,
+        clock,
+        cues,
+        _embed_sidecar: embed_sidecar,
+    })
 }

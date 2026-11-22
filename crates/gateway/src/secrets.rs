@@ -5,9 +5,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use monoagens_reason::{
-    ConfigSourceKind, ENV_EMBED_API_KEY, ENV_EMBED_ENDPOINT, ENV_MODEL_API_KEY, ENV_MODEL_ENDPOINT,
-    ENV_OPENAI_API_KEY, ENV_OPENAI_BASE_URL, ProviderSecrets, SecretError, SecretString,
-    validate_no_secrets_in_str,
+    ConfigSourceKind, ENV_MODEL_API_KEY, ENV_OPENAI_API_KEY, ProviderSecrets, SecretError,
+    SecretString, validate_no_secrets_in_str,
 };
 use toml_edit::{DocumentMut, Item, Table, Value};
 
@@ -288,64 +287,7 @@ pub fn parse_secrets_toml_str(raw: &str, path: &Path) -> Result<ProviderSecrets,
     let mut flat: BTreeMap<String, String> = BTreeMap::new();
     collect_toml_strings(doc.as_table(), "", &mut flat, path)?;
 
-    let pick =
-        |keys: &[&str]| -> Option<String> { keys.iter().find_map(|k| flat.get(*k).cloned()) };
-
-    let model_api_key = pick(&[
-        "model.api_key",
-        "model_api_key",
-        ENV_MODEL_API_KEY,
-        "openai.api_key",
-        "openai_api_key",
-        ENV_OPENAI_API_KEY,
-        "api_key",
-    ])
-    .map(SecretString::new);
-
-    let model_endpoint = pick(&[
-        "model.endpoint",
-        "model.endpoint_url",
-        "model_endpoint",
-        ENV_MODEL_ENDPOINT,
-        "openai.base_url",
-        "openai_base_url",
-        ENV_OPENAI_BASE_URL,
-        "endpoint",
-    ]);
-
-    let embed_api_key = pick(&[
-        "embed.api_key",
-        "embed_api_key",
-        ENV_EMBED_API_KEY,
-        "model.api_key",
-        "model_api_key",
-        ENV_MODEL_API_KEY,
-        "openai_api_key",
-        ENV_OPENAI_API_KEY,
-        "api_key",
-    ])
-    .map(SecretString::new);
-
-    let embed_endpoint = pick(&[
-        "embed.endpoint",
-        "embed.endpoint_url",
-        "embed_endpoint",
-        ENV_EMBED_ENDPOINT,
-        "model.endpoint",
-        "model.endpoint_url",
-        "model_endpoint",
-        ENV_MODEL_ENDPOINT,
-        "openai_base_url",
-        ENV_OPENAI_BASE_URL,
-        "endpoint",
-    ]);
-
-    Ok(ProviderSecrets {
-        model_api_key,
-        model_endpoint,
-        embed_api_key,
-        embed_endpoint,
-    })
+    Ok(ProviderSecrets::from_flat_map(&flat))
 }
 
 /// Secret key material for AEAD-at-rest attachment custody (`4.4`), loaded exclusively

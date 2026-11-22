@@ -15,6 +15,7 @@ pub mod hash;
 pub mod none;
 pub mod openai;
 pub mod scripted;
+pub mod sidecar;
 
 pub use embeddinggemma2::{
     EMBEDDING_GEMMA_2_CTX_TOKENS, EMBEDDING_GEMMA_2_DIM, EMBEDDING_GEMMA_2_VER,
@@ -26,6 +27,7 @@ pub use hash::HashEmbedder;
 pub use none::NoneEmbedder;
 pub use openai::{OpenAiEmbedConfig, OpenAiEmbedder};
 pub use scripted::ScriptedEmbedder;
+pub use sidecar::{ENV_ADAPTER_PYTHON, LocalEmbedSidecar, resolve_adapter_python};
 
 /// Mandatory task instruction prefixes (`A-15`, `R-37`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

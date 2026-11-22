@@ -4,14 +4,14 @@
 
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, BufReader, BufWriter};
+use std::io::{self, BufWriter};
 use std::path::PathBuf;
-use std::process::{Child, Command, ExitCode, Stdio};
+use std::process::ExitCode;
 use std::time::Duration;
 
 use monoagens_core::{CoreConfig, MemStore, ReplayMode};
 use monoagens_lab::reason_seam::embed::{
-    EmbedInput, Embedder, EmbeddingGemma2Config, EmbeddingGemma2Embedder,
+    EmbedInput, Embedder, EmbeddingGemma2Config, EmbeddingGemma2Embedder, LocalEmbedSidecar,
 };
 use monoagens_lab::reason_seam::model::{OpenAiModelConfig, OpenAiModelProvider, ReasoningEffort};
 use monoagens_lab::reason_seam::secrets::SecretString;
@@ -1228,7 +1228,7 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
     });
 
     // Configure EmbeddingGemma 2 semantic embedder for standard, category, smoke, and live runs (`task 10.5`).
-    let mut sidecar_guard: Option<SidecarProcessGuard> = None;
+    let mut sidecar_guard: Option<LocalEmbedSidecar> = None;
     let mut embedder_backend: Option<String> = None;
     let mut embedder_revision: Option<String> = None;
     let configured_embedder: Option<EmbeddingGemma2Embedder> = if should_enable_semantic_embedder(
@@ -1280,15 +1280,20 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
             let model_dir = embed_model_path
                 .clone()
                 .unwrap_or_else(|| datasets_dir.join(&emb_entry.relative_dir));
-            let (guard, sidecar_url, device_info) = start_embeddinggemma2_sidecar(&model_dir)?;
-            sidecar_guard = Some(guard);
-            embedder_backend = Some(format!("SidecarHttp (uv offline, {device_info})"));
+            let ws_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+            let script = ws_root.join("lab/adapters/eval_helpers/embeddinggemma2_sidecar.py");
+            let sidecar = LocalEmbedSidecar::start(&script, &model_dir, &ws_root)?;
+            embedder_backend = Some(format!(
+                "SidecarHttp (uv offline, {})",
+                sidecar.device_info()
+            ));
             let emb = EmbeddingGemma2Embedder::new(EmbeddingGemma2Config::local_http(
-                sidecar_url,
+                sidecar.url(),
                 Some(model_dir),
                 60_000,
             ))
             .map_err(|e| format!("failed to connect to EmbeddingGemma 2 sidecar: {e}"))?;
+            sidecar_guard = Some(sidecar);
             emb.embed(&EmbedInput::query("semantic embedder readiness check"))
                 .map_err(|e| format!("EmbeddingGemma 2 readiness check failed: {e}"))?;
             Some(emb)
@@ -2146,7 +2151,7 @@ fn run_smoke_id_cmd(args: &[String]) -> Result<ExitCode, String> {
         i += 1;
     }
 
-    let mut sidecar_guard: Option<SidecarProcessGuard> = None;
+    let mut sidecar_guard: Option<LocalEmbedSidecar> = None;
     let embedder: std::sync::Arc<dyn Embedder> = if offline_hash {
         std::sync::Arc::new(monoagens_lab::reason_seam::embed::HashEmbedder::with_model_ver(
             "egemma2-256",
@@ -2166,14 +2171,15 @@ fn run_smoke_id_cmd(args: &[String]) -> Result<ExitCode, String> {
         let model_dir = embed_model_path
             .unwrap_or_else(|| ws_root.join("lab/datasets/embedder_models/embeddinggemma-2"));
         if model_dir.is_dir() {
-            let (guard, url, _dev) = start_embeddinggemma2_sidecar(&model_dir)?;
-            sidecar_guard = Some(guard);
+            let script = ws_root.join("lab/adapters/eval_helpers/embeddinggemma2_sidecar.py");
+            let sidecar = LocalEmbedSidecar::start(&script, &model_dir, &ws_root)?;
             let emb = EmbeddingGemma2Embedder::new(EmbeddingGemma2Config::local_http(
-                url,
+                sidecar.url(),
                 Some(model_dir),
                 60_000,
             ))
             .map_err(|e| format!("failed to start EmbeddingGemma 2 embedder: {e}"))?;
+            sidecar_guard = Some(sidecar);
             std::sync::Arc::new(emb)
         } else {
             std::sync::Arc::new(monoagens_lab::reason_seam::embed::HashEmbedder::with_model_ver(
@@ -2237,84 +2243,6 @@ fn run_smoke_id_cmd(args: &[String]) -> Result<ExitCode, String> {
     } else {
         Ok(ExitCode::from(1))
     }
-}
-
-struct SidecarProcessGuard {
-    child: Child,
-}
-
-impl Drop for SidecarProcessGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-fn start_embeddinggemma2_sidecar(
-    model_dir: &std::path::Path,
-) -> Result<(SidecarProcessGuard, String, String), String> {
-    let ws_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let script = ws_root.join("lab/adapters/eval_helpers/embeddinggemma2_sidecar.py");
-    if !script.is_file() {
-        return Err(format!(
-            "EmbeddingGemma 2 sidecar script not found at '{}'",
-            script.display()
-        ));
-    }
-    let py = env::var("MONOAGENS_ADAPTER_PYTHON").unwrap_or_else(|_| {
-        let venv_py = ws_root.join("lab/adapters/.venv/bin/python");
-        if venv_py.is_file() {
-            venv_py.to_string_lossy().into_owned()
-        } else {
-            "python3".to_owned()
-        }
-    });
-
-    let mut child = Command::new(&py)
-        .arg(&script)
-        .arg("--model-path")
-        .arg(model_dir)
-        .arg("--port")
-        .arg("0")
-        .env("HF_HUB_OFFLINE", "1")
-        .env("TRANSFORMERS_OFFLINE", "1")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("failed to spawn EmbeddingGemma 2 sidecar via '{py}': {e}"))?;
-
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "sidecar stdout unavailable".to_owned())?;
-    let mut reader = BufReader::new(stdout);
-    let mut first_line = String::new();
-    reader
-        .read_line(&mut first_line)
-        .map_err(|e| format!("failed reading EmbeddingGemma 2 sidecar startup line: {e}"))?;
-
-    if !first_line.starts_with("READY ") {
-        let _ = child.kill();
-        let out = child.wait_with_output().ok();
-        let stderr = out
-            .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
-            .unwrap_or_default();
-        return Err(format!(
-            "EmbeddingGemma 2 sidecar failed to start (stdout='{}', stderr='{}')",
-            first_line.trim(),
-            stderr.trim()
-        ));
-    }
-
-    let rest = first_line.trim().strip_prefix("READY ").unwrap_or("");
-    let mut parts = rest.splitn(2, ' ');
-    let url = parts.next().unwrap_or("").to_owned();
-    let device_info = parts.next().unwrap_or("unknown").to_owned();
-    if url.is_empty() {
-        let _ = child.kill();
-        return Err("EmbeddingGemma 2 sidecar returned empty URL".to_owned());
-    }
-    Ok((SidecarProcessGuard { child }, url, device_info))
 }
 
 fn extract_endpoint_host(endpoint: &str) -> Option<String> {

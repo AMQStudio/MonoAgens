@@ -183,18 +183,16 @@ impl ActionSettlementTracker {
                 if let Some(guard) = entry.cue_guard.take() {
                     guard.finish();
                 }
-                let receipt = Receipt {
-                    action_id: action_id.clone(),
-                    capability_id: entry.capability_id,
-                    outcome: ReceiptOutcome::Unknown,
-                    reason_code: Some("ERR_BODY_CRASHED".to_owned()),
-                    detail: Some(reason.to_owned()),
-                    termination_reason: Some(TerminationReason::Normal),
-                    progress: None,
-                    delivered_units: None,
-                    h_act: entry.h_act,
-                    timestamp_ms: now,
-                };
+                let receipt = make_terminal_receipt(
+                    action_id.clone(),
+                    entry.capability_id,
+                    entry.h_act,
+                    ReceiptOutcome::Unknown,
+                    Some("ERR_BODY_CRASHED".to_owned()),
+                    reason.to_owned(),
+                    TerminationReason::Normal,
+                    now,
+                );
                 st.settled.insert(action_id, receipt.clone());
                 entry.settled_notify.notify_waiters();
                 receipts.push(receipt);
@@ -210,18 +208,16 @@ impl ActionSettlementTracker {
         timeout_ms: u64,
         now: Time,
     ) -> Option<Receipt> {
-        let receipt = Receipt {
-            action_id: action.action_id.clone(),
-            capability_id: action.capability_id.clone(),
-            outcome: ReceiptOutcome::Unknown,
-            reason_code: Some("timed_out".to_owned()),
-            detail: Some(format!("action timed out after {timeout_ms}ms")),
-            termination_reason: Some(TerminationReason::TimedOut),
-            progress: None,
-            delivered_units: None,
-            h_act: action.h_act.clone(),
-            timestamp_ms: now,
-        };
+        let receipt = make_terminal_receipt(
+            action.action_id.clone(),
+            action.capability_id.clone(),
+            action.h_act.clone(),
+            ReceiptOutcome::Unknown,
+            Some("timed_out".to_owned()),
+            format!("action timed out after {timeout_ms}ms"),
+            TerminationReason::TimedOut,
+            now,
+        );
         match self.try_settle(&action.action_id, receipt) {
             SettlementOutcome::SettledFirst(r) => Some(r),
             SettlementOutcome::AlreadySettledOrUnknown => None,
@@ -1219,18 +1215,16 @@ impl BodyRouter {
         };
 
         let Some(conn) = target_conn else {
-            let receipt = Receipt {
-                action_id: action.action_id.clone(),
-                capability_id: action.capability_id.clone(),
-                outcome: ReceiptOutcome::Refused,
-                reason_code: Some("ERR_UNKNOWN_PLACE".to_owned()),
-                detail: Some("no connected body owns target place".to_owned()),
-                termination_reason: Some(TerminationReason::Normal),
-                progress: Some(0.0),
-                delivered_units: Some(0),
-                h_act: action.h_act.clone(),
-                timestamp_ms: self.clock.now(),
-            };
+            let receipt = make_terminal_receipt(
+                action.action_id.clone(),
+                action.capability_id.clone(),
+                action.h_act.clone(),
+                ReceiptOutcome::Refused,
+                Some("ERR_UNKNOWN_PLACE".to_owned()),
+                "no connected body owns target place".to_owned(),
+                TerminationReason::Normal,
+                self.clock.now(),
+            );
             let _ = self.ingress.try_submit(Input::Receipt(receipt));
             return;
         };
@@ -1284,31 +1278,21 @@ impl BodyRouter {
         {
             Ok(exec_res) => {
                 if let Some(receipt) = exec_res.receipt {
-                    if let SettlementOutcome::SettledFirst(r) =
-                        self.settlement.try_settle(&action.action_id, receipt)
-                    {
-                        let _ = self.ingress.try_submit(Input::Receipt(r));
-                    }
+                    self.settle_and_submit(&action.action_id, receipt);
                     return;
                 }
                 if !exec_res.accepted {
-                    let receipt = Receipt {
-                        action_id: action.action_id.clone(),
-                        capability_id: action.capability_id.clone(),
-                        outcome: ReceiptOutcome::Failed,
-                        reason_code: Some("action_rejected".to_owned()),
-                        detail: Some("body returned accepted=false without receipt".to_owned()),
-                        termination_reason: Some(TerminationReason::Normal),
-                        progress: Some(0.0),
-                        delivered_units: Some(0),
-                        h_act: action.h_act.clone(),
-                        timestamp_ms: self.clock.now(),
-                    };
-                    if let SettlementOutcome::SettledFirst(r) =
-                        self.settlement.try_settle(&action.action_id, receipt)
-                    {
-                        let _ = self.ingress.try_submit(Input::Receipt(r));
-                    }
+                    let receipt = make_terminal_receipt(
+                        action.action_id.clone(),
+                        action.capability_id.clone(),
+                        action.h_act.clone(),
+                        ReceiptOutcome::Failed,
+                        Some("action_rejected".to_owned()),
+                        "body returned accepted=false without receipt".to_owned(),
+                        TerminationReason::Normal,
+                        self.clock.now(),
+                    );
+                    self.settle_and_submit(&action.action_id, receipt);
                     return;
                 }
 
@@ -1366,43 +1350,37 @@ impl BodyRouter {
                 } else {
                     ReceiptOutcome::Failed
                 };
-                let receipt = Receipt {
-                    action_id: action.action_id.clone(),
-                    capability_id: action.capability_id.clone(),
+                let receipt = make_terminal_receipt(
+                    action.action_id.clone(),
+                    action.capability_id.clone(),
+                    action.h_act.clone(),
                     outcome,
-                    reason_code: werr.data.map(|d| d.symbol),
-                    detail: Some(werr.message),
-                    termination_reason: Some(TerminationReason::Normal),
-                    progress: Some(0.0),
-                    delivered_units: Some(0),
-                    h_act: action.h_act.clone(),
-                    timestamp_ms: self.clock.now(),
-                };
-                if let SettlementOutcome::SettledFirst(r) =
-                    self.settlement.try_settle(&action.action_id, receipt)
-                {
-                    let _ = self.ingress.try_submit(Input::Receipt(r));
-                }
+                    werr.data.map(|d| d.symbol),
+                    werr.message,
+                    TerminationReason::Normal,
+                    self.clock.now(),
+                );
+                self.settle_and_submit(&action.action_id, receipt);
             }
             Err(BodyRpcError::Serialization(detail)) => {
-                let receipt = Receipt {
-                    action_id: action.action_id.clone(),
-                    capability_id: action.capability_id.clone(),
-                    outcome: ReceiptOutcome::Failed,
-                    reason_code: Some("ERR_SERIALIZATION".to_owned()),
-                    detail: Some(detail),
-                    termination_reason: Some(TerminationReason::Normal),
-                    progress: Some(0.0),
-                    delivered_units: Some(0),
-                    h_act: action.h_act.clone(),
-                    timestamp_ms: self.clock.now(),
-                };
-                if let SettlementOutcome::SettledFirst(r) =
-                    self.settlement.try_settle(&action.action_id, receipt)
-                {
-                    let _ = self.ingress.try_submit(Input::Receipt(r));
-                }
+                let receipt = make_terminal_receipt(
+                    action.action_id.clone(),
+                    action.capability_id.clone(),
+                    action.h_act.clone(),
+                    ReceiptOutcome::Failed,
+                    Some("ERR_SERIALIZATION".to_owned()),
+                    detail,
+                    TerminationReason::Normal,
+                    self.clock.now(),
+                );
+                self.settle_and_submit(&action.action_id, receipt);
             }
+        }
+    }
+
+    fn settle_and_submit(&self, action_id: &ActionId, receipt: Receipt) {
+        if let SettlementOutcome::SettledFirst(r) = self.settlement.try_settle(action_id, receipt) {
+            let _ = self.ingress.try_submit(Input::Receipt(r));
         }
     }
 
@@ -1503,4 +1481,35 @@ fn serialize_err_response(rpc_id: Option<RpcId>, code: i32, message: &str) -> Op
         },
     ))
     .ok()
+}
+
+/// Constructs a terminal/unknown [`Receipt`]; `Unknown` receipts omit progress and delivered units.
+#[allow(clippy::too_many_arguments)]
+fn make_terminal_receipt(
+    action_id: ActionId,
+    capability_id: CapabilityId,
+    h_act: Option<monoagens_protocol::HAct>,
+    outcome: ReceiptOutcome,
+    reason_code: Option<String>,
+    detail: String,
+    termination_reason: TerminationReason,
+    timestamp_ms: Time,
+) -> Receipt {
+    let (progress, delivered_units) = if outcome == ReceiptOutcome::Unknown {
+        (None, None)
+    } else {
+        (Some(0.0), Some(0))
+    };
+    Receipt {
+        action_id,
+        capability_id,
+        outcome,
+        reason_code,
+        detail: Some(detail),
+        termination_reason: Some(termination_reason),
+        progress,
+        delivered_units,
+        h_act,
+        timestamp_ms,
+    }
 }

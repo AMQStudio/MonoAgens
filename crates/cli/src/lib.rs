@@ -303,12 +303,16 @@ pub fn execute_cli(cli: Cli, out: &mut dyn Write, err: &mut dyn Write) -> CliOut
     let res = match cli.command {
         Commands::Chat(args) => commands::chat::cmd_chat(config_opt, json_mode, args, None, out, err),
         Commands::Serve(args) => commands::serve::cmd_serve(config_opt, json_mode, args, out, err),
-        Commands::Log(args) => commands::log::cmd_log(config_opt, json_mode, args, out),
-        Commands::Replay(args) => commands::replay::cmd_replay(config_opt, json_mode, args, out, err),
+        Commands::Log(args) => commands::inspect::cmd_log(config_opt, json_mode, args, out),
+        Commands::Replay(args) => {
+            commands::inspect::cmd_replay(config_opt, json_mode, args, out, err)
+        }
         Commands::Approvals(args) => commands::approvals::cmd_approvals(config_opt, json_mode, args, out),
         Commands::Link(args) => commands::link::cmd_link(config_opt, json_mode, args, out),
-        Commands::Conformance(args) => commands::conformance::cmd_conformance(args, out),
-        Commands::Inspector(args) => commands::inspector::cmd_inspector(config_opt, json_mode, args, out),
+        Commands::Conformance(args) => commands::inspect::cmd_conformance(args, out),
+        Commands::Inspector(args) => {
+            commands::inspect::cmd_inspector(config_opt, json_mode, args, out)
+        }
         Commands::ExportLearning(args) => {
             commands::export_learning::cmd_export_learning(config_opt, json_mode, args, out)
         }

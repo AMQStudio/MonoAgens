@@ -3,19 +3,15 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use monoagens_gateway::{
-    BodyPluginConfig, Clock, CueRecorder, DiagnosticSink, GatewayOptions, GatewayRuntime,
-    GatewaySeams, LoadedGatewayEnv, SystemClock, ValveDoorController, load_approval_secrets,
-    load_or_init_gateway_env, resolve_approval_mac_key,
-};
+use monoagens_gateway::BodyPluginConfig;
+use monoagens_protocol::ActorId;
 use monoagens_reason::ModelProvider;
-use monoagens_valve::{Valve, ValveSnapshot};
 use serde::Serialize;
 use tokio::sync::oneshot;
 
 use crate::ServeArgs;
 use crate::common::{
-    build_valve_config, maybe_start_embed_sidecar, owner_actor_from_cfg, print_startup_not_ready,
+    BootGatewayParams, BootedGateway, boot_gateway_runtime, load_ready_gateway_env,
     write_json_pretty,
 };
 
@@ -126,15 +122,10 @@ pub fn run_serve_with_provider(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<u8, String> {
-    let loaded: LoadedGatewayEnv = load_or_init_gateway_env(config_path, |k| std::env::var(k).ok())
-        .map_err(|e| e.to_string())?;
-
-    if provider_override.is_none()
-        && let Err(startup_err) = loaded.ensure_startup_ready()
-    {
-        print_startup_not_ready(&loaded, &startup_err, err);
+    let Some(loaded) = load_ready_gateway_env(config_path, provider_override.is_some(), err)?
+    else {
         return Ok(1);
-    }
+    };
 
     let selected_bodies = select_bodies(&loaded.config.bodies, &args.bodies)?;
     if selected_bodies.is_empty() && !args.allow_empty {
@@ -144,42 +135,12 @@ pub fn run_serve_with_provider(
         );
     }
 
-    let owner_actor = owner_actor_from_cfg(Some(&loaded.config));
-    let valve_cfg = build_valve_config(&loaded.config);
-    let mut snapshot = ValveSnapshot {
-        owner_actor_id: Some(owner_actor.clone()),
-        t_now: SystemClock::new().now(),
-        ..ValveSnapshot::default()
-    };
-    snapshot.known_actors.insert(owner_actor);
-    for person in &loaded.config.persons {
-        snapshot.known_actors.insert(person.actor_id.clone());
-    }
-
-    let approval_secrets =
-        load_approval_secrets(Some(&loaded.paths.secrets_path), |k| std::env::var(k).ok())
-            .map_err(|e| e.to_string())?;
-    let mac_key = resolve_approval_mac_key(&approval_secrets);
-
-    let mut valve = Valve::with_default_policies(valve_cfg, snapshot)
-        .map_err(|e| format!("valve policy verification failed: {e}"))?;
-    valve.set_approval_attestation_key(mac_key);
-    let door_controller = ValveDoorController::new(valve);
-
-    let mut cfg = loaded.config.clone();
-    let store_dir = args
-        .data_dir
-        .unwrap_or_else(|| loaded.paths.data_dir.clone());
-    cfg.data_dir = Some(store_dir.clone());
-    if let Some(model_override) = args.model {
-        cfg.soul.model_path = Some(model_override);
-    }
-
-    let _embed_sidecar_guard = if provider_override.is_none() {
-        maybe_start_embed_sidecar(&mut cfg, json_mode, err)?
-    } else {
-        None
-    };
+    let known_actors: Vec<ActorId> = loaded
+        .config
+        .persons
+        .iter()
+        .map(|p| p.actor_id.clone())
+        .collect();
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -187,29 +148,28 @@ pub fn run_serve_with_provider(
         .map_err(|e| format!("failed to start tokio runtime: {e}"))?;
 
     let config_path_str = loaded.paths.config_path.display().to_string();
-    let data_dir_str = store_dir.display().to_string();
     let exit_after_ms = args.exit_after_ms;
 
     rt.block_on(async move {
-        let clock = Arc::new(SystemClock::new());
-        let diagnostics = DiagnosticSink::new(&loaded.secrets);
-        let cues = CueRecorder::new();
-
-        let runtime = GatewayRuntime::start_segmented_with_configured_core(
-            cfg,
-            &loaded.secrets,
+        let BootedGateway {
+            runtime,
             store_dir,
-            door_controller,
-            GatewayOptions {
-                clock,
-                provider: provider_override,
-                diagnostics,
-                cues,
-                seams: GatewaySeams::default(),
+            _embed_sidecar,
+            ..
+        } = boot_gateway_runtime(
+            &loaded,
+            BootGatewayParams {
+                data_dir: args.data_dir,
+                model: args.model,
+                known_actors,
+                provider_override,
+                json_mode,
             },
+            |doors| doors,
+            err,
         )
-        .await
-        .map_err(|e| format!("gateway startup failed: {e}"))?;
+        .await?;
+        let data_dir_str = store_dir.display().to_string();
 
         let handle = runtime.handle();
         let outcomes = handle.connect_configured_bodies(&selected_bodies).await;
