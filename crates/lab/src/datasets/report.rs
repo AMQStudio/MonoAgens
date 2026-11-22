@@ -61,8 +61,13 @@ struct LoadedDatasetRun {
     outcomes: Vec<ItemOutcomeSummary>,
 }
 
-/// Generates `REPORT.md`, `index.html`, `tables/*.csv`, `charts/*`, and failure `transcripts/`
-/// inside `opts.out_dir` (defaulting to `<run_dir>/report`) strictly from persisted run records.
+/// Default number of representative items (balancing PASS and FAIL) rendered per dataset in
+/// `CONVERSATION_SAMPLES.md`.
+pub const DEFAULT_SAMPLES_PER_DATASET: usize = 2;
+
+/// Generates `REPORT.md`, `index.html`, `CONVERSATION_SAMPLES.md`, `tables/*.csv`, `charts/*`,
+/// and failure `transcripts/` inside `opts.out_dir` (defaulting to `<run_dir>/report`) strictly
+/// from persisted run records.
 pub fn generate_benchmark_report(opts: &ReportOptions) -> Result<GeneratedReportSummary, LabError> {
     ensure_not_sealed_path(&opts.run_dir)?;
     if !opts.run_dir.is_dir() {
@@ -483,6 +488,10 @@ pub fn generate_benchmark_report(opts: &ReportOptions) -> Result<GeneratedReport
     )?;
     let html_path = report_dir.join("index.html");
     fs::write(&html_path, &html)?;
+
+    let samples_path = report_dir.join("CONVERSATION_SAMPLES.md");
+    let samples_md = render_conversation_samples_from_runs(&by_ds, &tx_out_dir, DEFAULT_SAMPLES_PER_DATASET);
+    fs::write(&samples_path, samples_md)?;
 
     Ok(GeneratedReportSummary {
         report_dir: report_dir.to_string_lossy().into_owned(),
@@ -1271,6 +1280,7 @@ fn render_markdown_report(
         pareto.undominated_frontier.len(),
         pareto.gaps.len()
     );
+    md.push_str("- **Conversation Samples (PASS & FAIL):** [`CONVERSATION_SAMPLES.md`](CONVERSATION_SAMPLES.md)\n");
     md.push('\n');
 
     // 2. Reproducibility
@@ -1582,6 +1592,10 @@ fn render_html_report(
                 pareto.gaps.len()
             ),
         ),
+        (
+            "Conversation samples",
+            "<a href=\"CONVERSATION_SAMPLES.md\">CONVERSATION_SAMPLES.md</a>".to_owned(),
+        ),
         ("Git commit", repro.git_commit.clone()),
         ("Config digest", repro.config_digest.clone()),
         ("Manifest digest", repro.manifest_digest.clone()),
@@ -1869,4 +1883,368 @@ fn encode_base64(input: &[u8]) -> String {
         });
     }
     out
+}
+
+/// Standalone generator producing `CONVERSATION_SAMPLES.md` (balancing PASS and FAIL examples
+/// per dataset) from any run directory containing `*.outcomes.json` and `transcripts/*.jsonl`
+/// without requiring live API calls or modifying historical reports.
+pub fn generate_conversation_samples(
+    run_dir: &Path,
+    out_path: Option<&Path>,
+    samples_per_dataset: usize,
+) -> Result<PathBuf, LabError> {
+    ensure_not_sealed_path(run_dir)?;
+    if !run_dir.is_dir() {
+        return Err(LabError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("run directory '{}' does not exist", run_dir.display()),
+        )));
+    }
+    let target = out_path
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| run_dir.join("report/CONVERSATION_SAMPLES.md"));
+    ensure_not_sealed_path(&target)?;
+    if let Some(parent) = target.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut by_ds: BTreeMap<String, (PathBuf, Vec<ItemOutcomeSummary>)> = BTreeMap::new();
+    let mut stack = vec![run_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                if name != "report" && name != "transcripts" {
+                    stack.push(path);
+                }
+                continue;
+            }
+            let Some(fname) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if fname.ends_with(".outcomes.json")
+                && let Ok(raw) = fs::read_to_string(&path)
+                && let Ok(outcomes) = serde_json::from_str::<Vec<ItemOutcomeSummary>>(&raw)
+                && let Some(first) = outcomes.first()
+            {
+                let ds_id = first.dataset_id.clone();
+                by_ds.entry(ds_id).or_insert((dir.clone(), outcomes));
+            }
+        }
+    }
+
+    // Also include raw transcript-only directories (e.g. legacy pilot runs missing outcomes.json).
+    let mut raw_tx_dirs: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+    collect_transcript_jsonl_files(run_dir, &mut raw_tx_dirs)?;
+
+    let mut md = String::new();
+    md.push_str("# MonoAgens Lab — Conversation Samples Digest\n\n");
+    let _ = writeln!(
+        md,
+        "- **Run directory:** `{}`\n- **Samples per dataset:** up to `{}` (PASS + FAIL balanced)\n",
+        run_dir.display(),
+        samples_per_dataset.max(1)
+    );
+
+    if by_ds.is_empty() && raw_tx_dirs.is_empty() {
+        md.push_str("No recorded `.outcomes.json` or `transcripts/*.jsonl` files found in this run directory.\n");
+        fs::write(&target, md)?;
+        return Ok(target);
+    }
+
+    let mut visited_ds = BTreeSet::new();
+    for (ds_id, (src_dir, outcomes)) in &by_ds {
+        visited_ds.insert(ds_id.clone());
+        let tx_fallback = run_dir.join("report/transcripts");
+        render_dataset_samples_section(
+            &mut md,
+            ds_id,
+            outcomes,
+            src_dir,
+            &tx_fallback,
+            samples_per_dataset.max(1),
+        );
+    }
+    for (ds_id, files) in &raw_tx_dirs {
+        if visited_ds.contains(ds_id) || files.is_empty() {
+            continue;
+        }
+        let _ = writeln!(md, "## `{ds_id}` (transcripts only)\n");
+        for path in files.iter().take(samples_per_dataset.max(1)) {
+            let item_stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown");
+            let _ = writeln!(md, "### [TRANSCRIPT] `{ds_id}` / `{item_stem}`\n");
+            render_jsonl_timeline(&mut md, path);
+            md.push('\n');
+        }
+    }
+
+    fs::write(&target, md)?;
+    Ok(target)
+}
+
+fn collect_transcript_jsonl_files(
+    root: &Path,
+    out: &mut BTreeMap<String, Vec<PathBuf>>,
+) -> Result<(), LabError> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) == Some("jsonl")
+                && let Some(parent) = path.parent()
+                && let Some(grand) = parent.parent()
+                && grand.file_name().and_then(|n| n.to_str()) == Some("transcripts")
+                && let Some(ds_name) = parent.file_name().and_then(|n| n.to_str())
+            {
+                out.entry(ds_name.to_owned()).or_default().push(path);
+            }
+        }
+    }
+    for files in out.values_mut() {
+        files.sort();
+    }
+    Ok(())
+}
+
+fn render_conversation_samples_from_runs(
+    by_ds: &BTreeMap<String, LoadedDatasetRun>,
+    tx_out_dir: &Path,
+    samples_per_dataset: usize,
+) -> String {
+    let mut md = String::new();
+    md.push_str("# MonoAgens Lab — Conversation Samples Digest\n\n");
+    let _ = writeln!(
+        md,
+        "- **Datasets covered:** {}\n- **Samples per dataset:** up to `{}` (PASS + FAIL balanced)\n",
+        by_ds.len(),
+        samples_per_dataset.max(1)
+    );
+    if by_ds.is_empty() {
+        md.push_str("No scored dataset runs loaded.\n");
+        return md;
+    }
+    for (ds_id, loaded) in by_ds {
+        render_dataset_samples_section(
+            &mut md,
+            ds_id,
+            &loaded.outcomes,
+            &loaded.source_dir,
+            tx_out_dir,
+            samples_per_dataset.max(1),
+        );
+    }
+    md
+}
+
+fn is_outcome_pass(o: &ItemOutcomeSummary) -> bool {
+    !o.failed && o.passed != Some(false) && o.score.is_none_or(|s| s >= 0.5)
+}
+
+fn select_representative_outcomes(
+    outcomes: &[ItemOutcomeSummary],
+    limit: usize,
+) -> Vec<&ItemOutcomeSummary> {
+    if limit == 0 || outcomes.is_empty() {
+        return Vec::new();
+    }
+    let mut chosen: Vec<&ItemOutcomeSummary> = Vec::new();
+    let mut seen_items: BTreeSet<&str> = BTreeSet::new();
+
+    if let Some(first_pass) = outcomes.iter().find(|o| is_outcome_pass(o)) {
+        seen_items.insert(first_pass.item_id.as_str());
+        chosen.push(first_pass);
+    }
+    if chosen.len() < limit
+        && let Some(first_fail) = outcomes
+            .iter()
+            .find(|o| !is_outcome_pass(o) && !seen_items.contains(o.item_id.as_str()))
+    {
+        seen_items.insert(first_fail.item_id.as_str());
+        chosen.push(first_fail);
+    }
+    for o in outcomes {
+        if chosen.len() >= limit {
+            break;
+        }
+        if seen_items.insert(o.item_id.as_str()) {
+            chosen.push(o);
+        }
+    }
+    chosen
+}
+
+fn render_dataset_samples_section(
+    md: &mut String,
+    ds_id: &str,
+    outcomes: &[ItemOutcomeSummary],
+    src_dir: &Path,
+    tx_fallback_dir: &Path,
+    limit: usize,
+) {
+    let pass_cnt = outcomes.iter().filter(|o| is_outcome_pass(o)).count();
+    let fail_cnt = outcomes.len().saturating_sub(pass_cnt);
+    let _ = writeln!(
+        md,
+        "## `{ds_id}` ({pass_cnt} PASS / {fail_cnt} FAIL dari {} probe)\n",
+        outcomes.len()
+    );
+    let picked = select_representative_outcomes(outcomes, limit);
+    if picked.is_empty() {
+        md.push_str("_Tidak ada item outcome yang tersimpan._\n\n");
+        return;
+    }
+
+    let safe_ds = sanitize_id(ds_id);
+    for o in picked {
+        let badge = if is_outcome_pass(o) { "PASS" } else { "FAIL" };
+        let score_str = o
+            .score
+            .map_or_else(|| "n/a".to_owned(), |s| format!("{s:.3}"));
+        let _ = writeln!(
+            md,
+            "### [{badge}] `{ds_id}` / `{}` (probe: `{}`, metric: `{}` = `{score_str}`)\n",
+            o.item_id, o.probe_id, o.metric_name
+        );
+
+        let safe_it = sanitize_id(&o.item_id);
+        let candidates = [
+            src_dir.join(&o.transcript_rel_path),
+            src_dir
+                .join("transcripts")
+                .join(&safe_ds)
+                .join(format!("{safe_it}.jsonl")),
+            tx_fallback_dir
+                .join(&safe_ds)
+                .join(format!("{safe_it}.jsonl")),
+        ];
+        if let Some(tx_path) = candidates.into_iter().find(|p| p.is_file()) {
+            render_jsonl_timeline(md, &tx_path);
+        } else {
+            md.push_str("- _File transkrip JSONL tidak ditemukan._\n");
+        }
+
+        let soul_ans = if o.soul_answer.trim().is_empty() {
+            "(silent / tidak menjawab)"
+        } else {
+            o.soul_answer.trim()
+        };
+        let verdict = if o.failed {
+            o.failure_reason.as_deref().unwrap_or("error")
+        } else {
+            o.judge_verdict.as_deref().unwrap_or(badge)
+        };
+        let _ = writeln!(md, "\n- **Pertanyaan / Probe:** {}", truncate_inline(&o.question, 240));
+        let _ = writeln!(md, "- **Gold Answer:** `{}`", truncate_inline(&o.gold_answer, 200));
+        let _ = writeln!(md, "- **Soul Answer:** `{}`", truncate_inline(soul_ans, 240));
+        let _ = writeln!(md, "- **Verdict:** `{}`\n", truncate_inline(verdict, 180));
+    }
+}
+
+fn render_jsonl_timeline(md: &mut String, tx_path: &Path) {
+    let Ok(raw) = fs::read_to_string(tx_path) else {
+        md.push_str("- _Gagal membaca file transkrip JSONL._\n");
+        return;
+    };
+    let mut lines: Vec<serde_json::Value> = Vec::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            let rtype = val.get("record_type").and_then(|v| v.as_str()).unwrap_or("");
+            if rtype == "gate_decision"
+                && val.get("outcome").and_then(|v| v.as_str()) == Some("processed")
+            {
+                continue;
+            }
+            lines.push(val);
+        }
+    }
+
+    const MAX_TURNS: usize = 28;
+    let render_indices: Vec<Option<usize>> = if lines.len() <= MAX_TURNS {
+        (0..lines.len()).map(Some).collect()
+    } else {
+        let mut idx = Vec::with_capacity(MAX_TURNS + 1);
+        for i in 0..8 {
+            idx.push(Some(i));
+        }
+        idx.push(None);
+        for i in (lines.len() - 18)..lines.len() {
+            idx.push(Some(i));
+        }
+        idx
+    };
+
+    for entry in render_indices {
+        let Some(i) = entry else {
+            let skipped = lines.len().saturating_sub(26);
+            let _ = writeln!(md, "- ... _({skipped} langkah tengah diringkas)_ ...");
+            continue;
+        };
+        let val = &lines[i];
+        let rtype = val.get("record_type").and_then(|v| v.as_str()).unwrap_or("unknown");
+        match rtype {
+            "percept" => {
+                let actor = val.get("actor").and_then(|v| v.as_str()).unwrap_or("?");
+                let place = val.get("place").and_then(|v| v.as_str()).unwrap_or("?");
+                let text = val.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                let _ = writeln!(
+                    md,
+                    "- **[{actor}]** (`{place}`): {}",
+                    truncate_inline(text, 260)
+                );
+            }
+            "gate_decision" => {
+                let outcome = val.get("outcome").and_then(|v| v.as_str()).unwrap_or("?");
+                let _ = writeln!(md, "  - _[Otak S1: `{outcome}`]_");
+            }
+            "model_call" => {
+                let purpose = val.get("purpose").and_then(|v| v.as_str()).unwrap_or("reason");
+                let model = val.get("model").and_then(|v| v.as_str()).unwrap_or("model");
+                let lat = val.get("latency_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+                let tin = val.get("tokens_in").and_then(|v| v.as_u64()).unwrap_or(0);
+                let tout = val.get("tokens_out").and_then(|v| v.as_u64()).unwrap_or(0);
+                let resp = val
+                    .get("raw_response")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("(none)");
+                let _ = writeln!(
+                    md,
+                    "  - _[LLM `{purpose}` ({model}, {lat}ms, {tin}+{tout} tok)]_: `{}`",
+                    truncate_inline(resp, 220)
+                );
+            }
+            "action" => {
+                let cap = val
+                    .get("capability_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("action");
+                let payload = val.get("payload_text").and_then(|v| v.as_str()).unwrap_or("");
+                let _ = writeln!(md, "  - **[Mono -> `{cap}`]**: {}", truncate_inline(payload, 260));
+            }
+            "score_verdict" => {
+                let probe = val.get("probe_id").and_then(|v| v.as_str()).unwrap_or("?");
+                let passed = val.get("passed").and_then(|v| v.as_bool()).unwrap_or(false);
+                let score = val.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let _ = writeln!(
+                    md,
+                    "  - _[Scorer `{probe}`]_: `{}` (`score={score:.3}`)",
+                    if passed { "PASS" } else { "FAIL" }
+                );
+            }
+            _ => {}
+        }
+    }
 }

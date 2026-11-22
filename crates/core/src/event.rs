@@ -831,6 +831,16 @@ pub enum EventDetail {
         context_hint: [f32; 2],
         source_taint: Taint,
     },
+    /// Three-factor Hebbian synaptic feedback applied along normalized presynaptic context features (`V3`).
+    SynapticFeedbackApplied {
+        place: PlaceId,
+        arm: GateArm,
+        reward: f32,
+        is_delayed_one_sided: bool,
+        context_features: [f32; crate::neural::SYNAPTIC_DIM],
+        context_hint: [f32; 2],
+        source_taint: Taint,
+    },
 }
 
 /// Legacy Phase-0 (`v1`) event record layout supported for backward-compatible upcasting.
@@ -1482,16 +1492,20 @@ fn encode_opt_detail(w: &mut BinWriter, detail: Option<&EventDetail>) {
                 }
                 match trace {
                     Some(tr) => {
+                        let has_v3 = tr.neural.world_pred.is_some();
                         let has_v22 = !tr.neural.h_actor_next.is_empty()
                             || tr.neural.compute_tier_probs.is_some()
                             || tr.neural.compute_tier.is_some()
                             || tr.neural.p_user_correction.is_some();
-                        if has_v22 {
+                        if has_v3 {
+                            w.u8(3);
+                            encode_decision_trace(w, tr, true, true);
+                        } else if has_v22 {
                             w.u8(2);
-                            encode_decision_trace(w, tr, true);
+                            encode_decision_trace(w, tr, true, false);
                         } else {
                             w.u8(1);
-                            encode_decision_trace(w, tr, false);
+                            encode_decision_trace(w, tr, false, false);
                         }
                     }
                     None => w.u8(0),
@@ -2224,6 +2238,27 @@ fn encode_opt_detail(w: &mut BinWriter, detail: Option<&EventDetail>) {
             w.f32(context_hint[1]);
             w.u8(encode_taint(*source_taint));
         }
+        EventDetail::SynapticFeedbackApplied {
+            place,
+            arm,
+            reward,
+            is_delayed_one_sided,
+            context_features,
+            context_hint,
+            source_taint,
+        } => {
+            w.u8(43);
+            w.str(place.as_str());
+            w.u8(*arm as u8);
+            w.f32(*reward);
+            w.u8(u8::from(*is_delayed_one_sided));
+            for &f in context_features {
+                w.f32(f);
+            }
+            w.f32(context_hint[0]);
+            w.f32(context_hint[1]);
+            w.u8(encode_taint(*source_taint));
+        }
     }
 }
 
@@ -2404,8 +2439,9 @@ fn decode_opt_detail(r: &mut BinReader<'_>) -> Result<Option<EventDetail>, Event
             };
             let trace = match r.u8()? {
                 0 => None,
-                1 => Some(Box::new(decode_decision_trace(r, false)?)),
-                2 => Some(Box::new(decode_decision_trace(r, true)?)),
+                1 => Some(Box::new(decode_decision_trace(r, false, false)?)),
+                2 => Some(Box::new(decode_decision_trace(r, true, false)?)),
+                3 => Some(Box::new(decode_decision_trace(r, true, true)?)),
                 tag => {
                     return Err(EventFormatError::MalformedRecord(format!(
                         "invalid opt decision trace tag {tag}"
@@ -3057,6 +3093,30 @@ fn decode_opt_detail(r: &mut BinReader<'_>) -> Result<Option<EventDetail>, Event
                 source_taint,
             }))
         }
+        43 => {
+            let place = PlaceId::new(r.string()?);
+            let arm_code = r.u8()?;
+            let arm = GateArm::from_index(usize::from(arm_code)).ok_or_else(|| {
+                EventFormatError::MalformedRecord(format!("invalid gate arm code {arm_code}"))
+            })?;
+            let reward = r.f32()?;
+            let is_delayed_one_sided = r.u8()? != 0;
+            let mut context_features = [0.0_f32; crate::neural::SYNAPTIC_DIM];
+            for slot in &mut context_features {
+                *slot = r.f32()?;
+            }
+            let context_hint = [r.f32()?, r.f32()?];
+            let source_taint = decode_taint(r.u8()?)?;
+            Ok(Some(EventDetail::SynapticFeedbackApplied {
+                place,
+                arm,
+                reward,
+                is_delayed_one_sided,
+                context_features,
+                context_hint,
+                source_taint,
+            }))
+        }
         other => Err(EventFormatError::MalformedRecord(format!(
             "invalid detail tag {other}"
         ))),
@@ -3452,7 +3512,12 @@ fn decode_opt_f32(r: &mut BinReader<'_>) -> Result<Option<f32>, EventFormatError
     }
 }
 
-fn encode_decision_trace(w: &mut BinWriter, tr: &DecisionTrace, include_v22: bool) {
+fn encode_decision_trace(
+    w: &mut BinWriter,
+    tr: &DecisionTrace,
+    include_v22: bool,
+    include_v3: bool,
+) {
     let n = &tr.neural;
     for &x in &n.gate_logits {
         w.f32(x);
@@ -3520,12 +3585,24 @@ fn encode_decision_trace(w: &mut BinWriter, tr: &DecisionTrace, include_v22: boo
             None => w.u8(0),
         }
         encode_opt_f32(w, n.p_user_correction);
+        if include_v3 {
+            match n.world_pred {
+                Some(wp) => {
+                    w.u8(1);
+                    for x in wp {
+                        w.f32(x);
+                    }
+                }
+                None => w.u8(0),
+            }
+        }
     }
 }
 
 fn decode_decision_trace(
     r: &mut BinReader<'_>,
     include_v22: bool,
+    include_v3: bool,
 ) -> Result<DecisionTrace, EventFormatError> {
     let mut gate_logits = [0.0_f32; 4];
     for slot in &mut gate_logits {
@@ -3641,6 +3718,19 @@ fn decode_decision_trace(
     } else {
         (Vec::new(), None, None, None)
     };
+    let world_pred = if include_v3 {
+        match r.u8()? {
+            0 => None,
+            1 => Some([r.f32()?, r.f32()?, r.f32()?]),
+            tag => {
+                return Err(EventFormatError::MalformedRecord(format!(
+                    "invalid opt world_pred tag {tag}"
+                )));
+            }
+        }
+    } else {
+        None
+    };
 
     Ok(DecisionTrace {
         neural: NeuralOutputs {
@@ -3659,6 +3749,7 @@ fn decode_decision_trace(
             compute_tier_probs,
             compute_tier,
             p_user_correction,
+            world_pred,
             model_blake3: neural_model_blake3,
             feature_schema_version: neural_schema_version,
             is_neutral_fallback,

@@ -41,7 +41,7 @@ use super::context_emit::{
 };
 use super::sleep_and_beliefs::{
     flush_recalibration_if_pending, maybe_extract_procedure_from_goal,
-    maybe_run_sleep_consolidation, record_place_adapt_feedback,
+    maybe_run_sleep_consolidation, record_place_adapt_feedback, record_synaptic_feedback,
 };
 
 const DEFAULT_SILENCE_SAMPLE_RATE: f64 = 0.20;
@@ -334,13 +334,43 @@ pub(crate) fn execute_turn<S: Store>(
                         }),
                     );
                     append_and_apply(core, yield_dec)?;
-                    record_place_adapt_feedback(
+                    let wait_syn_feats = core
+                        .state()
+                        .place_adapt
+                        .get(&wait.place)
+                        .and_then(|ad| {
+                            ad.pending_traces
+                                .iter()
+                                .rev()
+                                .find(|t| t.event_id == wait.target_event_id)
+                                .or_else(|| {
+                                    ad.pending_traces
+                                        .iter()
+                                        .rev()
+                                        .find(|t| t.arm == GateArm::Wait)
+                                })
+                                .map(|t| t.features)
+                        })
+                        .unwrap_or([1.0, -1.0, -1.0, 0.0, 0.0, 0.0, -1.0, -1.0]);
+                    record_synaptic_feedback(
                         core,
                         Some(&stored),
                         &wait.place,
                         GateArm::Wait,
-                        0.5,
+                        0.35,
                         false,
+                        wait_syn_feats,
+                        stored.taint,
+                        now,
+                    )?;
+                    record_synaptic_feedback(
+                        core,
+                        Some(&stored),
+                        &wait.place,
+                        GateArm::Go,
+                        -0.25,
+                        false,
+                        wait_syn_feats,
                         stored.taint,
                         now,
                     )?;
@@ -569,6 +599,26 @@ pub(crate) fn execute_turn<S: Store>(
                 {
                     let p_go = gate.neural.gate_probs[3].max(0.15);
                     let reward = -0.35 * (p_corr / p_go).clamp(0.0, 1.0);
+                    let go_feats = core
+                        .state()
+                        .place_adapt
+                        .get(&stored.place)
+                        .and_then(|ad| {
+                            ad.pending_traces
+                                .iter()
+                                .rev()
+                                .find(|t| t.arm == GateArm::Go)
+                                .map(|t| t.features)
+                        })
+                        .unwrap_or_else(|| {
+                            let x_v3 = crate::neural::extract_features_v3_from_state(
+                                core.state(),
+                                &percept,
+                                now,
+                                0,
+                            );
+                            crate::neural::synaptic_features_from_x_num(&x_v3)
+                        });
                     record_place_adapt_feedback(
                         core,
                         Some(&stored),
@@ -576,6 +626,57 @@ pub(crate) fn execute_turn<S: Store>(
                         GateArm::Go,
                         reward,
                         true,
+                        stored.taint,
+                        now,
+                    )?;
+                    record_synaptic_feedback(
+                        core,
+                        Some(&stored),
+                        &stored.place,
+                        GateArm::Go,
+                        reward,
+                        true,
+                        go_feats,
+                        stored.taint,
+                        now,
+                    )?;
+                    record_synaptic_feedback(
+                        core,
+                        Some(&stored),
+                        &stored.place,
+                        GateArm::Wait,
+                        0.20 * (p_corr / p_go).clamp(0.0, 1.0),
+                        true,
+                        go_feats,
+                        stored.taint,
+                        now,
+                    )?;
+                } else if let Some(p_corr) = gate.neural.p_user_correction
+                    && p_corr.is_finite()
+                    && p_corr < 0.35
+                    && stored.actor != core.state().soul_actor_id
+                    && percept.reply_to.is_some()
+                    && let Some(go_trace) = core.state().place_adapt.get(&stored.place).and_then(|ad| {
+                        ad.pending_traces
+                            .iter()
+                            .rev()
+                            .find(|t| t.arm == GateArm::Go)
+                            .cloned()
+                    })
+                    && core
+                        .state()
+                        .event_authors
+                        .get(percept.reply_to.as_ref().expect("is_some"))
+                        .is_some_and(|a| a == &core.state().soul_actor_id)
+                {
+                    record_synaptic_feedback(
+                        core,
+                        Some(&stored),
+                        &stored.place,
+                        GateArm::Go,
+                        0.25,
+                        true,
+                        go_trace.features,
                         stored.taint,
                         now,
                     )?;

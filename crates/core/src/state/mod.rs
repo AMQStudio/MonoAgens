@@ -41,9 +41,11 @@ use crate::gate::decide::decide_gate_with_actor;
 use crate::ledger::PerceptionLedger;
 use crate::neural::{
     AdaptConfig, AdaptFeedback, ComputeTier, DEFAULT_H_DIM, NeuralModel, PlaceAdaptState,
-    RECENT_SOUL_REPAIR_WINDOW_MS, USER_CORRECTION_REPAIR_THRESHOLD, canonical_audience_hash,
-    extract_embedding_for_model, extract_embedding_for_model_config,
-    extract_features_v2_from_state, extract_visible_repair_context, forward_step_with_actor,
+    PlaceCosBaseline, PlaceTurnPerceptionState, RECENT_SOUL_REPAIR_WINDOW_MS, SynapticTrace,
+    USER_CORRECTION_REPAIR_THRESHOLD, canonical_audience_hash, extract_embedding_for_model,
+    extract_embedding_for_model_config, extract_features_v3_from_state,
+    extract_visible_repair_context, forward_step_with_actor, max_visible_memory_cosine,
+    synaptic_features_from_x_num,
 };
 use crate::privacy::build_visible_scope;
 use crate::recall::{ImportanceInputs, MemoryBasis, MemoryEntry};
@@ -142,6 +144,12 @@ pub struct CoreState {
     pub actor_memory: BTreeMap<(PlaceId, [u8; 32], ActorId), ActorMemorySlot>,
     /// Per-place bounded Warm-Start UCB online adaptation equalizer state.
     pub place_adapt: BTreeMap<PlaceId, PlaceAdaptState>,
+    /// Per-place content-blind EWMA cosine baseline for homeostatic surprise (`V3`).
+    #[serde(default)]
+    pub place_cos_baseline: BTreeMap<PlaceId, PlaceCosBaseline>,
+    /// Per-place short-term predictive perception memory (`V3`).
+    #[serde(default)]
+    pub place_perception: BTreeMap<PlaceId, PlaceTurnPerceptionState>,
 
     pub memory_candidates: Vec<CandidateMemory>,
     pub open_promises: BTreeMap<EventId, PromiseSummary>,
@@ -238,6 +246,8 @@ impl CoreState {
             place_memory: BTreeMap::new(),
             actor_memory: BTreeMap::new(),
             place_adapt: BTreeMap::new(),
+            place_cos_baseline: BTreeMap::new(),
+            place_perception: BTreeMap::new(),
             memory_candidates: Vec::new(),
             open_promises: BTreeMap::new(),
             expectation_cues: Vec::new(),
@@ -786,9 +796,10 @@ impl CoreState {
         synthetic_percept.reply_to = reply_to;
         synthetic_percept.embeddings = embeddings.to_vec();
         synthetic_percept.f_modal = percept.numeric_features.f_modal;
+        synthetic_percept.dialogue_act_gap = percept.numeric_features.dialogue_act_gap;
         synthetic_percept.peer_expertise_margin = peer_expertise_margin;
 
-        let x_num = extract_features_v2_from_state(
+        let x_num = extract_features_v3_from_state(
             self,
             &synthetic_percept,
             percept.timestamp_ms,
@@ -865,9 +876,10 @@ impl CoreState {
         synthetic_percept.origin_actor = Some(percept.origin_actor.clone());
         synthetic_percept.embeddings = embeddings.to_vec();
         synthetic_percept.f_modal = percept.numeric_features.f_modal;
+        synthetic_percept.dialogue_act_gap = percept.numeric_features.dialogue_act_gap;
         synthetic_percept.peer_expertise_margin = peer_expertise_margin;
 
-        let x_num = extract_features_v2_from_state(self, &synthetic_percept, percept.timestamp_ms, 0);
+        let x_num = extract_features_v3_from_state(self, &synthetic_percept, percept.timestamp_ms, 0);
         let e_256 = extract_embedding_for_model_config(&synthetic_percept, &m.config);
         let h_dim = m.config.h_dim;
         let h_prev = self
@@ -1647,6 +1659,33 @@ impl CoreState {
                         );
                     }
                 }
+                Some(EventDetail::SynapticFeedbackApplied {
+                    place,
+                    arm,
+                    reward,
+                    is_delayed_one_sided,
+                    context_features,
+                    context_hint,
+                    source_taint,
+                }) => {
+                    let adapt_cfg = self.effective_adapt_config();
+                    if adapt_cfg.online_adaptation
+                        && !(*source_taint == Taint::Untrusted
+                            && (*reward < 0.0 || *is_delayed_one_sided))
+                    {
+                        let st = self.place_adapt.entry(place.clone()).or_default();
+                        st.record_synaptic_feedback_at(
+                            *arm,
+                            *reward,
+                            *is_delayed_one_sided,
+                            context_features,
+                            *context_hint,
+                            &adapt_cfg,
+                            Some(record.timestamp_ms),
+                            *source_taint,
+                        );
+                    }
+                }
                 _ => {}
             },
             EventKind::BodyState => {
@@ -2193,14 +2232,95 @@ impl CoreState {
             hist.drain(0..drain);
         }
 
-        let (embeddings, reply_to) = match &percept.detail {
+        let (addressees, named, embeddings, reply_to, peer_expertise_margin) = match &percept.detail
+        {
             Some(EventDetail::PerceptMeta {
+                addressees,
+                named,
                 embeddings,
                 reply_to,
+                peer_expertise_margin,
                 ..
-            }) => (embeddings.clone(), *reply_to),
-            _ => (Vec::new(), None),
+            }) => (
+                addressees.clone(),
+                named.clone(),
+                embeddings.clone(),
+                *reply_to,
+                *peer_expertise_margin,
+            ),
+            _ => (Vec::new(), Vec::new(), Vec::new(), None, None),
         };
+
+        let adapt_cfg = self.effective_adapt_config();
+        if adapt_cfg.online_adaptation
+            && percept.taint != Taint::Untrusted
+            && let Some(tr) = trace
+            && !tr.commitment_bypass
+            && !tr.neural.is_neutral_fallback
+        {
+            let mut syn_percept = Percept::minimal(
+                percept.actor.clone(),
+                percept.place.clone(),
+                percept.audience.clone(),
+                percept.timestamp_ms,
+                percept.payload.clone(),
+            );
+            syn_percept.taint = percept.taint;
+            syn_percept.origin_actor = Some(percept.origin_actor.clone());
+            syn_percept.addressees = addressees;
+            syn_percept.named = named;
+            syn_percept.reply_to = reply_to;
+            syn_percept.embeddings = embeddings.clone();
+            syn_percept.f_modal = percept.numeric_features.f_modal;
+            syn_percept.dialogue_act_gap = percept.numeric_features.dialogue_act_gap;
+            syn_percept.peer_expertise_margin = peer_expertise_margin;
+            let x_v3 =
+                extract_features_v3_from_state(self, &syn_percept, percept.timestamp_ms, 0);
+            let syn_trace = SynapticTrace {
+                event_id: percept.id,
+                arm: tr.neural.predicted_class,
+                features: synaptic_features_from_x_num(&x_v3),
+                timestamp_ms: percept.timestamp_ms,
+            };
+            self.place_adapt
+                .entry(percept.place.clone())
+                .or_default()
+                .record_synaptic_trace(syn_trace, &adapt_cfg);
+        }
+
+        if percept.actor != self.soul_actor_id && !embeddings.is_empty() {
+            let max_cos = max_visible_memory_cosine(
+                self,
+                &embeddings,
+                &percept.audience,
+                &percept.place,
+                percept.timestamp_ms,
+            );
+            if max_cos > 0.0 {
+                self.place_cos_baseline
+                    .entry(percept.place.clone())
+                    .or_default()
+                    .observe(max_cos);
+            }
+        }
+        let gap_for_turn = percept
+            .numeric_features
+            .dialogue_act_gap
+            .map(f64::from)
+            .or_else(|| {
+                self.dialogue_act_head
+                    .as_ref()
+                    .and_then(|head| head.score(&embeddings))
+            });
+        self.place_perception
+            .entry(percept.place.clone())
+            .or_default()
+            .observe_turn(
+                percept.actor == self.soul_actor_id,
+                gap_for_turn,
+                embeddings.first(),
+                percept.timestamp_ms,
+            );
 
         if percept.id.as_u64() != 0 {
             let mut ep_participants = BTreeSet::new();

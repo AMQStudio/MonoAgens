@@ -15,7 +15,7 @@ use crate::consolidation::{
 use crate::context::{ContextSections, ModelTask};
 use crate::event::{DoorKind, EventDetail, EventKind, EventRecord, NumericFeatures};
 use crate::expectations::ExpectationRecord;
-use crate::neural::GateArm;
+use crate::neural::{GateArm, SYNAPTIC_DIM};
 use crate::ports::{ContextPlan, DoorDecision, Doors, ModelPurpose, Store};
 use crate::recall::MemoryBasis;
 use crate::{Core, CoreError, Effect};
@@ -640,6 +640,69 @@ pub(super) fn record_place_adapt_feedback<S: Store>(
         arm,
         reward,
         is_delayed_one_sided,
+        context_hint,
+        source_taint,
+    });
+    let ev = match cause {
+        Some(c) => EventRecord::derived_from(
+            c,
+            EventKind::Verdict,
+            now,
+            ActorId::new("core"),
+            place.clone(),
+            c.audience.clone(),
+            Some(source_taint),
+            NumericFeatures::default(),
+            OpaquePayload::default(),
+            Vec::new(),
+            detail,
+        ),
+        None => EventRecord::new_root(
+            EventKind::Verdict,
+            now,
+            ActorId::new("core"),
+            place.clone(),
+            Audience::new([core.state().soul_actor_id.clone()]),
+            OriginActor::new(core.state().soul_actor_id.clone()),
+            source_taint,
+            NumericFeatures::default(),
+            OpaquePayload::default(),
+            Vec::new(),
+            detail,
+        ),
+    };
+    let _ = append_and_apply(core, ev)?;
+    Ok(())
+}
+
+/// Records three-factor Hebbian synaptic feedback along `context_features` strictly via an
+/// audited `SynapticFeedbackApplied` event (`V3`), enforcing `online_adaptation` & `Taint` guards.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn record_synaptic_feedback<S: Store>(
+    core: &mut Core<S>,
+    cause: Option<&EventRecord>,
+    place: &PlaceId,
+    arm: GateArm,
+    reward: f32,
+    is_delayed_one_sided: bool,
+    context_features: [f32; SYNAPTIC_DIM],
+    source_taint: Taint,
+    now: Time,
+) -> Result<(), CoreError> {
+    let adapt_cfg = core.config().effective_adapt_config();
+    if !adapt_cfg.online_adaptation {
+        return Ok(());
+    }
+    if source_taint == Taint::Untrusted && (reward < 0.0 || is_delayed_one_sided) {
+        return Ok(());
+    }
+    let context_hint = core.state().compute_place_context_hint(place);
+    let detail = Some(EventDetail::SynapticFeedbackApplied {
+        place: place.clone(),
+        arm,
+        reward,
+        is_delayed_one_sided,
+        context_features,
         context_hint,
         source_taint,
     });

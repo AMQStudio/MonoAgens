@@ -228,6 +228,7 @@ fn cli_chat_configured_scripted_executes_body_cli_action() {
         ChatArgs {
             messages: vec!["hi soul".to_owned()],
             data_dir: None,
+            ..ChatArgs::default()
         },
         Some(provider),
         &mut stdout,
@@ -832,6 +833,7 @@ fn cli_two_session_prior_change_and_offline_replay_reproduces_both_sessions() {
         ChatArgs {
             messages: vec!["session 1 message".to_owned()],
             data_dir: None,
+            ..ChatArgs::default()
         },
         Some(Arc::new(ScriptedModelProvider::from_replies([
             ScriptedReply::text(act_reply_1),
@@ -888,6 +890,7 @@ fn cli_two_session_prior_change_and_offline_replay_reproduces_both_sessions() {
         ChatArgs {
             messages: vec!["session 2 message".to_owned()],
             data_dir: None,
+            ..ChatArgs::default()
         },
         Some(Arc::new(ScriptedModelProvider::from_replies([
             ScriptedReply::text(act_reply_2),
@@ -961,6 +964,7 @@ fn cli_chat_fails_startup_when_soul_core_config_is_missing_or_invalid() {
         ChatArgs {
             messages: vec!["hi".to_owned()],
             data_dir: None,
+            ..ChatArgs::default()
         },
         Some(Arc::new(ScriptedModelProvider::new())),
         &mut stdout,

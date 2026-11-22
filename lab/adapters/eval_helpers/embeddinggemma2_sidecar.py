@@ -156,6 +156,9 @@ def main() -> None:
                 if not isinstance(text, str):
                     self._write_json(400, {"error": "missing 'text' string"})
                     return
+                prefix = req.get("instruction_prefix")
+                if isinstance(prefix, str) and prefix and not text.startswith(prefix):
+                    text = f"{prefix}{text}"
                 dim = int(req.get("dimensions", 256))
                 norm = bool(req.get("normalize", True))
                 with encode_lock:

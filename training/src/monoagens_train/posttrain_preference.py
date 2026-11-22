@@ -154,6 +154,7 @@ def build_stage4_preference_targets(
     """Constructs preference pairs, KTO desirability targets, and CFPO timing masks from v1 or v2 shards."""
     bsz, seq_len, feat_dim = x_num.shape
     is_v2 = feat_dim >= 32
+    is_v3 = feat_dim >= 36
     active = mask > 0.5
     direct = (x_num[..., 0] > 0.5) | (x_num[..., 1] > 0.5) | (x_num[..., 3] > 0.5)
 
@@ -194,6 +195,21 @@ def build_stage4_preference_targets(
         is_repair_correction = np.zeros((bsz, seq_len), dtype=bool)
         is_self_repair_wait = np.zeros((bsz, seq_len), dtype=bool)
         is_habituation_silent = np.zeros((bsz, seq_len), dtype=bool)
+
+    is_proactive_help = np.zeros((bsz, seq_len), dtype=bool)
+    if dataset_ids is not None and len(dataset_ids) == bsz:
+        is_pg_ep = np.array([str(ds) == "proactive_group_v22" for ds in dataset_ids], dtype=bool)[:, None]
+        if is_v3:
+            is_proactive_help = (
+                active
+                & is_pg_ep
+                & (~direct)
+                & (y_gate == GATE_GO)
+                & (x_num[..., 32] >= 0.55)
+                & (x_num[..., 33] >= 0.45)
+            )
+        else:
+            is_proactive_help = active & is_pg_ep & (~direct) & (y_gate == GATE_GO) & (x_num[..., 13] >= 0.45)
 
     unaddressed = (~direct) | is_peer_pingpong | is_peer_deferral
 
@@ -250,11 +266,15 @@ def build_stage4_preference_targets(
     pos_2[is_go] = GATE_GO
     neg_2_i[is_go] = GATE_SILENT
     m_2[is_go] = np.where(
-        direct[is_go] | is_repair_correction[is_go] | is_peer_own_expertise[is_go], 1.0, 0.7
+        direct[is_go] | is_repair_correction[is_go] | is_peer_own_expertise[is_go] | is_proactive_help[is_go],
+        1.0,
+        0.7,
     )
     kto_und_idx[is_go] = GATE_SILENT
     kto_und_mask[is_go] = np.where(
-        direct[is_go] | is_repair_correction[is_go] | is_peer_own_expertise[is_go], 1.0, 0.4
+        direct[is_go] | is_repair_correction[is_go] | is_peer_own_expertise[is_go] | is_proactive_help[is_go],
+        1.0,
+        0.4,
     )
 
     # Internal note: Note > Silent, Note > Go
@@ -282,6 +302,10 @@ def build_stage4_preference_targets(
         proc_ep = np.array([str(ds).startswith("procedural_timing") for ds in dataset_ids], dtype=bool)
         if len(proc_ep) == bsz:
             cfpo_mask[proc_ep] = np.where(active[proc_ep], 1.0, cfpo_mask[proc_ep])
+        pg_ep = np.array([str(ds) == "proactive_group_v22" for ds in dataset_ids], dtype=bool)
+        if len(pg_ep) == bsz:
+            # Semantic question-vs-statement discrimination relies on real e_256 vectors.
+            cfpo_mask[pg_ep] = 0.0
 
     return {
         "pos_1": pos_1,

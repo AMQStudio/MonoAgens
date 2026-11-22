@@ -17,7 +17,7 @@ use monoagens_body_sdk::{
     ActorId, ApprovalResolveParams, ApprovalResolveResult, Audience, BodyDiscoverParams,
     BodyDiscoverResult, BodyHandler, BodyId, CURRENT_PROTOCOL_VERSION, CapabilityDescriptor,
     CapabilityFlags, CapabilityId, ChannelId, CorrelationId, MetaValue, OpaquePayload, OriginActor,
-    PerceptEmitParams, PerceptEmitResult, PlaceId, Receipt, ReceiptOutcome, SensedEffect, Taint,
+    PerceptEmitParams, PerceptEmitResult, PlaceId, Receipt, ReceiptOutcome, Taint,
     TerminationReason, Time, Waist2Error, Waist2Headers, sort_capabilities,
 };
 use serde_json::json;
@@ -306,12 +306,7 @@ impl<S: TerminalOutputSink> CliBody<S> {
             },
             typical_latency_ms: 0,
             capability_schema_hash: capability_schema_hash(&schema),
-            sensed_effect: Some(SensedEffect {
-                channel: ChannelId::new(self.place.as_str()),
-                window_ms: 500,
-                noise: 0.0,
-                delta_pred: 1.0,
-            }),
+            sensed_effect: None,
         }
     }
 }

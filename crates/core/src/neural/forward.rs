@@ -10,10 +10,11 @@ use core::f32::consts::TAU;
 
 use serde::{Deserialize, Serialize};
 
-use crate::neural::adapt::{AdaptConfig, PlaceAdaptState};
+use crate::neural::adapt::{AdaptConfig, PlaceAdaptState, synaptic_features_from_x_num};
 use crate::neural::weights::{NeuralModel, RecurrentCellWeights};
 use crate::neural::{
-    ComputeTier, DEFAULT_NUM_FEATURES_V1, DEFAULT_NUM_FEATURES_V2, GateClass, NeuralError,
+    ComputeTier, DEFAULT_NUM_FEATURES_V1, DEFAULT_NUM_FEATURES_V2, DEFAULT_NUM_FEATURES_V3,
+    GateClass, NeuralError,
 };
 
 const LAYER_NORM_EPS: f32 = 1e-5;
@@ -56,6 +57,9 @@ pub struct NeuralOutputs {
     /// Optional V2.2 calibrated probability that the percept corrects the soul's prior turn (`[0, 1]`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub p_user_correction: Option<f32>,
+    /// Optional V3 self-supervised predictive coding world-model forecast `[peer_reply, next_gap, topic_shift]` in `[0, 1]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub world_pred: Option<[f32; 3]>,
     /// `BLAKE3` digest of the model artifact (`None` when running in neutral fallback).
     pub model_blake3: Option<[u8; 32]>,
     /// Feature schema version declared by the model (`0` in neutral fallback).
@@ -91,6 +95,7 @@ pub fn neutral_outputs_with_actor(h_prev: &[f32], h_actor_prev: Option<&[f32]>) 
         compute_tier_probs: None,
         compute_tier: None,
         p_user_correction: None,
+        world_pred: None,
         model_blake3: None,
         feature_schema_version: 0,
         is_neutral_fallback: true,
@@ -135,7 +140,13 @@ pub fn forward_step_with_actor(
 
     let cfg = &m.config;
     validate_input_slice("e_256", e_256, cfg.d_in_emb)?;
-    let x_num_eff = if x_num.len() == DEFAULT_NUM_FEATURES_V2 && cfg.d_in_num == DEFAULT_NUM_FEATURES_V1 {
+    let x_num_eff = if (x_num.len() == DEFAULT_NUM_FEATURES_V2
+        || x_num.len() == DEFAULT_NUM_FEATURES_V3)
+        && cfg.d_in_num <= x_num.len()
+        && matches!(
+            cfg.d_in_num,
+            DEFAULT_NUM_FEATURES_V1 | DEFAULT_NUM_FEATURES_V2 | DEFAULT_NUM_FEATURES_V3
+        ) {
         &x_num[..cfg.d_in_num]
     } else {
         x_num
@@ -264,12 +275,14 @@ pub fn forward_step_with_actor(
         }
     }
 
-    // Apply final_norm and optional per-place FiLM adaptation per ensemble member,
+    // Apply final_norm and optional per-place FiLM + three-factor synaptic adaptation per ensemble member,
     // and compute the ensemble-mean representation h_mean.
+    let syn_feats = synaptic_features_from_x_num(x_num);
     let (adapt_active, logit_offsets) = match adapt {
-        Some((state, adapt_cfg)) if adapt_cfg.online_adaptation => {
-            (true, state.effective_logit_offsets(adapt_cfg))
-        }
+        Some((state, adapt_cfg)) if adapt_cfg.online_adaptation => (
+            true,
+            state.effective_synaptic_offsets(&syn_feats, adapt_cfg),
+        ),
         _ => (false, [0.0_f32; 4]),
     };
 
@@ -417,6 +430,18 @@ pub fn forward_step_with_actor(
         compute_tier_probs,
         compute_tier,
         p_user_correction,
+        world_pred: m.v3_world.as_ref().map(|wp| {
+            let mut raw = [0.0_f32; 3];
+            linear_into(
+                &wp.world_pred_weight,
+                Some(&wp.world_pred_bias),
+                &h_mean,
+                3,
+                d_model,
+                &mut raw,
+            );
+            [sigmoid(raw[0]), sigmoid(raw[1]), sigmoid(raw[2])]
+        }),
         model_blake3: Some(m.blake3),
         feature_schema_version: cfg.feature_schema_version,
         is_neutral_fallback: false,

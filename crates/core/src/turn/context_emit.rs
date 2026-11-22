@@ -909,10 +909,19 @@ pub(super) fn dispatch_action_and_open_predictions<S: Store>(
                     });
 
                 // Open Effect prediction (declared sensor effect or echo tracker).
-                let sensed = action
-                    .expected_effect
-                    .clone()
-                    .or_else(|| cap_desc.as_ref().and_then(|d| d.sensed_effect.clone()));
+                // Only honor LLM-supplied `expected_effect` when the body capability actually
+                // declares a physical `sensed_effect` (or when no catalog entry exists in unit tests).
+                let body_allows_sensed = cap_desc
+                    .as_ref()
+                    .is_none_or(|d| d.sensed_effect.is_some());
+                let sensed = if body_allows_sensed {
+                    action
+                        .expected_effect
+                        .clone()
+                        .or_else(|| cap_desc.as_ref().and_then(|d| d.sensed_effect.clone()))
+                } else {
+                    None
+                };
                 let (declared_sensor, eff_channel, eff_window_ms, delta_pred, sigma_ch) =
                     if let Some(se) = sensed {
                         (

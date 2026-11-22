@@ -28,6 +28,7 @@ from monoagens_train.features import (
     PerceptNumericInputsV2,
     build_x_num,
     build_x_num_v2,
+    populate_v3_sequence_dynamics,
 )
 
 SEQ_LEN_DEFAULT = 24
@@ -68,7 +69,7 @@ def _rotate_on_sphere(vec: np.ndarray, angle_deg: float, rng: np.random.Generato
 
 
 def _build_features(inp: PerceptNumericInputsV2, schema_version: int) -> np.ndarray:
-    if schema_version == 2:
+    if schema_version >= 2:
         return build_x_num_v2(inp)
     return build_x_num(inp)
 
@@ -79,10 +80,12 @@ def _generate_split(
     rng: np.random.Generator,
     schema_version: int = 1,
 ) -> dict[str, np.ndarray]:
-    if schema_version not in (1, 2):
+    if schema_version not in (1, 2, 3):
         raise ValueError(f"Unsupported schema_version: {schema_version}")
-    n_feat = NUM_FEATURES_V2 if schema_version == 2 else NUM_FEATURES
-    n_regimes = 8 if schema_version == 2 else 4
+    gen_schema = 2 if schema_version >= 2 else 1
+    n_feat = NUM_FEATURES_V2 if gen_schema == 2 else NUM_FEATURES
+    n_regimes = 8 if gen_schema == 2 else 4
+    ds_label = "procedural_timing_v22" if gen_schema == 2 else "procedural_timing"
 
     e_256 = np.zeros((n_sequences, seq_len, EMB_DIM), dtype=np.float32)
     x_num = np.zeros((n_sequences, seq_len, n_feat), dtype=np.float32)
@@ -92,13 +95,11 @@ def _generate_split(
     y_compute_tier = np.full((n_sequences, seq_len), COMPUTE_TIER_STANDARD, dtype=np.int64)
     y_user_correction = np.zeros((n_sequences, seq_len), dtype=np.float32)
     v22_mask = np.zeros((n_sequences, seq_len), dtype=np.float32)
-    zeros_f = np.zeros((n_sequences, seq_len), dtype=np.float32)
-    ds_label = "procedural_timing_v22" if schema_version == 2 else "procedural_timing"
     dataset_id = np.full((n_sequences,), ds_label, dtype="<U24")
 
     for i in range(n_sequences):
         regime = i % n_regimes
-        vec_drop = 0.65 if schema_version == 2 else 0.70
+        vec_drop = 0.65 if gen_schema == 2 else 0.70
         n_participants = int(rng.integers(3, 18))
 
         if regime == 0:
@@ -842,6 +843,10 @@ def _generate_split(
                     y_user_correction[i, 1] = 0.0
                     mask[i, 1] = 1.0
                     v22_mask[i, 1] = 1.0
+
+    zeros_f = np.zeros((n_sequences, seq_len), dtype=np.float32)
+    if schema_version == 3:
+        x_num = populate_v3_sequence_dynamics(x_num, e_256, y_gate, mask)
 
     return {
         "e_256": e_256,

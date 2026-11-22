@@ -195,8 +195,28 @@ fn tighten_thought_batch_constraints(val: &mut Value) {
                             .and_then(Value::as_array)
                             .is_some_and(|arr| arr.len() == 1 && arr[0].as_str() == Some("act"))
                 });
-                if is_act_variant && let Some(Value::Object(places)) = props.get_mut("places") {
-                    places.insert("minItems".to_owned(), Value::from(1));
+                if is_act_variant {
+                    if let Some(Value::Object(places)) = props.get_mut("places") {
+                        places.insert("minItems".to_owned(), Value::from(1));
+                    }
+                    if props.contains_key("payload") {
+                        props.insert(
+                            "payload".to_owned(),
+                            serde_json::json!({
+                                "anyOf": [
+                                    { "type": "string" },
+                                    {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 255
+                                        }
+                                    }
+                                ]
+                            }),
+                        );
+                    }
                 }
             }
             for child in map.values_mut() {
@@ -537,7 +557,19 @@ fn parse_single_act(
                 .with_act(idx, Some(act_kind.to_owned())));
             }
             check_string_array(obj, &prefix, "people", idx, act_kind)?;
-            check_u8_array(obj, &prefix, "payload", idx, act_kind)?;
+            let mut normalized_val = val.clone();
+            if let Some(Value::String(text_payload)) = obj.get("payload") {
+                let bytes_json: Vec<Value> = text_payload
+                    .as_bytes()
+                    .iter()
+                    .map(|&b| Value::from(b))
+                    .collect();
+                if let Some(norm_obj) = normalized_val.as_object_mut() {
+                    norm_obj.insert("payload".to_owned(), Value::Array(bytes_json));
+                }
+            } else {
+                check_u8_array(obj, &prefix, "payload", idx, act_kind)?;
+            }
             let rubric = check_rubric_fields(obj, &prefix, idx, act_kind)?;
             check_u64_array(obj, &prefix, "used_ids", idx, act_kind)?;
             if let Some(exp) = obj.get("expected").filter(|v| !v.is_null()) {
@@ -549,7 +581,7 @@ fn parse_single_act(
                 )?;
             }
             check_opt_string(obj, &prefix, "domain", idx, act_kind)?;
-            let act: ThoughtAct = serde_json::from_value(val.clone()).map_err(|err| {
+            let act: ThoughtAct = serde_json::from_value(normalized_val).map_err(|err| {
                 FailedWake::new(&prefix, format!("failed to decode act: {err}"))
                     .with_act(idx, Some(act_kind.to_owned()))
             })?;

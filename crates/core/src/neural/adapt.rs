@@ -8,10 +8,55 @@
 //! Setting `online_adaptation = false` completely isolates base-model behavior:
 //! adaptation state is neither applied during inference nor mutated on feedback.
 
-use monoagens_protocol::{Taint, Time};
+use monoagens_protocol::{EventId, Taint, Time};
 use serde::{Deserialize, Serialize};
 
 use crate::neural::{GateClass, NeuralError};
+
+/// Dimensionality of the compact content-blind presynaptic context vector (`W_fast` rows).
+pub const SYNAPTIC_DIM: usize = 8;
+
+/// Maximum per-place pending presynaptic eligibility traces retained for delayed credit assignment.
+const MAX_SYNAPTIC_TRACES_PER_PLACE: usize = 6;
+
+/// Presynaptic context snapshot recorded alongside a non-committed gate decision (`V3`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SynapticTrace {
+    pub event_id: EventId,
+    pub arm: GateArm,
+    pub features: [f32; SYNAPTIC_DIM],
+    pub timestamp_ms: Time,
+}
+
+/// Extracts a bounded `[-1.0, 1.0]` content-blind presynaptic feature vector from `x_num` (`18d`,
+/// `32d`, or `36d`) for three-factor synaptic fast-weight plasticity (`W_fast`).
+#[must_use]
+pub fn synaptic_features_from_x_num(x_num: &[f32]) -> [f32; SYNAPTIC_DIM] {
+    let u01_or = |idx: usize, default: f32| -> f32 {
+        x_num
+            .get(idx)
+            .copied()
+            .filter(|v| v.is_finite())
+            .map_or(default, |v| v.clamp(0.0, 1.0))
+    };
+    let directness = u01_or(0, 0.0).max(u01_or(1, 0.0));
+    let dyadic = u01_or(3, 0.0);
+    let mem_surprise = u01_or(33, 0.5);
+    let gap = u01_or(32, 0.5);
+    let topic_shift = u01_or(34, 0.5);
+    let repair_or_reply = u01_or(19, 0.0).max(u01_or(22, 0.0));
+    let automated_peer = u01_or(28, 0.0);
+    [
+        1.0,
+        directness * 2.0 - 1.0,
+        dyadic * 2.0 - 1.0,
+        mem_surprise * 2.0 - 1.0,
+        gap * 2.0 - 1.0,
+        topic_shift * 2.0 - 1.0,
+        repair_or_reply * 2.0 - 1.0,
+        automated_peer * 2.0 - 1.0,
+    ]
+}
 
 /// Default maximum magnitude for any per-place adaptation offset or FiLM scalar.
 pub const DEFAULT_MAX_ADAPT_DELTA: f32 = 0.5;
@@ -279,6 +324,12 @@ pub struct PlaceAdaptState {
     /// Bounded `MemCon`-style discrete recall-depth bandit state (`Skip / Light / Standard / DeepPlusProc`).
     #[serde(default)]
     pub recall_depth_bandit: RecallDepthBanditState,
+    /// Three-factor associative fast-weight matrix `W_fast` (`[arm][syn_feature]`) clamped to `[-max_d, max_d]`.
+    #[serde(default)]
+    pub synaptic_weights: [[f32; SYNAPTIC_DIM]; 4],
+    /// Recent per-place presynaptic eligibility traces for delayed outcome neuromodulation.
+    #[serde(default)]
+    pub pending_traces: Vec<SynapticTrace>,
 }
 
 impl Default for PlaceAdaptState {
@@ -300,6 +351,8 @@ impl PlaceAdaptState {
             total_pulls: 0,
             last_updated_ms: None,
             recall_depth_bandit: RecallDepthBanditState::new(),
+            synaptic_weights: [[0.0; SYNAPTIC_DIM]; 4],
+            pending_traces: Vec::new(),
         }
     }
 
@@ -336,6 +389,9 @@ impl PlaceAdaptState {
             for i in 0..4 {
                 self.arm_reward_sums[i] *= gamma;
                 self.arm_pulls[i] = ((self.arm_pulls[i] as f64) * gamma).floor() as u64;
+                for w in &mut self.synaptic_weights[i] {
+                    *w *= gamma_f32;
+                }
             }
             self.total_pulls = self.arm_pulls.iter().sum();
             self.recall_depth_bandit.apply_decay_factor(gamma);
@@ -384,6 +440,114 @@ impl PlaceAdaptState {
             out[i] = (base + ucb_bonus).clamp(-max_d, max_d);
         }
         out
+    }
+
+    /// Returns contextual gate logit offsets combining scalar UCB offsets with `W_fast . features`,
+    /// clamped within `[-max_adapt_delta, +max_adapt_delta]`. When `synaptic_weights` are zero,
+    /// matches [`Self::effective_logit_offsets`] bit-for-bit.
+    #[must_use]
+    pub fn effective_synaptic_offsets(
+        &self,
+        synaptic_features: &[f32; SYNAPTIC_DIM],
+        config: &AdaptConfig,
+    ) -> [f32; 4] {
+        if !config.online_adaptation {
+            return [0.0; 4];
+        }
+        let max_d = if config.max_adapt_delta.is_finite() && config.max_adapt_delta > 0.0 {
+            config.max_adapt_delta
+        } else {
+            DEFAULT_MAX_ADAPT_DELTA
+        };
+        let scalar = self.effective_logit_offsets(config);
+        let mut out = [0.0_f32; 4];
+        for (arm_idx, &base_scalar) in scalar.iter().enumerate() {
+            let mut fast_dot = 0.0_f32;
+            for j in 0..SYNAPTIC_DIM {
+                let w = self.synaptic_weights[arm_idx][j];
+                let f = synaptic_features[j];
+                if w.is_finite() && f.is_finite() {
+                    fast_dot += w * f;
+                }
+            }
+            out[arm_idx] = (base_scalar + fast_dot).clamp(-max_d, max_d);
+        }
+        out
+    }
+
+    /// Records a bounded presynaptic eligibility trace for subsequent delayed outcome attribution.
+    pub fn record_synaptic_trace(&mut self, trace: SynapticTrace, config: &AdaptConfig) {
+        if !config.online_adaptation {
+            return;
+        }
+        if let Some(pos) = self
+            .pending_traces
+            .iter()
+            .position(|t| t.event_id == trace.event_id)
+        {
+            self.pending_traces[pos] = trace;
+        } else {
+            self.pending_traces.push(trace);
+        }
+        if self.pending_traces.len() > MAX_SYNAPTIC_TRACES_PER_PLACE {
+            let drain = self.pending_traces.len() - MAX_SYNAPTIC_TRACES_PER_PLACE;
+            self.pending_traces.drain(0..drain);
+        }
+    }
+
+    /// Applies three-factor Hebbian plasticity `Delta W_fast[arm, j] = lr * decay * reward * f_j`
+    /// alongside scalar/FiLM updates, enforcing `online_adaptation`, `apply_time_decay`, and
+    /// `Taint::Untrusted` poisoning protections (`C-4`, `C-10`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_synaptic_feedback_at(
+        &mut self,
+        arm: GateArm,
+        reward: f32,
+        is_delayed_one_sided: bool,
+        synaptic_features: &[f32; SYNAPTIC_DIM],
+        context_hint: [f32; 2],
+        config: &AdaptConfig,
+        now_ms: Option<Time>,
+        source_taint: Taint,
+    ) {
+        self.record_feedback_at(
+            AdaptFeedback {
+                arm,
+                reward,
+                is_delayed_one_sided,
+                context_hint,
+            },
+            config,
+            now_ms,
+            source_taint,
+        );
+        if !config.online_adaptation || !reward.is_finite() {
+            return;
+        }
+        if source_taint == Taint::Untrusted && (reward < 0.0 || is_delayed_one_sided) {
+            return;
+        }
+        let max_d = if config.max_adapt_delta.is_finite() && config.max_adapt_delta > 0.0 {
+            config.max_adapt_delta
+        } else {
+            DEFAULT_MAX_ADAPT_DELTA
+        };
+        let decay = if is_delayed_one_sided {
+            config.delayed_negative_decay.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let step = config.learning_rate.max(0.0) * decay * reward.clamp(-1.0, 1.0);
+        let arm_idx = arm as usize;
+        for (j, slot) in self.synaptic_weights[arm_idx].iter_mut().enumerate() {
+            let cur = sanitize_clamped(*slot, max_d);
+            let f_j = if synaptic_features[j].is_finite() {
+                synaptic_features[j].clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
+            *slot = (cur + step * f_j).clamp(-max_d, max_d);
+        }
     }
 
     /// Applies bounded FiLM scale and shift modulation to the trunk representation slice.
@@ -829,5 +993,73 @@ mod tests {
                 < st.recall_depth_bandit.arm_reward_sums[RecallDepthArm::DeepPlusProc as usize]
         );
         assert!(decayed.recall_depth_bandit.total_pulls < st.recall_depth_bandit.total_pulls);
+    }
+
+    #[test]
+    fn three_factor_synaptic_weights_isolate_banter_from_direct_requests() {
+        let cfg = AdaptConfig::default();
+        let mut st = PlaceAdaptState::new();
+
+        // Context A: unaddressed banter (directness = 0.0, mem_surprise = 0.1, gap = 0.1)
+        let mut x_banter = vec![0.0_f32; 36];
+        x_banter[32] = 0.1;
+        x_banter[33] = 0.1;
+        x_banter[34] = 0.2;
+        let f_banter = synaptic_features_from_x_num(&x_banter);
+
+        // Context B: direct epistemic question (named = 1.0, mem_surprise = 0.9, gap = 0.95)
+        let mut x_direct = vec![0.0_f32; 36];
+        x_direct[0] = 1.0;
+        x_direct[32] = 0.95;
+        x_direct[33] = 0.90;
+        x_direct[34] = 0.85;
+        let f_direct = synaptic_features_from_x_num(&x_direct);
+
+        // Untrusted negative feedback must NOT alter synaptic_weights.
+        st.record_synaptic_feedback_at(
+            GateArm::Go,
+            -0.8,
+            true,
+            &f_banter,
+            [0.0, 0.0],
+            &cfg,
+            Some(Time::from_millis(1_000)),
+            Taint::Untrusted,
+        );
+        assert_eq!(st.synaptic_weights, [[0.0; SYNAPTIC_DIM]; 4]);
+
+        // Trusted negative on banter + positive on direct epistemic turn.
+        for step in 0..4 {
+            let ts = Time::from_millis(2_000 + step * 1_000);
+            st.record_synaptic_feedback_at(
+                GateArm::Go,
+                -0.6,
+                false,
+                &f_banter,
+                [0.0, 0.0],
+                &cfg,
+                Some(ts),
+                Taint::Trusted,
+            );
+            st.record_synaptic_feedback_at(
+                GateArm::Go,
+                0.6,
+                false,
+                &f_direct,
+                [1.0, 0.9],
+                &cfg,
+                Some(ts),
+                Taint::Trusted,
+            );
+        }
+
+        let off_banter = st.effective_synaptic_offsets(&f_banter, &cfg);
+        let off_direct = st.effective_synaptic_offsets(&f_direct, &cfg);
+        assert!(
+            off_direct[GateArm::Go as usize] > off_banter[GateArm::Go as usize],
+            "direct epistemic Go offset ({}) must stay higher than banter Go offset ({})",
+            off_direct[GateArm::Go as usize],
+            off_banter[GateArm::Go as usize]
+        );
     }
 }

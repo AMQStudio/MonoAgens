@@ -175,6 +175,8 @@ def export_golden_fixture(
                         if "p_user_correction" in out
                         else None
                     )
+                    if "world_pred" in out:
+                        step_rec["expected_world_pred"] = [float(v) for v in out["world_pred"][0].numpy()]
 
                 steps.append(step_rec)
 
@@ -191,6 +193,8 @@ def export_golden_fixture(
                 "has_phase2_heads": arch.has_phase2_heads,
                 "has_phase3_heads": arch.has_phase3_heads,
                 "has_v22_heads": arch.has_v22_heads,
+                "has_v3_world_head": arch.has_v3_world_head,
+                "has_info_gap_head": arch.has_info_gap_head,
                 "steps": steps,
             }
         )

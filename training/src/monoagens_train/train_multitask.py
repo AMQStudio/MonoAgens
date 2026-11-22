@@ -27,6 +27,7 @@ from monoagens_train.calibrate import (
     probs_from_logits_k,
 )
 from monoagens_train.datasets import (
+    build_proactive_group_episodes,
     build_v22_sea_episodes,
     load_multitask_shards,
     precompute_multitask_shards,
@@ -35,7 +36,14 @@ from monoagens_train.datasets import (
     precompute_phase3_shards,
 )
 from monoagens_train.export import export_golden_fixture
-from monoagens_train.features import NUM_FEATURES_V2, upgrade_x_num_v1_to_v2
+from monoagens_train.features import (
+    NUM_FEATURES_V2,
+    NUM_FEATURES_V3,
+    populate_v3_sequence_dynamics,
+    upgrade_x_num_to_schema,
+    upgrade_x_num_v1_to_v2,
+)
+from monoagens_train.info_gap_head import train_embeddinggemma_info_gap_head
 from monoagens_train.model import (
     CellKind,
     MonoNeuralController,
@@ -99,9 +107,16 @@ def _merge_splits(
     target_schema_version: int | None = None,
 ) -> dict[str, np.ndarray]:
     non_empty = [sd[split] for sd in shard_dicts if len(sd[split]["e_256"]) > 0]
+    need_v3 = (
+        target_schema_version == 3
+        or any(d["x_num"].shape[-1] == NUM_FEATURES_V3 for d in non_empty)
+    )
     need_v2 = (
-        target_schema_version == 2
-        or any(d["x_num"].shape[-1] == NUM_FEATURES_V2 for d in non_empty)
+        not need_v3
+        and (
+            target_schema_version == 2
+            or any(d["x_num"].shape[-1] == NUM_FEATURES_V2 for d in non_empty)
+        )
     )
     keys = (
         "e_256",
@@ -127,7 +142,16 @@ def _merge_splits(
         parts: list[np.ndarray] = []
         for d in non_empty:
             if k == "x_num":
-                parts.append(upgrade_x_num_v1_to_v2(d["x_num"]) if need_v2 else d["x_num"])
+                if need_v3:
+                    parts.append(
+                        d["x_num"]
+                        if d["x_num"].shape[-1] == NUM_FEATURES_V3
+                        else populate_v3_sequence_dynamics(d["x_num"], d["e_256"], d["y_gate"], d["mask"])
+                    )
+                elif need_v2:
+                    parts.append(upgrade_x_num_v1_to_v2(d["x_num"]))
+                else:
+                    parts.append(d["x_num"])
             elif k in d:
                 parts.append(d[k])
             elif k == "y_compute_tier":
@@ -238,8 +262,13 @@ def _collect_multitask_outputs(
     model.eval()
     e = torch.from_numpy(split_dict["e_256"])
     x_raw = split_dict["x_num"]
-    if model.arch.d_in_num == NUM_FEATURES_V2 and x_raw.shape[-1] != NUM_FEATURES_V2:
-        x_raw = upgrade_x_num_v1_to_v2(x_raw)
+    if x_raw.shape[-1] != model.arch.d_in_num:
+        target_sv = (
+            3
+            if model.arch.d_in_num == NUM_FEATURES_V3
+            else (2 if model.arch.d_in_num == NUM_FEATURES_V2 else 1)
+        )
+        x_raw = upgrade_x_num_to_schema(x_raw, target_sv)
     x = torch.from_numpy(x_raw)
 
     buckets: dict[str, list[np.ndarray]] = {"logits_k": []}
@@ -436,6 +465,7 @@ def train_multitask_model(
     modality_dropout_p: float = 0.15,
     feature_schema_version: int = 1,
     has_v22_heads: bool = False,
+    has_v3_world_head: bool = False,
     h_actor_dim: int = 0,
 ) -> tuple[MonoNeuralController, MultiTaskReportEntry]:
     _set_seed(seed)
@@ -445,6 +475,7 @@ def train_multitask_model(
         has_phase2_heads=(phase >= 2),
         has_phase3_heads=(phase >= 3),
         has_v22_heads=has_v22_heads,
+        has_v3_world_head=has_v3_world_head,
         feature_schema_version=feature_schema_version,
         h_actor_dim=h_actor_dim,
     )
@@ -453,14 +484,17 @@ def train_multitask_model(
         model.load_matching_weights(init_checkpoint)
 
     param_count = sum(p.numel() for p in model.parameters())
-    task_weights = HomoscedasticTaskWeights(n_tasks=8).to(device)
+    task_weights = HomoscedasticTaskWeights(n_tasks=9).to(device)
 
     tr = shards["train"]
-    x_tr = (
-        upgrade_x_num_v1_to_v2(tr["x_num"])
-        if arch.d_in_num == NUM_FEATURES_V2 and tr["x_num"].shape[-1] != NUM_FEATURES_V2
-        else tr["x_num"]
-    )
+    x_tr = tr["x_num"]
+    if x_tr.shape[-1] != arch.d_in_num:
+        target_sv = (
+            3
+            if arch.d_in_num == NUM_FEATURES_V3
+            else (2 if arch.d_in_num == NUM_FEATURES_V2 else 1)
+        )
+        x_tr = upgrade_x_num_to_schema(x_tr, target_sv)
     zeros_f = np.zeros_like(tr["mask"], dtype=np.float32)
     ones_i64 = np.ones_like(tr["y_gate"], dtype=np.int64)
     train_ds = TensorDataset(
@@ -580,6 +614,23 @@ def train_multitask_model(
                 loss_uc = (bce_uc * m_v22).sum() / m_v22.sum().clamp_min(1.0)
                 v22_losses.append(task_weights.weight(7, loss_uc))
 
+            # Self-supervised predictive coding world-model loss over raw next-turn transitions
+            if arch.has_v3_world_head and "world_pred_logits" in out and seq_len > 1:
+                m_trans = mb[:, :-1] * mb[:, 1:]
+                if m_trans.sum() > 0:
+                    wp_logits = out["world_pred_logits"][:, :-1, :]  # [B, T-1, 3]
+                    next_reply = (yb[:, 1:] >= 2).to(wp_logits.dtype)
+                    next_gap = (
+                        xb[:, 1:, 32] if xb.shape[-1] >= 36 else (yb[:, 1:] >= 2).to(wp_logits.dtype) * 0.8
+                    )
+                    next_shift = xb[:, 1:, 34] if xb.shape[-1] >= 36 else torch.full_like(next_reply, 0.5)
+                    wp_targets = torch.stack([next_reply, next_gap, next_shift], dim=-1).clamp(0.0, 1.0)
+                    bce_world = F.binary_cross_entropy_with_logits(
+                        wp_logits, wp_targets, reduction="none"
+                    ).mean(dim=-1)
+                    loss_world = (bce_world * m_trans).sum() / m_trans.sum().clamp_min(1.0)
+                    v22_losses.append(task_weights.weight(8, loss_world))
+
             # Group into <=3 orthogonal task families (Timing, Memory/Verify, V2.2 Chat)
             # so PCGrad still projects inter-family conflicts at ~3x higher throughput.
             task_losses: list[torch.Tensor] = [timing_group]
@@ -654,6 +705,8 @@ def run_phase2_and_phase3(
     stage4_preference: bool = False,
     feature_schema_version: int = 1,
     has_v22_heads: bool = False,
+    has_v3_world_head: bool = False,
+    fit_info_gap_head: bool = False,
     h_actor_dim: int = 0,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     cache_dir = repo_root / "training" / "cache"
@@ -783,17 +836,17 @@ def run_phase2_and_phase3(
             )
         (reports_dir / "phase2_report.md").write_text("\n".join(p2_md) + "\n", encoding="utf-8")
 
-    # ---- PHASE 3: Joint Phase 1 + 2 + 3 (+ optional V2.2 schema=2 heads & h_actor) ----
+    # ---- PHASE 3: Joint Phase 1 + 2 + 3 (+ optional V2.2/V3 heads & h_actor) ----
     seq_len = int(p1_shards["train"]["x_num"].shape[1])
     proc_timing_shards = build_procedural_timing_shards(
         seq_len=seq_len,
-        n_train=1280 if feature_schema_version == 2 else 640,
-        n_cal=160 if feature_schema_version == 2 else 80,
-        n_test=160 if feature_schema_version == 2 else 80,
+        n_train=1280 if feature_schema_version >= 2 else 640,
+        n_cal=160 if feature_schema_version >= 2 else 80,
+        n_test=160 if feature_schema_version >= 2 else 80,
         schema_version=feature_schema_version,
     )
     shard_sources = [p1_shards, p2_shards, p3_shards, proc_timing_shards]
-    if feature_schema_version == 2:
+    if feature_schema_version >= 2:
         sea_eps = build_v22_sea_episodes(repo_root, max_seq_len=seq_len, schema_version=2)
         if sea_eps:
             sea_cache = precompute_multitask_shards(
@@ -804,7 +857,18 @@ def run_phase2_and_phase3(
                 force_recompute=force_recompute_shards,
                 prompt_regime_id="t_d",
             )
-            shard_sources.append(load_multitask_shards(sea_cache, target_schema_version=2))
+            shard_sources.append(load_multitask_shards(sea_cache, target_schema_version=feature_schema_version))
+        pg_eps = build_proactive_group_episodes(max_seq_len=seq_len, schema_version=feature_schema_version)
+        if pg_eps:
+            pg_cache = precompute_multitask_shards(
+                repo_root=repo_root,
+                cache_path=cache_dir / "v22_proactive_group_shards.npz",
+                episodes=pg_eps,
+                max_seq_len=seq_len,
+                force_recompute=True,
+                prompt_regime_id="t_d",
+            )
+            shard_sources.append(load_multitask_shards(pg_cache, target_schema_version=feature_schema_version))
 
     p123_merged = {
         sp: _merge_splits(shard_sources, sp, target_schema_version=feature_schema_version)
@@ -830,6 +894,7 @@ def run_phase2_and_phase3(
             use_pcgrad=True,
             feature_schema_version=feature_schema_version,
             has_v22_heads=has_v22_heads,
+            has_v3_world_head=has_v3_world_head,
             h_actor_dim=h_actor_dim,
         )
         print(
@@ -880,16 +945,30 @@ def run_phase2_and_phase3(
             ),
         )
 
+    info_gap_metrics: dict[str, float] | None = None
+    if fit_info_gap_head or feature_schema_version >= 3:
+        ig_res = train_embeddinggemma_info_gap_head(repo_root)
+        info_gap_metrics = {
+            "train_acc": round(ig_res.train_acc, 4),
+            "val_acc": round(ig_res.val_acc, 4),
+            "val_brier": round(ig_res.val_brier, 6),
+        }
+        p3_best_mdl.set_info_gap_head(ig_res.w_gap, ig_res.b_gap)
+
     p3_best_name = (
-        "neural_v22_best.safetensors"
-        if feature_schema_version == 2
-        else "neural_phase3_best.safetensors"
+        "neural_v3_best.safetensors"
+        if feature_schema_version == 3
+        else ("neural_v22_best.safetensors" if feature_schema_version == 2 else "neural_phase3_best.safetensors")
     )
     p3_best_path = artifacts_dir / p3_best_name
     p3_best_blake3 = p3_best_mdl.export_safetensors(
         p3_best_path, temperature=p3_best_ent.temperature, cic_threshold=p3_best_ent.cic_threshold
     )
-    manifest_name = "manifest_v22.json" if feature_schema_version == 2 else "manifest_phase3.json"
+    manifest_name = (
+        "manifest_v3.json"
+        if feature_schema_version == 3
+        else ("manifest_v22.json" if feature_schema_version == 2 else "manifest_phase3.json")
+    )
     (artifacts_dir / manifest_name).write_text(
         json.dumps(
             {
@@ -897,6 +976,9 @@ def run_phase2_and_phase3(
                 "blake3": p3_best_blake3,
                 "feature_schema_version": p3_best_mdl.arch.feature_schema_version,
                 "has_v22_heads": p3_best_mdl.arch.has_v22_heads,
+                "has_info_gap_head": p3_best_mdl.arch.has_info_gap_head,
+                "has_v3_world_head": p3_best_mdl.arch.has_v3_world_head,
+                "info_gap_metrics": info_gap_metrics,
                 "h_actor_dim": p3_best_mdl.arch.h_actor_dim,
                 "expected_embed_model_ver": p3_best_mdl.arch.expected_embed_model_ver,
                 "expected_prompt_regime_id": p3_best_mdl.arch.expected_prompt_regime_id,
@@ -913,7 +995,13 @@ def run_phase2_and_phase3(
         r for r in p3_runs if r[1].scale == "150k" and r[1].cell_type == "gated_deltanet2"
     )
     p3_fix_hashes = export_multitask_parity_fixture(
-        3, p3_mg_mdl, p3_gdn_mdl, p3_mg_ent, p3_gdn_ent, fixtures_dir
+        3,
+        p3_mg_mdl,
+        p3_gdn_mdl,
+        p3_mg_ent,
+        p3_gdn_ent,
+        fixtures_dir,
+        fixture_prefix="neural_v3_golden" if feature_schema_version == 3 else None,
     )
 
     p3_report = {
@@ -936,7 +1024,11 @@ def run_phase2_and_phase3(
         "fixture_blake3": p3_fix_hashes,
         "runs": [asdict(r[1]) for r in p3_runs],
     }
-    report_stem = "v22_report" if feature_schema_version == 2 else "phase3_report"
+    report_stem = (
+        "v3_report"
+        if feature_schema_version == 3
+        else ("v22_report" if feature_schema_version == 2 else "phase3_report")
+    )
     (reports_dir / f"{report_stem}.json").write_text(json.dumps(p3_report, indent=2), encoding="utf-8")
     p3_md = [
         f"# Phase 3 Full Multi-Task Report (schema={feature_schema_version}, v22_heads={has_v22_heads}, h_actor_dim={h_actor_dim})",
@@ -969,8 +1061,10 @@ def main() -> None:
     parser.add_argument("--force-recompute-shards", action="store_true")
     parser.add_argument("--phase3-only", action="store_true")
     parser.add_argument("--stage4-preference", action="store_true")
-    parser.add_argument("--feature-schema-version", type=int, choices=(1, 2), default=1)
+    parser.add_argument("--feature-schema-version", type=int, choices=(1, 2, 3), default=1)
     parser.add_argument("--has-v22-heads", action="store_true")
+    parser.add_argument("--has-v3-world-head", action="store_true")
+    parser.add_argument("--fit-info-gap-head", action="store_true")
     parser.add_argument("--h-actor-dim", type=int, default=0)
     args = parser.parse_args()
 
@@ -983,6 +1077,8 @@ def main() -> None:
         stage4_preference=args.stage4_preference,
         feature_schema_version=args.feature_schema_version,
         has_v22_heads=args.has_v22_heads,
+        has_v3_world_head=args.has_v3_world_head,
+        fit_info_gap_head=args.fit_info_gap_head,
         h_actor_dim=args.h_actor_dim,
     )
     print("PHASE 2 WINNER:", json.dumps(p2_rep.get("winner", p2_rep), indent=2))

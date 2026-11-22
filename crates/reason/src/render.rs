@@ -611,7 +611,7 @@ fn render_slot_0_anchor(sections: &ContextSections) -> String {
         }
     }
     out.push_str(
-        "output_contract: motivation in 1..=5; confidence_0_20 in 0..=20; act requires non-empty capability_id and >=1 place; classify label must be non-empty.\n",
+        "output_contract: motivation in 1..=5; confidence_0_20 in 0..=20; think/believe are private and NOT shown to users; to reply visibly to a user, emit act='act' with an available capability_id (e.g. 'chat.speak'), places=[trigger place], and payload as UTF-8 reply text; classify label must be non-empty.\n",
     );
     out.push_str("[/ANCHOR]");
     out

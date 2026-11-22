@@ -8,6 +8,7 @@ use monoagens_protocol::{
     ActorId, Audience, DomainId, EventId, ExpectKind, FModal, Percept, PlaceId, TaggedEmbedding,
     Time, VisibleScope,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::consolidation::EpisodeState;
 use crate::neural::{DEFAULT_EMB_DIM, DEFAULT_NUM_FEATURES, NeuralModelConfig};
@@ -22,11 +23,17 @@ pub const FEATURE_SCHEMA_VERSION_V1: u16 = 1;
 /// Feature schema version 2 (`32d` `x_num`: `18d` v1 + `6d` repair + `4d` thread/actor + `4d` peer-agent).
 pub const FEATURE_SCHEMA_VERSION_V2: u16 = 2;
 
+/// Feature schema version 3 (`36d` `x_num`: `32d` v2 + `4d` active-inference surprise & gap channels).
+pub const FEATURE_SCHEMA_VERSION_V3: u16 = 3;
+
 /// Numeric feature vector width for schema v1 (`18d`).
 pub const DEFAULT_NUM_FEATURES_V1: usize = DEFAULT_NUM_FEATURES;
 
 /// Numeric feature vector width for schema v2 (`32d`).
 pub const DEFAULT_NUM_FEATURES_V2: usize = 32;
+
+/// Numeric feature vector width for schema v3 (`36d`).
+pub const DEFAULT_NUM_FEATURES_V3: usize = 36;
 
 /// Recency window (`ms`) for `has_recent_visible_soul_act` and Loop A repair lookup (`10 min`).
 pub const RECENT_SOUL_REPAIR_WINDOW_MS: u64 = 600_000;
@@ -808,6 +815,236 @@ pub fn extract_features_v2_from_state(
     out
 }
 
+/// Content-blind per-place EWMA cosine baseline used to normalize raw memory cosine into
+/// homeostatic relative surprise (`V3` predictive perception).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlaceCosBaseline {
+    pub mean: f32,
+    pub var: f32,
+    pub count: u64,
+}
+
+impl Default for PlaceCosBaseline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PlaceCosBaseline {
+    /// Creates an empty cosine baseline.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            mean: 0.5,
+            var: 0.01,
+            count: 0,
+        }
+    }
+
+    /// Updates running EWMA `(mean, var, count)` with an observed finite visible cosine similarity.
+    pub fn observe(&mut self, raw_cos: f64) {
+        if !raw_cos.is_finite() || raw_cos <= 0.0 {
+            return;
+        }
+        let c = raw_cos.clamp(0.0, 1.0) as f32;
+        if self.count == 0 {
+            self.mean = c;
+            self.var = 0.01;
+            self.count = 1;
+            return;
+        }
+        let alpha = 0.12_f32;
+        let diff = c - self.mean;
+        self.mean = (self.mean + alpha * diff).clamp(0.0, 1.0);
+        self.var = ((1.0 - alpha) * self.var + alpha * diff * diff).clamp(1e-4, 0.25);
+        self.count = self.count.saturating_add(1);
+    }
+
+    /// Normalizes `raw_cos` relative to this place's baseline surprise in `[0.0, 1.0]`.
+    #[must_use]
+    pub fn surprise_norm(&self, raw_cos: f64) -> f64 {
+        if !raw_cos.is_finite() || raw_cos <= 0.0 {
+            return 0.0;
+        }
+        let c = raw_cos.clamp(0.0, 1.0);
+        if self.count < 3 {
+            return ((c - 0.5).max(0.0) * 2.0).clamp(0.0, 1.0);
+        }
+        let sigma = f64::from(self.var).sqrt().max(0.08);
+        let z = (c - f64::from(self.mean)) / sigma;
+        (1.0 / (1.0 + (-z).exp())).clamp(0.0, 1.0)
+    }
+}
+
+/// Per-place short-term predictive perception memory (`last_emb`, `unanswered_gap_pressure`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct PlaceTurnPerceptionState {
+    pub last_emb: Option<TaggedEmbedding>,
+    pub unanswered_gap_pressure: f32,
+    pub last_updated_ms: Option<Time>,
+}
+
+const GAP_PRESSURE_HALF_LIFE_MS: f64 = 120_000.0;
+
+impl PlaceTurnPerceptionState {
+    /// Returns the exponentially decayed unanswered gap pressure at `now` in `[0.0, 1.0]`.
+    #[must_use]
+    pub fn decayed_gap_pressure(&self, now: Time) -> f64 {
+        let base = if self.unanswered_gap_pressure.is_finite() {
+            f64::from(self.unanswered_gap_pressure).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let Some(prev) = self.last_updated_ms else {
+            return base;
+        };
+        if now <= prev {
+            return base;
+        }
+        let dt_ms = now.saturating_sub_ms(prev) as f64;
+        (base * 0.5_f64.powf(dt_ms / GAP_PRESSURE_HALF_LIFE_MS)).clamp(0.0, 1.0)
+    }
+
+    /// Updates topic continuity embedding & residual unanswered gap pressure after one turn.
+    pub fn observe_turn(
+        &mut self,
+        is_soul: bool,
+        gap_opt: Option<f64>,
+        emb: Option<&TaggedEmbedding>,
+        now: Time,
+    ) {
+        let prev = self.decayed_gap_pressure(now);
+        let next_pressure = if is_soul {
+            0.0
+        } else if let Some(gap) = gap_opt.filter(|v| v.is_finite()) {
+            let g = gap.clamp(0.0, 1.0);
+            if g >= 0.55 {
+                (prev * 0.60 + g * 0.70).clamp(0.0, 1.0)
+            } else {
+                (prev * 0.45).clamp(0.0, 1.0)
+            }
+        } else {
+            (prev * 0.70).clamp(0.0, 1.0)
+        };
+        self.unanswered_gap_pressure = next_pressure as f32;
+        if let Some(e) = emb {
+            self.last_emb = Some(e.clone());
+        }
+        self.last_updated_ms = Some(self.last_updated_ms.map_or(now, |p| p.max(now)));
+    }
+}
+
+/// Raw inputs for constructing the bounded `36d` `schema = 3` `x_num` feature vector.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NumericFeatureInputsV3 {
+    pub v2: NumericFeatureInputsV2,
+    /// `32`: `A-14` `dialogue_act_gap` in `[0.0, 1.0]` (`0.5` neutral prior).
+    pub dialogue_act_gap: f64,
+    /// `33`: homeostatic relative surprise of `max_visible_mem_cos` in `[0.0, 1.0]`.
+    pub mem_cos_surprise: f64,
+    /// `34`: turn-to-turn topic shift surprise (`1.0 - cos(e_t, prev_place_turn)`) in `[0.0, 1.0]`.
+    pub topic_shift_surprise: f64,
+    /// `35`: time-decayed residual unanswered gap pressure at this place in `[0.0, 1.0]`.
+    pub unanswered_gap_pressure: f64,
+}
+
+impl Default for NumericFeatureInputsV3 {
+    fn default() -> Self {
+        Self {
+            v2: NumericFeatureInputsV2::default(),
+            dialogue_act_gap: 0.5,
+            mem_cos_surprise: 0.5,
+            topic_shift_surprise: 0.5,
+            unanswered_gap_pressure: 0.0,
+        }
+    }
+}
+
+/// Constructs the finite, `[0.0, 1.0]`-bounded `36d` `schema = 3` `x_num` vector.
+#[must_use]
+pub fn extract_x_num_v3(inp: &NumericFeatureInputsV3) -> [f32; DEFAULT_NUM_FEATURES_V3] {
+    let base = extract_x_num_v2(&inp.v2);
+    let mut out = [0.0_f32; DEFAULT_NUM_FEATURES_V3];
+    out[..DEFAULT_NUM_FEATURES_V2].copy_from_slice(&base);
+    out[32] = sanitize_unit(inp.dialogue_act_gap, 0.5);
+    out[33] = sanitize_unit(inp.mem_cos_surprise, 0.5);
+    out[34] = sanitize_unit(inp.topic_shift_surprise, 0.5);
+    out[35] = sanitize_unit(inp.unanswered_gap_pressure, 0.0);
+    out
+}
+
+/// Extracts the `36d` `schema = 3` `x_num` vector from [`CoreState`] strictly post-[`VisibleScope`]
+/// (`Delta_NI = 0`). Indices `0..32` match [`extract_features_v2_from_state`] bit-for-bit.
+#[must_use]
+pub fn extract_features_v3_from_state(
+    state: &CoreState,
+    percept: &Percept,
+    now: Time,
+    backlog_queue_depth: usize,
+) -> [f32; DEFAULT_NUM_FEATURES_V3] {
+    let v2 = extract_features_v2_from_state(state, percept, now, backlog_queue_depth);
+    let mut out = [0.0_f32; DEFAULT_NUM_FEATURES_V3];
+    out[..DEFAULT_NUM_FEATURES_V2].copy_from_slice(&v2);
+
+    let gap = percept
+        .dialogue_act_gap
+        .map(f64::from)
+        .or_else(|| {
+            state
+                .dialogue_act_head
+                .as_ref()
+                .and_then(|head| head.score(&percept.embeddings))
+        })
+        .unwrap_or(0.5);
+    let raw_vis_cos = f64::from(v2[13]);
+    let mem_surprise = state
+        .place_cos_baseline
+        .get(&percept.place)
+        .map_or_else(|| ((raw_vis_cos - 0.5).max(0.0) * 2.0).clamp(0.0, 1.0), |b| b.surprise_norm(raw_vis_cos));
+    let turn_state = state.place_perception.get(&percept.place);
+    let topic_shift = match (percept.embeddings.first(), turn_state.and_then(|s| s.last_emb.as_ref())) {
+        (Some(_), Some(prev)) => {
+            let cos = matching_cosine(&percept.embeddings, Some(prev));
+            (1.0 - cos).clamp(0.0, 1.0)
+        }
+        _ => 0.5,
+    };
+    let unanswered_pressure = turn_state.map_or(0.0, |s| s.decayed_gap_pressure(now));
+
+    out[32] = sanitize_unit(gap, 0.5);
+    out[33] = sanitize_unit(mem_surprise, 0.5);
+    out[34] = sanitize_unit(topic_shift, 0.5);
+    out[35] = sanitize_unit(unanswered_pressure, 0.0);
+    out
+}
+
+/// Computes `max_visible_mem_cos` strictly post-[`VisibleScope`] across non-superseded entries.
+#[must_use]
+pub fn max_visible_memory_cosine(
+    state: &CoreState,
+    embeddings: &[TaggedEmbedding],
+    audience: &Audience,
+    place: &PlaceId,
+    now: Time,
+) -> f64 {
+    let Some(q_emb) = embeddings.first() else {
+        return 0.0;
+    };
+    let scope = VisibleScope::new(audience.clone(), Some(place.clone()));
+    let mut best = 0.0_f64;
+    for mem in state.memory_entries.values() {
+        if mem.superseded_by.is_some() || !scope.allows(&mem.audience, Some(mem.event_id), now) {
+            continue;
+        }
+        for m_emb in &mem.embeddings {
+            if q_emb.tag == m_emb.tag {
+                best = best.max(cosine_similarity(&q_emb.values, &m_emb.values));
+            }
+        }
+    }
+    best
+}
+
 /// Helper returning default `256d` zero embedding for vectorless inputs.
 #[must_use]
 pub fn zero_embedding() -> Vec<f32> {
@@ -991,8 +1228,12 @@ mod tests {
             has_phase2_heads: false,
             has_phase3_heads: false,
             has_v22_heads: false,
+            has_info_gap_head: false,
+            has_v3_world_head: false,
             expected_embed_model_ver: Some("egemma2-256".to_owned()),
             expected_prompt_regime_id: Some("t_d".to_owned()),
+            info_gap_embed_model_ver: None,
+            info_gap_prompt_regime_id: None,
         };
         let picked = extract_embedding_for_model_config(&p, &cfg);
         assert_eq!(picked, vec![0.9, 0.8, 0.7, 0.6]);
@@ -1313,5 +1554,140 @@ mod tests {
         assert_eq!(v2_clean[29], 1.0); // room_has_other_automated_peers (peer_bot)
         assert!((v2_clean[30] - 0.5).abs() < 1e-5); // consecutive_automated_turns_norm = 3/6
         assert!((v2_clean[31] - 0.8).abs() < 1e-5); // peer_expertise_margin = 0.5*(0.6+1)
+    }
+
+    #[test]
+    fn v3_homeostatic_surprise_baseline_and_gap_pressure_preserve_delta_ni_zero() {
+        let place = PlaceId::new("grp_v3");
+        let priv_place = PlaceId::new("dm_alice");
+        let soul = ActorId::new("soul");
+        let alice = ActorId::new("alice");
+        let pub_aud = Audience::new([alice.clone(), ActorId::new("bob"), soul.clone()]);
+        let priv_aud = Audience::new([alice.clone(), soul.clone()]);
+        let tag = EmbeddingTag {
+            embed_model_ver: "egemma2-256".to_owned(),
+            dim_d: 4,
+            prompt_regime_id: "t_d".to_owned(),
+        };
+
+        let build_state = |with_private: bool| {
+            let mut st = CoreState::new();
+            st.soul_actor_id = soul.clone();
+            // Simulate high ambient slang cosine baseline (~0.79)
+            let baseline = st.place_cos_baseline.entry(place.clone()).or_default();
+            for c in [0.78, 0.79, 0.80, 0.78, 0.79] {
+                baseline.observe(c);
+            }
+            st.place_perception
+                .entry(place.clone())
+                .or_default()
+                .observe_turn(
+                    false,
+                    Some(0.85),
+                    Some(&TaggedEmbedding {
+                        tag: tag.clone(),
+                        values: vec![1.0, 0.0, 0.0, 0.0],
+                    }),
+                    Time::from_millis(10_000),
+                );
+            st.upsert_memory_entry(MemoryEntry {
+                event_id: EventId::new(101),
+                source_ids: vec![EventId::new(101)],
+                timestamp_ms: Time::from_millis(8_000),
+                place: place.clone(),
+                actor: alice.clone(),
+                origin_actor: OriginActor::new(alice.clone()),
+                basis: MemoryBasis::Observed,
+                taint: Taint::Trusted,
+                audience: pub_aud.clone(),
+                embeddings: vec![TaggedEmbedding {
+                    tag: tag.clone(),
+                    values: vec![1.0, 0.0, 0.0, 0.0],
+                }],
+                attachments: Vec::new(),
+                activation: ActivationTrace::default(),
+                superseded_by: None,
+                is_gist: false,
+                importance: crate::recall::ImportanceInputs::default(),
+                concepts: Vec::new(),
+                erased: false,
+            });
+            if with_private {
+                st.upsert_memory_entry(MemoryEntry {
+                    event_id: EventId::new(999),
+                    source_ids: vec![EventId::new(999)],
+                    timestamp_ms: Time::from_millis(9_500),
+                    place: priv_place.clone(),
+                    actor: alice.clone(),
+                    origin_actor: OriginActor::new(alice.clone()),
+                    basis: MemoryBasis::Told,
+                    taint: Taint::Trusted,
+                    audience: priv_aud.clone(),
+                    embeddings: vec![TaggedEmbedding {
+                        tag: tag.clone(),
+                        values: vec![0.0, 1.0, 0.0, 0.0],
+                    }],
+                    attachments: Vec::new(),
+                    activation: ActivationTrace::default(),
+                    superseded_by: None,
+                    is_gist: false,
+                    importance: crate::recall::ImportanceInputs::default(),
+                    concepts: Vec::new(),
+                    erased: false,
+                });
+            }
+            st
+        };
+
+        let st_clean = build_state(false);
+        let st_priv = build_state(true);
+        let now = Time::from_millis(40_000);
+
+        // Ambient turn with raw cos ~0.79 near baseline -> mem_cos_surprise near 0.50
+        let mut p_ambient = Percept::minimal(
+            ActorId::new("bob"),
+            place.clone(),
+            pub_aud.clone(),
+            now,
+            OpaquePayload::from_bytes(b"ambient"),
+        );
+        p_ambient.dialogue_act_gap = Some(0.15);
+        p_ambient.embeddings.push(TaggedEmbedding {
+            tag: tag.clone(),
+            values: vec![0.79, (1.0_f32 - 0.79 * 0.79).sqrt(), 0.0, 0.0],
+        });
+
+        // Anomalous sharp turn with raw cos = 1.0 well above ~0.79 baseline -> high surprise
+        let mut p_anom = Percept::minimal(
+            ActorId::new("bob"),
+            place,
+            pub_aud,
+            now,
+            OpaquePayload::from_bytes(b"question"),
+        );
+        p_anom.dialogue_act_gap = Some(0.92);
+        p_anom.embeddings.push(TaggedEmbedding {
+            tag,
+            values: vec![1.0, 0.0, 0.0, 0.0],
+        });
+
+        let x_amb_clean = extract_features_v3_from_state(&st_clean, &p_ambient, now, 0);
+        let x_amb_priv = extract_features_v3_from_state(&st_priv, &p_ambient, now, 0);
+        let x_anom = extract_features_v3_from_state(&st_clean, &p_anom, now, 0);
+
+        assert_eq!(x_amb_clean, x_amb_priv, "Delta_NI = 0 must hold for 36d v3");
+        assert!((x_amb_clean[32] - 0.15).abs() < 1e-5);
+        assert!(
+            x_amb_clean[33] >= 0.35 && x_amb_clean[33] <= 0.65,
+            "ambient cos matching baseline (~0.79) must map near neutral surprise, got {}",
+            x_amb_clean[33]
+        );
+        assert!(
+            x_anom[33] > x_amb_clean[33] + 0.25,
+            "anomalous higher cos must sharply exceed ambient surprise ({} vs {})",
+            x_anom[33],
+            x_amb_clean[33]
+        );
+        assert!(x_anom[35] > 0.4, "unanswered gap pressure must persist after 30s");
     }
 }

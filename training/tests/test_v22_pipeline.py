@@ -574,3 +574,103 @@ def test_train_multitask_and_stage4_preference_v22_smoke(tmp_path: Path):
     assert up_sh["train"]["x_num"].shape == (4, 8, 32)
     assert up_sh["train"]["y_compute_tier"].shape == (4, 8)
     assert up_sh["train"]["v22_mask"].shape == (4, 8)
+
+
+def test_proactive_group_episodes_cover_questions_statements_and_clean_splits() -> None:
+    from monoagens_train.datasets import (
+        GATE_GO,
+        GATE_SILENT,
+        GATE_WAIT,
+        build_proactive_group_episodes,
+    )
+
+    eps = build_proactive_group_episodes(max_seq_len=24, schema_version=2, repeat_factor=2)
+    splits = {ep.split for ep in eps}
+    assert splits == {"train", "calibration", "test"}
+    topic_clusters_by_split = {
+        sp: {ep.cluster_id for ep in eps if ep.split == sp} for sp in splits
+    }
+    assert topic_clusters_by_split["train"].isdisjoint(topic_clusters_by_split["calibration"])
+    assert topic_clusters_by_split["train"].isdisjoint(topic_clusters_by_split["test"])
+    assert topic_clusters_by_split["calibration"].isdisjoint(topic_clusters_by_split["test"])
+
+    labels_seen: set[int] = set()
+    has_paired_statement_negative = False
+    for ep in eps:
+        assert ep.dataset_id == "proactive_group_v22"
+        for t in ep.turns:
+            assert t.x_num.shape == (32,)
+            assert np.all(np.isfinite(t.x_num))
+            labels_seen.add(t.label_gate)
+            if (
+                t.label_gate == GATE_SILENT
+                and t.pair_query_text is not None
+                and float(t.x_num[13]) >= 0.70
+            ):
+                has_paired_statement_negative = True
+    assert {GATE_SILENT, GATE_WAIT, GATE_GO}.issubset(labels_seen)
+    assert has_paired_statement_negative
+
+
+def test_v3_schema_world_head_info_gap_logistic_and_roundtrip(tmp_path: Path) -> None:
+    from monoagens_train.features import NUM_FEATURES_V3, PerceptNumericInputsV3, build_x_num_v3
+    from monoagens_train.info_gap_head import fit_logistic_info_gap
+
+    x_v3 = build_x_num_v3(
+        PerceptNumericInputsV3(
+            dialogue_act_gap=0.88,
+            mem_cos_surprise=0.77,
+            topic_shift_surprise=0.66,
+            unanswered_gap_pressure=0.55,
+        )
+    )
+    assert x_v3.shape == (NUM_FEATURES_V3,)
+    assert np.isclose(x_v3[32], 0.88)
+    assert np.isclose(x_v3[33], 0.77)
+    assert np.isclose(x_v3[34], 0.66)
+    assert np.isclose(x_v3[35], 0.55)
+
+    # Fit synthetic A-14 logistic head over separable unit vectors
+    rng = np.random.default_rng(7)
+    pos = rng.normal(0.0, 0.15, size=(12, 256)).astype(np.float32)
+    pos[:, 0] += 1.5
+    neg = rng.normal(0.0, 0.15, size=(12, 256)).astype(np.float32)
+    neg[:, 0] -= 1.5
+    vecs = np.concatenate([pos, neg], axis=0)
+    vecs /= np.linalg.norm(vecs, axis=-1, keepdims=True)
+    labels = np.array([1.0] * 12 + [0.0] * 12, dtype=np.float32)
+    ig_res = fit_logistic_info_gap(vecs, labels)
+    assert ig_res.val_acc >= 0.9
+
+    shards = build_procedural_timing_shards(seq_len=10, n_train=32, n_cal=16, n_test=16, schema_version=3)
+    assert shards["train"]["x_num"].shape == (32, 10, 36)
+    model, entry = train_multitask_model(
+        phase=3,
+        scale="150k",
+        cell_type="mingru",
+        shards=shards,
+        phase1_test_split=shards["test"],
+        device=torch.device("cpu"),
+        epochs=2,
+        batch_size=16,
+        feature_schema_version=3,
+        has_v22_heads=True,
+        has_v3_world_head=True,
+        h_actor_dim=24,
+    )
+    model.set_info_gap_head(ig_res.w_gap, ig_res.b_gap)
+    st_path = tmp_path / "v3_test.safetensors"
+    model.export_safetensors(st_path, temperature=entry.temperature, cic_threshold=entry.cic_threshold)
+    reloaded, meta = MonoNeuralController.from_safetensors(st_path)
+    assert meta["feature_schema_version"] == "3"
+    assert meta["d_in_num"] == "36"
+    assert meta["has_v3_world_head"] == "true"
+    assert meta["has_info_gap_head"] == "true"
+    out = reloaded.step(
+        torch.zeros(1, 256),
+        torch.from_numpy(x_v3[None, :]),
+        torch.zeros(1, 64),
+    )
+    assert "world_pred" in out
+    assert out["world_pred"].shape == (1, 3)
+

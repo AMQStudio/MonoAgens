@@ -14,10 +14,13 @@ import numpy as np
 from monoagens_train.features import (
     NUM_FEATURES,
     NUM_FEATURES_V2,
+    NUM_FEATURES_V3,
     PerceptNumericInputs,
     PerceptNumericInputsV2,
     build_x_num,
     build_x_num_v2,
+    populate_v3_sequence_dynamics,
+    upgrade_x_num_to_schema,
     upgrade_x_num_v1_to_v2,
 )
 from monoagens_train.licenses import (
@@ -40,6 +43,7 @@ DEFAULT_PROMPT_REGIME_ID = "t_d"
 TASK_PREFIX_INSTRUCTIONS: dict[str, str] = {
     "t_d": "title: none | text: ",
     "t_q": "task: search result | query: ",
+    "t_clf": "task: classification | query: ",
     "t_sts": "task: sentence similarity | query: ",
     "raw": "",
 }
@@ -1749,6 +1753,8 @@ def _iter_local_records(dataset_dir: Path) -> list[dict[str, Any]]:
 
 
 def _x_num_for_schema(inp: PerceptNumericInputsV2, schema_version: int) -> np.ndarray:
+    if schema_version == 3:
+        return upgrade_x_num_to_schema(build_x_num_v2(inp), 3)
     return build_x_num_v2(inp) if schema_version == 2 else build_x_num(inp)
 
 
@@ -2129,8 +2135,13 @@ def precompute_multitask_shards(
                 cand_emb = emb_matrix[unique_texts[turn.text]]
                 e_arr[i, t_idx] = cand_emb
                 x_vec = turn.x_num.copy()
-                if inferred_num_features == NUM_FEATURES_V2 and x_vec.shape[-1] == NUM_FEATURES:
-                    x_vec = upgrade_x_num_v1_to_v2(x_vec)
+                if x_vec.shape[-1] != inferred_num_features:
+                    target_sv = (
+                        3
+                        if inferred_num_features == NUM_FEATURES_V3
+                        else (2 if inferred_num_features == NUM_FEATURES_V2 else 1)
+                    )
+                    x_vec = upgrade_x_num_to_schema(x_vec, target_sv)
                 if turn.pair_query_text is not None:
                     q_emb = emb_matrix[unique_texts[turn.pair_query_text]]
                     cos_q = float(np.clip(np.dot(q_emb, cand_emb), 0.0, 1.0))
@@ -2253,11 +2264,13 @@ def load_multitask_shards(
     for split in ("train", "calibration", "test"):
         e = data[f"{split}_e256"]
         x = data[f"{split}_xnum"]
-        if target_schema_version == 2 and x.shape[-1] == NUM_FEATURES:
-            x = upgrade_x_num_v1_to_v2(x)
         yg = data[f"{split}_ygate"]
         yw = data[f"{split}_ywait"]
         m = data[f"{split}_mask"]
+        if target_schema_version == 3 and x.shape[-1] != NUM_FEATURES_V3:
+            x = populate_v3_sequence_dynamics(x, e, yg, m)
+        elif target_schema_version == 2 and x.shape[-1] == NUM_FEATURES:
+            x = upgrade_x_num_v1_to_v2(x)
         ds = data[f"{split}_ds"]
         zeros = np.zeros_like(m, dtype=np.float32)
         ones_i64 = np.ones_like(yg, dtype=np.int64)
@@ -2290,3 +2303,651 @@ def load_multitask_shards(
                 assert np.all(np.isfinite(arr)), f"Non-finite shard array {split}/{k}"
         out[split] = d
     return out
+
+
+_PROACTIVE_GROUP_TOPICS: tuple[dict[str, Any], ...] = (
+    # Bilingual Indonesian & English multi-party scenarios (100% synthetic, zero Lab leakage)
+    {
+        "cid": "pg_pameran_paku",
+        "fact": "udah sebagian tinggal di lantai 3 kurang pasang paku di 3 foto",
+        "chatter": "haloooo gesss semangat ngerjain persiapan acara besok",
+        "statement": "okeee siap berarti besok langsung lanjut di lantai 3 ya",
+        "questions": [
+            "eh besok pasang paku di lantai berapa dan masih kurang berapa foto ya?",
+            "btw progres pemasangan foto tadi tinggal berapa lagi ya?",
+        ],
+        "unrelated_q": "guys malem ini ada yang mau mabar ga?",
+    },
+    {
+        "cid": "pg_ruang_bimbingan",
+        "fact": "jadwal bimbingan tugas akhir digeser ke hari Kamis jam 14.00 di ruang 204",
+        "chatter": "pagi semua udah pada sarapan belum",
+        "statement": "sip noted hari Kamis jam 14.00 di ruang 204 ya",
+        "questions": [
+            "eh jadwal bimbingan kita minggu ini jadi hari apa dan jam berapa ya?",
+            "ada yang inget bimbingan nanti di ruang berapa?",
+        ],
+        "unrelated_q": "ntar siang makan di kantin mana gess?",
+    },
+    {
+        "cid": "pg_kunci_lab",
+        "fact": "kunci lab robotika barusan dititipin ke pak Budi di pos satpam depan",
+        "chatter": "cuaca hari ini panas banget ya ampun",
+        "statement": "oke aman berarti kunci udah di pos satpam depan",
+        "questions": [
+            "eh kunci lab robotika sekarang dipegang siapa ya?",
+            "ada yang tau kunci lab ditaruh dimana tadi?",
+        ],
+        "unrelated_q": "nanti sore jadi futsal apa enggak?",
+    },
+    {
+        "cid": "pg_link_slide",
+        "fact": "file presentasi final sudah di-upload ke folder Drive Pameran_Final versi v3",
+        "chatter": "wkwk lucu banget stiker yang tadi",
+        "statement": "mantap versi v3 udah aman di folder Drive",
+        "questions": [
+            "teman-teman file presentasi final tadi disimpan di mana ya?",
+            "yang dipakai buat demo nanti slide versi berapa ya?",
+        ],
+        "unrelated_q": "ada yang bawa charger type-c ga?",
+    },
+    {
+        "cid": "pg_deploy_window",
+        "fact": "the production deploy window moved to Thursday 16:00 UTC after QA sign-off",
+        "chatter": "morning folks hope everyone had a good weekend",
+        "statement": "sounds good Thursday 16:00 UTC works for me after QA",
+        "questions": [
+            "hey does anyone remember what time the deploy window moved to?",
+            "wait are we still deploying on Thursday afternoon?",
+        ],
+        "unrelated_q": "anyone grabbing coffee downstairs?",
+    },
+    {
+        "cid": "pg_staging_port",
+        "fact": "the local test server listens on port 8088 with TLS disabled",
+        "chatter": "just pushed the UI tweak to my branch",
+        "statement": "cool I will hit port 8088 for local testing later",
+        "questions": [
+            "wait what port does the local test server run on?",
+            "is TLS enabled or disabled on the local test server?",
+        ],
+        "unrelated_q": "who wants pizza for lunch?",
+    },
+    {
+        "cid": "pg_anggaran_poster",
+        "fact": "biaya cetak 5 poster A1 kemarin totalnya 175 ribu sudah dibayar pakai kas tim",
+        "chatter": "eh hujan deres banget di luar",
+        "statement": "oh mantap 175 ribu berarti udah beres pakai kas tim ya",
+        "questions": [
+            "btw kemarin biaya cetak poster totalnya habis berapa ya?",
+            "uang cetak poster udah dibayar atau masih patungan?",
+        ],
+        "unrelated_q": "pulang jam berapa kalian nanti?",
+    },
+    {
+        "cid": "pg_wifi_guest",
+        "fact": "password wifi tamu lantai 2 bulan ini ganti jadi KampusMerdeka26",
+        "chatter": "baru nyampe nih macet banget di jalan",
+        "statement": "oke sip udah connect pakai password baru itu",
+        "questions": [
+            "eh password wifi tamu lantai 2 sekarang apaan ya?",
+            "ada yang tau pass wifi tamu yang baru bulan ini?",
+        ],
+        "unrelated_q": "kalian udah nonton film yang baru itu belum?",
+    },
+    {
+        "cid": "pg_stand_alat",
+        "fact": "kabel HDMI 5 meter sama tripod kecil disimpan di kotak hitam sebelah meja resepsionis",
+        "chatter": "bentar ya aku lagi di jalan beli minum dulu",
+        "statement": "siap kotak hitam dekat resepsionis ya udah ketemu",
+        "questions": [
+            "eh kabel HDMI panjang sama tripod tadi ditaruh mana ya?",
+            "ada yang lihat tripod kecil kita disimpan di mana?",
+        ],
+        "unrelated_q": "besok berangkat bareng naik motor aja yuk?",
+    },
+    {
+        "cid": "pg_db_migration",
+        "fact": "the staging Postgres migration requires running alembic upgrade head before starting workers",
+        "chatter": "lol that meme in random channel cracked me up",
+        "statement": "got it I already ran alembic upgrade head on staging",
+        "questions": [
+            "hey what command do we need to run before starting staging workers?",
+            "anyone recall if staging needs an alembic migration first?",
+        ],
+        "unrelated_q": "did everyone fill out the holiday survey?",
+    },
+    {
+        "cid": "pg_jadwal_juri",
+        "fact": "penilaian juri untuk booth kelompok kita dijadwalkan mulai jam 10.15 di aula utama",
+        "chatter": "semangat gess tinggal sedikit lagi rapi",
+        "statement": "oke jam 10.15 di aula utama kita standby lebih awal aja",
+        "questions": [
+            "gess juri mulai nilai booth kita jam berapa ya?",
+            "penilaian juri nanti lokasinya di sebelah mana?",
+        ],
+        "unrelated_q": "siapa yang nitip gorengan tadi?",
+    },
+    {
+        "cid": "pg_deadline_laporan",
+        "fact": "pengumpulan laporan revisi paling lambat Jumat jam 23.59 lewat portal akademik",
+        "chatter": "ngantuk berat nih habis begadang",
+        "statement": "sip Jumat malam jam 23.59 di portal akademik ya",
+        "questions": [
+            "eh deadline upload laporan revisi kapan dan lewat mana ya?",
+            "batas terakhir kumpul revisi hari Jumat jam berapa?",
+        ],
+        "unrelated_q": "libur semester mulai tanggal berapa sih?",
+    },
+    {
+        "cid": "pg_sprint_owner",
+        "fact": "Raka yang pegang modul pembayaran sprint ini sementara Dita urus notifikasi",
+        "chatter": "pagi tim yuk standup sebentar",
+        "statement": "oke jelas berarti pembayaran ke Raka dan notifikasi ke Dita",
+        "questions": [
+            "eh di sprint ini yang pegang modul pembayaran siapa ya?",
+            "kalau soal notifikasi nanyanya ke siapa tadi?",
+        ],
+        "unrelated_q": "ada yang tau cafe enak dekat sini?",
+    },
+    {
+        "cid": "pg_release_branch",
+        "fact": "hotfixes for this week should branch off release/v2.4 rather than main",
+        "chatter": "happy Friday everyone almost time to wrap up",
+        "statement": "makes sense I will branch my hotfix from release/v2.4",
+        "questions": [
+            "which branch should we cut hotfixes from this week?",
+            "wait are hotfixes going off main or release/v2.4?",
+        ],
+        "unrelated_q": "what game are people playing tonight?",
+    },
+    {
+        "cid": "pg_konsumsi_acara",
+        "fact": "snack kotak 40 porsi sudah dipesan atas nama Sinta dan diambil jam 07.30 pagi",
+        "chatter": "hadirrr baru bangun tidur wkwk",
+        "statement": "bagus 40 porsi atas nama Sinta aman buat besok pagi",
+        "questions": [
+            "eh konsumsi acara besok udah dipesan berapa porsi dan atas nama siapa?",
+            "snack kotak besok bisa diambil jam berapa ya?",
+        ],
+        "unrelated_q": "eh jaket himpunan udah jadi belum sih?",
+    },
+    {
+        "cid": "pg_rak_server",
+        "fact": "IP static printer lab ada di 192.168.10.45 khusus jaringan lab_internal",
+        "chatter": "bentar laptopku lagi restart update dulu",
+        "statement": "oke masuk ke 192.168.10.45 udah kebaca printernya",
+        "questions": [
+            "guys alamat IP printer lab kita berapa ya?",
+            "kalau mau ngeprint tadi harus connect wifi mana ya?",
+        ],
+        "unrelated_q": "nanti pulang naik ojol atau barengan?",
+    },
+    {
+        "cid": "pg_qa_account",
+        "fact": "the sandbox test login is qa-demo@example.org with two-factor disabled on staging",
+        "chatter": "afternoon crew checking in after lunch",
+        "statement": "thanks qa-demo@example.org worked without 2FA on staging",
+        "questions": [
+            "does anyone have the sandbox test login email for staging?",
+            "do we need 2FA for the staging demo account?",
+        ],
+        "unrelated_q": "did the AC in room 3 finally get fixed?",
+    },
+    {
+        "cid": "pg_peminjaman_proyektor",
+        "fact": "proyektor cadangan sudah dibooking atas nama Nadya untuk ruang seminar B",
+        "chatter": "siap gerak menuju kampus",
+        "statement": "sip proyektor atas nama Nadya udah beres buat ruang seminar B",
+        "questions": [
+            "eh peminjaman proyektor cadangan kemarin atas nama siapa ya?",
+            "proyektor cadangan tadi dipakai buat ruang mana?",
+        ],
+        "unrelated_q": "kalian udah isi absen pagi belum?",
+    },
+    {
+        "cid": "pg_parkir_loading",
+        "fact": "loading barang pameran hanya boleh lewat gerbang timur sebelum jam 09.00 pagi",
+        "chatter": "haloo semuanya udah pada nyampe?",
+        "statement": "oke sip sebelum jam 09.00 lewat gerbang timur ya",
+        "questions": [
+            "eh mobil logistik masuk loading barang lewat gerbang mana dan maksimal jam berapa?",
+            "gerbang timur buka untuk bongkar barang sampai jam berapa ya?",
+        ],
+        "unrelated_q": "besok pakai dresscode warna apa?",
+    },
+    {
+        "cid": "pg_ci_cache",
+        "fact": "CI builds clear stale Rust target caches every Sunday midnight UTC automatically",
+        "chatter": "morning team coffee first then code",
+        "statement": "good to know Sunday midnight UTC makes total sense for cache cleanup",
+        "questions": [
+            "when does CI clear stale Rust target caches automatically?",
+            "is CI cache pruning manual or scheduled on Sundays?",
+        ],
+        "unrelated_q": "anyone bringing snacks to the meetup?",
+    },
+)
+
+
+def build_proactive_group_episodes(
+    *,
+    max_seq_len: int = 24,
+    schema_version: int = 2,
+    repeat_factor: int = 4,
+    seed: int = 20261123,
+) -> list[TrajectoryEpisode]:
+    """Builds synthetic OSI-clean multi-party proactive-helping episodes for V2.2 System 1.
+
+    Covers:
+    - Pattern A1 (Go): Unaddressed unanswered group question matching visible memory after a pause.
+    - Pattern A2 (Wait -> Silent / Go): Rapid open-floor question deferring briefly for peer response.
+    - Pattern B (Silent hard-negative): Statement/confirmation on the SAME topic (high cosine, non-question).
+    - Pattern C (Silent hard-negative): Unaddressed chatter or unrelated question (low memory cosine).
+    - Pattern D (Silent habituation): Follow-up shortly after Soul already answered.
+    """
+    rng = np.random.default_rng(seed)
+    episodes: list[TrajectoryEpisode] = []
+    n_topics = len(_PROACTIVE_GROUP_TOPICS)
+
+    for rep in range(repeat_factor):
+        for t_idx, topic in enumerate(_PROACTIVE_GROUP_TOPICS):
+            mod = t_idx % 10
+            if mod < 7:
+                split = "train"
+            elif mod < 9:
+                split = "calibration"
+            else:
+                split = "test"
+
+            other_topic = _PROACTIVE_GROUP_TOPICS[(t_idx + 5) % n_topics]
+            n_participants = int(rng.integers(3, 8))
+            cid_base = f"pg:{topic['cid']}:r{rep}"
+
+            # 1) Direct proactive Go episode: fact -> chatter -> unanswered question with mem match -> Silent follow-up
+            q_text = topic["questions"][rep % len(topic["questions"])]
+            t_pause_s = float(rng.uniform(8.0, 45.0))
+            ep_go_turns = [
+                TurnRecord(
+                    text=topic["fact"],
+                    x_num=_x_num_for_schema(
+                        PerceptNumericInputsV2(
+                            is_named_soul=False,
+                            is_explicit_addressee=False,
+                            is_dyadic_place=False,
+                            active_participant_count=n_participants,
+                            dt_since_last_place_event_s=0.0,
+                            dt_since_last_soul_act_s=86400.0,
+                            dt_since_sender_last_act_s=86400.0,
+                            soul_acts_window=0,
+                            total_acts_window=1,
+                            sender_exchange_count=0,
+                            place_event_count=1,
+                            max_visible_mem_cos=0.05,
+                            active_thread_count=1,
+                            sender_in_top_thread=True,
+                            sender_reliability=float(rng.uniform(0.6, 0.9)),
+                        ),
+                        schema_version,
+                    ),
+                    label_gate=GATE_SILENT,
+                    wait_delta_ms=0.0,
+                    loss_mask=1.0,
+                    y_encode_importance=0.85,
+                    mask_encode_importance=1.0,
+                    y_compute_tier=0,
+                    mask_v22=1.0,
+                ),
+                TurnRecord(
+                    text=topic["chatter"],
+                    x_num=_x_num_for_schema(
+                        PerceptNumericInputsV2(
+                            is_named_soul=False,
+                            is_explicit_addressee=False,
+                            is_dyadic_place=False,
+                            active_participant_count=n_participants,
+                            dt_since_last_place_event_s=float(rng.uniform(2.0, 12.0)),
+                            dt_since_last_soul_act_s=86400.0,
+                            dt_since_sender_last_act_s=86400.0,
+                            soul_acts_window=0,
+                            total_acts_window=2,
+                            sender_exchange_count=0,
+                            place_event_count=2,
+                            max_visible_mem_cos=0.10,
+                            max_active_thread_cos=0.20,
+                            active_thread_count=1,
+                            sender_in_top_thread=True,
+                            sender_reliability=float(rng.uniform(0.5, 0.85)),
+                        ),
+                        schema_version,
+                    ),
+                    label_gate=GATE_SILENT,
+                    wait_delta_ms=0.0,
+                    loss_mask=1.0,
+                    y_encode_importance=0.10,
+                    mask_encode_importance=1.0,
+                    y_compute_tier=0,
+                    mask_v22=1.0,
+                ),
+                TurnRecord(
+                    text=q_text,
+                    x_num=_x_num_for_schema(
+                        PerceptNumericInputsV2(
+                            is_named_soul=False,
+                            is_explicit_addressee=False,
+                            is_reply_or_expect_link=False,
+                            is_dyadic_place=False,
+                            active_participant_count=n_participants,
+                            dt_since_last_place_event_s=t_pause_s,
+                            dt_since_last_soul_act_s=86400.0,
+                            dt_since_sender_last_act_s=float(rng.uniform(30.0, 600.0)),
+                            soul_acts_window=0,
+                            total_acts_window=3,
+                            sender_exchange_count=1,
+                            place_event_count=3,
+                            max_visible_mem_cos=0.80,
+                            max_visible_mem_age_s=float(rng.uniform(15.0, 300.0)),
+                            max_active_thread_cos=float(rng.uniform(0.45, 0.80)),
+                            active_thread_count=1,
+                            sender_in_top_thread=True,
+                            sender_reliability=float(rng.uniform(0.6, 0.95)),
+                        ),
+                        schema_version,
+                    ),
+                    label_gate=GATE_GO,
+                    wait_delta_ms=0.0,
+                    loss_mask=1.0,
+                    y_uncertainty=0.15,
+                    mask_uncertainty=1.0,
+                    y_encode_importance=0.70,
+                    mask_encode_importance=1.0,
+                    y_memory_relevance=1.0,
+                    mask_memory_relevance=1.0,
+                    pair_query_text=topic["fact"],
+                    y_compute_tier=1,
+                    mask_v22=1.0,
+                ),
+                # Habituation follow-up right after soul answered -> Silent
+                TurnRecord(
+                    text="oh sip makasih infonya",
+                    x_num=_x_num_for_schema(
+                        PerceptNumericInputsV2(
+                            is_named_soul=False,
+                            is_explicit_addressee=False,
+                            is_reply_or_expect_link=True,
+                            is_dyadic_place=False,
+                            active_participant_count=n_participants,
+                            dt_since_last_place_event_s=float(rng.uniform(1.0, 6.0)),
+                            dt_since_last_soul_act_s=float(rng.uniform(1.0, 6.0)),
+                            dt_since_sender_last_act_s=float(rng.uniform(2.0, 8.0)),
+                            soul_acts_window=1,
+                            total_acts_window=4,
+                            sender_exchange_count=2,
+                            place_event_count=4,
+                            has_recent_visible_soul_act=True,
+                            cos_soul_user=0.55,
+                            cos_expected_reply=0.75,
+                            is_reply_to_last_soul=True,
+                            soul_intervened_since_sender_last=True,
+                            max_visible_mem_cos=0.25,
+                            max_visible_mem_age_s=10.0,
+                            active_thread_count=1,
+                            sender_in_top_thread=True,
+                        ),
+                        schema_version,
+                    ),
+                    label_gate=GATE_SILENT,
+                    wait_delta_ms=0.0,
+                    loss_mask=1.0,
+                    y_compute_tier=0,
+                    mask_v22=1.0,
+                ),
+            ]
+            episodes.append(
+                TrajectoryEpisode(
+                    episode_id=f"{cid_base}:go",
+                    dataset_id="proactive_group_v22",
+                    cluster_id=topic["cid"],
+                    split=split,
+                    turns=ep_go_turns[:max_seq_len],
+                )
+            )
+
+            # 2) Rapid open-floor Wait episode: fact -> rapid question (<5s) -> Wait (2400ms) -> peer answers -> Silent
+            q_alt = topic["questions"][(rep + 1) % len(topic["questions"])]
+            ep_wait_turns = [
+                ep_go_turns[0],
+                TurnRecord(
+                    text=q_alt,
+                    x_num=_x_num_for_schema(
+                        PerceptNumericInputsV2(
+                            is_named_soul=False,
+                            is_explicit_addressee=False,
+                            is_reply_or_expect_link=False,
+                            is_dyadic_place=False,
+                            active_participant_count=n_participants,
+                            dt_since_last_place_event_s=float(rng.uniform(1.2, 4.5)),
+                            dt_since_last_soul_act_s=86400.0,
+                            dt_since_sender_last_act_s=float(rng.uniform(2.0, 12.0)),
+                            soul_acts_window=0,
+                            total_acts_window=2,
+                            sender_exchange_count=1,
+                            place_event_count=2,
+                            max_visible_mem_cos=0.78,
+                            max_visible_mem_age_s=float(rng.uniform(5.0, 90.0)),
+                            max_active_thread_cos=float(rng.uniform(0.5, 0.85)),
+                            active_thread_count=1,
+                            sender_in_top_thread=True,
+                            sender_reliability=float(rng.uniform(0.55, 0.9)),
+                        ),
+                        schema_version,
+                    ),
+                    label_gate=GATE_WAIT,
+                    wait_delta_ms=float(rng.uniform(2000.0, 3200.0)),
+                    loss_mask=1.0,
+                    y_uncertainty=0.25,
+                    mask_uncertainty=1.0,
+                    y_memory_relevance=1.0,
+                    mask_memory_relevance=1.0,
+                    pair_query_text=topic["fact"],
+                    y_compute_tier=1,
+                    mask_v22=1.0,
+                ),
+                # Human peer replies quickly before wait window expires -> Silent
+                TurnRecord(
+                    text=topic["statement"],
+                    x_num=_x_num_for_schema(
+                        PerceptNumericInputsV2(
+                            is_named_soul=False,
+                            is_explicit_addressee=False,
+                            is_reply_or_expect_link=True,
+                            is_dyadic_place=False,
+                            active_participant_count=n_participants,
+                            dt_since_last_place_event_s=float(rng.uniform(0.5, 2.0)),
+                            dt_since_last_soul_act_s=86400.0,
+                            dt_since_sender_last_act_s=float(rng.uniform(1.5, 10.0)),
+                            soul_acts_window=0,
+                            total_acts_window=3,
+                            sender_exchange_count=2,
+                            place_event_count=3,
+                            max_visible_mem_cos=0.75,
+                            max_visible_mem_age_s=15.0,
+                            max_active_thread_cos=0.80,
+                            active_thread_count=1,
+                            sender_in_top_thread=True,
+                        ),
+                        schema_version,
+                    ),
+                    label_gate=GATE_SILENT,
+                    wait_delta_ms=0.0,
+                    loss_mask=1.0,
+                    pair_query_text=topic["fact"],
+                    y_compute_tier=0,
+                    mask_v22=1.0,
+                ),
+            ]
+            episodes.append(
+                TrajectoryEpisode(
+                    episode_id=f"{cid_base}:wait",
+                    dataset_id="proactive_group_v22",
+                    cluster_id=topic["cid"],
+                    split=split,
+                    turns=ep_wait_turns[:max_seq_len],
+                )
+            )
+
+            # 3) Hard-negative Silent controls:
+            #    (a) Statement/confirmation on same topic (high cosine, NOT a question -> Silent!)
+            #    (b) Unrelated question without matching memory (low cosine -> Silent!)
+            ep_neg_turns = [
+                ep_go_turns[0],
+                TurnRecord(
+                    text=topic["statement"],
+                    x_num=_x_num_for_schema(
+                        PerceptNumericInputsV2(
+                            is_named_soul=False,
+                            is_explicit_addressee=False,
+                            is_reply_or_expect_link=False,
+                            is_dyadic_place=False,
+                            active_participant_count=n_participants,
+                            dt_since_last_place_event_s=float(rng.uniform(4.0, 25.0)),
+                            dt_since_last_soul_act_s=86400.0,
+                            dt_since_sender_last_act_s=float(rng.uniform(15.0, 180.0)),
+                            soul_acts_window=0,
+                            total_acts_window=2,
+                            sender_exchange_count=1,
+                            place_event_count=2,
+                            max_visible_mem_cos=0.78,
+                            max_visible_mem_age_s=float(rng.uniform(10.0, 120.0)),
+                            max_active_thread_cos=float(rng.uniform(0.50, 0.85)),
+                            active_thread_count=1,
+                            sender_in_top_thread=True,
+                        ),
+                        schema_version,
+                    ),
+                    label_gate=GATE_SILENT,
+                    wait_delta_ms=0.0,
+                    loss_mask=1.0,
+                    pair_query_text=topic["fact"],
+                    y_compute_tier=0,
+                    mask_v22=1.0,
+                ),
+                TurnRecord(
+                    text=topic["unrelated_q"],
+                    x_num=_x_num_for_schema(
+                        PerceptNumericInputsV2(
+                            is_named_soul=False,
+                            is_explicit_addressee=False,
+                            is_reply_or_expect_link=False,
+                            is_dyadic_place=False,
+                            active_participant_count=n_participants,
+                            dt_since_last_place_event_s=float(rng.uniform(10.0, 60.0)),
+                            dt_since_last_soul_act_s=86400.0,
+                            dt_since_sender_last_act_s=float(rng.uniform(30.0, 300.0)),
+                            soul_acts_window=0,
+                            total_acts_window=3,
+                            sender_exchange_count=1,
+                            place_event_count=3,
+                            max_visible_mem_cos=0.15,
+                            max_visible_mem_age_s=60.0,
+                            max_active_thread_cos=0.20,
+                            active_thread_count=2,
+                            sender_in_top_thread=False,
+                        ),
+                        schema_version,
+                    ),
+                    label_gate=GATE_SILENT,
+                    wait_delta_ms=0.0,
+                    loss_mask=1.0,
+                    pair_query_text=other_topic["fact"],
+                    y_compute_tier=0,
+                    mask_v22=1.0,
+                ),
+            ]
+            episodes.append(
+                TrajectoryEpisode(
+                    episode_id=f"{cid_base}:neg",
+                    dataset_id="proactive_group_v22",
+                    cluster_id=topic["cid"],
+                    split=split,
+                    turns=ep_neg_turns[:max_seq_len],
+                )
+            )
+
+            # 4) Hard-negative casual social Q&A with high slang/chatter cosine (e.g. "mabar?", "makan?")
+            ep_chatter_q_turns = [
+                ep_go_turns[1],
+                TurnRecord(
+                    text=topic["unrelated_q"],
+                    x_num=_x_num_for_schema(
+                        PerceptNumericInputsV2(
+                            is_named_soul=False,
+                            is_explicit_addressee=False,
+                            is_reply_or_expect_link=False,
+                            is_dyadic_place=False,
+                            active_participant_count=n_participants,
+                            dt_since_last_place_event_s=float(rng.uniform(3.0, 20.0)),
+                            dt_since_last_soul_act_s=86400.0,
+                            dt_since_sender_last_act_s=86400.0,
+                            soul_acts_window=0,
+                            total_acts_window=2,
+                            sender_exchange_count=0,
+                            place_event_count=2,
+                            max_visible_mem_cos=0.78,
+                            max_visible_mem_age_s=float(rng.uniform(4.0, 30.0)),
+                            max_active_thread_cos=float(rng.uniform(0.65, 0.85)),
+                            active_thread_count=1,
+                            sender_in_top_thread=False,
+                        ),
+                        schema_version,
+                    ),
+                    label_gate=GATE_SILENT,
+                    wait_delta_ms=0.0,
+                    loss_mask=1.0,
+                    pair_query_text=topic["chatter"],
+                    y_compute_tier=0,
+                    mask_v22=1.0,
+                ),
+                TurnRecord(
+                    text=other_topic["unrelated_q"],
+                    x_num=_x_num_for_schema(
+                        PerceptNumericInputsV2(
+                            is_named_soul=False,
+                            is_explicit_addressee=False,
+                            is_reply_or_expect_link=False,
+                            is_dyadic_place=False,
+                            active_participant_count=n_participants,
+                            dt_since_last_place_event_s=float(rng.uniform(3.0, 20.0)),
+                            dt_since_last_soul_act_s=86400.0,
+                            dt_since_sender_last_act_s=float(rng.uniform(10.0, 120.0)),
+                            soul_acts_window=0,
+                            total_acts_window=3,
+                            sender_exchange_count=1,
+                            place_event_count=3,
+                            max_visible_mem_cos=0.76,
+                            max_visible_mem_age_s=float(rng.uniform(5.0, 45.0)),
+                            max_active_thread_cos=float(rng.uniform(0.60, 0.85)),
+                            active_thread_count=1,
+                            sender_in_top_thread=True,
+                        ),
+                        schema_version,
+                    ),
+                    label_gate=GATE_SILENT,
+                    wait_delta_ms=0.0,
+                    loss_mask=1.0,
+                    pair_query_text=topic["unrelated_q"],
+                    y_compute_tier=0,
+                    mask_v22=1.0,
+                ),
+            ]
+            episodes.append(
+                TrajectoryEpisode(
+                    episode_id=f"{cid_base}:chatter_q_neg",
+                    dataset_id="proactive_group_v22",
+                    cluster_id=topic["cid"],
+                    split=split,
+                    turns=ep_chatter_q_turns[:max_seq_len],
+                )
+            )
+
+    return episodes

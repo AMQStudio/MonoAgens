@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use monoagens_core::{CoreConfig, ModelPurpose};
+use monoagens_core::{CoreConfig, ModelPurpose, NeuralModel};
 use monoagens_reason::embed::Embedder;
 use monoagens_reason::model::{
     CallOutcome, ModelCallFailure, ModelCallRecord, ModelCallSuccess, ModelProvider, ModelRequest,
@@ -29,7 +29,7 @@ use crate::datasets::fantom::{FantomConverter, FantomScorer};
 use crate::datasets::framework::{
     CachingEmbedder, Converter, EmbedderProbe, EmbedderProbeOutcome, ExternalItem, HistoryMode,
     JudgeExecutionConfig, SILENT_THINK_JSON, Scorer, ScorerDetailRecorder, ScorerItemOutcome,
-    TranscriptRecord, execute_external_item, execute_external_item_with_embedder,
+    TranscriptRecord, execute_external_item, execute_external_item_with_model_and_state,
     load_or_convert_cached, sample_items_stratified,
 };
 use crate::datasets::group_mem_bench::{GroupMemBenchConverter, GroupMemBenchScorer};
@@ -549,6 +549,21 @@ pub fn execute_external_datasets(
     let manifest_raw = fs::read(manifest_path).unwrap_or_default();
     let manifest_digest = format!("sha256:{}", sha256_hex(&manifest_raw));
     let loaded_config = monoagens_store::LoadedCoreConfig::from_config(config.clone())?;
+    let loaded_neural_model: Option<Arc<NeuralModel>> = match config.model_path.as_deref() {
+        Some(path_str) => {
+            let bytes = fs::read(path_str).map_err(|e| {
+                LabError::Protocol(format!("failed to read configured model_path '{path_str}': {e}"))
+            })?;
+            let model = NeuralModel::from_safetensors_bytes(&bytes, config.expected_blake3)
+                .map_err(|e| {
+                    LabError::Protocol(format!(
+                        "failed to load configured model_path '{path_str}': {e}"
+                    ))
+                })?;
+            Some(Arc::new(model))
+        }
+        None => None,
+    };
 
     let suite_scope = suite_domain(suite);
     let external_specs: Vec<&BenchmarkDatasetSpec> = registry
@@ -985,10 +1000,11 @@ pub fn execute_external_datasets(
                     opts.max_cost_usd.unwrap_or(0.0)
                 )));
             }
-            let exec = execute_external_item_with_embedder(
+            let exec = execute_external_item_with_model_and_state(
                 item,
                 config,
                 opts.seed,
+                loaded_neural_model.clone(),
                 probe_provider,
                 &opts.probe_model_name,
                 opts.live,
@@ -997,7 +1013,8 @@ pub fn execute_external_datasets(
                 None,
                 None,
                 None,
-            )?;
+            )?
+            .0;
             if history_mode_recorded.is_none()
                 && matches!(
                     item.history_mode,
@@ -1189,6 +1206,9 @@ pub fn execute_external_datasets(
         } else {
             0.0
         };
+        if let Some(ref model) = loaded_neural_model {
+            rec.model_blake3 = Some(monoagens_core::blake3::to_hex(&model.blake3));
+        }
         rec.metrics.wall_elapsed_ms = wall_elapsed_ms;
         if let Some(prov) = rec.dataset_provenance.as_mut() {
             prov.reasoning_effort = opts.reasoning_effort.clone();
@@ -1330,7 +1350,13 @@ impl ModelProvider for CostGuardedJudgeProvider<'_> {
             }
         }
 
-        let res = self.inner.invoke(request)?;
+        let res = if request.conversation_id.is_none() {
+            let mut patched = request.clone();
+            patched.conversation_id = Some(format!("judge-{}", request.request_id.as_u64()));
+            self.inner.invoke(&patched)?
+        } else {
+            self.inner.invoke(request)?
+        };
         let (tin, tout) = res
             .record
             .usage

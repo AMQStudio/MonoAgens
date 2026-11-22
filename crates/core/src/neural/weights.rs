@@ -3,10 +3,12 @@
 
 use std::collections::HashMap;
 
+use monoagens_protocol::EmbeddingTag;
 use safetensors::{Dtype, SafeTensors};
 use serde::{Deserialize, Serialize};
 
 use crate::blake3;
+use crate::gate::FrozenDialogueActHead;
 use crate::neural::NeuralError;
 
 /// Supported per-place recurrent working-memory cell architectures.
@@ -66,10 +68,18 @@ pub struct NeuralModelConfig {
     pub has_phase3_heads: bool,
     #[serde(default)]
     pub has_v22_heads: bool,
+    #[serde(default)]
+    pub has_info_gap_head: bool,
+    #[serde(default)]
+    pub has_v3_world_head: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_embed_model_ver: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_prompt_regime_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub info_gap_embed_model_ver: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub info_gap_prompt_regime_id: Option<String>,
 }
 
 /// One Pre-LN Residual SwiGLU block with `TabM` rank-1 ensemble adapters.
@@ -130,6 +140,33 @@ pub struct V22HeadWeights {
     pub p_user_correction_bias: f32,
 }
 
+/// Optional self-contained `A-14` logistic `dialogue_act_gap` head bundled inside `safetensors`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InfoGapHeadWeights {
+    pub w_gap: Vec<f32>,
+    pub b_gap: f32,
+    pub expected_tag: Option<EmbeddingTag>,
+}
+
+impl InfoGapHeadWeights {
+    /// Converts this model head into Core's [`FrozenDialogueActHead`] representation.
+    #[must_use]
+    pub fn to_frozen_head(&self) -> FrozenDialogueActHead {
+        FrozenDialogueActHead {
+            w_gap: self.w_gap.clone(),
+            b_gap: self.b_gap,
+            expected_tag: self.expected_tag.clone(),
+        }
+    }
+}
+
+/// Optional V3 self-supervised predictive coding world-model head (`[3, d_model]`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct V3WorldHeadWeights {
+    pub world_pred_weight: Vec<f32>,
+    pub world_pred_bias: [f32; 3],
+}
+
 /// Fully validated, immutable Pure-Rust neural controller weights loaded from `safetensors`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NeuralModel {
@@ -159,10 +196,12 @@ pub struct NeuralModel {
     pub gate_4_bias: [f32; 4],
     pub wait_delta_t_weight: Vec<f32>,
     pub wait_delta_t_bias: f32,
-    // Optional Phase 2, Phase 3 & V2.2 heads
+    // Optional Phase 2, Phase 3, V2.2 & V3 heads
     pub phase2: Option<Phase2HeadWeights>,
     pub phase3: Option<Phase3HeadWeights>,
     pub v22_heads: Option<V22HeadWeights>,
+    pub info_gap: Option<InfoGapHeadWeights>,
+    pub v3_world: Option<V3WorldHeadWeights>,
 }
 
 impl NeuralModel {
@@ -193,10 +232,12 @@ impl NeuralModel {
             SafeTensors::deserialize(bytes).map_err(|e| NeuralError::SafeTensorParse(e.to_string()))?;
 
         let feature_schema_version = parse_u16_gt_zero(meta_map, "feature_schema_version")?;
-        if feature_schema_version != 1 && feature_schema_version != 2 {
+        if !(1..=3).contains(&feature_schema_version) {
             return Err(NeuralError::InvalidMetadata {
                 key: "feature_schema_version",
-                detail: format!("unsupported schema version {feature_schema_version}, expected 1 or 2"),
+                detail: format!(
+                    "unsupported schema version {feature_schema_version}, expected 1, 2, or 3"
+                ),
             });
         }
         let d_in_emb = parse_usize_gt_zero(meta_map, "d_in_emb")?;
@@ -220,10 +261,16 @@ impl NeuralModel {
         let has_phase2_heads = parse_optional_bool(meta_map, "has_phase2_heads")?;
         let has_phase3_heads = parse_optional_bool(meta_map, "has_phase3_heads")?;
         let has_v22_heads = parse_optional_bool(meta_map, "has_v22_heads")?;
+        let has_info_gap_head = parse_optional_bool(meta_map, "has_info_gap_head")?;
+        let has_v3_world_head = parse_optional_bool(meta_map, "has_v3_world_head")?;
         let expected_embed_model_ver =
             parse_optional_nonempty_str(meta_map, "expected_embed_model_ver")?;
         let expected_prompt_regime_id =
             parse_optional_nonempty_str(meta_map, "expected_prompt_regime_id")?;
+        let info_gap_embed_model_ver =
+            parse_optional_nonempty_str(meta_map, "info_gap_embed_model_ver")?;
+        let info_gap_prompt_regime_id =
+            parse_optional_nonempty_str(meta_map, "info_gap_prompt_regime_id")?;
 
         // Infer or validate plr_n_frequencies from stem.plr.freqs.
         let freqs_view = tensors
@@ -293,8 +340,12 @@ impl NeuralModel {
             has_phase2_heads,
             has_phase3_heads,
             has_v22_heads,
+            has_info_gap_head,
+            has_v3_world_head,
             expected_embed_model_ver,
             expected_prompt_regime_id,
+            info_gap_embed_model_ver,
+            info_gap_prompt_regime_id,
         };
 
         // Load & validate stem tensors.
@@ -413,6 +464,42 @@ impl NeuralModel {
             None
         };
 
+        let info_gap = if has_info_gap_head {
+            let w_gap = load_f32_tensor(&tensors, "head.dialogue_act_gap.weight", &[d_in_emb])?;
+            let b_gap = load_f32_tensor(&tensors, "head.dialogue_act_gap.bias", &[1])?[0];
+            let tag_ver = config
+                .info_gap_embed_model_ver
+                .clone()
+                .or_else(|| config.expected_embed_model_ver.clone());
+            let expected_tag = tag_ver.map(|ver| EmbeddingTag {
+                embed_model_ver: ver,
+                dim_d: d_in_emb as u32,
+                prompt_regime_id: config
+                    .info_gap_prompt_regime_id
+                    .clone()
+                    .unwrap_or_else(|| "t_clf".to_owned()),
+            });
+            Some(InfoGapHeadWeights {
+                w_gap,
+                b_gap,
+                expected_tag,
+            })
+        } else {
+            None
+        };
+
+        let v3_world = if has_v3_world_head {
+            let world_pred_weight =
+                load_f32_tensor(&tensors, "head.world_pred.weight", &[3, d_model])?;
+            let wp_bias_vec = load_f32_tensor(&tensors, "head.world_pred.bias", &[3])?;
+            Some(V3WorldHeadWeights {
+                world_pred_weight,
+                world_pred_bias: [wp_bias_vec[0], wp_bias_vec[1], wp_bias_vec[2]],
+            })
+        } else {
+            None
+        };
+
         Ok(Self {
             config,
             blake3: actual_blake3,
@@ -438,6 +525,8 @@ impl NeuralModel {
             phase2,
             phase3,
             v22_heads,
+            info_gap,
+            v3_world,
         })
     }
 
@@ -484,7 +573,12 @@ impl NeuralModel {
         let v22 = self.v22_heads.as_ref().map_or(0, |h| {
             h.compute_tier_weight.len() + 3 + h.p_user_correction_weight.len() + 1
         });
-        stem + trunk + cell + actor_cell + p1 + p2 + p3 + v22
+        let info_gap = self.info_gap.as_ref().map_or(0, |h| h.w_gap.len() + 1);
+        let world = self
+            .v3_world
+            .as_ref()
+            .map_or(0, |h| h.world_pred_weight.len() + 3);
+        stem + trunk + cell + actor_cell + p1 + p2 + p3 + v22 + info_gap + world
     }
 }
 
@@ -728,7 +822,7 @@ pub(crate) mod tests_support {
         bytes: Vec<u8>,
     }
 
-    fn make_f32_data(len: usize, seed: u64, base_bias: f32) -> Vec<u8> {
+    pub(crate) fn make_f32_data(len: usize, seed: u64, base_bias: f32) -> Vec<u8> {
         let mut out = Vec::with_capacity(len * 4);
         let mut s = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
         for i in 0..len {
@@ -1396,7 +1490,7 @@ mod tests {
             NeuralError::MissingTensor("actor_memory.gdn2.w_delta.weight".to_owned())
         );
 
-        // Unsupported feature_schema_version = 3
+        // Unsupported feature_schema_version = 4
         let (mut meta3, entries3) = tests_support::build_synthetic_v22_tensors_map(
             2,
             256,
@@ -1415,7 +1509,7 @@ mod tests {
             false,
             false,
         );
-        meta3.insert("feature_schema_version".to_owned(), "3".to_owned());
+        meta3.insert("feature_schema_version".to_owned(), "4".to_owned());
         let err3 =
             NeuralModel::from_safetensors_bytes(&serialize_tensors_map(meta3, entries3), None)
                 .expect_err("unsupported schema version must fail");
@@ -1426,5 +1520,55 @@ mod tests {
                 ..
             }
         ));
+
+        // Schema v3 + info_gap + v3_world heads must load cleanly.
+        let (mut meta_v3, mut entries_v3) = tests_support::build_synthetic_v22_tensors_map(
+            3,
+            256,
+            36,
+            64,
+            32,
+            128,
+            192,
+            2,
+            4,
+            64,
+            24,
+            8,
+            CellType::MinGru,
+            true,
+            true,
+            true,
+        );
+        meta_v3.insert("has_info_gap_head".to_owned(), "true".to_owned());
+        meta_v3.insert("has_v3_world_head".to_owned(), "true".to_owned());
+        entries_v3.push((
+            "head.dialogue_act_gap.weight".to_owned(),
+            vec![256],
+            tests_support::make_f32_data(256, 90, 0.0),
+        ));
+        entries_v3.push((
+            "head.dialogue_act_gap.bias".to_owned(),
+            vec![1],
+            tests_support::make_f32_data(1, 91, -0.2),
+        ));
+        entries_v3.push((
+            "head.world_pred.weight".to_owned(),
+            vec![3, 128],
+            tests_support::make_f32_data(3 * 128, 92, 0.0),
+        ));
+        entries_v3.push((
+            "head.world_pred.bias".to_owned(),
+            vec![3],
+            tests_support::make_f32_data(3, 93, 0.0),
+        ));
+        let model_v3 = NeuralModel::from_safetensors_bytes(
+            &serialize_tensors_map(meta_v3, entries_v3),
+            None,
+        )
+        .expect("schema v3 with info_gap + world heads must load");
+        assert_eq!(model_v3.config.feature_schema_version, 3);
+        assert!(model_v3.info_gap.is_some());
+        assert!(model_v3.v3_world.is_some());
     }
 }

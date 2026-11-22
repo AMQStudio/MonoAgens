@@ -13,7 +13,7 @@ use monoagens_core::{
 use monoagens_protocol::{
     ApprovalResolveParams, ApprovalResolveResult, BodyId, Time, Waist2Error,
 };
-use monoagens_reason::{ModelProvider, ReasoningEffort};
+use monoagens_reason::{InfoGapClassifier, ModelProvider, ReasoningEffort};
 use monoagens_store::{ConfigLoadError, SegmentedStore, StoreConfig};
 use tokio::sync::{Notify, mpsc, oneshot};
 
@@ -442,9 +442,19 @@ impl GatewayRuntime {
             let embedder = build_embedder_from_config_async(&config, secrets)
                 .await
                 .map_err(|e| GatewayError::ProviderInit(e.to_string()))?;
+            let info_gap = neural_model.as_ref().and_then(|m| {
+                m.info_gap.as_ref().and_then(|ig| {
+                    InfoGapClassifier::from_weights(
+                        ig.w_gap.clone(),
+                        ig.b_gap,
+                        ig.expected_tag.clone(),
+                    )
+                    .ok()
+                })
+            });
             let service = Arc::new(PreQueueService::new(
                 embedder,
-                None,
+                info_gap,
                 None,
                 options.diagnostics.clone(),
                 Arc::clone(&options.clock),
@@ -672,6 +682,9 @@ async fn run_core_owner_task<S, F, D>(
 
     let (used, limit) = ctx.budget.snapshot(ctx.clock.now());
     core.set_daily_budget(used as f64, limit as f64);
+    if let Some(ig) = core.neural_model().and_then(|m| m.info_gap.as_ref()) {
+        core.set_dialogue_act_head(Some(ig.to_frozen_head()));
+    }
 
     if let Ok(events) = core.store().read_in_order(None, usize::MAX) {
         ctx.doors.replay_from_store_events(&events);
@@ -722,12 +735,18 @@ async fn run_core_owner_task<S, F, D>(
             );
             ctx.doors.sync_state_epoch(core.state().epoch);
 
+            let prev_seq = core.state().last_seq;
             let is_tick = matches!(env.input, Input::Tick);
             let is_body_state = matches!(env.input, Input::BodyState(_));
             ctx.stats.enter_step();
             let step_res = core.step(env.input, now, &mut ctx.doors);
             ctx.stats.exit_step();
             persist_door_approval_events(&mut core, &mut ctx);
+            if core.state().last_seq > prev_seq
+                && let Ok(new_events) = core.store().read_after_seq(Some(prev_seq), usize::MAX)
+            {
+                ctx.doors.sync_item_audiences(&new_events);
+            }
 
             match step_res {
                 Ok(effects) => {
@@ -1005,5 +1024,28 @@ mod tests {
             map_compute_tier_to_reasoning_effort(ComputeTier::Deep),
             ReasoningEffort::High
         );
+    }
+
+    #[test]
+    fn info_gap_head_converts_cleanly_to_reason_classifier_and_core_head() {
+        let head = monoagens_core::neural::InfoGapHeadWeights {
+            w_gap: vec![0.5, -0.25, 0.1],
+            b_gap: -0.4,
+            expected_tag: Some(monoagens_protocol::EmbeddingTag {
+                embed_model_ver: "egemma2-256".to_owned(),
+                dim_d: 3,
+                prompt_regime_id: "t_clf".to_owned(),
+            }),
+        };
+        let clf = InfoGapClassifier::from_weights(
+            head.w_gap.clone(),
+            head.b_gap,
+            head.expected_tag.clone(),
+        )
+        .expect("valid info gap head");
+        let core_head = head.to_frozen_head();
+        assert_eq!(core_head.w_gap, clf.w_gap());
+        assert_eq!(core_head.b_gap, clf.b_gap());
+        assert!((clf.neutral_prior_score() - 0.401_312_34).abs() < 1e-5);
     }
 }

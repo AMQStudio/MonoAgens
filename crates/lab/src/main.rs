@@ -126,6 +126,7 @@ fn run_cli(args: Vec<String>) -> Result<ExitCode, String> {
         "baseline" => run_baseline_cmd(&args[1..]),
         "benchmark" => run_benchmark_cmd(&args[1..]),
         "report" => run_report_cmd(&args[1..]),
+        "smoke-id" => run_smoke_id_cmd(&args[1..]),
         "datasets" => run_datasets_cmd(&args[1..]),
         "pareto" => run_pareto_cmd(&args[1..]),
         "test-body" => run_test_body_stdio(&args[1..]),
@@ -1014,11 +1015,37 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
 
     let category_suite = datasets::suite_domain(&suite).is_some();
     let memory_suite = suite == "memory-comparison";
-    if !category_suite && !memory_suite && suite != "standard" && suite != "in_tree_only" {
+    let smoke_suite = suite == "smoke" || suite == "smoke-e2e";
+    if !category_suite
+        && !memory_suite
+        && !smoke_suite
+        && suite != "standard"
+        && suite != "in_tree_only"
+    {
         return Err(format!(
-            "unknown benchmark suite '{suite}' (expected standard, in_tree_only, memory-comparison, or one of {})",
+            "unknown benchmark suite '{suite}' (expected standard, in_tree_only, smoke, smoke-e2e, memory-comparison, or one of {})",
             datasets::CATEGORY_SUITES.join("|")
         ));
+    }
+    if smoke_suite {
+        if only_ids.is_none() {
+            only_ids = Some(vec![
+                "when2speak".to_owned(),
+                "proactive_bench".to_owned(),
+                "longmemeval".to_owned(),
+                "fantom".to_owned(),
+            ]);
+        }
+        if pilot_items.is_none() {
+            pilot_items = Some(2);
+        }
+        if max_cost_usd.is_none() {
+            max_cost_usd = Some(0.25);
+        }
+        if out_dir.is_none() {
+            out_dir = Some(PathBuf::from(datasets::DEFAULT_RUNS_ROOT).join("smoke"));
+        }
+        report_flag = true;
     }
     if category_suite && out_dir.is_none() {
         out_dir = Some(PathBuf::from(datasets::DEFAULT_RUNS_ROOT).join(&suite));
@@ -1064,10 +1091,30 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
 
     let resolved_model_endpoint = model_endpoint
         .clone()
-        .or_else(|| provider_secrets.model_endpoint.clone());
+        .or_else(|| provider_secrets.model_endpoint.clone())
+        .or_else(|| {
+            loaded_profile
+                .as_ref()
+                .map(|p| p.endpoint_url.clone())
+                .filter(|s| !s.trim().is_empty())
+        });
     let resolved_judge_endpoint = judge_endpoint
         .clone()
-        .or_else(|| provider_secrets.model_endpoint.clone());
+        .or_else(|| provider_secrets.model_endpoint.clone())
+        .or_else(|| resolved_model_endpoint.clone());
+
+    if model_name == "scripted"
+        && let Some(prof) = loaded_profile.as_ref()
+        && !prof.model.trim().is_empty()
+    {
+        model_name = prof.model.clone();
+    }
+    if reasoning_effort.is_none()
+        && let Some(prof) = loaded_profile.as_ref()
+        && !prof.reasoning_effort.trim().is_empty()
+    {
+        reasoning_effort = Some(prof.reasoning_effort.parse::<ReasoningEffort>()?);
+    }
 
     if memory_suite && only_ids.is_none() {
         only_ids = Some(vec!["locomo".to_owned(), "longmemeval".to_owned()]);
@@ -1100,10 +1147,22 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
         extra_header_names.push(hdr_name.to_owned());
         extra_headers.push((
             hdr_name.to_owned(),
-            monoagens_lab::reason_seam::model::ExtraHeaderValue::Literal(SecretString::new(
-                hdr_val,
-            )),
+            monoagens_lab::reason_seam::model::ExtraHeaderValue::parse(&hdr_val),
         ));
+    }
+    if let Some(prof) = loaded_profile.as_ref() {
+        for (hdr_name, hdr_val) in &prof.headers {
+            if !extra_headers
+                .iter()
+                .any(|(existing, _)| existing.eq_ignore_ascii_case(hdr_name))
+            {
+                extra_header_names.push(hdr_name.clone());
+                extra_headers.push((
+                    hdr_name.clone(),
+                    monoagens_lab::reason_seam::model::ExtraHeaderValue::parse(hdr_val),
+                ));
+            }
+        }
     }
 
     let lab_ua = format!("monoagens-lab/{}", env!("CARGO_PKG_VERSION"));
@@ -1119,7 +1178,12 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
                 .map(SecretString::new)
                 .or_else(|| provider_secrets.model_api_key.clone());
             let mut cfg = OpenAiModelConfig::new(ep, key);
-            cfg.reasoning_effort = reasoning_effort;
+            if let Some(prof) = loaded_profile.as_ref() {
+                apply_run_profile_to_openai_config(&mut cfg, prof, false)?;
+            }
+            if reasoning_effort.is_some() {
+                cfg.reasoning_effort = reasoning_effort;
+            }
             cfg.extra_headers = extra_headers.clone();
             cfg.user_agent = Some(lab_ua.clone());
             cfg.max_retries = 5;
@@ -1139,7 +1203,12 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
                 .map(SecretString::new)
                 .or_else(|| provider_secrets.model_api_key.clone());
             let mut cfg = OpenAiModelConfig::new(ep, key);
-            cfg.reasoning_effort = judge_reasoning_effort;
+            if let Some(prof) = loaded_profile.as_ref() {
+                apply_run_profile_to_openai_config(&mut cfg, prof, false)?;
+            }
+            if judge_reasoning_effort.is_some() {
+                cfg.reasoning_effort = judge_reasoning_effort;
+            }
             cfg.extra_headers = extra_headers;
             cfg.user_agent = Some(lab_ua);
             cfg.max_retries = 5;
@@ -1162,10 +1231,8 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
     let mut sidecar_guard: Option<SidecarProcessGuard> = None;
     let mut embedder_backend: Option<String> = None;
     let mut embedder_revision: Option<String> = None;
-    let configured_embedder: Option<EmbeddingGemma2Embedder> = if (category_suite || memory_suite)
-        && !allow_no_embedder
-        && !preflight_only
-    {
+    let configured_embedder: Option<EmbeddingGemma2Embedder> =
+        if (category_suite || memory_suite || smoke_suite) && !allow_no_embedder && !preflight_only {
         if let Some(ep) = &embed_endpoint {
             let mpath = embed_model_path
                 .clone()
@@ -1366,7 +1433,9 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
         runs_root: runs_root.clone(),
         pilot_prefix_n: pilot_items,
         preflight_only,
-        require_semantic_embedder: category_suite && !allow_no_embedder && !preflight_only,
+        require_semantic_embedder: (category_suite || smoke_suite)
+            && !allow_no_embedder
+            && !preflight_only,
         probe_model_name: model_name,
         probe_provider: live_probe_provider
             .as_ref()
@@ -1388,7 +1457,7 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
     };
 
     let report = run_benchmark_suite_with_options(
-        &suite,
+        if smoke_suite { "in_tree_only" } else { &suite },
         &datasets_dir,
         pareto_input.as_ref(),
         pareto_flag,
@@ -1408,22 +1477,35 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
     }
     drop(sidecar_guard);
 
-    // Each category suite owns its run directory and report; `standard` only indexes.
-    let auto_report = category_suite && !preflight_only;
+    // Each category/smoke suite owns its run directory and report; `standard` only indexes.
+    let auto_report = (category_suite || smoke_suite) && !preflight_only;
+    let effective_suite = if smoke_suite {
+        "standard".to_owned()
+    } else {
+        suite.clone()
+    };
+    let report_label = smoke_suite.then(|| "smoke-e2e (2 items/dataset)".to_owned());
+    let mut generated_samples_path: Option<String> = None;
     if (report_flag || auto_report)
         && let Some(dir) = out_dir.as_deref()
     {
-        datasets::generate_benchmark_report(&datasets::ReportOptions {
+        let rep_sum = datasets::generate_benchmark_report(&datasets::ReportOptions {
             run_dir: dir.to_path_buf(),
             out_dir: None,
             manifest_path,
             extra_notes: report_notes,
             skip_python_charts: false,
             suite: category_suite.then(|| suite.clone()),
-            label: None,
+            label: report_label,
             appendix_markdown: None,
         })
         .map_err(|e| e.to_string())?;
+        generated_samples_path = Some(
+            PathBuf::from(&rep_sum.report_dir)
+                .join("CONVERSATION_SAMPLES.md")
+                .display()
+                .to_string(),
+        );
     }
     if json {
         println!(
@@ -1431,9 +1513,12 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
             serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
         );
     } else {
+        let samples_suffix = generated_samples_path
+            .as_deref()
+            .map_or_else(String::new, |p| format!(" samples={p}"));
         println!(
-            "benchmark suite={} partial={} scorecard_rows={} tool_rag_points={} arm_t_restart_ok={}",
-            report.suite,
+            "benchmark suite={effective_suite} requested_suite={} partial={} scorecard_rows={} tool_rag_points={} arm_t_restart_ok={}{samples_suffix}",
+            suite,
             report.partial,
             report.scorecard.len(),
             report.tool_rag_scaling.len(),
@@ -1818,6 +1903,8 @@ fn run_report_cmd(args: &[String]) -> Result<ExitCode, String> {
     let mut label: Option<String> = None;
     let mut appendix_path: Option<PathBuf> = None;
     let mut skip_python_charts = false;
+    let mut samples_per_dataset: usize = datasets::DEFAULT_SAMPLES_PER_DATASET;
+    let mut samples_only = false;
     let mut json = false;
 
     let mut i = 0;
@@ -1855,6 +1942,16 @@ fn run_report_cmd(args: &[String]) -> Result<ExitCode, String> {
                     args.get(i).ok_or("--appendix requires a path")?,
                 ));
             }
+            "--samples-per-dataset" => {
+                i += 1;
+                let val = args
+                    .get(i)
+                    .ok_or("--samples-per-dataset requires an integer")?;
+                samples_per_dataset = val
+                    .parse::<usize>()
+                    .map_err(|e| format!("invalid --samples-per-dataset '{val}': {e}"))?;
+            }
+            "--samples-only" => samples_only = true,
             "--no-python-charts" => skip_python_charts = true,
             "--json" => json = true,
             other => return Err(format!("unknown argument '{other}' for report")),
@@ -1863,6 +1960,28 @@ fn run_report_cmd(args: &[String]) -> Result<ExitCode, String> {
     }
 
     let run_dir = run_dir.ok_or("report requires --run <dir>")?;
+    if samples_only {
+        let target = out_dir
+            .as_deref()
+            .map(|d| d.join("CONVERSATION_SAMPLES.md"));
+        let samples_path =
+            datasets::generate_conversation_samples(&run_dir, target.as_deref(), samples_per_dataset)
+                .map_err(|e| e.to_string())?;
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "samples_markdown_path": samples_path.display().to_string(),
+                    "samples_per_dataset": samples_per_dataset,
+                }))
+                .map_err(|e| e.to_string())?
+            );
+        } else {
+            println!("conversation_samples={}", samples_path.display());
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+
     let appendix_markdown = match appendix_path {
         Some(path) => Some(
             fs::read_to_string(&path)
@@ -1871,7 +1990,7 @@ fn run_report_cmd(args: &[String]) -> Result<ExitCode, String> {
         None => None,
     };
     let summary = datasets::generate_benchmark_report(&datasets::ReportOptions {
-        run_dir,
+        run_dir: run_dir.clone(),
         out_dir,
         manifest_path,
         extra_notes: notes,
@@ -1882,6 +2001,18 @@ fn run_report_cmd(args: &[String]) -> Result<ExitCode, String> {
     })
     .map_err(|e| e.to_string())?;
 
+    let samples_target = PathBuf::from(&summary.report_dir).join("CONVERSATION_SAMPLES.md");
+    if samples_per_dataset != datasets::DEFAULT_SAMPLES_PER_DATASET
+        || summary.run_records_loaded == 0
+    {
+        let _ = datasets::generate_conversation_samples(
+            &run_dir,
+            Some(&samples_target),
+            samples_per_dataset,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
     if json {
         println!(
             "{}",
@@ -1889,14 +2020,216 @@ fn run_report_cmd(args: &[String]) -> Result<ExitCode, String> {
         );
     } else {
         println!(
-            "report generated at {} (records={}, csvs={}, charts={})",
+            "report generated at {} (records={}, csvs={}, charts={}, samples={})",
             summary.report_dir,
             summary.run_records_loaded,
             summary.csv_files.len(),
-            summary.chart_files.len()
+            summary.chart_files.len(),
+            samples_target.display()
         );
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn apply_run_profile_to_openai_config(
+    cfg: &mut OpenAiModelConfig,
+    prof: &monoagens_lab::memory::RunProfile,
+    include_headers: bool,
+) -> Result<(), String> {
+    cfg.profile_name = Some(prof.name.clone());
+    if !prof.reasoning_effort.trim().is_empty() {
+        cfg.reasoning_effort = Some(prof.reasoning_effort.parse::<ReasoningEffort>()?);
+    }
+    cfg.output_limits = prof.output_limits.clone();
+    cfg.output_limit_param = prof.output_limit_param.clone();
+    cfg.usage_paths = monoagens_lab::reason_seam::model::UsageFieldPaths {
+        input_tokens: prof.usage_paths.input_tokens.clone(),
+        output_tokens: prof.usage_paths.output_tokens.clone(),
+        cached_tokens: prof.usage_paths.cached_tokens.clone(),
+        reasoning_tokens: prof.usage_paths.reasoning_tokens.clone(),
+        ..Default::default()
+    };
+    if include_headers {
+        cfg.extra_headers = prof
+            .headers
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    monoagens_lab::reason_seam::model::ExtraHeaderValue::parse(v),
+                )
+            })
+            .collect();
+    }
+    Ok(())
+}
+
+fn run_smoke_id_cmd(args: &[String]) -> Result<ExitCode, String> {
+    let ws_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let default_v3 = ws_root.join("training/artifacts/neural_v3_best.safetensors");
+    let default_v22 = ws_root.join("training/artifacts/neural_v22_best.safetensors");
+    let mut model_path: Option<PathBuf> = if default_v3.is_file() {
+        Some(default_v3)
+    } else if default_v22.is_file() {
+        Some(default_v22)
+    } else {
+        None
+    };
+    let mut out_dir = PathBuf::from(datasets::DEFAULT_RUNS_ROOT).join("smoke-id");
+    let mut embed_endpoint: Option<String> = None;
+    let mut embed_model_path: Option<PathBuf> = None;
+    let mut offline_hash = false;
+    let mut live = false;
+    let mut profile_path: Option<PathBuf> = None;
+    let mut secrets_path: Option<PathBuf> = None;
+    let mut seed: u64 = 1;
+    let mut json = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--model" => {
+                i += 1;
+                model_path = Some(PathBuf::from(
+                    args.get(i).ok_or("--model requires a path")?,
+                ));
+            }
+            "--out-dir" => {
+                i += 1;
+                out_dir = PathBuf::from(args.get(i).ok_or("--out-dir requires a path")?);
+            }
+            "--embed-endpoint" => {
+                i += 1;
+                embed_endpoint = Some(
+                    args.get(i)
+                        .ok_or("--embed-endpoint requires a URL")?
+                        .clone(),
+                );
+            }
+            "--embed-model-path" => {
+                i += 1;
+                embed_model_path = Some(PathBuf::from(
+                    args.get(i).ok_or("--embed-model-path requires a path")?,
+                ));
+            }
+            "--offline-hash" => offline_hash = true,
+            "--live" => live = true,
+            "--profile" => {
+                i += 1;
+                profile_path = Some(PathBuf::from(
+                    args.get(i).ok_or("--profile requires a path")?,
+                ));
+            }
+            "--secrets" => {
+                i += 1;
+                secrets_path = Some(PathBuf::from(
+                    args.get(i).ok_or("--secrets requires a path")?,
+                ));
+            }
+            "--seed" => {
+                i += 1;
+                let val = args.get(i).ok_or("--seed requires an integer")?;
+                seed = val
+                    .parse::<u64>()
+                    .map_err(|e| format!("invalid --seed '{val}': {e}"))?;
+            }
+            "--json" => json = true,
+            other => return Err(format!("unknown argument '{other}' for smoke-id")),
+        }
+        i += 1;
+    }
+
+    let mut sidecar_guard: Option<SidecarProcessGuard> = None;
+    let embedder: std::sync::Arc<dyn Embedder> = if offline_hash {
+        std::sync::Arc::new(monoagens_lab::reason_seam::embed::HashEmbedder::with_model_ver(
+            "egemma2-256",
+            256,
+        ))
+    } else if let Some(ep) = embed_endpoint {
+        let mpath = embed_model_path
+            .unwrap_or_else(|| ws_root.join("lab/datasets/embedder_models/embeddinggemma-2"));
+        let emb = EmbeddingGemma2Embedder::new(EmbeddingGemma2Config::local_http(
+            ep,
+            Some(mpath),
+            60_000,
+        ))
+        .map_err(|e| format!("failed to connect EmbeddingGemma 2 embedder: {e}"))?;
+        std::sync::Arc::new(emb)
+    } else {
+        let model_dir = embed_model_path
+            .unwrap_or_else(|| ws_root.join("lab/datasets/embedder_models/embeddinggemma-2"));
+        if model_dir.is_dir() {
+            let (guard, url, _dev) = start_embeddinggemma2_sidecar(&model_dir)?;
+            sidecar_guard = Some(guard);
+            let emb = EmbeddingGemma2Embedder::new(EmbeddingGemma2Config::local_http(
+                url,
+                Some(model_dir),
+                60_000,
+            ))
+            .map_err(|e| format!("failed to start EmbeddingGemma 2 embedder: {e}"))?;
+            std::sync::Arc::new(emb)
+        } else {
+            std::sync::Arc::new(monoagens_lab::reason_seam::embed::HashEmbedder::with_model_ver(
+                "egemma2-256",
+                256,
+            ))
+        }
+    };
+
+    let (provider, model_name): (
+        Option<std::sync::Arc<dyn monoagens_lab::reason_seam::model::ModelProvider>>,
+        String,
+    ) = if live {
+        let profile = profile_path
+            .as_deref()
+            .ok_or("--live smoke-id requires --profile <path>")?;
+        let prof = monoagens_lab::memory::RunProfile::load_from_path(profile)
+            .map_err(|e| e.to_string())?;
+        let secrets =
+            datasets::load_lab_provider_secrets(secrets_path.as_deref()).map_err(|e| e.to_string())?;
+        let key = secrets.model_api_key.clone();
+        let mut cfg = OpenAiModelConfig::new(&prof.endpoint_url, key);
+        apply_run_profile_to_openai_config(&mut cfg, &prof, true)?;
+        cfg.default_timeout_ms = 60_000;
+        let prov = OpenAiModelProvider::new(cfg)?;
+        (
+            Some(std::sync::Arc::new(prov)
+                as std::sync::Arc<dyn monoagens_lab::reason_seam::model::ModelProvider>),
+            prof.model,
+        )
+    } else {
+        (None, "scripted".to_owned())
+    };
+
+    let res = monoagens_lab::indonesian_smoke::run_indonesian_smoke(
+        &monoagens_lab::indonesian_smoke::IndonesianSmokeOptions {
+            model_path,
+            out_dir,
+            embedder,
+            provider,
+            model_name,
+            seed,
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    drop(sidecar_guard);
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&res).map_err(|e| e.to_string())?
+        );
+    } else {
+        println!(
+            "smoke-id mode={} passed={}/{} samples={}",
+            res.mode, res.passed_count, res.total_count, res.samples_markdown_path
+        );
+    }
+    if res.passed_count == res.total_count {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::from(1))
+    }
 }
 
 struct SidecarProcessGuard {
@@ -1996,5 +2329,5 @@ fn extract_endpoint_host(endpoint: &str) -> Option<String> {
 }
 
 fn usage() -> String {
-    "Usage:\n  monoagens-lab run --scenario <path> [--config <path>] [--seed <u64>] [--json] [--record-out <path>]\n  monoagens-lab suite [--root <dir>] [--set development|validation] [--config <path>] [--seeds 1,2] [--json]\n  monoagens-lab compare (--scenario <path> | --set development|validation [--root <dir>]) [--ablation neutral|online_adapt] [--model <path>] [--config <path>] [--seeds 1,2,3,4,5] [--out-dir <dir>] [--json]\n  monoagens-lab replay --scenario <path> [--config <path>] [--seed <u64>] [--json]\n  monoagens-lab baseline --adapter <slug> --scenario <path> [--config <path>] [--seed <u64>] [--sealed] [--timeout-s <u64>] [--json]\n  monoagens-lab benchmark --suite <standard|in_tree_only|memory|prospective|timing|group|tom|indonesian|security> [--datasets-dir <path>] [--config <path>] [--pareto] [--pareto-input <path>] [--report] [--json]\n  monoagens-lab report --run <dir> [--out <dir>] [--manifest <path>] [--note <text>] [--json]\n  monoagens-lab datasets <init|list|pin|fetch|verify> [ids...] [--manifest <path>] [--datasets-dir <path>] [--record-checksums] [--json]\n  monoagens-lab pareto --input <scorecard.json> [--json]\n  monoagens-lab controller [--model <path>] [--json]\n  monoagens-lab test-body [--state-dir <path>]".to_owned()
+    "Usage:\n  monoagens-lab run --scenario <path> [--config <path>] [--seed <u64>] [--json] [--record-out <path>]\n  monoagens-lab suite [--root <dir>] [--set development|validation] [--config <path>] [--seeds 1,2] [--json]\n  monoagens-lab compare (--scenario <path> | --set development|validation [--root <dir>]) [--ablation neutral|online_adapt] [--model <path>] [--config <path>] [--seeds 1,2,3,4,5] [--out-dir <dir>] [--json]\n  monoagens-lab replay --scenario <path> [--config <path>] [--seed <u64>] [--json]\n  monoagens-lab baseline --adapter <slug> --scenario <path> [--config <path>] [--seed <u64>] [--sealed] [--timeout-s <u64>] [--json]\n  monoagens-lab benchmark --suite <standard|in_tree_only|smoke|smoke-e2e|memory|prospective|timing|group|tom|indonesian|security> [--datasets-dir <path>] [--config <path>] [--pareto] [--pareto-input <path>] [--report] [--json]\n  monoagens-lab report --run <dir> [--out <dir>] [--manifest <path>] [--samples-per-dataset <N>] [--samples-only] [--note <text>] [--json]\n  monoagens-lab smoke-id [--model <path>] [--out-dir <dir>] [--offline-hash] [--live --profile <path>] [--json]\n  monoagens-lab datasets <init|list|pin|fetch|verify> [ids...] [--manifest <path>] [--datasets-dir <path>] [--record-checksums] [--json]\n  monoagens-lab pareto --input <scorecard.json> [--json]\n  monoagens-lab controller [--model <path>] [--json]\n  monoagens-lab test-body [--state-dir <path>]".to_owned()
 }

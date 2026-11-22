@@ -1797,3 +1797,174 @@ fn report_marks_records_without_monoagens_mode_invalid() {
         "status.csv must mark the legacy record invalid: {status_csv}"
     );
 }
+
+#[test]
+fn report_generates_conversation_samples_balancing_pass_and_fail() {
+    use monoagens_lab::datasets::{
+        ItemOutcomeSummary, ReportOptions, TranscriptRecord, generate_benchmark_report,
+        generate_conversation_samples,
+    };
+
+    let tmp = TempDir::new().unwrap();
+    let manifest_path = tmp.path().join("datasets.manifest.toml");
+    let datasets_dir = tmp.path().join("datasets");
+    let out_dir = tmp.path().join("smoke_run");
+    fs::create_dir_all(&datasets_dir).unwrap();
+
+    let registry = standard_benchmark_registry();
+    let mut manifest = load_and_validate_manifest(
+        &workspace_root().join("lab/datasets.manifest.example.toml"),
+        &registry,
+    )
+    .unwrap();
+    seed_verified_dataset_file(
+        manifest.get_mut("longmemeval").unwrap(),
+        &datasets_dir,
+        "longmemeval_s_cleaned.json",
+        b"lme",
+    );
+    save_manifest_to_path(&manifest, &manifest_path).unwrap();
+
+    let mut handlers = DatasetHandlerRegistry::default();
+    handlers.register_behavioral(
+        Box::new(StubBehavioralConverter {
+            id: "longmemeval".to_owned(),
+            version: "1.0.0".to_owned(),
+        }),
+        Box::new(StubScorer {
+            id: "longmemeval".to_owned(),
+            requires_judge: false,
+            metric_name: "overall_acc".to_owned(),
+        }),
+    );
+    run_benchmark_suite_with_options(
+        "memory",
+        &datasets_dir,
+        None,
+        false,
+        &CoreConfig::default(),
+        &BenchmarkExecutionOptions {
+            manifest_path: Some(manifest_path.clone()),
+            only_ids: Some(vec!["longmemeval".to_owned()]),
+            out_dir: Some(out_dir.clone()),
+            handlers,
+            ..BenchmarkExecutionOptions::default()
+        },
+    )
+    .expect("offline memory run");
+
+    // Seed mixed PASS and FAIL outcomes + JSONL transcripts to verify balanced digest rendering.
+    let tx_dir = out_dir.join("transcripts/longmemeval");
+    fs::create_dir_all(&tx_dir).unwrap();
+    for (item_id, text) in [("item_pass", "Ruang rapat dipindah ke aula."), ("item_fail", "Lupa catat.")] {
+        let rec = TranscriptRecord::Percept {
+            phase: "probe".to_owned(),
+            turn_or_probe_id: "p0".to_owned(),
+            actor: "user".to_owned(),
+            place: "room:a".to_owned(),
+            audience: vec!["soul".to_owned(), "user".to_owned()],
+            timestamp_ms: 1000,
+            text: text.to_owned(),
+            embedding_dim: Some(256),
+            embedding_tag: Some("egemma2-256:256:t_d".to_owned()),
+        };
+        let line = serde_json::to_string(&rec).unwrap();
+        fs::write(tx_dir.join(format!("{item_id}.jsonl")), format!("{line}\n")).unwrap();
+    }
+    let mixed = vec![
+        ItemOutcomeSummary {
+            dataset_id: "longmemeval".to_owned(),
+            item_id: "item_pass".to_owned(),
+            probe_id: "p_pass".to_owned(),
+            cluster_id: "c1".to_owned(),
+            category: Some("memory".to_owned()),
+            question: "Di mana ruang rapat?".to_owned(),
+            gold_answer: "aula".to_owned(),
+            soul_answer: "aula".to_owned(),
+            spoke: true,
+            metric_name: "overall_acc".to_owned(),
+            score: Some(1.0),
+            passed: Some(true),
+            judge_verdict: Some("correct".to_owned()),
+            failed: false,
+            failure_reason: None,
+            transcript_rel_path: "transcripts/longmemeval/item_pass.jsonl".to_owned(),
+        },
+        ItemOutcomeSummary {
+            dataset_id: "longmemeval".to_owned(),
+            item_id: "item_fail".to_owned(),
+            probe_id: "p_fail".to_owned(),
+            cluster_id: "c2".to_owned(),
+            category: Some("memory".to_owned()),
+            question: "Jam berapa rapat?".to_owned(),
+            gold_answer: "14:00".to_owned(),
+            soul_answer: "tidak tahu".to_owned(),
+            spoke: true,
+            metric_name: "overall_acc".to_owned(),
+            score: Some(0.0),
+            passed: Some(false),
+            judge_verdict: Some("wrong".to_owned()),
+            failed: false,
+            failure_reason: None,
+            transcript_rel_path: "transcripts/longmemeval/item_fail.jsonl".to_owned(),
+        },
+    ];
+    fs::write(
+        out_dir.join("longmemeval__seed-1.outcomes.json"),
+        serde_json::to_vec_pretty(&mixed).unwrap(),
+    )
+    .unwrap();
+
+    let summary = generate_benchmark_report(&ReportOptions {
+        run_dir: out_dir.clone(),
+        out_dir: None,
+        manifest_path: Some(manifest_path),
+        extra_notes: Vec::new(),
+        skip_python_charts: true,
+        suite: Some("memory".to_owned()),
+        label: Some("smoke-e2e".to_owned()),
+        appendix_markdown: None,
+    })
+    .expect("generate report");
+
+    let report_dir = PathBuf::from(&summary.report_dir);
+    let samples_md = fs::read_to_string(report_dir.join("CONVERSATION_SAMPLES.md")).unwrap();
+    assert!(samples_md.contains("[PASS] `longmemeval` / `item_pass`"), "{samples_md}");
+    assert!(samples_md.contains("[FAIL] `longmemeval` / `item_fail`"), "{samples_md}");
+    assert!(samples_md.contains("Ruang rapat dipindah ke aula."), "{samples_md}");
+    let report_md = fs::read_to_string(report_dir.join("REPORT.md")).unwrap();
+    assert!(report_md.contains("CONVERSATION_SAMPLES.md"));
+
+    let custom = tmp.path().join("custom_samples.md");
+    let custom_out = generate_conversation_samples(&out_dir, Some(&custom), 1).expect("standalone");
+    let custom_txt = fs::read_to_string(custom_out).unwrap();
+    assert!(custom_txt.contains("[PASS] `longmemeval` / `item_pass`"));
+}
+
+#[test]
+fn indonesian_smoke_suite_offline_verifies_silent_proactive_and_privacy() {
+    use monoagens_lab::indonesian_smoke::{IndonesianSmokeOptions, run_indonesian_smoke};
+    use monoagens_lab::reason_seam::embed::HashEmbedder;
+
+    let tmp = TempDir::new().unwrap();
+    let out_dir = tmp.path().join("smoke-id");
+    let embedder = std::sync::Arc::new(HashEmbedder::with_model_ver("egemma2-256", 256));
+    let report = run_indonesian_smoke(&IndonesianSmokeOptions {
+        model_path: None,
+        out_dir: out_dir.clone(),
+        embedder,
+        provider: None,
+        model_name: "scripted".to_owned(),
+        seed: 1,
+    })
+    .expect("run indonesian smoke");
+
+    assert_eq!(report.passed_count, 3);
+    assert_eq!(report.total_count, 3);
+    assert!(out_dir.join("CONVERSATION_SAMPLES.md").is_file());
+    assert!(out_dir.join("smoke_id_summary.json").is_file());
+    let md = fs::read_to_string(out_dir.join("CONVERSATION_SAMPLES.md")).unwrap();
+    assert!(md.contains("id_01_grup_santai_silent"));
+    assert!(md.contains("id_02_proactive_unanswered_question"));
+    assert!(md.contains("id_03_dm_privacy_delta_ni_zero"));
+}

@@ -259,7 +259,7 @@ impl Valve {
         res
     }
 
-    /// Reconstructs `ApprovalManager` and `DigestQueue` state deterministically from append-only events.
+    /// Reconstructs `ApprovalManager`, `DigestQueue`, and `item_audiences` state deterministically from append-only events.
     pub fn replay_from_events(&mut self, events: &[EventRecord]) -> u64 {
         let replayed_epoch = self.approvals.replay_from_events(
             events,
@@ -268,7 +268,26 @@ impl Valve {
         );
         self.snapshot.state_epoch = self.snapshot.state_epoch.max(replayed_epoch);
         self.digest_queue.replay_from_events(events);
+        self.sync_event_audiences(events);
         self.snapshot.state_epoch
+    }
+
+    /// Synchronizes `item_audiences` (and scrubs `HardForget` targets) from a slice of events.
+    pub fn sync_event_audiences(&mut self, events: &[EventRecord]) {
+        for ev in events {
+            if let Some(monoagens_core::EventDetail::HardForget {
+                target_event_ids, ..
+            }) = &ev.detail
+            {
+                for tid in target_event_ids {
+                    self.snapshot.item_audiences.remove(tid);
+                }
+            } else if ev.id.as_u64() != 0 && !ev.audience.is_empty() {
+                self.snapshot
+                    .item_audiences
+                    .insert(ev.id, ev.audience.clone());
+            }
+        }
     }
 
     /// Returns a shared reference to the [`ApprovalManager`].

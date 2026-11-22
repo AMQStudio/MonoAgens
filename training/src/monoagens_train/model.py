@@ -39,8 +39,12 @@ class ControllerArchitecture:
     has_phase2_heads: bool = False
     has_phase3_heads: bool = False
     has_v22_heads: bool = False
+    has_info_gap_head: bool = False
+    has_v3_world_head: bool = False
     expected_embed_model_ver: str = "egemma2-256"
     expected_prompt_regime_id: str = "t_d"
+    info_gap_embed_model_ver: str = "egemma2-256"
+    info_gap_prompt_regime_id: str = "t_clf"
 
 
 def architecture_for_scale(
@@ -50,15 +54,18 @@ def architecture_for_scale(
     has_phase2_heads: bool = False,
     has_phase3_heads: bool = False,
     has_v22_heads: bool = False,
+    has_info_gap_head: bool = False,
+    has_v3_world_head: bool = False,
     feature_schema_version: int = 1,
     d_in_num: int | None = None,
     h_actor_dim: int = 0,
 ) -> ControllerArchitecture:
-    if feature_schema_version not in (1, 2):
+    if feature_schema_version not in (1, 2, 3):
         raise ValueError(f"Unsupported feature_schema_version: {feature_schema_version}")
     if h_actor_dim < 0:
         raise ValueError(f"h_actor_dim must be >= 0, got {h_actor_dim}")
-    resolved_d_in_num = d_in_num if d_in_num is not None else (32 if feature_schema_version == 2 else 18)
+    default_num = 36 if feature_schema_version == 3 else (32 if feature_schema_version == 2 else 18)
+    resolved_d_in_num = d_in_num if d_in_num is not None else default_num
 
     if scale == "150k":
         return ControllerArchitecture(
@@ -77,6 +84,8 @@ def architecture_for_scale(
             has_phase2_heads=has_phase2_heads,
             has_phase3_heads=has_phase3_heads,
             has_v22_heads=has_v22_heads,
+            has_info_gap_head=has_info_gap_head,
+            has_v3_world_head=has_v3_world_head,
         )
     if scale == "500k":
         return ControllerArchitecture(
@@ -95,6 +104,8 @@ def architecture_for_scale(
             has_phase2_heads=has_phase2_heads,
             has_phase3_heads=has_phase3_heads,
             has_v22_heads=has_v22_heads,
+            has_info_gap_head=has_info_gap_head,
+            has_v3_world_head=has_v3_world_head,
         )
     if scale == "1m":
         return ControllerArchitecture(
@@ -113,6 +124,8 @@ def architecture_for_scale(
             has_phase2_heads=has_phase2_heads,
             has_phase3_heads=has_phase3_heads,
             has_v22_heads=has_v22_heads,
+            has_info_gap_head=has_info_gap_head,
+            has_v3_world_head=has_v3_world_head,
         )
     if scale == "3m":
         return ControllerArchitecture(
@@ -131,6 +144,8 @@ def architecture_for_scale(
             has_phase2_heads=has_phase2_heads,
             has_phase3_heads=has_phase3_heads,
             has_v22_heads=has_v22_heads,
+            has_info_gap_head=has_info_gap_head,
+            has_v3_world_head=has_v3_world_head,
         )
     raise ValueError(f"Unknown scale preset: {scale}")
 
@@ -232,6 +247,31 @@ class MonoNeuralController(nn.Module):
         else:
             self.head_compute_tier = None
             self.head_p_user_correction = None
+
+        # Optional V3 Self-Supervised Predictive Coding World-Model Head
+        if arch.has_v3_world_head:
+            self.head_world_pred = nn.Linear(arch.d_model, 3)
+        else:
+            self.head_world_pred = None
+
+        # Optional self-contained A-14 logistic `dialogue_act_gap` weights
+        self.register_buffer(
+            "info_gap_weight",
+            torch.zeros(arch.d_in_emb, dtype=torch.float32) if arch.has_info_gap_head else None,
+        )
+        self.register_buffer(
+            "info_gap_bias",
+            torch.zeros(1, dtype=torch.float32) if arch.has_info_gap_head else None,
+        )
+
+    def set_info_gap_head(self, w_gap: torch.Tensor | list[float], b_gap: float) -> None:
+        """Installs frozen A-14 logistic `dialogue_act_gap` weights into this controller artifact."""
+        w_tensor = torch.as_tensor(w_gap, dtype=torch.float32).reshape(-1)
+        if w_tensor.numel() != self.arch.d_in_emb:
+            raise ValueError(f"Expected w_gap length {self.arch.d_in_emb}, got {w_tensor.numel()}")
+        self.register_buffer("info_gap_weight", w_tensor.detach().cpu().clone())
+        self.register_buffer("info_gap_bias", torch.tensor([float(b_gap)], dtype=torch.float32))
+        object.__setattr__(self.arch, "has_info_gap_head", True)
 
     def step(
         self,
@@ -354,6 +394,11 @@ class MonoNeuralController(nn.Module):
             out["p_user_correction_logit"] = uc_logit
             out["p_user_correction"] = torch.sigmoid(uc_logit)
 
+        if self.head_world_pred is not None:
+            wp_logits = self.head_world_pred(h_mean)  # [B, 3]
+            out["world_pred_logits"] = wp_logits
+            out["world_pred"] = torch.sigmoid(wp_logits)
+
         return out
 
     def forward_sequence(
@@ -396,6 +441,8 @@ class MonoNeuralController(nn.Module):
             "compute_tier_probs",
             "p_user_correction_logit",
             "p_user_correction",
+            "world_pred_logits",
+            "world_pred",
         )
         opt_acc: dict[str, list[torch.Tensor]] = {k: [] for k in opt_keys}
 
@@ -517,6 +564,14 @@ class MonoNeuralController(nn.Module):
             canonical_to_param["head.p_user_correction.weight"] = self.head_p_user_correction.weight
             canonical_to_param["head.p_user_correction.bias"] = self.head_p_user_correction.bias
 
+        if self.head_world_pred is not None:
+            canonical_to_param["head.world_pred.weight"] = self.head_world_pred.weight
+            canonical_to_param["head.world_pred.bias"] = self.head_world_pred.bias
+
+        if self.arch.has_info_gap_head and self.info_gap_weight is not None and self.info_gap_bias is not None:
+            canonical_to_param["head.dialogue_act_gap.weight"] = self.info_gap_weight
+            canonical_to_param["head.dialogue_act_gap.bias"] = self.info_gap_bias
+
         return canonical_to_param
 
     def canonical_state_dict(self) -> dict[str, torch.Tensor]:
@@ -556,8 +611,12 @@ class MonoNeuralController(nn.Module):
             "has_phase2_heads": "true" if arch.has_phase2_heads else "false",
             "has_phase3_heads": "true" if arch.has_phase3_heads else "false",
             "has_v22_heads": "true" if arch.has_v22_heads else "false",
+            "has_info_gap_head": "true" if arch.has_info_gap_head else "false",
+            "has_v3_world_head": "true" if arch.has_v3_world_head else "false",
             "expected_embed_model_ver": expected_embed_model_ver or arch.expected_embed_model_ver,
             "expected_prompt_regime_id": expected_prompt_regime_id or arch.expected_prompt_regime_id,
+            "info_gap_embed_model_ver": arch.info_gap_embed_model_ver,
+            "info_gap_prompt_regime_id": arch.info_gap_prompt_regime_id,
         }
         tensors = self.canonical_state_dict()
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -607,8 +666,12 @@ class MonoNeuralController(nn.Module):
             has_phase2_heads=meta.get("has_phase2_heads", "false") == "true",
             has_phase3_heads=meta.get("has_phase3_heads", "false") == "true",
             has_v22_heads=meta.get("has_v22_heads", "false") == "true",
+            has_info_gap_head=meta.get("has_info_gap_head", "false") == "true",
+            has_v3_world_head=meta.get("has_v3_world_head", "false") == "true",
             expected_embed_model_ver=meta.get("expected_embed_model_ver", "egemma2-256"),
             expected_prompt_regime_id=meta.get("expected_prompt_regime_id", "t_d"),
+            info_gap_embed_model_ver=meta.get("info_gap_embed_model_ver", "egemma2-256"),
+            info_gap_prompt_regime_id=meta.get("info_gap_prompt_regime_id", "t_clf"),
         )
         model = cls(arch)
         expected_tensors = len(model._canonical_param_map())

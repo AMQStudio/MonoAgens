@@ -77,11 +77,14 @@ pub use ops::{
 pub use pitch::{PitchConverter, PitchScorer};
 pub use pm_bench::{PmBenchConverter, PmBenchScorer};
 pub use proactive_bench::{ProactiveBenchConverter, ProactiveBenchScorer};
-pub use report::{GeneratedReportSummary, ReportOptions, generate_benchmark_report};
+pub use report::{
+    DEFAULT_SAMPLES_PER_DATASET, GeneratedReportSummary, ReportOptions,
+    generate_benchmark_report, generate_conversation_samples,
+};
 pub use runner::{
     BenchmarkExecutionOptions, CATEGORY_SUITES, DEFAULT_RUNS_ROOT, DatasetHandlerRegistry,
-    JudgeConfig, JudgeSubstitutionPolicy, PreflightDatasetEstimate, PreflightEstimate,
-    build_standard_index, derive_monoagens_mode, estimate_live_preflight,
+    ItemOutcomeSummary, JudgeConfig, JudgeSubstitutionPolicy, PreflightDatasetEstimate,
+    PreflightEstimate, build_standard_index, derive_monoagens_mode, estimate_live_preflight,
     execute_external_datasets, load_lab_provider_secrets, official_judge_model,
     resolve_judge_metric_name, resolve_manifest_path, suite_domain,
     verify_required_datasets_with_manifest,

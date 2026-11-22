@@ -98,23 +98,27 @@ use serde::{Deserialize, Serialize};
 
 pub use adapt::{
     AdaptConfig, AdaptFeedback, GateArm, PlaceAdaptState, RecallDepthArm, RecallDepthBanditState,
+    SYNAPTIC_DIM, SynapticTrace, synaptic_features_from_x_num,
 };
 pub use features::{
-    DEFAULT_NUM_FEATURES_V1, DEFAULT_NUM_FEATURES_V2, FEATURE_SCHEMA_VERSION,
-    FEATURE_SCHEMA_VERSION_V1, FEATURE_SCHEMA_VERSION_V2, NumericFeatureInputs,
-    NumericFeatureInputsV2, RECENT_SOUL_REPAIR_WINDOW_MS, VisibleRepairContext,
-    canonical_audience_hash, cosine_similarity, extract_embedding_for_model,
-    extract_embedding_for_model_config, extract_features_from_state,
-    extract_features_v2_from_state, extract_fmodal, extract_visible_repair_context, extract_x_num,
-    extract_x_num_v2, extract_x_num_with_fmodal, zero_embedding,
+    DEFAULT_NUM_FEATURES_V1, DEFAULT_NUM_FEATURES_V2, DEFAULT_NUM_FEATURES_V3,
+    FEATURE_SCHEMA_VERSION, FEATURE_SCHEMA_VERSION_V1, FEATURE_SCHEMA_VERSION_V2,
+    FEATURE_SCHEMA_VERSION_V3, NumericFeatureInputs, NumericFeatureInputsV2,
+    NumericFeatureInputsV3, PlaceCosBaseline, PlaceTurnPerceptionState,
+    RECENT_SOUL_REPAIR_WINDOW_MS, VisibleRepairContext, canonical_audience_hash,
+    cosine_similarity, extract_embedding_for_model, extract_embedding_for_model_config,
+    extract_features_from_state, extract_features_v2_from_state, extract_features_v3_from_state,
+    extract_fmodal, extract_visible_repair_context, extract_x_num, extract_x_num_v2,
+    extract_x_num_v3, extract_x_num_with_fmodal, max_visible_memory_cosine, zero_embedding,
 };
 pub use forward::{
     NeuralOutputs, forward_step, forward_step_with_actor, neutral_outputs,
     neutral_outputs_with_actor,
 };
 pub use weights::{
-    CellType, NeuralModel, NeuralModelConfig, Phase2HeadWeights, Phase3HeadWeights,
-    RecurrentCellWeights, SwiGluBlockWeights, V22HeadWeights,
+    CellType, InfoGapHeadWeights, NeuralModel, NeuralModelConfig, Phase2HeadWeights,
+    Phase3HeadWeights, RecurrentCellWeights, SwiGluBlockWeights, V3WorldHeadWeights,
+    V22HeadWeights,
 };
 
 /// Default per-place recurrent working memory dimension.

@@ -39,11 +39,14 @@ use crate::ledger::{
     ActorCard, CapabilityHealthStats, FalseBeliefFlag, OpenRequestItem, PerceptionLedger,
     SelfCalibrationStats, ToldLedgerItem, WitnessedFactSummary,
 };
-use crate::neural::{ComputeTier, PlaceAdaptState, RecallDepthBanditState};
+use crate::neural::{
+    ComputeTier, PlaceAdaptState, PlaceCosBaseline, PlaceTurnPerceptionState,
+    RecallDepthBanditState, SYNAPTIC_DIM, SynapticTrace,
+};
 use crate::recall::{ImportanceInputs, MemoryBasis, MemoryEntry};
 
 const SNAPSHOT_MAGIC: &[u8; 4] = b"MGSN";
-const SNAPSHOT_VERSION: u16 = 13;
+const SNAPSHOT_VERSION: u16 = 14;
 
 pub fn encode_snapshot(state: &CoreState) -> Vec<u8> {
     let mut w = BinWriter::new();
@@ -207,6 +210,20 @@ pub fn encode_snapshot(state: &CoreState) -> Vec<u8> {
             w.f64(v);
         }
         w.u64(ad.recall_depth_bandit.total_pulls);
+        for row in &ad.synaptic_weights {
+            for &val in row {
+                w.f32(val);
+            }
+        }
+        w.u32(ad.pending_traces.len() as u32);
+        for trace in &ad.pending_traces {
+            w.u64(trace.event_id.as_u64());
+            w.u8(trace.arm as u8);
+            for &f in &trace.features {
+                w.f32(f);
+            }
+            w.u64(trace.timestamp_ms.as_millis());
+        }
     }
 
     w.u32(state.memory_candidates.len() as u32);
@@ -337,6 +354,26 @@ pub fn encode_snapshot(state: &CoreState) -> Vec<u8> {
         for &rid in &hints.repair_context_ids {
             w.u64(rid.as_u64());
         }
+    }
+    w.u32(state.place_cos_baseline.len() as u32);
+    for (place, b) in &state.place_cos_baseline {
+        w.str(place.as_str());
+        w.f32(b.mean);
+        w.f32(b.var);
+        w.u64(b.count);
+    }
+    w.u32(state.place_perception.len() as u32);
+    for (place, p) in &state.place_perception {
+        w.str(place.as_str());
+        match &p.last_emb {
+            Some(emb) => {
+                w.u8(1);
+                encode_tagged_embeddings(&mut w, std::slice::from_ref(emb));
+            }
+            None => w.u8(0),
+        }
+        w.f32(p.unanswered_gap_pressure);
+        w.opt_u64(p.last_updated_ms.map(Time::as_millis));
     }
 
     w.finish()
@@ -616,6 +653,41 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<CoreState, EventFormatError> {
         } else {
             RecallDepthBanditState::new()
         };
+        let (synaptic_weights, pending_traces) = if version >= 14 {
+            let mut weights = [[0.0_f32; SYNAPTIC_DIM]; 4];
+            for row in &mut weights {
+                for slot in row {
+                    *slot = r.f32()?;
+                }
+            }
+            let t_len = r.u32()? as usize;
+            let mut traces = Vec::with_capacity(t_len.min(32));
+            for _ in 0..t_len {
+                let event_id = EventId::new(r.u64()?);
+                let arm_code = r.u8()?;
+                let arm = crate::neural::GateArm::from_index(usize::from(arm_code)).ok_or_else(
+                    || {
+                        EventFormatError::MalformedRecord(format!(
+                            "invalid synaptic trace gate arm code {arm_code}"
+                        ))
+                    },
+                )?;
+                let mut features = [0.0_f32; SYNAPTIC_DIM];
+                for slot in &mut features {
+                    *slot = r.f32()?;
+                }
+                let timestamp_ms = Time::from_millis(r.u64()?);
+                traces.push(SynapticTrace {
+                    event_id,
+                    arm,
+                    features,
+                    timestamp_ms,
+                });
+            }
+            (weights, traces)
+        } else {
+            ([[0.0_f32; SYNAPTIC_DIM]; 4], Vec::new())
+        };
         place_adapt.insert(
             place,
             PlaceAdaptState {
@@ -627,6 +699,8 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<CoreState, EventFormatError> {
                 total_pulls,
                 last_updated_ms,
                 recall_depth_bandit,
+                synaptic_weights,
+                pending_traces,
             },
         );
     }
@@ -864,6 +938,49 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<CoreState, EventFormatError> {
     } else {
         BTreeMap::new()
     };
+    let place_cos_baseline = if version >= 14 {
+        let len = r.u32()? as usize;
+        let mut map = BTreeMap::new();
+        for _ in 0..len {
+            let place = PlaceId::new(r.string()?);
+            let mean = r.f32()?;
+            let var = r.f32()?;
+            let count = r.u64()?;
+            map.insert(place, PlaceCosBaseline { mean, var, count });
+        }
+        map
+    } else {
+        BTreeMap::new()
+    };
+    let place_perception = if version >= 14 {
+        let len = r.u32()? as usize;
+        let mut map = BTreeMap::new();
+        for _ in 0..len {
+            let place = PlaceId::new(r.string()?);
+            let last_emb = match r.u8()? {
+                0 => None,
+                1 => decode_tagged_embeddings(&mut r)?.into_iter().next(),
+                tag => {
+                    return Err(EventFormatError::MalformedRecord(format!(
+                        "invalid opt last_emb tag {tag}"
+                    )));
+                }
+            };
+            let unanswered_gap_pressure = r.f32()?;
+            let last_updated_ms = r.opt_u64()?.map(Time::from_millis);
+            map.insert(
+                place,
+                PlaceTurnPerceptionState {
+                    last_emb,
+                    unanswered_gap_pressure,
+                    last_updated_ms,
+                },
+            );
+        }
+        map
+    } else {
+        BTreeMap::new()
+    };
 
     let startup_recovery_pending = !unconsumed_inputs.is_empty();
     Ok(CoreState {
@@ -887,6 +1004,8 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<CoreState, EventFormatError> {
         place_memory,
         actor_memory,
         place_adapt,
+        place_cos_baseline,
+        place_perception,
         memory_candidates,
         open_promises,
         expectation_cues,

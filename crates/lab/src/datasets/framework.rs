@@ -695,7 +695,7 @@ pub fn execute_external_item_with_model_and_state(
         seed,
         ..config.clone()
     };
-    let mut core = Core::open(MemStore::new(), cfg, model)?;
+    let mut core = Core::open(MemStore::new(), cfg, model.clone())?;
     register_item_capabilities(&mut core, item);
     let silent_provider = {
         let mut p = ScriptedModelProvider::new();
@@ -1001,7 +1001,7 @@ pub fn execute_external_item_with_model_and_state(
                 seed,
                 ..config.clone()
             };
-            let mut probe_core = Core::open(cloned_store, probe_cfg, None)?;
+            let mut probe_core = Core::open(cloned_store, probe_cfg, model.clone())?;
             register_item_capabilities(&mut probe_core, item);
             // Advance cursor past any ConfigLoaded/Open events appended by Core::open
             let open_tail = probe_core

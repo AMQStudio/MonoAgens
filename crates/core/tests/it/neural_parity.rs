@@ -42,6 +42,8 @@ struct GoldenStep {
     expected_compute_tier_probs: Option<[f32; 3]>,
     #[serde(default)]
     expected_p_user_correction: Option<f32>,
+    #[serde(default)]
+    expected_world_pred: Option<[f32; 3]>,
 }
 
 fn assert_opt_f32_close(label: &str, actual: Option<f32>, expected: Option<f32>, tol: f32) -> f32 {
@@ -202,6 +204,21 @@ fn verify_golden_fixture(
                 ));
             }
 
+            if let Some(exp_wp) = step.expected_world_pred {
+                let got_wp = out
+                    .world_pred
+                    .expect("expected world_pred output for V3 fixture");
+                for (i, (r_w, p_w)) in got_wp.iter().zip(exp_wp.iter()).enumerate() {
+                    let dw = (r_w - p_w).abs();
+                    max_abs_diff = max_abs_diff.max(dw);
+                    assert!(
+                        dw <= TOL,
+                        "{} step {step_idx} world_pred[{i}] diff {dw} > {TOL}",
+                        case.name
+                    );
+                }
+            }
+
             assert_eq!(out.h_next.len(), step.expected_h_next.len());
             for (i, (&r_h, &p_h)) in out.h_next.iter().zip(&step.expected_h_next).enumerate() {
                 let d_h = (r_h - p_h).abs();
@@ -255,4 +272,9 @@ fn python_rust_phase3_neural_forward_parity_within_1e_5() {
 #[test]
 fn python_rust_v22_neural_forward_parity_within_1e_5() {
     verify_golden_fixture("neural_v22_golden.json", true, true, true);
+}
+
+#[test]
+fn python_rust_v3_neural_forward_parity_within_1e_5() {
+    verify_golden_fixture("neural_v3_golden.json", true, true, true);
 }

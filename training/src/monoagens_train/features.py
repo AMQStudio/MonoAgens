@@ -1,4 +1,4 @@
-"""Model-agnostic numeric feature builders (`x_num`) for schema v1 (18d) and v2 (32d)."""
+"""Model-agnostic numeric feature builders (`x_num`) for schema v1 (18d), v2 (32d), and v3 (36d)."""
 
 from __future__ import annotations
 
@@ -10,9 +10,11 @@ import numpy as np
 FEATURE_SCHEMA_VERSION = 1
 FEATURE_SCHEMA_VERSION_V1 = 1
 FEATURE_SCHEMA_VERSION_V2 = 2
+FEATURE_SCHEMA_VERSION_V3 = 3
 NUM_FEATURES = 18
 NUM_FEATURES_V1 = 18
 NUM_FEATURES_V2 = 32
+NUM_FEATURES_V3 = 36
 
 FEATURE_NAMES: tuple[str, ...] = (
     "is_named_soul",
@@ -56,6 +58,15 @@ FEATURE_NAMES_V2_EXT: tuple[str, ...] = (
     "peer_expertise_margin",
 )
 FEATURE_NAMES_V2: tuple[str, ...] = FEATURE_NAMES + FEATURE_NAMES_V2_EXT
+
+FEATURE_NAMES_V3_EXT: tuple[str, ...] = (
+    # 32..36: 4d active-inference & homeostatic surprise channels (V3)
+    "dialogue_act_gap",
+    "mem_cos_surprise",
+    "topic_shift_surprise",
+    "unanswered_gap_pressure",
+)
+FEATURE_NAMES_V3: tuple[str, ...] = FEATURE_NAMES_V2 + FEATURE_NAMES_V3_EXT
 
 
 def _sanitize_unit(val: float, default: float = 0.0) -> float:
@@ -128,6 +139,16 @@ class PerceptNumericInputsV2(PerceptNumericInputs):
     consecutive_automated_turns: int = 0
     consecutive_automated_turns_norm: float | None = None
     peer_expertise_margin: float | None = None
+
+
+@dataclass(frozen=True)
+class PerceptNumericInputsV3(PerceptNumericInputsV2):
+    """Schema v3 (36d) numeric inputs extending v2 with active-inference surprise & gap signals."""
+
+    dialogue_act_gap: float = 0.5
+    mem_cos_surprise: float = 0.5
+    topic_shift_surprise: float = 0.5
+    unanswered_gap_pressure: float = 0.0
 
 
 def build_x_num(inp: PerceptNumericInputs) -> np.ndarray:
@@ -214,4 +235,118 @@ def upgrade_x_num_v1_to_v2(x_num: np.ndarray) -> np.ndarray:
     out[..., :NUM_FEATURES_V1] = arr
     out[..., 27] = 0.5  # sender_reliability neutral Beta(1, 1) prior
     out[..., 31] = 0.5  # peer_expertise_margin neutral default
+    return out
+
+
+def build_x_num_v3(inp: PerceptNumericInputsV3) -> np.ndarray:
+    """Constructs the finite, [0, 1]-bounded 36d float32 `x_num` feature vector (schema v3)."""
+    v2 = build_x_num_v2(inp)
+    ext = np.array(
+        [
+            _sanitize_unit(inp.dialogue_act_gap, default=0.5),
+            _sanitize_unit(inp.mem_cos_surprise, default=0.5),
+            _sanitize_unit(inp.topic_shift_surprise, default=0.5),
+            _sanitize_unit(inp.unanswered_gap_pressure, default=0.0),
+        ],
+        dtype=np.float32,
+    )
+    return np.concatenate([v2, ext], axis=0)
+
+
+def upgrade_x_num_to_schema(x_num: np.ndarray, target_schema_version: int) -> np.ndarray:
+    """Upcasts 18d/32d/36d `x_num` arrays cleanly to the target schema width."""
+    arr = np.asarray(x_num, dtype=np.float32)
+    if target_schema_version == 1:
+        if arr.shape[-1] >= NUM_FEATURES_V1:
+            return arr[..., :NUM_FEATURES_V1].copy()
+        raise ValueError(f"Expected >= {NUM_FEATURES_V1}, got {arr.shape[-1]}")
+    if target_schema_version == 2:
+        if arr.shape[-1] >= NUM_FEATURES_V2:
+            return arr[..., :NUM_FEATURES_V2].copy()
+        return upgrade_x_num_v1_to_v2(arr)
+    if target_schema_version == 3:
+        if arr.shape[-1] == NUM_FEATURES_V3:
+            return arr.copy()
+        v2 = upgrade_x_num_v1_to_v2(arr) if arr.shape[-1] == NUM_FEATURES_V1 else arr[..., :NUM_FEATURES_V2]
+        out = np.zeros((*arr.shape[:-1], NUM_FEATURES_V3), dtype=np.float32)
+        out[..., :NUM_FEATURES_V2] = v2
+        out[..., 32] = 0.5
+        out[..., 33] = np.clip((v2[..., 13] - 0.5) * 2.0, 0.0, 1.0)
+        out[..., 34] = 0.5
+        out[..., 35] = 0.0
+        return out
+    raise ValueError(f"Unsupported target_schema_version={target_schema_version}")
+
+
+def populate_v3_sequence_dynamics(
+    x_num: np.ndarray,
+    e_256: np.ndarray,
+    y_gate: np.ndarray,
+    mask: np.ndarray,
+) -> np.ndarray:
+    """Populates homeostatic `mem_cos_surprise`, `topic_shift_surprise`, and `unanswered_gap_pressure`
+    sequentially across `[B, T, 36]` matching Rust `PlaceCosBaseline` and `PlaceTurnPerceptionState`.
+    """
+    out = upgrade_x_num_to_schema(x_num, 3)
+    bsz, seq_len, _ = out.shape
+    for b in range(bsz):
+        mean = 0.5
+        var = 0.01
+        count = 0
+        pressure = 0.0
+        prev_emb: np.ndarray | None = None
+        for t in range(seq_len):
+            if mask[b, t] <= 0.5:
+                continue
+            raw_cos = float(np.clip(out[b, t, 13], 0.0, 1.0))
+            if raw_cos <= 0.0:
+                surprise = 0.0
+            elif count < 3:
+                surprise = float(np.clip(max(0.0, raw_cos - 0.5) * 2.0, 0.0, 1.0))
+            else:
+                sigma = max(0.08, math.sqrt(max(var, 1e-6)))
+                z = (raw_cos - mean) / sigma
+                surprise = float(1.0 / (1.0 + math.exp(-max(-20.0, min(20.0, z)))))
+            out[b, t, 33] = surprise
+
+            cur_emb = e_256[b, t]
+            cur_norm = float(np.linalg.norm(cur_emb))
+            if prev_emb is not None and cur_norm > 1e-6:
+                cos_prev = float(np.clip(np.dot(cur_emb, prev_emb) / cur_norm, 0.0, 1.0))
+                out[b, t, 34] = float(np.clip(1.0 - cos_prev, 0.0, 1.0))
+            else:
+                out[b, t, 34] = 0.5
+            out[b, t, 35] = float(np.clip(pressure, 0.0, 1.0))
+
+            # Advance sequential homeostatic baseline & gap state (matching Rust `apply_completed_percept`)
+            if raw_cos > 0.0:
+                if count == 0:
+                    mean, var, count = raw_cos, 0.01, 1
+                else:
+                    alpha = 0.12
+                    diff = raw_cos - mean
+                    mean = float(np.clip(mean + alpha * diff, 0.0, 1.0))
+                    var = float(np.clip((1.0 - alpha) * var + alpha * diff * diff, 1e-4, 0.25))
+                    count += 1
+            if cur_norm > 1e-6:
+                prev_emb = cur_emb / cur_norm
+
+            # Estimate turn gap if still neutral (0.5): Wait/Go or direct inquiry carries higher epistemic gap,
+            # while retaining 15% neutral 0.50 samples so vectorless/[embed]=none fallback stays calibrated.
+            gap = float(out[b, t, 32])
+            if abs(gap - 0.5) < 1e-5:
+                pseudo = ((b * 1315423911 + t * 2654435761) & 0xFFFF) / 65535.0
+                if pseudo >= 0.15:
+                    jitter = ((b * 73856093 ^ t * 19349663) & 255) / 255.0 - 0.5
+                    if int(y_gate[b, t]) in (2, 3) and out[b, t, 0] < 0.5:
+                        gap = float(np.clip(0.80 + 0.18 * jitter, 0.55, 0.98))
+                    elif int(y_gate[b, t]) == 0:
+                        gap = float(np.clip(0.24 + 0.20 * jitter, 0.04, 0.48))
+                out[b, t, 32] = gap
+            if int(y_gate[b, t]) == 3:
+                pressure = 0.0
+            elif gap >= 0.55:
+                pressure = float(np.clip(pressure * 0.60 + gap * 0.70, 0.0, 1.0))
+            else:
+                pressure = float(np.clip(pressure * 0.45, 0.0, 1.0))
     return out

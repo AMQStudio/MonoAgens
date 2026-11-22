@@ -109,6 +109,9 @@ pub trait DoorController: Doors + Send {
     /// Reconstructs persisted approval and digest state from append-only events on startup.
     fn replay_from_store_events(&mut self, _events: &[EventRecord]) {}
 
+    /// Synchronizes newly appended event audiences into the door snapshot for `Line2Scope`.
+    fn sync_item_audiences(&mut self, _events: &[EventRecord]) {}
+
     /// Handles Waist-2 `approval/resolve` when Valve 6.x is wired.
     ///
     /// Returning `None` indicates the approval capability is absent.
@@ -343,6 +346,10 @@ impl DoorController for ValveDoorController {
 
     fn replay_from_store_events(&mut self, events: &[EventRecord]) {
         self.valve.replay_from_events(events);
+    }
+
+    fn sync_item_audiences(&mut self, events: &[EventRecord]) {
+        self.valve.sync_event_audiences(events);
     }
 
     fn resolve_approval(
