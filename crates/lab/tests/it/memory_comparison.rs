@@ -1740,7 +1740,7 @@ fn benchmark_model_profile_loads_from_toml_and_live_without_profile_refuses() {
     )
     .expect("load committed profile");
     assert_eq!(prof.output_limits.classify, 1_024);
-    assert_eq!(prof.output_limits.reason, 4_096);
+    assert_eq!(prof.output_limits.reason, 8_192);
     assert_eq!(prof.output_limits.consolidate, 8_192);
     assert_eq!(prof.output_limit_param, "max_completion_tokens");
 

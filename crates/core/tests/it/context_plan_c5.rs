@@ -1418,3 +1418,129 @@ fn place_tail_holds_only_conversation_never_core_bookkeeping() {
         assert!(!rec.payload.is_empty());
     }
 }
+
+#[test]
+fn core_step_strips_place_id_from_act_people_preserving_actors_and_response_expectation()
+-> Result<(), CoreError> {
+    let mut core = Core::open(MemStore::new(), unit_cfg_low_bar(99), None)?;
+    let mut doors = NoopDoors;
+    core.register_capability_item(CapabilityCatalogEntry {
+        descriptor: cap_desc("chat.speak", "speak in chat", "h-speak", true, false),
+        is_static_core: true,
+        owner_signed: true,
+        active: true,
+        audience: Audience::new([ActorId::new("soul"), ActorId::new("alice")]),
+        embedding: None,
+    });
+
+    let p = basic_percept(
+        "alice",
+        "room_1",
+        &["soul", "alice"],
+        &["soul"],
+        b"hi there",
+        1_000,
+        Vec::new(),
+    );
+    let wake_effects = core.step(Input::Percept(Box::new(p)), t(1_000), &mut doors)?;
+    let req_id = wake_effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::Model {
+                purpose: ModelPurpose::Reason,
+                plan,
+            } => plan.trigger_event_id,
+            _ => None,
+        })
+        .expect("wake trigger");
+
+    // 1) `people: ["room_1"]` matching `places: ["room_1"]` normalizes to `[]`.
+    let effs1 = core.step(
+        Input::ModelResult {
+            request_id: req_id,
+            acts: vec![ThoughtAct::Act {
+                capability_id: CapabilityId::new("chat.speak"),
+                places: vec![PlaceId::new("room_1")],
+                people: vec![ActorId::new("room_1")],
+                payload: OpaquePayload::from_bytes(b"hello room"),
+                motivation: 4,
+                confidence_0_20: 18,
+                used_ids: Vec::new(),
+                expected: None,
+                domain: None,
+            }],
+        },
+        t(1_100),
+        &mut doors,
+    )?;
+    assert!(effs1.iter().any(|e| matches!(e, Effect::Dispatch(_))));
+    let resp_exps: Vec<_> = core
+        .state()
+        .expectation_book
+        .expectations
+        .values()
+        .filter(|e| e.kind == ExpectKind::Response)
+        .collect();
+    assert!(!resp_exps.is_empty());
+    assert!(
+        resp_exps.iter().all(|e| e.people.is_empty()),
+        "place_id in people must be stripped from opened expectations"
+    );
+
+    // 2) `people: ["alice", "room_1", "unknown_actor"]` strips only `"room_1"`.
+    let p2 = basic_percept(
+        "alice",
+        "room_1",
+        &["soul", "alice"],
+        &["soul"],
+        b"follow up",
+        2_000,
+        Vec::new(),
+    );
+    let wake2 = core.step(Input::Percept(Box::new(p2)), t(2_000), &mut doors)?;
+    let req2 = wake2
+        .iter()
+        .find_map(|e| match e {
+            Effect::Model {
+                purpose: ModelPurpose::Reason,
+                plan,
+            } => plan.trigger_event_id,
+            _ => None,
+        })
+        .expect("wake 2");
+    core.step(
+        Input::ModelResult {
+            request_id: req2,
+            acts: vec![ThoughtAct::Act {
+                capability_id: CapabilityId::new("chat.speak"),
+                places: vec![PlaceId::new("room_1")],
+                people: vec![
+                    ActorId::new("alice"),
+                    ActorId::new("room_1"),
+                    ActorId::new("unknown_actor"),
+                ],
+                payload: OpaquePayload::from_bytes(b"hello alice"),
+                motivation: 4,
+                confidence_0_20: 18,
+                used_ids: Vec::new(),
+                expected: None,
+                domain: None,
+            }],
+        },
+        t(2_100),
+        &mut doors,
+    )?;
+    let latest_resp = core
+        .state()
+        .expectation_book
+        .expectations
+        .values()
+        .filter(|e| e.kind == ExpectKind::Response)
+        .max_by_key(|e| e.expectation_id.as_u64())
+        .expect("latest response expectation");
+    assert_eq!(
+        latest_resp.people,
+        vec![ActorId::new("alice"), ActorId::new("unknown_actor")]
+    );
+    Ok(())
+}

@@ -10,8 +10,8 @@ use serde::Deserialize;
 use crate::LabError;
 use crate::datasets::framework::{
     ConvertedDataset, Converter, ExternalItem, ExternalPrediction, ExternalProbe, GoldBook,
-    GoldEntry, GoldEvidenceRef, HistoryMode, JudgeExecutionConfig, Scorer, ScorerMetric,
-    ScorerReport, make_text_percept,
+    GoldEntry, GoldEvidenceRef, HistoryMode, JudgeExecutionConfig, Scorer, ScorerItemOutcome,
+    ScorerMetric, ScorerReport, make_text_percept,
 };
 use crate::datasets::manifest::DatasetManifestEntry;
 use crate::datasets::scoring_utils::binary_prf1;
@@ -191,7 +191,7 @@ impl Scorer for When2SpeakScorer {
         &self,
         predictions: &[ExternalPrediction],
         gold: &GoldBook,
-        _judge: &JudgeExecutionConfig<'_>,
+        judge: &JudgeExecutionConfig<'_>,
         _seed: u64,
     ) -> Result<ScorerReport, LabError> {
         let mut tp = 0usize;
@@ -204,12 +204,40 @@ impl Scorer for When2SpeakScorer {
                 LabError::Protocol(format!("when2speak missing gold for {}", pred.item_id))
             })?;
             let gold_speak = entry.metadata.get("gold_label").map(String::as_str) == Some("SPEAK");
-            match (gold_speak, pred.spoke) {
+            let predicted_speak = if !pred.spoke {
+                false
+            } else {
+                let upper = pred
+                    .response_text
+                    .as_deref()
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_uppercase();
+                !(upper == "SILENT"
+                    || upper == ">"
+                    || upper.starts_with("SILENT")
+                    || upper.starts_with('>'))
+            };
+            match (gold_speak, predicted_speak) {
                 (true, true) => tp += 1,
                 (false, true) => fp += 1,
                 (false, false) => tn += 1,
                 (true, false) => fn_ += 1,
             }
+            let hit = gold_speak == predicted_speak;
+            judge.record_outcome(ScorerItemOutcome {
+                item_id: pred.item_id.clone(),
+                probe_id: pred.probe_id.clone(),
+                cluster_id: pred.cluster_id.clone(),
+                category: entry.category.clone(),
+                metric_name: "when2speak_turn".to_owned(),
+                score: Some(if hit { 1.0 } else { 0.0 }),
+                passed: Some(hit),
+                judge_prompt: None,
+                judge_verdict: None,
+                failed: false,
+                failure_reason: None,
+            });
         }
 
         let (_, _, f1_speak) = binary_prf1(tp, fp, fn_);
@@ -258,5 +286,125 @@ impl Scorer for When2SpeakScorer {
             judge_model: None,
             judge_prompt_version: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+    use crate::datasets::framework::ScorerDetailRecorder;
+
+    fn w2s_gold_entry(item_id: &str, gold_speak: bool) -> GoldEntry {
+        let mut metadata = BTreeMap::new();
+        metadata.insert(
+            "gold_label".to_owned(),
+            if gold_speak { "SPEAK" } else { "SILENT" }.to_owned(),
+        );
+        GoldEntry {
+            item_id: item_id.to_owned(),
+            probe_id: "turn_decision".to_owned(),
+            cluster_id: item_id.to_owned(),
+            gold_answer: if gold_speak { "<" } else { ">" }.to_owned(),
+            accepted_answers: vec![if gold_speak { "<" } else { ">" }.to_owned()],
+            gold_evidence: Vec::new(),
+            privacy_conflict: false,
+            category: Some(if gold_speak { "SPEAK" } else { "SILENT" }.to_owned()),
+            metadata,
+        }
+    }
+
+    fn w2s_pred(item_id: &str, spoke: bool, response_text: Option<&str>) -> ExternalPrediction {
+        ExternalPrediction {
+            item_id: item_id.to_owned(),
+            probe_id: "turn_decision".to_owned(),
+            cluster_id: item_id.to_owned(),
+            spoke,
+            response_text: response_text.map(str::to_owned),
+            action_turn_ms: Some(1_000),
+            probe_gate_wakes: 1,
+            history_gate_wakes: 0,
+            tokens_in: 10,
+            tokens_out: 5,
+            cost_usd: 0.0,
+        }
+    }
+
+    #[test]
+    fn chat_speak_silent_is_scored_as_silent_and_recorded_in_detail_recorder() {
+        let gold = GoldBook {
+            dataset_id: "when2speak".to_owned(),
+            entries: vec![
+                w2s_gold_entry("item_tn", false),
+                w2s_gold_entry("item_fn", true),
+                w2s_gold_entry("item_tn_gt", false),
+                w2s_gold_entry("item_tp", true),
+            ],
+        };
+        let preds = vec![
+            w2s_pred("item_tn", true, Some("SILENT")),
+            w2s_pred("item_fn", true, Some("  silent  ")),
+            w2s_pred("item_tn_gt", true, Some(">")),
+            w2s_pred("item_tp", true, Some("SPEAK: here is my reply")),
+        ];
+
+        let recorder = Arc::new(Mutex::new(ScorerDetailRecorder::default()));
+        let judge = JudgeExecutionConfig {
+            recorder: Some(Arc::clone(&recorder)),
+            ..JudgeExecutionConfig::default()
+        };
+
+        let rep = When2SpeakScorer.score(&preds, &gold, &judge, 1).unwrap();
+        let fir = rep
+            .metrics
+            .iter()
+            .find(|m| m.name == "fir")
+            .and_then(|m| m.value)
+            .unwrap();
+        let mir = rep
+            .metrics
+            .iter()
+            .find(|m| m.name == "mir")
+            .and_then(|m| m.value)
+            .unwrap();
+        let macro_f1 = rep
+            .metrics
+            .iter()
+            .find(|m| m.name == "macro_f1")
+            .and_then(|m| m.value)
+            .unwrap();
+
+        // Confusion matrix: TP=1 (item_tp), FP=0, TN=2 (item_tn, item_tn_gt), FN=1 (item_fn)
+        assert!((fir - 0.0).abs() < 1e-12, "fir={fir}");
+        assert!((mir - 0.5).abs() < 1e-12, "mir={mir}");
+        // f1_speak = 2*1/(2*1 + 0 + 1) = 2/3, f1_silent = 2*2/(2*2 + 1 + 0) = 4/5, macro_f1 = 11/15
+        let expected_macro_f1 = 0.5 * ((2.0 / 3.0) + (4.0 / 5.0));
+        assert!(
+            (macro_f1 - expected_macro_f1).abs() < 1e-12,
+            "macro_f1={macro_f1}"
+        );
+
+        let guard = recorder.lock().unwrap();
+        assert_eq!(guard.outcomes.len(), 4);
+        assert_eq!(guard.outcomes[0].item_id, "item_tn");
+        assert_eq!(guard.outcomes[0].metric_name, "when2speak_turn");
+        assert_eq!(guard.outcomes[0].score, Some(1.0));
+        assert_eq!(guard.outcomes[0].passed, Some(true));
+        assert_eq!(guard.outcomes[0].category.as_deref(), Some("SILENT"));
+
+        assert_eq!(guard.outcomes[1].item_id, "item_fn");
+        assert_eq!(guard.outcomes[1].metric_name, "when2speak_turn");
+        assert_eq!(guard.outcomes[1].score, Some(0.0));
+        assert_eq!(guard.outcomes[1].passed, Some(false));
+        assert_eq!(guard.outcomes[1].category.as_deref(), Some("SPEAK"));
+
+        assert_eq!(guard.outcomes[2].item_id, "item_tn_gt");
+        assert_eq!(guard.outcomes[2].score, Some(1.0));
+        assert_eq!(guard.outcomes[2].passed, Some(true));
+
+        assert_eq!(guard.outcomes[3].item_id, "item_tp");
+        assert_eq!(guard.outcomes[3].score, Some(1.0));
+        assert_eq!(guard.outcomes[3].passed, Some(true));
     }
 }

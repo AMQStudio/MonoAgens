@@ -234,7 +234,18 @@ impl Scorer for ProactiveBenchScorer {
                 LabError::Protocol(format!("proactive_bench missing gold for {}", pred.item_id))
             })?;
             let need = entry.metadata.get("need").map(String::as_str) == Some("true");
-            match (need, pred.spoke) {
+            let predicted_spoke = if !pred.spoke {
+                false
+            } else {
+                let upper = pred
+                    .response_text
+                    .as_deref()
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_uppercase();
+                !upper.starts_with("SILENT")
+            };
+            match (need, predicted_spoke) {
                 (true, true) => {
                     cd += 1;
                     if let Some(resp) = &pred.response_text {
@@ -250,6 +261,20 @@ impl Scorer for ProactiveBenchScorer {
                 (true, false) => mn += 1,
                 (false, false) => nr += 1,
             }
+            let hit = need == predicted_spoke;
+            judge.record_outcome(crate::datasets::framework::ScorerItemOutcome {
+                item_id: pred.item_id.clone(),
+                probe_id: pred.probe_id.clone(),
+                cluster_id: pred.cluster_id.clone(),
+                category: entry.category.clone(),
+                metric_name: "proactive_trigger".to_owned(),
+                score: Some(if hit { 1.0 } else { 0.0 }),
+                passed: Some(hit),
+                judge_prompt: None,
+                judge_verdict: None,
+                failed: false,
+                failure_reason: None,
+            });
         }
 
         let (_p, _r, f1) = binary_prf1(cd, fd, mn);
@@ -328,5 +353,96 @@ impl Scorer for ProactiveBenchScorer {
             judge_model: None,
             judge_prompt_version: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+    use crate::datasets::framework::ScorerDetailRecorder;
+
+    fn pb_gold_entry(item_id: &str, need: bool, category: &str) -> GoldEntry {
+        let mut metadata = BTreeMap::new();
+        metadata.insert("need".to_owned(), need.to_string());
+        GoldEntry {
+            item_id: item_id.to_owned(),
+            probe_id: "trigger".to_owned(),
+            cluster_id: "code_01".to_owned(),
+            gold_answer: if need {
+                "Offer to check build logs".to_owned()
+            } else {
+                String::new()
+            },
+            accepted_answers: Vec::new(),
+            gold_evidence: Vec::new(),
+            privacy_conflict: false,
+            category: Some(category.to_owned()),
+            metadata,
+        }
+    }
+
+    fn pb_pred(item_id: &str, spoke: bool, response_text: Option<&str>) -> ExternalPrediction {
+        ExternalPrediction {
+            item_id: item_id.to_owned(),
+            probe_id: "trigger".to_owned(),
+            cluster_id: "code_01".to_owned(),
+            spoke,
+            response_text: response_text.map(str::to_owned),
+            action_turn_ms: Some(1_000),
+            probe_gate_wakes: 1,
+            history_gate_wakes: 0,
+            tokens_in: 10,
+            tokens_out: 5,
+            cost_usd: 0.0,
+        }
+    }
+
+    #[test]
+    fn chat_speak_silent_is_scored_as_non_speaking_and_recorded() {
+        let gold = GoldBook {
+            dataset_id: "proactive_bench".to_owned(),
+            entries: vec![
+                pb_gold_entry("pb_need_silent", true, "code"),
+                pb_gold_entry("pb_noneed_silent", false, "writing"),
+            ],
+        };
+        let preds = vec![
+            pb_pred("pb_need_silent", true, Some("SILENT")),
+            pb_pred("pb_noneed_silent", true, Some("  silent  ")),
+        ];
+        let recorder = Arc::new(Mutex::new(ScorerDetailRecorder::default()));
+        let judge = JudgeExecutionConfig {
+            recorder: Some(recorder.clone()),
+            ..JudgeExecutionConfig::default()
+        };
+
+        let rep = ProactiveBenchScorer
+            .score(&preds, &gold, &judge, 1)
+            .expect("score proactive_bench");
+        let f1 = rep.metrics.iter().find(|m| m.name == "f1").unwrap().value;
+        let fd = rep
+            .metrics
+            .iter()
+            .find(|m| m.name == "false_detection")
+            .unwrap()
+            .value;
+        assert_eq!(f1, Some(0.0));
+        assert_eq!(fd, Some(0.0));
+
+        let guard = recorder.lock().expect("recorder lock");
+        assert_eq!(guard.outcomes.len(), 2);
+        assert_eq!(guard.outcomes[0].item_id, "pb_need_silent");
+        assert_eq!(guard.outcomes[0].metric_name, "proactive_trigger");
+        assert_eq!(guard.outcomes[0].category.as_deref(), Some("code"));
+        assert_eq!(guard.outcomes[0].score, Some(0.0));
+        assert_eq!(guard.outcomes[0].passed, Some(false));
+
+        assert_eq!(guard.outcomes[1].item_id, "pb_noneed_silent");
+        assert_eq!(guard.outcomes[1].metric_name, "proactive_trigger");
+        assert_eq!(guard.outcomes[1].category.as_deref(), Some("writing"));
+        assert_eq!(guard.outcomes[1].score, Some(1.0));
+        assert_eq!(guard.outcomes[1].passed, Some(true));
     }
 }

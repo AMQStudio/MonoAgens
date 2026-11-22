@@ -402,6 +402,7 @@ impl Scorer for FantomScorer {
         seed: u64,
     ) -> Result<ScorerReport, LabError> {
         let mut st_payload = Vec::new();
+        let mut st_meta: Vec<(String, String, String)> = Vec::new();
         let mut set_clusters: BTreeMap<String, String> = BTreeMap::new();
         let mut all_ok: BTreeMap<String, bool> = BTreeMap::new();
         let mut form_scores: BTreeMap<String, Vec<f64>> = BTreeMap::new();
@@ -446,6 +447,7 @@ impl Scorer for FantomScorer {
             }
 
             if form == "BeliefQ[Dist.]" {
+                st_meta.push((p.item_id.clone(), p.probe_id.clone(), p.cluster_id.clone()));
                 st_payload.push(serde_json::json!({
                     "item_id": p.item_id,
                     "probe_id": p.probe_id,
@@ -534,18 +536,7 @@ impl Scorer for FantomScorer {
             );
             match helper_res {
                 Ok(Some(val)) => {
-                    let mut dist_ok: BTreeMap<String, bool> = BTreeMap::new();
-                    if let Some(arr) = val.get("results").and_then(|v| v.as_array()) {
-                        for r in arr {
-                            if let (Some(iid), Some(ok)) = (
-                                r.get("item_id").and_then(|v| v.as_str()),
-                                r.get("ok").and_then(|v| v.as_bool()),
-                            ) {
-                                let cur = dist_ok.entry(iid.to_owned()).or_insert(true);
-                                *cur &= ok;
-                            }
-                        }
-                    }
+                    let dist_ok = record_fantom_dist_outcomes(judge, &st_meta, &val);
                     let star_obs: Vec<(String, f64)> = all_ok
                         .iter()
                         .map(|(iid, &ok)| {
@@ -578,5 +569,103 @@ impl Scorer for FantomScorer {
             judge_model: None,
             judge_prompt_version: None,
         })
+    }
+}
+
+fn record_fantom_dist_outcomes(
+    judge: &JudgeExecutionConfig<'_>,
+    st_meta: &[(String, String, String)],
+    val: &serde_json::Value,
+) -> BTreeMap<String, bool> {
+    let mut dist_ok: BTreeMap<String, bool> = BTreeMap::new();
+    if let Some(arr) = val.get("results").and_then(|v| v.as_array()) {
+        for (idx, r) in arr.iter().enumerate() {
+            if let (Some(iid), Some(ok)) = (
+                r.get("item_id").and_then(|v| v.as_str()),
+                r.get("ok").and_then(|v| v.as_bool()),
+            ) {
+                let cur = dist_ok.entry(iid.to_owned()).or_insert(true);
+                *cur &= ok;
+                let probe_override = r.get("probe_id").and_then(|v| v.as_str());
+                let meta = if let Some(pid) = probe_override {
+                    st_meta
+                        .iter()
+                        .find(|(m_iid, m_pid, _)| m_iid == iid && m_pid == pid)
+                } else {
+                    st_meta
+                        .get(idx)
+                        .filter(|(m_iid, _, _)| m_iid == iid)
+                        .or_else(|| st_meta.iter().find(|(m_iid, _, _)| m_iid == iid))
+                };
+                if let Some((meta_iid, probe_id, cluster_id)) = meta {
+                    judge.record_outcome(crate::datasets::framework::ScorerItemOutcome {
+                        item_id: meta_iid.clone(),
+                        probe_id: probe_id.clone(),
+                        cluster_id: cluster_id.clone(),
+                        category: Some("BeliefQ[Dist.]".to_owned()),
+                        metric_name: "fantom_all_star".to_owned(),
+                        score: Some(if ok { 1.0 } else { 0.0 }),
+                        passed: Some(ok),
+                        judge_prompt: None,
+                        judge_verdict: None,
+                        failed: false,
+                        failure_reason: None,
+                    });
+                }
+            }
+        }
+    }
+    dist_ok
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+    use crate::datasets::framework::ScorerDetailRecorder;
+
+    #[test]
+    fn belief_dist_eval_results_record_fantom_all_star_outcomes_by_probe() {
+        let recorder = Arc::new(Mutex::new(ScorerDetailRecorder::default()));
+        let judge = JudgeExecutionConfig {
+            recorder: Some(recorder.clone()),
+            ..JudgeExecutionConfig::default()
+        };
+        let st_meta = vec![
+            ("set_1".to_owned(), "belief0_dist".to_owned(), "conv_1".to_owned()),
+            ("set_1".to_owned(), "belief1_dist".to_owned(), "conv_1".to_owned()),
+            ("set_2".to_owned(), "belief0_dist".to_owned(), "conv_2".to_owned()),
+        ];
+        let val = serde_json::json!({
+            "results": [
+                {"item_id": "set_1", "ok": true},
+                {"item_id": "set_1", "ok": false},
+                {"item_id": "set_2", "ok": true}
+            ]
+        });
+
+        let dist_ok = record_fantom_dist_outcomes(&judge, &st_meta, &val);
+        assert_eq!(dist_ok.get("set_1"), Some(&false));
+        assert_eq!(dist_ok.get("set_2"), Some(&true));
+
+        let guard = recorder.lock().expect("recorder lock");
+        assert_eq!(guard.outcomes.len(), 3);
+        assert_eq!(guard.outcomes[0].item_id, "set_1");
+        assert_eq!(guard.outcomes[0].probe_id, "belief0_dist");
+        assert_eq!(guard.outcomes[0].cluster_id, "conv_1");
+        assert_eq!(guard.outcomes[0].category.as_deref(), Some("BeliefQ[Dist.]"));
+        assert_eq!(guard.outcomes[0].metric_name, "fantom_all_star");
+        assert_eq!(guard.outcomes[0].score, Some(1.0));
+        assert_eq!(guard.outcomes[0].passed, Some(true));
+
+        assert_eq!(guard.outcomes[1].probe_id, "belief1_dist");
+        assert_eq!(guard.outcomes[1].score, Some(0.0));
+        assert_eq!(guard.outcomes[1].passed, Some(false));
+
+        assert_eq!(guard.outcomes[2].item_id, "set_2");
+        assert_eq!(guard.outcomes[2].probe_id, "belief0_dist");
+        assert_eq!(guard.outcomes[2].cluster_id, "conv_2");
+        assert_eq!(guard.outcomes[2].passed, Some(true));
     }
 }

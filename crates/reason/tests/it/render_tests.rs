@@ -305,6 +305,24 @@ fn identical_plan_renders_byte_identical_and_preserves_structural_slot_order() {
             .contains("<now>2023-11-14T22:23:20.000Z</now>")
     );
     assert!(r1.full_prompt.contains("knowledge_cutoff: 2025-10"));
+    assert!(
+        r1.full_prompt
+            .contains("yes/no answer or a single option letter"),
+        "[ANCHOR] output_contract must include direct-answer rule"
+    );
+    assert!(
+        r1.full_prompt
+            .contains("never put a place ID into people"),
+        "[ANCHOR] output_contract must clarify places vs people"
+    );
+    assert!(
+        r1.full_prompt
+            .contains("Keep direct factual answers concise.")
+            && r1.full_prompt.contains(
+                "output only the matching names/items without mentioning excluded ones"
+            ),
+        "[ANCHOR] output_contract must include concise direct-answer and matching-only list rule"
+    );
     assert!(r1.full_prompt.contains("2023-11-13T18:26:40.000Z"));
     assert!(!r1.full_prompt.contains("ago"));
 
@@ -1376,4 +1394,77 @@ fn classify_and_consolidate_tasks_render_their_question_material_and_labels() {
     // Reasoning wakes never carry a task block.
     let plain = render_context_plan(&sample_plan(false, None));
     assert!(!plain.dynamic_context.contains("[TASK]"));
+}
+
+#[test]
+fn recalled_renders_chronologically_and_skips_place_tail_duplicates() {
+    let make_seg = |slot: ContextSlotKind, id: u64, ts_ms: u64, label: &str| ContextSegment {
+        slot,
+        segment_kind: TrustSegmentKind::UntrustedQuoted,
+        event_id: Some(EventId::new(id)),
+        origin_actor: OriginActor::new(ActorId::new("alice")),
+        taint: Taint::Provisional,
+        timestamp_ms: Some(t(ts_ms)),
+        basis: Some(MemoryBasis::Observed),
+        recollection: None,
+        is_gist: false,
+        superseded_by: None,
+        attachments: Vec::new(),
+        estimated_bytes: 128,
+        is_reference_only: false,
+        label: label.to_owned(),
+    };
+
+    let mut plan = sample_plan(false, None);
+    plan.sections.place_tail = vec![make_seg(
+        ContextSlotKind::PlaceTail,
+        25,
+        1_700_000_200_000,
+        "tail item 25",
+    )];
+    // Deliberately supply recalled out of chronological order (newest first, tie-broken reversed)
+    // plus a duplicate of place_tail id=25.
+    plan.sections.recalled = vec![
+        make_seg(ContextSlotKind::Recalled, 30, 1_700_000_300_000, "third"),
+        make_seg(ContextSlotKind::Recalled, 25, 1_700_000_200_000, "dup_of_tail"),
+        make_seg(ContextSlotKind::Recalled, 12, 1_700_000_100_000, "tie_second"),
+        make_seg(ContextSlotKind::Recalled, 10, 1_700_000_100_000, "tie_first"),
+    ];
+
+    let rendered = render_context_plan_with(&plan, &RenderExtras::default());
+    let recalled_block = rendered
+        .dynamic_context
+        .split_once("[RECALLED]\n")
+        .and_then(|(_, rest)| rest.split_once("[/RECALLED]"))
+        .map(|(b, _)| b)
+        .expect("[RECALLED] block");
+
+    assert!(
+        !recalled_block.contains("id=25") && !recalled_block.contains("dup_of_tail"),
+        "duplicate place_tail event_id must be omitted from [RECALLED]: {recalled_block}"
+    );
+    let pos_10 = recalled_block.find("id=10").expect("id=10");
+    let pos_12 = recalled_block.find("id=12").expect("id=12");
+    let pos_30 = recalled_block.find("id=30").expect("id=30");
+    assert!(
+        pos_10 < pos_12 && pos_12 < pos_30,
+        "[RECALLED] must render ascending by (timestamp_ms, event_id): {recalled_block}"
+    );
+    assert!(rendered.dynamic_context.contains("tail item 25"));
+
+    // When all recalled items are duplicated in place_tail, [RECALLED] renders `- none`.
+    plan.sections.recalled = vec![make_seg(
+        ContextSlotKind::Recalled,
+        25,
+        1_700_000_200_000,
+        "dup_only",
+    )];
+    let empty_rec = render_context_plan_with(&plan, &RenderExtras::default());
+    let empty_block = empty_rec
+        .dynamic_context
+        .split_once("[RECALLED]\n")
+        .and_then(|(_, rest)| rest.split_once("[/RECALLED]"))
+        .map(|(b, _)| b)
+        .expect("[RECALLED] block");
+    assert_eq!(empty_block, "- none\n");
 }

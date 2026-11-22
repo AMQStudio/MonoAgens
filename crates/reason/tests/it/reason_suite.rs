@@ -508,6 +508,54 @@ fn malformed_acts_produce_failed_wake_naming_the_wrong_field_and_rubric_decodes(
 }
 
 #[test]
+fn act_people_strips_exact_place_ids_while_keeping_actors() {
+    let make_batch = |people: Vec<&str>| {
+        json!({
+            "acts": [{
+                "act": "act",
+                "capability_id": "chat.speak",
+                "places": ["room_1"],
+                "people": people,
+                "payload": "hello",
+                "motivation": 4,
+                "confidence_0_20": 18,
+                "used_ids": []
+            }]
+        })
+        .to_string()
+    };
+
+    let only_place = parse_thought_output(&make_batch(vec!["room_1"])).expect("parse");
+    match &only_place.acts[0] {
+        ThoughtAct::Act { places, people, .. } => {
+            assert_eq!(places, &[PlaceId::new("room_1")]);
+            assert!(people.is_empty(), "place_id in people must normalize to []");
+        }
+        other => panic!("expected Act, got {other:?}"),
+    }
+
+    let mixed = parse_thought_output(&make_batch(vec!["alice", "room_1"])).expect("parse");
+    match &mixed.acts[0] {
+        ThoughtAct::Act { people, .. } => {
+            assert_eq!(people, &[ActorId::new("alice")]);
+        }
+        other => panic!("expected Act, got {other:?}"),
+    }
+
+    let unknown_actor =
+        parse_thought_output(&make_batch(vec!["unknown_actor", "Room_1"])).expect("parse");
+    match &unknown_actor.acts[0] {
+        ThoughtAct::Act { people, .. } => {
+            assert_eq!(
+                people,
+                &[ActorId::new("unknown_actor"), ActorId::new("Room_1")]
+            );
+        }
+        other => panic!("expected Act, got {other:?}"),
+    }
+}
+
+#[test]
 fn http_failure_classification_timeout_and_zero_secret_leakage_keep_loop_alive() {
     let canary_key = "sk-canary-super-secret-key-987654321";
     let replies = vec![

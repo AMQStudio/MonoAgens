@@ -611,7 +611,7 @@ fn render_slot_0_anchor(sections: &ContextSections) -> String {
         }
     }
     out.push_str(
-        "output_contract: motivation in 1..=5; confidence_0_20 in 0..=20; think/believe are private and NOT shown to users; to reply visibly to a user, emit act='act' with an available capability_id (e.g. 'chat.speak'), places=[trigger place], and payload as UTF-8 reply text; classify label must be non-empty.\n",
+        "output_contract: motivation in 1..=5; confidence_0_20 in 0..=20; think/believe are private and NOT shown to users; to reply visibly to a user, emit act='act' with an available capability_id (e.g. 'chat.speak'), places=[trigger place] (room/place IDs only), people=[] to reply to the whole room or strictly actor IDs (never put a place ID into people), and payload as UTF-8 reply text; classify label must be non-empty. Keep direct factual answers concise. When a user explicitly asks for a yes/no answer or a single option letter, put that exact word or option letter first at the start of payload before any explanation; when asked to list matching names/items, output only the matching names/items without mentioning excluded ones.\n",
     );
     out.push_str("[/ANCHOR]");
     out
@@ -954,10 +954,29 @@ fn render_working_set(sections: &ContextSections, extras: &RenderExtras) -> (Str
 fn render_recalled(sections: &ContextSections, extras: &RenderExtras) -> String {
     let mut out = String::new();
     out.push_str("[RECALLED]\n");
-    if sections.recalled.is_empty() {
+    let place_tail_ids: BTreeSet<EventId> = sections
+        .place_tail
+        .iter()
+        .filter_map(|seg| seg.event_id)
+        .collect();
+    let mut ordered: Vec<&ContextSegment> = sections
+        .recalled
+        .iter()
+        .filter(|seg| {
+            seg.event_id
+                .is_none_or(|eid| !place_tail_ids.contains(&eid))
+        })
+        .collect();
+    ordered.sort_by_key(|seg| {
+        (
+            seg.timestamp_ms.map_or(u64::MAX, Time::as_millis),
+            seg.event_id.map_or(u64::MAX, EventId::as_u64),
+        )
+    });
+    if ordered.is_empty() {
         out.push_str("- none\n");
     } else {
-        for seg in &sections.recalled {
+        for seg in ordered {
             let credence = resolve_recalled_credence(seg, &sections.source_cards, extras);
             out.push_str(&render_segment(seg, extras, credence));
             out.push('\n');

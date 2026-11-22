@@ -1227,12 +1227,16 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
         substitution_policy: judge_sub_policy,
     });
 
-    // Configure EmbeddingGemma 2 semantic embedder for standard runs (`task 10.5`).
+    // Configure EmbeddingGemma 2 semantic embedder for standard, category, smoke, and live runs (`task 10.5`).
     let mut sidecar_guard: Option<SidecarProcessGuard> = None;
     let mut embedder_backend: Option<String> = None;
     let mut embedder_revision: Option<String> = None;
-    let configured_embedder: Option<EmbeddingGemma2Embedder> =
-        if (category_suite || memory_suite || smoke_suite) && !allow_no_embedder && !preflight_only {
+    let configured_embedder: Option<EmbeddingGemma2Embedder> = if should_enable_semantic_embedder(
+        live,
+        category_suite || memory_suite || smoke_suite,
+        allow_no_embedder,
+        preflight_only,
+    ) {
         if let Some(ep) = &embed_endpoint {
             let mpath = embed_model_path
                 .clone()
@@ -1433,9 +1437,12 @@ fn run_benchmark_cmd(args: &[String]) -> Result<ExitCode, String> {
         runs_root: runs_root.clone(),
         pilot_prefix_n: pilot_items,
         preflight_only,
-        require_semantic_embedder: (category_suite || smoke_suite)
-            && !allow_no_embedder
-            && !preflight_only,
+        require_semantic_embedder: should_enable_semantic_embedder(
+            live,
+            category_suite || smoke_suite,
+            allow_no_embedder,
+            preflight_only,
+        ),
         probe_model_name: model_name,
         probe_provider: live_probe_provider
             .as_ref()
@@ -2328,6 +2335,29 @@ fn extract_endpoint_host(endpoint: &str) -> Option<String> {
     }
 }
 
+fn should_enable_semantic_embedder(
+    live: bool,
+    suite_requires_embedder: bool,
+    allow_no_embedder: bool,
+    preflight_only: bool,
+) -> bool {
+    (live || suite_requires_embedder) && !allow_no_embedder && !preflight_only
+}
+
 fn usage() -> String {
     "Usage:\n  monoagens-lab run --scenario <path> [--config <path>] [--seed <u64>] [--json] [--record-out <path>]\n  monoagens-lab suite [--root <dir>] [--set development|validation] [--config <path>] [--seeds 1,2] [--json]\n  monoagens-lab compare (--scenario <path> | --set development|validation [--root <dir>]) [--ablation neutral|online_adapt] [--model <path>] [--config <path>] [--seeds 1,2,3,4,5] [--out-dir <dir>] [--json]\n  monoagens-lab replay --scenario <path> [--config <path>] [--seed <u64>] [--json]\n  monoagens-lab baseline --adapter <slug> --scenario <path> [--config <path>] [--seed <u64>] [--sealed] [--timeout-s <u64>] [--json]\n  monoagens-lab benchmark --suite <standard|in_tree_only|smoke|smoke-e2e|memory|prospective|timing|group|tom|indonesian|security> [--datasets-dir <path>] [--config <path>] [--pareto] [--pareto-input <path>] [--report] [--json]\n  monoagens-lab report --run <dir> [--out <dir>] [--manifest <path>] [--samples-per-dataset <N>] [--samples-only] [--note <text>] [--json]\n  monoagens-lab smoke-id [--model <path>] [--out-dir <dir>] [--offline-hash] [--live --profile <path>] [--json]\n  monoagens-lab datasets <init|list|pin|fetch|verify> [ids...] [--manifest <path>] [--datasets-dir <path>] [--record-checksums] [--json]\n  monoagens-lab pareto --input <scorecard.json> [--json]\n  monoagens-lab controller [--model <path>] [--json]\n  monoagens-lab test-body [--state-dir <path>]".to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_enable_semantic_embedder;
+
+    #[test]
+    fn live_runs_enable_semantic_embedder_even_for_in_tree_only_while_offline_stays_disabled() {
+        assert!(should_enable_semantic_embedder(true, false, false, false));
+        assert!(!should_enable_semantic_embedder(true, false, true, false));
+        assert!(!should_enable_semantic_embedder(true, false, false, true));
+        assert!(!should_enable_semantic_embedder(false, false, false, false));
+        assert!(should_enable_semantic_embedder(false, true, false, false));
+    }
 }

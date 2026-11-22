@@ -20,7 +20,9 @@ use monoagens_protocol::{
 use monoagens_reason::embed::{
     EmbedContent, EmbedError, EmbedInput, EmbedModality, Embedder, TaskPrefix,
 };
-use monoagens_reason::model::{ModelOutput, ModelProvider, ScriptedModelProvider, ScriptedReply};
+use monoagens_reason::model::{
+    ModelOutput, ModelProvider, ProviderFailureClass, ScriptedModelProvider, ScriptedReply,
+};
 use monoagens_reason::{RenderExtras, render_context_plan_with};
 use serde::{Deserialize, Serialize};
 
@@ -1460,8 +1462,17 @@ fn drive_model_effects(
                     }
                     let system_prompt = rendered.static_prefix.clone();
                     let prompt = rendered.dynamic_context.clone();
+                    let mut invoke_res = provider.invoke(&req);
+                    if let Err(ref fail) = invoke_res
+                        && fail.class == ProviderFailureClass::InvalidOutput
+                        && fail.detail.contains("EOF while parsing")
+                        && !guard.budget_exhausted()
+                        && !guard.max_tokens.is_some_and(|limit| guard.tokens_used >= limit)
+                    {
+                        invoke_res = provider.invoke(&req);
+                    }
                     let (inp, call_in, call_out, _call_cached, _call_reasoning) =
-                        match provider.invoke(&req) {
+                        match invoke_res {
                             Ok(ok) => {
                                 let usage = ok.record.usage;
                                 let (tin, tout, treas, tcached) = if ctx.is_silent_history {
@@ -1928,4 +1939,208 @@ pub fn make_text_percept(
         Time::from_millis(timestamp_ms),
         OpaquePayload::from_bytes(text.as_ref().as_bytes().to_vec()),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use monoagens_protocol::{CapabilityFlags, CapabilitySchemaHash, PlaceId};
+    use monoagens_reason::model::{ModelCallFailure, ModelCallSuccess, ModelRequest};
+
+    use super::*;
+
+    struct CountingProvider {
+        inner: ScriptedModelProvider,
+        calls: AtomicUsize,
+    }
+
+    impl CountingProvider {
+        fn from_replies(replies: impl IntoIterator<Item = ScriptedReply>) -> Self {
+            Self {
+                inner: ScriptedModelProvider::from_replies(replies),
+                calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn call_count(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl ModelProvider for CountingProvider {
+        fn provider_name(&self) -> &str {
+            self.inner.provider_name()
+        }
+
+        fn invoke(&self, request: &ModelRequest) -> Result<ModelCallSuccess, ModelCallFailure> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.invoke(request)
+        }
+    }
+
+    fn speak_probe_item() -> ExternalItem {
+        let soul = ActorId::new("soul");
+        let proctor = ActorId::new("lab_proctor");
+        let place = PlaceId::new("room:test");
+        let aud = Audience::new([proctor, soul]);
+        let cap = CapabilityDescriptor {
+            id: CapabilityId::new("chat.speak"),
+            capability_schema_hash: CapabilitySchemaHash::new("h1"),
+            places: vec![place.clone()],
+            flags: CapabilityFlags {
+                communicative: true,
+                identity_changing: false,
+                irreversible: false,
+            },
+            typical_latency_ms: 50,
+            description: "Speak in chat".to_owned(),
+            sensed_effect: None,
+        };
+        ExternalItem {
+            item_id: "eof_retry_item".to_owned(),
+            cluster_id: "eof_retry_item".to_owned(),
+            strata_key: "test".to_owned(),
+            history: Vec::new(),
+            checkpoint_group: None,
+            probes: vec![ExternalProbe {
+                probe_id: "p0".to_owned(),
+                percept: make_text_percept(
+                    "lab_proctor",
+                    place.as_str(),
+                    aud.members.iter().cloned(),
+                    1_700_000_000_000,
+                    "Please reply.",
+                ),
+                isolated_checkpoint: true,
+                probe_scope: VisibleScope::new(aud, Some(place)),
+                expected_capability: None,
+            }],
+            history_mode: HistoryMode::StaticSilent,
+            capabilities: vec![cap],
+        }
+    }
+
+    #[test]
+    fn truncated_json_eof_retries_once_and_recovers() {
+        let item = speak_probe_item();
+        let valid_reply = serde_json::json!({
+            "acts": [{
+                "act": "act",
+                "capability_id": "chat.speak",
+                "places": ["room:test"],
+                "people": ["lab_proctor"],
+                "payload": b"Recovered answer.".to_vec(),
+                "motivation": 5,
+                "confidence_0_20": 18,
+                "used_ids": []
+            }]
+        })
+        .to_string();
+        let provider = CountingProvider::from_replies([
+            ScriptedReply::failure(
+                ProviderFailureClass::InvalidOutput,
+                "json parse error: EOF while parsing a value at line 1 column 128",
+            ),
+            ScriptedReply::text(valid_reply),
+        ]);
+        let mut guard = CostGuard::with_max_cost_usd(1.0);
+        let exec = execute_external_item(
+            &item,
+            &CoreConfig::default(),
+            1,
+            &provider,
+            "mock-model",
+            true,
+            &mut guard,
+        )
+        .unwrap();
+
+        assert_eq!(provider.call_count(), 2);
+        assert!(exec.failed_items.is_empty(), "{:?}", exec.failed_items);
+        assert_eq!(exec.predictions.len(), 1);
+        assert!(exec.predictions[0].spoke);
+        assert_eq!(
+            exec.predictions[0].response_text.as_deref(),
+            Some("Recovered answer.")
+        );
+    }
+
+    #[test]
+    fn truncated_json_eof_does_not_retry_more_than_once_or_when_budget_exhausted() {
+        let item = speak_probe_item();
+
+        // Exhausted budget in drive_model_effects -> no retry (1 call only).
+        let exhausted_provider = CountingProvider::from_replies([
+            ScriptedReply::failure(
+                ProviderFailureClass::InvalidOutput,
+                "EOF while parsing an object at line 1 column 10",
+            ),
+            ScriptedReply::text(SILENT_THINK_JSON),
+        ]);
+        let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).unwrap();
+        let mut exhausted_guard = CostGuard::with_max_cost_usd(0.0);
+        let mut purpose_costs = BTreeMap::new();
+        let mut transcript_events = Vec::new();
+        let mut failed_items = Vec::new();
+        let mut actions_dispatched = 0usize;
+        let mut model_latencies_ms = Vec::new();
+        let mut ctx = DriveEffectsContext {
+            phase: "probe",
+            turn_or_probe_id: "p0",
+            item_id: &item.item_id,
+            probe_id: "p0",
+            is_silent_history: false,
+            session_id: "ses_test",
+            attribution: None,
+            request_timeout_ms: None,
+            max_output_tokens: None,
+            transcript_events: &mut transcript_events,
+            failed_items: &mut failed_items,
+            actions_dispatched: &mut actions_dispatched,
+            model_latencies_ms: &mut model_latencies_ms,
+        };
+        let _ = drive_model_effects(
+            &mut core,
+            vec![Effect::Model {
+                purpose: ModelPurpose::Reason,
+                plan: Default::default(),
+            }],
+            Time::from_millis(1_700_000_000_000),
+            &mut exhausted_guard,
+            &exhausted_provider,
+            "mock-model",
+            &mut purpose_costs,
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(exhausted_provider.call_count(), 1);
+        assert_eq!(failed_items.len(), 1);
+
+        // Two consecutive EOF failures -> retries at most once (2 calls total), then fails wake.
+        let double_fail_provider = CountingProvider::from_replies([
+            ScriptedReply::failure(
+                ProviderFailureClass::InvalidOutput,
+                "EOF while parsing a string at line 1 column 42",
+            ),
+            ScriptedReply::failure(
+                ProviderFailureClass::InvalidOutput,
+                "EOF while parsing a string at line 1 column 55",
+            ),
+            ScriptedReply::text(SILENT_THINK_JSON),
+        ]);
+        let mut guard = CostGuard::with_max_cost_usd(1.0);
+        let exec_double = execute_external_item(
+            &item,
+            &CoreConfig::default(),
+            1,
+            &double_fail_provider,
+            "mock-model",
+            true,
+            &mut guard,
+        )
+        .unwrap();
+        assert_eq!(double_fail_provider.call_count(), 2);
+        assert_eq!(exec_double.failed_items.len(), 1);
+    }
 }

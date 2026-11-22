@@ -7,7 +7,7 @@ output_limit_param = "max_completion_tokens"
 
 [output_limits]
 classify = 1024
-reason = 4096
+reason = 8192
 consolidate = 8192
 
 [headers]

@@ -581,10 +581,13 @@ fn parse_single_act(
                 )?;
             }
             check_opt_string(obj, &prefix, "domain", idx, act_kind)?;
-            let act: ThoughtAct = serde_json::from_value(normalized_val).map_err(|err| {
+            let mut act: ThoughtAct = serde_json::from_value(normalized_val).map_err(|err| {
                 FailedWake::new(&prefix, format!("failed to decode act: {err}"))
                     .with_act(idx, Some(act_kind.to_owned()))
             })?;
+            if let ThoughtAct::Act { places, people, .. } = &mut act {
+                people.retain(|person| !places.iter().any(|pl| pl.as_str() == person.as_str()));
+            }
             act.validate().map_err(|err| {
                 FailedWake::new(format!("{prefix}.act"), err.to_string())
                     .with_act(idx, Some(act_kind.to_owned()))

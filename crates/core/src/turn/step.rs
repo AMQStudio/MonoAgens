@@ -2006,7 +2006,7 @@ pub(crate) fn execute_turn<S: Store>(
                     ThoughtAct::Act {
                         capability_id,
                         places,
-                        people,
+                        mut people,
                         payload,
                         motivation,
                         confidence_0_20,
@@ -2014,6 +2014,9 @@ pub(crate) fn execute_turn<S: Store>(
                         expected,
                         domain,
                     } => {
+                        people.retain(|person| {
+                            !places.iter().any(|pl| pl.as_str() == person.as_str())
+                        });
                         let action_seq = core.state().next_action_seq.max(1);
                         let action_id = ActionId::new(format!("act-{action_seq}"));
                         let mut act_taint = stored_thought.taint;
