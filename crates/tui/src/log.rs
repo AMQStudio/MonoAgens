@@ -2,16 +2,22 @@
 //! rotating file, masking and subscription live there); this module holds the overlay state
 //! (filters, search, follow, scrolling) and draws it.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use monoagens_gateway::{LogBuffer, LogEntry, RunLogLevel};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
+use ratatui::widgets::{Clear, Widget};
 
-use crate::render::{render_scrollbar, scroll_window};
+use crate::core::hitmap::{HitTarget, ScrollId};
+use crate::core::input::{PasteTarget, TextInput};
+use crate::core::overlay::{OverlayId, WidgetOutcome};
+use crate::core::theme::render_dimmed_backdrop;
+use crate::render::scroll_window;
 use crate::state::{AppAction, HitRegions};
 use crate::theme::ThemePalette;
 use crate::width::{chrome_label, fit_prefix, sanitize};
+use crate::widgets::scrollbar::render_vertical_scrollbar;
 use unicode_width::UnicodeWidthStr;
 
 /// Rows used by the overlay besides the entries (header and footer).
@@ -28,6 +34,7 @@ pub struct LogView {
     /// Source filter (`None` shows every source).
     pub source: Option<String>,
     pub search: String,
+    pub search_input: TextInput,
     /// The search box has the keyboard.
     pub searching: bool,
     /// Keep the view at the newest entry.
@@ -48,6 +55,7 @@ impl Default for LogView {
             level: 1,
             source: None,
             search: String::new(),
+            search_input: TextInput::new(false),
             searching: false,
             follow: true,
             offset: 0,
@@ -215,20 +223,24 @@ impl LogView {
             .join("\n")
     }
 
+    fn sync_search_input(&mut self) {
+        if self.search_input.value != self.search {
+            self.search_input.set_value(self.search.clone());
+        }
+    }
+
     /// Handles a key while the overlay is open.
     pub fn handle_key(&mut self, key: KeyEvent) -> Vec<AppAction> {
         if self.searching {
             match key.code {
                 KeyCode::Esc | KeyCode::Enter => self.searching = false,
-                KeyCode::Backspace => {
-                    self.search.pop();
-                    self.reset_view();
+                _ => {
+                    self.sync_search_input();
+                    if self.search_input.handle_key(key) == WidgetOutcome::Consumed {
+                        self.search.clone_from(&self.search_input.value);
+                        self.reset_view();
+                    }
                 }
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.search.push(c);
-                    self.reset_view();
-                }
-                _ => {}
             }
             return Vec::new();
         }
@@ -273,6 +285,22 @@ impl LogView {
     }
 }
 
+impl PasteTarget for LogView {
+    fn paste_text(&mut self, raw: &str) -> bool {
+        if !self.searching {
+            return false;
+        }
+        self.sync_search_input();
+        if self.search_input.paste_text(raw) {
+            self.search.clone_from(&self.search_input.value);
+            self.reset_view();
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// Draws the overlay over the whole `area`.
 pub fn render_log_overlay(
     area: Rect,
@@ -285,6 +313,9 @@ pub fn render_log_overlay(
     if area.width < 10 || area.height < LOG_CHROME_ROWS + 1 {
         return;
     }
+    render_dimmed_backdrop(buf, area, palette);
+    hit.hitmap.record(area, HitTarget::Backdrop(OverlayId::Log));
+    Clear.render(area, buf);
     let bg = Style::default().fg(palette.fg).bg(palette.bg);
     for y in area.y..area.y + area.height {
         for x in area.x..area.x + area.width {
@@ -294,6 +325,7 @@ pub fn render_log_overlay(
             }
         }
     }
+    hit.hitmap.record(area, HitTarget::OverlayBody(OverlayId::Log));
     let all = view.filtered();
     let total = all.len();
     let visible = (area.height - LOG_CHROME_ROWS) as usize;
@@ -336,6 +368,10 @@ pub fn render_log_overlay(
             style = style.bg(palette.status_bg).add_modifier(Modifier::BOLD);
         }
         buf.set_string(area.x, y, line, style);
+        hit.hitmap.record(
+            Rect::new(area.x, y, list_w as u16, 1),
+            HitTarget::ListRow(offset + row),
+        );
     }
     if total == 0 {
         buf.set_string(
@@ -348,7 +384,17 @@ pub fn render_log_overlay(
 
     // Scrollbar on the right edge of the entry rows.
     let sb = Rect::new(area.x + area.width - 1, area.y + 1, 1, visible as u16);
-    render_scrollbar(sb, buf, total, offset, visible, palette);
+    render_vertical_scrollbar(
+        buf,
+        sb,
+        ScrollId::Log,
+        total,
+        visible,
+        offset,
+        &mut hit.hitmap,
+        Style::default().fg(palette.separator).bg(palette.bg),
+        Style::default().fg(palette.accent).bg(palette.bg),
+    );
     hit.log_area = Rect::new(area.x, area.y + 1, area.width, visible as u16);
     hit.log_total = total;
     hit.log_visible = visible;

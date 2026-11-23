@@ -1,14 +1,21 @@
 //! 8-tab 2-pane `/settings` overlay model, plugin drill-down state, and first-run Setup Wizard.
 
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 
 use monoagens_gateway::{GatewayConfig, PluginKind, ResolvedPaths};
 
 use crate::config::{DynamicTomlDoc, DynamicTomlEntry, TuiPreferences};
+use crate::core::hitmap::HitMap;
+use crate::core::input::{PasteTarget, TextInput};
+use crate::core::labels::{
+    friendly_plugin, friendly_setting, friendly_valve_toggle, matches_friendly_query,
+};
+use crate::core::overlay::WidgetOutcome;
 use crate::list_editor::ItemEditor;
 use crate::pairing::PairingState;
-use crate::rbac_editor::RbacPage;
 use crate::selector::Selector;
+use crate::views::rbac::RbacViewState;
 
 /// All 8 tabs in the `/settings` modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -85,7 +92,12 @@ impl SettingsTab {
     #[must_use]
     pub const fn sections(self) -> &'static [&'static str] {
         match self {
-            Self::Appearance => &["Theme & Layout", "Motion & Shimmer", "Chat & Status Line", "Keybindings"],
+            Self::Appearance => &[
+                "Theme & Layout",
+                "Motion & Shimmer",
+                "Chat & Status Line",
+                "Keybindings",
+            ],
             Self::SoulBrain => &["Soul Identity", "Neural Core", "Embeddings"],
             Self::Model => &[
                 "Provider & Model",
@@ -98,7 +110,12 @@ impl SettingsTab {
             Self::Rbac => &["Fallback & Roles", "Actors", "Places & Bases"],
             Self::Providers => &["Providers", "Legacy Endpoint & Key", "Plugin [env] Secrets"],
             Self::Plugins => &["Configured & Catalog"],
-            Self::Runtime => &["Timeouts & Cues", "Identity Linking", "Storage", "Resolved Paths"],
+            Self::Runtime => &[
+                "Timeouts & Cues",
+                "Identity Linking",
+                "Storage",
+                "Resolved Paths",
+            ],
         }
     }
 }
@@ -203,10 +220,16 @@ impl ValveRuleTogglesState {
     /// Reads optional boolean rule toggles under `[valve]` from `monoagens.toml`.
     #[must_use]
     pub fn load_from_config(config_path: &std::path::Path) -> Self {
-        let mut out = Self::default();
         let Ok(raw) = std::fs::read_to_string(config_path) else {
-            return out;
+            return Self::default();
         };
+        Self::parse_toml(&raw)
+    }
+
+    /// Parses optional boolean rule toggles under `[valve]` from raw `monoagens.toml` text.
+    #[must_use]
+    pub fn parse_toml(raw: &str) -> Self {
+        let mut out = Self::default();
         let Ok(doc) = raw.parse::<toml_edit::DocumentMut>() else {
             return out;
         };
@@ -227,6 +250,23 @@ impl ValveRuleTogglesState {
         out.quiet_hours = read("quiet_hours", out.quiet_hours);
         out.proactive_cap = read("proactive_cap", out.proactive_cap);
         out
+    }
+
+    /// Updates rule toggles from a JSON `[valve]` object when provided by a snapshot.
+    pub fn apply_json(&mut self, obj: &serde_json::Map<String, serde_json::Value>) {
+        let read = |k: &str, cur: bool| {
+            obj.get(k)
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(cur)
+        };
+        self.cedar_abac = read("cedar_abac", self.cedar_abac);
+        self.line2_scope = read("line2_scope", self.line2_scope);
+        self.taint_blocking = read("taint_blocking", self.taint_blocking);
+        self.pending_approval = read("pending_approval", self.pending_approval);
+        self.budget_guard = read("budget_guard", self.budget_guard);
+        self.chain_brake = read("chain_brake", self.chain_brake);
+        self.quiet_hours = read("quiet_hours", self.quiet_hours);
+        self.proactive_cap = read("proactive_cap", self.proactive_cap);
     }
 }
 
@@ -249,7 +289,9 @@ pub enum SettingValueKind {
     Number(String),
     /// Filesystem path (validated on save).
     Path(String),
-    MaskedSecret { is_set: bool },
+    MaskedSecret {
+        is_set: bool,
+    },
     List(Vec<String>),
     Map(Vec<(String, String)>),
     Action(String),
@@ -284,6 +326,64 @@ pub struct InlineEditState {
     pub prompt: String,
     pub buffer: String,
     pub masked: bool,
+    pub input: TextInput,
+}
+
+impl InlineEditState {
+    /// Creates an inline edit state backed by a single-line [`TextInput`].
+    #[must_use]
+    pub fn new(
+        target: InlineEditTarget,
+        prompt: impl Into<String>,
+        initial: impl Into<String>,
+        masked: bool,
+    ) -> Self {
+        let initial = initial.into();
+        let input = TextInput::new(false)
+            .with_value(initial.clone())
+            .with_masked(masked);
+        Self {
+            target,
+            prompt: prompt.into(),
+            buffer: initial,
+            masked,
+            input,
+        }
+    }
+
+    /// Forwards a key event to [`Self::input`] and keeps [`Self::buffer`] synchronized.
+    pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> WidgetOutcome {
+        self.sync_input_from_buffer();
+        let outcome = self.input.handle_key(key);
+        self.sync_buffer();
+        outcome
+    }
+
+    /// Sanitizes and inserts pasted text into [`Self::input`], keeping [`Self::buffer`] synchronized.
+    pub fn paste_text(&mut self, raw: &str) -> bool {
+        self.sync_input_from_buffer();
+        let changed = self.input.paste_text(raw);
+        self.sync_buffer();
+        changed
+    }
+
+    /// Toggles secret masking on both `masked` and `input.masked`.
+    pub fn toggle_masked(&mut self) {
+        self.masked = !self.masked;
+        self.input.masked = self.masked;
+    }
+
+    /// Synchronizes `buffer` from `input.value`.
+    pub fn sync_buffer(&mut self) {
+        self.buffer = self.input.value.clone();
+    }
+
+    fn sync_input_from_buffer(&mut self) {
+        if self.input.as_str() != self.buffer {
+            self.input.set_value(self.buffer.clone());
+        }
+        self.input.masked = self.masked;
+    }
 }
 
 /// Level 2 plugin detail drill-down (`Plugins › <id>`).
@@ -331,10 +431,6 @@ pub struct ConfirmState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfirmAction {
     RemovePlugin(String),
-    DeleteRole(String),
-    DeletePlace(String),
-    DeleteBase(String),
-    RemoveActor(String),
 }
 
 /// Guided install of a catalog plugin (command path, kind, enable).
@@ -360,7 +456,7 @@ pub struct RbacHints {
 }
 
 /// Complete state of the `/settings` 8-tab 2-pane modal.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SettingsModalState {
     pub open: bool,
     pub tab: SettingsTab,
@@ -368,6 +464,7 @@ pub struct SettingsModalState {
     pub selected_index: usize,
     pub scroll_offset: usize,
     pub search_query: String,
+    pub search_input: TextInput,
     pub editing: Option<InlineEditState>,
     pub plugin_detail: Option<PluginDetailState>,
     pub valve_toggles: ValveRuleTogglesState,
@@ -377,16 +474,46 @@ pub struct SettingsModalState {
     pub items: Option<ItemEditor>,
     /// Entries of the map being edited as last saved (to null out removed keys).
     pub items_base: Vec<(String, String)>,
-    /// RBAC sub-page (role, actor, place, permission base) in place of the list.
-    pub rbac_page: Option<RbacPage>,
-    /// Main-list selection to restore when the RBAC sub-page closes.
-    pub page_return: Option<(usize, usize)>,
+    /// 2-pane RBAC toggle matrix state (`crate::views::rbac`).
+    pub rbac: RbacViewState,
+    /// Full `capabilities.list` payload (`groups` + `capabilities`) from the gateway.
+    pub capabilities_json: Option<serde_json::Value>,
     pub pairing: Option<PairingState>,
     pub confirm: Option<ConfirmState>,
     pub install: Option<InstallFlow>,
     pub hints: RbacHints,
     /// Rows the list showed in the last frame (written by the renderer).
-    pub list_rows: std::cell::Cell<usize>,
+    pub list_rows: Cell<usize>,
+    /// Last rendered `HitMap` for Settings (updated by `render_settings_overlay`).
+    pub hitmap: RefCell<HitMap>,
+}
+
+impl Default for SettingsModalState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            tab: SettingsTab::default(),
+            section_index: 0,
+            selected_index: 0,
+            scroll_offset: 0,
+            search_query: String::new(),
+            search_input: TextInput::new(false).with_placeholder("type to filter settings…"),
+            editing: None,
+            plugin_detail: None,
+            valve_toggles: ValveRuleTogglesState::default(),
+            selector: None,
+            items: None,
+            items_base: Vec::new(),
+            rbac: RbacViewState::default(),
+            capabilities_json: None,
+            pairing: None,
+            confirm: None,
+            install: None,
+            hints: RbacHints::default(),
+            list_rows: Cell::new(0),
+            hitmap: RefCell::new(HitMap::default()),
+        }
+    }
 }
 
 impl SettingsModalState {
@@ -397,8 +524,26 @@ impl SettingsModalState {
         self.section_index = 0;
         self.selected_index = 0;
         self.scroll_offset = 0;
-        self.search_query.clear();
+        self.clear_search();
         self.close_subviews();
+    }
+
+    /// Clears both `search_input` and `search_query`.
+    pub fn clear_search(&mut self) {
+        self.search_input.clear();
+        self.search_query.clear();
+    }
+
+    /// Copies `search_input.value` into `search_query`.
+    pub fn sync_search_from_input(&mut self) {
+        self.search_query = self.search_input.value.clone();
+    }
+
+    /// Synchronizes `search_input` from `search_query` if `search_query` was mutated directly.
+    pub fn sync_input_from_search(&mut self) {
+        if self.search_input.as_str() != self.search_query {
+            self.search_input.set_value(self.search_query.clone());
+        }
     }
 
     /// Closes every editor, sub-page and dialog opened over the list.
@@ -407,8 +552,6 @@ impl SettingsModalState {
         self.plugin_detail = None;
         self.selector = None;
         self.items = None;
-        self.rbac_page = None;
-        self.page_return = None;
         self.pairing = None;
         self.confirm = None;
         self.install = None;
@@ -417,7 +560,7 @@ impl SettingsModalState {
     /// Closes the modal and clears transient edit buffers.
     pub fn close(&mut self) {
         self.open = false;
-        self.search_query.clear();
+        self.clear_search();
         self.close_subviews();
     }
 
@@ -428,7 +571,19 @@ impl SettingsModalState {
             || self.plugin_detail.is_some()
             || self.selector.is_some()
             || self.items.is_some()
-            || self.rbac_page.is_some()
+            || self.pairing.is_some()
+            || self.confirm.is_some()
+            || self.install.is_some()
+    }
+
+    /// Whether a blocking sub-modal is stacked above the main Settings pane.
+    ///
+    /// Unlike [`Self::has_subview`], in-place `plugin_detail`, footer `editing`, and the
+    /// 2-pane `Rbac` view still receive mouse clicks and wheel scrolling.
+    #[must_use]
+    pub fn has_blocking_modal(&self) -> bool {
+        self.selector.is_some()
+            || self.items.is_some()
             || self.pairing.is_some()
             || self.confirm.is_some()
             || self.install.is_some()
@@ -464,7 +619,10 @@ pub enum WizardKeyPhase {
     Editing,
     Testing,
     Failed(String),
-    Ok { models: usize, latency_ms: u64 },
+    Ok {
+        models: usize,
+        latency_ms: u64,
+    },
 }
 
 /// Centered first-run Setup Wizard state.
@@ -504,7 +662,11 @@ impl SetupWizardState {
         let len = plugin_ids.len();
         let providers: Vec<WizardProvider> = monoagens_reason::model::catalog::entries()
             .iter()
-            .map(|e| WizardProvider { id: e.id.clone(), label: e.label.clone(), keyless: e.keyless })
+            .map(|e| WizardProvider {
+                id: e.id.clone(),
+                label: e.label.clone(),
+                keyless: e.keyless,
+            })
             .collect();
         Self {
             step: WizardStep::Step1Provider,
@@ -551,7 +713,11 @@ impl SetupWizardState {
         let q = self.search.trim().to_lowercase();
         self.providers
             .iter()
-            .filter(|p| q.is_empty() || p.id.to_lowercase().contains(&q) || p.label.to_lowercase().contains(&q))
+            .filter(|p| {
+                q.is_empty()
+                    || p.id.to_lowercase().contains(&q)
+                    || p.label.to_lowercase().contains(&q)
+            })
             .collect()
     }
 
@@ -559,7 +725,10 @@ impl SetupWizardState {
     #[must_use]
     pub fn filtered_models(&self) -> Vec<&String> {
         let q = self.model_search.trim().to_lowercase();
-        self.models.iter().filter(|m| q.is_empty() || m.to_lowercase().contains(&q)).collect()
+        self.models
+            .iter()
+            .filter(|m| q.is_empty() || m.to_lowercase().contains(&q))
+            .collect()
     }
 }
 
@@ -587,7 +756,13 @@ pub struct RowsCtx<'a> {
     pub model_name: &'a str,
 }
 
-fn row(id: &str, section: &'static str, label: &str, description: &str, value: SettingValueKind) -> SettingRow {
+fn row(
+    id: &str,
+    section: &'static str,
+    label: &str,
+    description: &str,
+    value: SettingValueKind,
+) -> SettingRow {
     SettingRow {
         id: id.to_owned(),
         section,
@@ -603,7 +778,11 @@ fn opt_path(p: Option<&PathBuf>, none: &str) -> String {
 
 fn key_status(p: &ProviderSummary) -> String {
     if p.keyless && !p.key_set {
-        if p.logged_in { "enabled".to_owned() } else { "not enabled".to_owned() }
+        if p.logged_in {
+            "enabled".to_owned()
+        } else {
+            "not enabled".to_owned()
+        }
     } else if p.key_set {
         match &p.key_source {
             Some(src) if src != "secrets" => format!("key set ({src})"),
@@ -660,32 +839,160 @@ pub fn all_settings_rows(ctx: &RowsCtx<'_>) -> Vec<(SettingsTab, SettingRow)> {
 /// Builds the filtered option rows for the active `/settings` tab.
 #[must_use]
 #[allow(clippy::too_many_lines)]
-pub fn build_settings_rows_with(tab: SettingsTab, search_query: &str, ctx: &RowsCtx<'_>) -> Vec<SettingRow> {
+pub fn build_settings_rows_with(
+    tab: SettingsTab,
+    search_query: &str,
+    ctx: &RowsCtx<'_>,
+) -> Vec<SettingRow> {
     use SettingValueKind as V;
-    let RowsCtx { prefs, cfg, paths, secrets, valve_toggles, plugins, providers, bindings, model_name } = ctx;
+    let RowsCtx {
+        prefs,
+        cfg,
+        paths,
+        secrets,
+        valve_toggles,
+        plugins,
+        providers,
+        bindings,
+        model_name,
+    } = ctx;
     let sel = |s: &str| V::Select(s.to_owned());
     let mut rows = match tab {
         SettingsTab::Appearance => {
             let mut v = vec![
-                row("tui.theme", "Theme & Layout", "Theme", "Color palette (Titanium, Slate, Terracotta, Light)", sel(prefs.theme.label())),
-                row("tui.message_layout", "Theme & Layout", "Message Layout", "Chat bubbles vs full-width stream", sel(prefs.message_layout.label())),
-                row("tui.sidebar", "Theme & Layout", "Sidebar", "Auto (>=120 cols), Open, or Closed", sel(prefs.sidebar.label())),
-                row("tui.motion", "Motion & Shimmer", "Motion", "tachyonfx animations (Full, Reduced, Off)", sel(prefs.motion.label())),
-                row("tui.shimmer", "Motion & Shimmer", "Shimmer", "Thinking status shimmer (Classic, Subtle, Off)", sel(prefs.shimmer.label())),
-                row("tui.icons", "Theme & Layout", "Icons", "Chrome icons: Symbols (single-width) or Emoji", sel(prefs.icons.label())),
-                row("tui.mouse_support", "Motion & Shimmer", "Mouse Support", "Enable wheel scroll and click hit-testing", V::Bool(prefs.mouse_support)),
-                row("tui.copy_on_select", "Motion & Shimmer", "Copy on Select", "Auto-copy dragged chat selection on mouse release", V::Bool(prefs.copy_on_select)),
-                row("tui.auto_chat_title", "Chat & Status Line", "Auto Chat Title", "LLM auto-naming & topic-shift re-titling", V::Bool(prefs.auto_chat_title)),
-                row("tui.show_capability_steps", "Chat & Status Line", "Show Capability Steps", "Render tool execution blocks in the chat", V::Bool(prefs.show_capability_steps)),
-                row("tui.show_turn_duration", "Chat & Status Line", "Show Turn Duration", "Display elapsed reply time below replies", V::Bool(prefs.show_turn_duration)),
-                row("tui.show_brain_trace", "Chat & Status Line", "Show Brain Trace (Lab)", "Show dim brain telemetry in /lab mode", V::Bool(prefs.show_brain_trace)),
-                row("tui.show_token_budget", "Chat & Status Line", "Status: Token Budget %", "Show daily budget usage % on status line", V::Bool(prefs.show_token_budget)),
-                row("tui.show_cost_estimate", "Chat & Status Line", "Status: Cost Estimate", "Show estimated session cost on status line", V::Bool(prefs.show_cost_estimate)),
-                row("tui.show_valve_badge", "Chat & Status Line", "Status: Valve Badge", "Show active Valve mode on status line", V::Bool(prefs.show_valve_badge)),
-                row("tui.conv.notifications", "Chat & Status Line", "Notifications", "Notify when the terminal is unfocused and a reply or approval arrives (off, bell, desktop, both)", sel(prefs.conv.notifications.label())),
-                row("tui.conv.live_draft_preview", "Chat & Status Line", "Live draft preview", "Show the reply draft while the model writes", V::Bool(prefs.conv.live_draft_preview)),
-                row("tui.conv.image_preview", "Chat & Status Line", "Image preview", "Show inline previews of image attachments where the terminal supports it", V::Bool(prefs.conv.image_preview)),
-                row("tui.autocomplete_limit", "Chat & Status Line", "Slash Menu Rows", "Visible rows of the / menu (1..=10); it scrolls past that", V::Number(prefs.autocomplete_limit.to_string())),
+                row(
+                    "tui.theme",
+                    "Theme & Layout",
+                    "Theme",
+                    "Color palette (Titanium, Slate, Terracotta, Light)",
+                    sel(prefs.theme.label()),
+                ),
+                row(
+                    "tui.message_layout",
+                    "Theme & Layout",
+                    "Message Layout",
+                    "Chat bubbles vs full-width stream",
+                    sel(prefs.message_layout.label()),
+                ),
+                row(
+                    "tui.sidebar",
+                    "Theme & Layout",
+                    "Sidebar",
+                    "Auto (>=120 cols), Open, or Closed",
+                    sel(prefs.sidebar.label()),
+                ),
+                row(
+                    "tui.motion",
+                    "Motion & Shimmer",
+                    "Motion",
+                    "tachyonfx animations (Full, Reduced, Off)",
+                    sel(prefs.motion.label()),
+                ),
+                row(
+                    "tui.shimmer",
+                    "Motion & Shimmer",
+                    "Shimmer",
+                    "Thinking status shimmer (Classic, Subtle, Off)",
+                    sel(prefs.shimmer.label()),
+                ),
+                row(
+                    "tui.icons",
+                    "Theme & Layout",
+                    "Icons",
+                    "Chrome icons: Symbols (single-width) or Emoji",
+                    sel(prefs.icons.label()),
+                ),
+                row(
+                    "tui.mouse_support",
+                    "Motion & Shimmer",
+                    "Mouse Support",
+                    "Enable wheel scroll and click hit-testing",
+                    V::Bool(prefs.mouse_support),
+                ),
+                row(
+                    "tui.copy_on_select",
+                    "Motion & Shimmer",
+                    "Copy on Select",
+                    "Auto-copy dragged chat selection on mouse release",
+                    V::Bool(prefs.copy_on_select),
+                ),
+                row(
+                    "tui.auto_chat_title",
+                    "Chat & Status Line",
+                    "Auto Chat Title",
+                    "LLM auto-naming & topic-shift re-titling",
+                    V::Bool(prefs.auto_chat_title),
+                ),
+                row(
+                    "tui.show_capability_steps",
+                    "Chat & Status Line",
+                    "Show Capability Steps",
+                    "Render tool execution blocks in the chat",
+                    V::Bool(prefs.show_capability_steps),
+                ),
+                row(
+                    "tui.show_turn_duration",
+                    "Chat & Status Line",
+                    "Show Turn Duration",
+                    "Display elapsed reply time below replies",
+                    V::Bool(prefs.show_turn_duration),
+                ),
+                row(
+                    "tui.show_brain_trace",
+                    "Chat & Status Line",
+                    "Show Brain Trace (Lab)",
+                    "Show dim brain telemetry in /lab mode",
+                    V::Bool(prefs.show_brain_trace),
+                ),
+                row(
+                    "tui.show_token_budget",
+                    "Chat & Status Line",
+                    "Status: Token Budget %",
+                    "Show daily budget usage % on status line",
+                    V::Bool(prefs.show_token_budget),
+                ),
+                row(
+                    "tui.show_cost_estimate",
+                    "Chat & Status Line",
+                    "Status: Cost Estimate",
+                    "Show estimated session cost on status line",
+                    V::Bool(prefs.show_cost_estimate),
+                ),
+                row(
+                    "tui.show_valve_badge",
+                    "Chat & Status Line",
+                    "Status: Valve Badge",
+                    "Show active Valve mode on status line",
+                    V::Bool(prefs.show_valve_badge),
+                ),
+                row(
+                    "tui.conv.notifications",
+                    "Chat & Status Line",
+                    "Notifications",
+                    "Notify when the terminal is unfocused and a reply or approval arrives (off, bell, desktop, both)",
+                    sel(prefs.conv.notifications.label()),
+                ),
+                row(
+                    "tui.conv.live_draft_preview",
+                    "Chat & Status Line",
+                    "Live draft preview",
+                    "Show the reply draft while the model writes",
+                    V::Bool(prefs.conv.live_draft_preview),
+                ),
+                row(
+                    "tui.conv.image_preview",
+                    "Chat & Status Line",
+                    "Image preview",
+                    "Show inline previews of image attachments where the terminal supports it",
+                    V::Bool(prefs.conv.image_preview),
+                ),
+                row(
+                    "tui.autocomplete_limit",
+                    "Chat & Status Line",
+                    "Slash Menu Rows",
+                    "Visible rows of the / menu (1..=10); it scrolls past that",
+                    V::Number(prefs.autocomplete_limit.to_string()),
+                ),
             ];
             v.push(row(
                 "keys.edit",
@@ -697,21 +1004,132 @@ pub fn build_settings_rows_with(tab: SettingsTab, search_query: &str, ctx: &Rows
             v
         }
         SettingsTab::SoulBrain => vec![
-            row("soul.name", "Soul Identity", "soul.name", "Persistent soul display name", V::Text(cfg.soul.name.clone())),
-            row("soul.seed", "Soul Identity", "soul.seed", "Deterministic PRNG seed", V::Number(cfg.soul.seed.to_string())),
-            row("soul.core_config", "Neural Core", "soul.core_config", "Optional CoreConfig JSON file", V::Path(opt_path(cfg.soul.core_config.as_ref(), "(default)"))),
-            row("soul.model_path", "Neural Core", "soul.model_path", "Optional .safetensors neural gate weights path", V::Path(opt_path(cfg.soul.model_path.as_ref(), "(neutral fallback)"))),
-            row("soul.expected_blake3", "Neural Core", "soul.expected_blake3", "Expected BLAKE3 of the weights file (64 hex characters)", V::Text(cfg.soul.expected_blake3.clone().unwrap_or_else(|| "(unset)".to_owned()))),
-            row("soul.online_adaptation", "Neural Core", "soul.online_adaptation", "Online 3-factor Hebbian / LinUCB adaptation", V::Bool(cfg.soul.online_adaptation.unwrap_or(false))),
-            row("embed.backend", "Embeddings", "embed.backend", "Pre-queue embedder backend", sel(cfg.embed.backend.as_str())),
-            row("embed.model_ver", "Embeddings", "embed.model_ver", "Embedding model version tag stored with vectors", V::Text(cfg.embed.model_ver.clone())),
-            row("embed.dim_d", "Embeddings", "embed.dim_d", "Embedding dimension", V::Number(cfg.embed.dim_d.to_string())),
-            row("embed.timeout_ms", "Embeddings", "embed.timeout_ms", "Pre-queue embedding timeout in ms", V::Number(cfg.embed.timeout_ms.to_string())),
-            row("embed.model_path", "Embeddings", "embed.model_path", "Local embedding model directory", V::Path(opt_path(cfg.embed.model_path.as_ref(), "(auto / unset)"))),
-            row("embed.endpoint_url", "Embeddings", "embed.endpoint_url", "Sidecar or remote embeddings endpoint", V::Text(cfg.embed.endpoint_url.clone().unwrap_or_else(|| "(unset)".to_owned()))),
-            row("embed.program", "Embeddings", "embed.program", "Sidecar program for the stdio backend", V::Text(cfg.embed.program.clone().unwrap_or_else(|| "(unset)".to_owned()))),
-            row("embed.args", "Embeddings", "embed.args", "Arguments passed to the sidecar program", V::List(cfg.embed.args.clone())),
-            row("embed.remote_model", "Embeddings", "embed.remote_model", "Model name sent to a remote embeddings endpoint", V::Text(cfg.embed.remote_model.clone().unwrap_or_else(|| "(unset)".to_owned()))),
+            row(
+                "soul.name",
+                "Soul Identity",
+                &friendly_setting("soul.name", "Soul Name").format_inline(),
+                "Persistent soul display name",
+                V::Text(cfg.soul.name.clone()),
+            ),
+            row(
+                "soul.seed",
+                "Soul Identity",
+                &friendly_setting("soul.seed", "Deterministic Seed").format_inline(),
+                "Deterministic PRNG seed",
+                V::Number(cfg.soul.seed.to_string()),
+            ),
+            row(
+                "soul.core_config",
+                "Neural Core",
+                &friendly_setting("soul.core_config", "Core Config File").format_inline(),
+                "Optional CoreConfig JSON file",
+                V::Path(opt_path(cfg.soul.core_config.as_ref(), "(default)")),
+            ),
+            row(
+                "soul.model_path",
+                "Neural Core",
+                &friendly_setting("soul.model_path", "Neural Weights Path").format_inline(),
+                "Optional .safetensors neural gate weights path",
+                V::Path(opt_path(cfg.soul.model_path.as_ref(), "(neutral fallback)")),
+            ),
+            row(
+                "soul.expected_blake3",
+                "Neural Core",
+                &friendly_setting("soul.expected_blake3", "Weights BLAKE3 Checksum")
+                    .format_inline(),
+                "Expected BLAKE3 of the weights file (64 hex characters)",
+                V::Text(
+                    cfg.soul
+                        .expected_blake3
+                        .clone()
+                        .unwrap_or_else(|| "(unset)".to_owned()),
+                ),
+            ),
+            row(
+                "soul.online_adaptation",
+                "Neural Core",
+                &friendly_setting("soul.online_adaptation", "Online Adaptation").format_inline(),
+                "Online 3-factor Hebbian / LinUCB adaptation",
+                V::Bool(cfg.soul.online_adaptation.unwrap_or(false)),
+            ),
+            row(
+                "embed.backend",
+                "Embeddings",
+                &friendly_setting("embed.backend", "Embedding Backend").format_inline(),
+                "Pre-queue embedder backend",
+                sel(cfg.embed.backend.as_str()),
+            ),
+            row(
+                "embed.model_ver",
+                "Embeddings",
+                &friendly_setting("embed.model_ver", "Embedding Model Version").format_inline(),
+                "Embedding model version tag stored with vectors",
+                V::Text(cfg.embed.model_ver.clone()),
+            ),
+            row(
+                "embed.dim_d",
+                "Embeddings",
+                &friendly_setting("embed.dim_d", "Embedding Dimensions").format_inline(),
+                "Embedding dimension",
+                V::Number(cfg.embed.dim_d.to_string()),
+            ),
+            row(
+                "embed.timeout_ms",
+                "Embeddings",
+                &friendly_setting("embed.timeout_ms", "Embedding Timeout").format_inline(),
+                "Pre-queue embedding timeout in ms",
+                V::Number(cfg.embed.timeout_ms.to_string()),
+            ),
+            row(
+                "embed.model_path",
+                "Embeddings",
+                &friendly_setting("embed.model_path", "Embedding Model Path").format_inline(),
+                "Local embedding model directory",
+                V::Path(opt_path(cfg.embed.model_path.as_ref(), "(auto / unset)")),
+            ),
+            row(
+                "embed.endpoint_url",
+                "Embeddings",
+                &friendly_setting("embed.endpoint_url", "Embedding Endpoint URL").format_inline(),
+                "Sidecar or remote embeddings endpoint",
+                V::Text(
+                    cfg.embed
+                        .endpoint_url
+                        .clone()
+                        .unwrap_or_else(|| "(unset)".to_owned()),
+                ),
+            ),
+            row(
+                "embed.program",
+                "Embeddings",
+                &friendly_setting("embed.program", "Embedding Sidecar Program").format_inline(),
+                "Sidecar program for the stdio backend",
+                V::Text(
+                    cfg.embed
+                        .program
+                        .clone()
+                        .unwrap_or_else(|| "(unset)".to_owned()),
+                ),
+            ),
+            row(
+                "embed.args",
+                "Embeddings",
+                &friendly_setting("embed.args", "Embedding Sidecar Args").format_inline(),
+                "Arguments passed to the sidecar program",
+                V::List(cfg.embed.args.clone()),
+            ),
+            row(
+                "embed.remote_model",
+                "Embeddings",
+                &friendly_setting("embed.remote_model", "Remote Embedding Model").format_inline(),
+                "Model name sent to a remote embeddings endpoint",
+                V::Text(
+                    cfg.embed
+                        .remote_model
+                        .clone()
+                        .unwrap_or_else(|| "(unset)".to_owned()),
+                ),
+            ),
         ],
         SettingsTab::Model => {
             let m = &cfg.model;
@@ -720,31 +1138,139 @@ pub fn build_settings_rows_with(tab: SettingsTab, search_query: &str, ctx: &Rows
                 .clone()
                 .unwrap_or_else(|| m.provider.as_str().to_owned());
             let mut v = vec![
-                row("model.provider", "Provider & Model", "Provider", "Open the provider picker (same screen as /model)", V::Action(provider_label)),
-                row("model.model", "Provider & Model", "Model", "Open the model picker with search (same screen as /model)", V::Action((*model_name).to_owned())),
-                row("model.provider_options.base_url", "Provider & Model", "Base URL override", "Overrides the provider's base URL (empty removes it)", V::Text(m.provider_base_url.clone().unwrap_or_else(|| "(provider default)".to_owned()))),
-                row("model.temperature", "Provider & Model", "model.temperature", "Sampling temperature (0.0..=2.0, empty = provider default)", V::Number(m.temperature.map_or_else(|| "default".to_owned(), |t| format!("{t:.2}")))),
-                row("model.max_output_tokens", "Output Limits", "max_output_tokens", "Hard cap on output tokens for every purpose (empty = none)", V::Number(m.max_output_tokens.map_or_else(|| "(none)".to_owned(), |n| n.to_string()))),
-                row("model.output_limits.classify", "Output Limits", "output_limits.classify", "Max output tokens for Classify calls", V::Number(m.output_limits.classify.to_string())),
-                row("model.output_limits.reason", "Output Limits", "output_limits.reason", "Max output tokens for Reason calls", V::Number(m.output_limits.reason.to_string())),
-                row("model.output_limits.consolidate", "Output Limits", "output_limits.consolidate", "Max output tokens for Consolidate calls", V::Number(m.output_limits.consolidate.to_string())),
-                row("model.daily_token_budget", "Budget & Headers", "daily_token_budget", "UTC-day token budget cap", V::Number(m.daily_token_budget.to_string())),
-                row("model.output_limit_param", "Budget & Headers", "output_limit_param", "Wire JSON key for max tokens (max_tokens or max_completion_tokens)", sel(&m.output_limit_param)),
-                row("model.extra_headers", "Budget & Headers", "extra_headers", "Extra HTTP headers sent with every model request", V::Map(m.extra_headers.clone())),
+                row(
+                    "model.provider",
+                    "Provider & Model",
+                    &friendly_setting("model.provider", "Provider").format_inline(),
+                    "Open the provider picker (same screen as /model)",
+                    V::Action(provider_label),
+                ),
+                row(
+                    "model.model",
+                    "Provider & Model",
+                    &friendly_setting("model.model", "Model").format_inline(),
+                    "Open the model picker with search (same screen as /model)",
+                    V::Action((*model_name).to_owned()),
+                ),
+                row(
+                    "model.provider_options.base_url",
+                    "Provider & Model",
+                    &friendly_setting("model.provider_options.base_url", "Base URL Override")
+                        .format_inline(),
+                    "Overrides the provider's base URL (empty removes it)",
+                    V::Text(
+                        m.provider_base_url
+                            .clone()
+                            .unwrap_or_else(|| "(provider default)".to_owned()),
+                    ),
+                ),
+                row(
+                    "model.temperature",
+                    "Provider & Model",
+                    &friendly_setting("model.temperature", "Temperature").format_inline(),
+                    "Sampling temperature (0.0..=2.0, empty = provider default)",
+                    V::Number(
+                        m.temperature
+                            .map_or_else(|| "default".to_owned(), |t| format!("{t:.2}")),
+                    ),
+                ),
+                row(
+                    "model.max_output_tokens",
+                    "Output Limits",
+                    &friendly_setting("model.max_output_tokens", "Max Output Tokens")
+                        .format_inline(),
+                    "Hard cap on output tokens for every purpose (empty = none)",
+                    V::Number(
+                        m.max_output_tokens
+                            .map_or_else(|| "(none)".to_owned(), |n| n.to_string()),
+                    ),
+                ),
+                row(
+                    "model.output_limits.classify",
+                    "Output Limits",
+                    &friendly_setting("model.output_limits.classify", "Classify Token Limit")
+                        .format_inline(),
+                    "Max output tokens for Classify calls",
+                    V::Number(m.output_limits.classify.to_string()),
+                ),
+                row(
+                    "model.output_limits.reason",
+                    "Output Limits",
+                    &friendly_setting("model.output_limits.reason", "Reason Token Limit")
+                        .format_inline(),
+                    "Max output tokens for Reason calls",
+                    V::Number(m.output_limits.reason.to_string()),
+                ),
+                row(
+                    "model.output_limits.consolidate",
+                    "Output Limits",
+                    &friendly_setting("model.output_limits.consolidate", "Consolidate Token Limit")
+                        .format_inline(),
+                    "Max output tokens for Consolidate calls",
+                    V::Number(m.output_limits.consolidate.to_string()),
+                ),
+                row(
+                    "model.daily_token_budget",
+                    "Budget & Headers",
+                    &friendly_setting("model.daily_token_budget", "Daily Token Budget")
+                        .format_inline(),
+                    "UTC-day token budget cap",
+                    V::Number(m.daily_token_budget.to_string()),
+                ),
+                row(
+                    "model.output_limit_param",
+                    "Budget & Headers",
+                    &friendly_setting("model.output_limit_param", "Output Limit Wire Key")
+                        .format_inline(),
+                    "Wire JSON key for max tokens (max_tokens or max_completion_tokens)",
+                    sel(&m.output_limit_param),
+                ),
+                row(
+                    "model.extra_headers",
+                    "Budget & Headers",
+                    &friendly_setting("model.extra_headers", "Extra HTTP Headers").format_inline(),
+                    "Extra HTTP headers sent with every model request",
+                    V::Map(m.extra_headers.clone()),
+                ),
             ];
             let up = &m.usage_paths;
-            for (key, val) in [
-                ("input_tokens", up.input_tokens.clone()),
-                ("output_tokens", up.output_tokens.clone()),
-                ("cached_tokens", up.cached_tokens.clone()),
-                ("reasoning_tokens", up.reasoning_tokens.clone()),
-                ("total_tokens", up.total_tokens.clone()),
-                ("cost", up.cost.clone().unwrap_or_default()),
+            for (key, fallback, val) in [
+                (
+                    "input_tokens",
+                    "Usage Input Tokens Path",
+                    up.input_tokens.clone(),
+                ),
+                (
+                    "output_tokens",
+                    "Usage Output Tokens Path",
+                    up.output_tokens.clone(),
+                ),
+                (
+                    "cached_tokens",
+                    "Usage Cached Tokens Path",
+                    up.cached_tokens.clone(),
+                ),
+                (
+                    "reasoning_tokens",
+                    "Usage Reasoning Tokens Path",
+                    up.reasoning_tokens.clone(),
+                ),
+                (
+                    "total_tokens",
+                    "Usage Total Tokens Path",
+                    up.total_tokens.clone(),
+                ),
+                (
+                    "cost",
+                    "Usage Cost Path",
+                    up.cost.clone().unwrap_or_default(),
+                ),
             ] {
+                let id = format!("model.usage_paths.{key}");
                 v.push(row(
-                    &format!("model.usage_paths.{key}"),
+                    &id,
                     "Usage Paths & Prices",
-                    &format!("usage_paths.{key}"),
+                    &friendly_setting(&format!("usage_paths.{key}"), fallback).format_inline(),
                     "JSON path of this counter in the provider's usage object",
                     V::Text(val),
                 ));
@@ -752,7 +1278,7 @@ pub fn build_settings_rows_with(tab: SettingsTab, search_query: &str, ctx: &Rows
             v.push(row(
                 "model.prices",
                 "Usage Paths & Prices",
-                "prices",
+                &friendly_setting("model.prices", "Token Prices").format_inline(),
                 "USD per million tokens as 'input,output' per provider/model (drives cost estimates)",
                 V::Map(
                     m.prices
@@ -761,30 +1287,56 @@ pub fn build_settings_rows_with(tab: SettingsTab, search_query: &str, ctx: &Rows
                         .collect(),
                 ),
             ));
-            for purpose in ["reason", "classify", "consolidate"] {
+            for (purpose, title) in [
+                ("reason", "Reason"),
+                ("classify", "Classify"),
+                ("consolidate", "Consolidate"),
+            ] {
                 let pm = m.purposes.get(purpose);
                 v.push(row(
                     &format!("model.purposes.{purpose}.model"),
                     "Per-purpose Models",
-                    &format!("{purpose}.model"),
+                    &friendly_setting(&format!("{purpose}.model"), &format!("{title} Model"))
+                        .format_inline(),
                     "Model for this purpose only (empty = use the main model)",
                     V::Text(pm.map_or_else(|| "(main model)".to_owned(), |p| p.model.clone())),
                 ));
                 v.push(row(
                     &format!("model.purposes.{purpose}.provider"),
                     "Per-purpose Models",
-                    &format!("{purpose}.provider"),
+                    &friendly_setting(&format!("{purpose}.provider"), &format!("{title} Provider"))
+                        .format_inline(),
                     "Provider for this purpose (default: the main provider)",
-                    sel(pm.and_then(|p| p.catalog_provider.as_deref()).unwrap_or("(main provider)")),
+                    sel(pm
+                        .and_then(|p| p.catalog_provider.as_deref())
+                        .unwrap_or("(main provider)")),
                 ));
             }
             v
         }
         SettingsTab::Valve => {
             let mut v = vec![
-                row("valve.mode", "Enforcement", "valve.mode", "enforcing | partial | off", sel(&cfg.valve.mode)),
-                row("valve.max_chain_wakes", "Enforcement", "max_chain_wakes", "Circuit-breaker limit for chained wakes", V::Number(cfg.valve.max_chain_wakes.to_string())),
-                row("valve.guest_access", "Enforcement", "guest_access", "Admit unregistered senders as guests; RBAC agent.converse decides whether they may use the agent", V::Bool(cfg.valve.guest_access)),
+                row(
+                    "valve.mode",
+                    "Enforcement",
+                    &friendly_setting("valve.mode", "Enforcement Mode").format_inline(),
+                    "enforcing | partial | off",
+                    sel(&cfg.valve.mode),
+                ),
+                row(
+                    "valve.max_chain_wakes",
+                    "Enforcement",
+                    &friendly_setting("valve.max_chain_wakes", "Max Chain Wakes").format_inline(),
+                    "Circuit-breaker limit for chained wakes",
+                    V::Number(cfg.valve.max_chain_wakes.to_string()),
+                ),
+                row(
+                    "valve.guest_access",
+                    "Enforcement",
+                    &friendly_valve_toggle("valve.guest_access").format_inline(),
+                    "Admit unregistered senders as guests; RBAC agent.converse decides whether they may use the agent",
+                    V::Bool(cfg.valve.guest_access),
+                ),
             ];
             let on = |k: &str| match k {
                 "cedar_abac" => valve_toggles.cedar_abac,
@@ -797,7 +1349,13 @@ pub fn build_settings_rows_with(tab: SettingsTab, search_query: &str, ctx: &Rows
                 _ => valve_toggles.proactive_cap,
             };
             for (key, desc) in crate::settings_fields::VALVE_TOGGLES {
-                v.push(row(&format!("valve.{key}"), "Rule Toggles", key, desc, V::Bool(on(key))));
+                v.push(row(
+                    &format!("valve.{key}"),
+                    "Rule Toggles",
+                    &friendly_valve_toggle(key).format_inline(),
+                    desc,
+                    V::Bool(on(key)),
+                ));
             }
             v
         }
@@ -809,7 +1367,9 @@ pub fn build_settings_rows_with(tab: SettingsTab, search_query: &str, ctx: &Rows
                 "Fallback & Roles",
                 "Fallback role",
                 "Role of actors without an assignment (roles.fallback)",
-                sel(rbac.and_then(|r| r.fallback_role.as_deref()).unwrap_or("(none)")),
+                sel(rbac
+                    .and_then(|r| r.fallback_role.as_deref())
+                    .unwrap_or("(none)")),
             ));
             if let Some(r) = rbac {
                 for (name, role) in &r.roles {
@@ -817,7 +1377,11 @@ pub fn build_settings_rows_with(tab: SettingsTab, search_query: &str, ctx: &Rows
                         &format!("rbac.role.{name}"),
                         "Fallback & Roles",
                         &format!("role {name}"),
-                        &format!("allow=[{}] deny=[{}]", role.allow.join(","), role.deny.join(",")),
+                        &format!(
+                            "allow=[{}] deny=[{}]",
+                            role.allow.join(","),
+                            role.deny.join(",")
+                        ),
                         V::Action(format!(
                             "base={} approval={} allow={} deny={}",
                             role.base.as_str(),
@@ -828,7 +1392,13 @@ pub fn build_settings_rows_with(tab: SettingsTab, search_query: &str, ctx: &Rows
                     ));
                 }
             }
-            out.push(row("rbac.new_role", "Fallback & Roles", "[ + New role ]", "Create a role; [roles.<name>] is written on first edit", V::Action("Create".to_owned())));
+            out.push(row(
+                "rbac.new_role",
+                "Fallback & Roles",
+                "[ + New role ]",
+                "Create a role; [roles.<name>] is written on first edit",
+                V::Action("Create".to_owned()),
+            ));
             for person in &cfg.persons {
                 out.push(row(
                     &format!("rbac.actor.{}", person.actor_id.as_str()),
@@ -837,12 +1407,22 @@ pub fn build_settings_rows_with(tab: SettingsTab, search_query: &str, ctx: &Rows
                     "Roles assigned to this actor",
                     V::Action(format!(
                         "{}{}",
-                        if person.roles.is_empty() { "(no roles)".to_owned() } else { person.roles.join(", ") },
+                        if person.roles.is_empty() {
+                            "(no roles)".to_owned()
+                        } else {
+                            person.roles.join(", ")
+                        },
                         if person.is_owner { " (owner)" } else { "" }
                     )),
                 ));
             }
-            out.push(row("rbac.new_actor", "Actors", "[ + Assign roles to an actor ]", "Pick an actor seen in the event log or type an id", V::Action("Add".to_owned())));
+            out.push(row(
+                "rbac.new_actor",
+                "Actors",
+                "[ + Assign roles to an actor ]",
+                "Pick an actor seen in the event log or type an id",
+                V::Action("Add".to_owned()),
+            ));
             if let Some(r) = rbac {
                 for (place, rule) in &r.places {
                     out.push(row(
@@ -850,11 +1430,21 @@ pub fn build_settings_rows_with(tab: SettingsTab, search_query: &str, ctx: &Rows
                         "Places & Bases",
                         &format!("place {}", place.as_str()),
                         "Per-place narrowing: allow / deny capability patterns",
-                        V::Action(format!("allow={} deny={}", rule.allow.len(), rule.deny.len())),
+                        V::Action(format!(
+                            "allow={} deny={}",
+                            rule.allow.len(),
+                            rule.deny.len()
+                        )),
                     ));
                 }
             }
-            out.push(row("rbac.new_place", "Places & Bases", "[ + Add place rule ]", "Narrow what is allowed in one place id", V::Action("Add".to_owned())));
+            out.push(row(
+                "rbac.new_place",
+                "Places & Bases",
+                "[ + Add place rule ]",
+                "Narrow what is allowed in one place id",
+                V::Action("Add".to_owned()),
+            ));
             if let Some(r) = rbac {
                 for (cap, tier) in &r.permission_bases {
                     out.push(row(
@@ -862,11 +1452,19 @@ pub fn build_settings_rows_with(tab: SettingsTab, search_query: &str, ctx: &Rows
                         "Places & Bases",
                         &format!("base {cap}"),
                         "Minimum tier required for this capability",
-                        V::Action(tier.map_or_else(|| "owner-only".to_owned(), |t| t.as_str().to_owned())),
+                        V::Action(
+                            tier.map_or_else(|| "owner-only".to_owned(), |t| t.as_str().to_owned()),
+                        ),
                     ));
                 }
             }
-            out.push(row("rbac.new_base", "Places & Bases", "[ + Set permission base ]", "Require a minimum tier (or owner-only) for a capability id", V::Action("Add".to_owned())));
+            out.push(row(
+                "rbac.new_base",
+                "Places & Bases",
+                "[ + Set permission base ]",
+                "Require a minimum tier (or owner-only) for a capability id",
+                V::Action("Add".to_owned()),
+            ));
             out
         }
         SettingsTab::Providers => {
@@ -885,8 +1483,22 @@ pub fn build_settings_rows_with(tab: SettingsTab, search_query: &str, ctx: &Rows
                 }
             }
             out.extend([
-                row("secrets.embed_api_key", "Embeddings Key", "embed_api_key", "API key of a remote embeddings backend (secrets.toml, masked)", V::MaskedSecret { is_set: secrets.top_level_keys.iter().any(|k| k == "embed_api_key") }),
-                row("secrets.add_env", "Plugin [env] Secrets", "[ + Add / Update [env] Secret ]", "Write masked secret into secrets.toml [env] (0600)", V::Action("Add Key".to_owned())),
+                row(
+                    "secrets.embed_api_key",
+                    "Embeddings Key",
+                    &friendly_setting("embed_api_key", "Embeddings API Key").format_inline(),
+                    "API key of a remote embeddings backend (secrets.toml, masked)",
+                    V::MaskedSecret {
+                        is_set: secrets.top_level_keys.iter().any(|k| k == "embed_api_key"),
+                    },
+                ),
+                row(
+                    "secrets.add_env",
+                    "Plugin [env] Secrets",
+                    "[ + Add / Update [env] Secret ]",
+                    "Write masked secret into secrets.toml [env] (0600)",
+                    V::Action("Add Key".to_owned()),
+                ),
             ]);
             for env_key in &secrets.env_keys {
                 out.push(row(
@@ -909,12 +1521,17 @@ pub fn build_settings_rows_with(tab: SettingsTab, search_query: &str, ctx: &Rows
                 let status_label = if !p.installed {
                     "available (press i to install)".to_owned()
                 } else {
-                    format!("{} {} (enabled={})", p.state.dot_glyph(), p.state.label(), p.enabled)
+                    format!(
+                        "{} {} (enabled={})",
+                        p.state.dot_glyph(),
+                        p.state.label(),
+                        p.enabled
+                    )
                 };
                 row(
                     &format!("plugin.{}", p.id),
                     "Configured & Catalog",
-                    &format!("{} {}", p.id, kind_badge),
+                    &format!("{} {}", friendly_plugin(&p.id).format_inline(), kind_badge),
                     "Space: Start/Stop · Enter: Details & TOML · i: Install · d: Remove",
                     V::Action(status_label),
                 )
@@ -924,30 +1541,118 @@ pub fn build_settings_rows_with(tab: SettingsTab, search_query: &str, ctx: &Rows
             let rt = &cfg.runtime;
             let n = |v: u64| V::Number(v.to_string());
             vec![
-                row("runtime.hook_timeout_ms", "Timeouts & Cues", "hook_timeout_ms", "Body handshake / hook timeout (ms)", n(rt.hook_timeout_ms)),
-                row("runtime.action_timeout_ms", "Timeouts & Cues", "action_timeout_ms", "Action execution timeout (ms)", n(rt.action_timeout_ms)),
-                row("runtime.model_timeout_ms", "Timeouts & Cues", "model_timeout_ms", "Model HTTP request timeout (ms)", n(rt.model_timeout_ms)),
-                row("runtime.working_cue_ms", "Timeouts & Cues", "working_cue_ms", "Honest R-47 working cue threshold (ms)", n(rt.working_cue_ms)),
-                row("runtime.progress_note_ms", "Timeouts & Cues", "progress_note_ms", "Honest R-47 progress note threshold (ms)", n(rt.progress_note_ms)),
-                row("runtime.body_shutdown_grace_ms", "Timeouts & Cues", "body_shutdown_grace_ms", "Grace period when shutting down bodies (ms)", n(rt.body_shutdown_grace_ms)),
-                row("identity.link_challenge_ttl_s", "Identity Linking", "link_challenge_ttl_s", "Lifetime of an account-link challenge (seconds)", n(cfg.identity.link_challenge_ttl_s)),
-                row("identity.link_max_attempts", "Identity Linking", "link_max_attempts", "Wrong-code attempts before a link challenge is void", n(u64::from(cfg.identity.link_max_attempts))),
-                row("identity.retroactive_merge", "Identity Linking", "retroactive_merge", "Merge earlier history of linked accounts into one actor", V::Bool(cfg.identity.retroactive_merge)),
-                row("data_dir", "Storage", "data_dir", "Directory of the store, logs and sockets (applies after a restart)", V::Path(cfg.data_dir.as_ref().map_or_else(|| paths.data_dir.display().to_string(), |p| p.display().to_string()))),
-                row("paths.config", "Resolved Paths", "monoagens.toml", "Active config path", V::ReadOnly(paths.config_path.display().to_string())),
-                row("paths.secrets", "Resolved Paths", "secrets.toml", "Active secrets path (0600)", V::ReadOnly(paths.secrets_path.display().to_string())),
-                row("paths.data", "Resolved Paths", "data_dir (resolved)", "SegmentedStore & tui_chats.json directory", V::ReadOnly(paths.data_dir.display().to_string())),
+                row(
+                    "runtime.hook_timeout_ms",
+                    "Timeouts & Cues",
+                    &friendly_setting("runtime.hook_timeout_ms", "Hook Timeout").format_inline(),
+                    "Body handshake / hook timeout (ms)",
+                    n(rt.hook_timeout_ms),
+                ),
+                row(
+                    "runtime.action_timeout_ms",
+                    "Timeouts & Cues",
+                    &friendly_setting("runtime.action_timeout_ms", "Action Timeout")
+                        .format_inline(),
+                    "Action execution timeout (ms)",
+                    n(rt.action_timeout_ms),
+                ),
+                row(
+                    "runtime.model_timeout_ms",
+                    "Timeouts & Cues",
+                    &friendly_setting("runtime.model_timeout_ms", "Model Timeout").format_inline(),
+                    "Model HTTP request timeout (ms)",
+                    n(rt.model_timeout_ms),
+                ),
+                row(
+                    "runtime.working_cue_ms",
+                    "Timeouts & Cues",
+                    &friendly_setting("runtime.working_cue_ms", "Working Cue Delay")
+                        .format_inline(),
+                    "Honest R-47 working cue threshold (ms)",
+                    n(rt.working_cue_ms),
+                ),
+                row(
+                    "runtime.progress_note_ms",
+                    "Timeouts & Cues",
+                    &friendly_setting("runtime.progress_note_ms", "Progress Note Delay")
+                        .format_inline(),
+                    "Honest R-47 progress note threshold (ms)",
+                    n(rt.progress_note_ms),
+                ),
+                row(
+                    "runtime.body_shutdown_grace_ms",
+                    "Timeouts & Cues",
+                    &friendly_setting("runtime.body_shutdown_grace_ms", "Body Shutdown Grace")
+                        .format_inline(),
+                    "Grace period when shutting down bodies (ms)",
+                    n(rt.body_shutdown_grace_ms),
+                ),
+                row(
+                    "identity.link_challenge_ttl_s",
+                    "Identity Linking",
+                    &friendly_setting("identity.link_challenge_ttl_s", "Link Challenge TTL")
+                        .format_inline(),
+                    "Lifetime of an account-link challenge (seconds)",
+                    n(cfg.identity.link_challenge_ttl_s),
+                ),
+                row(
+                    "identity.link_max_attempts",
+                    "Identity Linking",
+                    &friendly_setting("identity.link_max_attempts", "Link Max Attempts")
+                        .format_inline(),
+                    "Wrong-code attempts before a link challenge is void",
+                    n(u64::from(cfg.identity.link_max_attempts)),
+                ),
+                row(
+                    "identity.retroactive_merge",
+                    "Identity Linking",
+                    &friendly_setting("identity.retroactive_merge", "Retroactive History Merge")
+                        .format_inline(),
+                    "Merge earlier history of linked accounts into one actor",
+                    V::Bool(cfg.identity.retroactive_merge),
+                ),
+                row(
+                    "data_dir",
+                    "Storage",
+                    &friendly_setting("data_dir", "Data Directory").format_inline(),
+                    "Directory of the store, logs and sockets (applies after a restart)",
+                    V::Path(cfg.data_dir.as_ref().map_or_else(
+                        || paths.data_dir.display().to_string(),
+                        |p| p.display().to_string(),
+                    )),
+                ),
+                row(
+                    "paths.config",
+                    "Resolved Paths",
+                    &friendly_setting("monoagens.toml", "Config File Path").format_inline(),
+                    "Active config path",
+                    V::ReadOnly(paths.config_path.display().to_string()),
+                ),
+                row(
+                    "paths.secrets",
+                    "Resolved Paths",
+                    &friendly_setting("secrets.toml", "Secrets File Path").format_inline(),
+                    "Active secrets path (0600)",
+                    V::ReadOnly(paths.secrets_path.display().to_string()),
+                ),
+                row(
+                    "paths.data",
+                    "Resolved Paths",
+                    &friendly_setting("data_dir", "Resolved Data Directory").format_inline(),
+                    "SegmentedStore & tui_chats.json directory",
+                    V::ReadOnly(paths.data_dir.display().to_string()),
+                ),
             ]
         }
     };
 
-    let q = search_query.trim().to_ascii_lowercase();
-    if !q.is_empty() {
+    let q_trimmed = search_query.trim();
+    if !q_trimmed.is_empty() {
+        let q = q_trimmed.to_ascii_lowercase();
         rows.retain(|r| {
-            r.label.to_ascii_lowercase().contains(&q)
+            matches_friendly_query(q_trimmed, &r.label, &r.id)
                 || r.description.to_ascii_lowercase().contains(&q)
                 || r.section.to_ascii_lowercase().contains(&q)
-                || r.id.to_ascii_lowercase().contains(&q)
         });
     }
     rows

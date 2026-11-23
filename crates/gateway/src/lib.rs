@@ -8,6 +8,7 @@
 
 pub mod admin;
 pub mod attachments;
+pub mod capabilities;
 pub mod clock;
 pub mod commands;
 pub mod config;
@@ -37,6 +38,7 @@ pub use attachments::{
     GatewayAttachmentBridge, HardForgetAttachmentReport, STAGING_TTL_MS,
     ScopedAttachmentBlobReader, sha256_hex,
 };
+pub use capabilities::{CAPABILITY_CACHE_FILENAME, CapabilityCache, friendly_capability_label};
 pub use clock::{Clock, ClockTimeout, SystemClock, VirtualClock, run_with_clock_timeout};
 pub use commands::{CommandOutcome, CommandRegistry, CommandSpec};
 pub use config::{

@@ -373,7 +373,7 @@ impl<T: TelegramTransport> TelegramBody<T> {
     fn build_audience(&mut self, chat: &TgChat, sender: &ActorId) -> Audience {
         let bot = self.bot_actor();
         if chat.chat_type == "private" {
-            return Audience::new([sender.clone(), bot]);
+            return Audience::new([sender.clone(), bot, ActorId::new("soul")]);
         }
         self.ensure_group_admins_seeded(chat.id);
         let entry = self.group_members.entry(chat.id).or_default();
@@ -529,6 +529,10 @@ impl<T: TelegramTransport> TelegramBody<T> {
 
         let mut addressees = Vec::new();
         let mut named = Vec::new();
+        let soul_actor = ActorId::new("soul");
+        if msg.chat.chat_type == "private" {
+            addressees.push(soul_actor.clone());
+        }
         if let (Some(txt), Some(bot)) = (&text, &self.bot_user)
             && let Some(ref uname) = bot.username
             && txt.to_ascii_lowercase().contains(&format!("@{}", uname.to_ascii_lowercase()))
@@ -536,9 +540,23 @@ impl<T: TelegramTransport> TelegramBody<T> {
             let bot_actor = self.bot_actor();
             addressees.push(bot_actor.clone());
             named.push(bot_actor);
+            if !addressees.contains(&soul_actor) {
+                addressees.push(soul_actor.clone());
+            }
         }
 
         let reply_to_pid = msg.reply_to_message.as_ref().map(|r| r.message_id.to_string());
+        let reply_to_bot = msg
+            .reply_to_message
+            .as_ref()
+            .is_some_and(|r| self.is_self_user(r.from.as_ref()))
+            || reply_to_pid
+                .as_deref()
+                .and_then(|pid| self.echo_registry.resolve_reply_to(pid))
+                .is_some();
+        if reply_to_bot && !addressees.contains(&soul_actor) {
+            addressees.push(soul_actor);
+        }
         let correlation_id = reply_to_pid
             .as_deref()
             .and_then(|pid| self.echo_registry.resolve_reply_to(pid))

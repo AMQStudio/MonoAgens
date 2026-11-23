@@ -9,8 +9,10 @@ use serde_json::Value;
 
 use crate::catalog_ui::{CatalogUi, Screen, footer_bar, put, title_bar};
 use crate::config::IconMode;
-use crate::state::AppAction;
+use crate::core::hitmap::{HitTarget, ScrollId};
+use crate::state::{AppAction, HitRegions};
 use crate::theme::ThemePalette;
+use crate::widgets::scrollbar::render_vertical_scrollbar;
 
 /// `/usage` state.
 #[derive(Debug, Clone, Default)]
@@ -105,18 +107,53 @@ impl CatalogUi {
 
 /// Draws the view.
 pub fn render(area: Rect, buf: &mut Buffer, ui: &CatalogUi, palette: &ThemePalette, icons: IconMode) {
+    let mut hit = HitRegions::default();
+    render_with_hit(area, buf, ui, palette, icons, &mut hit);
+}
+
+/// Draws the view and records `HitMap` targets.
+pub fn render_with_hit(
+    area: Rect,
+    buf: &mut Buffer,
+    ui: &CatalogUi,
+    palette: &ThemePalette,
+    icons: IconMode,
+    hit: &mut HitRegions,
+) {
     title_bar(area, buf, " Usage today (UTC)", palette, icons);
     let w = area.width as usize;
     let visible = (area.height as usize).saturating_sub(2);
-    for (i, line) in ui.usage.lines().iter().skip(ui.usage.offset).take(visible).enumerate() {
+    let lines = ui.usage.lines();
+    let total = lines.len();
+    let offset = ui.usage.offset.min(total.saturating_sub(visible));
+    let list_w = w.saturating_sub(1);
+    for (i, line) in lines.iter().skip(offset).take(visible).enumerate() {
+        let y = area.y + 1 + i as u16;
         put(
             buf,
             area.x,
-            area.y + 1 + i as u16,
-            w,
+            y,
+            list_w,
             &format!(" {line}"),
             Style::default().fg(palette.fg).bg(palette.bg),
             icons,
+        );
+        hit.hitmap.record(
+            Rect::new(area.x, y, list_w as u16, 1),
+            HitTarget::ListRow(offset + i),
+        );
+    }
+    if area.width > 1 && visible > 0 {
+        render_vertical_scrollbar(
+            buf,
+            Rect::new(area.x + area.width - 1, area.y + 1, 1, visible as u16),
+            ScrollId::CatalogList,
+            total,
+            visible,
+            offset,
+            &mut hit.hitmap,
+            Style::default().fg(palette.separator).bg(palette.bg),
+            Style::default().fg(palette.accent).bg(palette.bg),
         );
     }
     footer_bar(area, buf, " r refresh · ↑/↓ scroll · ⎋ close", palette, icons);

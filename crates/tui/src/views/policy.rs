@@ -52,6 +52,22 @@ impl PolicyView {
         self.nav.clamp(n);
     }
 
+    /// Selects rendered row `row_idx` and ensures it stays visible.
+    pub fn select_row(&mut self, row_idx: usize, visible: usize) {
+        let total = self.lines().len();
+        if total == 0 {
+            self.nav = Nav::default();
+            return;
+        }
+        self.nav.selected = row_idx.min(total - 1);
+        self.nav.offset = crate::core::viewport::scroll_offset_for_row(
+            self.nav.selected,
+            self.nav.offset,
+            visible.max(1),
+            total,
+        );
+    }
+
     fn lines(&self) -> Vec<(Row, Line)> {
         let mut out: Vec<(Row, Line)> = Vec::new();
         let Some(r) = &self.report else {

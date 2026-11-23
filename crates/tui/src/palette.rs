@@ -1,15 +1,20 @@
 //! `Ctrl+K` command palette: fuzzy search over commands, settings rows and chats.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::core::hitmap::{HitTarget, ScrollId};
+use crate::core::input::{PasteTarget, TextInput};
+use crate::core::overlay::{OverlayId, WidgetOutcome};
+use crate::core::theme::render_dimmed_backdrop;
 use crate::settings::SettingsTab;
 use crate::state::HitRegions;
 use crate::theme::ThemePalette;
 use crate::ui_util::{ListRow, boxed, centered, render_list};
+use crate::widgets::scrollbar::render_vertical_scrollbar;
 
 /// What Enter does.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +71,7 @@ pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Palette {
     pub query: String,
+    pub input: TextInput,
     pub items: Vec<PaletteItem>,
     pub sel: usize,
     pub off: usize,
@@ -84,7 +90,20 @@ impl Palette {
     /// Opens the palette over `items`.
     #[must_use]
     pub fn new(items: Vec<PaletteItem>) -> Self {
-        Self { query: String::new(), items, sel: 0, off: 0, view_rows: 10 }
+        Self {
+            query: String::new(),
+            input: TextInput::new(false),
+            items,
+            sel: 0,
+            off: 0,
+            view_rows: 10,
+        }
+    }
+
+    fn sync_input_from_query(&mut self) {
+        if self.input.value != self.query {
+            self.input.set_value(self.query.clone());
+        }
     }
 
     /// Items matching the query, best first.
@@ -112,7 +131,7 @@ impl Palette {
     fn clamp(&mut self) {
         let n = self.filtered().len();
         self.sel = self.sel.min(n.saturating_sub(1));
-        self.off = crate::render::scroll_window(self.sel, self.off, self.view_rows, n);
+        self.off = crate::render::scroll_window(self.sel, self.off, self.view_rows.max(1), n);
     }
 
     /// Moves the selection by `delta` (no wrap).
@@ -136,28 +155,42 @@ impl Palette {
             }
             KeyCode::Up => self.move_by(-1),
             KeyCode::Down => self.move_by(1),
-            KeyCode::PageUp => self.move_by(-(self.view_rows as isize)),
-            KeyCode::PageDown => self.move_by(self.view_rows as isize),
-            KeyCode::Backspace => {
-                self.query.pop();
-                self.sel = 0;
-                self.clamp();
+            KeyCode::PageUp => self.move_by(-(self.view_rows.max(1) as isize)),
+            KeyCode::PageDown => self.move_by(self.view_rows.max(1) as isize),
+            _ => {
+                self.sync_input_from_query();
+                if self.input.handle_key(key) == WidgetOutcome::Consumed {
+                    self.query.clone_from(&self.input.value);
+                    self.sel = 0;
+                    self.clamp();
+                }
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.query.push(c);
-                self.sel = 0;
-                self.clamp();
-            }
-            _ => {}
         }
         PaletteOutcome::None
     }
 }
 
+impl PasteTarget for Palette {
+    fn paste_text(&mut self, raw: &str) -> bool {
+        self.sync_input_from_query();
+        if self.input.paste_text(raw) {
+            self.query.clone_from(&self.input.value);
+            self.sel = 0;
+            self.clamp();
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// Draws the palette.
 pub fn render_palette(area: Rect, buf: &mut Buffer, p: &Palette, theme: &ThemePalette, hit: &mut HitRegions) {
+    render_dimmed_backdrop(buf, area, theme);
+    hit.hitmap.record(area, HitTarget::Backdrop(OverlayId::Palette));
     let bx = centered(80.min(area.width), 20.min(area.height), area);
     let inner = boxed(bx, buf, "Command palette", theme);
+    hit.hitmap.record(bx, HitTarget::OverlayBody(OverlayId::Palette));
     if inner.height < 4 {
         return;
     }
@@ -175,6 +208,24 @@ pub fn render_palette(area: Rect, buf: &mut Buffer, p: &Palette, theme: &ThemePa
     hit.overlay_area = list;
     let mut hits = Vec::new();
     let off = render_list(list, buf, &rows, p.sel, p.off, theme, &mut hits);
+    for (rect, idx) in &hits {
+        hit.hitmap.record(*rect, HitTarget::ListRow(*idx));
+    }
+    let visible = list.height as usize;
+    if rows.len() > visible && list.width > 2 {
+        let track = Rect::new(list.x + list.width - 1, list.y, 1, list.height);
+        render_vertical_scrollbar(
+            buf,
+            track,
+            ScrollId::Palette,
+            rows.len(),
+            visible,
+            off,
+            &mut hit.hitmap,
+            Style::default().fg(theme.separator).bg(theme.modal_bg),
+            Style::default().fg(theme.accent).bg(theme.modal_bg),
+        );
+    }
     hit.overlay_rows = hits;
     hit.overlay_total = rows.len();
     hit.overlay_offset = off;

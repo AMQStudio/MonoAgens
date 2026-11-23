@@ -91,7 +91,7 @@ for line in sys.stdin.read().split("\n"):
                 elif p[i].isdigit() and 90 <= int(p[i]) <= 97:
                     fg = int(p[i]) - 90 + 8
                 i += 1
-        elif m.group(2) in ("●", "◐", "◉"):
+        elif m.group(2) in ("●", "◐", "◉", "○"):
             name = {1: "red", 9: "red", 2: "green", 10: "green", 3: "yellow", 11: "yellow"}.get(fg, "other")
             print(name); sys.exit(0)
 print("none")
@@ -414,23 +414,23 @@ wait_for_absent "❯" 5
 tmux resize-window -t "$SESSION" -x "$COLS" -y 26   # fewer rows than the Model tab has
 sleep 0.5
 tmux send-keys -t "$SESSION" "/settings" Enter
-wait_for "Settings  ("
+wait_for "Soul & Brain"
 tmux send-keys -t "$SESSION" Right Right
 wait_for "Budget & Headers"
-screen | grep -qF "┃" || fail "settings scrollbar thumb missing"
+screen | grep -qE "┃|█" || fail "settings scrollbar thumb missing"
 echo "ok: settings list shows a scrollbar"
 tmux send-keys -t "$SESSION" "output_limit_param"
 sleep 0.3
 tmux send-keys -t "$SESSION" Enter
-wait_for "Type to search"
+wait_for "↑/↓ select"
 tmux send-keys -t "$SESSION" Escape      # 1: closes the selector
-wait_for_absent "Type to search" 5
-screen | grep -qF "Settings  (" || fail "Esc closed the whole overlay instead of the selector"
+wait_for_absent "↑/↓ select" 5
+screen | grep -qF "Soul & Brain" || fail "Esc closed the whole overlay instead of the selector"
 tmux send-keys -t "$SESSION" Escape      # 2: clears the search
 sleep 0.3
-screen | grep -qF "Settings  (" || fail "Esc closed the overlay instead of clearing the search"
+screen | grep -qF "Soul & Brain" || fail "Esc closed the overlay instead of clearing the search"
 tmux send-keys -t "$SESSION" Escape      # 3: closes the overlay
-wait_for_absent "Settings  (" 5
+wait_for_absent "Soul & Brain" 5
 echo "ok: Esc goes back one level (selector, search, overlay)"
 quit_tui
 
@@ -555,14 +555,19 @@ wait_for "Command palette"
 tmux send-keys -t "$SESSION" "quiet_hours"
 wait_for "quiet_hours"
 tmux send-keys -t "$SESSION" Enter
-wait_for "Settings  ("
+wait_for "Soul & Brain"
 tmux send-keys -t "$SESSION" Enter
 wait_for "Saved valve.quiet_hours" 15
 grep -q "quiet_hours = true" "$HOME_DIR/monoagens.toml" || fail "daemon config did not change: $(cat "$HOME_DIR/monoagens.toml")"
 [[ -f "$HOME_DIR/monoagens.toml.bak" ]] || fail "no .bak next to the daemon config"
 echo "ok: attached settings edit reached the daemon config (.bak written)"
 tmux send-keys -t "$SESSION" Escape
-wait_for_absent "Settings  (" 5
+wait_for_absent "Soul & Brain" 5
+
+# 7d. attached TUI: /reload applies config live cleanly
+tmux send-keys -t "$SESSION" "/reload" Enter
+wait_for "Reloaded config" 15
+echo "ok: /reload reloaded config live"
 quit_tui
 kill -0 "$SERVE_PID" 2>/dev/null || fail "serve died when the TUI detached"
 [[ -S "$HOME_DIR/data/gateway.sock" ]] || fail "admin socket vanished after detach"

@@ -1,8 +1,8 @@
 //! Gateway slash-command registry and RBAC-filtered `/help` execution (zero LLM calls).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use monoagens_protocol::{ActorId, BodyId, CapabilityId, PlaceId};
+use monoagens_protocol::{ActorId, BodyId, CapabilityDescriptor, CapabilityId, PlaceId};
 use monoagens_valve::{RbacConfig, RoleTier};
 use serde::{Deserialize, Serialize};
 
@@ -179,18 +179,65 @@ impl CommandRegistry {
         rbac: Option<&RbacConfig>,
         capabilities: &[CapabilityId],
     ) -> String {
-        let permitted_cmds: Vec<&CommandSpec> = self
-            .commands
-            .values()
-            .filter(|spec| self.is_command_permitted(spec, actor, owner, place, rbac))
-            .collect();
-
-        let permitted_caps: Vec<&CapabilityId> = capabilities
+        let mut seen = BTreeSet::new();
+        let permitted_caps: Vec<&str> = capabilities
             .iter()
+            .filter(|cap| seen.insert(cap.as_str()))
             .filter(|cap| match rbac {
                 None => true,
                 Some(cfg) => cfg.is_permitted(actor, owner, place, cap.as_str()),
             })
+            .map(CapabilityId::as_str)
+            .collect();
+        self.format_help(actor, owner, place, rbac, &permitted_caps)
+    }
+
+    /// Renders RBAC-filtered `/help` output from full [`CapabilityDescriptor`]s,
+    /// deduplicating by capability id and excluding `identity_changing` capabilities for non-owners.
+    #[must_use]
+    pub fn render_help_descriptors(
+        &self,
+        actor: &ActorId,
+        owner: &ActorId,
+        place: Option<&PlaceId>,
+        rbac: Option<&RbacConfig>,
+        capabilities: &[CapabilityDescriptor],
+    ) -> String {
+        let mut merged: BTreeMap<&str, bool> = BTreeMap::new();
+        for cap in capabilities {
+            merged
+                .entry(cap.id.as_str())
+                .and_modify(|id_chg| *id_chg |= cap.flags.identity_changing)
+                .or_insert(cap.flags.identity_changing);
+        }
+        let permitted_caps: Vec<&str> = merged
+            .into_iter()
+            .filter(|(id, id_chg)| {
+                if *id_chg && actor != owner {
+                    return false;
+                }
+                match rbac {
+                    None => true,
+                    Some(cfg) => cfg.is_permitted(actor, owner, place, id),
+                }
+            })
+            .map(|(id, _)| id)
+            .collect();
+        self.format_help(actor, owner, place, rbac, &permitted_caps)
+    }
+
+    fn format_help(
+        &self,
+        actor: &ActorId,
+        owner: &ActorId,
+        place: Option<&PlaceId>,
+        rbac: Option<&RbacConfig>,
+        permitted_caps: &[&str],
+    ) -> String {
+        let permitted_cmds: Vec<&CommandSpec> = self
+            .commands
+            .values()
+            .filter(|spec| self.is_command_permitted(spec, actor, owner, place, rbac))
             .collect();
 
         let mut lines = Vec::new();
@@ -214,11 +261,7 @@ impl CommandRegistry {
             lines.push(format!(
                 "Permitted capabilities ({}): {}",
                 permitted_caps.len(),
-                permitted_caps
-                    .iter()
-                    .map(|c| c.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                permitted_caps.join(", ")
             ));
         }
 
@@ -238,6 +281,37 @@ impl CommandRegistry {
         rbac: Option<&RbacConfig>,
         capabilities: &[CapabilityId],
     ) -> Option<CommandOutcome> {
+        self.try_handle_slash_command_inner(text, actor, owner, place, rbac, || {
+            self.render_help(actor, owner, place, rbac, capabilities)
+        })
+    }
+
+    /// Descriptor-aware variant of [`Self::try_handle_slash_command`] that filters
+    /// `identity_changing` capabilities from non-owner `/help` output.
+    #[must_use]
+    pub fn try_handle_slash_command_with_descriptors(
+        &self,
+        text: &str,
+        actor: &ActorId,
+        owner: &ActorId,
+        place: Option<&PlaceId>,
+        rbac: Option<&RbacConfig>,
+        capabilities: &[CapabilityDescriptor],
+    ) -> Option<CommandOutcome> {
+        self.try_handle_slash_command_inner(text, actor, owner, place, rbac, || {
+            self.render_help_descriptors(actor, owner, place, rbac, capabilities)
+        })
+    }
+
+    fn try_handle_slash_command_inner(
+        &self,
+        text: &str,
+        actor: &ActorId,
+        owner: &ActorId,
+        place: Option<&PlaceId>,
+        rbac: Option<&RbacConfig>,
+        render_help: impl FnOnce() -> String,
+    ) -> Option<CommandOutcome> {
         let (cmd_name, args) = parse_slash_command(text)?;
         let spec = self.commands.get(&cmd_name)?;
 
@@ -256,7 +330,7 @@ impl CommandRegistry {
         }
 
         let reply_text = match spec.name.as_str() {
-            "help" => self.render_help(actor, owner, place, rbac, capabilities),
+            "help" => render_help(),
             "whoami" => render_whoami(actor, owner, rbac),
             "roles" => render_roles(actor, owner, rbac),
             _ => format!("Executed /{}", spec.name),

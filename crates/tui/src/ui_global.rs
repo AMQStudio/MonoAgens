@@ -6,12 +6,17 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 
+use crate::core::hitmap::{HitTarget, ScrollId};
+use crate::core::overlay::{OverlayEntry, OverlayId};
+use crate::core::theme::render_dimmed_backdrop;
+use crate::core::viewport::scroll_offset_for_row;
 use crate::keybindings::{ACTIONS, KeyMap};
 use crate::palette::{Palette, PaletteItem, PaletteOutcome, PaletteTarget, render_palette};
 use crate::settings::{RowsCtx, all_settings_rows};
 use crate::state::{AppAction, HitRegions, TuiAppState};
 use crate::theme::ThemePalette;
 use crate::ui_util::{ListRow, boxed, centered, render_list, trunc};
+use crate::widgets::scrollbar::render_vertical_scrollbar;
 
 /// State of the help overlay.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -72,9 +77,21 @@ impl TuiAppState {
             || self.wizard.is_some()
     }
 
+    pub(crate) fn help_viewport_rows(&self) -> usize {
+        let bx_h = 24u16.min(self.last_viewport.height);
+        // boxed() takes 2 border rows, plus 1 bottom hint row.
+        bx_h.saturating_sub(3).max(1) as usize
+    }
+
     /// Opens the help overlay.
     pub fn open_help(&mut self) {
         self.ux.help = Some(HelpState { screen: self.help_screen().to_owned(), sel: 0, off: 0 });
+        self.overlays.raise_or_push(OverlayEntry {
+            id: OverlayId::Help,
+            blocks_chat: true,
+            dim_backdrop: true,
+            sub_input_active: false,
+        });
     }
 
     /// Opens the palette over commands, settings rows and chats.
@@ -120,7 +137,15 @@ impl TuiAppState {
                 target: PaletteTarget::Chat(chat.id.clone()),
             });
         }
-        self.ux.palette = Some(Palette::new(items));
+        let mut palette = Palette::new(items);
+        palette.view_rows = (20u16.min(self.last_viewport.height)).saturating_sub(4).max(1) as usize;
+        self.ux.palette = Some(palette);
+        self.overlays.raise_or_push(OverlayEntry {
+            id: OverlayId::Palette,
+            blocks_chat: true,
+            dim_backdrop: true,
+            sub_input_active: true,
+        });
     }
 
     fn run_palette_target(&mut self, target: PaletteTarget) -> Vec<AppAction> {
@@ -146,23 +171,27 @@ impl TuiAppState {
 
     /// Globally bound keys and the help / palette overlays. `None` = not handled here.
     pub(crate) fn global_key(&mut self, key: KeyEvent) -> Option<Vec<AppAction>> {
-        if let Some(h) = &mut self.ux.help {
-            let n = help_entries(&h.screen.clone(), &self.ux.keymap).len();
-            let before = h.sel;
-            let mut close = false;
-            match key.code {
-                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?' | 'q') | KeyCode::F(1) => close = true,
-                KeyCode::Up => h.sel = h.sel.saturating_sub(1),
-                KeyCode::Down => h.sel = (h.sel + 1).min(n.saturating_sub(1)),
-                KeyCode::PageUp => h.sel = h.sel.saturating_sub(8),
-                KeyCode::PageDown => h.sel = (h.sel + 8).min(n.saturating_sub(1)),
-                _ => {}
-            }
-            if h.sel != before {
-                h.off = crate::render::scroll_window(h.sel, h.off, 20, n);
-            }
-            if close {
-                self.ux.help = None;
+        if self.ux.help.is_some() {
+            let visible = self.help_viewport_rows();
+            if let Some(h) = &mut self.ux.help {
+                let n = help_entries(&h.screen, &self.ux.keymap).len();
+                let before = h.sel;
+                let mut close = false;
+                match key.code {
+                    KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?' | 'q') | KeyCode::F(1) => close = true,
+                    KeyCode::Up => h.sel = h.sel.saturating_sub(1),
+                    KeyCode::Down => h.sel = (h.sel + 1).min(n.saturating_sub(1)),
+                    KeyCode::PageUp => h.sel = h.sel.saturating_sub(visible.max(1)),
+                    KeyCode::PageDown => h.sel = (h.sel + visible.max(1)).min(n.saturating_sub(1)),
+                    _ => {}
+                }
+                if h.sel != before {
+                    h.off = scroll_offset_for_row(h.sel, h.off, visible, n);
+                }
+                if close {
+                    self.ux.help = None;
+                    self.overlays.remove(OverlayId::Help);
+                }
             }
             return Some(Vec::new());
         }
@@ -171,10 +200,12 @@ impl TuiAppState {
                 PaletteOutcome::None => Vec::new(),
                 PaletteOutcome::Close => {
                     self.ux.palette = None;
+                    self.overlays.remove(OverlayId::Palette);
                     Vec::new()
                 }
                 PaletteOutcome::Run(target) => {
                     self.ux.palette = None;
+                    self.overlays.remove(OverlayId::Palette);
                     self.run_palette_target(target)
                 }
             });
@@ -219,6 +250,9 @@ impl TuiAppState {
             _ => None,
         };
         let clicked_row = || {
+            if let Some(HitTarget::ListRow(idx)) = hit.hitmap.hit_test(mouse.column, mouse.row) {
+                return Some(*idx);
+            }
             hit.overlay_rows
                 .iter()
                 .find(|(r, _)| inside(*r))
@@ -226,14 +260,31 @@ impl TuiAppState {
         };
         let left = matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left));
         if self.ux.help.is_some() {
-            if let (Some(d), Some(h)) = (wheel, &mut self.ux.help) {
-                h.sel = (h.sel as isize + d * 3).max(0) as usize;
+            let visible = if hit.overlay_area.height > 0 {
+                hit.overlay_area.height as usize
+            } else {
+                self.help_viewport_rows()
+            };
+            if let Some(h) = &mut self.ux.help {
+                let total = help_entries(&h.screen, &self.ux.keymap).len();
+                if let Some(d) = wheel {
+                    if total > 0 {
+                        h.sel = (h.sel as isize + d * 3).clamp(0, (total - 1) as isize) as usize;
+                        h.off = scroll_offset_for_row(h.sel, h.off, visible, total);
+                    }
+                } else if left && let Some(i) = clicked_row() && total > 0 {
+                    h.sel = i.min(total - 1);
+                    h.off = scroll_offset_for_row(h.sel, h.off, visible, total);
+                }
             }
             return Some(Vec::new());
         }
         if self.ux.palette.is_some() {
             let mut run = None;
             if let Some(p) = &mut self.ux.palette {
+                if hit.overlay_area.height > 0 {
+                    p.view_rows = hit.overlay_area.height as usize;
+                }
                 if let Some(d) = wheel {
                     p.move_by(d * 3);
                 } else if left && let Some(i) = clicked_row() {
@@ -243,6 +294,7 @@ impl TuiAppState {
             }
             if let Some(t) = run {
                 self.ux.palette = None;
+                self.overlays.remove(OverlayId::Palette);
                 return Some(self.run_palette_target(t));
             }
             return Some(Vec::new());
@@ -272,25 +324,66 @@ impl TuiAppState {
     }
 }
 
+/// Draws the help overlay with backdrop clearing and `HitMap` recording.
+pub fn render_help_overlay(
+    area: Rect,
+    buf: &mut Buffer,
+    h: &HelpState,
+    state: &TuiAppState,
+    palette: &ThemePalette,
+    hit: &mut HitRegions,
+) {
+    render_dimmed_backdrop(buf, area, palette);
+    hit.hitmap.record(area, HitTarget::Backdrop(OverlayId::Help));
+    let bx = centered(78.min(area.width), 24.min(area.height), area);
+    let inner = boxed(bx, buf, &format!("Keys: {} (Esc closes)", h.screen), palette);
+    hit.hitmap.record(bx, HitTarget::OverlayBody(OverlayId::Help));
+    if inner.height < 2 || inner.width < 4 {
+        return;
+    }
+    let entries = help_entries(&h.screen, &state.ux.keymap);
+    let rows: Vec<ListRow> = entries
+        .iter()
+        .map(|(k, d)| ListRow { left: k.clone(), right: d.clone(), dim: false })
+        .collect();
+    let list = Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1));
+    let mut hits = Vec::new();
+    let sel = h.sel.min(rows.len().saturating_sub(1));
+    let off = render_list(list, buf, &rows, sel, h.off, palette, &mut hits);
+    for (rect, idx) in &hits {
+        hit.hitmap.record(*rect, HitTarget::ListRow(*idx));
+    }
+    let visible = list.height as usize;
+    if rows.len() > visible && list.width > 2 {
+        let track = Rect::new(list.x + list.width - 1, list.y, 1, list.height);
+        render_vertical_scrollbar(
+            buf,
+            track,
+            ScrollId::Help,
+            rows.len(),
+            visible,
+            off,
+            &mut hit.hitmap,
+            Style::default().fg(palette.separator).bg(palette.modal_bg),
+            Style::default().fg(palette.accent).bg(palette.modal_bg),
+        );
+    }
+    hit.overlay_area = list;
+    hit.overlay_rows = hits;
+    hit.overlay_total = rows.len();
+    hit.overlay_offset = off;
+    buf.set_string(
+        inner.x + 1,
+        inner.y + inner.height - 1,
+        trunc("Rebind keys in /settings > Appearance > Key bindings (keybindings.toml)", inner.width.saturating_sub(2) as usize),
+        Style::default().fg(palette.dim).bg(palette.modal_bg),
+    );
+}
+
 /// Draws the help overlay and the palette.
 pub fn render_ux_overlays(area: Rect, buf: &mut Buffer, state: &TuiAppState, palette: &ThemePalette, hit: &mut HitRegions) {
     if let Some(h) = &state.ux.help {
-        let bx = centered(78.min(area.width), 24.min(area.height), area);
-        let inner = boxed(bx, buf, &format!("Keys: {} (Esc closes)", h.screen), palette);
-        let entries = help_entries(&h.screen, &state.ux.keymap);
-        let rows: Vec<ListRow> = entries
-            .iter()
-            .map(|(k, d)| ListRow { left: k.clone(), right: d.clone(), dim: false })
-            .collect();
-        let list = Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1));
-        let mut hits = Vec::new();
-        render_list(list, buf, &rows, h.sel.min(rows.len().saturating_sub(1)), h.off, palette, &mut hits);
-        buf.set_string(
-            inner.x + 1,
-            inner.y + inner.height - 1,
-            trunc("Rebind keys in /settings > Appearance > Key bindings (keybindings.toml)", inner.width.saturating_sub(2) as usize),
-            Style::default().fg(palette.dim).bg(palette.modal_bg),
-        );
+        render_help_overlay(area, buf, h, state, palette, hit);
     }
     if let Some(p) = &state.ux.palette {
         render_palette(area, buf, p, palette, hit);

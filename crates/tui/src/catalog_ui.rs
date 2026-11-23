@@ -13,22 +13,29 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
+use ratatui::widgets::{Clear, Widget};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 use unicode_width::UnicodeWidthStr;
 
 use crate::client::{GatewayClient, RuntimeEvent};
 use crate::config::IconMode;
-use crate::login::LoginView;
+use crate::core::hitmap::{HitMap, HitTarget, ScrollId};
+use crate::core::input::{PasteTarget, sanitize_paste};
+use crate::core::overlay::OverlayId;
+use crate::core::theme::render_dimmed_backdrop;
+use crate::core::viewport::scroll_offset_for_row;
+use crate::login::{KeyEntry, LoginView};
 use crate::model_picker::ModelPicker;
-use crate::state::AppAction;
+use crate::state::{AppAction, HitRegions};
 use crate::theme::ThemePalette;
 use crate::usage::UsageView;
 use crate::width::{chrome_label, fit_prefix, sanitize};
+use crate::widgets::scrollbar::render_vertical_scrollbar;
 
 /// A secret typed by the user. `Debug` never prints it, so actions and events can be logged.
 #[derive(Clone, PartialEq, Eq)]
@@ -278,27 +285,101 @@ impl CatalogUi {
         }
     }
 
-    /// Pasted text: only the key entry takes it (masked, single line).
+    /// Pasted text routed through the central paste sanitizer.
     pub fn handle_paste(&mut self, raw: &str) {
+        let cleaned = sanitize_paste(raw, false);
+        if cleaned.is_empty() {
+            return;
+        }
         match self.screen {
-            Screen::KeyEntry => self.key_entry_paste(raw),
-            Screen::CustomForm => self.custom_form_paste(raw),
+            Screen::KeyEntry => self.key_entry_paste(&cleaned),
+            Screen::CustomForm => self.custom_form_paste(&cleaned),
             Screen::Picker => {
-                for c in raw.chars().filter(|c| !c.is_control()) {
-                    self.picker.search.push(c);
-                }
+                self.picker.search.push_str(&cleaned);
                 self.picker.model_sel = 0;
                 self.picker.model_off = 0;
             }
             Screen::LoginList => {
-                for c in raw.chars().filter(|c| !c.is_control()) {
-                    self.login.search.push(c);
-                }
+                self.login.search.push_str(&cleaned);
                 self.login.sel = 0;
                 self.login.off = 0;
             }
-            _ => {}
+            Screen::Usage | Screen::Closed => {}
         }
+    }
+
+    /// Mouse wheel scrolling and row-click handling using `HitMap`.
+    pub fn handle_mouse(&mut self, mouse: MouseEvent, hit: &HitMap) -> Vec<AppAction> {
+        let wheel = match mouse.kind {
+            MouseEventKind::ScrollUp => Some(-3isize),
+            MouseEventKind::ScrollDown => Some(3isize),
+            _ => None,
+        };
+        if let Some(delta) = wheel {
+            match self.screen {
+                Screen::Picker => {
+                    if matches!(hit.hit_test(mouse.column, mouse.row), Some(HitTarget::RailRow(_))) {
+                        return self.move_left(delta.signum());
+                    }
+                    self.move_models(delta);
+                }
+                Screen::LoginList => {
+                    let total = self.login_rows().len();
+                    if total > 0 {
+                        self.login.sel = (self.login.sel as isize + delta)
+                            .clamp(0, (total - 1) as isize) as usize;
+                        self.login.off = scroll_offset_for_row(
+                            self.login.sel,
+                            self.login.off,
+                            self.rows(),
+                            total,
+                        );
+                    }
+                }
+                Screen::Usage => {
+                    let total = self.usage.lines().len();
+                    let max = total.saturating_sub(self.rows());
+                    self.usage.offset = self.usage.offset.saturating_add_signed(delta).min(max);
+                }
+                Screen::KeyEntry | Screen::CustomForm | Screen::Closed => {}
+            }
+            return Vec::new();
+        }
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            match hit.hit_test(mouse.column, mouse.row) {
+                Some(HitTarget::RailRow(idx)) if self.screen == Screen::Picker => {
+                    return self.pick_left_row(*idx);
+                }
+                Some(HitTarget::ListRow(idx)) => match self.screen {
+                    Screen::Picker => return self.click_model_row(*idx),
+                    Screen::LoginList => {
+                        let rows_info: Vec<String> =
+                            self.login_rows().into_iter().map(|p| p.id.clone()).collect();
+                        if !rows_info.is_empty() {
+                            let target = (*idx).min(rows_info.len() - 1);
+                            if self.login.sel == target
+                                && let Some(pid) = rows_info.get(target)
+                            {
+                                self.login.entry = KeyEntry::new(pid.clone(), None);
+                                self.return_to = Screen::LoginList;
+                                self.screen = Screen::KeyEntry;
+                            } else {
+                                self.login.sel = target;
+                                self.login.off = scroll_offset_for_row(
+                                    target,
+                                    self.login.off,
+                                    self.rows(),
+                                    rows_info.len(),
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        Vec::new()
     }
 
     /// Mouse wheel.
@@ -684,6 +765,19 @@ fn provider_message(body: &str) -> String {
 // Rendering shared by the screens
 // ---------------------------------------------------------------------------------------------
 
+impl PasteTarget for CatalogUi {
+    fn paste_text(&mut self, raw: &str) -> bool {
+        if !matches!(
+            self.screen,
+            Screen::KeyEntry | Screen::CustomForm | Screen::Picker | Screen::LoginList
+        ) {
+            return false;
+        }
+        self.handle_paste(raw);
+        true
+    }
+}
+
 /// Draws the open overlay over the whole `area`.
 pub fn render_overlay(
     area: Rect,
@@ -692,9 +786,25 @@ pub fn render_overlay(
     palette: &ThemePalette,
     icons: IconMode,
 ) {
+    let mut hit = HitRegions::default();
+    render_overlay_with_hit(area, buf, ui, palette, icons, &mut hit);
+}
+
+/// Draws the open overlay over `area`, clearing backdrop and recording `HitMap` targets.
+pub fn render_overlay_with_hit(
+    area: Rect,
+    buf: &mut Buffer,
+    ui: &CatalogUi,
+    palette: &ThemePalette,
+    icons: IconMode,
+    hit: &mut HitRegions,
+) {
     if area.width < 20 || area.height < CHROME_ROWS + 2 {
         return;
     }
+    render_dimmed_backdrop(buf, area, palette);
+    hit.hitmap.record(area, HitTarget::Backdrop(OverlayId::Catalog));
+    Clear.render(area, buf);
     let bg = Style::default().fg(palette.fg).bg(palette.bg);
     for y in area.y..area.y + area.height {
         for x in area.x..area.x + area.width {
@@ -704,13 +814,40 @@ pub fn render_overlay(
             }
         }
     }
+    hit.hitmap.record(area, HitTarget::OverlayBody(OverlayId::Catalog));
     match ui.screen {
         Screen::Closed => {}
-        Screen::Picker => crate::model_picker::render(area, buf, ui, palette, icons),
-        Screen::LoginList => crate::login::render_list(area, buf, ui, palette, icons),
+        Screen::Picker => crate::model_picker::render_with_hit(area, buf, ui, palette, icons, hit),
+        Screen::LoginList => {
+            crate::login::render_list(area, buf, ui, palette, icons);
+            let list_top = area.y + 2;
+            let visible = (area.y + area.height - 1).saturating_sub(list_top) as usize;
+            let rows = ui.login_rows();
+            let offset = crate::render::scroll_window(ui.login.sel, ui.login.off, visible, rows.len());
+            let list_w = area.width.saturating_sub(1);
+            for (i, _) in rows.iter().skip(offset).take(visible).enumerate() {
+                hit.hitmap.record(
+                    Rect::new(area.x, list_top + i as u16, list_w, 1),
+                    HitTarget::ListRow(offset + i),
+                );
+            }
+            if area.width > 1 && visible > 0 {
+                render_vertical_scrollbar(
+                    buf,
+                    Rect::new(area.x + area.width - 1, list_top, 1, visible as u16),
+                    ScrollId::CatalogList,
+                    rows.len(),
+                    visible,
+                    offset,
+                    &mut hit.hitmap,
+                    Style::default().fg(palette.separator).bg(palette.bg),
+                    Style::default().fg(palette.accent).bg(palette.bg),
+                );
+            }
+        }
         Screen::KeyEntry => crate::login::render_key_entry(area, buf, ui, palette, icons),
         Screen::CustomForm => crate::login::render_custom_form(area, buf, ui, palette, icons),
-        Screen::Usage => crate::usage::render(area, buf, ui, palette, icons),
+        Screen::Usage => crate::usage::render_with_hit(area, buf, ui, palette, icons, hit),
     }
 }
 

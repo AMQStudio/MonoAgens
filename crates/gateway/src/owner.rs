@@ -5,6 +5,7 @@
 //! Admin methods never bypass a door: `turn.submit` enters through the same inbound path as
 //! any body (`Input::Percept`), and `config.apply` only edits `monoagens.toml` and reloads.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -14,18 +15,20 @@ use monoagens_reason::model::catalog::{self, CatalogEntry};
 use monoagens_reason::model::discovery;
 use monoagens_reason::{ProviderSecrets, SecretString};
 use monoagens_protocol::{
-    ActorId, ApprovalResolveParams, Audience, CapabilityId, ChannelId, OpaquePayload, Percept,
-    PlaceId, Taint,
+    ActorId, ApprovalResolveParams, Audience, BodyId, CapabilityDescriptor, CapabilityFlags,
+    ChannelId, OpaquePayload, Percept, PlaceId, Taint,
 };
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use toml_edit::{ArrayOfTables, Item, TableLike, value};
 
+use crate::capabilities::{CapabilityCache, friendly_capability_label, friendly_plugin_label};
 use crate::commands::CommandOutcome;
 use crate::config::{ConfigError, GatewayConfig, load_config_file, update_config_with_backup};
 use crate::runlog::RunLog;
 use crate::runtime::GatewayHandle;
-use crate::supervisor::{PluginSupervisor, SupervisorError};
+use crate::supervisor::{PluginInfo, PluginState, PluginSupervisor, SupervisorError};
+use crate::waist2::CAPABILITY_APPROVAL_PROMPT;
 
 /// JSON-RPC style error code: method not found.
 pub const ERR_METHOD_NOT_FOUND: i32 = -32601;
@@ -119,6 +122,7 @@ pub struct GatewayOwner {
     data_dir: PathBuf,
     owner_actor: ActorId,
     provider_hook: Mutex<Option<ProviderHook>>,
+    secrets_digest: Mutex<Option<[u8; 32]>>,
     jobs: crate::governance::Jobs,
     approvals: tokio::sync::Mutex<ApprovalsCache>,
     approvals_full_replays: std::sync::atomic::AtomicUsize,
@@ -135,6 +139,7 @@ struct ApprovalsCache {
 impl GatewayOwner {
     #[must_use]
     pub fn new(p: OwnerParams) -> Self {
+        let secrets_digest = secrets_toml_digest(&p.secrets_path);
         Self {
             handle: p.handle,
             supervisor: p.supervisor,
@@ -146,6 +151,7 @@ impl GatewayOwner {
             data_dir: p.data_dir,
             owner_actor: p.owner_actor,
             provider_hook: Mutex::new(None),
+            secrets_digest: Mutex::new(secrets_digest),
             jobs: crate::governance::Jobs::default(),
             approvals: tokio::sync::Mutex::new(ApprovalsCache::default()),
             approvals_full_replays: std::sync::atomic::AtomicUsize::new(0),
@@ -550,6 +556,8 @@ impl GatewayOwner {
         }
         write_provider_key(&self.secrets_path, &entry.id, key)
             .map_err(|e| AdminError::server(format!("failed to write secrets: {e}")))?;
+        *self.secrets_digest.lock().expect("secrets digest lock") =
+            secrets_toml_digest(&self.secrets_path);
         self.handle
             .diagnostics()
             .register_secret(&SecretString::new(key));
@@ -605,6 +613,8 @@ impl GatewayOwner {
         }
         write_named_secret(&self.secrets_path, section, name, val)
             .map_err(|e| AdminError::server(format!("failed to write secrets: {e}")))?;
+        *self.secrets_digest.lock().expect("secrets digest lock") =
+            secrets_toml_digest(&self.secrets_path);
         if let Some(v) = val
             && name != "model_endpoint"
         {
@@ -617,18 +627,157 @@ impl GatewayOwner {
         Ok(json!({ "ok": true }))
     }
 
-    /// `capabilities.list`: `{capabilities:[{id, body}]}` of every capability registered by a
-    /// connected body (what a body reported in `body/discover`), for RBAC allow/deny pickers.
+    /// `capabilities.list`: `{groups, capabilities}` combining `core` (`agent.converse`),
+    /// configured plugins (live or cached in `<data_dir>/capability_cache.json`), and any extra
+    /// connected non-`body-tui` bodies, with friendly labels, risk tiers, and `owner_only` flags.
     #[must_use]
     pub fn capabilities_list(&self) -> Value {
-        let caps: Vec<Value> = self
-            .handle
-            .router()
-            .all_capabilities()
-            .into_iter()
-            .map(|c| json!({ "id": c.id.as_str() }))
-            .collect();
-        json!({ "capabilities": caps })
+        let by_body = self.handle.router().capabilities_by_body();
+        let sup_list = self.supervisor.list();
+        let cfg_plugins = self
+            .config
+            .lock()
+            .expect("owner config lock")
+            .effective_plugins();
+
+        let mut sup_by_id: BTreeMap<&str, &PluginInfo> = BTreeMap::new();
+        let mut body_to_plugin: BTreeMap<&str, &str> = BTreeMap::new();
+        for info in &sup_list {
+            sup_by_id.insert(info.id.as_str(), info);
+            if let Some(bid) = &info.body_id {
+                body_to_plugin.insert(bid.as_str(), info.id.as_str());
+            }
+        }
+
+        let mut cache = CapabilityCache::load(&self.data_dir);
+        let mut cache_dirty = false;
+        for (body_id, caps) in &by_body {
+            if body_id.as_str() == "body-tui" {
+                continue;
+            }
+            let plugin_id = body_to_plugin
+                .get(body_id.as_str())
+                .copied()
+                .unwrap_or_else(|| body_id.as_str());
+            if cache.update_plugin(plugin_id, caps.clone()) {
+                cache_dirty = true;
+            }
+        }
+        if cache_dirty {
+            cache.save(&self.data_dir);
+        }
+
+        let mut groups: Vec<Value> = Vec::new();
+        let mut flat_caps: Vec<Value> = Vec::new();
+        let mut seen_cap_ids: BTreeSet<String> = BTreeSet::new();
+
+        let core_desc = "Allow this role to chat with and wake the agent";
+        let core_display = friendly_capability_label("agent.converse");
+        let core_flags = json!({
+            "communicative": true,
+            "identity_changing": false,
+            "irreversible": false,
+        });
+        groups.push(json!({
+            "id": "core",
+            "label": "Core Agent",
+            "kind": "core",
+            "running": true,
+            "body_id": Value::Null,
+            "capabilities": [
+                {
+                    "id": "agent.converse",
+                    "display_name": core_display,
+                    "description": core_desc,
+                    "flags": core_flags,
+                    "risk_tier": "R0",
+                    "owner_only": false,
+                }
+            ],
+        }));
+        seen_cap_ids.insert("agent.converse".to_owned());
+        flat_caps.push(json!({
+            "id": "agent.converse",
+            "display_name": core_display,
+            "description": core_desc,
+            "plugin_id": "core",
+            "flags": core_flags,
+            "risk_tier": "R0",
+            "owner_only": false,
+        }));
+
+        let mut covered_bodies: BTreeSet<String> = BTreeSet::new();
+        let mut seen_plugins: BTreeSet<String> = BTreeSet::new();
+
+        for plugin in &cfg_plugins {
+            if !seen_plugins.insert(plugin.id.clone()) {
+                continue;
+            }
+            let sup = sup_by_id.get(plugin.id.as_str()).copied();
+            let sup_body_id = sup.and_then(|s| s.body_id.clone());
+            let sup_running = sup.is_some_and(|s| s.state == PluginState::Running);
+
+            let (running, body_id_opt, raw_caps) = if let Some(bid) = sup_body_id {
+                let live = by_body.get(&BodyId::new(&bid));
+                if live.is_some() {
+                    covered_bodies.insert(bid.clone());
+                }
+                let caps = live
+                    .cloned()
+                    .or_else(|| cache.get(&plugin.id).map(<[CapabilityDescriptor]>::to_vec))
+                    .unwrap_or_default();
+                (sup_running, Some(bid), caps)
+            } else if let Some(live) = by_body.get(&BodyId::new(&plugin.id)) {
+                covered_bodies.insert(plugin.id.clone());
+                (true, Some(plugin.id.clone()), live.clone())
+            } else {
+                let caps = cache
+                    .get(&plugin.id)
+                    .map(<[CapabilityDescriptor]>::to_vec)
+                    .unwrap_or_default();
+                (false, None, caps)
+            };
+
+            let group_caps = collect_group_capabilities(
+                &plugin.id,
+                &raw_caps,
+                &mut seen_cap_ids,
+                &mut flat_caps,
+            );
+            groups.push(json!({
+                "id": plugin.id,
+                "label": friendly_plugin_label(&plugin.id),
+                "kind": plugin.kind.as_str(),
+                "running": running,
+                "body_id": body_id_opt,
+                "capabilities": group_caps,
+            }));
+        }
+
+        for (body_id, caps) in &by_body {
+            if body_id.as_str() == "body-tui" || covered_bodies.contains(body_id.as_str()) {
+                continue;
+            }
+            let plugin_id = body_to_plugin
+                .get(body_id.as_str())
+                .copied()
+                .unwrap_or_else(|| body_id.as_str());
+            if !seen_plugins.insert(plugin_id.to_owned()) {
+                continue;
+            }
+            let group_caps =
+                collect_group_capabilities(plugin_id, caps, &mut seen_cap_ids, &mut flat_caps);
+            groups.push(json!({
+                "id": plugin_id,
+                "label": friendly_plugin_label(plugin_id),
+                "kind": "adapter",
+                "running": true,
+                "body_id": body_id.as_str(),
+                "capabilities": group_caps,
+            }));
+        }
+
+        json!({ "groups": groups, "capabilities": flat_caps })
     }
 
     /// `events.since`: `{total, events, budget}` with the log entries at index `from..`.
@@ -666,20 +815,21 @@ impl GatewayOwner {
     pub fn command_run(&self, raw: &str, actor: Option<&str>, place: Option<&str>) -> Value {
         let actor = actor.map_or_else(|| self.owner_actor.clone(), ActorId::new);
         let place = place.map(PlaceId::new);
-        let caps: Vec<CapabilityId> = self
-            .handle
-            .router()
-            .all_capabilities()
-            .into_iter()
-            .map(|c| c.id)
-            .collect();
+        let caps = self.handle.router().all_capabilities();
         let rbac = self.config.lock().expect("owner config lock").rbac.clone();
         let outcome = self
             .handle
             .command_registry()
             .lock()
             .expect("cmd reg lock")
-            .try_handle_slash_command(raw, &actor, &self.owner_actor, place.as_ref(), rbac.as_ref(), &caps);
+            .try_handle_slash_command_with_descriptors(
+                raw,
+                &actor,
+                &self.owner_actor,
+                place.as_ref(),
+                rbac.as_ref(),
+                &caps,
+            );
         match outcome {
             Some(CommandOutcome::Handled { reply_text }) => {
                 json!({ "outcome": "handled", "reply_text": reply_text })
@@ -745,48 +895,63 @@ impl GatewayOwner {
         .map_err(|e| AdminError::server(e.to_string()))?;
         let new_cfg = load_config_file(&self.config_path, &self.secrets_path)
             .map_err(|e| AdminError::server(e.to_string()))?;
-        let old = std::mem::replace(
-            &mut *self.config.lock().expect("owner config lock"),
-            new_cfg.clone(),
-        );
+        self.reload_from_parsed(new_cfg, None, false, "applied")
+            .await
+    }
 
-        // Valve / RBAC settings feed the approval projection: rebuild it on the next poll.
-        self.approvals.lock().await.last_id = None;
+    /// `config.reload`: re-reads `monoagens.toml` and `secrets.toml` from disk, validates
+    /// fail-closed (never writing `.bak` or mutating live config/provider on error), and
+    /// hot-reloads Valve/RBAC/Persons, [`PluginSupervisor`], and [`LiveModel`].
+    pub async fn config_reload(&self) -> Result<ReloadReport, AdminError> {
+        let new_cfg = load_config_file(&self.config_path, &self.secrets_path)
+            .map_err(|e| AdminError::server(e.to_string()))?;
+        let gw_secrets =
+            crate::secrets::load_gateway_secrets(Some(&self.secrets_path), |n| std::env::var(n).ok())
+                .map_err(|e| AdminError::server(format!("failed to load secrets: {e}")))?;
+        let new_secrets_digest = secrets_toml_digest(&self.secrets_path);
+        let secrets_changed =
+            *self.secrets_digest.lock().expect("secrets digest lock") != new_secrets_digest;
+        let report = self
+            .reload_from_parsed(
+                new_cfg,
+                Some(gw_secrets.providers.clone()),
+                secrets_changed,
+                "reloaded",
+            )
+            .await?;
+        *self.secrets_digest.lock().expect("secrets digest lock") = new_secrets_digest;
+        register_provider_secrets(&self.handle, &gw_secrets.providers);
+        Ok(report)
+    }
 
+    async fn reload_from_parsed(
+        &self,
+        new_cfg: GatewayConfig,
+        secrets: Option<ProviderSecrets>,
+        secrets_changed: bool,
+        verb: &str,
+    ) -> Result<ReloadReport, AdminError> {
+        let old = self.config_snapshot();
         let mut report = ReloadReport::default();
-        if old.valve != new_cfg.valve
-            || old.rbac != new_cfg.rbac
-            || old.persons != new_cfg.persons
-            || old.model.daily_token_budget != new_cfg.model.daily_token_budget
-        {
-            report.valve = self
-                .handle
-                .reload_valve(&new_cfg)
-                .await
-                .map_err(|e| AdminError::server(e.to_string()))?;
-        }
-        if old.effective_plugins() != new_cfg.effective_plugins() {
-            report.plugins = self.supervisor.reload(new_cfg.effective_plugins()).await;
-        }
-        if old.model != new_cfg.model || old.embed != new_cfg.embed {
+
+        if old.model != new_cfg.model || old.embed != new_cfg.embed || secrets_changed {
             report.provider = true;
-            if old.model != new_cfg.model
+            if (old.model != new_cfg.model || secrets_changed)
                 && new_cfg.model.provider != crate::config::ModelProviderKind::Scripted
             {
                 // Scripted providers are injected by the embedder and cannot be rebuilt
                 // from config; every other provider is rebuilt live for the next request.
-                let secrets = crate::secrets::load_provider_secrets(
-                    Some(&self.secrets_path),
-                    |n| std::env::var(n).ok(),
-                )
-                .map_err(|e| AdminError::server(format!("failed to load secrets: {e}")))?;
+                let secrets = match secrets {
+                    Some(s) => s,
+                    None => self.load_secrets()?,
+                };
                 if let Err(e) = self.handle.rebuild_model(&new_cfg, &secrets).await {
                     self.runlog.warn(
                         "provider",
                         &format!("provider rebuild failed, previous provider kept: {e}"),
                     );
                     return Err(AdminError::server(format!(
-                        "config saved but the provider could not be rebuilt (previous provider kept): {e}"
+                        "provider could not be rebuilt (previous provider kept): {e}"
                     )));
                 }
                 self.runlog.info(
@@ -802,6 +967,29 @@ impl GatewayOwner {
                     ),
                 );
             }
+        }
+
+        if old.valve != new_cfg.valve
+            || old.rbac != new_cfg.rbac
+            || old.persons != new_cfg.persons
+            || old.model.daily_token_budget != new_cfg.model.daily_token_budget
+        {
+            report.valve = self
+                .handle
+                .reload_valve(&new_cfg)
+                .await
+                .map_err(|e| AdminError::server(e.to_string()))?;
+        }
+
+        if old.effective_plugins() != new_cfg.effective_plugins() {
+            report.plugins = self.supervisor.reload(new_cfg.effective_plugins()).await;
+        }
+
+        *self.config.lock().expect("owner config lock") = new_cfg.clone();
+        // Valve / RBAC settings feed the approval projection: rebuild it on the next poll.
+        self.approvals.lock().await.last_id = None;
+
+        if report.provider {
             let hook = self.provider_hook.lock().expect("provider hook lock").clone();
             match hook {
                 Some(h) => h(&new_cfg),
@@ -814,10 +1002,11 @@ impl GatewayOwner {
                 None => {}
             }
         }
+
         self.runlog.info(
             "settings",
             &format!(
-                "config applied (valve={}, plugins=[{}], provider={})",
+                "config {verb} (valve={}, plugins=[{}], provider={})",
                 report.valve,
                 report.plugins.join(","),
                 report.provider
@@ -1152,5 +1341,83 @@ fn json_to_value(v: &Value, key: &str) -> Result<toml_edit::Value, ConfigError> 
             toml_edit::Value::InlineTable(tbl)
         }
     })
+}
+
+fn collect_group_capabilities(
+    plugin_id: &str,
+    descriptors: &[CapabilityDescriptor],
+    seen_cap_ids: &mut BTreeSet<String>,
+    flat_caps: &mut Vec<Value>,
+) -> Vec<Value> {
+    let mut group_seen = BTreeSet::new();
+    let mut group_caps = Vec::new();
+    for cap in descriptors {
+        let id = cap.id.as_str();
+        if !group_seen.insert(id.to_owned()) {
+            continue;
+        }
+        let display_name = friendly_capability_label(id);
+        let risk_tier = capability_risk_tier(cap.flags);
+        let owner_only = cap.flags.identity_changing || id == CAPABILITY_APPROVAL_PROMPT;
+        let flags = json!({
+            "communicative": cap.flags.communicative,
+            "identity_changing": cap.flags.identity_changing,
+            "irreversible": cap.flags.irreversible,
+        });
+        group_caps.push(json!({
+            "id": id,
+            "display_name": display_name,
+            "description": cap.description,
+            "flags": flags,
+            "risk_tier": risk_tier,
+            "owner_only": owner_only,
+        }));
+        if seen_cap_ids.insert(id.to_owned()) {
+            flat_caps.push(json!({
+                "id": id,
+                "display_name": display_name,
+                "description": cap.description,
+                "plugin_id": plugin_id,
+                "flags": flags,
+                "risk_tier": risk_tier,
+                "owner_only": owner_only,
+            }));
+        }
+    }
+    group_caps
+}
+
+fn capability_risk_tier(flags: CapabilityFlags) -> &'static str {
+    match monoagens_valve::approvals::classify_action_risk(
+        flags,
+        false,
+        false,
+        Taint::Trusted,
+        Default::default(),
+    ) {
+        monoagens_valve::approvals::RiskTier::R0 => "R0",
+        monoagens_valve::approvals::RiskTier::R1 => "R1",
+        monoagens_valve::approvals::RiskTier::R2 => "R2",
+        monoagens_valve::approvals::RiskTier::R3 => "R3",
+    }
+}
+
+fn secrets_toml_digest(path: &std::path::Path) -> Option<[u8; 32]> {
+    std::fs::read(path)
+        .ok()
+        .map(|bytes| *blake3::hash(&bytes).as_bytes())
+}
+
+fn register_provider_secrets(handle: &GatewayHandle, secrets: &ProviderSecrets) {
+    let diag = handle.diagnostics();
+    if let Some(k) = &secrets.model_api_key {
+        diag.register_secret(k);
+    }
+    if let Some(k) = &secrets.embed_api_key {
+        diag.register_secret(k);
+    }
+    for k in secrets.provider_keys.values() {
+        diag.register_secret(k);
+    }
 }
 

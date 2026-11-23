@@ -147,6 +147,12 @@ pub trait GatewayClient: Send + Sync {
     fn status(&self) -> Fut<'_, ClientResult<Value>>;
     fn config_get(&self) -> Fut<'_, ClientResult<Value>>;
     fn config_apply(&self, patch: Value) -> Fut<'_, ClientResult<Value>>;
+    /// `config.reload`: reloads `monoagens.toml`, RBAC, plugins, and provider live without writing.
+    fn config_reload(&self) -> Fut<'_, ClientResult<Value>> {
+        Box::pin(async move {
+            Err(ClientError::server("config.reload: not supported by this client"))
+        })
+    }
     /// `providers.list`: catalog providers with key state (never key material).
     fn providers_list(&self) -> Fut<'_, ClientResult<Value>>;
     /// `models.discover`: the cached list (`refresh = false`, instant) or a fresh one.
@@ -653,6 +659,13 @@ impl GatewayClient for InProcessClient {
         })
     }
 
+    fn config_reload(&self) -> Fut<'_, ClientResult<Value>> {
+        Box::pin(async move {
+            let report = self.owner.config_reload().await?;
+            Ok(json!({ "ok": true, "reloaded": report }))
+        })
+    }
+
     fn providers_list(&self) -> Fut<'_, ClientResult<Value>> {
         Box::pin(async move { self.owner.providers_list() })
     }
@@ -1079,6 +1092,10 @@ impl GatewayClient for SocketClient {
 
     fn config_apply(&self, patch: Value) -> Fut<'_, ClientResult<Value>> {
         Box::pin(async move { self.call("config.apply", json!({ "patch": patch })).await })
+    }
+
+    fn config_reload(&self) -> Fut<'_, ClientResult<Value>> {
+        Box::pin(async move { self.call("config.reload", json!({})).await })
     }
 
     fn providers_list(&self) -> Fut<'_, ClientResult<Value>> {

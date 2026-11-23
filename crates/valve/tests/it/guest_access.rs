@@ -8,8 +8,8 @@ use monoagens_protocol::{
     ActorId, Audience, OpaquePayload, OriginActor, Percept, PlaceId, Taint, Time,
 };
 use monoagens_valve::{
-    PERMISSION_AGENT_CONVERSE, RbacConfig, RoleDefinition, RoleTier, Valve, ValveConfig,
-    ValveSnapshot,
+    ApprovalMode, PERMISSION_AGENT_CONVERSE, RbacConfig, RbacDecision, RoleDefinition, RoleTier,
+    Valve, ValveConfig, ValveSnapshot,
 };
 
 const WA: &str = "wa:user:6285111242960@s.whatsapp.net";
@@ -140,4 +140,92 @@ fn guests_are_rebuilt_from_percept_events_after_restart() {
     assert!(restarted.snapshot().guest_actors.contains(&ActorId::new(WA)));
     let mut p = percept(WA);
     assert_eq!(restarted.inbound(&mut p), DoorDecision::Allow);
+}
+
+#[test]
+fn admitted_guest_is_default_denied_unlisted_capabilities_while_member_base_and_owner_work() {
+    let place = PlaceId::new("wa:dm:6285111242960@s.whatsapp.net");
+    let guest_actor = ActorId::new(WA);
+    let member_actor = ActorId::new("per_family");
+    let owner_actor = ActorId::new("per_owner");
+
+    // 1. Guest with allow = ["chat.*", "web.search", "web.fetch", "agent.converse"] and empty permission_bases.
+    let mut cfg = rbac(&["chat.*", "web.search", "web.fetch", PERMISSION_AGENT_CONVERSE]);
+    cfg.actor_roles
+        .insert(member_actor.clone(), vec!["family".to_owned()]);
+
+    let mut v = valve(true, Some(cfg));
+    let mut p = percept(WA);
+    assert_eq!(v.inbound(&mut p), DoorDecision::Allow);
+
+    for cap in ["chat.speak", "web.search", "web.fetch", PERMISSION_AGENT_CONVERSE] {
+        assert_eq!(
+            v.check_rbac(&guest_actor, Some(&place), cap),
+            RbacDecision::Allow,
+            "guest should be allowed '{cap}'"
+        );
+    }
+    for cap in [
+        "workspace.run",
+        "workspace.write",
+        "pdf.delete",
+        "soul_tuning.set_mode",
+    ] {
+        assert!(
+            matches!(
+                v.check_rbac(&guest_actor, Some(&place), cap),
+                RbacDecision::Deny { .. }
+            ),
+            "guest should be denied '{cap}'"
+        );
+    }
+    for cap in ["workspace.run", "pdf.delete", "soul_tuning.set_mode"] {
+        assert_eq!(
+            v.check_rbac(&owner_actor, Some(&place), cap),
+            RbacDecision::Allow
+        );
+    }
+
+    // 2. Explicit `[permission_bases]` ("web.search" = "member") allows member-tier role and denies guest-tier role.
+    let mut base_cfg = rbac(&["chat.*", PERMISSION_AGENT_CONVERSE]);
+    base_cfg
+        .actor_roles
+        .insert(member_actor.clone(), vec!["family".to_owned()]);
+    base_cfg
+        .permission_bases
+        .insert("web.search".to_owned(), Some(RoleTier::Member));
+    base_cfg.roles.insert(
+        "owner_strict".to_owned(),
+        RoleDefinition {
+            name: "owner_strict".to_owned(),
+            base: RoleTier::Owner,
+            allow: vec!["*".to_owned()],
+            deny: Vec::new(),
+            approval: Some(ApprovalMode::Strict),
+            label: None,
+            context: None,
+            settings: BTreeMap::new(),
+        },
+    );
+
+    let v2 = valve(true, Some(base_cfg.clone()));
+    assert_eq!(
+        v2.check_rbac(&member_actor, Some(&place), "web.search"),
+        RbacDecision::Allow
+    );
+    assert!(matches!(
+        v2.check_rbac(&guest_actor, Some(&place), "web.search"),
+        RbacDecision::Deny { .. }
+    ));
+
+    // 3. Owner with explicit ApprovalMode::Strict holds.
+    let mut strict_owner_cfg = base_cfg;
+    strict_owner_cfg
+        .actor_roles
+        .insert(owner_actor.clone(), vec!["owner_strict".to_owned()]);
+    let v3 = valve(true, Some(strict_owner_cfg));
+    assert!(matches!(
+        v3.check_rbac(&owner_actor, Some(&place), "workspace.run"),
+        RbacDecision::Hold { .. }
+    ));
 }

@@ -507,3 +507,145 @@ fn rbac_never_widens_line1_line2_or_taint_quarantine() {
         RbacDecision::Allow
     );
 }
+
+#[test]
+fn non_owner_default_deny_enforces_allow_lists_permission_bases_and_owner_override() {
+    let owner = ActorId::new("owner:alice");
+    let guest_actor = ActorId::new("person:guest");
+    let bare_guest_actor = ActorId::new("person:bare_guest");
+    let member_actor = ActorId::new("person:member");
+    let main_room = PlaceId::new("room:main");
+
+    let make_role = |name: &str, base: RoleTier, allow: &[&str], approval: Option<ApprovalMode>| {
+        RoleDefinition {
+            name: name.to_owned(),
+            base,
+            allow: allow.iter().map(|s| (*s).to_owned()).collect(),
+            deny: Vec::new(),
+            approval,
+            label: None,
+            context: None,
+            settings: BTreeMap::new(),
+        }
+    };
+
+    // 1. Guest with explicit allow list and empty permission_bases:
+    //    default-DENY blocks unlisted capabilities, while allow list permits listed ones.
+    let mut rbac = RbacConfig {
+        fallback_role: Some("bare_guest".to_owned()),
+        roles: BTreeMap::from([
+            (
+                "guest_converse".to_owned(),
+                make_role(
+                    "guest_converse",
+                    RoleTier::Guest,
+                    &["chat.*", "web.search", "web.fetch", "agent.converse"],
+                    None,
+                ),
+            ),
+            (
+                "bare_guest".to_owned(),
+                make_role("bare_guest", RoleTier::Guest, &[], None),
+            ),
+            (
+                "member".to_owned(),
+                make_role("member", RoleTier::Member, &[], None),
+            ),
+            (
+                "owner_strict".to_owned(),
+                make_role("owner_strict", RoleTier::Owner, &["*"], Some(ApprovalMode::Strict)),
+            ),
+        ]),
+        actor_roles: BTreeMap::from([
+            (guest_actor.clone(), vec!["guest_converse".to_owned()]),
+            (member_actor.clone(), vec!["member".to_owned()]),
+        ]),
+        places: BTreeMap::new(),
+        permission_bases: BTreeMap::new(),
+    };
+
+    for denied_cap in [
+        "workspace.run",
+        "workspace.write",
+        "pdf.delete",
+        "soul_tuning.set_mode",
+    ] {
+        assert!(
+            matches!(
+                rbac.evaluate(&guest_actor, &owner, Some(&main_room), denied_cap),
+                RbacDecision::Deny { .. }
+            ),
+            "expected guest to be denied '{denied_cap}'"
+        );
+        assert!(
+            !rbac.is_permitted(&guest_actor, &owner, Some(&main_room), denied_cap),
+            "expected is_permitted=false for guest on '{denied_cap}'"
+        );
+        assert!(
+            matches!(
+                rbac.evaluate(&bare_guest_actor, &owner, Some(&main_room), denied_cap),
+                RbacDecision::Deny { .. }
+            ),
+            "expected bare guest to be denied '{denied_cap}'"
+        );
+    }
+
+    for allowed_cap in ["chat.speak", "web.search", "web.fetch", "agent.converse"] {
+        assert_eq!(
+            rbac.evaluate(&guest_actor, &owner, Some(&main_room), allowed_cap),
+            RbacDecision::Allow,
+            "expected guest to be allowed '{allowed_cap}'"
+        );
+        assert!(
+            matches!(
+                rbac.evaluate(&bare_guest_actor, &owner, Some(&main_room), allowed_cap),
+                RbacDecision::Deny { .. }
+            ),
+            "expected bare guest without allow entry to be denied '{allowed_cap}'"
+        );
+    }
+
+    // 2. Explicit `[permission_bases]` ("web.search" = "member") allows member-tier role
+    //    (even with empty `allow`) and denies guest-tier role (without `"web.search"` in `allow`).
+    rbac.permission_bases
+        .insert("web.search".to_owned(), Some(RoleTier::Member));
+    assert_eq!(
+        rbac.evaluate(&member_actor, &owner, Some(&main_room), "web.search"),
+        RbacDecision::Allow
+    );
+    assert!(matches!(
+        rbac.evaluate(&bare_guest_actor, &owner, Some(&main_room), "web.search"),
+        RbacDecision::Deny { .. }
+    ));
+    // Unlisted capability remains default-denied for member too.
+    assert!(matches!(
+        rbac.evaluate(&member_actor, &owner, Some(&main_room), "workspace.run"),
+        RbacDecision::Deny { .. }
+    ));
+
+    // 3. Owner remains Allow (regardless of empty allow/permission_bases), or Hold under explicit Strict.
+    for cap in [
+        "workspace.run",
+        "workspace.write",
+        "pdf.delete",
+        "soul_tuning.set_mode",
+        "web.search",
+    ] {
+        assert_eq!(
+            rbac.evaluate(&owner, &owner, Some(&main_room), cap),
+            RbacDecision::Allow
+        );
+    }
+
+    rbac.actor_roles
+        .insert(owner.clone(), vec!["owner_strict".to_owned()]);
+    for cap in ["workspace.run", "chat.speak", "web.search"] {
+        assert!(
+            matches!(
+                rbac.evaluate(&owner, &owner, Some(&main_room), cap),
+                RbacDecision::Hold { .. }
+            ),
+            "expected owner with ApprovalMode::Strict to Hold on '{cap}'"
+        );
+    }
+}

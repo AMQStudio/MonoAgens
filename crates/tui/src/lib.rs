@@ -10,6 +10,7 @@ pub mod clipboard;
 pub mod composer_history;
 pub mod config;
 pub mod conv;
+pub mod core;
 pub mod draft_preview;
 pub mod doctor;
 pub mod effects;
@@ -26,7 +27,6 @@ pub mod pairing;
 pub mod plugin_detail;
 pub mod palette;
 pub mod people_editor;
-pub mod rbac_editor;
 pub mod render;
 pub mod runtime;
 pub mod selector;
@@ -44,6 +44,7 @@ pub mod ui_global;
 pub mod ui_util;
 pub mod usage;
 pub mod views;
+pub mod widgets;
 
 pub use attachments::{
     FileAttachmentOutcome, MAX_INLINE_DOCUMENT_BYTES, MAX_TUI_PERCEPT_INLINE_BYTES, PasteItem,

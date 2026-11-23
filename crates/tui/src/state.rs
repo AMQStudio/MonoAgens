@@ -21,6 +21,10 @@ use crate::config::{
     BUILTIN_PLUGIN_PRESETS, LocalChatStore, SidebarMode, StoredChatMessagePreview, TuiPreferences,
     config_dir_from_path, discover_builtin_binary, list_secret_keys,
 };
+use crate::core::hitmap::{HitMap, HitTarget, ScrollId};
+use crate::core::input::{PasteCollapseStore, PasteTarget, TextInput, sanitize_paste};
+use crate::core::overlay::{OverlayEntry, OverlayId, OverlayStack, is_key_press};
+use crate::core::viewport::{is_horizontal_scroll, offset_from_scrollbar_y};
 use crate::settings::{
     PluginUiEntry, PluginUiState, SecretsUiSummary, SettingsModalState, SettingsTab, SetupWizardState,
     ValveRuleTogglesState, WizardStep,
@@ -88,6 +92,7 @@ pub struct ComposerState {
     pub history_idx: Option<usize>,
     pub pending_attachments: Vec<PendingAttachment>,
     pub next_attachment_id: usize,
+    pub paste_collapse: PasteCollapseStore,
 }
 
 impl Default for ComposerState {
@@ -99,6 +104,7 @@ impl Default for ComposerState {
             history_idx: None,
             pending_attachments: Vec::new(),
             next_attachment_id: 1,
+            paste_collapse: PasteCollapseStore::default(),
         }
     }
 }
@@ -250,16 +256,18 @@ impl ComposerState {
         }
     }
 
-    /// Clears composer and records non-empty input into history.
+    /// Clears composer and records non-empty input into history, expanding collapsed paste tokens.
     pub fn take_submitted(&mut self) -> String {
         let taken = std::mem::take(&mut self.text);
+        let expanded = self.paste_collapse.expand(&taken);
+        self.paste_collapse.clear();
         self.cursor = 0;
         self.history_idx = None;
-        let trimmed = taken.trim().to_owned();
+        let trimmed = expanded.trim().to_owned();
         if !trimmed.is_empty() && self.history.last() != Some(&trimmed) {
             self.history.push(trimmed.clone());
         }
-        taken
+        expanded
     }
 
     /// Returns `true` when the composer begins with `/` on a single line (triggers autocomplete).
@@ -384,6 +392,8 @@ pub struct HitRegions {
     pub wizard_buttons: Vec<(Rect, usize)>,
     /// Visible rows of each selectable message of the chat feed (timeline index).
     pub message_rows: Vec<(Rect, usize)>,
+    /// Unified Z-ordered hit-test map for widgets, overlays, and scrollbars.
+    pub hitmap: HitMap,
 }
 
 impl HitRegions {
@@ -421,6 +431,7 @@ impl HitRegions {
         self.settings_options.clear();
         self.wizard_buttons.clear();
         self.message_rows.clear();
+        self.hitmap.clear();
     }
 }
 
@@ -455,6 +466,8 @@ pub enum AppAction {
     RunDoctor,
     /// `/retry` or `Ctrl+R` in the config-error state: reload the config and boot the gateway.
     RetryBoot,
+    /// `/reload`: reload `monoagens.toml`, RBAC, plugins, and provider live.
+    ReloadConfig,
     /// `Alt+L`: clear the terminal and repaint everything.
     ResetDisplay,
     /// `Ctrl+Z`: leave the alternate screen, stop the process, restore on `SIGCONT`.
@@ -538,6 +551,12 @@ pub struct TuiAppState {
     pub conv: crate::conv::ConvState,
     /// Key map, help overlay and command palette.
     pub ux: crate::ui_global::UxState,
+    /// Authoritative overlay Z-order stack governing render, key, paste, and mouse dispatch.
+    pub overlays: OverlayStack,
+    /// Last observed terminal viewport size.
+    pub last_viewport: Rect,
+    /// Currently dragged scrollbar metadata across any surface.
+    pub active_scrollbar_drag: Option<(ScrollId, Rect, usize, usize)>,
 }
 
 impl TuiAppState {
@@ -628,6 +647,9 @@ impl TuiAppState {
             gov: crate::views::GovState::default(),
             conv: crate::conv::ConvState::default(),
             ux: crate::ui_global::UxState { keymap, ..crate::ui_global::UxState::default() },
+            overlays: OverlayStack::default(),
+            last_viewport: Rect::new(0, 0, 80, 24),
+            active_scrollbar_drag: None,
         };
         app.filter_autocomplete();
         app
@@ -862,9 +884,18 @@ impl TuiAppState {
             SlashCommandItem {
                 name: "retry".to_owned(),
                 usage: "/retry".to_owned(),
-                description: "Reload the configuration and boot the gateway again".to_owned(),
+                description: "Retry failed boot or re-run the last interrupted/failed turn".to_owned(),
                 current_value: None,
                 icon: "↻",
+                lab_only: false,
+                from_plugin: None,
+            },
+            SlashCommandItem {
+                name: "reload".to_owned(),
+                usage: "/reload".to_owned(),
+                description: "Reload monoagens.toml, RBAC, plugins, and provider live".to_owned(),
+                current_value: None,
+                icon: "⟳",
                 lab_only: false,
                 from_plugin: None,
             },
@@ -1263,53 +1294,133 @@ impl TuiAppState {
         }
     }
 
-    /// Handles bracketed paste (`Event::Paste`) or clipboard text paste across Wizard,
-    /// Settings modal, or Chat composer (smart media/PDF cards, workspace-gated host file
-    /// imports, and long-text collapse).
+    /// Returns `true` when any overlay or modal surface is currently open.
+    #[must_use]
+    pub fn has_open_overlay(&self) -> bool {
+        !self.effective_overlay_stack().is_empty()
+    }
+
+    /// Reconciles `self.overlays` with active overlay fields and returns a snapshot stack.
+    #[must_use]
+    pub fn effective_overlay_stack(&self) -> OverlayStack {
+        let mut stack = self.overlays.clone();
+        reconcile_overlay_stack(self, &mut stack);
+        stack
+    }
+
+    /// Synchronizes `self.overlays` in place with all active overlay fields.
+    pub fn sync_overlay_stack(&mut self) {
+        let mut stack = std::mem::take(&mut self.overlays);
+        reconcile_overlay_stack(self, &mut stack);
+        self.overlays = stack;
+    }
+
+    fn active_overlay_accepts_text_paste(&self) -> bool {
+        let stack = self.effective_overlay_stack();
+        match stack.top().map(|e| e.id) {
+            None => true,
+            Some(OverlayId::Help) => false,
+            Some(OverlayId::Palette) => true,
+            Some(OverlayId::Log) => self.log.searching,
+            Some(OverlayId::Governance) => self.gov.prompt.is_some(),
+            Some(OverlayId::Catalog) => matches!(
+                self.catalog.screen,
+                crate::catalog_ui::Screen::Picker
+                    | crate::catalog_ui::Screen::LoginList
+                    | crate::catalog_ui::Screen::KeyEntry
+                    | crate::catalog_ui::Screen::CustomForm
+            ),
+            Some(OverlayId::Settings) => {
+                self.settings.confirm.is_none() && self.settings.install.is_none()
+            }
+            Some(OverlayId::Wizard) => self.wizard.as_ref().is_some_and(|w| {
+                matches!(
+                    w.step,
+                    WizardStep::Step1Provider
+                        | WizardStep::StepEndpoint
+                        | WizardStep::StepKey
+                        | WizardStep::StepModel
+                )
+            }),
+            Some(OverlayId::ConvModal) => {
+                self.conv.history_search.is_some() || self.conv.chat_search_input
+            }
+        }
+    }
+
+    /// Handles bracketed paste (`Event::Paste`) or clipboard text paste across the top active
+    /// overlay (`OverlayStack`) or the main chat composer (smart media/PDF cards, workspace-gated
+    /// host file imports, and `[Paste #N, +L lines]` long-text collapse).
     pub fn handle_paste(&mut self, raw: &str) -> Vec<AppAction> {
         self.selection = None;
-        if self.catalog.is_open() {
-            self.catalog.handle_paste(raw);
-            return Vec::new();
-        }
-        if let Some(w) = &mut self.wizard {
-            if w.step == WizardStep::Step1Provider && w.editing {
-                let cleaned = raw.trim_matches(['\r', '\n']);
-                match w.selected_field {
-                    0 => w.endpoint.push_str(cleaned),
-                    1 => w.api_key.push_str(cleaned),
-                    2 => w.model.push_str(cleaned),
-                    _ => {}
+        self.sync_overlay_stack();
+        match self.effective_overlay_stack().top().map(|e| e.id) {
+            Some(OverlayId::Help) => return Vec::new(),
+            Some(OverlayId::Palette) => {
+                if let Some(p) = &mut self.ux.palette {
+                    let _ = p.paste_text(raw);
                 }
+                return Vec::new();
             }
-            return Vec::new();
-        }
-
-        if self.settings.open {
-            let cleaned = raw.trim_matches(['\r', '\n']);
-            if let Some(edit) = &mut self.settings.editing {
-                edit.buffer.push_str(cleaned);
-            } else if self.settings.plugin_detail.is_none() {
-                self.settings.search_query.push_str(cleaned);
-                self.settings.selected_index = 0;
-                self.settings.scroll_offset = 0;
+            Some(OverlayId::Log) => {
+                if self.log.searching {
+                    let _ = self.log.paste_text(raw);
+                }
+                return Vec::new();
             }
-            return Vec::new();
+            Some(OverlayId::Governance) => {
+                if let Some(p) = &mut self.gov.prompt {
+                    let mut ti = TextInput::new(false).with_value(std::mem::take(&mut p.text));
+                    let _ = ti.paste_text(raw);
+                    p.text = ti.value;
+                    if p.purpose == crate::views::PromptFor::ActivitySearch {
+                        self.gov.activity.search = p.text.clone();
+                    }
+                }
+                return Vec::new();
+            }
+            Some(OverlayId::Catalog) => {
+                let _ = self.catalog.paste_text(raw);
+                return Vec::new();
+            }
+            Some(OverlayId::Settings) => {
+                let _ = self.handle_settings_paste(raw);
+                return Vec::new();
+            }
+            Some(OverlayId::Wizard) => {
+                if let Some(w) = &mut self.wizard {
+                    let _ = w.paste_text(raw);
+                }
+                return Vec::new();
+            }
+            Some(OverlayId::ConvModal) => {
+                let _ = self.conv_paste(raw);
+                return Vec::new();
+            }
+            None => {}
         }
 
         let items = classify_paste_input(raw);
+        let mut handled_paths_or_media = false;
         for item in items {
             match item {
-                PasteItem::Attach(att) => {
+                PasteItem::Attach(att)
+                    if !matches!(att.kind, PendingAttachmentKind::LongText { .. }) =>
+                {
+                    handled_paths_or_media = true;
                     self.handle_supported_attachment(att);
                 }
                 PasteItem::PlainPath(path_str) => {
+                    handled_paths_or_media = true;
                     self.handle_host_file_path_import(Path::new(&path_str));
                 }
-                PasteItem::PlainText(text) => {
-                    self.composer.insert_str(&text);
-                }
+                PasteItem::Attach(_) | PasteItem::PlainText(_) => {}
             }
+        }
+        if !handled_paths_or_media {
+            let sanitized = sanitize_paste(raw, true);
+            let collapsed = self.composer.paste_collapse.collapse_if_large(&sanitized);
+            self.composer.insert_str(&collapsed);
         }
         self.filter_autocomplete();
         Vec::new()
@@ -1323,6 +1434,7 @@ impl TuiAppState {
         hit: &HitRegions,
         viewport: Rect,
     ) -> EventOutcome {
+        self.last_viewport = viewport;
         self.log.view_rows = viewport
             .height
             .saturating_sub(crate::log::LOG_CHROME_ROWS)
@@ -1332,6 +1444,10 @@ impl TuiAppState {
             .height
             .saturating_sub(crate::views::GOV_CHROME_ROWS)
             .max(1) as usize;
+        if let Some(p) = &mut self.ux.palette {
+            p.view_rows = (20u16.min(viewport.height)).saturating_sub(4).max(1) as usize;
+        }
+        self.sync_overlay_stack();
         match ev {
             Event::Key(k) => EventOutcome {
                 actions: self.handle_key_event(k),
@@ -1368,10 +1484,32 @@ impl TuiAppState {
         }
     }
 
-    /// Handles a key event across Wizard, Settings modal, Approval card, or Chat composer.
+    /// Handles a key event across the active [`OverlayStack`], Approval card, or Chat composer.
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Vec<AppAction> {
+        if !is_key_press(key) {
+            return Vec::new();
+        }
+        self.sync_overlay_stack();
+        let actions = self.handle_key_event_inner(key);
+        self.sync_overlay_stack();
+        actions
+    }
+
+    fn handle_key_event_inner(&mut self, key: KeyEvent) -> Vec<AppAction> {
         let mut actions = Vec::new();
         self.selection = None;
+
+        // Route Ctrl+V before modal early returns so every active text input supports
+        // clipboard paste (text-only inside overlays; image-or-text only on main composer).
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('v')
+            && !key.modifiers.contains(KeyModifiers::ALT)
+        {
+            if !self.has_open_overlay() || self.active_overlay_accepts_text_paste() {
+                actions.push(AppAction::PasteFromClipboard);
+            }
+            return actions;
+        }
 
         // The help overlay and the command palette own the keyboard while open (before any
         // conversation shortcut, so Esc closes them instead of interrupting a turn).
@@ -1441,12 +1579,6 @@ impl TuiAppState {
         // Settings overlay intercepts input while open
         if self.settings.open {
             return self.settings_key(key);
-        }
-
-        // Composer Ctrl+V clipboard paste (image or text)
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('v') {
-            actions.push(AppAction::PasteFromClipboard);
-            return actions;
         }
 
         // Pending Approval inline card shortcuts when composer is empty
@@ -1564,6 +1696,7 @@ impl TuiAppState {
                 if !self.composer.text.is_empty() || !self.composer.pending_attachments.is_empty() {
                     self.composer.text.clear();
                     self.composer.cursor = 0;
+                    self.composer.paste_collapse.clear();
                     self.composer.clear_attachments();
                     self.filter_autocomplete();
                 }
@@ -1746,6 +1879,7 @@ impl TuiAppState {
             }
             None => self.settings.open_tab(SettingsTab::Appearance),
         }
+        self.sync_overlay_stack();
     }
 
     /// Ends the busy state (reply, error, silent turn, door block, ...).
@@ -1841,7 +1975,9 @@ impl TuiAppState {
             let toggles = ValveRuleTogglesState::load_from_config(&self.paths.config_path);
             self.gov.policy.toggles = crate::views::policy::toggle_rows(&toggles);
         }
-        self.gov.open(panel)
+        let actions = self.gov.open(panel);
+        self.sync_overlay_stack();
+        actions
     }
 
     /// Executes a local TUI slash command or forwards a Gateway/plugin command.
@@ -1915,11 +2051,18 @@ impl TuiAppState {
             "/events" => self.open_gov(crate::views::Panel::Events),
             "/status" => self.open_gov(crate::views::Panel::Status),
             "/doctor" => vec![AppAction::RunDoctor],
+            "/reload" => vec![AppAction::ReloadConfig],
             "/retry" => {
                 if self.config_error.is_some() {
                     vec![AppAction::RetryBoot]
+                } else if self.conv.last_turn.is_some() {
+                    let actions = self.conv_retry();
+                    if actions.is_empty() && !self.is_busy() {
+                        self.set_toast("Nothing to retry (use /reload to reload config)", false);
+                    }
+                    actions
                 } else {
-                    self.set_toast("Nothing to retry: the gateway is running", false);
+                    self.set_toast("Nothing to retry (use /reload to reload config)", false);
                     Vec::new()
                 }
             }
@@ -2207,45 +2350,136 @@ impl TuiAppState {
         }
     }
 
-    /// Handles mouse wheel scrolling and left-clicks using [`HitRegions`].
+    /// Handles mouse wheel scrolling, row clicks, and scrollbar drags using [`HitRegions`] and
+    /// [`HitMap`].
     pub fn handle_mouse_event(
         &mut self,
         mouse: MouseEvent,
         hit: &HitRegions,
         viewport: Rect,
     ) -> Vec<AppAction> {
+        if is_horizontal_scroll(mouse.kind) {
+            return Vec::new();
+        }
+        self.last_viewport = viewport;
+        self.sync_overlay_stack();
         let mut actions = Vec::new();
         let x = mouse.column;
         let y = mouse.row;
 
-        if self.gov.is_open() {
-            match mouse.kind {
-                MouseEventKind::ScrollUp => self.gov.scroll_by(-3),
-                MouseEventKind::ScrollDown => self.gov.scroll_by(3),
-                _ => {}
+        // Continue or finish an active scrollbar drag anywhere on screen.
+        match mouse.kind {
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some((scroll_id, track, total, visible)) = self.active_scrollbar_drag {
+                    let target = offset_from_scrollbar_y(track.y, track.height, y, total, visible);
+                    self.apply_scrollbar_offset(scroll_id, target, total, visible);
+                    return actions;
+                }
             }
+            MouseEventKind::Up(MouseButton::Left)
+                if self.active_scrollbar_drag.take().is_some()
+                    || self.dragging_chat_scrollbar =>
+            {
+                self.dragging_chat_scrollbar = false;
+                return actions;
+            }
+            _ => {}
+        }
+
+        // Start a scrollbar drag when clicking any visible scrollbar track recorded in HitMap.
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && let Some((scroll_id, track, total, visible)) = hit.hitmap.scrollbar_at(x, y)
+        {
+            self.selection = None;
+            self.active_scrollbar_drag = Some((scroll_id, track, total, visible));
+            if scroll_id == ScrollId::Chat {
+                self.dragging_chat_scrollbar = true;
+            }
+            let target = offset_from_scrollbar_y(track.y, track.height, y, total, visible);
+            self.apply_scrollbar_offset(scroll_id, target, total, visible);
             return actions;
         }
 
-        if self.log.open {
-            match mouse.kind {
-                MouseEventKind::ScrollUp => self.log.scroll_by(-3),
-                MouseEventKind::ScrollDown => self.log.scroll_by(3),
-                _ => {}
-            }
-            return actions;
-        }
-        if self.catalog.is_open() {
-            match mouse.kind {
-                MouseEventKind::ScrollUp => self.catalog.scroll_by(-3),
-                MouseEventKind::ScrollDown => self.catalog.scroll_by(3),
-                _ => {}
-            }
-            return actions;
-        }
+        let wheel_delta = match mouse.kind {
+            MouseEventKind::ScrollUp => Some(-3isize),
+            MouseEventKind::ScrollDown => Some(3isize),
+            _ => None,
+        };
 
-        if let Some(actions) = self.ux_mouse(mouse, hit) {
-            return actions;
+        // Top-down overlay mouse isolation: no scroll or click leaks behind a blocking overlay.
+        match self.effective_overlay_stack().top().map(|e| e.id) {
+            Some(OverlayId::Help | OverlayId::Palette) => {
+                self.selection = None;
+                return self.ux_mouse(mouse, hit).unwrap_or_default();
+            }
+            Some(OverlayId::Settings) => {
+                self.selection = None;
+                return self.handle_settings_mouse(mouse, &hit.hitmap);
+            }
+            Some(OverlayId::Wizard) => {
+                self.selection = None;
+                if let Some(d) = wheel_delta {
+                    self.wizard_wheel(d);
+                    return actions;
+                }
+                if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                    if let Some(HitTarget::ListRow(idx)) = hit.hitmap.hit_test(x, y) {
+                        return self.activate_wizard_button(*idx);
+                    }
+                    for (rect, btn_idx) in &hit.wizard_buttons {
+                        if rect_contains(*rect, x, y) {
+                            return self.activate_wizard_button(*btn_idx);
+                        }
+                    }
+                }
+                return actions;
+            }
+            Some(OverlayId::Log) => {
+                self.selection = None;
+                if let Some(d) = wheel_delta {
+                    self.log.scroll_by(d);
+                    return actions;
+                }
+                if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+                    && let Some(HitTarget::ListRow(idx)) = hit.hitmap.hit_test(x, y)
+                {
+                    let total = self.log.filtered().len();
+                    if total > 0 {
+                        let vis = self.log.view_rows.max(1);
+                        self.log.offset = self.log.effective_offset(total, vis);
+                        self.log.follow = false;
+                        self.log.selected = (*idx).min(total - 1);
+                    }
+                }
+                return actions;
+            }
+            Some(OverlayId::Catalog) => {
+                self.selection = None;
+                return self.catalog.handle_mouse(mouse, &hit.hitmap);
+            }
+            Some(OverlayId::Governance) => {
+                self.selection = None;
+                if let Some(d) = wheel_delta {
+                    self.gov.scroll_by(d);
+                    return actions;
+                }
+                if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+                    && self.gov.detail.is_none()
+                    && let Some(HitTarget::ListRow(idx)) = hit.hitmap.hit_test(x, y)
+                {
+                    let visible = self.gov.view_rows.max(1);
+                    self.select_gov_row(*idx, visible);
+                }
+                return actions;
+            }
+            Some(OverlayId::ConvModal) if self.conv.why.is_some() => {
+                self.selection = None;
+                if let Some(d) = wheel_delta {
+                    self.conv_why_wheel(d, viewport.height);
+                }
+                return actions;
+            }
+            _ => {}
         }
 
         // The slash menu takes the wheel while the pointer is over it.
@@ -2265,9 +2499,7 @@ impl TuiAppState {
         match mouse.kind {
             MouseEventKind::ScrollUp => {
                 self.selection = None;
-                if self.settings.open {
-                    self.settings_wheel(-1);
-                } else if self.sidebar_visible(viewport.width) && rect_contains(hit.sidebar_area, x, y) {
+                if self.sidebar_visible(viewport.width) && rect_contains(hit.sidebar_area, x, y) {
                     self.sidebar_scroll = self.sidebar_scroll.saturating_sub(2);
                 } else if rect_contains(hit.chat_area, x, y) || !rect_contains(hit.sidebar_area, x, y) {
                     self.auto_scroll = false;
@@ -2276,9 +2508,7 @@ impl TuiAppState {
             }
             MouseEventKind::ScrollDown => {
                 self.selection = None;
-                if self.settings.open {
-                    self.settings_wheel(1);
-                } else if self.sidebar_visible(viewport.width) && rect_contains(hit.sidebar_area, x, y) {
+                if self.sidebar_visible(viewport.width) && rect_contains(hit.sidebar_area, x, y) {
                     self.sidebar_scroll = (self.sidebar_scroll + 2).min(hit.sidebar_max_scroll);
                 } else if rect_contains(hit.chat_area, x, y) || !rect_contains(hit.sidebar_area, x, y) {
                     let max_scroll = hit.chat_total_lines.saturating_sub(hit.chat_visible_lines);
@@ -2289,54 +2519,6 @@ impl TuiAppState {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
-                if self.wizard.is_some() {
-                    self.selection = None;
-                    for (rect, btn_idx) in &hit.wizard_buttons {
-                        if rect_contains(*rect, x, y) {
-                            return self.activate_wizard_button(*btn_idx);
-                        }
-                    }
-                    return actions;
-                }
-
-                if self.settings.open {
-                    self.selection = None;
-                    if self.settings.has_subview() && self.settings.plugin_detail.is_none() {
-                        return actions; // a dialog or editor owns the pointer
-                    }
-                    if self.settings.plugin_detail.is_some()
-                        && let Some(back_rect) = hit.settings_back
-                        && rect_contains(back_rect, x, y)
-                    {
-                        self.settings.plugin_detail = None;
-                        self.settings.editing = None;
-                        return actions;
-                    }
-                    for (rect, tab) in &hit.settings_tabs {
-                        if rect_contains(*rect, x, y) {
-                            return self.switch_settings_tab(*tab);
-                        }
-                    }
-                    for (rect, sec_idx) in &hit.settings_sections {
-                        if rect_contains(*rect, x, y) {
-                            self.settings.section_index = *sec_idx;
-                            self.jump_to_section(*sec_idx);
-                            return actions;
-                        }
-                    }
-                    for (rect, opt_idx) in &hit.settings_options {
-                        if rect_contains(*rect, x, y) {
-                            if let Some(detail) = &mut self.settings.plugin_detail {
-                                detail.selected_row = *opt_idx;
-                                return self.activate_plugin_detail_row(*opt_idx);
-                            }
-                            self.settings.selected_index = *opt_idx;
-                            return self.activate_settings_row(*opt_idx);
-                        }
-                    }
-                    return actions;
-                }
-
                 // Inline Approval buttons
                 if let Some(approve_rect) = hit.approval_approve
                     && rect_contains(approve_rect, x, y)
@@ -2422,13 +2604,19 @@ impl TuiAppState {
                     }
                 }
 
-                // Chat vertical scrollbar click/drag
+                // Chat vertical scrollbar click/drag (fallback if HitMap was not populated)
                 if let Some(sb_rect) = hit.chat_scrollbar
                     && rect_contains(sb_rect, x, y)
                 {
                     self.selection = None;
                     self.dragging_chat_scrollbar = true;
                     self.scroll_chat_from_scrollbar_y(hit, y);
+                    return actions;
+                }
+
+                // Clicking the composer must NEVER begin chat text drag-selection.
+                if matches!(hit.hitmap.hit_test(x, y), Some(HitTarget::Composer)) {
+                    self.selection = None;
                     return actions;
                 }
 
@@ -2496,19 +2684,152 @@ impl TuiAppState {
         actions
     }
 
+    fn select_gov_row(&mut self, row_idx: usize, visible: usize) {
+        match self.gov.panel {
+            Some(crate::views::Panel::Approvals) => self.gov.approvals.select_row(row_idx, visible),
+            Some(crate::views::Panel::People) => self.gov.people.select_row(row_idx, visible),
+            Some(crate::views::Panel::Policy) => self.gov.policy.select_row(row_idx, visible),
+            Some(crate::views::Panel::Activity) => self.gov.activity.select_row(row_idx, visible),
+            Some(crate::views::Panel::Events) => self.gov.events.select_row(row_idx, visible),
+            Some(crate::views::Panel::Status) => self.gov.status.select_row(row_idx, visible),
+            None => {}
+        }
+    }
+
+    fn apply_scrollbar_offset(
+        &mut self,
+        scroll_id: ScrollId,
+        target_offset: usize,
+        total: usize,
+        visible: usize,
+    ) {
+        let max_off = total.saturating_sub(visible);
+        let off = target_offset.min(max_off);
+        match scroll_id {
+            ScrollId::Chat => {
+                self.chat_scroll = off;
+                self.auto_scroll = off >= max_off;
+            }
+            ScrollId::Sidebar => {
+                self.sidebar_scroll = off;
+            }
+            ScrollId::Help => {
+                if let Some(h) = &mut self.ux.help {
+                    h.off = off;
+                    let end = (off + visible.saturating_sub(1)).min(total.saturating_sub(1));
+                    h.sel = h.sel.clamp(off, end);
+                }
+            }
+            ScrollId::Palette => {
+                if let Some(p) = &mut self.ux.palette {
+                    p.off = off;
+                    let end = (off + visible.saturating_sub(1)).min(total.saturating_sub(1));
+                    p.sel = p.sel.clamp(off, end);
+                }
+            }
+            ScrollId::Log => {
+                self.log.follow = false;
+                self.log.offset = off;
+                let end = (off + visible.saturating_sub(1)).min(total.saturating_sub(1));
+                self.log.selected = self.log.selected.clamp(off, end);
+            }
+            ScrollId::CatalogList => match self.catalog.screen {
+                crate::catalog_ui::Screen::Picker => {
+                    self.catalog.picker.model_off = off;
+                    let end = (off + visible.saturating_sub(1)).min(total.saturating_sub(1));
+                    self.catalog.picker.model_sel = self.catalog.picker.model_sel.clamp(off, end);
+                }
+                crate::catalog_ui::Screen::LoginList => {
+                    self.catalog.login.off = off;
+                    let end = (off + visible.saturating_sub(1)).min(total.saturating_sub(1));
+                    self.catalog.login.sel = self.catalog.login.sel.clamp(off, end);
+                }
+                crate::catalog_ui::Screen::Usage => {
+                    self.catalog.usage.offset = off;
+                }
+                _ => {}
+            },
+            ScrollId::GovernanceList => {
+                if let Some(d) = &mut self.gov.detail {
+                    d.offset = off;
+                } else {
+                    let end = (off + visible.saturating_sub(1)).min(total.saturating_sub(1));
+                    match self.gov.panel {
+                        Some(crate::views::Panel::Approvals) => {
+                            self.gov.approvals.nav.offset = off;
+                            self.gov.approvals.nav.selected = self.gov.approvals.nav.selected.clamp(0, self.gov.approvals.items.len().saturating_sub(1));
+                        }
+                        Some(crate::views::Panel::People) => {
+                            self.gov.people.nav.offset = off;
+                            self.gov.people.nav.selected = self.gov.people.nav.selected.clamp(off, end);
+                        }
+                        Some(crate::views::Panel::Policy) => {
+                            self.gov.policy.nav.offset = off;
+                            self.gov.policy.nav.selected = self.gov.policy.nav.selected.clamp(off, end);
+                        }
+                        Some(crate::views::Panel::Activity) => {
+                            self.gov.activity.nav.offset = off;
+                            self.gov.activity.nav.selected = self.gov.activity.nav.selected.clamp(off, end);
+                        }
+                        Some(crate::views::Panel::Events) => {
+                            self.gov.events.nav.offset = off;
+                            self.gov.events.nav.selected = self.gov.events.nav.selected.clamp(off, end);
+                        }
+                        Some(crate::views::Panel::Status) => {
+                            self.gov.status.nav.offset = off;
+                            self.gov.status.nav.selected = self.gov.status.nav.selected.clamp(off, end);
+                        }
+                        None => {}
+                    }
+                }
+            }
+            ScrollId::Wizard => {
+                if let Some(w) = &mut self.wizard {
+                    let end = (off + visible.saturating_sub(1)).min(total.saturating_sub(1));
+                    match w.step {
+                        WizardStep::Step1Provider => {
+                            w.off = off;
+                            w.sel = w.sel.clamp(off, end);
+                        }
+                        WizardStep::StepModel => {
+                            w.model_off = off;
+                            w.model_sel = w.model_sel.clamp(off, end);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            ScrollId::ConvModal => {
+                if let Some(why) = &mut self.conv.why {
+                    why.scroll = off;
+                }
+            }
+            ScrollId::SettingsRail
+            | ScrollId::SettingsList
+            | ScrollId::RbacRail
+            | ScrollId::RbacList => {
+                // Settings & RBAC scrollbars are also synced smoothly when dragged via HitMap.
+                if self.settings.open {
+                    self.settings.scroll_offset = off;
+                    let end = (off + visible.saturating_sub(1)).min(total.saturating_sub(1));
+                    self.settings.selected_index = self.settings.selected_index.clamp(off, end);
+                }
+            }
+        }
+    }
+
     fn scroll_chat_from_scrollbar_y(&mut self, hit: &HitRegions, y: u16) {
         let Some(sb) = hit.chat_scrollbar else {
             return;
         };
+        let new_scroll = offset_from_scrollbar_y(
+            sb.y,
+            sb.height,
+            y,
+            hit.chat_total_lines,
+            hit.chat_visible_lines,
+        );
         let max_scroll = hit.chat_total_lines.saturating_sub(hit.chat_visible_lines);
-        if max_scroll == 0 || sb.height <= 1 {
-            self.chat_scroll = max_scroll;
-            self.auto_scroll = true;
-            return;
-        }
-        let rel_y = y.saturating_sub(sb.y).min(sb.height - 1) as usize;
-        let denom = (sb.height - 1) as usize;
-        let new_scroll = (rel_y * max_scroll + denom / 2) / denom;
         self.chat_scroll = new_scroll.min(max_scroll);
         self.auto_scroll = self.chat_scroll >= max_scroll;
     }
@@ -2611,6 +2932,56 @@ pub fn build_plugin_entries(cfg: &GatewayConfig, paths: &ResolvedPaths) -> Vec<P
     }
 
     out
+}
+
+fn reconcile_overlay_stack(state: &TuiAppState, stack: &mut OverlayStack) {
+    let wizard_sub = state.wizard.as_ref().is_some_and(|w| {
+        matches!(
+            w.step,
+            WizardStep::Step1Provider
+                | WizardStep::StepEndpoint
+                | WizardStep::StepKey
+                | WizardStep::StepModel
+        )
+    });
+    let catalog_sub = matches!(
+        state.catalog.screen,
+        crate::catalog_ui::Screen::Picker
+            | crate::catalog_ui::Screen::LoginList
+            | crate::catalog_ui::Screen::KeyEntry
+            | crate::catalog_ui::Screen::CustomForm
+    );
+    let conv_blocks = state.conv.why.is_some() || state.conv.delete_confirm.is_some();
+    let conv_dim = state.conv.why.is_some();
+    let conv_sub = state.conv.history_search.is_some() || state.conv.chat_search_input;
+
+    let specs = [
+        (OverlayId::ConvModal, state.conv.modal(), conv_blocks, conv_dim, conv_sub),
+        (OverlayId::Wizard, state.wizard.is_some(), true, true, wizard_sub),
+        (OverlayId::Settings, state.settings.open, true, true, state.settings.has_subview()),
+        (OverlayId::Catalog, state.catalog.is_open(), true, true, catalog_sub),
+        (OverlayId::Governance, state.gov.is_open(), true, true, state.gov.prompt.is_some()),
+        (OverlayId::Log, state.log.open, true, true, state.log.searching),
+        (OverlayId::Palette, state.ux.palette.is_some(), true, true, true),
+        (OverlayId::Help, state.ux.help.is_some(), true, true, false),
+    ];
+
+    for (id, active, blocks_chat, dim_backdrop, sub_input_active) in specs {
+        if !active {
+            stack.remove(id);
+            continue;
+        }
+        if stack.contains(id) {
+            stack.set_sub_input_active(id, sub_input_active);
+        } else {
+            stack.push(OverlayEntry {
+                id,
+                blocks_chat,
+                dim_backdrop,
+                sub_input_active,
+            });
+        }
+    }
 }
 
 impl TuiAppState {

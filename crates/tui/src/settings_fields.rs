@@ -8,7 +8,9 @@ use monoagens_gateway::{EmbedBackendKind, GatewayConfig};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
-use crate::config::{IconMode, MessageLayout, MotionMode, ShimmerMode, SidebarMode, TuiPreferences};
+use crate::config::{
+    IconMode, MessageLayout, MotionMode, ShimmerMode, SidebarMode, TuiPreferences,
+};
 use crate::list_editor::NumberSpec;
 use crate::selector::SelectOption;
 use crate::theme::ThemePreset;
@@ -39,14 +41,38 @@ pub enum Edit {
 
 /// One valve toggle: id suffix, label, what it switches.
 pub const VALVE_TOGGLES: [(&str, &str); 8] = [
-    ("cedar_abac", "Evaluates the Cedar policy rules (attribute-based access) on every action; off skips them."),
-    ("line2_scope", "Keeps replies inside the audience of the message that caused them (Line 2 visibility boundary)."),
-    ("taint_blocking", "Quarantines content from untrusted sources at all three doors so it cannot trigger actions."),
-    ("pending_approval", "Holds high-risk actions until the owner approves them instead of running them at once."),
-    ("budget_guard", "Stops model calls once the daily token budget (Model tab) is used up."),
-    ("chain_brake", "Stops a chain of self-triggered wakes after the limit set by max_chain_wakes."),
-    ("quiet_hours", "Holds non-urgent outbound notifications during quiet hours (for example 23:00-07:00)."),
-    ("proactive_cap", "Caps unsolicited proactive notifications per day."),
+    (
+        "cedar_abac",
+        "Evaluates the Cedar policy rules (attribute-based access) on every action; off skips them.",
+    ),
+    (
+        "line2_scope",
+        "Keeps replies inside the audience of the message that caused them (Line 2 visibility boundary).",
+    ),
+    (
+        "taint_blocking",
+        "Quarantines content from untrusted sources at all three doors so it cannot trigger actions.",
+    ),
+    (
+        "pending_approval",
+        "Holds high-risk actions until the owner approves them instead of running them at once.",
+    ),
+    (
+        "budget_guard",
+        "Stops model calls once the daily token budget (Model tab) is used up.",
+    ),
+    (
+        "chain_brake",
+        "Stops a chain of self-triggered wakes after the limit set by max_chain_wakes.",
+    ),
+    (
+        "quiet_hours",
+        "Holds non-urgent outbound notifications during quiet hours (for example 23:00-07:00).",
+    ),
+    (
+        "proactive_cap",
+        "Caps unsolicited proactive notifications per day.",
+    ),
 ];
 
 /// Description of a valve toggle (C2).
@@ -56,6 +82,12 @@ pub fn valve_toggle_description(key: &str) -> &'static str {
         .iter()
         .find(|(k, _)| *k == key)
         .map_or("", |(_, d)| *d)
+}
+
+/// Human-friendly `Friendly Label (tech.id)` for a valve toggle key.
+#[must_use]
+pub fn valve_toggle_label(key: &str) -> crate::core::labels::FriendlyLabel {
+    crate::core::labels::friendly_valve_toggle(key)
 }
 
 fn serde_str<T: Serialize>(v: &T) -> String {
@@ -96,7 +128,11 @@ pub fn select_spec(id: &str, ctx: &SelectCtx<'_>) -> Option<(Vec<SelectOption>, 
             serde_str(&p.theme),
         ),
         "tui.message_layout" => (
-            cycle(MessageLayout::Chat, MessageLayout::next, MessageLayout::label),
+            cycle(
+                MessageLayout::Chat,
+                MessageLayout::next,
+                MessageLayout::label,
+            ),
             serde_str(&p.message_layout),
         ),
         "tui.sidebar" => (
@@ -116,17 +152,36 @@ pub fn select_spec(id: &str, ctx: &SelectCtx<'_>) -> Option<(Vec<SelectOption>, 
             serde_str(&p.icons),
         ),
         "tui.conv.notifications" => (
-            cycle(crate::notify::NotifyMode::Off, crate::notify::NotifyMode::next, crate::notify::NotifyMode::label),
+            cycle(
+                crate::notify::NotifyMode::Off,
+                crate::notify::NotifyMode::next,
+                crate::notify::NotifyMode::label,
+            ),
             serde_str(&p.conv.notifications),
         ),
         "embed.backend" => (
             [
                 (EmbedBackendKind::None, "No pre-queue embedding"),
-                (EmbedBackendKind::Hash, "Deterministic hash embedder (no model needed)"),
-                (EmbedBackendKind::EmbeddingGemma2Http, "EmbeddingGemma 2 sidecar over HTTP"),
-                (EmbedBackendKind::EmbeddingGemma2Stdio, "EmbeddingGemma 2 sidecar over stdio"),
-                (EmbedBackendKind::EmbeddingGemma2Remote, "Remote OpenAI-style embeddings of EmbeddingGemma 2"),
-                (EmbedBackendKind::OpenAiCompatible, "OpenAI-compatible embeddings endpoint"),
+                (
+                    EmbedBackendKind::Hash,
+                    "Deterministic hash embedder (no model needed)",
+                ),
+                (
+                    EmbedBackendKind::EmbeddingGemma2Http,
+                    "EmbeddingGemma 2 sidecar over HTTP",
+                ),
+                (
+                    EmbedBackendKind::EmbeddingGemma2Stdio,
+                    "EmbeddingGemma 2 sidecar over stdio",
+                ),
+                (
+                    EmbedBackendKind::EmbeddingGemma2Remote,
+                    "Remote OpenAI-style embeddings of EmbeddingGemma 2",
+                ),
+                (
+                    EmbedBackendKind::OpenAiCompatible,
+                    "OpenAI-compatible embeddings endpoint",
+                ),
             ]
             .iter()
             .map(|(k, d)| SelectOption::plain(k.as_str(), d))
@@ -135,7 +190,10 @@ pub fn select_spec(id: &str, ctx: &SelectCtx<'_>) -> Option<(Vec<SelectOption>, 
         ),
         "valve.mode" => (
             vec![
-                SelectOption::plain("enforcing", "Every rule applies; denied actions are blocked"),
+                SelectOption::plain(
+                    "enforcing",
+                    "Every rule applies; denied actions are blocked",
+                ),
                 SelectOption::plain("partial", "Rules apply but some holds are relaxed"),
                 SelectOption::plain("off", "No enforcement (testing only)"),
             ],
@@ -144,7 +202,10 @@ pub fn select_spec(id: &str, ctx: &SelectCtx<'_>) -> Option<(Vec<SelectOption>, 
         "model.output_limit_param" => (
             vec![
                 SelectOption::plain("max_tokens", "Classic chat-completions parameter"),
-                SelectOption::plain("max_completion_tokens", "Newer parameter required by reasoning models"),
+                SelectOption::plain(
+                    "max_completion_tokens",
+                    "Newer parameter required by reasoning models",
+                ),
             ],
             ctx.cfg.model.output_limit_param.clone(),
         ),
@@ -187,9 +248,9 @@ pub fn number_spec(id: &str) -> Option<NumberSpec> {
         "model.daily_token_budget" => NumberSpec::int(1, i64::MAX),
         "model.max_output_tokens" => NumberSpec::int(1, 10_000_000),
         "model.temperature" => NumberSpec::float(0.0, 2.0),
-        "model.output_limits.reason" | "model.output_limits.classify" | "model.output_limits.consolidate" => {
-            NumberSpec::int(1, 1_000_000)
-        }
+        "model.output_limits.reason"
+        | "model.output_limits.classify"
+        | "model.output_limits.consolidate" => NumberSpec::int(1, 1_000_000),
         "valve.max_chain_wakes" => NumberSpec::int(1, 1_000),
         "embed.dim_d" => NumberSpec::int(1, 8_192),
         "embed.timeout_ms" => NumberSpec::int(1, 600_000),
@@ -250,7 +311,10 @@ pub fn check_path(raw: &str, must_exist: bool) -> Result<(), String> {
     } else if let Some(parent) = p.parent().filter(|d| !d.as_os_str().is_empty())
         && !parent.exists()
     {
-        return Err(format!("parent directory does not exist: {}", parent.display()));
+        return Err(format!(
+            "parent directory does not exist: {}",
+            parent.display()
+        ));
     }
     Ok(())
 }
@@ -298,7 +362,8 @@ pub fn config_patch(id: &str, edit: &Edit) -> Result<Value, String> {
             if raw.trim().is_empty() && is_optional(id) {
                 Value::Null
             } else {
-                let spec = number_spec(id).ok_or_else(|| format!("'{id}' is not a number field"))?;
+                let spec =
+                    number_spec(id).ok_or_else(|| format!("'{id}' is not a number field"))?;
                 num_json(spec, spec.validate(raw)?)
             }
         }
@@ -308,7 +373,11 @@ pub fn config_patch(id: &str, edit: &Edit) -> Result<Value, String> {
     Ok(nested(&path, value))
 }
 
-fn map_patch(id: &str, old: &[(String, String)], new: &[(String, String)]) -> Result<Value, String> {
+fn map_patch(
+    id: &str,
+    old: &[(String, String)],
+    new: &[(String, String)],
+) -> Result<Value, String> {
     let mut table = Map::new();
     for (k, _) in old {
         if !new.iter().any(|(nk, _)| nk == k) {
@@ -318,15 +387,17 @@ fn map_patch(id: &str, old: &[(String, String)], new: &[(String, String)]) -> Re
     for (k, v) in new {
         let val = match id {
             "model.prices" => {
-                let (i, o) = v
-                    .split_once(',')
-                    .ok_or_else(|| format!("price for '{k}' must be 'input,output' (USD per million tokens)"))?;
+                let (i, o) = v.split_once(',').ok_or_else(|| {
+                    format!("price for '{k}' must be 'input,output' (USD per million tokens)")
+                })?;
                 let parse = |s: &str| {
                     s.trim()
                         .parse::<f64>()
                         .ok()
                         .filter(|n| n.is_finite() && *n >= 0.0)
-                        .ok_or_else(|| format!("price '{}' for '{k}' must be a number >= 0", s.trim()))
+                        .ok_or_else(|| {
+                            format!("price '{}' for '{k}' must be a number >= 0", s.trim())
+                        })
                 };
                 json!({ "input_per_mtok": parse(i)?, "output_per_mtok": parse(o)? })
             }
@@ -341,7 +412,9 @@ fn map_patch(id: &str, old: &[(String, String)], new: &[(String, String)]) -> Re
 /// Applies a `tui.*` edit to a copy of `prefs` through its serde form (so the editor can never
 /// write a value `tui.toml` would refuse to read).
 pub fn apply_pref(prefs: &TuiPreferences, id: &str, edit: &Edit) -> Result<TuiPreferences, String> {
-    let key = id.strip_prefix("tui.").ok_or_else(|| format!("'{id}' is not a tui.toml key"))?;
+    let key = id
+        .strip_prefix("tui.")
+        .ok_or_else(|| format!("'{id}' is not a tui.toml key"))?;
     let mut table = toml::Table::try_from(prefs).map_err(|e| e.to_string())?;
     let new = match edit {
         Edit::Toggle(b) => toml::Value::Boolean(*b),
@@ -390,14 +463,38 @@ pub fn tui_keys() -> Vec<String> {
 
 /// Configuration keys that deliberately have no settings row, each with the reason.
 pub const COVERAGE_EXCLUSIONS: &[(&str, &str)] = &[
-    ("version", "schema version; changing it would make the file unreadable"),
-    ("bodies", "legacy [[bodies]] alias of [plugins.<id>]; plugins are edited on the Plugins tab"),
-    ("identity.heuristic_merge_enabled", "invariant-locked to false (identity merges are never heuristic)"),
-    ("identity.owner_escalation_guard", "invariant-locked to true (Absolute Line 1)"),
-    ("person.id", "alias of person.actor_id; the RBAC editor writes actor_id"),
-    ("person.is_owner", "alias of person.owner; the owner flag is not editable here (invariant: owner identity)"),
-    ("attachment_master_key", "generated key; rotating it orphans stored attachments (set MONOAGENS_ATTACHMENT_MASTER_KEY)"),
-    ("attestation_key", "generated key; rotating it invalidates pending approvals (set MONOAGENS_APPROVAL_ATTESTATION_KEY)"),
+    (
+        "version",
+        "schema version; changing it would make the file unreadable",
+    ),
+    (
+        "bodies",
+        "legacy [[bodies]] alias of [plugins.<id>]; plugins are edited on the Plugins tab",
+    ),
+    (
+        "identity.heuristic_merge_enabled",
+        "invariant-locked to false (identity merges are never heuristic)",
+    ),
+    (
+        "identity.owner_escalation_guard",
+        "invariant-locked to true (Absolute Line 1)",
+    ),
+    (
+        "person.id",
+        "alias of person.actor_id; the RBAC editor writes actor_id",
+    ),
+    (
+        "person.is_owner",
+        "alias of person.owner; the owner flag is not editable here (invariant: owner identity)",
+    ),
+    (
+        "attachment_master_key",
+        "generated key; rotating it orphans stored attachments (set MONOAGENS_ATTACHMENT_MASTER_KEY)",
+    ),
+    (
+        "attestation_key",
+        "generated key; rotating it invalidates pending approvals (set MONOAGENS_APPROVAL_ATTESTATION_KEY)",
+    ),
 ];
 
 /// Keys edited by a dedicated editor instead of a flat row: key pattern -> editor.
@@ -427,15 +524,39 @@ pub const EDITOR_COVERAGE: &[(&str, &str)] = &[
     ("places.<place>.allow", "rbac places"),
     ("places.<place>.deny", "rbac places"),
     ("permission_bases.<capability>", "rbac permission bases"),
-    ("model.extra_headers.<name>", "model tab map row model.extra_headers"),
-    ("model.prices.<id>.input_per_mtok", "model tab map row model.prices"),
-    ("model.prices.<id>.output_per_mtok", "model tab map row model.prices"),
+    (
+        "model.extra_headers.<name>",
+        "model tab map row model.extra_headers",
+    ),
+    (
+        "model.prices.<id>.input_per_mtok",
+        "model tab map row model.prices",
+    ),
+    (
+        "model.prices.<id>.output_per_mtok",
+        "model tab map row model.prices",
+    ),
     ("env.<NAME>", "providers tab [env] secret rows"),
-    ("providers.enabled", "provider page: enable a local provider"),
-    ("providers.custom.<name>.base_url", "provider page: Add custom provider"),
-    ("providers.custom.<name>.dialect", "provider page: Add custom provider"),
-    ("providers.custom.<name>.keyless", "provider page: Add custom provider"),
-    ("providers.<id>.api_key", "providers tab provider page and /provider"),
+    (
+        "providers.enabled",
+        "provider page: enable a local provider",
+    ),
+    (
+        "providers.custom.<name>.base_url",
+        "provider page: Add custom provider",
+    ),
+    (
+        "providers.custom.<name>.dialect",
+        "provider page: Add custom provider",
+    ),
+    (
+        "providers.custom.<name>.keyless",
+        "provider page: Add custom provider",
+    ),
+    (
+        "providers.<id>.api_key",
+        "providers tab provider page and /provider",
+    ),
 ];
 
 #[cfg(test)]
@@ -449,16 +570,22 @@ mod tests {
             json!({"valve": {"cedar_abac": false}})
         );
         assert_eq!(
-            config_patch("model.output_limit_param", &Edit::Select("max_completion_tokens".into())).unwrap(),
+            config_patch(
+                "model.output_limit_param",
+                &Edit::Select("max_completion_tokens".into())
+            )
+            .unwrap(),
             json!({"model": {"output_limit_param": "max_completion_tokens"}})
         );
         assert_eq!(
             config_patch("model.temperature", &Edit::Number("0.755".into())).unwrap(),
             json!({"model": {"temperature": 0.76}})
         );
-        assert!(config_patch("runtime.hook_timeout_ms", &Edit::Number("70000".into()))
-            .unwrap_err()
-            .contains("1..=60000"));
+        assert!(
+            config_patch("runtime.hook_timeout_ms", &Edit::Number("70000".into()))
+                .unwrap_err()
+                .contains("1..=60000")
+        );
         assert_eq!(
             config_patch("embed.args", &Edit::List(vec!["--a".into(), "--b".into()])).unwrap(),
             json!({"embed": {"args": ["--a", "--b"]}})
@@ -472,7 +599,10 @@ mod tests {
 
     #[test]
     fn map_patch_nulls_removed_keys() {
-        let old = vec![("A".to_owned(), "1".to_owned()), ("B".to_owned(), "2".to_owned())];
+        let old = vec![
+            ("A".to_owned(), "1".to_owned()),
+            ("B".to_owned(), "2".to_owned()),
+        ];
         let new = vec![("B".to_owned(), "3".to_owned())];
         assert_eq!(
             config_patch("model.extra_headers", &Edit::Map { old, new }).unwrap(),
@@ -480,16 +610,37 @@ mod tests {
         );
         let price = config_patch(
             "model.prices",
-            &Edit::Map { old: vec![], new: vec![("groq/x".into(), "0.5, 1.5".into())] },
+            &Edit::Map {
+                old: vec![],
+                new: vec![("groq/x".into(), "0.5, 1.5".into())],
+            },
         )
         .unwrap();
-        assert_eq!(price["model"]["prices"]["groq/x"]["output_per_mtok"], json!(1.5));
-        assert!(config_patch("model.prices", &Edit::Map { old: vec![], new: vec![("k".into(), "1".into())] }).is_err());
+        assert_eq!(
+            price["model"]["prices"]["groq/x"]["output_per_mtok"],
+            json!(1.5)
+        );
+        assert!(
+            config_patch(
+                "model.prices",
+                &Edit::Map {
+                    old: vec![],
+                    new: vec![("k".into(), "1".into())]
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn path_rule_checks_existence() {
-        assert!(config_patch("soul.model_path", &Edit::Path("/definitely/not/here.safetensors".into())).is_err());
+        assert!(
+            config_patch(
+                "soul.model_path",
+                &Edit::Path("/definitely/not/here.safetensors".into())
+            )
+            .is_err()
+        );
         assert!(config_patch("soul.model_path", &Edit::Path(String::new())).is_ok());
     }
 

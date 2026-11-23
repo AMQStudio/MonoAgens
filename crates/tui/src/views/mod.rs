@@ -9,6 +9,7 @@ pub mod approvals;
 pub mod events;
 pub mod people;
 pub mod policy;
+pub mod rbac;
 pub mod status;
 
 use std::collections::BTreeSet;

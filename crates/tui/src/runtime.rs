@@ -441,6 +441,16 @@ async fn connect_gateway(
                         is_error: false,
                     },
                 );
+                for action in [
+                    crate::settings_runtime::SettingsAction::LoadConfigSnapshot,
+                    crate::settings_runtime::SettingsAction::LoadRbacHints,
+                ] {
+                    tokio::spawn(crate::settings_runtime::run_settings_action(
+                        action,
+                        Arc::clone(&client),
+                        inputs.tx.clone(),
+                    ));
+                }
             }
             Some(client)
         }
@@ -537,9 +547,26 @@ async fn run_tui_event_loop(
             maybe_ev = key_rx.recv() => {
                 let Some(ev) = maybe_ev else { break; };
                 let viewport = terminal.size().map(|s| ratatui::layout::Rect::new(0, 0, s.width, s.height)).unwrap_or_default();
+                let was_settings_open = state.settings.open;
                 let outcome = state.handle_terminal_event(ev, &hit, viewport);
                 needs_redraw = outcome.redraw;
                 let mut redraw = if outcome.clear { Redraw::Clear } else { Redraw::None };
+                if !was_settings_open
+                    && state.settings.open
+                    && let Some(c) = client.as_ref()
+                    && c.kind() == ClientKind::Attached
+                {
+                    for action in [
+                        crate::settings_runtime::SettingsAction::LoadConfigSnapshot,
+                        crate::settings_runtime::SettingsAction::LoadRbacHints,
+                    ] {
+                        tokio::spawn(crate::settings_runtime::run_settings_action(
+                            action,
+                            Arc::clone(c),
+                            tx.clone(),
+                        ));
+                    }
+                }
                 for action in outcome.actions {
                     let r = handle_app_action(
                         action,
@@ -697,17 +724,51 @@ async fn handle_app_action(
             guard.set_mouse_capture(enabled);
         }
         AppAction::CompleteSetupWizard | AppAction::RetryBoot => {
-            if client.is_none() && reload_config(state, loaded, options) {
+            let mut inputs = BootInputs {
+                loaded,
+                options,
+                provider_override,
+                tx,
+            };
+            try_boot_after_reload(state, &mut inputs, client, follower).await;
+        }
+        AppAction::ReloadConfig => {
+            if let Some(c) = client.as_ref() {
+                match c.config_reload().await {
+                    Ok(v) => {
+                        state.reload_config_from_disk();
+                        if let Ok(plugins) = c.plugins_list().await {
+                            for p in plugins {
+                                state.set_plugin_state(&p.id, plugin_info_state(&p));
+                            }
+                        }
+                        for action in [
+                            crate::settings_runtime::SettingsAction::LoadConfigSnapshot,
+                            crate::settings_runtime::SettingsAction::LoadRbacHints,
+                        ] {
+                            tokio::spawn(crate::settings_runtime::run_settings_action(
+                                action,
+                                Arc::clone(c),
+                                tx.clone(),
+                            ));
+                        }
+                        state.set_toast(format_reload_toast(&v), false);
+                    }
+                    Err(e) => {
+                        state.set_toast(format!("Reload failed: {e}"), true);
+                    }
+                }
+            } else if state.config_error.is_some() {
                 let mut inputs = BootInputs {
                     loaded,
                     options,
                     provider_override,
                     tx,
                 };
-                *client = connect_gateway(state, &mut inputs, follower).await;
-                if client.is_some() {
-                    state.set_toast("Gateway booted", false);
-                }
+                try_boot_after_reload(state, &mut inputs, client, follower).await;
+            } else {
+                state.reload_config_from_disk();
+                state.set_toast("Reloaded config from disk", false);
             }
         }
         AppAction::Catalog(action) => match client.as_ref() {
@@ -1024,35 +1085,90 @@ async fn handle_app_action(
             suspend_process(guard);
             needs_full_redraw = Redraw::Clear;
         }
-        AppAction::PasteFromClipboard => match read_clipboard_image_or_text() {
-            Some(ClipboardContent::ImagePng(bytes)) => {
-                let dims = parse_image_dimensions(&bytes);
-                let byte_len = bytes.len();
-                let att = PendingAttachment {
-                    id: 0,
-                    kind: PendingAttachmentKind::Image {
-                        width: dims.map(|d| d.0),
-                        height: dims.map(|d| d.1),
-                        mime: "image/png".to_owned(),
-                    },
-                    label: "clipboard.png".to_owned(),
-                    source_path: None,
-                    bytes: Some(bytes),
-                    byte_len,
-                };
-                let id = state.composer.add_attachment(att);
-                state.filter_autocomplete();
-                state.set_toast(format!("Attached clipboard image #{id}"), false);
+        AppAction::PasteFromClipboard => {
+            if state.has_open_overlay() {
+                use crate::core::input::{ClipboardPort, SystemClipboard};
+                match SystemClipboard.read_text() {
+                    Ok(Some(text)) => {
+                        let _ = state.handle_paste(&text);
+                    }
+                    Ok(None) => {
+                        state.set_toast("Clipboard has no text or is unavailable", false);
+                    }
+                    Err(err) => {
+                        state.set_toast(format!("Clipboard read failed: {err}"), true);
+                    }
+                }
+            } else {
+                match read_clipboard_image_or_text() {
+                    Some(ClipboardContent::ImagePng(bytes)) => {
+                        let dims = parse_image_dimensions(&bytes);
+                        let byte_len = bytes.len();
+                        let att = PendingAttachment {
+                            id: 0,
+                            kind: PendingAttachmentKind::Image {
+                                width: dims.map(|d| d.0),
+                                height: dims.map(|d| d.1),
+                                mime: "image/png".to_owned(),
+                            },
+                            label: "clipboard.png".to_owned(),
+                            source_path: None,
+                            bytes: Some(bytes),
+                            byte_len,
+                        };
+                        let id = state.composer.add_attachment(att);
+                        state.filter_autocomplete();
+                        state.set_toast(format!("Attached clipboard image #{id}"), false);
+                    }
+                    Some(ClipboardContent::Text(text)) => {
+                        let _ = state.handle_paste(&text);
+                    }
+                    None => {
+                        state.set_toast("Clipboard is empty or unavailable", false);
+                    }
+                }
             }
-            Some(ClipboardContent::Text(text)) => {
-                let _ = state.handle_paste(&text);
-            }
-            None => {
-                state.set_toast("Clipboard is empty or unavailable", false);
-            }
-        },
+        }
     }
     needs_full_redraw
+}
+
+fn format_reload_toast(v: &serde_json::Value) -> String {
+    let valve = v
+        .pointer("/reloaded/valve")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let plugins = v
+        .pointer("/reloaded/plugins")
+        .and_then(serde_json::Value::as_array)
+        .map(|arr| {
+            let names: Vec<&str> = arr.iter().filter_map(serde_json::Value::as_str).collect();
+            if names.is_empty() {
+                "none".to_owned()
+            } else {
+                names.join(",")
+            }
+        })
+        .unwrap_or_else(|| "none".to_owned());
+    let provider = v
+        .pointer("/reloaded/provider")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    format!("Reloaded config (valve={valve}, plugins={plugins}, provider={provider})")
+}
+
+async fn try_boot_after_reload(
+    state: &mut TuiAppState,
+    inputs: &mut BootInputs<'_>,
+    client: &mut Option<Arc<dyn GatewayClient>>,
+    follower: &mut LogFollower,
+) {
+    if client.is_none() && reload_config(state, inputs.loaded, inputs.options) {
+        *client = connect_gateway(state, inputs, follower).await;
+        if client.is_some() {
+            state.set_toast("Gateway booted", false);
+        }
+    }
 }
 
 /// Reloads the config for a wizard completion or `/retry`. Returns `true` when the gateway

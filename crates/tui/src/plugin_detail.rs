@@ -8,22 +8,28 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use serde_json::{Value, json};
+use unicode_width::UnicodeWidthStr;
 
 use monoagens_gateway::{BodyTransportConfig, PluginKind};
 
 use crate::config::{
-    DynamicTomlDoc, DynamicTomlValue, config_dir_from_path, discover_builtin_binary, find_builtin_preset,
+    DynamicTomlDoc, DynamicTomlValue, config_dir_from_path, discover_builtin_binary,
+    find_builtin_preset,
 };
+use crate::core::hitmap::{HitMap, HitTarget, ScrollId};
+use crate::core::overlay::{OverlayId, is_key_press};
+use crate::core::theme::{ThemePalette, render_dimmed_backdrop};
+use crate::core::viewport::scroll_offset_for_row;
 use crate::list_editor::ItemEditor;
 use crate::selector::{SelectOption, Selector};
 use crate::settings::{
-    ConfirmAction, ConfirmState, InlineEditState, InlineEditTarget, InstallFlow, PluginDetailState, PluginUiState,
-    SettingRow, SettingValueKind,
+    ConfirmAction, ConfirmState, InlineEditState, InlineEditTarget, InstallFlow, PluginDetailState,
+    PluginUiState, SettingRow, SettingValueKind,
 };
 use crate::settings_runtime::SettingsAction;
 use crate::state::{AppAction, HitRegions, TuiAppState};
-use crate::theme::ThemePalette;
-use crate::ui_util::{ListRow, boxed, centered, fill, render_list, trunc};
+use crate::ui_util::{boxed, centered, fill, trunc};
+use crate::widgets::scrollbar::render_vertical_scrollbar;
 
 /// Plugins whose binary has a `pair` subcommand.
 #[must_use]
@@ -59,7 +65,11 @@ impl TuiAppState {
     /// Secrets the plugin needs: env names from its configured (or preset) arguments.
     #[must_use]
     pub fn required_secrets(&self, plugin_id: &str) -> Vec<String> {
-        let configured = self.gateway_cfg.effective_plugins().into_iter().find(|p| p.id == plugin_id);
+        let configured = self
+            .gateway_cfg
+            .effective_plugins()
+            .into_iter()
+            .find(|p| p.id == plugin_id);
         let args: Vec<String> = match configured.map(|p| p.transport) {
             Some(BodyTransportConfig::Stdio { args, .. }) => args,
             _ => find_builtin_preset(plugin_id)
@@ -72,7 +82,8 @@ impl TuiAppState {
     /// Whether `name` is set in `secrets.toml [env]` or the process environment.
     #[must_use]
     pub fn secret_is_set(&self, name: &str) -> bool {
-        self.secrets_summary.env_keys.iter().any(|k| k == name) || std::env::var_os(name).is_some_and(|v| !v.is_empty())
+        self.secrets_summary.env_keys.iter().any(|k| k == name)
+            || std::env::var_os(name).is_some_and(|v| !v.is_empty())
     }
 
     /// Last `n` stderr lines of a plugin from the runtime log.
@@ -128,19 +139,53 @@ impl TuiAppState {
         let (state_text, running) = match entry.map(|p| &p.state) {
             Some(PluginUiState::Failed(why)) => (format!("{} failed: {why}", "●"), false),
             Some(s @ PluginUiState::NeedsSetup(_)) => (
-                format!("{} {} - {}", s.dot_glyph(), s.label(), s.fix_hint().unwrap_or("")),
+                format!(
+                    "{} {} - {}",
+                    s.dot_glyph(),
+                    s.label(),
+                    s.fix_hint().unwrap_or("")
+                ),
                 false,
             ),
             Some(s) => (
                 format!("{} {}", s.dot_glyph(), s.label()),
-                matches!(s, PluginUiState::Running | PluginUiState::Starting | PluginUiState::RunningElsewhere),
+                matches!(
+                    s,
+                    PluginUiState::Running
+                        | PluginUiState::Starting
+                        | PluginUiState::RunningElsewhere
+                ),
             ),
             None => ("not installed".to_owned(), false),
         };
-        rows.push(row("pd:status", "State", "Live state with the failure reason", V::ReadOnly(state_text)));
-        rows.push(row("pd:start", "[ Start ]", "Start the plugin process", V::Action(if running { "running".to_owned() } else { "Start".to_owned() })));
-        rows.push(row("pd:stop", "[ Stop ]", "Stop the plugin process", V::Action("Stop".to_owned())));
-        rows.push(row("pd:restart", "[ Restart ]", "Stop, then start the plugin", V::Action("Restart".to_owned())));
+        rows.push(row(
+            "pd:status",
+            "State",
+            "Live state with the failure reason",
+            V::ReadOnly(state_text),
+        ));
+        rows.push(row(
+            "pd:start",
+            "[ Start ]",
+            "Start the plugin process",
+            V::Action(if running {
+                "running".to_owned()
+            } else {
+                "Start".to_owned()
+            }),
+        ));
+        rows.push(row(
+            "pd:stop",
+            "[ Stop ]",
+            "Stop the plugin process",
+            V::Action("Stop".to_owned()),
+        ));
+        rows.push(row(
+            "pd:restart",
+            "[ Restart ]",
+            "Stop, then start the plugin",
+            V::Action("Restart".to_owned()),
+        ));
         rows.push(row(
             "pd:enabled",
             "Enable on startup",
@@ -148,52 +193,120 @@ impl TuiAppState {
             V::Bool(entry.is_some_and(|p| p.enabled)),
         ));
         if let Some(cfg) = self.gateway_cfg.plugins.iter().find(|p| p.id == pid) {
-            rows.push(row("pd:kind", "Kind", "adapter (a platform) or capability (tools)", V::Select(cfg.kind.as_str().to_owned())));
+            rows.push(row(
+                "pd:kind",
+                "Kind",
+                "adapter (a platform) or capability (tools)",
+                V::Select(cfg.kind.as_str().to_owned()),
+            ));
             match &cfg.transport {
                 BodyTransportConfig::Stdio { command, args } => {
-                    rows.push(row("pd:command", "Command", "Executable the gateway launches", V::Path(command.clone())));
-                    rows.push(row("pd:args", "Arguments", "Command line arguments", V::List(args.clone())));
+                    rows.push(row(
+                        "pd:command",
+                        "Command",
+                        "Executable the gateway launches",
+                        V::Path(command.clone()),
+                    ));
+                    rows.push(row(
+                        "pd:args",
+                        "Arguments",
+                        "Command line arguments",
+                        V::List(args.clone()),
+                    ));
                 }
                 BodyTransportConfig::UnixSocket { path } => {
-                    rows.push(row("pd:socket", "Socket", "Unix socket of an already running plugin", V::Path(path.display().to_string())));
+                    rows.push(row(
+                        "pd:socket",
+                        "Socket",
+                        "Unix socket of an already running plugin",
+                        V::Path(path.display().to_string()),
+                    ));
                 }
             }
-            rows.push(row("pd:deps", "Dependencies", "Plugins that must start first", V::List(cfg.dependencies.clone())));
-            rows.push(row("pd:optdeps", "Optional dependencies", "Plugins started first when present", V::List(cfg.optional_dependencies.clone())));
+            rows.push(row(
+                "pd:deps",
+                "Dependencies",
+                "Plugins that must start first",
+                V::List(cfg.dependencies.clone()),
+            ));
+            rows.push(row(
+                "pd:optdeps",
+                "Optional dependencies",
+                "Plugins started first when present",
+                V::List(cfg.optional_dependencies.clone()),
+            ));
         }
         for name in self.required_secrets(pid) {
             let set = self.secret_is_set(&name);
             rows.push(row(
                 &format!("pd:secret:{name}"),
-                &if set { format!("Secret {name}") } else { format!("! Missing secret {name}") },
+                &if set {
+                    format!("Secret {name}")
+                } else {
+                    format!("! Missing secret {name}")
+                },
                 "Required by the plugin's arguments; stored in secrets.toml [env] (never shown)",
-                V::Action(if set { "set - Enter to replace".to_owned() } else { "NOT SET - Enter to set".to_owned() }),
+                V::Action(if set {
+                    "set - Enter to replace".to_owned()
+                } else {
+                    "NOT SET - Enter to set".to_owned()
+                }),
             ));
         }
         if can_pair(pid) {
-            rows.push(row("pd:pair", "[ Pair device ]", "Link a phone: shows the QR / pair code on a page here", V::Action("Pair".to_owned())));
+            rows.push(row(
+                "pd:pair",
+                "[ Pair device ]",
+                "Link a phone: shows the QR / pair code on a page here",
+                V::Action("Pair".to_owned()),
+            ));
         }
-        rows.push(row("pd:log", "[ View log ]", "Open /log filtered to this plugin", V::Action(format!("plugin:{pid}"))));
+        rows.push(row(
+            "pd:log",
+            "[ View log ]",
+            "Open /log filtered to this plugin",
+            V::Action(format!("plugin:{pid}")),
+        ));
         for (i, l) in self.plugin_stderr_tail(pid, 5).into_iter().enumerate() {
-            rows.push(row(&format!("pd:err:{i}"), "stderr", "Last stderr lines of the plugin", V::ReadOnly(l)));
+            rows.push(row(
+                &format!("pd:err:{i}"),
+                "stderr",
+                "Last stderr lines of the plugin",
+                V::ReadOnly(l),
+            ));
         }
-        rows.push(row("pd:reload", "[ Reload plugin file ]", &format!("Re-read {}", detail.toml_path.display()), V::Action(format!("{} keys", detail.toml_entries.len()))));
+        rows.push(row(
+            "pd:reload",
+            "[ Reload plugin file ]",
+            &format!("Re-read {}", detail.toml_path.display()),
+            V::Action(format!("{} keys", detail.toml_entries.len())),
+        ));
         for e in &detail.toml_entries {
             let id = format!("pv:{}", e.key_path);
             let desc = "Value in plugins/<id>.toml (comments are preserved)";
             rows.push(match &e.value {
                 DynamicTomlValue::Bool(b) => row(&id, &e.key_path, desc, V::Bool(*b)),
-                DynamicTomlValue::Int(_) | DynamicTomlValue::Float(_) => row(&id, &e.key_path, desc, V::Number(e.value.display_compact())),
+                DynamicTomlValue::Int(_) | DynamicTomlValue::Float(_) => {
+                    row(&id, &e.key_path, desc, V::Number(e.value.display_compact()))
+                }
                 DynamicTomlValue::Str(s) => row(&id, &e.key_path, desc, V::Text(s.clone())),
                 DynamicTomlValue::StrArray(a) => row(&id, &e.key_path, desc, V::List(a.clone())),
             });
         }
-        rows.push(row("pd:addkey", "[ + Add value ]", "Insert a key in plugins/<id>.toml", V::Action("Add".to_owned())));
+        rows.push(row(
+            "pd:addkey",
+            "[ + Add value ]",
+            "Insert a key in plugins/<id>.toml",
+            V::Action("Add".to_owned()),
+        ));
         rows
     }
 
     /// Esc / navigation inside the detail page; Esc leaves the page.
     pub(crate) fn handle_plugin_detail_key(&mut self, key: KeyEvent) -> Vec<AppAction> {
+        if !is_key_press(key) {
+            return Vec::new();
+        }
         let total = self.plugin_detail_rows().len();
         let view = self.settings.list_rows.get().max(1);
         let Some(detail) = &mut self.settings.plugin_detail else {
@@ -201,9 +314,10 @@ impl TuiAppState {
         };
         let mv = |d: &mut PluginDetailState, delta: isize| {
             if total > 0 {
-                d.selected_row = (d.selected_row as isize + delta).clamp(0, total as isize - 1) as usize;
+                d.selected_row =
+                    (d.selected_row as isize + delta).clamp(0, total as isize - 1) as usize;
             }
-            d.scroll_offset = crate::render::scroll_window(d.selected_row, d.scroll_offset, view, total);
+            d.scroll_offset = scroll_offset_for_row(d.selected_row, d.scroll_offset, view, total);
         };
         match key.code {
             KeyCode::Esc => self.settings.plugin_detail = None,
@@ -228,7 +342,12 @@ impl TuiAppState {
         let Some(row) = rows.get(index).cloned() else {
             return Vec::new();
         };
-        let Some(pid) = self.settings.plugin_detail.as_ref().map(|d| d.plugin_id.clone()) else {
+        let Some(pid) = self
+            .settings
+            .plugin_detail
+            .as_ref()
+            .map(|d| d.plugin_id.clone())
+        else {
             return Vec::new();
         };
         match row.id.as_str() {
@@ -245,11 +364,18 @@ impl TuiAppState {
                 vec![AppAction::Settings(SettingsAction::RestartPlugin(pid))]
             }
             "pd:enabled" => {
-                let next = !self.plugins.iter().find(|p| p.id == pid).is_some_and(|p| p.enabled);
+                let next = !self
+                    .plugins
+                    .iter()
+                    .find(|p| p.id == pid)
+                    .is_some_and(|p| p.enabled);
                 let patch = json!({ "plugins": { pid.clone(): { "enabled": next } } });
                 self.submit_patch(
                     patch,
-                    format!("{} '{pid}' on startup", if next { "Enabled" } else { "Disabled" }),
+                    format!(
+                        "{} '{pid}' on startup",
+                        if next { "Enabled" } else { "Disabled" }
+                    ),
                 )
             }
             "pd:kind" => {
@@ -274,12 +400,12 @@ impl TuiAppState {
                     SettingValueKind::Path(p) => p.clone(),
                     _ => String::new(),
                 };
-                self.settings.editing = Some(InlineEditState {
-                    target: InlineEditTarget::SettingField { id: row.id.clone() },
-                    prompt: format!("Edit {}", row.label),
-                    buffer: cur,
-                    masked: false,
-                });
+                self.settings.editing = Some(InlineEditState::new(
+                    InlineEditTarget::SettingField { id: row.id.clone() },
+                    format!("Edit {}", row.label),
+                    cur,
+                    false,
+                ));
                 Vec::new()
             }
             "pd:args" | "pd:deps" | "pd:optdeps" => {
@@ -304,22 +430,24 @@ impl TuiAppState {
                 Vec::new()
             }
             "pd:addkey" => {
-                self.settings.editing = Some(InlineEditState {
-                    target: InlineEditTarget::PluginTomlNewKeyName { plugin_id: pid },
-                    prompt: "Enter new TOML key path (e.g. session.auto_reconnect)".to_owned(),
-                    buffer: String::new(),
-                    masked: false,
-                });
+                self.settings.editing = Some(InlineEditState::new(
+                    InlineEditTarget::PluginTomlNewKeyName { plugin_id: pid },
+                    "Enter new TOML key path (e.g. session.auto_reconnect)",
+                    "",
+                    false,
+                ));
                 Vec::new()
             }
             id if id.starts_with("pd:secret:") => {
                 let name = id.trim_start_matches("pd:secret:").to_owned();
-                self.settings.editing = Some(InlineEditState {
-                    target: InlineEditTarget::NewEnvSecretValue { env_key: name.clone() },
-                    prompt: format!("Value for [env].{name} (masked, Ctrl+R reveals)"),
-                    buffer: String::new(),
-                    masked: true,
-                });
+                self.settings.editing = Some(InlineEditState::new(
+                    InlineEditTarget::NewEnvSecretValue {
+                        env_key: name.clone(),
+                    },
+                    format!("Value for [env].{name} (masked, Ctrl+R reveals)"),
+                    "",
+                    true,
+                ));
                 Vec::new()
             }
             id if id.starts_with("pv:") => {
@@ -330,7 +458,12 @@ impl TuiAppState {
         }
     }
 
-    fn activate_plugin_value(&mut self, pid: &str, key_path: &str, row: &SettingRow) -> Vec<AppAction> {
+    fn activate_plugin_value(
+        &mut self,
+        pid: &str,
+        key_path: &str,
+        row: &SettingRow,
+    ) -> Vec<AppAction> {
         match &row.value {
             SettingValueKind::Bool(b) => {
                 self.save_plugin_value(key_path, DynamicTomlValue::Bool(!*b));
@@ -339,15 +472,15 @@ impl TuiAppState {
                 self.settings.items = Some(ItemEditor::list(&row.id, key_path, vals));
             }
             SettingValueKind::Number(cur) | SettingValueKind::Text(cur) => {
-                self.settings.editing = Some(InlineEditState {
-                    target: InlineEditTarget::PluginTomlValue {
+                self.settings.editing = Some(InlineEditState::new(
+                    InlineEditTarget::PluginTomlValue {
                         plugin_id: pid.to_owned(),
                         key_path: key_path.to_owned(),
                     },
-                    prompt: format!("Edit {key_path}"),
-                    buffer: cur.clone(),
-                    masked: false,
-                });
+                    format!("Edit {key_path}"),
+                    cur.clone(),
+                    false,
+                ));
             }
             _ => {}
         }
@@ -377,7 +510,12 @@ impl TuiAppState {
 
     /// A selector over the detail page was answered.
     pub(crate) fn plugin_select_picked(&mut self, target: &str, value: &str) -> Vec<AppAction> {
-        let Some(pid) = self.settings.plugin_detail.as_ref().map(|d| d.plugin_id.clone()) else {
+        let Some(pid) = self
+            .settings
+            .plugin_detail
+            .as_ref()
+            .map(|d| d.plugin_id.clone())
+        else {
             return Vec::new();
         };
         match target {
@@ -390,8 +528,17 @@ impl TuiAppState {
     }
 
     /// A list editor on the detail page saved.
-    pub(crate) fn plugin_items_saved(&mut self, target: &str, values: Vec<String>) -> Vec<AppAction> {
-        let Some(pid) = self.settings.plugin_detail.as_ref().map(|d| d.plugin_id.clone()) else {
+    pub(crate) fn plugin_items_saved(
+        &mut self,
+        target: &str,
+        values: Vec<String>,
+    ) -> Vec<AppAction> {
+        let Some(pid) = self
+            .settings
+            .plugin_detail
+            .as_ref()
+            .map(|d| d.plugin_id.clone())
+        else {
             return Vec::new();
         };
         if let Some(key_path) = target.strip_prefix("pv:") {
@@ -410,7 +557,12 @@ impl TuiAppState {
 
     /// An inline text edit on the detail page was committed.
     pub(crate) fn plugin_field_committed(&mut self, id: &str, text: &str) -> Vec<AppAction> {
-        let Some(pid) = self.settings.plugin_detail.as_ref().map(|d| d.plugin_id.clone()) else {
+        let Some(pid) = self
+            .settings
+            .plugin_detail
+            .as_ref()
+            .map(|d| d.plugin_id.clone())
+        else {
             return Vec::new();
         };
         let (key, is_path) = match id {
@@ -443,11 +595,15 @@ impl TuiAppState {
 
     /// Keys on the pairing page.
     pub(crate) fn pairing_key(&mut self, key: KeyEvent) -> Vec<AppAction> {
-        let Some(st) = &self.settings.pairing else {
+        if !is_key_press(key) {
+            return Vec::new();
+        }
+        let Some(st) = &mut self.settings.pairing else {
             return Vec::new();
         };
         let done = st.status.is_done();
         let pid = st.plugin_id.clone();
+        let page = st.rendered_rows.get().max(1) as isize;
         match key.code {
             KeyCode::Esc => {
                 self.settings.pairing = None;
@@ -455,6 +611,12 @@ impl TuiAppState {
                     return vec![AppAction::Settings(SettingsAction::CancelPairing)];
                 }
             }
+            KeyCode::Up => st.scroll_by(-1),
+            KeyCode::Down => st.scroll_by(1),
+            KeyCode::PageUp => st.scroll_by(-page),
+            KeyCode::PageDown => st.scroll_by(page),
+            KeyCode::Home => st.scroll_to(0),
+            KeyCode::End => st.scroll_offset = None,
             KeyCode::Char('r') if done => return self.start_pairing(&pid),
             _ => {}
         }
@@ -470,7 +632,10 @@ impl TuiAppState {
             return;
         };
         let found = discover_builtin_binary(preset).map(|p| p.display().to_string());
-        let hint = format!("Build it with: cargo build -p {} (or put '{}' on PATH)", preset.binary, preset.binary);
+        let hint = format!(
+            "Build it with: cargo build -p {} (or put '{}' on PATH)",
+            preset.binary, preset.binary
+        );
         self.settings.install = Some(InstallFlow {
             plugin_id: plugin_id.to_owned(),
             kind: preset.kind,
@@ -483,6 +648,9 @@ impl TuiAppState {
 
     /// Keys of the install flow: `e` toggles enable, `k` toggles kind, Enter installs.
     pub(crate) fn install_key(&mut self, key: KeyEvent) -> Vec<AppAction> {
+        if !is_key_press(key) {
+            return Vec::new();
+        }
         let Some(flow) = &mut self.settings.install else {
             return Vec::new();
         };
@@ -498,7 +666,10 @@ impl TuiAppState {
             KeyCode::Enter => {
                 let flow = flow.clone();
                 let Some(cmd) = flow.command.clone() else {
-                    self.set_toast(format!("'{}' was not found; build it first", flow.binary), true);
+                    self.set_toast(
+                        format!("'{}' was not found; build it first", flow.binary),
+                        true,
+                    );
                     return Vec::new();
                 };
                 self.settings.install = None;
@@ -507,7 +678,12 @@ impl TuiAppState {
                     .map(|p| p.default_args.iter().map(|s| (*s).to_owned()).collect())
                     .unwrap_or_default();
                 let opt: Vec<String> = preset
-                    .map(|p| p.default_optional_deps.iter().map(|s| (*s).to_owned()).collect())
+                    .map(|p| {
+                        p.default_optional_deps
+                            .iter()
+                            .map(|s| (*s).to_owned())
+                            .collect()
+                    })
                     .unwrap_or_default();
                 let patch = json!({ "plugins": { flow.plugin_id.clone(): {
                     "enabled": flow.enable,
@@ -533,6 +709,138 @@ impl TuiAppState {
     }
 }
 
+/// Draws the plugin detail page into the settings body and records hits in both `hit` and `hitmap`.
+pub fn render_plugin_detail_with_hitmap(
+    area: Rect,
+    buf: &mut Buffer,
+    state: &TuiAppState,
+    detail: &PluginDetailState,
+    palette: &ThemePalette,
+    hit: &mut HitRegions,
+    hitmap: &mut HitMap,
+) {
+    if area.width < 8 || area.height < 2 {
+        return;
+    }
+    let plugin = state.plugins.iter().find(|p| p.id == detail.plugin_id);
+    let (glyph, color, label) = match plugin {
+        Some(p) => {
+            let color = match &p.state {
+                PluginUiState::Running | PluginUiState::RunningElsewhere => palette.status_green,
+                PluginUiState::Starting
+                | PluginUiState::Stopping
+                | PluginUiState::NeedsSetup(_) => palette.status_yellow,
+                PluginUiState::Stopped | PluginUiState::Failed(_) => palette.status_red,
+            };
+            (p.state.dot_glyph(), color, p.state.label())
+        }
+        None => ("●", palette.dim, "unknown"),
+    };
+    let back = "[ ← Plugins ]";
+    let back_w = (UnicodeWidthStr::width(back) as u16).min(area.width.saturating_sub(2));
+    let back_rect = Rect::new(area.x + 1, area.y, back_w, 1);
+    hit.settings_back = Some(back_rect);
+    hitmap.record(back_rect, HitTarget::Button("settings.back".to_owned()));
+
+    let header = Line::from(vec![
+        Span::styled(
+            back,
+            Style::default()
+                .bg(palette.selection_bg)
+                .fg(palette.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" > {} (", detail.plugin_id),
+            Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(glyph, Style::default().fg(color)),
+        Span::styled(format!(" {label})"), Style::default().fg(palette.muted)),
+    ]);
+    buf.set_line(area.x + 1, area.y, &header, area.width.saturating_sub(2));
+
+    let rows_data = state.plugin_detail_rows();
+    let list_area = Rect::new(
+        area.x + 1,
+        area.y + 2,
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    );
+    let visible = usize::from(list_area.height);
+    state.settings.list_rows.set(visible);
+    if list_area.width == 0 || list_area.height == 0 {
+        return;
+    }
+    fill(buf, list_area, palette.modal_bg, palette.fg);
+
+    let total = rows_data.len();
+    let selected = detail.selected_row.min(total.saturating_sub(1));
+    let off = scroll_offset_for_row(selected, detail.scroll_offset, visible.max(1), total);
+    let has_sb = total > visible && list_area.width > 3;
+    let content_w = if has_sb {
+        list_area.width - 1
+    } else {
+        list_area.width
+    };
+    let left_w = ((content_w as usize) * 2 / 5)
+        .max(12)
+        .min(content_w as usize);
+
+    for (vis_idx, r) in rows_data.iter().enumerate().skip(off).take(visible) {
+        let y = list_area.y + (vis_idx - off) as u16;
+        let rect = Rect::new(list_area.x, y, content_w, 1);
+        hit.settings_options.push((rect, vis_idx));
+        hitmap.record(rect, HitTarget::ListRow(vis_idx));
+
+        let sel = vis_idx == selected;
+        let bg = if sel {
+            palette.selection_bg
+        } else {
+            palette.modal_bg
+        };
+        fill(buf, rect, bg, palette.fg);
+        let marker = if sel { "› " } else { "  " };
+        let left = format!("{marker}{}", trunc(&r.label, left_w.saturating_sub(3)));
+        let left = format!("{left:<left_w$}");
+        let fg = if sel {
+            palette.accent
+        } else if matches!(r.value, SettingValueKind::ReadOnly(_)) {
+            palette.dim
+        } else {
+            palette.fg
+        };
+        let right = trunc(
+            &crate::settings_ui::value_text(&r.value),
+            (content_w as usize).saturating_sub(left_w + 1),
+        );
+        let line = Line::from(vec![
+            Span::styled(left, Style::default().fg(fg).bg(bg)),
+            Span::styled(right, Style::default().fg(palette.muted).bg(bg)),
+        ]);
+        buf.set_line(list_area.x, y, &line, content_w);
+    }
+
+    if has_sb {
+        let track = Rect::new(
+            list_area.x + list_area.width - 1,
+            list_area.y,
+            1,
+            list_area.height,
+        );
+        render_vertical_scrollbar(
+            buf,
+            track,
+            ScrollId::SettingsList,
+            total,
+            visible,
+            off,
+            hitmap,
+            Style::default().fg(palette.dim).bg(palette.modal_bg),
+            Style::default().fg(palette.accent).bg(palette.modal_bg),
+        );
+    }
+}
+
 /// Draws the plugin detail page into the settings body.
 pub fn render_plugin_detail(
     area: Rect,
@@ -542,60 +850,38 @@ pub fn render_plugin_detail(
     palette: &ThemePalette,
     hit: &mut HitRegions,
 ) {
-    let plugin = state.plugins.iter().find(|p| p.id == detail.plugin_id);
-    let (glyph, color, label) = match plugin {
-        Some(p) => {
-            let color = match &p.state {
-                PluginUiState::Running | PluginUiState::RunningElsewhere => palette.status_green,
-                PluginUiState::Starting | PluginUiState::Stopping | PluginUiState::NeedsSetup(_) => {
-                    palette.status_yellow
-                }
-                PluginUiState::Stopped | PluginUiState::Failed(_) => palette.status_red,
-            };
-            (p.state.dot_glyph(), color, p.state.label())
-        }
-        None => ("●", palette.dim, "unknown"),
-    };
-    let back = "[ ← Plugins ]";
-    let back_w = (unicode_width::UnicodeWidthStr::width(back) as u16).min(area.width.saturating_sub(2));
-    hit.settings_back = Some(Rect::new(area.x + 1, area.y, back_w, 1));
-    let header = Line::from(vec![
-        Span::styled(
-            back,
-            Style::default().bg(palette.selection_bg).fg(palette.accent).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(format!(" > {} (", detail.plugin_id), Style::default().fg(palette.fg).add_modifier(Modifier::BOLD)),
-        Span::styled(glyph, Style::default().fg(color)),
-        Span::styled(format!(" {label})"), Style::default().fg(palette.muted)),
-    ]);
-    buf.set_line(area.x + 1, area.y, &header, area.width.saturating_sub(2));
-
-    let rows_data = state.plugin_detail_rows();
-    let list_area = Rect::new(area.x + 1, area.y + 2, area.width.saturating_sub(2), area.height.saturating_sub(2));
-    state.settings.list_rows.set(list_area.height as usize);
-    fill(buf, list_area, palette.modal_bg, palette.fg);
-    let rows: Vec<ListRow> = rows_data
-        .iter()
-        .map(|r| ListRow {
-            left: r.label.clone(),
-            right: crate::settings_ui::value_text(&r.value),
-            dim: matches!(r.value, SettingValueKind::ReadOnly(_)),
-        })
-        .collect();
-    let mut hits = Vec::new();
-    render_list(list_area, buf, &rows, detail.selected_row, detail.scroll_offset, palette, &mut hits);
-    hit.settings_options.extend(hits);
+    let mut hitmap = HitMap::default();
+    render_plugin_detail_with_hitmap(area, buf, state, detail, palette, hit, &mut hitmap);
 }
 
-/// Draws the guided install box.
-pub fn render_install(area: Rect, buf: &mut Buffer, flow: &InstallFlow, palette: &ThemePalette) {
+/// Draws the guided install box and records backdrop/body hit targets.
+pub fn render_install_with_hitmap(
+    area: Rect,
+    buf: &mut Buffer,
+    flow: &InstallFlow,
+    palette: &ThemePalette,
+    hitmap: &mut HitMap,
+) {
+    render_dimmed_backdrop(buf, area, palette);
+    hitmap.record(area, HitTarget::Backdrop(OverlayId::Settings));
+
     let bx = centered(78.min(area.width), 13.min(area.height), area);
     let inner = boxed(bx, buf, &format!("Install {}", flow.plugin_id), palette);
+    hitmap.record(bx, HitTarget::OverlayBody(OverlayId::Settings));
+    if inner.height < 3 || inner.width < 12 {
+        return;
+    }
     let style = Style::default().fg(palette.fg).bg(palette.modal_bg);
     let mut y = inner.y;
+    let body_bottom = inner.y + inner.height.saturating_sub(1);
     let mut put = |text: String, st: Style| {
-        if y < inner.y + inner.height {
-            buf.set_string(inner.x + 1, y, trunc(&text, inner.width.saturating_sub(2) as usize), st);
+        if y < body_bottom {
+            buf.set_string(
+                inner.x + 1,
+                y,
+                trunc(&text, inner.width.saturating_sub(2) as usize),
+                st,
+            );
             y += 1;
         }
     };
@@ -603,34 +889,78 @@ pub fn render_install(area: Rect, buf: &mut Buffer, flow: &InstallFlow, palette:
         Some(c) => put(format!("Command:  {c}"), style),
         None => {
             put(
-                format!("Command:  NOT FOUND (looked for '{}' next to this binary, in target/ and on PATH)", flow.binary),
+                format!(
+                    "Command:  NOT FOUND (looked for '{}' next to this binary, in target/ and on PATH)",
+                    flow.binary
+                ),
                 Style::default().fg(palette.status_red).bg(palette.modal_bg),
             );
-            put(format!("Hint:     {}", flow.hint), Style::default().fg(palette.status_yellow).bg(palette.modal_bg));
+            put(
+                format!("Hint:     {}", flow.hint),
+                Style::default()
+                    .fg(palette.status_yellow)
+                    .bg(palette.modal_bg),
+            );
         }
     }
-    put(format!("Kind:     {}   (k toggles)", flow.kind.as_str()), style);
-    put(format!("Enable on startup: {}   (e toggles)", if flow.enable { "yes" } else { "no" }), style);
-    put(String::new(), style);
     put(
-        if flow.command.is_some() {
-            "Enter installs · Esc cancels".to_owned()
-        } else {
-            "Nothing is enabled until the binary exists · Esc closes".to_owned()
-        },
+        format!("Kind:     {}   (k toggles)", flow.kind.as_str()),
+        style,
+    );
+    put(
+        format!(
+            "Enable on startup: {}   (e toggles)",
+            if flow.enable { "yes" } else { "no" }
+        ),
+        style,
+    );
+    let footer = if flow.command.is_some() {
+        " Enter installs · e toggle enable · k toggle kind · Esc cancels"
+    } else {
+        " Nothing is enabled until the binary exists · Esc closes"
+    };
+    buf.set_string(
+        inner.x,
+        inner.y + inner.height - 1,
+        trunc(footer, usize::from(inner.width)),
         Style::default().fg(palette.dim).bg(palette.modal_bg),
     );
 }
 
-/// Draws a yes/no question.
-pub fn render_confirm(area: Rect, buf: &mut Buffer, c: &ConfirmState, palette: &ThemePalette) {
+/// Draws the guided install box.
+pub fn render_install(area: Rect, buf: &mut Buffer, flow: &InstallFlow, palette: &ThemePalette) {
+    let mut hitmap = HitMap::default();
+    render_install_with_hitmap(area, buf, flow, palette, &mut hitmap);
+}
+
+/// Draws a yes/no question and records backdrop/body hit targets.
+pub fn render_confirm_with_hitmap(
+    area: Rect,
+    buf: &mut Buffer,
+    c: &ConfirmState,
+    palette: &ThemePalette,
+    hitmap: &mut HitMap,
+) {
+    render_dimmed_backdrop(buf, area, palette);
+    hitmap.record(area, HitTarget::Backdrop(OverlayId::Settings));
+
     let bx = centered(70.min(area.width), 5.min(area.height), area);
     let inner = boxed(bx, buf, "Confirm", palette);
+    hitmap.record(bx, HitTarget::OverlayBody(OverlayId::Settings));
+    if inner.height == 0 || inner.width < 4 {
+        return;
+    }
+    let prompt_y = inner.y + usize::from(inner.height > 1) as u16;
     buf.set_string(
         inner.x + 1,
-        inner.y + 1,
+        prompt_y,
         trunc(&c.prompt, inner.width.saturating_sub(2) as usize),
         Style::default().fg(palette.fg).bg(palette.modal_bg),
     );
 }
 
+/// Draws a yes/no question.
+pub fn render_confirm(area: Rect, buf: &mut Buffer, c: &ConfirmState, palette: &ThemePalette) {
+    let mut hitmap = HitMap::default();
+    render_confirm_with_hitmap(area, buf, c, palette, &mut hitmap);
+}

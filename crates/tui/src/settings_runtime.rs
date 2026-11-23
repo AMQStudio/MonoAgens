@@ -31,6 +31,9 @@ pub enum SettingsAction {
     /// Reads the capability ids of connected bodies and the actors seen in the event log for the
     /// RBAC pickers.
     LoadRbacHints,
+    /// Reads the live gateway configuration snapshot (`config.get`) so attached TUIs match the
+    /// daemon.
+    LoadConfigSnapshot,
     /// First-run wizard connection test: lists the provider's models with `key` (no gateway
     /// is running yet).
     WizardTest {
@@ -68,11 +71,20 @@ impl std::fmt::Debug for SecretText {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettingsEvent {
     /// A write finished.
-    Done { ok: String, result: Result<(), String> },
+    Done {
+        ok: String,
+        result: Result<(), String>,
+    },
     /// Output of the pairing process.
     Pairing(PairingEvent),
-    /// Known capability ids and seen actors for the RBAC pickers.
-    RbacHints { capabilities: Vec<String>, actors: Vec<String> },
+    /// Live configuration snapshot returned by `config.get`.
+    ConfigLoaded(Value),
+    /// Known capability ids, full `capabilities.list` payload, and seen actors for RBAC pickers.
+    RbacHints {
+        capabilities: Vec<String>,
+        capabilities_json: Option<Value>,
+        actors: Vec<String>,
+    },
     /// The wizard's connection test finished.
     WizardTested(crate::wizard::WizardTest),
 }
@@ -90,10 +102,24 @@ pub async fn run_settings_action(
     };
     match action {
         SettingsAction::Apply { patch, ok } => {
-            let result = client.config_apply(patch).await.map(|_| ()).map_err(|e| e.message);
+            let result = client
+                .config_apply(patch)
+                .await
+                .map(|_| ())
+                .map_err(|e| e.message);
+            if result.is_ok()
+                && let Ok(snapshot) = client.config_get().await
+            {
+                send(SettingsEvent::ConfigLoaded(snapshot));
+            }
             send(SettingsEvent::Done { ok, result });
         }
-        SettingsAction::Secret { section, name, value, ok } => {
+        SettingsAction::Secret {
+            section,
+            name,
+            value,
+            ok,
+        } => {
             let result = client
                 .secrets_set_named(section, name, value.map(|v| v.expose().to_owned()))
                 .await
@@ -102,24 +128,44 @@ pub async fn run_settings_action(
             send(SettingsEvent::Done { ok, result });
         }
         SettingsAction::RestartPlugin(id) => {
-            let result = client.plugins_restart(id.clone()).await.map_err(|e| e.message);
+            let result = client
+                .plugins_restart(id.clone())
+                .await
+                .map_err(|e| e.message);
             send(SettingsEvent::Done {
                 ok: format!("Restarted plugin '{id}'"),
                 result,
             });
         }
-        a @ SettingsAction::WizardTest { .. } => run_settings_action_without_client(a, tx.clone()).await,
+        a @ SettingsAction::WizardTest { .. } => {
+            run_settings_action_without_client(a, tx.clone()).await
+        }
+        SettingsAction::LoadConfigSnapshot => match client.config_get().await {
+            Ok(val) => send(SettingsEvent::ConfigLoaded(val)),
+            Err(e) => send(SettingsEvent::Done {
+                ok: String::new(),
+                result: Err(e.message),
+            }),
+        },
         SettingsAction::LoadRbacHints => {
-            let caps = client.gov_call("capabilities.list".to_owned(), serde_json::json!({})).await;
-            let capabilities: Vec<String> = caps
-                .ok()
-                .and_then(|v| v.get("capabilities").and_then(Value::as_array).cloned())
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|c| c.get("id").and_then(Value::as_str).map(str::to_owned))
-                .collect();
+            let capabilities_json = client
+                .gov_call("capabilities.list".to_owned(), serde_json::json!({}))
+                .await
+                .ok();
+            let capabilities: Vec<String> = capabilities_json
+                .as_ref()
+                .and_then(|v| v.get("capabilities").and_then(Value::as_array))
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|c| c.get("id").and_then(Value::as_str).map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
             let events = client
-                .gov_call("events.query".to_owned(), serde_json::json!({ "limit": 1000 }))
+                .gov_call(
+                    "events.query".to_owned(),
+                    serde_json::json!({ "limit": 1000 }),
+                )
                 .await;
             let mut actors: Vec<String> = events
                 .ok()
@@ -131,7 +177,11 @@ pub async fn run_settings_action(
                 .collect();
             actors.sort();
             actors.dedup();
-            send(SettingsEvent::RbacHints { capabilities, actors });
+            send(SettingsEvent::RbacHints {
+                capabilities,
+                capabilities_json,
+                actors,
+            });
         }
         other @ (SettingsAction::StartPairing(_) | SettingsAction::CancelPairing) => {
             run_settings_action_without_client(other, tx.clone()).await;
@@ -141,7 +191,10 @@ pub async fn run_settings_action(
 
 /// Pairing needs no gateway client: runs it without one (a TUI whose gateway is down can still
 /// pair, the session file lives in the data dir).
-pub async fn run_settings_action_without_client(action: SettingsAction, tx: mpsc::UnboundedSender<RuntimeEvent>) {
+pub async fn run_settings_action_without_client(
+    action: SettingsAction,
+    tx: mpsc::UnboundedSender<RuntimeEvent>,
+) {
     let send = |ev: SettingsEvent| {
         let _ = tx.send(RuntimeEvent::Settings(ev));
     };
@@ -162,20 +215,32 @@ pub async fn run_settings_action_without_client(action: SettingsAction, tx: mpsc
                 n.notify_one();
             }
         }
-        SettingsAction::WizardTest { provider, key, base_url } => {
+        SettingsAction::WizardTest {
+            provider,
+            key,
+            base_url,
+        } => {
             let started = std::time::Instant::now();
             let res = tokio::task::spawn_blocking(move || {
                 let entry = monoagens_reason::model::catalog::find(&provider)
                     .ok_or_else(|| format!("unknown provider '{provider}'"))?;
-                let secret = (!key.expose().is_empty()).then(|| monoagens_reason::SecretString::new(key.expose()));
-                monoagens_reason::model::discovery::list_models(entry, secret.as_ref(), base_url.as_deref())
-                    .map(|models| models.into_iter().map(|m| m.id).collect::<Vec<_>>())
-                    .map_err(|e| e.to_string())
+                let secret = (!key.expose().is_empty())
+                    .then(|| monoagens_reason::SecretString::new(key.expose()));
+                monoagens_reason::model::discovery::list_models(
+                    entry,
+                    secret.as_ref(),
+                    base_url.as_deref(),
+                )
+                .map(|models| models.into_iter().map(|m| m.id).collect::<Vec<_>>())
+                .map_err(|e| e.to_string())
             })
             .await
             .unwrap_or_else(|e| Err(format!("connection test task failed: {e}")));
             let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-            send(SettingsEvent::WizardTested(crate::wizard::WizardTest { result: res, latency_ms }));
+            send(SettingsEvent::WizardTested(crate::wizard::WizardTest {
+                result: res,
+                latency_ms,
+            }));
         }
         other => send(SettingsEvent::Done {
             ok: String::new(),

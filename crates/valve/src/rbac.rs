@@ -343,21 +343,26 @@ impl RbacConfig {
             return Self::allow_or_strict_hold(approval_mode, capability_or_permission);
         }
 
-        // 6. Tier-base comparison against `permission_bases`.
+        // 6. Tier-base comparison against `permission_bases` (default-deny for non-owners).
         let tier = self.effective_tier_opt(actor, owner);
-        if let Some(Some(required_tier)) = required_base
-            && tier < required_tier
-        {
-            return RbacDecision::Deny {
+        match required_base {
+            Some(Some(required_tier)) if tier >= required_tier => {
+                Self::allow_or_strict_hold(approval_mode, capability_or_permission)
+            }
+            Some(Some(required_tier)) => RbacDecision::Deny {
                 reason: format!(
                     "tier '{}' is below required '{}' for '{capability_or_permission}'",
                     tier.as_str(),
                     required_tier.as_str()
                 ),
-            };
+            },
+            _ => RbacDecision::Deny {
+                reason: format!(
+                    "capability '{capability_or_permission}' is not granted to role/tier '{}'",
+                    tier.as_str()
+                ),
+            },
         }
-
-        Self::allow_or_strict_hold(approval_mode, capability_or_permission)
     }
 
     /// Returns `true` when `evaluate` does not return [`RbacDecision::Deny`].
@@ -458,7 +463,7 @@ pub fn agent_converse_permitted(
     match rbac {
         Some(cfg) => {
             let default_base = if registered || !guest_access {
-                None
+                Some(RoleTier::Guest)
             } else {
                 Some(RoleTier::Member)
             };

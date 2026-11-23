@@ -17,10 +17,13 @@ use crate::catalog_ui::{
     put, title_bar,
 };
 use crate::config::IconMode;
+use crate::core::hitmap::{HitTarget, ScrollId};
+use crate::core::viewport::scroll_offset_for_row;
 use crate::login::KeyEntry;
-use crate::render::{render_scrollbar, scroll_window};
-use crate::state::AppAction;
+use crate::render::scroll_window;
+use crate::state::{AppAction, HitRegions};
 use crate::theme::ThemePalette;
+use crate::widgets::scrollbar::render_vertical_scrollbar;
 
 /// Which pane has the keyboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -227,7 +230,7 @@ impl CatalogUi {
         })]
     }
 
-    fn move_left(&mut self, delta: isize) -> Vec<AppAction> {
+    pub(crate) fn move_left(&mut self, delta: isize) -> Vec<AppAction> {
         let rows = self.left_rows();
         let mut i = self.picker.left_sel as isize;
         loop {
@@ -246,7 +249,38 @@ impl CatalogUi {
         self.ensure_refreshed()
     }
 
-    fn move_models(&mut self, delta: isize) {
+    pub(crate) fn pick_left_row(&mut self, idx: usize) -> Vec<AppAction> {
+        let rows = self.left_rows();
+        let Some(row) = rows.get(idx) else {
+            return Vec::new();
+        };
+        if *row == LeftRow::Separator {
+            return Vec::new();
+        }
+        self.picker.focus = Pane::Providers;
+        self.picker.left_sel = idx;
+        self.picker.left_off = scroll_offset_for_row(idx, self.picker.left_off, self.rows(), rows.len());
+        self.picker.model_sel = 0;
+        self.picker.model_off = 0;
+        self.ensure_refreshed()
+    }
+
+    pub(crate) fn click_model_row(&mut self, idx: usize) -> Vec<AppAction> {
+        let total = self.right_rows().len();
+        if total == 0 {
+            return Vec::new();
+        }
+        let target = idx.min(total - 1);
+        if self.picker.focus == Pane::Models && self.picker.model_sel == target {
+            return self.picker_enter();
+        }
+        self.picker.focus = Pane::Models;
+        self.picker.model_sel = target;
+        self.picker.model_off = scroll_offset_for_row(target, self.picker.model_off, self.rows(), total);
+        Vec::new()
+    }
+
+    pub(crate) fn move_models(&mut self, delta: isize) {
         let total = self.right_rows().len();
         if total == 0 {
             return;
@@ -406,6 +440,19 @@ fn now_ms() -> u64 {
 
 /// Draws the picker.
 pub fn render(area: Rect, buf: &mut Buffer, ui: &CatalogUi, palette: &ThemePalette, icons: IconMode) {
+    let mut hit = HitRegions::default();
+    render_with_hit(area, buf, ui, palette, icons, &mut hit);
+}
+
+/// Draws the picker and records `HitMap` targets.
+pub fn render_with_hit(
+    area: Rect,
+    buf: &mut Buffer,
+    ui: &CatalogUi,
+    palette: &ThemePalette,
+    icons: IconMode,
+    hit: &mut HitRegions,
+) {
     let w = area.width as usize;
     let cur_label = ui
         .current_provider
@@ -475,6 +522,10 @@ pub fn render(area: Rect, buf: &mut Buffer, ui: &CatalogUi, palette: &ThemePalet
             style = style.add_modifier(Modifier::BOLD).fg(palette.accent);
         }
         put(buf, area.x, y, left_w as usize, &text, style, icons);
+        if !matches!(row, LeftRow::Separator) {
+            hit.hitmap
+                .record(Rect::new(area.x, y, left_w, 1), HitTarget::RailRow(idx));
+        }
     }
     if ui.providers.is_empty() {
         let msg = if ui.providers_loaded { "no providers" } else { " loading…" };
@@ -554,19 +605,29 @@ pub fn render(area: Rect, buf: &mut Buffer, ui: &CatalogUi, palette: &ThemePalet
         let name_w = list_w.saturating_sub(meta_w + 1);
         let line = format!("{}{}", pad(&format!("{marker}{name}"), name_w), if meta.is_empty() { String::new() } else { format!(" {meta}") });
         put(buf, right_x, y, list_w, &line, style, icons);
+        hit.hitmap.record(
+            Rect::new(right_x, y, list_w as u16, 1),
+            HitTarget::ListRow(idx),
+        );
     }
     if rows.is_empty() {
         let msg = empty_message(ui);
         put(buf, right_x, list_top, right_w, &format!(" {msg}"), dim, icons);
     }
-    render_scrollbar(
-        Rect::new(right_x + right_w as u16 - 1, list_top, 1, visible as u16),
-        buf,
-        rows.len(),
-        offset,
-        visible,
-        palette,
-    );
+    hit.overlay_area = Rect::new(right_x, list_top, right_w as u16, visible as u16);
+    if right_w > 0 && visible > 0 {
+        render_vertical_scrollbar(
+            buf,
+            Rect::new(right_x + right_w as u16 - 1, list_top, 1, visible as u16),
+            ScrollId::CatalogList,
+            rows.len(),
+            visible,
+            offset,
+            &mut hit.hitmap,
+            Style::default().fg(palette.separator).bg(palette.bg),
+            Style::default().fg(palette.accent).bg(palette.bg),
+        );
+    }
 
     // Detail line for the focused model.
     let detail = match rows.get(ui.picker.model_sel) {

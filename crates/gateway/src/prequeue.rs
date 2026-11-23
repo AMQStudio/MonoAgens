@@ -519,7 +519,7 @@ impl ToolRagIndex {
             .iter()
             .map(|e| CapabilityCatalogEntry {
                 descriptor: e.descriptor.clone(),
-                is_static_core: false,
+                is_static_core: e.descriptor.id.as_str() == "chat.speak",
                 owner_signed: false,
                 active: true,
                 audience: Audience::default(),

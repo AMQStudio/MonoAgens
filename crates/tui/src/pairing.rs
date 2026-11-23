@@ -8,10 +8,13 @@
 //! page runs the same subprocess with piped output (no terminal takeover) and shows the lines as
 //! the plugin emits them; the exit code is the final status.
 
+use std::cell::Cell;
 use std::process::Stdio;
 use std::sync::Arc;
 
-use monoagens_gateway::{BodyTransportConfig, GatewayConfig, ResolvedPaths, load_plugin_env_secrets};
+use monoagens_gateway::{
+    BodyTransportConfig, GatewayConfig, ResolvedPaths, load_plugin_env_secrets,
+};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -19,8 +22,12 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::{Notify, mpsc};
 
 use crate::config::{config_dir_from_path, discover_builtin_binary, find_builtin_preset};
-use crate::theme::ThemePalette;
+use crate::core::hitmap::{HitMap, HitTarget, ScrollId};
+use crate::core::overlay::OverlayId;
+use crate::core::theme::{ThemePalette, render_dimmed_backdrop};
+use crate::core::viewport::{clamp_scroll_offset, max_scroll_offset};
 use crate::ui_util::{boxed, centered, fill, trunc};
+use crate::widgets::scrollbar::render_vertical_scrollbar;
 
 /// Maximum lines kept for the page.
 const MAX_LINES: usize = 400;
@@ -40,7 +47,11 @@ pub fn pair_command(
     plugin_id: &str,
     phone: Option<&str>,
 ) -> Result<PairCommand, String> {
-    let binary = if let Some(p) = cfg.effective_plugins().into_iter().find(|p| p.id == plugin_id) {
+    let binary = if let Some(p) = cfg
+        .effective_plugins()
+        .into_iter()
+        .find(|p| p.id == plugin_id)
+    {
         match p.transport {
             BodyTransportConfig::Stdio { command, .. } => command,
             BodyTransportConfig::UnixSocket { path } => {
@@ -52,7 +63,12 @@ pub fn pair_command(
         }
     } else if let Some(preset) = find_builtin_preset(plugin_id) {
         discover_builtin_binary(preset)
-            .ok_or_else(|| format!("binary '{}' for '{plugin_id}' not found (build it first)", preset.binary))?
+            .ok_or_else(|| {
+                format!(
+                    "binary '{}' for '{plugin_id}' not found (build it first)",
+                    preset.binary
+                )
+            })?
             .display()
             .to_string()
     } else {
@@ -60,7 +76,8 @@ pub fn pair_command(
     };
     let cfg_dir = config_dir_from_path(&paths.config_path);
     let state_dir = paths.data_dir.join("plugins").join(plugin_id);
-    std::fs::create_dir_all(&state_dir).map_err(|e| format!("failed to create plugin state dir: {e}"))?;
+    std::fs::create_dir_all(&state_dir)
+        .map_err(|e| format!("failed to create plugin state dir: {e}"))?;
     let mut args = vec![
         "pair".to_owned(),
         "--db".to_owned(),
@@ -73,10 +90,20 @@ pub fn pair_command(
     let mut env = vec![
         (
             "MONOAGENS_PLUGIN_CONFIG".to_owned(),
-            cfg_dir.join("plugins").join(format!("{plugin_id}.toml")).display().to_string(),
+            cfg_dir
+                .join("plugins")
+                .join(format!("{plugin_id}.toml"))
+                .display()
+                .to_string(),
         ),
-        ("MONOAGENS_PLUGIN_STATE_DIR".to_owned(), state_dir.display().to_string()),
-        ("MONOAGENS_BODY_STATE_DIR".to_owned(), state_dir.display().to_string()),
+        (
+            "MONOAGENS_PLUGIN_STATE_DIR".to_owned(),
+            state_dir.display().to_string(),
+        ),
+        (
+            "MONOAGENS_BODY_STATE_DIR".to_owned(),
+            state_dir.display().to_string(),
+        ),
     ];
     for (k, secret) in load_plugin_env_secrets(&paths.secrets_path).unwrap_or_default() {
         let v = secret.expose();
@@ -129,7 +156,10 @@ impl PairingStatus {
     /// The process is over.
     #[must_use]
     pub fn is_done(&self) -> bool {
-        matches!(self, Self::Paired | Self::TimedOut | Self::Cancelled | Self::Failed(_))
+        matches!(
+            self,
+            Self::Paired | Self::TimedOut | Self::Cancelled | Self::Failed(_)
+        )
     }
 }
 
@@ -139,6 +169,8 @@ pub struct PairingState {
     pub plugin_id: String,
     pub lines: Vec<String>,
     pub status: PairingStatus,
+    pub scroll_offset: Option<usize>,
+    pub rendered_rows: Cell<usize>,
 }
 
 impl PairingState {
@@ -149,7 +181,26 @@ impl PairingState {
             plugin_id: plugin_id.to_owned(),
             lines: Vec::new(),
             status: PairingStatus::Waiting,
+            scroll_offset: None,
+            rendered_rows: Cell::new(0),
         }
+    }
+
+    /// Scrolls the pairing log by `delta` lines (negative = up, positive = down).
+    pub fn scroll_by(&mut self, delta: isize) {
+        let view = self.rendered_rows.get().max(1);
+        let max_off = max_scroll_offset(self.lines.len(), view);
+        let cur = self.scroll_offset.unwrap_or(max_off).min(max_off);
+        let next = clamp_scroll_offset(cur.saturating_add_signed(delta), self.lines.len(), view);
+        self.scroll_offset = if next >= max_off { None } else { Some(next) };
+    }
+
+    /// Jumps to a specific vertical scroll offset (e.g. from scrollbar click/drag).
+    pub fn scroll_to(&mut self, offset: usize) {
+        let view = self.rendered_rows.get().max(1);
+        let max_off = max_scroll_offset(self.lines.len(), view);
+        let next = clamp_scroll_offset(offset, self.lines.len(), view);
+        self.scroll_offset = if next >= max_off { None } else { Some(next) };
     }
 
     /// Folds one event into the page.
@@ -215,7 +266,11 @@ pub fn strip_ansi(s: &str) -> (String, bool) {
 }
 
 /// Runs `cmd`, forwarding its output lines as events until it exits or `cancel` fires.
-pub async fn run_pairing(cmd: PairCommand, tx: mpsc::UnboundedSender<PairingEvent>, cancel: Arc<Notify>) {
+pub async fn run_pairing(
+    cmd: PairCommand,
+    tx: mpsc::UnboundedSender<PairingEvent>,
+    cancel: Arc<Notify>,
+) {
     let mut child = match tokio::process::Command::new(&cmd.binary)
         .args(&cmd.args)
         .envs(cmd.env.iter().map(|(k, v)| (k, v)))
@@ -227,7 +282,10 @@ pub async fn run_pairing(cmd: PairCommand, tx: mpsc::UnboundedSender<PairingEven
     {
         Ok(c) => c,
         Err(e) => {
-            let _ = tx.send(PairingEvent::SpawnFailed(format!("failed to launch '{}': {e}", cmd.binary)));
+            let _ = tx.send(PairingEvent::SpawnFailed(format!(
+                "failed to launch '{}': {e}",
+                cmd.binary
+            )));
             return;
         }
     };
@@ -255,7 +313,10 @@ pub async fn run_pairing(cmd: PairCommand, tx: mpsc::UnboundedSender<PairingEven
     let _ = tx.send(PairingEvent::Exit(code));
 }
 
-async fn forward_lines<R: tokio::io::AsyncRead + Unpin>(reader: BufReader<R>, tx: mpsc::UnboundedSender<PairingEvent>) {
+async fn forward_lines<R: tokio::io::AsyncRead + Unpin>(
+    reader: BufReader<R>,
+    tx: mpsc::UnboundedSender<PairingEvent>,
+) {
     let mut lines = reader.lines();
     while let Ok(Some(raw)) = lines.next_line().await {
         let (text, clear) = strip_ansi(&raw);
@@ -266,10 +327,20 @@ async fn forward_lines<R: tokio::io::AsyncRead + Unpin>(reader: BufReader<R>, tx
     }
 }
 
-/// Draws the pairing page.
-pub fn render_pairing(area: Rect, buf: &mut Buffer, st: &PairingState, palette: &ThemePalette) {
+/// Draws the pairing page and records backdrop/body/scrollbar regions in `hitmap`.
+pub fn render_pairing_with_hitmap(
+    area: Rect,
+    buf: &mut Buffer,
+    st: &PairingState,
+    palette: &ThemePalette,
+    hitmap: &mut HitMap,
+) {
+    render_dimmed_backdrop(buf, area, palette);
+    hitmap.record(area, HitTarget::Backdrop(OverlayId::Settings));
+
     let bx = centered(area.width.min(100), area.height.min(34), area);
     let inner = boxed(bx, buf, &format!("Pair {}", st.plugin_id), palette);
+    hitmap.record(bx, HitTarget::OverlayBody(OverlayId::Settings));
     if inner.height < 4 || inner.width < 16 {
         return;
     }
@@ -281,36 +352,75 @@ pub fn render_pairing(area: Rect, buf: &mut Buffer, st: &PairingState, palette: 
     buf.set_string(
         inner.x + 1,
         inner.y,
-        trunc(&format!("{glyph} Status: {}", st.status.label()), inner.width.saturating_sub(2) as usize),
+        trunc(
+            &format!("{glyph} Status: {}", st.status.label()),
+            inner.width.saturating_sub(2) as usize,
+        ),
         Style::default().fg(color).bg(palette.modal_bg),
     );
-    let body = Rect::new(inner.x, inner.y + 2, inner.width, inner.height.saturating_sub(3));
+    let body = Rect::new(
+        inner.x,
+        inner.y + 2,
+        inner.width,
+        inner.height.saturating_sub(3),
+    );
     fill(buf, body, palette.modal_bg, palette.fg);
     let visible = body.height as usize;
-    let start = st.lines.len().saturating_sub(visible);
+    st.rendered_rows.set(visible.max(1));
+    let max_off = max_scroll_offset(st.lines.len(), visible);
+    let start = st.scroll_offset.unwrap_or(max_off).min(max_off);
+    let has_sb = st.lines.len() > visible && body.width > 3;
+    let content_w = if has_sb { body.width - 1 } else { body.width };
     for (i, line) in st.lines.iter().skip(start).take(visible).enumerate() {
         buf.set_string(
             body.x + 1,
             body.y + i as u16,
-            crate::width::fit_prefix(line, body.width.saturating_sub(2) as usize),
+            crate::width::fit_prefix(line, content_w.saturating_sub(2) as usize),
             Style::default().fg(palette.fg).bg(palette.modal_bg),
         );
     }
-    if st.lines.is_empty() {
+    if has_sb && body.height > 0 {
+        let track = Rect::new(body.x + body.width - 1, body.y, 1, body.height);
+        render_vertical_scrollbar(
+            buf,
+            track,
+            ScrollId::SettingsList,
+            st.lines.len(),
+            visible,
+            start,
+            hitmap,
+            Style::default().fg(palette.dim).bg(palette.modal_bg),
+            Style::default().fg(palette.accent).bg(palette.modal_bg),
+        );
+    }
+    if st.lines.is_empty() && body.height > 0 {
         buf.set_string(
             body.x + 1,
             body.y,
-            "Starting the pairing process...",
+            trunc(
+                "Starting the pairing process...",
+                content_w.saturating_sub(2) as usize,
+            ),
             Style::default().fg(palette.dim).bg(palette.modal_bg),
         );
     }
-    let hint = if st.status.is_done() { " Esc close · r retry" } else { " Esc cancel pairing" };
+    let hint = if st.status.is_done() {
+        " Esc close · r retry"
+    } else {
+        " Esc cancel pairing"
+    };
     buf.set_string(
         inner.x,
         inner.y + inner.height - 1,
-        hint,
+        trunc(hint, usize::from(inner.width)),
         Style::default().fg(palette.dim).bg(palette.modal_bg),
     );
+}
+
+/// Draws the pairing page.
+pub fn render_pairing(area: Rect, buf: &mut Buffer, st: &PairingState, palette: &ThemePalette) {
+    let mut hitmap = HitMap::default();
+    render_pairing_with_hitmap(area, buf, st, palette, &mut hitmap);
 }
 
 #[cfg(test)]

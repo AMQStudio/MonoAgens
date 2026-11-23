@@ -39,6 +39,22 @@ impl StatusView {
         self.raw = Some(v.clone());
     }
 
+    /// Selects rendered row `row_idx` and ensures it stays visible.
+    pub fn select_row(&mut self, row_idx: usize, visible: usize) {
+        let total = self.view().rows.len();
+        if total == 0 {
+            self.nav = Nav::default();
+            return;
+        }
+        self.nav.selected = row_idx.min(total - 1);
+        self.nav.offset = crate::core::viewport::scroll_offset_for_row(
+            self.nav.selected,
+            self.nav.offset,
+            visible.max(1),
+            total,
+        );
+    }
+
     #[must_use]
     pub fn view(&self) -> ViewModel {
         let mut rows = Vec::new();

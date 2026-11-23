@@ -1599,3 +1599,155 @@ fn status_json_reports_needs_pairing_without_a_session_and_opens_no_network() {
     // The command must not have created a session database.
     assert!(!state_dir.join("session.db").exists());
 }
+
+#[test]
+fn inbound_sets_addressees_and_audience_for_dm_ambient_group_reply_and_mention() {
+    let boot_ms = 1_700_000_500_000u64;
+    let mut translator = InboundTranslator::new(boot_ms);
+    let mut transport = OfflineWhatsAppTransport::new();
+    transport.own_jid = Some("6289999999@s.whatsapp.net".parse().unwrap());
+    transport.group_participants.insert(
+        "1203630123456@g.us".to_owned(),
+        vec![
+            "6281111111@s.whatsapp.net".parse().unwrap(),
+            "6289999999@s.whatsapp.net".parse().unwrap(),
+        ],
+    );
+    let mut echo = EchoRegistry::default();
+    echo.register_echo(
+        "bot-echo-1",
+        ActionId::new("act-bot-echo-1"),
+        0,
+        Time::from_millis(boot_ms),
+    );
+    let pending = PendingApprovalPromptMap::new(16);
+    let mut stager = MemoryBlobStager::default();
+
+    // 1. 1:1 DM via translate_inbound and translate_inbound_action -> addressees == ["soul"], audience includes "soul".
+    let dm = inbound_msg(
+        "dm-soul-1",
+        "6281111111@s.whatsapp.net",
+        "6281111111@s.whatsapp.net",
+        false,
+        false,
+        (boot_ms + 1_000) as i64,
+        wa::Message {
+            conversation: Some("hello bot".to_owned()),
+            ..Default::default()
+        },
+    );
+    let p_dm = translator
+        .translate_inbound(&dm, &mut transport, &echo, &mut stager, "k-dm-1")
+        .expect("DM should translate");
+    assert_eq!(p_dm.addressees, vec![ActorId::new("soul")]);
+    assert!(
+        p_dm.audience
+            .as_ref()
+            .expect("DM audience present")
+            .contains(&ActorId::new("soul"))
+    );
+
+    match translator
+        .translate_inbound_action(
+            &dm,
+            &mut transport,
+            &echo,
+            &pending,
+            &mut stager,
+            "k-dm-action",
+        )
+        .expect("DM action should translate")
+    {
+        InboundAction::PerceptEmit(percept) => {
+            assert_eq!(percept.addressees, vec![ActorId::new("soul")]);
+            assert!(
+                percept
+                    .audience
+                    .as_ref()
+                    .expect("DM audience present")
+                    .contains(&ActorId::new("soul"))
+            );
+        }
+        other => panic!("expected PerceptEmit, got {other:?}"),
+    }
+
+    // 2. Ambient group message -> addressees is empty.
+    let grp_ambient = inbound_msg(
+        "grp-ambient-1",
+        "1203630123456@g.us",
+        "6281111111@s.whatsapp.net",
+        true,
+        false,
+        (boot_ms + 2_000) as i64,
+        wa::Message {
+            conversation: Some("hey everyone".to_owned()),
+            ..Default::default()
+        },
+    );
+    let p_ambient = translator
+        .translate_inbound(&grp_ambient, &mut transport, &echo, &mut stager, "k-grp-1")
+        .expect("ambient group should translate");
+    assert!(p_ambient.addressees.is_empty());
+
+    // 3. Group message replying to a bot echo -> addressees == ["soul"].
+    let grp_reply = inbound_msg(
+        "grp-reply-1",
+        "1203630123456@g.us",
+        "6281111111@s.whatsapp.net",
+        true,
+        false,
+        (boot_ms + 3_000) as i64,
+        wa::Message {
+            extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
+                text: Some("following up".to_owned()),
+                context_info: buffa::MessageField::some(wa::ContextInfo {
+                    stanza_id: Some("bot-echo-1".to_owned()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+    let p_reply = translator
+        .translate_inbound(&grp_reply, &mut transport, &echo, &mut stager, "k-grp-2")
+        .expect("group reply to echo should translate");
+    assert_eq!(p_reply.addressees, vec![ActorId::new("soul")]);
+
+    // 4. Group message mentioning the bot JID (with device suffix) -> addressees == ["soul"].
+    let grp_mention = inbound_msg(
+        "grp-mention-1",
+        "1203630123456@g.us",
+        "6281111111@s.whatsapp.net",
+        true,
+        false,
+        (boot_ms + 4_000) as i64,
+        wa::Message {
+            extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
+                text: Some("@6289999999 help please".to_owned()),
+                context_info: buffa::MessageField::some(wa::ContextInfo {
+                    mentioned_jid: vec!["6289999999:2@s.whatsapp.net".to_owned()],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+    match translator
+        .translate_inbound_action(
+            &grp_mention,
+            &mut transport,
+            &echo,
+            &pending,
+            &mut stager,
+            "k-grp-3",
+        )
+        .expect("group mention action should translate")
+    {
+        InboundAction::PerceptEmit(percept) => {
+            assert_eq!(percept.addressees, vec![ActorId::new("soul")]);
+        }
+        other => panic!("expected PerceptEmit, got {other:?}"),
+    }
+}

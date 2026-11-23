@@ -16,6 +16,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
+use ratatui::widgets::{Clear, Widget};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
@@ -24,11 +25,16 @@ use crate::catalog_ui::pad;
 use crate::chat_search;
 use crate::client::{GatewayClient, RuntimeEvent};
 use crate::composer_history::{self, HistorySearch};
+use crate::core::hitmap::{HitTarget, ScrollId};
+use crate::core::input::{PasteTarget, TextInput};
+use crate::core::overlay::OverlayId;
+use crate::core::theme::render_dimmed_backdrop;
 use crate::draft_preview::DraftState;
 use crate::message_actions::{self, TurnSummary, WhyOverlay};
 use crate::notify::{NotifyMode, Notifier};
-use crate::state::{AppAction, ChatTimelineItem, TuiAppState};
+use crate::state::{AppAction, ChatTimelineItem, HitRegions, TuiAppState};
 use crate::theme::ThemePalette;
+use crate::widgets::scrollbar::render_vertical_scrollbar;
 
 /// A second Esc within this window interrupts the running turn.
 pub const ESC_INTERRUPT_WINDOW_MS: u64 = 1_500;
@@ -249,6 +255,41 @@ impl TuiAppState {
         self.filter_autocomplete();
     }
 
+    /// Pastes sanitized single-line text into an active conversation modal input (`history_search`
+    /// or `chat_search_input`).
+    pub fn conv_paste(&mut self, raw: &str) -> bool {
+        if let Some(s) = &mut self.conv.history_search {
+            let mut ti = TextInput::new(false).with_value(s.query.clone());
+            if ti.paste_text(raw) {
+                s.query = ti.value;
+                self.conv_show_history_match();
+                return true;
+            }
+            return false;
+        }
+        if self.conv.chat_search_input {
+            let cur = self.conv.chat_filter.clone().unwrap_or_default();
+            let mut ti = TextInput::new(false).with_value(cur);
+            if ti.paste_text(raw) {
+                self.conv.chat_filter = (!ti.value.is_empty()).then_some(ti.value);
+                return true;
+            }
+            return false;
+        }
+        false
+    }
+
+    /// Mouse wheel scrolling inside the `/why` modal (never leaks to chat behind `/why`).
+    pub(crate) fn conv_why_wheel(&mut self, delta: isize, viewport_height: u16) {
+        let Some(why) = &mut self.conv.why else {
+            return;
+        };
+        let h = (why.lines.len() as u16 + 4).min(viewport_height.saturating_sub(2)).max(5);
+        let rows = (h as usize).saturating_sub(3).max(1);
+        let max_scroll = why.lines.len().saturating_sub(rows);
+        why.scroll = why.scroll.saturating_add_signed(delta).min(max_scroll);
+    }
+
     /// Keys while one of this module's modal states is active.
     fn conv_modal_key(&mut self, key: KeyEvent) -> Option<Vec<AppAction>> {
         if self.conv.delete_confirm.is_some() {
@@ -266,12 +307,13 @@ impl TuiAppState {
             return Some(Vec::new());
         }
         if let Some(why) = &mut self.conv.why {
+            let max_scroll = why.lines.len().saturating_sub(1);
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => self.conv.why = None,
                 KeyCode::Up => why.scroll = why.scroll.saturating_sub(1),
-                KeyCode::Down => why.scroll += 1,
+                KeyCode::Down => why.scroll = (why.scroll + 1).min(max_scroll),
                 KeyCode::PageUp => why.scroll = why.scroll.saturating_sub(8),
-                KeyCode::PageDown => why.scroll += 8,
+                KeyCode::PageDown => why.scroll = (why.scroll + 8).min(max_scroll),
                 _ => {}
             }
             return Some(Vec::new());
@@ -350,7 +392,7 @@ impl TuiAppState {
         }
     }
 
-    fn conv_retry(&mut self) -> Vec<AppAction> {
+    pub(crate) fn conv_retry(&mut self) -> Vec<AppAction> {
         if self.is_busy() {
             return Vec::new();
         }
@@ -1080,6 +1122,20 @@ pub fn summary_lines(state: &TuiAppState, idx: usize, width: usize, palette: &Th
 
 /// Draws the one-line prompts at the bottom of the chat feed and the `/why` overlay.
 pub fn render_overlays(area: Rect, feed: Rect, buf: &mut Buffer, state: &TuiAppState, palette: &ThemePalette) {
+    let mut hit = HitRegions::default();
+    render_overlays_with_hit(area, feed, buf, state, palette, &mut hit);
+}
+
+/// Draws the one-line prompts at the bottom of the chat feed and the `/why` overlay, recording
+/// backdrop, modal body, and scrollbar in `hit`.
+pub fn render_overlays_with_hit(
+    area: Rect,
+    feed: Rect,
+    buf: &mut Buffer,
+    state: &TuiAppState,
+    palette: &ThemePalette,
+    hit: &mut HitRegions,
+) {
     let c = &state.conv;
     let prompt: Option<String> = if let Some(id) = &c.delete_confirm {
         let title = state
@@ -1115,8 +1171,34 @@ pub fn render_overlays(area: Rect, feed: Rect, buf: &mut Buffer, state: &TuiAppS
         let style = Style::default().fg(palette.accent).bg(palette.status_bg);
         buf.set_string(feed.x + 1, y, pad(&p, feed.width.saturating_sub(2) as usize), style);
     }
-    if let Some(why) = &c.why {
+    if let Some(why) = &c.why
+        && area.width >= 30
+        && area.height >= 7
+    {
+        render_dimmed_backdrop(buf, area, palette);
+        hit.hitmap.record(area, HitTarget::Backdrop(OverlayId::ConvModal));
+        let w = area.width.saturating_sub(6).min(120);
+        let h = (why.lines.len() as u16 + 4).min(area.height.saturating_sub(2)).max(5);
+        let rect = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+        Clear.render(rect, buf);
         message_actions::render_why(area, buf, why, palette);
+        hit.hitmap.record(rect, HitTarget::OverlayBody(OverlayId::ConvModal));
+        let rows = (rect.height as usize).saturating_sub(3);
+        if why.lines.len() > rows && rect.width > 2 && rows > 0 {
+            let scroll = why.scroll.min(why.lines.len().saturating_sub(rows));
+            let track = Rect::new(rect.x + rect.width - 1, rect.y + 2, 1, rows as u16);
+            render_vertical_scrollbar(
+                buf,
+                track,
+                ScrollId::ConvModal,
+                why.lines.len(),
+                rows,
+                scroll,
+                &mut hit.hitmap,
+                Style::default().fg(palette.separator).bg(palette.modal_bg),
+                Style::default().fg(palette.accent).bg(palette.modal_bg),
+            );
+        }
     }
 }
 

@@ -1791,3 +1791,210 @@ fn status_json_reports_the_missing_token_secret() {
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["ready"], json!(true));
 }
+
+#[test]
+fn inbound_sets_addressees_and_audience_for_dm_group_mention_reply_and_ambient() {
+    let mut transport = RecordingTelegramTransport::new(777_000, "mono_tg_bot");
+    transport.admins.insert(-100_999, Vec::new());
+    let mut body = TelegramBody::new(BodyId::new("body-telegram"), transport);
+    body.init_bot_identity().unwrap();
+
+    // Send a bot message into the group so EchoRegistry tracks its message_id.
+    let sent = body
+        .execute(make_exec(
+            "act-tg-bot-echo",
+            "chat.speak",
+            "tg:group:-100999",
+            json!({ "text": "Bot announcement" }).to_string().into_bytes(),
+        ))
+        .unwrap();
+    let bot_echo_id: i64 = extract_receipt_pids(&sent.receipt.unwrap())[0]
+        .parse()
+        .unwrap();
+
+    let alice = TgUser {
+        id: 42,
+        is_bot: false,
+        first_name: "Alice".to_owned(),
+        last_name: None,
+        username: Some("alice".to_owned()),
+    };
+    let bob = TgUser {
+        id: 88,
+        is_bot: false,
+        first_name: "Bob".to_owned(),
+        last_name: None,
+        username: Some("bob".to_owned()),
+    };
+    let bot_user = TgUser {
+        id: 777_000,
+        is_bot: true,
+        first_name: "TestBot".to_owned(),
+        last_name: None,
+        username: Some("mono_tg_bot".to_owned()),
+    };
+
+    let make_msg = |message_id: i64,
+                    chat: TgChat,
+                    from: TgUser,
+                    text: &str,
+                    reply_to: Option<TgMessage>| TgMessage {
+        message_id,
+        message_thread_id: None,
+        from: Some(from),
+        sender_chat: None,
+        date: 1_700_000_100 + message_id,
+        chat,
+        reply_to_message: reply_to.map(Box::new),
+        edit_date: None,
+        media_group_id: None,
+        text: Some(text.to_owned()),
+        caption: None,
+        photo: None,
+        document: None,
+        video: None,
+        audio: None,
+        voice: None,
+        sticker: None,
+        new_chat_members: None,
+        left_chat_member: None,
+    };
+
+    let dm_chat = || TgChat {
+        id: 42,
+        chat_type: "private".to_owned(),
+        title: None,
+        username: Some("alice".to_owned()),
+        is_forum: None,
+    };
+    let group_chat = || TgChat {
+        id: -100_999,
+        chat_type: "supergroup".to_owned(),
+        title: Some("Devs".to_owned()),
+        username: None,
+        is_forum: None,
+    };
+
+    // 1. Private DM includes "soul" in both addressees and audience.
+    let dm_upd = TgUpdate {
+        update_id: 10,
+        message: Some(make_msg(10, dm_chat(), alice.clone(), "hi there", None)),
+        edited_message: None,
+        callback_query: None,
+        message_reaction: None,
+    };
+    let dm_percept = body
+        .translate_update(&dm_upd, None)
+        .unwrap()
+        .expect("DM percept");
+    assert_eq!(dm_percept.addressees, vec![ActorId::new("soul")]);
+    assert!(
+        dm_percept
+            .audience
+            .as_ref()
+            .expect("DM audience")
+            .contains(&ActorId::new("soul"))
+    );
+
+    // 2. Group @mention includes "soul" in addressees.
+    let mention_upd = TgUpdate {
+        update_id: 11,
+        message: Some(make_msg(
+            11,
+            group_chat(),
+            alice.clone(),
+            "Hey @mono_tg_bot check this",
+            None,
+        )),
+        edited_message: None,
+        callback_query: None,
+        message_reaction: None,
+    };
+    let mention_percept = body
+        .translate_update(&mention_upd, None)
+        .unwrap()
+        .expect("mention percept");
+    assert!(mention_percept.addressees.contains(&ActorId::new("soul")));
+
+    // 3a. Group reply-to-bot (by bot user identity) includes "soul" in addressees.
+    let reply_bot_user = make_msg(900, group_chat(), bot_user, "previous bot msg", None);
+    let reply_user_upd = TgUpdate {
+        update_id: 12,
+        message: Some(make_msg(
+            12,
+            group_chat(),
+            alice.clone(),
+            "thanks!",
+            Some(reply_bot_user),
+        )),
+        edited_message: None,
+        callback_query: None,
+        message_reaction: None,
+    };
+    let reply_user_percept = body
+        .translate_update(&reply_user_upd, None)
+        .unwrap()
+        .expect("reply-to-bot-user percept");
+    assert_eq!(reply_user_percept.addressees, vec![ActorId::new("soul")]);
+
+    // 3b. Group reply-to-bot (by EchoRegistry message_id) includes "soul" in addressees.
+    let reply_echo_msg = make_msg(bot_echo_id, group_chat(), bob.clone(), "Bot announcement", None);
+    let reply_echo_upd = TgUpdate {
+        update_id: 13,
+        message: Some(make_msg(
+            13,
+            group_chat(),
+            alice.clone(),
+            "got it",
+            Some(reply_echo_msg),
+        )),
+        edited_message: None,
+        callback_query: None,
+        message_reaction: None,
+    };
+    let reply_echo_percept = body
+        .translate_update(&reply_echo_upd, None)
+        .unwrap()
+        .expect("reply-to-echo percept");
+    assert_eq!(reply_echo_percept.addressees, vec![ActorId::new("soul")]);
+
+    // 4. Ambient group messages (plain and replying to another human) leave addressees empty.
+    let ambient_upd = TgUpdate {
+        update_id: 14,
+        message: Some(make_msg(
+            14,
+            group_chat(),
+            alice.clone(),
+            "lunch anyone?",
+            None,
+        )),
+        edited_message: None,
+        callback_query: None,
+        message_reaction: None,
+    };
+    let ambient_percept = body
+        .translate_update(&ambient_upd, None)
+        .unwrap()
+        .expect("ambient group percept");
+    assert!(ambient_percept.addressees.is_empty());
+
+    let human_msg = make_msg(901, group_chat(), bob, "sure, ramen?", None);
+    let ambient_reply_upd = TgUpdate {
+        update_id: 15,
+        message: Some(make_msg(
+            15,
+            group_chat(),
+            alice,
+            "sounds good",
+            Some(human_msg),
+        )),
+        edited_message: None,
+        callback_query: None,
+        message_reaction: None,
+    };
+    let ambient_reply_percept = body
+        .translate_update(&ambient_reply_upd, None)
+        .unwrap()
+        .expect("ambient reply-to-human percept");
+    assert!(ambient_reply_percept.addressees.is_empty());
+}

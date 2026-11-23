@@ -578,16 +578,49 @@ impl BodyRouter {
             .cloned()
     }
 
-    /// Returns all currently registered [`CapabilityDescriptor`]s across live bodies.
+    /// Returns all currently registered [`CapabilityDescriptor`]s across live bodies,
+    /// deduplicated by [`CapabilityId`].
     #[must_use]
     pub fn all_capabilities(&self) -> Vec<CapabilityDescriptor> {
         let st = self.inner.lock().expect("router lock");
-        let mut out = Vec::new();
+        let mut by_id: BTreeMap<CapabilityId, CapabilityDescriptor> = BTreeMap::new();
         for conn in st.bodies.values() {
-            out.extend(conn.capabilities().iter().cloned());
+            for cap in conn.capabilities() {
+                match by_id.get_mut(&cap.id) {
+                    Some(existing) => {
+                        existing.places.extend(cap.places.iter().cloned());
+                        existing.flags.communicative |= cap.flags.communicative;
+                        existing.flags.identity_changing |= cap.flags.identity_changing;
+                        existing.flags.irreversible |= cap.flags.irreversible;
+                        if existing.description.trim().is_empty()
+                            && !cap.description.trim().is_empty()
+                        {
+                            existing.description = cap.description.clone();
+                        }
+                    }
+                    None => {
+                        by_id.insert(cap.id.clone(), cap.clone());
+                    }
+                }
+            }
         }
+        let mut out: Vec<CapabilityDescriptor> = by_id.into_values().collect();
         sort_capabilities(&mut out);
         out
+    }
+
+    /// Returns currently registered [`CapabilityDescriptor`]s grouped by connected [`BodyId`].
+    #[must_use]
+    pub fn capabilities_by_body(&self) -> BTreeMap<BodyId, Vec<CapabilityDescriptor>> {
+        let st = self.inner.lock().expect("router lock");
+        st.bodies
+            .iter()
+            .map(|(body_id, conn)| {
+                let mut caps = conn.capabilities().to_vec();
+                sort_capabilities(&mut caps);
+                (body_id.clone(), caps)
+            })
+            .collect()
     }
 
     /// Connects a child process speaking Waist-2 NDJSON over `stdin`/`stdout`, runs
@@ -1032,12 +1065,17 @@ impl BodyRouter {
             && let Some(text) = percept_commands::percept_text(&percept)
             && text.trim_start().starts_with('/')
         {
-            let capabilities: Vec<CapabilityId> =
-                self.all_capabilities().into_iter().map(|c| c.id).collect();
+            let capabilities = self.all_capabilities();
             let reply = {
                 let ctx = self.command_ctx.read().expect("command ctx lock");
                 let registry = self.commands.lock().expect("commands lock");
-                percept_commands::answer(&registry, &ctx, &percept, &text, &capabilities)
+                percept_commands::answer_with_descriptors(
+                    &registry,
+                    &ctx,
+                    &percept,
+                    &text,
+                    &capabilities,
+                )
             };
             if let Some(reply) = reply {
                 self.spawn_direct_reply(percept.place.clone(), percept.actor.clone(), reply);

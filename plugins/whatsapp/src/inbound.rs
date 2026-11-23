@@ -394,6 +394,7 @@ impl InboundTranslator {
         } else {
             let mut set = BTreeSet::new();
             set.insert(actor.clone());
+            set.insert(ActorId::new("soul"));
             if let Some(own) = transport.own_jid() {
                 set.insert(jid_to_actor(&own));
             }
@@ -451,6 +452,20 @@ impl InboundTranslator {
             .map(|rec| CorrelationId::new(rec.action_id.as_str()))
             .or_else(|| Some(CorrelationId::new(inbound.info.id.clone())));
 
+        let reply_to_own = reply_to_pid
+            .as_deref()
+            .and_then(|pid| echo_registry.resolve_reply_to(pid))
+            .is_some();
+        let mentions_own = transport.own_jid().is_some_and(|own| {
+            let own_actor = jid_to_actor(&own);
+            named.iter().any(|n| n == &own_actor)
+        });
+        let addressees = if !is_group || reply_to_own || mentions_own {
+            vec![ActorId::new("soul")]
+        } else {
+            Vec::new()
+        };
+
         Some(InboundAction::PerceptEmit(Box::new(PerceptEmitParams {
             headers: Waist2Headers::new(idempotency_key),
             actor: actor.clone(),
@@ -460,7 +475,7 @@ impl InboundTranslator {
             timestamp_ms: Time::from_millis(msg_timestamp_ms),
             payload: OpaquePayload::from_bytes(payload_bytes),
             taint: Taint::Untrusted,
-            addressees: Vec::new(),
+            addressees,
             named,
             orient: Vec::new(),
             reply_to: None,

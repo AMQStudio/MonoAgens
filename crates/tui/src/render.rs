@@ -9,20 +9,22 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Widget};
+use ratatui::widgets::{Clear, Widget};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::config::{IconMode, MessageLayout};
+use crate::core::hitmap::{HitTarget, ScrollId};
+use crate::core::overlay::OverlayId;
+use crate::core::theme::{ChromeGlyphs, render_dimmed_backdrop};
 use crate::effects::TuiEffects;
 use crate::markdown::render_markdown_lines;
-use crate::settings::{
-    PluginUiState, SettingValueKind, SettingsTab,
-};
+use crate::settings::PluginUiState;
 use crate::state::{
     ChatTimelineItem, HitRegions, PendingApprovalCard, TuiAppState, normalize_selection,
 };
 use crate::theme::ThemePalette;
-use crate::width::{chrome_label, chrome_text, fit_prefix, sanitize};
+use crate::width::{chrome_label, fit_prefix, sanitize};
+use crate::widgets::scrollbar::render_vertical_scrollbar as widget_vertical_scrollbar;
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Below this width the sidebar is hidden and cannot open.
@@ -84,45 +86,75 @@ pub fn render_to_buffer(
         render_sidebar(sb_rect, buf, state, &palette, hit);
     }
 
-    hit.chat_area = main_rect;
     let feed_rect = render_main_pane(main_rect, buf, state, effects, &palette, hit);
 
+    let stack = state.effective_overlay_stack();
     let mut modal_rect = None;
-    if state.settings.open {
-        let mr = if area.height < COMPACT_ROWS {
-            area
-        } else {
-            centered_rect(88, 86, area)
-        };
-        modal_rect = Some(mr);
-        hit.settings_area = mr;
-        render_settings_modal(mr, buf, state, &palette, hit);
-        crate::settings_ui::render_settings_subviews(area, buf, state, &palette, hit);
-    } else if let Some(wizard) = &state.wizard {
-        modal_rect = Some(area);
-        crate::wizard::render_wizard(area, buf, wizard, &palette, hit);
+    for entry in stack.iter_bottom_to_top() {
+        match entry.id {
+            OverlayId::ConvModal => {
+                if state.conv.why.is_some() {
+                    modal_rect = Some(area);
+                }
+                crate::conv::render_overlays_with_hit(area, feed_rect, buf, state, &palette, hit);
+            }
+            OverlayId::Wizard => {
+                if let Some(wizard) = &state.wizard {
+                    modal_rect = Some(area);
+                    crate::wizard::render_wizard(area, buf, wizard, &palette, hit);
+                }
+            }
+            OverlayId::Settings => {
+                modal_rect = Some(area);
+                state.render_settings_overlay(area, buf, &palette, hit);
+            }
+            OverlayId::Catalog => {
+                modal_rect = Some(area);
+                crate::catalog_ui::render_overlay_with_hit(
+                    area,
+                    buf,
+                    &state.catalog,
+                    &palette,
+                    state.prefs.icons,
+                    hit,
+                );
+            }
+            OverlayId::Governance => {
+                modal_rect = Some(area);
+                render_dimmed_backdrop(buf, area, &palette);
+                hit.hitmap.record(area, HitTarget::Backdrop(OverlayId::Governance));
+                Clear.render(area, buf);
+                crate::views::draw(area, buf, &state.gov, &palette, state.prefs.icons);
+                record_gov_hitmap(area, buf, &state.gov, &palette, hit);
+            }
+            OverlayId::Log => {
+                modal_rect = Some(area);
+                crate::log::render_log_overlay(
+                    area,
+                    buf,
+                    &state.log,
+                    &palette,
+                    state.prefs.icons,
+                    hit,
+                );
+            }
+            OverlayId::Palette => {
+                if let Some(p) = &state.ux.palette {
+                    modal_rect = Some(area);
+                    crate::palette::render_palette(area, buf, p, &palette, hit);
+                }
+            }
+            OverlayId::Help => {
+                if let Some(h) = &state.ux.help {
+                    modal_rect = Some(area);
+                    crate::ui_global::render_help_overlay(area, buf, h, state, &palette, hit);
+                }
+            }
+        }
     }
 
-    if state.ux.help.is_some() || state.ux.palette.is_some() {
-        modal_rect = Some(area);
-        crate::ui_global::render_ux_overlays(area, buf, state, &palette, hit);
-    }
-
-    if state.log.open {
-        modal_rect = Some(area);
-        crate::log::render_log_overlay(area, buf, &state.log, &palette, state.prefs.icons, hit);
-    }
-
-    if state.catalog.is_open() {
-        modal_rect = Some(area);
-        crate::catalog_ui::render_overlay(area, buf, &state.catalog, &palette, state.prefs.icons);
-    } else if state.gov.is_open() {
-        modal_rect = Some(area);
-        crate::views::draw(area, buf, &state.gov, &palette, state.prefs.icons);
-    }
-
-    if modal_rect.is_none() {
-        crate::conv::render_overlays(area, feed_rect, buf, state, &palette);
+    if modal_rect.is_none() && !stack.contains(OverlayId::ConvModal) {
+        crate::conv::render_overlays_with_hit(area, feed_rect, buf, state, &palette, hit);
     }
 
     if let Some(toast) = &state.toast {
@@ -131,10 +163,62 @@ pub fn render_to_buffer(
 
     let fx_area = modal_rect.unwrap_or(main_rect);
     effects.process(elapsed_ms, buf, fx_area);
+}
 
-    // Chat content keeps its emoji; everything else is normalised for terminal width safety.
-    let content_rect = if modal_rect.is_some() { None } else { Some(feed_rect) };
-    normalize_chrome(buf, area, content_rect, state.prefs.icons);
+fn record_gov_hitmap(
+    area: Rect,
+    buf: &mut Buffer,
+    gov: &crate::views::GovState,
+    palette: &ThemePalette,
+    hit: &mut HitRegions,
+) {
+    if area.width < 10 || area.height < crate::views::GOV_CHROME_ROWS + 1 {
+        return;
+    }
+    hit.hitmap.record(area, HitTarget::OverlayBody(OverlayId::Governance));
+    let visible = (area.height - crate::views::GOV_CHROME_ROWS) as usize;
+    if let Some(d) = &gov.detail {
+        let d_vis = visible.saturating_sub(1);
+        if d.lines.len() > d_vis && d_vis > 0 {
+            let track = Rect::new(area.x + area.width - 1, area.y + 2, 1, d_vis as u16);
+            widget_vertical_scrollbar(
+                buf,
+                track,
+                ScrollId::GovernanceList,
+                d.lines.len(),
+                d_vis,
+                d.offset,
+                &mut hit.hitmap,
+                Style::default().fg(palette.separator).bg(palette.bg),
+                Style::default().fg(palette.accent).bg(palette.bg),
+            );
+        }
+        return;
+    }
+    let vm = gov.view_model(gov.now());
+    let total = vm.rows.len();
+    let offset = scroll_window(vm.selected.unwrap_or(0), vm.offset, visible, total);
+    let list_w = area.width.saturating_sub(1);
+    for (i, _) in vm.rows.iter().skip(offset).take(visible).enumerate() {
+        hit.hitmap.record(
+            Rect::new(area.x, area.y + 1 + i as u16, list_w, 1),
+            HitTarget::ListRow(offset + i),
+        );
+    }
+    if total > visible && visible > 0 {
+        let track = Rect::new(area.x + area.width - 1, area.y + 1, 1, visible as u16);
+        widget_vertical_scrollbar(
+            buf,
+            track,
+            ScrollId::GovernanceList,
+            total,
+            visible,
+            offset,
+            &mut hit.hitmap,
+            Style::default().fg(palette.separator).bg(palette.bg),
+            Style::default().fg(palette.accent).bg(palette.bg),
+        );
+    }
 }
 
 fn render_too_small(area: Rect, buf: &mut Buffer, palette: &ThemePalette) {
@@ -155,33 +239,6 @@ fn render_too_small(area: Rect, buf: &mut Buffer, palette: &ThemePalette) {
     }
 }
 
-/// Drops U+FE0F and (in `Symbols` mode) swaps chrome emoji for single-width symbols, cell by cell,
-/// leaving `skip` (the chat feed) untouched.
-fn normalize_chrome(buf: &mut Buffer, area: Rect, skip: Option<Rect>, mode: IconMode) {
-    for y in area.y..area.y.saturating_add(area.height) {
-        for x in area.x..area.x.saturating_add(area.width) {
-            if skip.is_some_and(|r| rect_has(r, x, y)) {
-                continue;
-            }
-            let Some(cell) = buf.cell_mut((x, y)) else {
-                continue;
-            };
-            let sym = cell.symbol();
-            if sym.is_ascii() {
-                continue;
-            }
-            let fixed = chrome_text(sym, mode);
-            if fixed != sym {
-                cell.set_symbol(&fixed);
-            }
-        }
-    }
-}
-
-const fn rect_has(r: Rect, x: u16, y: u16) -> bool {
-    x >= r.x && x < r.x.saturating_add(r.width) && y >= r.y && y < r.y.saturating_add(r.height)
-}
-
 fn fill_bg(buf: &mut Buffer, area: Rect, bg: ratatui::style::Color, fg: ratatui::style::Color) {
     let style = Style::default().bg(bg).fg(fg);
     for y in area.y..area.y.saturating_add(area.height) {
@@ -194,7 +251,7 @@ fn fill_bg(buf: &mut Buffer, area: Rect, bg: ratatui::style::Color, fg: ratatui:
 }
 
 enum SidebarRow {
-    Header(&'static str),
+    Header(String),
     Spacer,
     Chat { id: String, title: String, active: bool },
     Plugin { id: String, kind: PluginKind, state: PluginUiState },
@@ -234,20 +291,21 @@ fn render_sidebar(
         buf.set_line(area.x + 1, row_y, &line, inner_w as u16);
     };
 
-    // Brand header
+    // Brand header (strictly 1-cell glyphs)
+    let glyphs = ChromeGlyphs::for_mode(state.prefs.icons);
     put_line(
         buf,
         area.y,
         vec![
             Span::styled(
-                "✦ Mono",
+                format!("{} Mono", glyphs.tab_plugins),
                 Style::default()
                     .fg(palette.accent)
                     .bg(palette.sidebar_bg)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                "  ✨",
+                format!("  {}", glyphs.bullet),
                 Style::default().fg(palette.muted).bg(palette.sidebar_bg),
             ),
         ],
@@ -270,7 +328,7 @@ fn render_sidebar(
     }
 
     let mut rows: Vec<SidebarRow> = Vec::new();
-    rows.push(SidebarRow::Header("💬 CHATS"));
+    rows.push(SidebarRow::Header(format!("{} CHATS", glyphs.arrow_right)));
     for chat in crate::chat_search::visible_chats(
         &state.chats,
         &state.timelines,
@@ -278,12 +336,12 @@ fn render_sidebar(
     ) {
         rows.push(SidebarRow::Chat {
             id: chat.id.clone(),
-            title: if chat.pinned { format!("★ {}", chat.title) } else { chat.title.clone() },
+            title: if chat.pinned { format!("* {}", chat.title) } else { chat.title.clone() },
             active: chat.id == state.chats.active_chat_id,
         });
     }
     rows.push(SidebarRow::Spacer);
-    rows.push(SidebarRow::Header("🔌 PLUGINS"));
+    rows.push(SidebarRow::Header(format!("{} PLUGINS", glyphs.tab_model)));
 
     let visible_plugins: Vec<_> = {
         let installed: Vec<_> = state.plugins.iter().filter(|p| p.installed).collect();
@@ -303,7 +361,7 @@ fn render_sidebar(
 
     if state.lab_mode {
         rows.push(SidebarRow::Spacer);
-        rows.push(SidebarRow::Header("🧪 SPEAK AS"));
+        rows.push(SidebarRow::Header(format!("{} SPEAK AS", glyphs.tab_soul)));
         for actor in &state.lab_session.known_actors {
             rows.push(SidebarRow::Actor {
                 id: actor.clone(),
@@ -325,7 +383,7 @@ fn render_sidebar(
                     buf,
                     y,
                     vec![Span::styled(
-                        (*label).to_owned(),
+                        label.clone(),
                         Style::default()
                             .fg(palette.dim)
                             .bg(palette.sidebar_bg)
@@ -337,7 +395,9 @@ fn render_sidebar(
             SidebarRow::Chat { id, title, active } => {
                 let row_rect = Rect::new(area.x, y, area.width.saturating_sub(1), 1);
                 hit.sidebar_chats.push((row_rect, id.clone()));
-                let prefix = if *active { "▸ " } else { "  " };
+                hit.hitmap.record(row_rect, HitTarget::SidebarChat(id.clone()));
+                let active_prefix = format!("{} ", glyphs.pointer);
+                let prefix = if *active { active_prefix.as_str() } else { "  " };
                 let trunc_title = truncate_to_width(title, inner_w.saturating_sub(2));
                 let row_bg = if *active {
                     palette.selection_bg
@@ -354,7 +414,7 @@ fn render_sidebar(
                     buf,
                     y,
                     vec![
-                        Span::styled(prefix, Style::default().fg(palette.accent).bg(row_bg)),
+                        Span::styled(prefix.to_owned(), Style::default().fg(palette.accent).bg(row_bg)),
                         Span::styled(trunc_title, Style::default().fg(row_fg).bg(row_bg)),
                     ],
                 );
@@ -362,13 +422,17 @@ fn render_sidebar(
             SidebarRow::Plugin { id, kind, state: pstate } => {
                 let row_rect = Rect::new(area.x, y, area.width.saturating_sub(1), 1);
                 hit.sidebar_plugins.push((row_rect, id.clone()));
+                hit.hitmap.record(row_rect, HitTarget::SidebarPlugin(id.clone()));
                 let dot_color = match pstate {
-                    PluginUiState::Running | PluginUiState::RunningElsewhere => palette.status_green,
+                    PluginUiState::Running | PluginUiState::RunningElsewhere => {
+                        palette.status_green
+                    }
                     PluginUiState::Starting | PluginUiState::Stopping | PluginUiState::NeedsSetup(_) => {
                         palette.status_yellow
                     }
                     PluginUiState::Stopped | PluginUiState::Failed(_) => palette.status_red,
                 };
+                let dot_glyph = pstate.dot_glyph();
                 let kind_label = match kind {
                     PluginKind::Adapter => "(Adapter)",
                     PluginKind::Capability => "(Capabilities)",
@@ -380,7 +444,7 @@ fn render_sidebar(
                     y,
                     vec![
                         Span::styled(
-                            format!("{} ", pstate.dot_glyph()),
+                            format!("{dot_glyph} "),
                             Style::default().fg(dot_color).bg(palette.sidebar_bg),
                         ),
                         Span::styled(
@@ -397,7 +461,12 @@ fn render_sidebar(
             SidebarRow::Actor { id, active } => {
                 let row_rect = Rect::new(area.x, y, area.width.saturating_sub(1), 1);
                 hit.sidebar_actors.push((row_rect, id.clone()));
-                let prefix = if *active { "● " } else { "○ " };
+                hit.hitmap.record(row_rect, HitTarget::SidebarActor(id.clone()));
+                let prefix = if *active {
+                    format!("{} ", glyphs.dot_on)
+                } else {
+                    format!("{} ", glyphs.dot_off)
+                };
                 put_line(
                     buf,
                     y,
@@ -415,15 +484,16 @@ fn render_sidebar(
 
     if total_rows > avail_h {
         let sb_rect = Rect::new(sep_x, body_y, 1, avail_h as u16);
-        render_vertical_scrollbar(
+        widget_vertical_scrollbar(
             buf,
             sb_rect,
+            ScrollId::Sidebar,
             total_rows,
             avail_h,
             scroll,
-            palette.sidebar_bg,
-            palette,
-            false,
+            &mut hit.hitmap,
+            Style::default().fg(palette.separator).bg(palette.sidebar_bg),
+            Style::default().fg(palette.accent).bg(palette.sidebar_bg),
         );
     }
 }
@@ -492,6 +562,7 @@ fn render_main_pane(
     let composer_rect = chunks[6];
 
     hit.chat_area = feed_rect;
+    hit.hitmap.record(feed_rect, HitTarget::ChatFeed);
     render_chat_feed(feed_rect, buf, state, palette, hit);
 
     if let Some(card) = &state.pending_approval
@@ -508,7 +579,7 @@ fn render_main_pane(
     if attachment_height > 0 {
         render_attachment_strip(attachment_rect, buf, state, palette, hit);
     }
-    render_composer(composer_rect, buf, state, palette, !compact_rows);
+    render_composer(composer_rect, buf, state, palette, !compact_rows, hit);
 
     if autocomplete_height > 0 {
         render_autocomplete(ac_rect, buf, state, palette, hit);
@@ -689,7 +760,8 @@ fn render_chat_feed(
                 if state.prefs.show_turn_duration
                     && let Some(ms) = duration_ms
                 {
-                    let label = chrome_label(&format!("  ⏱ {}", format_turn_duration(*ms)), state.prefs.icons);
+                    let glyphs = ChromeGlyphs::for_mode(state.prefs.icons);
+                    let label = format!("  {} {}", glyphs.bullet, format_turn_duration(*ms));
                     rendered_lines.push(Line::from(Span::styled(
                         label,
                         Style::default().fg(palette.dim),
@@ -761,13 +833,14 @@ fn render_chat_feed(
     }
 
     if rendered_lines.is_empty() {
+        let glyphs = ChromeGlyphs::for_mode(state.prefs.icons);
         let top_pad = (area.height as usize).saturating_sub(6) / 3;
         for _ in 0..top_pad {
             rendered_lines.push(Line::default());
         }
-        let header = chrome_label(
-            &format!("  ✨ {} · ready", state.gateway_cfg.soul.name),
-            state.prefs.icons,
+        let header = format!(
+            "  {} {} · ready",
+            glyphs.tab_plugins, state.gateway_cfg.soul.name
         );
         rendered_lines.push(Line::from(Span::styled(
             truncate_to_width(&header, content_w),
@@ -785,9 +858,9 @@ fn render_chat_feed(
             )));
         }
         rendered_lines.push(Line::default());
-        let tips = chrome_label(
-            "  💬 Start chatting · ✨ /new · 📎 /attach · ⚙️ /settings · 📋 drag to copy · Ctrl+B sidebar",
-            state.prefs.icons,
+        let tips = format!(
+            "  {} Start chatting · {} /new · {} /attach · {} /settings · {} drag to copy · Ctrl+B sidebar",
+            glyphs.arrow_right, glyphs.tab_plugins, glyphs.bullet, glyphs.tab_runtime, glyphs.info
         );
         for wline in wrap_text_lines(&tips, content_w) {
             rendered_lines.push(Line::from(Span::styled(
@@ -809,10 +882,14 @@ fn render_chat_feed(
     for (start, end, idx) in message_spans {
         let (from, to) = (start.max(scroll), end.min(scroll + visible_h));
         if from < to {
-            hit.message_rows.push((
-                Rect::new(area.x, area.y + (from - scroll) as u16, area.width.saturating_sub(1), (to - from) as u16),
-                idx,
-            ));
+            let msg_rect = Rect::new(
+                area.x,
+                area.y + (from - scroll) as u16,
+                area.width.saturating_sub(1),
+                (to - from) as u16,
+            );
+            hit.message_rows.push((msg_rect, idx));
+            hit.hitmap.record(msg_rect, HitTarget::ChatMessage(idx));
         }
     }
 
@@ -852,16 +929,30 @@ fn render_chat_feed(
     hit.chat_scrollbar = Some(sb_rect);
     hit.chat_total_lines = total;
     hit.chat_visible_lines = visible_h;
-    render_vertical_scrollbar(
-        buf,
-        sb_rect,
-        total,
-        visible_h,
-        scroll,
-        palette.bg,
-        palette,
-        true,
-    );
+    if total > visible_h {
+        widget_vertical_scrollbar(
+            buf,
+            sb_rect,
+            ScrollId::Chat,
+            total,
+            visible_h,
+            scroll,
+            &mut hit.hitmap,
+            Style::default().fg(palette.separator).bg(palette.bg),
+            Style::default().fg(palette.accent).bg(palette.bg),
+        );
+    } else {
+        render_vertical_scrollbar(
+            buf,
+            sb_rect,
+            total,
+            visible_h,
+            scroll,
+            palette.bg,
+            palette,
+            true,
+        );
+    }
 
     // Apply selection highlight overlay across normalized (start..=end) cell range.
     if let Some(sel) = state.selection
@@ -958,8 +1049,14 @@ fn render_approval_card(
 
         let approve_x = area.x + 3;
         let deny_x = approve_x + approve_lbl.len() as u16 + 2;
-        hit.approval_approve = Some(Rect::new(approve_x, btn_y, approve_lbl.len() as u16, 1));
-        hit.approval_deny = Some(Rect::new(deny_x, btn_y, deny_lbl.len() as u16, 1));
+        let approve_rect = Rect::new(approve_x, btn_y, approve_lbl.len() as u16, 1);
+        let deny_rect = Rect::new(deny_x, btn_y, deny_lbl.len() as u16, 1);
+        hit.approval_approve = Some(approve_rect);
+        hit.approval_deny = Some(deny_rect);
+        hit.hitmap
+            .record(approve_rect, HitTarget::Button("approval.approve".to_owned()));
+        hit.hitmap
+            .record(deny_rect, HitTarget::Button("approval.deny".to_owned()));
     }
 }
 
@@ -992,12 +1089,13 @@ fn render_status_bar(
     palette: &ThemePalette,
 ) {
     fill_bg(buf, area, palette.status_bg, palette.muted);
+    let glyphs = ChromeGlyphs::for_mode(state.prefs.icons);
     let mut spans: Vec<Span<'static>> = Vec::new();
     if state.is_busy() {
         let spinner = effects.spinner_glyph(state.prefs.motion);
         let elapsed = TuiAppState::format_elapsed(Duration::from_millis(state.thinking_elapsed_ms));
         spans.push(Span::styled(
-            format!(" {spinner} {elapsed} › "),
+            format!(" {spinner} {elapsed} {} ", glyphs.pointer),
             Style::default()
                 .fg(palette.accent)
                 .bg(palette.status_bg)
@@ -1005,7 +1103,7 @@ fn render_status_bar(
         ));
     } else {
         spans.push(Span::styled(
-            " ● ",
+            format!(" {} ", glyphs.dot_on),
             Style::default().fg(palette.status_green).bg(palette.status_bg),
         ));
     }
@@ -1018,7 +1116,7 @@ fn render_status_bar(
     let compact = area.width < MIN_SIDEBAR_COLS;
     if state.prefs.show_valve_badge && !compact {
         spans.push(Span::styled(
-            format!(" · 🛡️ Valve: {}", state.valve_mode),
+            format!(" · {} Valve: {}", glyphs.tab_valve, state.valve_mode),
             Style::default().fg(palette.muted).bg(palette.status_bg),
         ));
     }
@@ -1052,7 +1150,8 @@ fn render_status_bar(
     if !compact {
         spans.push(Span::styled(
             format!(
-                " · 💬 {}",
+                " · {} {}",
+                glyphs.arrow_right,
                 sanitize(&state.chats.active_chat().title, false)
             ),
             Style::default().fg(palette.dim).bg(palette.status_bg),
@@ -1061,7 +1160,7 @@ fn render_status_bar(
 
     if state.gov.pending_count > 0 {
         spans.push(Span::styled(
-            format!(" · ⚑ {}", state.gov.pending_count),
+            format!(" · ! {}", state.gov.pending_count),
             Style::default()
                 .fg(palette.status_yellow)
                 .bg(palette.status_bg)
@@ -1072,7 +1171,7 @@ fn render_status_bar(
     if state.lab_mode {
         spans.push(Span::raw(" "));
         spans.push(Span::styled(
-            " 🧪 lab ",
+            format!(" {} lab ", glyphs.tab_soul),
             Style::default()
                 .bg(palette.lab_badge_bg)
                 .fg(palette.lab_badge_fg)
@@ -1171,7 +1270,9 @@ fn render_composer(
     state: &TuiAppState,
     palette: &ThemePalette,
     show_hint: bool,
+    hit: &mut HitRegions,
 ) {
+    hit.hitmap.record(area, HitTarget::Composer);
     if area.height < 3 || area.width < 6 {
         return;
     }
@@ -1187,7 +1288,7 @@ fn render_composer(
     let rule_style = Style::default().fg(palette.separator);
     buf.set_string(area.x, area.y, &rule, rule_style);
 
-    let composer_active = !state.settings.open && state.wizard.is_none();
+    let composer_active = !state.has_open_overlay();
     let cursor_style = if palette.no_color {
         Style::default().add_modifier(Modifier::REVERSED)
     } else {
@@ -1317,6 +1418,7 @@ fn render_autocomplete(
         let y = area.y + (row - offset) as u16;
         let row_rect = Rect::new(area.x, y, text_w, 1);
         hit.autocomplete_rows.push((row_rect, row));
+        hit.hitmap.record(row_rect, HitTarget::ListRow(row));
 
         let selected = row == state.autocomplete_idx;
         let bg = if selected {
@@ -1328,7 +1430,8 @@ fn render_autocomplete(
         fill_bg(buf, row_rect, bg, left_fg);
 
         let marker = if selected { "❯" } else { " " };
-        let left_text = format!("{marker}{} /{}", item.icon, item.name);
+        let icon = chrome_label(item.icon, state.prefs.icons);
+        let left_text = format!("{marker}{icon} /{}", item.name);
         let padded_left = format!("{left_text:<width$}", width = col_left_w);
         let right_text = match &item.current_value {
             Some(v) => format!("{}  [{v}]", item.description),
@@ -1349,326 +1452,6 @@ fn render_autocomplete(
     }
 }
 
-fn render_settings_modal(
-    area: Rect,
-    buf: &mut Buffer,
-    state: &TuiAppState,
-    palette: &ThemePalette,
-    hit: &mut HitRegions,
-) {
-    Clear.render(area, buf);
-    fill_bg(buf, area, palette.modal_bg, palette.fg);
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(palette.accent))
-        .title(Span::styled(
-            " ⚙️ Settings  (←/→ Tab · ↑/↓ Select · Enter/Space Edit · Esc Back/Close) ",
-            Style::default()
-                .fg(palette.fg)
-                .bg(palette.modal_bg)
-                .add_modifier(Modifier::BOLD),
-        ));
-    let inner = block.inner(area);
-    block.render(area, buf);
-
-    if inner.width < 24 || inner.height < 8 {
-        return;
-    }
-
-    // Tab bar + search bar
-    let mut tab_x = inner.x + 1;
-    let tab_y = inner.y;
-    // Icons are dropped when the eight tabs do not fit, so every tab stays reachable.
-    let full_w: usize = SettingsTab::ALL
-        .iter()
-        .map(|t| format!(" {} {} ", t.icon(), t.label()).width() + 1)
-        .sum();
-    let with_icons = full_w + 2 <= inner.width as usize;
-    for tab in SettingsTab::ALL {
-        let label = if with_icons {
-            format!(" {} {} ", tab.icon(), tab.label())
-        } else {
-            format!(" {} ", tab.label())
-        };
-        let w = label.width() as u16;
-        if tab_x + w >= inner.x + inner.width {
-            break;
-        }
-        let active = tab == state.settings.tab;
-        let style = if active {
-            Style::default()
-                .bg(palette.accent)
-                .fg(palette.accent_fg)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(palette.muted).bg(palette.modal_bg)
-        };
-        buf.set_string(tab_x, tab_y, &label, style);
-        hit.settings_tabs.push((Rect::new(tab_x, tab_y, w, 1), tab));
-        tab_x += w + 1;
-    }
-
-    let search_y = inner.y + 1;
-    let search_line = Line::from(vec![
-        Span::styled(
-            " 🔍 Search: ",
-            Style::default()
-                .fg(palette.accent)
-                .bg(palette.modal_bg)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            if state.settings.search_query.is_empty() {
-                "type to filter settings…".to_owned()
-            } else {
-                format!("{}▏", state.settings.search_query)
-            },
-            Style::default()
-                .fg(if state.settings.search_query.is_empty() {
-                    palette.dim
-                } else {
-                    palette.fg
-                })
-                .bg(palette.modal_bg),
-        ),
-    ]);
-    buf.set_line(inner.x, search_y, &search_line, inner.width);
-
-    let rule = "─".repeat(inner.width as usize);
-    buf.set_string(inner.x, inner.y + 2, &rule, Style::default().fg(palette.separator));
-
-    let body_area = Rect::new(
-        inner.x,
-        inner.y + 3,
-        inner.width,
-        inner.height.saturating_sub(4),
-    );
-
-    if let Some(detail) = &state.settings.plugin_detail {
-        crate::plugin_detail::render_plugin_detail(body_area, buf, state, detail, palette, hit);
-    } else {
-        let panes = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(24), Constraint::Min(20)])
-            .split(body_area);
-
-        render_settings_sections(panes[0], buf, state, palette, hit);
-        render_settings_options(panes[1], buf, state, palette, hit);
-    }
-
-    if let Some(edit) = &state.settings.editing {
-        let prompt_area = Rect::new(
-            inner.x + 1,
-            inner.y + inner.height.saturating_sub(1),
-            inner.width.saturating_sub(2),
-            1,
-        );
-        let display_buf = if edit.masked {
-            "●".repeat(edit.buffer.chars().count())
-        } else {
-            edit.buffer.clone()
-        };
-        let line = Line::from(vec![
-            Span::styled(
-                format!(" ✏️ {}: ", edit.prompt),
-                Style::default()
-                    .fg(palette.accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(format!("{display_buf}▏"), Style::default().fg(palette.fg)),
-        ]);
-        fill_bg(buf, prompt_area, palette.selection_bg, palette.fg);
-        buf.set_line(prompt_area.x, prompt_area.y, &line, prompt_area.width);
-    }
-}
-
-fn render_settings_sections(
-    area: Rect,
-    buf: &mut Buffer,
-    state: &TuiAppState,
-    palette: &ThemePalette,
-    hit: &mut HitRegions,
-) {
-    let sep_x = area.x + area.width.saturating_sub(1);
-    for y in area.y..area.y + area.height {
-        if let Some(cell) = buf.cell_mut((sep_x, y)) {
-            cell.set_symbol("│");
-            cell.set_style(Style::default().fg(palette.separator).bg(palette.modal_bg));
-        }
-    }
-
-    for (idx, sec) in state.settings.tab.sections().iter().enumerate() {
-        let y = area.y + idx as u16;
-        if y >= area.y + area.height {
-            break;
-        }
-        let rect = Rect::new(area.x, y, area.width.saturating_sub(1), 1);
-        hit.settings_sections.push((rect, idx));
-        let active = idx == state.settings.section_index;
-        let bg = if active {
-            palette.selection_bg
-        } else {
-            palette.modal_bg
-        };
-        let prefix = if active { "▸ " } else { "  " };
-        let style = if active {
-            Style::default()
-                .bg(bg)
-                .fg(palette.accent)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(palette.muted).bg(bg)
-        };
-        fill_bg(buf, rect, bg, palette.fg);
-        let line = Line::from(vec![
-            Span::styled(prefix, Style::default().fg(palette.accent).bg(bg)),
-            Span::styled(
-                truncate_to_width(sec, (area.width as usize).saturating_sub(4)),
-                style,
-            ),
-        ]);
-        buf.set_line(area.x + 1, y, &line, area.width.saturating_sub(2));
-    }
-}
-
-fn render_settings_options(
-    area: Rect,
-    buf: &mut Buffer,
-    state: &TuiAppState,
-    palette: &ThemePalette,
-    hit: &mut HitRegions,
-) {
-    let rows = state.visible_settings_rows();
-
-    let desc_h = if !rows.is_empty() && area.height >= 7 { 2u16 } else { 0 };
-    let preview_h = if state.settings.tab == SettingsTab::Appearance
-        && state.settings.rbac_page.is_none()
-        && area.height >= 12
-    {
-        4u16
-    } else {
-        0
-    };
-    let list_h = area.height.saturating_sub(preview_h + desc_h) as usize;
-    state.settings.list_rows.set(list_h);
-    let selected = state.settings.selected_index.min(rows.len().saturating_sub(1));
-    let scroll = scroll_window(selected, state.settings.scroll_offset, list_h, rows.len());
-    let has_sb = rows.len() > list_h && area.width > 2;
-    let row_w = if has_sb { area.width.saturating_sub(1) } else { area.width };
-
-    for (vis_idx, row) in rows.iter().skip(scroll).take(list_h).enumerate() {
-        let abs_idx = scroll + vis_idx;
-        let y = area.y + vis_idx as u16;
-        let rect = Rect::new(area.x, y, row_w, 1);
-        hit.settings_options.push((rect, abs_idx));
-
-        let is_sel = abs_idx == selected;
-        let bg = if is_sel { palette.selection_bg } else { palette.modal_bg };
-        fill_bg(buf, rect, bg, palette.fg);
-
-        let val_style = match &row.value {
-            SettingValueKind::Bool(true) => Style::default()
-                .fg(palette.status_green)
-                .bg(bg)
-                .add_modifier(Modifier::BOLD),
-            SettingValueKind::Bool(false) => Style::default().fg(palette.dim).bg(bg),
-            SettingValueKind::Select(_) => Style::default().fg(palette.accent).bg(bg),
-            SettingValueKind::Action(_) => Style::default()
-                .fg(palette.accent)
-                .bg(bg)
-                .add_modifier(Modifier::BOLD),
-            SettingValueKind::MaskedSecret { is_set: true } => Style::default().fg(palette.status_green).bg(bg),
-            SettingValueKind::MaskedSecret { is_set: false } => Style::default().fg(palette.status_yellow).bg(bg),
-            _ => Style::default().fg(palette.muted).bg(bg),
-        };
-        let val_str = crate::settings_ui::value_text(&row.value);
-
-        let left_w = ((row_w as usize) / 2).max(18);
-        let right_w = (row_w as usize).saturating_sub(left_w + 3);
-        let marker = if is_sel { "❯ " } else { "  " };
-        let label_padded = format!(
-            "{marker}{:<width$}",
-            truncate_to_width(&row.label, left_w.saturating_sub(3)),
-            width = left_w.saturating_sub(2)
-        );
-        let val_trunc = truncate_to_width(&val_str, right_w);
-
-        let line = Line::from(vec![
-            Span::styled(
-                label_padded,
-                Style::default()
-                    .fg(if is_sel { palette.accent } else { palette.fg })
-                    .bg(bg)
-                    .add_modifier(if is_sel { Modifier::BOLD } else { Modifier::empty() }),
-            ),
-            Span::styled(val_trunc, val_style),
-        ]);
-        buf.set_line(area.x, y, &line, row_w);
-    }
-
-    if has_sb && list_h > 0 {
-        let sb_rect = Rect::new(area.x + area.width - 1, area.y, 1, list_h as u16);
-        render_scrollbar(sb_rect, buf, rows.len(), scroll, list_h, palette);
-    }
-
-    if desc_h > 0
-        && let Some(sel_row) = rows.get(selected)
-    {
-        let dy = area.y + list_h as u16;
-        let sep = "─".repeat(area.width.saturating_sub(2) as usize);
-        buf.set_string(
-            area.x + 1,
-            dy,
-            &sep,
-            Style::default().fg(palette.separator).bg(palette.modal_bg),
-        );
-        let desc_line = Line::from(vec![
-            Span::styled(" 💡 ", Style::default().fg(palette.accent).bg(palette.modal_bg)),
-            Span::styled(
-                truncate_to_width(&sel_row.description, area.width.saturating_sub(5) as usize),
-                Style::default().fg(palette.muted).bg(palette.modal_bg),
-            ),
-        ]);
-        buf.set_line(area.x, dy + 1, &desc_line, area.width);
-    }
-
-    if preview_h > 0 {
-        let py = area.y + list_h as u16 + desc_h;
-        let preview_area = Rect::new(area.x + 1, py, area.width.saturating_sub(2), preview_h);
-        buf.set_string(
-            preview_area.x,
-            preview_area.y,
-            "✨ Live Preview:",
-            Style::default()
-                .fg(palette.accent)
-                .bg(palette.modal_bg)
-                .add_modifier(Modifier::BOLD),
-        );
-        let bubble = Span::styled(
-            "  Hello Mono! ✨  ",
-            Style::default().bg(palette.bubble_bg).fg(palette.bubble_fg),
-        );
-        buf.set_line(
-            preview_area.x,
-            preview_area.y + 1,
-            &Line::from(vec![bubble]),
-            preview_area.width,
-        );
-        let status_preview = format!(
-            " ● {} · 🛡️ Valve: {} · $0.00 ── 0% · 💬 {}",
-            state.model_name,
-            state.valve_mode,
-            state.chats.active_chat().title
-        );
-        buf.set_string(
-            preview_area.x,
-            preview_area.y + 2,
-            truncate_to_width(&status_preview, preview_area.width as usize),
-            Style::default().bg(palette.status_bg).fg(palette.fg),
-        );
-    }
-}
-
 fn render_toast(
     area: Rect,
     buf: &mut Buffer,
@@ -1677,16 +1460,14 @@ fn render_toast(
     palette: &ThemePalette,
     icons: IconMode,
 ) {
-    let prefixed = if text.starts_with('📋') || text.starts_with('✅') || text.starts_with('⚠') {
-        text.to_owned()
-    } else if is_error {
-        format!("⚠️ {text}")
+    let glyphs = ChromeGlyphs::for_mode(icons);
+    let prefixed = if is_error {
+        format!("! {}", chrome_label(text, icons))
     } else if text.starts_with("Copied") {
-        format!("📋 {text}")
+        format!("{} {}", glyphs.info, chrome_label(text, icons))
     } else {
-        format!("✅ {text}")
+        format!("{} {}", glyphs.check_on, chrome_label(text, icons))
     };
-    let prefixed = chrome_label(&prefixed, icons);
     let w = (prefixed.width() as u16 + 4).min(area.width.saturating_sub(4)).max(12);
     let x = area.x + area.width.saturating_sub(w + 2);
     let y = area.y + 1;
@@ -1703,18 +1484,6 @@ fn render_toast(
         truncate_to_width(&prefixed, w.saturating_sub(2) as usize),
         Style::default().fg(fg).bg(palette.status_bg),
     );
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let w = ((u32::from(area.width) * u32::from(percent_x)) / 100)
-        .max(24)
-        .min(u32::from(area.width)) as u16;
-    let h = ((u32::from(area.height) * u32::from(percent_y)) / 100)
-        .max(10)
-        .min(u32::from(area.height)) as u16;
-    let x = area.x + (area.width.saturating_sub(w)) / 2;
-    let y = area.y + (area.height.saturating_sub(h)) / 2;
-    Rect::new(x, y, w, h)
 }
 
 fn truncate_to_width(s: &str, max_w: usize) -> String {

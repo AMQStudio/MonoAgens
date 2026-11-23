@@ -5,7 +5,7 @@
 //! (`peer_cred`). Waist-2 has no reusable framing helper (its reader is inline in the router),
 //! so framing here is the same plain one-JSON-object-per-line convention, with a line cap.
 //!
-//! Methods: `status`, `config.get`, `config.apply`, `plugins.list`, `plugins.start`,
+//! Methods: `status`, `config.get`, `config.apply`, `config.reload`, `plugins.list`, `plugins.start`,
 //! `plugins.stop`, `plugins.restart`, `plugins.subscribe`, `logs.subscribe`, `cues.subscribe`,
 //! `turn.submit` (text, or a full client-built `percept`), `turn.cancel`, `events.since`,
 //! `commands.list`, `commands.run`, `approvals.resolve`, `providers.list`, `models.discover`,
@@ -470,6 +470,10 @@ async fn dispatch(owner: &GatewayOwner, method: &str, params: &Value) -> Result<
         "config.apply" => {
             let patch = params.get("patch").unwrap_or(params);
             let report = owner.config_apply(patch).await?;
+            Ok(json!({ "ok": true, "reloaded": report }))
+        }
+        "config.reload" => {
+            let report = owner.config_reload().await?;
             Ok(json!({ "ok": true, "reloaded": report }))
         }
         "plugins.list" => Ok(owner.plugins_list()),

@@ -75,6 +75,38 @@ impl ApprovalsView {
         }
     }
 
+    /// Selects rendered row `row_idx` (mapping expanded detail rows back to their item) and
+    /// keeps it visible within `visible` rows.
+    pub fn select_row(&mut self, row_idx: usize, visible: usize) {
+        if self.items.is_empty() {
+            self.nav = Nav::default();
+            return;
+        }
+        let mut cursor = 0usize;
+        let mut target_item = self.items.len() - 1;
+        let mut target_row = 0usize;
+        let mut total_rows = 0usize;
+        for (i, _) in self.items.iter().enumerate() {
+            let item_start = cursor;
+            cursor += 1;
+            if self.expanded && i == self.nav.selected {
+                cursor += 4;
+            }
+            if row_idx >= item_start && row_idx < cursor {
+                target_item = i;
+                target_row = item_start;
+            }
+            total_rows = cursor;
+        }
+        self.nav.selected = target_item;
+        self.nav.offset = crate::core::viewport::scroll_offset_for_row(
+            target_row,
+            self.nav.offset,
+            visible.max(1),
+            total_rows,
+        );
+    }
+
     pub fn cancel_confirm(&mut self) -> bool {
         self.confirm.take().is_some()
     }

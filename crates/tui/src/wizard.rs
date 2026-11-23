@@ -11,11 +11,17 @@ use serde_json::json;
 use monoagens_reason::model::catalog;
 
 use crate::config::{install_builtin_plugin, write_or_update_gateway_config};
+use crate::core::hitmap::{HitTarget, ScrollId};
+use crate::core::input::{PasteTarget, sanitize_paste};
+use crate::core::overlay::OverlayId;
+use crate::core::theme::render_dimmed_backdrop;
+use crate::core::viewport::scroll_offset_for_row;
 use crate::settings::{SetupWizardState, WizardKeyPhase, WizardStep};
 use crate::settings_runtime::{SecretText, SettingsAction};
 use crate::state::{AppAction, HitRegions, TuiAppState};
 use crate::theme::ThemePalette;
 use crate::ui_util::{ListRow, boxed, centered, render_list, trunc};
+use crate::widgets::scrollbar::render_vertical_scrollbar;
 
 /// The test result of the wizard's connection test.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,9 +30,88 @@ pub struct WizardTest {
     pub latency_ms: u64,
 }
 
+impl PasteTarget for SetupWizardState {
+    fn paste_text(&mut self, raw: &str) -> bool {
+        let cleaned = sanitize_paste(raw, false);
+        if cleaned.is_empty() {
+            return false;
+        }
+        match self.step {
+            WizardStep::Step1Provider => {
+                self.search.push_str(&cleaned);
+                self.sel = 0;
+                self.off = 0;
+                true
+            }
+            WizardStep::StepEndpoint => {
+                self.endpoint.push_str(&cleaned);
+                self.error = None;
+                true
+            }
+            WizardStep::StepKey => {
+                if matches!(self.key_phase, WizardKeyPhase::Testing) {
+                    return false;
+                }
+                let token: String = cleaned.chars().filter(|c| !c.is_whitespace()).collect();
+                if token.is_empty() {
+                    return false;
+                }
+                self.api_key.push_str(&token);
+                self.key_phase = WizardKeyPhase::Editing;
+                true
+            }
+            WizardStep::StepModel => {
+                self.model_search.push_str(&cleaned);
+                self.model_sel = 0;
+                self.model_off = 0;
+                true
+            }
+            WizardStep::Step2Plugins => false,
+        }
+    }
+}
+
 impl TuiAppState {
+    fn wizard_viewport_rows(&self) -> usize {
+        let bx_h = 24u16.min(self.last_viewport.height);
+        // boxed() takes 2 border rows, plus 4 chrome rows around list_area.
+        bx_h.saturating_sub(6).max(1) as usize
+    }
+
+    /// Mouse wheel scrolling inside the Setup Wizard (never leaks to chat behind it).
+    pub(crate) fn wizard_wheel(&mut self, delta: isize) {
+        let visible = self.wizard_viewport_rows();
+        let Some(w) = &mut self.wizard else {
+            return;
+        };
+        match w.step {
+            WizardStep::Step1Provider => {
+                let n = w.filtered_providers().len();
+                if n > 0 {
+                    w.sel = (w.sel as isize + delta).clamp(0, (n - 1) as isize) as usize;
+                    w.off = scroll_offset_for_row(w.sel, w.off, visible, n);
+                }
+            }
+            WizardStep::StepModel => {
+                let n = w.filtered_models().len();
+                if n > 0 {
+                    w.model_sel = (w.model_sel as isize + delta).clamp(0, (n - 1) as isize) as usize;
+                    w.model_off = scroll_offset_for_row(w.model_sel, w.model_off, visible, n);
+                }
+            }
+            WizardStep::Step2Plugins => {
+                let n = w.plugin_ids.len();
+                if n > 0 {
+                    w.plugin_cursor = (w.plugin_cursor as isize + delta).clamp(0, (n - 1) as isize) as usize;
+                }
+            }
+            WizardStep::StepEndpoint | WizardStep::StepKey => {}
+        }
+    }
+
     /// Keys of the first-run wizard.
     pub(crate) fn handle_wizard_key(&mut self, key: KeyEvent) -> Vec<AppAction> {
+        let visible = self.wizard_viewport_rows();
         let Some(w) = &mut self.wizard else {
             return Vec::new();
         };
@@ -38,6 +123,7 @@ impl TuiAppState {
                     KeyCode::Esc => {
                         if w.search.is_empty() {
                             self.wizard = None;
+                            self.overlays.remove(OverlayId::Wizard);
                             return vec![AppAction::CompleteSetupWizard];
                         }
                         w.search.clear();
@@ -45,8 +131,8 @@ impl TuiAppState {
                     }
                     KeyCode::Up => w.sel = w.sel.saturating_sub(1),
                     KeyCode::Down => w.sel = (w.sel + 1).min(n.saturating_sub(1)),
-                    KeyCode::PageUp => w.sel = w.sel.saturating_sub(8),
-                    KeyCode::PageDown => w.sel = (w.sel + 8).min(n.saturating_sub(1)),
+                    KeyCode::PageUp => w.sel = w.sel.saturating_sub(visible.max(1)),
+                    KeyCode::PageDown => w.sel = (w.sel + visible.max(1)).min(n.saturating_sub(1)),
                     KeyCode::Backspace => {
                         w.search.pop();
                         w.sel = 0;
@@ -60,7 +146,7 @@ impl TuiAppState {
                 }
                 if let Some(w) = &mut self.wizard {
                     let n = w.filtered_providers().len();
-                    w.off = crate::render::scroll_window(w.sel, w.off, 10, n);
+                    w.off = scroll_offset_for_row(w.sel, w.off, visible, n);
                 }
             }
             WizardStep::StepEndpoint => match key.code {
@@ -72,6 +158,10 @@ impl TuiAppState {
                         w.error = None;
                         w.step = WizardStep::StepKey;
                     }
+                }
+                KeyCode::Char('u') if ctrl => {
+                    w.endpoint.clear();
+                    w.error = None;
                 }
                 KeyCode::Backspace => {
                     w.endpoint.pop();
@@ -86,8 +176,8 @@ impl TuiAppState {
                     KeyCode::Esc => w.step = WizardStep::StepKey,
                     KeyCode::Up => w.model_sel = w.model_sel.saturating_sub(1),
                     KeyCode::Down => w.model_sel = (w.model_sel + 1).min(n.saturating_sub(1)),
-                    KeyCode::PageUp => w.model_sel = w.model_sel.saturating_sub(8),
-                    KeyCode::PageDown => w.model_sel = (w.model_sel + 8).min(n.saturating_sub(1)),
+                    KeyCode::PageUp => w.model_sel = w.model_sel.saturating_sub(visible.max(1)),
+                    KeyCode::PageDown => w.model_sel = (w.model_sel + visible.max(1)).min(n.saturating_sub(1)),
                     KeyCode::Backspace => {
                         w.model_search.pop();
                         w.model_sel = 0;
@@ -110,7 +200,7 @@ impl TuiAppState {
                     _ => {}
                 }
                 let n = w.filtered_models().len();
-                w.model_off = crate::render::scroll_window(w.model_sel, w.model_off, 10, n);
+                w.model_off = scroll_offset_for_row(w.model_sel, w.model_off, visible, n);
             }
             WizardStep::Step2Plugins => match key.code {
                 KeyCode::Up => w.plugin_cursor = w.plugin_cursor.saturating_sub(1),
@@ -130,6 +220,7 @@ impl TuiAppState {
                 KeyCode::Enter => return self.finish_wizard(),
                 KeyCode::Esc => {
                     self.wizard = None;
+                    self.overlays.remove(OverlayId::Wizard);
                     return vec![AppAction::CompleteSetupWizard];
                 }
                 _ => {}
@@ -297,6 +388,7 @@ impl TuiAppState {
             }
         }
         self.reload_config_from_disk();
+        self.overlays.remove(OverlayId::Wizard);
         self.set_toast("Setup saved to secrets.toml (0600) & monoagens.toml", false);
         vec![AppAction::CompleteSetupWizard]
     }
@@ -356,6 +448,8 @@ pub fn seed_models(provider: &str) -> Vec<String> {
 
 /// Draws the wizard.
 pub fn render_wizard(area: Rect, buf: &mut Buffer, w: &SetupWizardState, palette: &ThemePalette, hit: &mut HitRegions) {
+    render_dimmed_backdrop(buf, area, palette);
+    hit.hitmap.record(area, HitTarget::Backdrop(OverlayId::Wizard));
     let title = match w.step {
         WizardStep::Step1Provider => "MonoAgens Setup 1/4: Provider",
         WizardStep::StepEndpoint => "MonoAgens Setup 2/4: Endpoint (custom provider)",
@@ -365,6 +459,7 @@ pub fn render_wizard(area: Rect, buf: &mut Buffer, w: &SetupWizardState, palette
     };
     let bx = centered(78.min(area.width), 24.min(area.height), area);
     let inner = boxed(bx, buf, title, palette);
+    hit.hitmap.record(bx, HitTarget::OverlayBody(OverlayId::Wizard));
     if inner.width < 20 || inner.height < 8 {
         return;
     }
@@ -373,6 +468,7 @@ pub fn render_wizard(area: Rect, buf: &mut Buffer, w: &SetupWizardState, palette
     let accent = Style::default().fg(palette.accent).bg(palette.modal_bg).add_modifier(Modifier::BOLD);
     let width = inner.width.saturating_sub(2) as usize;
     let list_area = Rect::new(inner.x, inner.y + 2, inner.width, inner.height.saturating_sub(4));
+    let visible = list_area.height as usize;
     match w.step {
         WizardStep::Step1Provider => {
             buf.set_string(inner.x + 1, inner.y, format!("Search: {}▏", w.search), accent);
@@ -386,7 +482,25 @@ pub fn render_wizard(area: Rect, buf: &mut Buffer, w: &SetupWizardState, palette
                 })
                 .collect();
             let mut hits = Vec::new();
-            render_list(list_area, buf, &rows, w.sel, w.off, palette, &mut hits);
+            let off = render_list(list_area, buf, &rows, w.sel, w.off, palette, &mut hits);
+            for (rect, idx) in &hits {
+                hit.hitmap.record(*rect, HitTarget::ListRow(*idx));
+            }
+            if rows.len() > visible && list_area.width > 2 {
+                let track = Rect::new(list_area.x + list_area.width - 1, list_area.y, 1, list_area.height);
+                render_vertical_scrollbar(
+                    buf,
+                    track,
+                    ScrollId::Wizard,
+                    rows.len(),
+                    visible,
+                    off,
+                    &mut hit.hitmap,
+                    Style::default().fg(palette.separator).bg(palette.modal_bg),
+                    Style::default().fg(palette.accent).bg(palette.modal_bg),
+                );
+            }
+            hit.overlay_area = list_area;
             hit.wizard_buttons.extend(hits);
             buf.set_string(inner.x + 1, inner.y + inner.height - 1, "Enter choose · type to search · Esc skip setup", dim);
         }
@@ -422,7 +536,25 @@ pub fn render_wizard(area: Rect, buf: &mut Buffer, w: &SetupWizardState, palette
                 .map(|m| ListRow { left: (*m).clone(), right: String::new(), dim: false })
                 .collect();
             let mut hits = Vec::new();
-            render_list(list_area, buf, &rows, w.model_sel, w.model_off, palette, &mut hits);
+            let off = render_list(list_area, buf, &rows, w.model_sel, w.model_off, palette, &mut hits);
+            for (rect, idx) in &hits {
+                hit.hitmap.record(*rect, HitTarget::ListRow(*idx));
+            }
+            if rows.len() > visible && list_area.width > 2 {
+                let track = Rect::new(list_area.x + list_area.width - 1, list_area.y, 1, list_area.height);
+                render_vertical_scrollbar(
+                    buf,
+                    track,
+                    ScrollId::Wizard,
+                    rows.len(),
+                    visible,
+                    off,
+                    &mut hit.hitmap,
+                    Style::default().fg(palette.separator).bg(palette.modal_bg),
+                    Style::default().fg(palette.accent).bg(palette.modal_bg),
+                );
+            }
+            hit.overlay_area = list_area;
             hit.wizard_buttons.extend(hits);
             buf.set_string(inner.x + 1, inner.y + inner.height - 1, "Enter pick (typed text is used when nothing matches) · Esc back", dim);
         }
@@ -435,7 +567,25 @@ pub fn render_wizard(area: Rect, buf: &mut Buffer, w: &SetupWizardState, palette
                 .map(|(id, on)| ListRow { left: id.clone(), right: if *on { "● on".to_owned() } else { "○ off".to_owned() }, dim: false })
                 .collect();
             let mut hits = Vec::new();
-            render_list(list_area, buf, &rows, w.plugin_cursor, 0, palette, &mut hits);
+            let off = render_list(list_area, buf, &rows, w.plugin_cursor, 0, palette, &mut hits);
+            for (rect, idx) in &hits {
+                hit.hitmap.record(*rect, HitTarget::ListRow(*idx));
+            }
+            if rows.len() > visible && list_area.width > 2 {
+                let track = Rect::new(list_area.x + list_area.width - 1, list_area.y, 1, list_area.height);
+                render_vertical_scrollbar(
+                    buf,
+                    track,
+                    ScrollId::Wizard,
+                    rows.len(),
+                    visible,
+                    off,
+                    &mut hit.hitmap,
+                    Style::default().fg(palette.separator).bg(palette.modal_bg),
+                    Style::default().fg(palette.accent).bg(palette.modal_bg),
+                );
+            }
+            hit.overlay_area = list_area;
             hit.wizard_buttons.extend(hits);
             if let Some(e) = &w.error {
                 buf.set_string(inner.x + 1, inner.y + inner.height - 2, trunc(e, width), Style::default().fg(palette.status_red).bg(palette.modal_bg));

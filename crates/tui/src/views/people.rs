@@ -202,6 +202,22 @@ impl PeopleView {
         self.nav.clamp(total);
     }
 
+    /// Selects rendered row `row_idx` and ensures it stays visible.
+    pub fn select_row(&mut self, row_idx: usize, visible: usize) {
+        let total = self.items().len();
+        if total == 0 {
+            self.nav = Nav::default();
+            return;
+        }
+        self.nav.selected = row_idx.min(total - 1);
+        self.nav.offset = crate::core::viewport::scroll_offset_for_row(
+            self.nav.selected,
+            self.nav.offset,
+            visible.max(1),
+            total,
+        );
+    }
+
     /// The configured persons as edit specs.
     fn specs(&self) -> Vec<PersonSpec> {
         self.persons

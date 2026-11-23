@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use monoagens_protocol::{ActorId, CapabilityId, Percept, PlaceId};
+use monoagens_protocol::{ActorId, CapabilityDescriptor, CapabilityId, Percept, PlaceId};
 use monoagens_valve::{RbacConfig, agent_converse_permitted};
 use serde_json::Value;
 
@@ -140,6 +140,40 @@ pub fn answer(
         ctx.rbac.as_ref(),
         capabilities,
     )?;
+    format_outcome(ctx, percept, text, outcome)
+}
+
+/// Descriptor-aware variant of [`answer`] that filters `identity_changing` capabilities from
+/// non-owner `/help` replies.
+#[must_use]
+pub fn answer_with_descriptors(
+    registry: &CommandRegistry,
+    ctx: &CommandContext,
+    percept: &Percept,
+    text: &str,
+    capabilities: &[CapabilityDescriptor],
+) -> Option<String> {
+    if !text.trim_start().starts_with('/') {
+        return None;
+    }
+    let owner = ctx.owner.clone().unwrap_or_else(|| ActorId::new("per_owner"));
+    let outcome = registry.try_handle_slash_command_with_descriptors(
+        text,
+        &percept.actor,
+        &owner,
+        Some(&percept.place),
+        ctx.rbac.as_ref(),
+        capabilities,
+    )?;
+    format_outcome(ctx, percept, text, outcome)
+}
+
+fn format_outcome(
+    ctx: &CommandContext,
+    percept: &Percept,
+    text: &str,
+    outcome: CommandOutcome,
+) -> Option<String> {
     match outcome {
         CommandOutcome::Handled { reply_text } => Some(match command_name(text).as_str() {
             "whoami" => whoami(ctx, &percept.actor, &percept.place),
