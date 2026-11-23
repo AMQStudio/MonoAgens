@@ -7,13 +7,14 @@ use monoagens_gateway::PluginKind;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Paragraph, Widget, Wrap};
-use unicode_width::UnicodeWidthStr;
+use ratatui::widgets::{Block, BorderType, Clear, Paragraph, Widget, Wrap};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::config::MessageLayout;
 use crate::effects::TuiEffects;
+use crate::markdown::render_markdown_lines;
 use crate::settings::{
     PluginDetailState, PluginUiState, SettingValueKind, SettingsTab, SetupWizardState, WizardStep,
     build_settings_rows,
@@ -61,7 +62,7 @@ pub fn render_to_buffer(
     let (sidebar_rect, main_rect) = if show_sidebar {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(28), Constraint::Min(20)])
+            .constraints([Constraint::Length(30), Constraint::Min(20)])
             .split(area);
         (Some(chunks[0]), chunks[1])
     } else {
@@ -107,6 +108,14 @@ fn fill_bg(buf: &mut Buffer, area: Rect, bg: ratatui::style::Color, fg: ratatui:
     }
 }
 
+enum SidebarRow {
+    Header(&'static str),
+    Spacer,
+    Chat { id: String, title: String, active: bool },
+    Plugin { id: String, kind: PluginKind, state: PluginUiState },
+    Actor { id: String, active: bool },
+}
+
 fn render_sidebar(
     area: Rect,
     buf: &mut Buffer,
@@ -114,7 +123,7 @@ fn render_sidebar(
     palette: &ThemePalette,
     hit: &mut HitRegions,
 ) {
-    if area.width < 4 || area.height < 3 {
+    if area.width < 4 || area.height < 4 {
         return;
     }
     fill_bg(buf, area, palette.sidebar_bg, palette.fg);
@@ -130,7 +139,6 @@ fn render_sidebar(
     }
 
     let inner_w = area.width.saturating_sub(2) as usize;
-    let mut y = area.y;
     let max_y = area.y.saturating_add(area.height);
 
     let put_line = |buf: &mut Buffer, row_y: u16, spans: Vec<Span<'static>>| {
@@ -141,71 +149,52 @@ fn render_sidebar(
         buf.set_line(area.x + 1, row_y, &line, inner_w as u16);
     };
 
-    // CHATS section
+    // Brand header
     put_line(
         buf,
-        y,
-        vec![Span::styled(
-            "CHATS",
-            Style::default()
-                .fg(palette.dim)
-                .bg(palette.sidebar_bg)
-                .add_modifier(Modifier::BOLD),
-        )],
-    );
-    y += 1;
-
-    for chat in &state.chats.chats {
-        if y >= max_y {
-            break;
-        }
-        let is_active = chat.id == state.chats.active_chat_id;
-        let row_rect = Rect::new(area.x, y, area.width.saturating_sub(1), 1);
-        hit.sidebar_chats.push((row_rect, chat.id.clone()));
-
-        let prefix = if is_active { "▸ " } else { "  " };
-        let title = truncate_to_width(&chat.title, inner_w.saturating_sub(2));
-        let row_bg = if is_active {
-            palette.selection_bg
-        } else {
-            palette.sidebar_bg
-        };
-        let row_fg = if is_active {
-            palette.accent
-        } else {
-            palette.fg
-        };
-        fill_bg(buf, row_rect, row_bg, row_fg);
-        put_line(
-            buf,
-            y,
-            vec![
-                Span::styled(prefix, Style::default().fg(palette.accent).bg(row_bg)),
-                Span::styled(title, Style::default().fg(row_fg).bg(row_bg)),
-            ],
-        );
-        y += 1;
-    }
-
-    if y < max_y {
-        y += 1;
-    }
-
-    // PLUGINS section (only installed or enabled plugins, or first few catalog entries if none)
-    if y < max_y {
-        put_line(
-            buf,
-            y,
-            vec![Span::styled(
-                "PLUGINS",
+        area.y,
+        vec![
+            Span::styled(
+                "✦ Mono",
                 Style::default()
-                    .fg(palette.dim)
+                    .fg(palette.accent)
                     .bg(palette.sidebar_bg)
                     .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "  ✨",
+                Style::default().fg(palette.muted).bg(palette.sidebar_bg),
+            ),
+        ],
+    );
+    if area.y + 1 < max_y {
+        put_line(
+            buf,
+            area.y + 1,
+            vec![Span::styled(
+                "─".repeat(inner_w),
+                Style::default().fg(palette.separator).bg(palette.sidebar_bg),
             )],
         );
-        y += 1;
     }
+
+    let body_y = area.y + 2;
+    let avail_h = max_y.saturating_sub(body_y) as usize;
+    if avail_h == 0 {
+        return;
+    }
+
+    let mut rows: Vec<SidebarRow> = Vec::new();
+    rows.push(SidebarRow::Header("💬 CHATS"));
+    for chat in &state.chats.chats {
+        rows.push(SidebarRow::Chat {
+            id: chat.id.clone(),
+            title: chat.title.clone(),
+            active: chat.id == state.chats.active_chat_id,
+        });
+    }
+    rows.push(SidebarRow::Spacer);
+    rows.push(SidebarRow::Header("🔌 PLUGINS"));
 
     let visible_plugins: Vec<_> = {
         let installed: Vec<_> = state.plugins.iter().filter(|p| p.installed).collect();
@@ -215,82 +204,136 @@ fn render_sidebar(
             installed
         }
     };
-
     for plugin in visible_plugins {
-        if y >= max_y {
-            break;
-        }
-        let row_rect = Rect::new(area.x, y, area.width.saturating_sub(1), 1);
-        hit.sidebar_plugins.push((row_rect, plugin.id.clone()));
-
-        let dot_color = match &plugin.state {
-            PluginUiState::Running => palette.status_green,
-            PluginUiState::Starting | PluginUiState::Stopping => palette.status_yellow,
-            PluginUiState::Stopped | PluginUiState::Failed(_) => palette.status_red,
-        };
-        let kind_label = match plugin.kind {
-            PluginKind::Adapter => "(Adapter)",
-            PluginKind::Capability => "(Capabilities)",
-        };
-        let name_budget = inner_w.saturating_sub(kind_label.len() + 3);
-        let name = truncate_to_width(&plugin.id, name_budget);
-        put_line(
-            buf,
-            y,
-            vec![
-                Span::styled(
-                    format!("{} ", plugin.state.dot_glyph()),
-                    Style::default().fg(dot_color).bg(palette.sidebar_bg),
-                ),
-                Span::styled(
-                    format!("{name} "),
-                    Style::default().fg(palette.fg).bg(palette.sidebar_bg),
-                ),
-                Span::styled(
-                    kind_label,
-                    Style::default().fg(palette.dim).bg(palette.sidebar_bg),
-                ),
-            ],
-        );
-        y += 1;
+        rows.push(SidebarRow::Plugin {
+            id: plugin.id.clone(),
+            kind: plugin.kind,
+            state: plugin.state.clone(),
+        });
     }
 
-    // SPEAK AS section ONLY when lab_mode == true
-    if state.lab_mode && y + 2 < max_y {
-        y += 1;
-        put_line(
-            buf,
-            y,
-            vec![Span::styled(
-                "SPEAK AS",
-                Style::default()
-                    .fg(palette.dim)
-                    .bg(palette.sidebar_bg)
-                    .add_modifier(Modifier::BOLD),
-            )],
-        );
-        y += 1;
+    if state.lab_mode {
+        rows.push(SidebarRow::Spacer);
+        rows.push(SidebarRow::Header("🧪 SPEAK AS"));
         for actor in &state.lab_session.known_actors {
-            if y >= max_y {
-                break;
-            }
-            let row_rect = Rect::new(area.x, y, area.width.saturating_sub(1), 1);
-            hit.sidebar_actors.push((row_rect, actor.clone()));
-            let is_cur = state.lab_session.current_actor.as_str() == actor;
-            let prefix = if is_cur { "● " } else { "○ " };
-            put_line(
-                buf,
-                y,
-                vec![
-                    Span::styled(prefix, Style::default().fg(palette.accent).bg(palette.sidebar_bg)),
-                    Span::styled(
-                        truncate_to_width(actor, inner_w.saturating_sub(2)),
-                        Style::default().fg(palette.fg).bg(palette.sidebar_bg),
-                    ),
-                ],
-            );
-            y += 1;
+            rows.push(SidebarRow::Actor {
+                id: actor.clone(),
+                active: state.lab_session.current_actor.as_str() == actor,
+            });
         }
+    }
+
+    let total_rows = rows.len();
+    let max_scroll = total_rows.saturating_sub(avail_h);
+    hit.sidebar_max_scroll = max_scroll;
+    let scroll = state.sidebar_scroll.min(max_scroll);
+
+    for (vis_idx, row) in rows.iter().skip(scroll).take(avail_h).enumerate() {
+        let y = body_y + vis_idx as u16;
+        match row {
+            SidebarRow::Header(label) => {
+                put_line(
+                    buf,
+                    y,
+                    vec![Span::styled(
+                        (*label).to_owned(),
+                        Style::default()
+                            .fg(palette.dim)
+                            .bg(palette.sidebar_bg)
+                            .add_modifier(Modifier::BOLD),
+                    )],
+                );
+            }
+            SidebarRow::Spacer => {}
+            SidebarRow::Chat { id, title, active } => {
+                let row_rect = Rect::new(area.x, y, area.width.saturating_sub(1), 1);
+                hit.sidebar_chats.push((row_rect, id.clone()));
+                let prefix = if *active { "▸ " } else { "  " };
+                let trunc_title = truncate_to_width(title, inner_w.saturating_sub(2));
+                let row_bg = if *active {
+                    palette.selection_bg
+                } else {
+                    palette.sidebar_bg
+                };
+                let row_fg = if *active {
+                    palette.accent
+                } else {
+                    palette.fg
+                };
+                fill_bg(buf, row_rect, row_bg, row_fg);
+                put_line(
+                    buf,
+                    y,
+                    vec![
+                        Span::styled(prefix, Style::default().fg(palette.accent).bg(row_bg)),
+                        Span::styled(trunc_title, Style::default().fg(row_fg).bg(row_bg)),
+                    ],
+                );
+            }
+            SidebarRow::Plugin { id, kind, state: pstate } => {
+                let row_rect = Rect::new(area.x, y, area.width.saturating_sub(1), 1);
+                hit.sidebar_plugins.push((row_rect, id.clone()));
+                let dot_color = match pstate {
+                    PluginUiState::Running => palette.status_green,
+                    PluginUiState::Starting | PluginUiState::Stopping => palette.status_yellow,
+                    PluginUiState::Stopped | PluginUiState::Failed(_) => palette.status_red,
+                };
+                let kind_label = match kind {
+                    PluginKind::Adapter => "(Adapter)",
+                    PluginKind::Capability => "(Capabilities)",
+                };
+                let name_budget = inner_w.saturating_sub(kind_label.len() + 3);
+                let name = truncate_to_width(id, name_budget);
+                put_line(
+                    buf,
+                    y,
+                    vec![
+                        Span::styled(
+                            format!("{} ", pstate.dot_glyph()),
+                            Style::default().fg(dot_color).bg(palette.sidebar_bg),
+                        ),
+                        Span::styled(
+                            format!("{name} "),
+                            Style::default().fg(palette.fg).bg(palette.sidebar_bg),
+                        ),
+                        Span::styled(
+                            kind_label,
+                            Style::default().fg(palette.dim).bg(palette.sidebar_bg),
+                        ),
+                    ],
+                );
+            }
+            SidebarRow::Actor { id, active } => {
+                let row_rect = Rect::new(area.x, y, area.width.saturating_sub(1), 1);
+                hit.sidebar_actors.push((row_rect, id.clone()));
+                let prefix = if *active { "● " } else { "○ " };
+                put_line(
+                    buf,
+                    y,
+                    vec![
+                        Span::styled(prefix, Style::default().fg(palette.accent).bg(palette.sidebar_bg)),
+                        Span::styled(
+                            truncate_to_width(id, inner_w.saturating_sub(2)),
+                            Style::default().fg(palette.fg).bg(palette.sidebar_bg),
+                        ),
+                    ],
+                );
+            }
+        }
+    }
+
+    if total_rows > avail_h {
+        let sb_rect = Rect::new(sep_x, body_y, 1, avail_h as u16);
+        render_vertical_scrollbar(
+            buf,
+            sb_rect,
+            total_rows,
+            avail_h,
+            scroll,
+            palette.sidebar_bg,
+            palette,
+            false,
+        );
     }
 }
 
@@ -314,8 +357,8 @@ fn render_main_pane(
     } else {
         0
     };
-    let composer_lines = state.composer.text.lines().count().clamp(1, 5) as u16;
-    let composer_height = composer_lines + 2; // top rule + lines + bottom rule
+    let composer_lines = state.composer.text.split('\n').count().clamp(1, 5) as u16;
+    let composer_height = composer_lines + 3; // top rule + lines + bottom rule + footer hint
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -369,12 +412,13 @@ fn render_chat_feed(
     palette: &ThemePalette,
     hit: &mut HitRegions,
 ) {
-    if area.width < 4 || area.height == 0 {
+    if area.width < 5 || area.height == 0 {
         return;
     }
     let items = state.active_timeline();
     let pad_x = 1u16;
-    let content_w = area.width.saturating_sub(pad_x * 2) as usize;
+    let sb_x = area.x + area.width - 1;
+    let content_w = area.width.saturating_sub(pad_x * 2 + 1) as usize;
     if content_w < 4 {
         return;
     }
@@ -389,8 +433,8 @@ fn render_chat_feed(
                 ..
             } => {
                 if state.prefs.message_layout == MessageLayout::Chat {
-                    let max_bubble_w = ((content_w * 70) / 100).max(12).min(content_w);
-                    let inner_max = max_bubble_w.saturating_sub(2);
+                    let max_bubble_w = ((content_w * 72) / 100).max(14).min(content_w);
+                    let inner_max = max_bubble_w.saturating_sub(4).max(4);
                     let wrapped = wrap_text_lines(text, inner_max);
                     let text_w = wrapped
                         .iter()
@@ -398,7 +442,7 @@ fn render_chat_feed(
                         .max()
                         .unwrap_or(1)
                         .min(inner_max);
-                    let bubble_w = text_w + 2;
+                    let bubble_w = text_w + 4;
                     let left_pad = content_w.saturating_sub(bubble_w);
 
                     if state.lab_mode && *is_group {
@@ -413,7 +457,7 @@ fn render_chat_feed(
                         rendered_lines.push(Line::from(vec![
                             Span::raw(" ".repeat(left_pad)),
                             Span::styled(
-                                format!(" {wline}{} ", " ".repeat(trail)),
+                                format!("  {wline}{}  ", " ".repeat(trail)),
                                 Style::default().bg(palette.bubble_bg).fg(palette.bubble_fg),
                             ),
                         ]));
@@ -421,10 +465,16 @@ fn render_chat_feed(
                     rendered_lines.push(Line::default());
                 } else {
                     for wline in wrap_text_lines(text, content_w.saturating_sub(2)) {
-                        rendered_lines.push(Line::from(Span::styled(
-                            format!("› {wline}"),
-                            Style::default().fg(palette.fg).bg(palette.bubble_bg),
-                        )));
+                        rendered_lines.push(Line::from(vec![
+                            Span::styled(
+                                "▎ ",
+                                Style::default().fg(palette.accent).bg(palette.bubble_bg),
+                            ),
+                            Span::styled(
+                                wline,
+                                Style::default().fg(palette.bubble_fg).bg(palette.bubble_bg),
+                            ),
+                        ]));
                     }
                     rendered_lines.push(Line::default());
                 }
@@ -432,16 +482,11 @@ fn render_chat_feed(
             ChatTimelineItem::AssistantMessage {
                 text, duration_ms, ..
             } => {
-                for wline in wrap_text_lines(text, content_w) {
-                    rendered_lines.push(Line::from(Span::styled(
-                        wline,
-                        Style::default().fg(palette.fg),
-                    )));
-                }
+                rendered_lines.extend(render_markdown_lines(text, content_w, palette));
                 if state.prefs.show_turn_duration
                     && let Some(ms) = duration_ms
                 {
-                    let label = format!("  {:.1}s", *ms as f64 / 1000.0);
+                    let label = format!("  ⏱ {}", format_turn_duration(*ms));
                     rendered_lines.push(Line::from(Span::styled(
                         label,
                         Style::default().fg(palette.dim),
@@ -501,14 +546,36 @@ fn render_chat_feed(
     }
 
     if rendered_lines.is_empty() {
-        let hint = format!(
-            "  {} · ready. Type a message or /settings",
-            state.gateway_cfg.soul.name
-        );
+        let top_pad = (area.height as usize).saturating_sub(6) / 3;
+        for _ in 0..top_pad {
+            rendered_lines.push(Line::default());
+        }
+        let header = format!("  ✨ {} · ready", state.gateway_cfg.soul.name);
         rendered_lines.push(Line::from(Span::styled(
-            hint,
-            Style::default().fg(palette.dim),
+            truncate_to_width(&header, content_w),
+            Style::default()
+                .fg(palette.accent)
+                .add_modifier(Modifier::BOLD),
         )));
+        for wline in wrap_text_lines(
+            "  Ready to chat — type a message, drop a file, or try /settings",
+            content_w,
+        ) {
+            rendered_lines.push(Line::from(Span::styled(
+                wline,
+                Style::default().fg(palette.fg),
+            )));
+        }
+        rendered_lines.push(Line::default());
+        for wline in wrap_text_lines(
+            "  💬 Start chatting · ✨ /new · 📎 /attach · ⚙️ /settings · 📋 drag to copy · Ctrl+B sidebar",
+            content_w,
+        ) {
+            rendered_lines.push(Line::from(Span::styled(
+                wline,
+                Style::default().fg(palette.dim),
+            )));
+        }
     }
 
     let visible_h = area.height as usize;
@@ -529,12 +596,12 @@ fn render_chat_feed(
         );
     }
 
-    // Record exact rendered viewport lines for mouse drag-select extraction.
+    // Record exact rendered viewport lines for mouse drag-select extraction (excluding scrollbar col).
     for row_idx in 0..area.height {
         let y = area.y + row_idx;
         let mut row_text = String::new();
         let mut skip = 0usize;
-        for x in area.x..area.x.saturating_add(area.width) {
+        for x in area.x..sb_x {
             if skip > 0 {
                 skip -= 1;
                 continue;
@@ -551,12 +618,28 @@ fn render_chat_feed(
         hit.chat_viewport_lines.push(row_text.trim_end().to_owned());
     }
 
+    // Sleek vertical scrollbar on rightmost column of feed_rect
+    let sb_rect = Rect::new(sb_x, area.y, 1, area.height);
+    hit.chat_scrollbar = Some(sb_rect);
+    hit.chat_total_lines = total;
+    hit.chat_visible_lines = visible_h;
+    render_vertical_scrollbar(
+        buf,
+        sb_rect,
+        total,
+        visible_h,
+        scroll,
+        palette.bg,
+        palette,
+        true,
+    );
+
     // Apply selection highlight overlay across normalized (start..=end) cell range.
     if let Some(sel) = state.selection
         && sel.anchor != sel.current
     {
         let (start, end) = normalize_selection(sel.anchor, sel.current);
-        let max_x = area.x.saturating_add(area.width.saturating_sub(1));
+        let max_x = sb_x.saturating_sub(1);
         let max_y = area.y.saturating_add(area.height.saturating_sub(1));
         let start_y = start.1.clamp(area.y, max_y);
         let end_y = end.1.clamp(area.y, max_y);
@@ -660,7 +743,7 @@ fn render_busy_phase_line(
 ) {
     let spinner = effects.spinner_glyph(state.prefs.motion);
     let mut spans = vec![Span::styled(
-        format!(" {spinner} "),
+        format!(" {spinner} ✨ "),
         Style::default().fg(palette.accent),
     )];
     for (idx, ch) in state.thinking_phase.chars().enumerate() {
@@ -704,7 +787,7 @@ fn render_status_bar(
 
     if state.prefs.show_valve_badge {
         spans.push(Span::styled(
-            format!(" · Valve: {}", state.valve_mode),
+            format!(" · 🛡️ Valve: {}", state.valve_mode),
             Style::default().fg(palette.muted).bg(palette.status_bg),
         ));
     }
@@ -728,14 +811,14 @@ fn render_status_bar(
     }
 
     spans.push(Span::styled(
-        format!(" · {}", state.chats.active_chat().title),
+        format!(" · 💬 {}", state.chats.active_chat().title),
         Style::default().fg(palette.dim).bg(palette.status_bg),
     ));
 
     if state.lab_mode {
         spans.push(Span::raw(" "));
         spans.push(Span::styled(
-            " lab ",
+            " 🧪 lab ",
             Style::default()
                 .bg(palette.lab_badge_bg)
                 .fg(palette.lab_badge_fg)
@@ -834,43 +917,127 @@ fn render_composer(
     state: &TuiAppState,
     palette: &ThemePalette,
 ) {
-    if area.height < 3 {
+    if area.height < 3 || area.width < 6 {
         return;
     }
+    let has_footer = area.height >= 4;
+    let bottom_rule_y = if has_footer {
+        area.y + area.height - 2
+    } else {
+        area.y + area.height - 1
+    };
+    let text_rows = bottom_rule_y.saturating_sub(area.y + 1);
+
     let rule = "─".repeat(area.width as usize);
     let rule_style = Style::default().fg(palette.separator);
     buf.set_string(area.x, area.y, &rule, rule_style);
 
-    let text_rows = area.height - 2;
+    let composer_active = !state.settings.open && state.wizard.is_none();
+    let cursor_style = if palette.no_color {
+        Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default().bg(Color::White).fg(Color::Black)
+    };
+
+    let mut cursor_byte = state.composer.cursor.min(state.composer.text.len());
+    while cursor_byte > 0 && !state.composer.text.is_char_boundary(cursor_byte) {
+        cursor_byte -= 1;
+    }
+    let before_cursor = &state.composer.text[..cursor_byte];
+    let cursor_row = before_cursor.matches('\n').count();
+    let line_start_byte = before_cursor.rfind('\n').map_or(0, |i| i + 1);
+    let cursor_col_in_line_bytes = cursor_byte - line_start_byte;
+    let cursor_col_display = before_cursor[line_start_byte..].width();
+
     let lines: Vec<&str> = if state.composer.text.is_empty() {
         vec![""]
     } else {
         state.composer.text.split('\n').collect()
     };
 
+    let v_scroll = if text_rows == 0 {
+        0
+    } else {
+        cursor_row.saturating_sub(text_rows as usize - 1)
+    };
+    let text_avail_w = area.width.saturating_sub(4) as usize;
+    let line_render_w = area.width.saturating_sub(2);
+
     for row in 0..text_rows {
+        let abs_row = v_scroll + row as usize;
         let y = area.y + 1 + row;
-        let prefix = if row == 0 { "› " } else { "  " };
-        let content = lines.get(row as usize).copied().unwrap_or("");
-        if state.composer.text.is_empty() && row == 0 {
+        let prefix = if abs_row == 0 { "> " } else { "  " };
+        let prefix_style = Style::default()
+            .fg(palette.accent)
+            .add_modifier(Modifier::BOLD);
+        let content = lines.get(abs_row).copied().unwrap_or("");
+
+        if state.composer.text.is_empty() && abs_row == 0 {
+            let mut spans = vec![Span::styled(prefix, prefix_style)];
+            if composer_active {
+                spans.push(Span::styled(" ", cursor_style));
+            }
+            spans.push(Span::styled(
+                "Message Mono or type / for commands…",
+                Style::default().fg(palette.dim),
+            ));
+            buf.set_line(area.x + 1, y, &Line::from(spans), line_render_w);
+        } else if composer_active && abs_row == cursor_row && text_avail_w > 0 {
+            let local_cursor = cursor_col_in_line_bytes.min(content.len());
+            let before = &content[..local_cursor];
+            let (cursor_sym, after) = if let Some(ch) = content[local_cursor..].chars().next() {
+                let next_idx = local_cursor + ch.len_utf8();
+                (ch.to_string(), &content[next_idx..])
+            } else {
+                (" ".to_owned(), "")
+            };
+            let cursor_w = cursor_sym.width().max(1);
+            let h_scroll = if cursor_col_display + cursor_w > text_avail_w {
+                (cursor_col_display + cursor_w).saturating_sub(text_avail_w)
+            } else {
+                0
+            };
+            let before_vis = slice_display_window(before, h_scroll, text_avail_w);
+            let used_w = before_vis.width();
+            let rem_after_cursor = text_avail_w.saturating_sub(used_w + cursor_sym.width());
+            let after_vis = truncate_to_width_no_ellipsis(after, rem_after_cursor);
+
             let line = Line::from(vec![
-                Span::styled(prefix, Style::default().fg(palette.accent)),
-                Span::styled(
-                    "Message Mono or type / for commands…",
-                    Style::default().fg(palette.dim),
-                ),
+                Span::styled(prefix, prefix_style),
+                Span::styled(before_vis, Style::default().fg(palette.fg)),
+                Span::styled(cursor_sym, cursor_style),
+                Span::styled(after_vis, Style::default().fg(palette.fg)),
             ]);
-            buf.set_line(area.x + 1, y, &line, area.width.saturating_sub(2));
+            buf.set_line(area.x + 1, y, &line, line_render_w);
         } else {
             let line = Line::from(vec![
-                Span::styled(prefix, Style::default().fg(palette.accent)),
-                Span::styled(content.to_owned(), Style::default().fg(palette.fg)),
+                Span::styled(prefix, prefix_style),
+                Span::styled(
+                    truncate_to_width_no_ellipsis(content, text_avail_w),
+                    Style::default().fg(palette.fg),
+                ),
             ]);
-            buf.set_line(area.x + 1, y, &line, area.width.saturating_sub(2));
+            buf.set_line(area.x + 1, y, &line, line_render_w);
         }
     }
 
-    buf.set_string(area.x, area.y + area.height - 1, &rule, rule_style);
+    buf.set_string(area.x, bottom_rule_y, &rule, rule_style);
+
+    if has_footer {
+        let hint = if state.is_busy()
+            || (state.composer.is_slash_mode() && !state.autocomplete.is_empty())
+        {
+            " esc to cancel · enter send · shift+enter newline · / commands · ctrl+b sidebar · ctrl+v paste"
+        } else {
+            " esc to clear · enter send · shift+enter newline · / commands · ctrl+b sidebar · ctrl+v paste"
+        };
+        buf.set_string(
+            area.x,
+            area.y + area.height - 1,
+            truncate_to_width(hint, area.width as usize),
+            Style::default().fg(palette.dim),
+        );
+    }
 }
 
 fn render_autocomplete(
@@ -923,8 +1090,15 @@ fn render_settings_modal(
     Clear.render(area, buf);
     fill_bg(buf, area, palette.modal_bg, palette.fg);
     let block = Block::bordered()
-        .border_style(Style::default().fg(palette.separator))
-        .title(" Settings  (←/→ Tab · ↑/↓ Select · Enter/Space Edit · Esc Back/Close) ");
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(palette.accent))
+        .title(Span::styled(
+            " ⚙️ Settings  (←/→ Tab · ↑/↓ Select · Enter/Space Edit · Esc Back/Close) ",
+            Style::default()
+                .fg(palette.fg)
+                .bg(palette.modal_bg)
+                .add_modifier(Modifier::BOLD),
+        ));
     let inner = block.inner(area);
     block.render(area, buf);
 
@@ -936,7 +1110,7 @@ fn render_settings_modal(
     let mut tab_x = inner.x + 1;
     let tab_y = inner.y;
     for tab in SettingsTab::ALL {
-        let label = format!(" {} ", tab.label());
+        let label = format!(" {} {} ", tab.icon(), tab.label());
         let w = label.width() as u16;
         if tab_x + w >= inner.x + inner.width {
             break;
@@ -957,18 +1131,26 @@ fn render_settings_modal(
 
     let search_y = inner.y + 1;
     let search_line = Line::from(vec![
-        Span::styled(" Search: ", Style::default().fg(palette.dim)),
+        Span::styled(
+            " 🔍 Search: ",
+            Style::default()
+                .fg(palette.accent)
+                .bg(palette.modal_bg)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(
             if state.settings.search_query.is_empty() {
-                "(type to filter…)".to_owned()
+                "type to filter settings…".to_owned()
             } else {
-                state.settings.search_query.clone()
+                format!("{}▏", state.settings.search_query)
             },
-            Style::default().fg(if state.settings.search_query.is_empty() {
-                palette.dim
-            } else {
-                palette.accent
-            }),
+            Style::default()
+                .fg(if state.settings.search_query.is_empty() {
+                    palette.dim
+                } else {
+                    palette.fg
+                })
+                .bg(palette.modal_bg),
         ),
     ]);
     buf.set_line(inner.x, search_y, &search_line, inner.width);
@@ -988,7 +1170,7 @@ fn render_settings_modal(
     } else {
         let panes = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(22), Constraint::Min(20)])
+            .constraints([Constraint::Length(24), Constraint::Min(20)])
             .split(body_area);
 
         render_settings_sections(panes[0], buf, state, palette, hit);
@@ -1009,7 +1191,7 @@ fn render_settings_modal(
         };
         let line = Line::from(vec![
             Span::styled(
-                format!("{}: ", edit.prompt),
+                format!(" ✏️ {}: ", edit.prompt),
                 Style::default()
                     .fg(palette.accent)
                     .add_modifier(Modifier::BOLD),
@@ -1044,16 +1226,29 @@ fn render_settings_sections(
         let rect = Rect::new(area.x, y, area.width.saturating_sub(1), 1);
         hit.settings_sections.push((rect, idx));
         let active = idx == state.settings.section_index;
+        let bg = if active {
+            palette.selection_bg
+        } else {
+            palette.modal_bg
+        };
+        let prefix = if active { "▸ " } else { "  " };
         let style = if active {
             Style::default()
-                .bg(palette.selection_bg)
+                .bg(bg)
                 .fg(palette.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(palette.muted).bg(palette.modal_bg)
+            Style::default().fg(palette.muted).bg(bg)
         };
-        fill_bg(buf, rect, if active { palette.selection_bg } else { palette.modal_bg }, palette.fg);
-        buf.set_string(area.x + 1, y, *sec, style);
+        fill_bg(buf, rect, bg, palette.fg);
+        let line = Line::from(vec![
+            Span::styled(prefix, Style::default().fg(palette.accent).bg(bg)),
+            Span::styled(
+                truncate_to_width(sec, (area.width as usize).saturating_sub(4)),
+                style,
+            ),
+        ]);
+        buf.set_line(area.x + 1, y, &line, area.width.saturating_sub(2));
     }
 }
 
@@ -1075,23 +1270,36 @@ fn render_settings_options(
         &state.plugins,
     );
 
-    let preview_h = if state.settings.tab == SettingsTab::Appearance && area.height >= 10 {
-        4
+    let desc_h = if !rows.is_empty() && area.height >= 7 {
+        2u16
     } else {
         0
     };
-    let list_h = area.height.saturating_sub(preview_h) as usize;
+    let preview_h = if state.settings.tab == SettingsTab::Appearance && area.height >= 12 {
+        4u16
+    } else {
+        0
+    };
+    let list_h = area.height.saturating_sub(preview_h + desc_h) as usize;
     let selected = state.settings.selected_index.min(rows.len().saturating_sub(1));
-    let scroll = if selected >= state.settings.scroll_offset + list_h {
+    let scroll = if list_h == 0 {
+        0
+    } else if selected >= state.settings.scroll_offset + list_h {
         selected.saturating_sub(list_h.saturating_sub(1))
     } else {
         state.settings.scroll_offset.min(selected)
+    };
+    let has_sb = rows.len() > list_h && area.width > 2;
+    let row_w = if has_sb {
+        area.width.saturating_sub(1)
+    } else {
+        area.width
     };
 
     for (vis_idx, row) in rows.iter().skip(scroll).take(list_h).enumerate() {
         let abs_idx = scroll + vis_idx;
         let y = area.y + vis_idx as u16;
-        let rect = Rect::new(area.x, y, area.width, 1);
+        let rect = Rect::new(area.x, y, row_w, 1);
         hit.settings_options.push((rect, abs_idx));
 
         let is_sel = abs_idx == selected;
@@ -1102,26 +1310,50 @@ fn render_settings_options(
         };
         fill_bg(buf, rect, bg, palette.fg);
 
-        let val_str = match &row.value {
-            SettingValueKind::Bool(b) => {
-                if *b { "[x] on".to_owned() } else { "[ ] off".to_owned() }
+        let (val_str, val_style) = match &row.value {
+            SettingValueKind::Bool(true) => (
+                "● ON".to_owned(),
+                Style::default()
+                    .fg(palette.status_green)
+                    .bg(bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            SettingValueKind::Bool(false) => {
+                ("○ off".to_owned(), Style::default().fg(palette.dim).bg(bg))
             }
-            SettingValueKind::Cycle(s)
-            | SettingValueKind::Text(s)
+            SettingValueKind::Cycle(s) => (
+                format!("✦ {s}"),
+                Style::default().fg(palette.accent).bg(bg),
+            ),
+            SettingValueKind::Action(s) => (
+                format!("▸ {s}"),
+                Style::default()
+                    .fg(palette.accent)
+                    .bg(bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            SettingValueKind::Text(s)
             | SettingValueKind::Number(s)
-            | SettingValueKind::Action(s)
-            | SettingValueKind::ReadOnly(s) => s.clone(),
-            SettingValueKind::MaskedSecret { is_set } => {
-                if *is_set { "●●●● (set)".to_owned() } else { "(unset)".to_owned() }
+            | SettingValueKind::ReadOnly(s) => {
+                (s.clone(), Style::default().fg(palette.muted).bg(bg))
             }
+            SettingValueKind::MaskedSecret { is_set: true } => (
+                "🔒 ●●●● (set)".to_owned(),
+                Style::default().fg(palette.status_green).bg(bg),
+            ),
+            SettingValueKind::MaskedSecret { is_set: false } => (
+                "🔓 (unset)".to_owned(),
+                Style::default().fg(palette.status_yellow).bg(bg),
+            ),
         };
 
-        let left_w = ((area.width as usize) / 2).max(18);
-        let right_w = (area.width as usize).saturating_sub(left_w + 3);
+        let left_w = ((row_w as usize) / 2).max(18);
+        let right_w = (row_w as usize).saturating_sub(left_w + 3);
+        let marker = if is_sel { "▸ " } else { "  " };
         let label_padded = format!(
-            " {:<width$}",
-            truncate_to_width(&row.label, left_w.saturating_sub(2)),
-            width = left_w.saturating_sub(1)
+            "{marker}{:<width$}",
+            truncate_to_width(&row.label, left_w.saturating_sub(3)),
+            width = left_w.saturating_sub(2)
         );
         let val_trunc = truncate_to_width(&val_str, right_w);
 
@@ -1130,30 +1362,86 @@ fn render_settings_options(
                 label_padded,
                 Style::default()
                     .fg(if is_sel { palette.accent } else { palette.fg })
-                    .bg(bg),
+                    .bg(bg)
+                    .add_modifier(if is_sel {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
             ),
-            Span::styled(val_trunc, Style::default().fg(palette.muted).bg(bg)),
+            Span::styled(val_trunc, val_style),
         ]);
-        buf.set_line(area.x, y, &line, area.width);
+        buf.set_line(area.x, y, &line, row_w);
+    }
+
+    if has_sb && list_h > 0 {
+        let sb_rect = Rect::new(area.x + area.width - 1, area.y, 1, list_h as u16);
+        render_vertical_scrollbar(
+            buf,
+            sb_rect,
+            rows.len(),
+            list_h,
+            scroll,
+            palette.modal_bg,
+            palette,
+            false,
+        );
+    }
+
+    if desc_h > 0
+        && let Some(sel_row) = rows.get(selected)
+    {
+        let dy = area.y + list_h as u16;
+        let sep = "─".repeat(area.width.saturating_sub(2) as usize);
+        buf.set_string(
+            area.x + 1,
+            dy,
+            &sep,
+            Style::default().fg(palette.separator).bg(palette.modal_bg),
+        );
+        let desc_line = Line::from(vec![
+            Span::styled(
+                " 💡 ",
+                Style::default().fg(palette.accent).bg(palette.modal_bg),
+            ),
+            Span::styled(
+                truncate_to_width(
+                    &sel_row.description,
+                    area.width.saturating_sub(5) as usize,
+                ),
+                Style::default().fg(palette.muted).bg(palette.modal_bg),
+            ),
+        ]);
+        buf.set_line(area.x, dy + 1, &desc_line, area.width);
     }
 
     if preview_h > 0 {
-        let py = area.y + list_h as u16;
+        let py = area.y + list_h as u16 + desc_h;
         let preview_area = Rect::new(area.x + 1, py, area.width.saturating_sub(2), preview_h);
         buf.set_string(
             preview_area.x,
             preview_area.y,
-            "Live Preview:",
-            Style::default().fg(palette.dim),
+            "✨ Live Preview:",
+            Style::default()
+                .fg(palette.accent)
+                .bg(palette.modal_bg)
+                .add_modifier(Modifier::BOLD),
         );
         let bubble = Span::styled(
-            " Hello Mono! ",
+            "  Hello Mono! ✨  ",
             Style::default().bg(palette.bubble_bg).fg(palette.bubble_fg),
         );
-        buf.set_line(preview_area.x, preview_area.y + 1, &Line::from(vec![bubble]), preview_area.width);
+        buf.set_line(
+            preview_area.x,
+            preview_area.y + 1,
+            &Line::from(vec![bubble]),
+            preview_area.width,
+        );
         let status_preview = format!(
-            " ● {} · Valve: {} · $0.00 ── 0%",
-            state.model_name, state.valve_mode
+            " ● {} · 🛡️ Valve: {} · $0.00 ── 0% · 💬 {}",
+            state.model_name,
+            state.valve_mode,
+            state.chats.active_chat().title
         );
         buf.set_string(
             preview_area.x,
@@ -1173,45 +1461,64 @@ fn render_plugin_detail(
     hit: &mut HitRegions,
 ) {
     let plugin = state.plugins.iter().find(|p| p.id == detail.plugin_id);
-    let header_status = plugin
-        .map(|p| format!("{} {}", p.state.dot_glyph(), p.state.label()))
-        .unwrap_or_else(|| "unknown".to_owned());
+    let (dot_glyph, dot_color, status_label) = match plugin {
+        Some(p) => {
+            let color = match &p.state {
+                PluginUiState::Running => palette.status_green,
+                PluginUiState::Starting | PluginUiState::Stopping => palette.status_yellow,
+                PluginUiState::Stopped | PluginUiState::Failed(_) => palette.status_red,
+            };
+            (p.state.dot_glyph(), color, p.state.label())
+        }
+        None => ("●", palette.dim, "unknown"),
+    };
+    let back_pill = "[ ← Plugins ]";
+    let back_x = area.x + 1;
+    let back_w = (back_pill.width() as u16).min(area.width.saturating_sub(2));
+    hit.settings_back = Some(Rect::new(back_x, area.y, back_w, 1));
+
     let header = Line::from(vec![
         Span::styled(
-            format!(" Plugins › {} ", detail.plugin_id),
+            back_pill,
             Style::default()
+                .bg(palette.selection_bg)
                 .fg(palette.accent)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!("({header_status})"), Style::default().fg(palette.muted)),
+        Span::styled(
+            format!(" › {} (", detail.plugin_id),
+            Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(dot_glyph, Style::default().fg(dot_color)),
+        Span::styled(format!(" {status_label})"), Style::default().fg(palette.muted)),
     ]);
-    buf.set_line(area.x + 1, area.y, &header, area.width.saturating_sub(2));
+    buf.set_line(back_x, area.y, &header, area.width.saturating_sub(2));
 
     let running = plugin.is_some_and(|p| matches!(p.state, PluginUiState::Running | PluginUiState::Starting));
     let enabled = plugin.is_some_and(|p| p.enabled);
     let mut rows: Vec<(String, String)> = vec![
         (
             if running {
-                "[ Stop Plugin ]".to_owned()
+                "[ ⏹️ Stop Plugin ]".to_owned()
             } else {
-                "[ Start Plugin ]".to_owned()
+                "[ ▶️ Start Plugin ]".to_owned()
             },
             "Spawn / stop Waist-2 body".to_owned(),
         ),
         (
-            "[ Pair Device ]".to_owned(),
+            "[ 📱 Pair Device ]".to_owned(),
             "Run interactive `pair` in TTY".to_owned(),
         ),
         (
-            "[ Enable on Startup ]".to_owned(),
-            format!("{}", enabled),
+            "[ 🚀 Enable on Startup ]".to_owned(),
+            if enabled { "● ON".to_owned() } else { "○ off".to_owned() },
         ),
         (
-            "[ Manage Env Secrets ]".to_owned(),
+            "[ 🔑 Manage Env Secrets ]".to_owned(),
             "Add/update [env] secret in secrets.toml (0600)".to_owned(),
         ),
         (
-            format!("[ Reload {} ]", detail.toml_path.file_name().and_then(|n| n.to_str()).unwrap_or("plugin.toml")),
+            format!("[ 🔄 Reload {} ]", detail.toml_path.file_name().and_then(|n| n.to_str()).unwrap_or("plugin.toml")),
             format!("{} keys", detail.toml_entries.len()),
         ),
     ];
@@ -1219,15 +1526,36 @@ fn render_plugin_detail(
     for entry in &detail.toml_entries {
         rows.push((entry.key_path.clone(), entry.value.display_compact()));
     }
-    rows.push(("[ + Add TOML Key ]".to_owned(), "Insert key in plugins/<id>.toml".to_owned()));
+    rows.push(("[ ➕ Add TOML Key ]".to_owned(), "Insert key in plugins/<id>.toml".to_owned()));
 
     let start_y = area.y + 2;
     let avail_h = area.height.saturating_sub(2) as usize;
-    for (idx, (k, v)) in rows.iter().take(avail_h).enumerate() {
-        let y = start_y + idx as u16;
-        let rect = Rect::new(area.x + 1, y, area.width.saturating_sub(2), 1);
-        hit.settings_options.push((rect, idx));
-        let sel = idx == detail.selected_row;
+    let total_rows = rows.len();
+    let max_scroll = total_rows.saturating_sub(avail_h);
+    let selected = detail.selected_row.min(total_rows.saturating_sub(1));
+    let scroll = if avail_h == 0 {
+        0
+    } else if selected >= detail.scroll_offset + avail_h {
+        selected.saturating_sub(avail_h - 1)
+    } else if selected < detail.scroll_offset {
+        selected
+    } else {
+        detail.scroll_offset
+    }
+    .min(max_scroll);
+
+    let has_sb = total_rows > avail_h && area.width > 4;
+    let row_w = if has_sb {
+        area.width.saturating_sub(3)
+    } else {
+        area.width.saturating_sub(2)
+    };
+
+    for (vis_idx, (abs_idx, (k, v))) in rows.iter().enumerate().skip(scroll).take(avail_h).enumerate() {
+        let y = start_y + vis_idx as u16;
+        let rect = Rect::new(area.x + 1, y, row_w, 1);
+        hit.settings_options.push((rect, abs_idx));
+        let sel = abs_idx == selected;
         let bg = if sel {
             palette.selection_bg
         } else {
@@ -1248,6 +1576,20 @@ fn render_plugin_detail(
             ),
         ]);
         buf.set_line(rect.x, rect.y, &line, rect.width);
+    }
+
+    if has_sb && avail_h > 0 {
+        let sb_rect = Rect::new(area.x + area.width - 1, start_y, 1, avail_h as u16);
+        render_vertical_scrollbar(
+            buf,
+            sb_rect,
+            total_rows,
+            avail_h,
+            scroll,
+            palette.modal_bg,
+            palette,
+            false,
+        );
     }
 }
 
@@ -1383,7 +1725,16 @@ fn render_setup_wizard(
 }
 
 fn render_toast(area: Rect, buf: &mut Buffer, text: &str, is_error: bool, palette: &ThemePalette) {
-    let w = (text.width() as u16 + 4).min(area.width.saturating_sub(4)).max(12);
+    let prefixed = if text.starts_with('📋') || text.starts_with('✅') || text.starts_with('⚠') {
+        text.to_owned()
+    } else if is_error {
+        format!("⚠️ {text}")
+    } else if text.starts_with("Copied") {
+        format!("📋 {text}")
+    } else {
+        format!("✅ {text}")
+    };
+    let w = (prefixed.width() as u16 + 4).min(area.width.saturating_sub(4)).max(12);
     let x = area.x + area.width.saturating_sub(w + 2);
     let y = area.y + 1;
     let rect = Rect::new(x, y, w, 1);
@@ -1396,7 +1747,7 @@ fn render_toast(area: Rect, buf: &mut Buffer, text: &str, is_error: bool, palett
     buf.set_string(
         x + 1,
         y,
-        truncate_to_width(text, w.saturating_sub(2) as usize),
+        truncate_to_width(&prefixed, w.saturating_sub(2) as usize),
         Style::default().fg(fg).bg(palette.status_bg),
     );
 }
@@ -1485,4 +1836,103 @@ fn wrap_text_lines(text: &str, max_w: usize) -> Vec<String> {
         lines.push(String::new());
     }
     lines
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_vertical_scrollbar(
+    buf: &mut Buffer,
+    rect: Rect,
+    total: usize,
+    visible: usize,
+    scroll: usize,
+    track_bg: Color,
+    palette: &ThemePalette,
+    always_show_track: bool,
+) {
+    if rect.width == 0 || rect.height == 0 {
+        return;
+    }
+    let h = rect.height as usize;
+    if total <= visible {
+        if !always_show_track {
+            return;
+        }
+        let track_style = Style::default().fg(palette.separator).bg(track_bg);
+        for r in 0..h {
+            if let Some(cell) = buf.cell_mut((rect.x, rect.y + r as u16)) {
+                cell.set_symbol("│");
+                cell.set_style(track_style);
+            }
+        }
+        return;
+    }
+
+    let thumb_h = ((visible * h) / total.max(1)).max(1).min(h);
+    let max_scroll = total.saturating_sub(visible);
+    let clamped_scroll = scroll.min(max_scroll);
+    let max_thumb_top = h.saturating_sub(thumb_h);
+    let thumb_top = if max_scroll == 0 || max_thumb_top == 0 {
+        0
+    } else {
+        (clamped_scroll * max_thumb_top + max_scroll / 2) / max_scroll
+    };
+
+    let track_style = Style::default().fg(palette.separator).bg(track_bg);
+    let thumb_style = Style::default().fg(palette.accent).bg(track_bg);
+
+    for r in 0..h {
+        let is_thumb = r >= thumb_top && r < thumb_top + thumb_h;
+        if let Some(cell) = buf.cell_mut((rect.x, rect.y + r as u16)) {
+            cell.set_symbol(if is_thumb { "┃" } else { "│" });
+            cell.set_style(if is_thumb { thumb_style } else { track_style });
+        }
+    }
+}
+
+fn format_turn_duration(ms: u64) -> String {
+    if ms >= 60_000 {
+        TuiAppState::format_elapsed(Duration::from_millis(ms))
+    } else {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    }
+}
+
+fn slice_display_window(s: &str, h_scroll: usize, max_w: usize) -> String {
+    if max_w == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut col = 0usize;
+    let mut out_w = 0usize;
+    for ch in s.chars() {
+        let cw = ch.width().unwrap_or(0);
+        if col < h_scroll {
+            col += cw;
+            continue;
+        }
+        if out_w + cw > max_w {
+            break;
+        }
+        out.push(ch);
+        out_w += cw;
+        col += cw;
+    }
+    out
+}
+
+fn truncate_to_width_no_ellipsis(s: &str, max_w: usize) -> String {
+    if max_w == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut cur_w = 0usize;
+    for ch in s.chars() {
+        let cw = ch.width().unwrap_or(0);
+        if cur_w + cw > max_w {
+            break;
+        }
+        out.push(ch);
+        cur_w += cw;
+    }
+    out
 }

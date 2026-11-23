@@ -48,6 +48,21 @@ impl SettingsTab {
         }
     }
 
+    /// Expressive tab icon shown in `/settings`.
+    #[must_use]
+    pub const fn icon(self) -> &'static str {
+        match self {
+            Self::Appearance => "🎨",
+            Self::SoulBrain => "🧠",
+            Self::Model => "🤖",
+            Self::Valve => "🛡️",
+            Self::Rbac => "🔐",
+            Self::Providers => "🔑",
+            Self::Plugins => "🔌",
+            Self::Runtime => "⚡",
+        }
+    }
+
     /// Next tab (wraps around).
     #[must_use]
     pub fn next(self) -> Self {
@@ -242,6 +257,7 @@ pub struct InlineEditState {
 pub struct PluginDetailState {
     pub plugin_id: String,
     pub selected_row: usize,
+    pub scroll_offset: usize,
     pub toml_path: PathBuf,
     pub toml_doc: Option<DynamicTomlDoc>,
     pub toml_entries: Vec<DynamicTomlEntry>,

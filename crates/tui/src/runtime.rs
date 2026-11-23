@@ -265,7 +265,7 @@ pub fn run_tui_with_provider(
 
 enum RuntimeEvent {
     AssistantReply {
-        chat_id: String,
+        chat_id: Option<String>,
         text: String,
         duration_ms: u64,
     },
@@ -357,6 +357,7 @@ async fn run_tui_event_loop(
     tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_draw = Instant::now();
     let mut last_busy_start: Option<Instant> = None;
+    let mut active_turn_chat_id: Option<String> = None;
     let mut needs_redraw = true;
 
     loop {
@@ -399,8 +400,9 @@ async fn run_tui_event_loop(
                 };
                 needs_redraw = true;
 
+                let mut need_full_redraw = false;
                 for action in actions {
-                    handle_app_action(
+                    if handle_app_action(
                         action,
                         state,
                         guard,
@@ -412,10 +414,22 @@ async fn run_tui_event_loop(
                         &mut seen_events_len,
                         &mut plugin_children,
                         &mut last_busy_start,
+                        &mut active_turn_chat_id,
                         &tx,
                         &mut effects,
                     )
-                    .await;
+                    .await
+                    {
+                        need_full_redraw = true;
+                    }
+                }
+                if need_full_redraw {
+                    while key_rx.try_recv().is_ok() {}
+                    while crossterm::event::poll(Duration::ZERO).unwrap_or(false) {
+                        let _ = crossterm::event::read();
+                    }
+                    let _ = terminal.clear();
+                    needs_redraw = true;
                 }
             }
             maybe_rt = rx.recv() => {
@@ -424,6 +438,7 @@ async fn run_tui_event_loop(
                         rt_ev,
                         state,
                         &mut last_busy_start,
+                        &mut active_turn_chat_id,
                         &mut effects,
                     );
                     needs_redraw = true;
@@ -460,6 +475,8 @@ async fn run_tui_event_loop(
                             state,
                             &mut seen_events_len,
                             &mut resolved_approvals,
+                            &mut last_busy_start,
+                            &mut active_turn_chat_id,
                         )
                         .await;
                     }
@@ -494,9 +511,11 @@ async fn handle_app_action(
     seen_events_len: &mut usize,
     plugin_children: &mut HashMap<String, (Child, Option<BodyId>)>,
     last_busy_start: &mut Option<Instant>,
+    active_turn_chat_id: &mut Option<String>,
     tx: &mpsc::UnboundedSender<RuntimeEvent>,
     effects: &mut TuiEffects,
-) {
+) -> bool {
+    let mut needs_full_redraw = false;
     match action {
         AppAction::ToggleMouseCapture(enabled) => {
             guard.set_mouse_capture(enabled);
@@ -535,6 +554,7 @@ async fn handle_app_action(
             attachments,
         } => {
             *last_busy_start = Some(Instant::now());
+            *active_turn_chat_id = Some(chat_id.clone());
             // Check non-blocking background auto-titler
             let trigger = {
                 let chat = state.chats.active_chat_mut();
@@ -586,6 +606,7 @@ async fn handle_app_action(
             let Some(b) = booted.as_ref() else {
                 state.thinking = false;
                 *last_busy_start = None;
+                *active_turn_chat_id = None;
                 state.push_timeline_item(
                     &chat_id,
                     ChatTimelineItem::SystemNotice {
@@ -594,7 +615,7 @@ async fn handle_app_action(
                         is_error: true,
                     },
                 );
-                return;
+                return needs_full_redraw;
             };
 
             sync_dynamic_actors(&b.dynamic_actors, state);
@@ -701,11 +722,17 @@ async fn handle_app_action(
             let res = run_interactive_pair_subprocess(guard, &loaded.paths, &state.gateway_cfg, &pid);
             match res {
                 Ok(0) => state.set_toast(format!("Paired '{pid}' successfully"), false),
+                Ok(130) => state.set_toast(format!("Pairing '{pid}' cancelled"), false),
+                Ok(124) => state.set_toast(
+                    format!("Pairing '{pid}' timed out — try again or use phone pairing"),
+                    true,
+                ),
                 Ok(code) => state.set_toast(format!("Pairing '{pid}' exited with code {code}"), true),
                 Err(e) => state.set_toast(e, true),
             }
             let palette = crate::theme::ThemePalette::for_preset(state.prefs.theme);
             effects.trigger_modal_dissolve(state.prefs.motion, &palette);
+            needs_full_redraw = true;
         }
         AppAction::SubmitGatewayCommand(raw) => {
             if let Some(b) = booted.as_ref() {
@@ -799,12 +826,14 @@ async fn handle_app_action(
             }
         },
     }
+    needs_full_redraw
 }
 
 fn handle_runtime_event(
     rt_ev: RuntimeEvent,
     state: &mut TuiAppState,
     last_busy_start: &mut Option<Instant>,
+    active_turn_chat_id: &mut Option<String>,
     effects: &mut TuiEffects,
 ) {
     let palette = crate::theme::ThemePalette::for_preset(state.prefs.theme);
@@ -815,12 +844,25 @@ fn handle_runtime_event(
             duration_ms,
         } => {
             state.thinking = false;
+            let elapsed_ms = if duration_ms > 0 {
+                duration_ms
+            } else {
+                last_busy_start
+                    .take()
+                    .map(|t| t.elapsed().as_millis() as u64)
+                    .unwrap_or(0)
+            };
             *last_busy_start = None;
+            state.thinking_elapsed_ms = elapsed_ms;
+            let target_chat_id = active_turn_chat_id
+                .take()
+                .or(chat_id)
+                .unwrap_or_else(|| state.chats.active_chat_id.clone());
             state.push_timeline_item(
-                &chat_id,
+                &target_chat_id,
                 ChatTimelineItem::AssistantMessage {
                     text,
-                    duration_ms: Some(duration_ms),
+                    duration_ms: Some(elapsed_ms),
                     timestamp_ms: 0,
                 },
             );
@@ -832,7 +874,9 @@ fn handle_runtime_event(
         RuntimeEvent::TurnError(err) => {
             state.thinking = false;
             *last_busy_start = None;
-            let cid = state.chats.active_chat_id.clone();
+            let cid = active_turn_chat_id
+                .take()
+                .unwrap_or_else(|| state.chats.active_chat_id.clone());
             state.push_timeline_item(
                 &cid,
                 ChatTimelineItem::SystemNotice {
@@ -873,6 +917,8 @@ async fn poll_new_gateway_events(
     state: &mut TuiAppState,
     seen_len: &mut usize,
     resolved_approvals: &mut BTreeSet<ActionId>,
+    last_busy_start: &mut Option<Instant>,
+    active_turn_chat_id: &mut Option<String>,
 ) {
     let (used, limit) = handle.budget().snapshot(clock.now());
     state.daily_tokens_used = used;
@@ -884,7 +930,9 @@ async fn poll_new_gateway_events(
     if events.len() <= *seen_len {
         return;
     }
-    let active_id = state.chats.active_chat_id.clone();
+    let active_id = active_turn_chat_id
+        .clone()
+        .unwrap_or_else(|| state.chats.active_chat_id.clone());
     for ev in &events[*seen_len..] {
         if let Some(detail) = &ev.detail {
             match detail {
@@ -898,6 +946,8 @@ async fn poll_new_gateway_events(
                     }
                     if *outcome == DecisionOutcome::Silent || *outcome == DecisionOutcome::DoorBlocked {
                         state.thinking = false;
+                        *last_busy_start = None;
+                        *active_turn_chat_id = None;
                     }
                 }
                 EventDetail::Action {
@@ -933,6 +983,8 @@ async fn poll_new_gateway_events(
                 }
                 EventDetail::Failure { component, detail, .. } => {
                     state.thinking = false;
+                    *last_busy_start = None;
+                    *active_turn_chat_id = None;
                     state.push_timeline_item(
                         &active_id,
                         ChatTimelineItem::SystemNotice {
@@ -1223,7 +1275,7 @@ fn handle_tui_waist2_line(
             if params.capability_id.as_str() == "chat.speak" {
                 let text = extract_chat_speak_text(params.payload.as_bytes());
                 let _ = tx.send(RuntimeEvent::AssistantReply {
-                    chat_id: "direct".to_owned(),
+                    chat_id: None,
                     text,
                     duration_ms: 0,
                 });

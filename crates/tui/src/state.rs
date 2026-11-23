@@ -18,11 +18,11 @@ use crate::attachments::{
 };
 
 use crate::config::{
-    BUILTIN_PLUGIN_PRESETS, DynamicTomlDoc, LocalChatStore, SidebarMode, TuiPreferences,
-    config_dir_from_path, discover_builtin_binary, find_builtin_preset, install_builtin_plugin,
-    list_secret_keys, parse_dynamic_input, remove_plugin_from_config, remove_secret_env,
-    save_monoagens_toml_field, save_secret_env, save_secret_key, set_plugin_enabled,
-    write_or_update_gateway_config,
+    BUILTIN_PLUGIN_PRESETS, DynamicTomlDoc, LocalChatStore, SidebarMode, StoredChatMessagePreview,
+    TuiPreferences, config_dir_from_path, discover_builtin_binary, find_builtin_preset,
+    install_builtin_plugin, list_secret_keys, parse_dynamic_input, remove_plugin_from_config,
+    remove_secret_env, save_monoagens_toml_field, save_secret_env, save_secret_key,
+    set_plugin_enabled, write_or_update_gateway_config,
 };
 use crate::settings::{
     InlineEditState, InlineEditTarget, PluginDetailState, PluginUiEntry, PluginUiState,
@@ -315,7 +315,11 @@ pub struct ChatSelection {
 #[derive(Debug, Clone, Default)]
 pub struct HitRegions {
     pub sidebar_area: Rect,
+    pub sidebar_max_scroll: usize,
     pub chat_area: Rect,
+    pub chat_scrollbar: Option<Rect>,
+    pub chat_total_lines: usize,
+    pub chat_visible_lines: usize,
     pub chat_viewport_lines: Vec<String>,
     pub attachment_cards: Vec<(Rect, usize)>,
     pub sidebar_chats: Vec<(Rect, String)>,
@@ -325,6 +329,7 @@ pub struct HitRegions {
     pub approval_deny: Option<Rect>,
     pub autocomplete_rows: Vec<(Rect, usize)>,
     pub settings_area: Rect,
+    pub settings_back: Option<Rect>,
     pub settings_tabs: Vec<(Rect, SettingsTab)>,
     pub settings_sections: Vec<(Rect, usize)>,
     pub settings_options: Vec<(Rect, usize)>,
@@ -335,7 +340,11 @@ impl HitRegions {
     /// Clears all per-frame hit rectangles before rendering.
     pub fn clear(&mut self) {
         self.sidebar_area = Rect::default();
+        self.sidebar_max_scroll = 0;
         self.chat_area = Rect::default();
+        self.chat_scrollbar = None;
+        self.chat_total_lines = 0;
+        self.chat_visible_lines = 0;
         self.chat_viewport_lines.clear();
         self.attachment_cards.clear();
         self.sidebar_chats.clear();
@@ -345,6 +354,7 @@ impl HitRegions {
         self.approval_deny = None;
         self.autocomplete_rows.clear();
         self.settings_area = Rect::default();
+        self.settings_back = None;
         self.settings_tabs.clear();
         self.settings_sections.clear();
         self.settings_options.clear();
@@ -397,8 +407,10 @@ pub struct TuiAppState {
     pub autocomplete_idx: usize,
     pub settings: SettingsModalState,
     pub wizard: Option<SetupWizardState>,
+    pub sidebar_scroll: usize,
     pub chat_scroll: usize,
     pub auto_scroll: bool,
+    pub dragging_chat_scrollbar: bool,
     pub thinking: bool,
     pub thinking_phase: String,
     pub thinking_elapsed_ms: u64,
@@ -443,7 +455,7 @@ impl TuiAppState {
                     } else {
                         ChatTimelineItem::AssistantMessage {
                             text: m.text_preview.clone(),
-                            duration_ms: None,
+                            duration_ms: m.duration_ms,
                             timestamp_ms: m.timestamp_ms,
                         }
                     }
@@ -473,8 +485,10 @@ impl TuiAppState {
             autocomplete_idx: 0,
             settings,
             wizard: None,
+            sidebar_scroll: 0,
             chat_scroll: 0,
             auto_scroll: true,
+            dragging_chat_scrollbar: false,
             thinking: false,
             thinking_phase: "Reasoning…".to_owned(),
             thinking_elapsed_ms: 0,
@@ -525,10 +539,40 @@ impl TuiAppState {
         });
     }
 
-    /// Appends a timeline item to the active chat (and records preview for user/assistant msgs).
+    /// Appends a timeline item to the chat and persists user/assistant messages to `tui_chats.json`.
     pub fn push_timeline_item(&mut self, chat_id: &str, item: ChatTimelineItem) {
+        let persist_msg = match &item {
+            ChatTimelineItem::UserMessage {
+                sender,
+                text,
+                timestamp_ms,
+                ..
+            } => Some(StoredChatMessagePreview {
+                role: "user".to_owned(),
+                sender: sender.clone(),
+                text_preview: text.clone(),
+                timestamp_ms: *timestamp_ms,
+                duration_ms: None,
+            }),
+            ChatTimelineItem::AssistantMessage {
+                text,
+                duration_ms,
+                timestamp_ms,
+            } => Some(StoredChatMessagePreview {
+                role: "assistant".to_owned(),
+                sender: self.gateway_cfg.soul.name.clone(),
+                text_preview: text.clone(),
+                timestamp_ms: *timestamp_ms,
+                duration_ms: *duration_ms,
+            }),
+            _ => None,
+        };
         let entry = self.timelines.entry(chat_id.to_owned()).or_default();
         entry.push(item);
+        if let Some(msg) = persist_msg {
+            self.chats.append_message(chat_id, msg);
+            self.persist_chats();
+        }
         if self.chats.active_chat_id == chat_id && self.auto_scroll {
             self.chat_scroll = usize::MAX;
         }
@@ -591,8 +635,8 @@ impl TuiAppState {
     pub fn available_slash_commands(&self) -> Vec<SlashCommandItem> {
         let mut cmds = vec![
             SlashCommandItem {
-                name: "chat new".to_owned(),
-                usage: "/chat new [name]".to_owned(),
+                name: "new".to_owned(),
+                usage: "/new [name]".to_owned(),
                 description: "Create a new local chat (same persistent soul)".to_owned(),
                 current_value: None,
                 icon: "+",
@@ -600,11 +644,20 @@ impl TuiAppState {
                 from_plugin: None,
             },
             SlashCommandItem {
-                name: "chat rename".to_owned(),
-                usage: "/chat rename <title>".to_owned(),
+                name: "rename".to_owned(),
+                usage: "/rename <title>".to_owned(),
                 description: "Rename active chat and lock against auto-retitle".to_owned(),
                 current_value: Some(self.chats.active_chat().title.clone()),
                 icon: "✎",
+                lab_only: false,
+                from_plugin: None,
+            },
+            SlashCommandItem {
+                name: "delete".to_owned(),
+                usage: "/delete".to_owned(),
+                description: "Delete active chat (or clear if it is the last chat)".to_owned(),
+                current_value: None,
+                icon: "✕",
                 lab_only: false,
                 from_plugin: None,
             },
@@ -1235,9 +1288,12 @@ impl TuiAppState {
                 Vec::new()
             }
             "/clear" => {
-                self.timelines.entry(active_id).or_default().clear();
+                self.timelines.entry(active_id.clone()).or_default().clear();
+                self.chats.clear_messages(&active_id);
+                self.persist_chats();
                 self.chat_scroll = 0;
                 self.auto_scroll = true;
+                self.set_toast("Cleared active chat", false);
                 Vec::new()
             }
             "/attach" => {
@@ -1305,29 +1361,43 @@ impl TuiAppState {
                     Vec::new()
                 }
             }
-            "/chat" => {
-                let mut sub = rest.splitn(2, char::is_whitespace);
-                let action = sub.next().unwrap_or("");
-                let arg = sub.next().map(str::trim).unwrap_or("");
-                match action {
-                    "new" => {
-                        let name = (!arg.is_empty()).then_some(arg);
-                        let created_id = self.chats.create_chat(name).id.clone();
-                        self.timelines.entry(created_id).or_default();
-                        self.persist_chats();
-                        self.set_toast("Created new local chat", false);
-                    }
-                    "rename" => {
-                        if arg.is_empty() {
-                            self.set_toast("Usage: /chat rename <title>", true);
-                        } else if self.chats.rename_chat(&active_id, arg) {
-                            self.persist_chats();
-                            self.set_toast(format!("Renamed & locked chat: {arg}"), false);
-                        }
-                    }
-                    _ => {
-                        self.set_toast("Usage: /chat new [name] | /chat rename <title>", true);
-                    }
+            "/new" => {
+                let arg = rest.trim();
+                let name = (!arg.is_empty()).then_some(arg);
+                let created_id = self.chats.create_chat(name).id.clone();
+                self.timelines.entry(created_id).or_default();
+                self.auto_scroll = true;
+                self.chat_scroll = 0;
+                self.persist_chats();
+                self.set_toast("Created new chat", false);
+                Vec::new()
+            }
+            "/rename" => {
+                let arg = rest.trim();
+                if arg.is_empty() {
+                    self.set_toast("Usage: /rename <title>", true);
+                } else if self.chats.rename_chat(&active_id, arg) {
+                    self.persist_chats();
+                    self.set_toast(format!("Renamed & locked chat: {arg}"), false);
+                }
+                Vec::new()
+            }
+            "/delete" => {
+                if self.chats.delete_chat(&active_id) {
+                    self.timelines.remove(&active_id);
+                    let next_id = self.chats.active_chat_id.clone();
+                    self.timelines.entry(next_id).or_default();
+                    self.auto_scroll = true;
+                    self.chat_scroll = usize::MAX;
+                    self.persist_chats();
+                    self.set_toast("Deleted chat", false);
+                } else {
+                    self.timelines.entry(active_id.clone()).or_default().clear();
+                    self.chats.clear_messages(&active_id);
+                    self.chat_scroll = 0;
+                    self.auto_scroll = true;
+                    self.persist_chats();
+                    self.set_toast("Cleared last remaining chat", false);
                 }
                 Vec::new()
             }
@@ -1502,12 +1572,15 @@ impl TuiAppState {
                     if self.settings.plugin_detail.is_some() {
                         if let Some(detail) = &mut self.settings.plugin_detail {
                             detail.selected_row = detail.selected_row.saturating_sub(1);
+                            detail.scroll_offset = detail.scroll_offset.saturating_sub(1);
                         }
                     } else {
                         self.settings.scroll_offset = self.settings.scroll_offset.saturating_sub(1);
                         self.settings.selected_index =
                             self.settings.selected_index.saturating_sub(1);
                     }
+                } else if self.sidebar_visible(viewport.width) && rect_contains(hit.sidebar_area, x, y) {
+                    self.sidebar_scroll = self.sidebar_scroll.saturating_sub(2);
                 } else if rect_contains(hit.chat_area, x, y) || !rect_contains(hit.sidebar_area, x, y) {
                     self.auto_scroll = false;
                     self.chat_scroll = self.chat_scroll.saturating_sub(3);
@@ -1519,6 +1592,7 @@ impl TuiAppState {
                     if let Some(detail) = &mut self.settings.plugin_detail {
                         let max_idx = detail.total_rows().saturating_sub(1);
                         detail.selected_row = (detail.selected_row + 1).min(max_idx);
+                        detail.scroll_offset = (detail.scroll_offset + 1).min(max_idx);
                     } else {
                         let rows = self.current_settings_rows();
                         if !rows.is_empty() {
@@ -1527,8 +1601,14 @@ impl TuiAppState {
                             self.settings.scroll_offset = self.settings.scroll_offset.saturating_add(1);
                         }
                     }
+                } else if self.sidebar_visible(viewport.width) && rect_contains(hit.sidebar_area, x, y) {
+                    self.sidebar_scroll = (self.sidebar_scroll + 2).min(hit.sidebar_max_scroll);
                 } else if rect_contains(hit.chat_area, x, y) || !rect_contains(hit.sidebar_area, x, y) {
-                    self.chat_scroll = self.chat_scroll.saturating_add(3);
+                    let max_scroll = hit.chat_total_lines.saturating_sub(hit.chat_visible_lines);
+                    self.chat_scroll = self.chat_scroll.saturating_add(3).min(max_scroll);
+                    if self.chat_scroll >= max_scroll {
+                        self.auto_scroll = true;
+                    }
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
@@ -1544,6 +1624,14 @@ impl TuiAppState {
 
                 if self.settings.open {
                     self.selection = None;
+                    if self.settings.plugin_detail.is_some()
+                        && let Some(back_rect) = hit.settings_back
+                        && rect_contains(back_rect, x, y)
+                    {
+                        self.settings.plugin_detail = None;
+                        self.settings.editing = None;
+                        return actions;
+                    }
                     for (rect, tab) in &hit.settings_tabs {
                         if rect_contains(*rect, x, y) {
                             self.settings.tab = *tab;
@@ -1660,6 +1748,16 @@ impl TuiAppState {
                     }
                 }
 
+                // Chat vertical scrollbar click/drag
+                if let Some(sb_rect) = hit.chat_scrollbar
+                    && rect_contains(sb_rect, x, y)
+                {
+                    self.selection = None;
+                    self.dragging_chat_scrollbar = true;
+                    self.scroll_chat_from_scrollbar_y(hit, y);
+                    return actions;
+                }
+
                 // Chat viewport drag-select start
                 if rect_contains(hit.chat_area, x, y) {
                     self.selection = Some(ChatSelection {
@@ -1672,6 +1770,10 @@ impl TuiAppState {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                if self.dragging_chat_scrollbar {
+                    self.scroll_chat_from_scrollbar_y(hit, y);
+                    return actions;
+                }
                 if let Some(sel) = &mut self.selection
                     && sel.dragging
                     && hit.chat_area.width > 0
@@ -1689,6 +1791,10 @@ impl TuiAppState {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                if self.dragging_chat_scrollbar {
+                    self.dragging_chat_scrollbar = false;
+                    return actions;
+                }
                 if let Some(mut sel) = self.selection.take()
                     && sel.dragging
                 {
@@ -1710,6 +1816,23 @@ impl TuiAppState {
         }
 
         actions
+    }
+
+    fn scroll_chat_from_scrollbar_y(&mut self, hit: &HitRegions, y: u16) {
+        let Some(sb) = hit.chat_scrollbar else {
+            return;
+        };
+        let max_scroll = hit.chat_total_lines.saturating_sub(hit.chat_visible_lines);
+        if max_scroll == 0 || sb.height <= 1 {
+            self.chat_scroll = max_scroll;
+            self.auto_scroll = true;
+            return;
+        }
+        let rel_y = y.saturating_sub(sb.y).min(sb.height - 1) as usize;
+        let denom = (sb.height - 1) as usize;
+        let new_scroll = (rel_y * max_scroll + denom / 2) / denom;
+        self.chat_scroll = new_scroll.min(max_scroll);
+        self.auto_scroll = self.chat_scroll >= max_scroll;
     }
 
     fn current_settings_rows(&self) -> Vec<crate::settings::SettingRow> {
@@ -1743,6 +1866,7 @@ impl TuiAppState {
         let mut detail = PluginDetailState {
             plugin_id: plugin_id.to_owned(),
             selected_row: 0,
+            scroll_offset: 0,
             toml_path,
             toml_doc: None,
             toml_entries: Vec::new(),
@@ -2040,10 +2164,22 @@ impl TuiAppState {
             }
             KeyCode::Up => {
                 detail.selected_row = detail.selected_row.saturating_sub(1);
+                if detail.selected_row < detail.scroll_offset {
+                    detail.scroll_offset = detail.selected_row;
+                }
             }
             KeyCode::Down => {
                 if total > 0 {
                     detail.selected_row = (detail.selected_row + 1).min(total - 1);
+                }
+            }
+            KeyCode::PageUp => {
+                detail.selected_row = detail.selected_row.saturating_sub(5);
+                detail.scroll_offset = detail.scroll_offset.saturating_sub(5);
+            }
+            KeyCode::PageDown => {
+                if total > 0 {
+                    detail.selected_row = (detail.selected_row + 5).min(total - 1);
                 }
             }
             KeyCode::Char(' ') | KeyCode::Enter => {

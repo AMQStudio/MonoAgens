@@ -7,6 +7,7 @@ use std::env;
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -15,6 +16,8 @@ use body_whatsapp::{
     MemoryBlobLookup, WhatsAppBody, WhatsAppPluginConfig, WhatsAppTransport,
     resolve_state_dir_from_env,
 };
+use crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::tty::IsTty;
 use monoagens_body_kit::PersistentBodyRuntime;
 use monoagens_body_sdk::{
     BlobPutResult, BodyId, InboundFrame, OutboundBuilder, RpcId, Waist2Response,
@@ -26,14 +29,20 @@ use tokio::sync::{mpsc, oneshot};
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::pair_code::PairCodeOptions;
 use whatsapp_rust::store::SqliteStore;
-use whatsapp_rust::wacore::types::events::{Event, EventKind};
+use whatsapp_rust::wacore::types::events::{ConnectFailureReason, Event, EventKind};
 
-#[derive(Debug, Clone)]
+const DEFAULT_PAIR_TIMEOUT_SECS: u64 = 120;
+const EXIT_CODE_TIMEOUT: i32 = 124;
+const EXIT_CODE_CANCELLED: i32 = 130;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum CliCommand {
     Pair {
         db_path: PathBuf,
         phone: Option<String>,
         custom_code: Option<String>,
+        timeout_secs: u64,
+        fresh: bool,
     },
     Serve {
         db_path: PathBuf,
@@ -53,6 +62,8 @@ fn parse_cli_args(args: &[String], config: &WhatsAppPluginConfig) -> Result<CliC
     let mut db_path = config.resolve_db_path();
     let mut phone: Option<String> = None;
     let mut custom_code: Option<String> = None;
+    let mut timeout_secs = DEFAULT_PAIR_TIMEOUT_SECS;
+    let mut fresh = false;
     let mut body_id = DEFAULT_BODY_ID.to_owned();
     let mut force_live = false;
     let mut force_offline = false;
@@ -77,6 +88,19 @@ fn parse_cli_args(args: &[String], config: &WhatsAppPluginConfig) -> Result<CliC
                     .ok_or_else(|| "--code requires a custom pairing code".to_owned())?;
                 custom_code = Some(val.clone());
             }
+            "--timeout-secs" => {
+                let val = iter
+                    .next()
+                    .ok_or_else(|| "--timeout-secs requires a positive integer".to_owned())?;
+                let parsed: u64 = val
+                    .parse()
+                    .map_err(|_| format!("invalid --timeout-secs value '{val}'"))?;
+                if parsed == 0 {
+                    return Err("--timeout-secs must be greater than 0".to_owned());
+                }
+                timeout_secs = parsed;
+            }
+            "--fresh" => fresh = true,
             "--body-id" => {
                 let val = iter
                     .next()
@@ -89,7 +113,7 @@ fn parse_cli_args(args: &[String], config: &WhatsAppPluginConfig) -> Result<CliC
                 eprintln!(
                     "Usage:\n  \
                      body-whatsapp [--db <path>] [--live] [--offline] [--body-id <id>]\n  \
-                     body-whatsapp pair [--db <path>] [--phone <number>] [--code <8char>]"
+                     body-whatsapp pair [--db <path>] [--phone <number>] [--code <8char>] [--timeout-secs <secs>] [--fresh]"
                 );
                 std::process::exit(0);
             }
@@ -104,6 +128,8 @@ fn parse_cli_args(args: &[String], config: &WhatsAppPluginConfig) -> Result<CliC
             db_path,
             phone,
             custom_code,
+            timeout_secs,
+            fresh,
         })
     } else {
         Ok(CliCommand::Serve {
@@ -115,37 +141,177 @@ fn parse_cli_args(args: &[String], config: &WhatsAppPluginConfig) -> Result<CliC
     }
 }
 
-fn render_qr_to_stderr(code: &str, timeout: Duration) {
-    let mut err = io::stderr().lock();
-    let _ = writeln!(
-        err,
-        "\n=== WhatsApp Link QR (valid for {}s) ===",
+/// Formats a QR payload into high-contrast black-on-white ANSI modules with a
+/// mandatory quiet zone and raw-mode-safe `\r\n` line endings.
+fn format_qr_for_terminal(code: &str, timeout: Duration) -> Result<String, String> {
+    let qr = qrcode::QrCode::new(code.as_bytes())
+        .map_err(|e| format!("failed to encode QR code: {e}"))?;
+    let art = qr
+        .render::<qrcode::render::unicode::Dense1x2>()
+        .quiet_zone(true)
+        .dark_color(qrcode::render::unicode::Dense1x2::Dark)
+        .light_color(qrcode::render::unicode::Dense1x2::Light)
+        .build();
+
+    let mut out = String::new();
+    out.push_str(&format!(
+        "=== WhatsApp Link QR (valid for {}s) ===\r\n",
         timeout.as_secs()
-    );
-    if let Ok(qr) = qrcode::QrCode::new(code.as_bytes()) {
-        let art = qr
-            .render::<qrcode::render::unicode::Dense1x2>()
-            .dark_color(qrcode::render::unicode::Dense1x2::Light)
-            .light_color(qrcode::render::unicode::Dense1x2::Dark)
-            .build();
-        let _ = writeln!(err, "{art}");
+    ));
+    for line in art.lines() {
+        out.push_str("\x1b[30;47m");
+        out.push_str(line);
+        out.push_str("\x1b[0m\r\n");
     }
-    let _ = writeln!(err, "QR raw: {code}");
-    let _ = writeln!(err, "===========================================\n");
+    out.push_str("===========================================\r\n");
+    Ok(out)
+}
+
+fn render_qr_to_stderr(code: &str, timeout: Duration) {
+    render_qr_to_stderr_with_options(code, timeout, None, false);
+}
+
+fn render_qr_to_stderr_with_options(
+    code: &str,
+    timeout: Duration,
+    banner: Option<&str>,
+    clear_previous: bool,
+) {
+    let mut err = io::stderr().lock();
+    if clear_previous {
+        let _ = write!(err, "\x1b[2J\x1b[H");
+        if let Some(header) = banner {
+            let _ = write!(err, "{header}\r\n\r\n");
+        }
+    }
+    match format_qr_for_terminal(code, timeout) {
+        Ok(block) => {
+            let _ = write!(err, "{block}");
+        }
+        Err(e) => {
+            let _ = write!(err, "{e}\r\n");
+        }
+    }
     let _ = err.flush();
 }
 
 fn render_pair_code_to_stderr(code: &str, timeout: Duration) {
     let mut err = io::stderr().lock();
-    let _ = writeln!(
+    let _ = write!(
         err,
-        "\n=== WhatsApp Pair Code (valid for {}s) ===\n  \
-         WhatsApp > Linked Devices > Link a Device > Link with phone number instead\n  \
-         >>> {code} <<<\n\
-         ===============================================\n",
+        "\r\n=== WhatsApp Pair Code (valid for {}s) ===\r\n  \
+         WhatsApp > Linked Devices > Link a Device > Link with phone number instead\r\n  \
+         >>> {code} <<<\r\n\
+         ===============================================\r\n\r\n",
         timeout.as_secs()
     );
     let _ = err.flush();
+}
+
+fn pair_eprintln(msg: &str) {
+    let mut err = io::stderr().lock();
+    let _ = write!(err, "{msg}\r\n");
+    let _ = err.flush();
+}
+
+fn sqlite_sidecar_path(db_path: &Path, suffix: &str) -> PathBuf {
+    let mut os = db_path.as_os_str().to_os_string();
+    os.push(suffix);
+    PathBuf::from(os)
+}
+
+/// Removes a SQLite database file and its `-wal` / `-shm` sidecar files if present.
+fn remove_sqlite_files(db_path: &Path) -> Result<(), String> {
+    let wal_path = sqlite_sidecar_path(db_path, "-wal");
+    let shm_path = sqlite_sidecar_path(db_path, "-shm");
+    for path in [db_path, wal_path.as_path(), shm_path.as_path()] {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(format!("failed to remove '{}': {e}", path.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// RAII guard that enables terminal raw mode on TTY stdin and guarantees restoration
+/// on drop or panic.
+struct RawModeGuard {
+    active: bool,
+}
+
+impl RawModeGuard {
+    fn enter() -> Self {
+        let active = io::stdin().is_tty() && crossterm::terminal::enable_raw_mode().is_ok();
+        Self { active }
+    }
+
+    fn is_active(&self) -> bool {
+        self.active
+    }
+
+    fn restore(&mut self) {
+        if self.active {
+            let _ = crossterm::terminal::disable_raw_mode();
+            self.active = false;
+        }
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        self.restore();
+    }
+}
+
+fn is_cancel_key(key: &crossterm::event::KeyEvent) -> bool {
+    if key.kind == KeyEventKind::Release {
+        return false;
+    }
+    match key.code {
+        KeyCode::Esc => true,
+        KeyCode::Char('q' | 'Q') if !key.modifiers.contains(KeyModifiers::CONTROL) => true,
+        KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => true,
+        _ => false,
+    }
+}
+
+fn spawn_key_cancel_watcher(
+    cancel_tx: mpsc::Sender<()>,
+    stop_flag: Arc<AtomicBool>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        while !stop_flag.load(Ordering::Relaxed) {
+            match event::poll(Duration::from_millis(100)) {
+                Ok(true) => {
+                    if let Ok(CrosstermEvent::Key(key)) = event::read()
+                        && is_cancel_key(&key)
+                    {
+                        let _ = cancel_tx.try_send(());
+                        break;
+                    }
+                }
+                Ok(false) => {}
+                Err(_) => break,
+            }
+        }
+    })
+}
+
+enum PairSignal {
+    Connected,
+    Exhausted,
+    FatalError(String),
+    LoggedOutOrPairError(String),
+}
+
+enum PairOutcome {
+    Connected,
+    Cancelled,
+    TimedOut,
+    Failed(String),
 }
 
 fn now_epoch_ms() -> u64 {
@@ -168,8 +334,15 @@ async fn run_pair_command(
     db_path: PathBuf,
     phone: Option<String>,
     custom_code: Option<String>,
-) -> Result<(), String> {
+    timeout_secs: u64,
+    fresh: bool,
+) -> Result<PairOutcome, String> {
     ensure_parent_dir(&db_path)?;
+    if fresh {
+        remove_sqlite_files(&db_path)?;
+    }
+    let existed_before_pair = db_path.exists();
+
     let db_str = db_path
         .to_str()
         .ok_or_else(|| format!("non-UTF8 db path: {}", db_path.display()))?;
@@ -177,31 +350,122 @@ async fn run_pair_command(
         .await
         .map_err(|e| format!("failed to open WhatsApp SQLite store '{db_str}': {e}"))?;
 
-    let (connected_tx, mut connected_rx) = mpsc::channel::<()>(1);
-    let connected_tx_cb = connected_tx.clone();
+    let (signal_tx, mut signal_rx) = mpsc::channel::<PairSignal>(16);
+    let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
+    let qr_rendered_once = Arc::new(AtomicBool::new(false));
+    let pair_succeeded = Arc::new(AtomicBool::new(false));
+    let using_phone = phone.is_some();
+
+    let banner = format!(
+        "WhatsApp Pairing — scan QR from WhatsApp > Linked Devices (press Esc, q, or Ctrl+C to cancel; timeout {timeout_secs}s)"
+    );
+    let banner_qr = banner.clone();
+    let qr_rendered_cb = Arc::clone(&qr_rendered_once);
+    let signal_tx_ev = signal_tx.clone();
+    let pair_succeeded_ev = Arc::clone(&pair_succeeded);
 
     let mut builder = Bot::builder()
         .with_backend(store)
         .skip_history_sync()
-        .on_qr_code(|code, timeout| async move {
-            render_qr_to_stderr(&code, timeout);
-        })
         .on_pair_code(|code, timeout| async move {
             render_pair_code_to_stderr(&code, timeout);
         })
         .on_pair_code_error(|err, _client| async move {
-            eprintln!("WhatsApp pair code error: {}", err.error);
+            pair_eprintln(&format!("❌ WhatsApp pair code error: {}", err.error));
         })
-        .on_connected(move |_client| {
-            let tx = connected_tx_cb.clone();
+        .on_event(move |event, _client| {
+            let signal_tx = signal_tx_ev.clone();
+            let pair_succeeded = Arc::clone(&pair_succeeded_ev);
             async move {
-                eprintln!("WhatsApp paired and connected successfully.");
-                let _ = tx.send(()).await;
+                match &*event {
+                    Event::PairSuccess(_) => {
+                        pair_succeeded.store(true, Ordering::Release);
+                        pair_eprintln(
+                            "✅ Device linked! Completing WhatsApp handshake & saving session...",
+                        );
+                    }
+                    Event::Connected(_) => {
+                        pair_succeeded.store(true, Ordering::Release);
+                        let _ = signal_tx.send(PairSignal::Connected).await;
+                    }
+                    Event::PairError(err) => {
+                        pair_eprintln(&format!("❌ WhatsApp pairing error: {:?}", err));
+                        let _ = signal_tx
+                            .send(PairSignal::LoggedOutOrPairError(format!(
+                                "WhatsApp pairing error: {}",
+                                err.error
+                            )))
+                            .await;
+                    }
+                    Event::PairPasskeyRequest(_) => {
+                        let msg = "❌ WhatsApp requested Passkey/WebAuthn verification ('SHORTCAKE_PASSKEY') for this account. Try pairing via phone number (`monoagens pair whatsapp --phone <number>`) or wait and retry.";
+                        pair_eprintln(msg);
+                        let _ = signal_tx
+                            .send(PairSignal::FatalError(
+                                "WhatsApp requested Passkey/WebAuthn verification ('SHORTCAKE_PASSKEY').".to_owned(),
+                            ))
+                            .await;
+                    }
+                    Event::PairPasskeyError(err) => {
+                        pair_eprintln(&format!(
+                            "❌ WhatsApp requested Passkey/WebAuthn verification ('SHORTCAKE_PASSKEY') for this account ({}). Try pairing via phone number (`monoagens pair whatsapp --phone <number>`) or wait and retry.",
+                            err.error
+                        ));
+                        let _ = signal_tx
+                            .send(PairSignal::FatalError(format!(
+                                "WhatsApp Passkey/WebAuthn verification failed ('SHORTCAKE_PASSKEY'): {}",
+                                err.error
+                            )))
+                            .await;
+                    }
+                    Event::ConnectFailure(cf) => {
+                        pair_eprintln(&format!("❌ WhatsApp connection failed: {:?}", cf));
+                        if cf.reason.is_logged_out()
+                            || matches!(
+                                cf.reason,
+                                ConnectFailureReason::TempBanned
+                                    | ConnectFailureReason::AccountLocked
+                            )
+                        {
+                            let _ = signal_tx
+                                .send(PairSignal::LoggedOutOrPairError(format!(
+                                    "WhatsApp connection failed: {:?}",
+                                    cf.reason
+                                )))
+                                .await;
+                        }
+                    }
+                    Event::PairingQrCodesExhausted(exhausted) => {
+                        if !using_phone || exhausted.disconnected {
+                            pair_eprintln("⏱️ QR codes expired without scanning.");
+                            let _ = signal_tx.send(PairSignal::Exhausted).await;
+                        }
+                    }
+                    Event::LoggedOut(info) => {
+                        pair_eprintln(&format!("❌ Logged out during pairing: {:?}", info));
+                        let _ = signal_tx
+                            .send(PairSignal::LoggedOutOrPairError(format!(
+                                "Logged out during pairing: {:?}",
+                                info.reason
+                            )))
+                            .await;
+                    }
+                    _ => {}
+                }
             }
-        })
-        .on_logged_out(|info| async move {
-            eprintln!("WhatsApp logged out during pairing: {:?}", info.reason);
         });
+
+    if !using_phone {
+        builder = builder.on_qr_code(move |code, timeout| {
+            let banner = banner_qr.clone();
+            let rendered_once = Arc::clone(&qr_rendered_cb);
+            async move {
+                let is_refresh = rendered_once.swap(true, Ordering::AcqRel);
+                let clear = is_refresh && io::stderr().is_tty();
+                render_qr_to_stderr_with_options(&code, timeout, Some(&banner), clear);
+            }
+        });
+    }
 
     if let Some(phone_number) = phone {
         builder = builder.with_pair_code(PairCodeOptions {
@@ -216,23 +480,117 @@ async fn run_pair_command(
         .await
         .map_err(|e| format!("failed to build WhatsApp bot: {e}"))?;
 
+    let mut raw_guard = RawModeGuard::enter();
+    pair_eprintln(&banner);
+
+    let watcher_stop = Arc::new(AtomicBool::new(false));
+    let watcher_handle = if raw_guard.is_active() {
+        Some(spawn_key_cancel_watcher(
+            cancel_tx,
+            Arc::clone(&watcher_stop),
+        ))
+    } else {
+        drop(cancel_tx);
+        None
+    };
+
     let mut handle = bot.spawn();
-    tokio::select! {
+    let deadline = tokio::time::sleep(Duration::from_secs(timeout_secs));
+    tokio::pin!(deadline);
+
+    let mut cleanup_db = false;
+    let outcome = tokio::select! {
         _ = &mut handle => {
-            eprintln!("WhatsApp pairing session ended.");
+            if !existed_before_pair && !pair_succeeded.load(Ordering::Acquire) {
+                cleanup_db = true;
+            }
+            PairOutcome::Failed("WhatsApp pairing session ended unexpectedly.".to_owned())
         }
-        _ = connected_rx.recv() => {
-            // Allow persistence manager to flush paired credentials to SQLite cleanly.
-            tokio::time::sleep(Duration::from_secs(2)).await;
+        sig = signal_rx.recv() => {
+            match sig {
+                Some(PairSignal::Connected) => {
+                    // Allow persistence manager to flush Signal/ADV keys cleanly to SQLite.
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    handle.shutdown().await;
+                    PairOutcome::Connected
+                }
+                Some(PairSignal::Exhausted) => {
+                    handle.shutdown().await;
+                    if !existed_before_pair && !pair_succeeded.load(Ordering::Acquire) {
+                        cleanup_db = true;
+                    }
+                    PairOutcome::TimedOut
+                }
+                Some(PairSignal::LoggedOutOrPairError(msg)) => {
+                    handle.shutdown().await;
+                    cleanup_db = true;
+                    PairOutcome::Failed(msg)
+                }
+                Some(PairSignal::FatalError(msg)) => {
+                    handle.shutdown().await;
+                    if !existed_before_pair && !pair_succeeded.load(Ordering::Acquire) {
+                        cleanup_db = true;
+                    }
+                    PairOutcome::Failed(msg)
+                }
+                None => {
+                    handle.shutdown().await;
+                    if !existed_before_pair && !pair_succeeded.load(Ordering::Acquire) {
+                        cleanup_db = true;
+                    }
+                    PairOutcome::Failed("WhatsApp pairing event channel closed.".to_owned())
+                }
+            }
+        }
+        _ = &mut deadline => {
             handle.shutdown().await;
-            eprintln!("Session saved to {}", db_path.display());
+            if !existed_before_pair && !pair_succeeded.load(Ordering::Acquire) {
+                cleanup_db = true;
+            }
+            PairOutcome::TimedOut
+        }
+        _ = cancel_rx.recv() => {
+            handle.shutdown().await;
+            if !existed_before_pair && !pair_succeeded.load(Ordering::Acquire) {
+                cleanup_db = true;
+            }
+            PairOutcome::Cancelled
         }
         _ = tokio::signal::ctrl_c() => {
-            eprintln!("Interrupted; shutting down pairing session.");
             handle.shutdown().await;
+            if !existed_before_pair && !pair_succeeded.load(Ordering::Acquire) {
+                cleanup_db = true;
+            }
+            PairOutcome::Cancelled
         }
+    };
+
+    watcher_stop.store(true, Ordering::Relaxed);
+    if let Some(jh) = watcher_handle {
+        let _ = jh.join();
     }
-    Ok(())
+    raw_guard.restore();
+
+    if cleanup_db {
+        let _ = remove_sqlite_files(&db_path);
+    }
+
+    match &outcome {
+        PairOutcome::Connected => {
+            eprintln!("✅ Session saved to {}", db_path.display());
+        }
+        PairOutcome::Cancelled => {
+            eprintln!("Pairing cancelled by user.");
+        }
+        PairOutcome::TimedOut => {
+            eprintln!(
+                "⏱️ Pairing timed out after {timeout_secs}s without connecting. Retry (`monoagens pair whatsapp --fresh`) or try phone-number pairing (`monoagens pair whatsapp --phone <country_code+number>`)."
+            );
+        }
+        PairOutcome::Failed(_) => {}
+    }
+
+    Ok(outcome)
 }
 
 /// Captures any inline `blob/put` payloads into `blob_lookup` before `PersistentBodyRuntime`
@@ -627,14 +985,31 @@ fn main() {
             db_path,
             phone,
             custom_code,
+            timeout_secs,
+            fresh,
         } => {
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .expect("failed to build tokio runtime");
-            if let Err(err) = rt.block_on(run_pair_command(db_path, phone, custom_code)) {
-                eprintln!("body-whatsapp pair failed: {err}");
-                std::process::exit(1);
+            match rt.block_on(run_pair_command(
+                db_path,
+                phone,
+                custom_code,
+                timeout_secs,
+                fresh,
+            )) {
+                Ok(PairOutcome::Connected) => {}
+                Ok(PairOutcome::Cancelled) => std::process::exit(EXIT_CODE_CANCELLED),
+                Ok(PairOutcome::TimedOut) => std::process::exit(EXIT_CODE_TIMEOUT),
+                Ok(PairOutcome::Failed(err)) => {
+                    eprintln!("body-whatsapp pair failed: {err}");
+                    std::process::exit(1);
+                }
+                Err(err) => {
+                    eprintln!("body-whatsapp pair failed: {err}");
+                    std::process::exit(1);
+                }
             }
         }
         CliCommand::Serve {
@@ -660,5 +1035,175 @@ fn main() {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyEvent;
+
+    #[test]
+    fn parse_cli_args_supports_pair_timeout_fresh_and_phone() {
+        let cfg = WhatsAppPluginConfig::default();
+        let args: Vec<String> = [
+            "pair",
+            "--timeout-secs",
+            "60",
+            "--fresh",
+            "--phone",
+            "628123",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+
+        let cmd = parse_cli_args(&args, &cfg).expect("valid pair args");
+        assert_eq!(
+            cmd,
+            CliCommand::Pair {
+                db_path: cfg.resolve_db_path(),
+                phone: Some("628123".to_owned()),
+                custom_code: None,
+                timeout_secs: 60,
+                fresh: true,
+            }
+        );
+
+        let defaults = parse_cli_args(&["pair".to_owned()], &cfg).expect("default pair args");
+        assert_eq!(
+            defaults,
+            CliCommand::Pair {
+                db_path: cfg.resolve_db_path(),
+                phone: None,
+                custom_code: None,
+                timeout_secs: DEFAULT_PAIR_TIMEOUT_SECS,
+                fresh: false,
+            }
+        );
+
+        assert!(
+            parse_cli_args(
+                &[
+                    "pair".to_owned(),
+                    "--timeout-secs".to_owned(),
+                    "0".to_owned()
+                ],
+                &cfg
+            )
+            .is_err()
+        );
+        assert!(
+            parse_cli_args(
+                &[
+                    "pair".to_owned(),
+                    "--timeout-secs".to_owned(),
+                    "abc".to_owned()
+                ],
+                &cfg
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn format_qr_for_terminal_uses_crlf_quiet_zone_and_high_contrast_ansi() {
+        let payload = "2@example-whatsapp-pairing-payload";
+        let rendered =
+            format_qr_for_terminal(payload, Duration::from_secs(60)).expect("qr render");
+
+        assert!(rendered.contains("valid for 60s"));
+        assert!(!rendered.contains("QR raw:"));
+
+        // Every newline must be preceded by \r so raw-mode terminals never staircase.
+        for (idx, b) in rendered.bytes().enumerate() {
+            if b == b'\n' {
+                assert!(
+                    idx > 0 && rendered.as_bytes()[idx - 1] == b'\r',
+                    "bare \\n found at byte {idx}"
+                );
+            }
+        }
+
+        let qr_lines: Vec<&str> = rendered
+            .split("\r\n")
+            .filter(|line| line.starts_with("\x1b[30;47m"))
+            .collect();
+        assert!(!qr_lines.is_empty());
+
+        let no_qz_art = qrcode::QrCode::new(payload.as_bytes())
+            .unwrap()
+            .render::<qrcode::render::unicode::Dense1x2>()
+            .quiet_zone(false)
+            .dark_color(qrcode::render::unicode::Dense1x2::Dark)
+            .light_color(qrcode::render::unicode::Dense1x2::Light)
+            .build();
+        let no_qz_lines: Vec<&str> = no_qz_art.lines().collect();
+
+        // Quiet zone adds light padding around all sides (more rows and wider rows).
+        let stripped_first = qr_lines[0]
+            .trim_start_matches("\x1b[30;47m")
+            .trim_end_matches("\x1b[0m");
+        assert!(qr_lines.len() > no_qz_lines.len());
+        assert!(stripped_first.chars().count() > no_qz_lines[0].chars().count());
+        assert!(stripped_first.chars().all(|c| c == ' '));
+        for line in &qr_lines {
+            assert!(line.ends_with("\x1b[0m"));
+        }
+    }
+
+    #[test]
+    fn remove_sqlite_files_cleans_db_wal_and_shm_safely() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("session.db");
+        let wal_path = dir.path().join("session.db-wal");
+        let shm_path = dir.path().join("session.db-shm");
+        let keep_path = dir.path().join("keep.txt");
+
+        fs::write(&db_path, b"db").unwrap();
+        fs::write(&wal_path, b"wal").unwrap();
+        fs::write(&shm_path, b"shm").unwrap();
+        fs::write(&keep_path, b"keep").unwrap();
+
+        remove_sqlite_files(&db_path).expect("cleanup succeeds");
+        assert!(!db_path.exists());
+        assert!(!wal_path.exists());
+        assert!(!shm_path.exists());
+        assert!(keep_path.exists());
+
+        // Idempotent when files are already absent.
+        remove_sqlite_files(&db_path).expect("idempotent cleanup succeeds");
+    }
+
+    #[test]
+    fn is_cancel_key_matches_esc_q_and_ctrl_c_only() {
+        assert!(is_cancel_key(&KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE
+        )));
+        assert!(is_cancel_key(&KeyEvent::new(
+            KeyCode::Char('q'),
+            KeyModifiers::NONE
+        )));
+        assert!(is_cancel_key(&KeyEvent::new(
+            KeyCode::Char('Q'),
+            KeyModifiers::SHIFT
+        )));
+        assert!(is_cancel_key(&KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL
+        )));
+        assert!(!is_cancel_key(&KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::NONE
+        )));
+        assert!(!is_cancel_key(&KeyEvent::new(
+            KeyCode::Char('q'),
+            KeyModifiers::CONTROL
+        )));
+
+        let mut release = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        release.kind = KeyEventKind::Release;
+        assert!(!is_cancel_key(&release));
     }
 }

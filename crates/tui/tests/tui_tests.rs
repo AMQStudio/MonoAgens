@@ -1097,3 +1097,396 @@ fn mouse_drag_select_copies_viewport_text_respects_toggle_and_copy_command_and_o
         )]
     );
 }
+
+#[test]
+fn composer_renders_white_block_cursor_when_empty_and_mid_text() {
+    let dir = TempDir::new().expect("tempdir");
+    let mut state = make_test_state(&dir);
+    state.prefs.sidebar = SidebarMode::Closed;
+
+    let mut effects = TuiEffects::new();
+    let mut hit = HitRegions::default();
+
+    // 1. Empty composer renders solid white block cursor right after `> ` before placeholder
+    let term_empty = render_headless(100, 24, &state, &mut effects, &mut hit);
+    let buf_empty = term_empty.backend().buffer();
+    let text_empty = buffer_text(buf_empty);
+    assert!(text_empty.contains(">  Message Mono or type / for commands…") || text_empty.contains("Message Mono or type / for commands…"));
+    assert!(text_empty.contains("esc to clear"));
+
+    let mut empty_cursor_pos = None;
+    for y in 0..buf_empty.area.height {
+        for x in 0..buf_empty.area.width {
+            let cell = buf_empty.cell((x, y)).expect("cell");
+            if cell.bg == Color::White && cell.fg == Color::Black {
+                empty_cursor_pos = Some((x, y, cell.symbol().to_owned()));
+            }
+        }
+    }
+    let (cx, cy, csym) = empty_cursor_pos.expect("white block cursor must render when empty");
+    assert_eq!(csym, " ");
+    assert_eq!(buf_empty.cell((cx - 2, cy)).expect("cell").symbol(), ">");
+
+    // 2. Type "hello" and move_left() twice -> cursor lands on second 'l'
+    for ch in "hello".chars() {
+        state.composer.insert_char(ch);
+    }
+    state.composer.move_left();
+    state.composer.move_left();
+
+    let term_mid = render_headless(100, 24, &state, &mut effects, &mut hit);
+    let buf_mid = term_mid.backend().buffer();
+    let mut mid_cursor = None;
+    for y in 0..buf_mid.area.height {
+        for x in 0..buf_mid.area.width {
+            let cell = buf_mid.cell((x, y)).expect("cell");
+            if cell.bg == Color::White && cell.fg == Color::Black {
+                mid_cursor = Some((x, y, cell.symbol().to_owned()));
+            }
+        }
+    }
+    let (mx, _my, msym) = mid_cursor.expect("white block cursor must render mid-text");
+    assert_eq!(msym, "l");
+    assert_eq!(mx, cx + 3, "cursor moved to index 3 ('l' in 'hello')");
+}
+
+#[test]
+fn assistant_markdown_renders_headings_inline_styles_lists_quotes_and_code_blocks() {
+    let dir = TempDir::new().expect("tempdir");
+    let mut state = make_test_state(&dir);
+    state.prefs.sidebar = SidebarMode::Closed;
+    state.push_timeline_item(
+        "direct",
+        ChatTimelineItem::AssistantMessage {
+            text: concat!(
+                "# Heading Title\n\n",
+                "Here is **bold** and `inline_code`.\n\n",
+                "- first item\n",
+                "- second item\n\n",
+                "> quoted wisdom\n\n",
+                "```rust\n",
+                "fn main() {}\n",
+                "```"
+            )
+            .to_owned(),
+            duration_ms: Some(1400),
+            timestamp_ms: 100,
+        },
+    );
+
+    let mut effects = TuiEffects::new();
+    let mut hit = HitRegions::default();
+    let term = render_headless(100, 32, &state, &mut effects, &mut hit);
+    let buf = term.backend().buffer();
+    let rendered = buffer_text(buf);
+
+    assert!(rendered.contains("Heading Title"), "rendered:\n{rendered}");
+    assert!(rendered.contains("Here is bold and inline_code."), "rendered:\n{rendered}");
+    assert!(rendered.contains("• first item"), "rendered:\n{rendered}");
+    assert!(rendered.contains("• second item"), "rendered:\n{rendered}");
+    assert!(rendered.contains("▎ quoted wisdom"), "rendered:\n{rendered}");
+    assert!(rendered.contains("╭─ rust"), "rendered:\n{rendered}");
+    assert!(rendered.contains("│ fn main() {}"), "rendered:\n{rendered}");
+    assert!(rendered.contains("╰───"), "rendered:\n{rendered}");
+    assert!(rendered.contains("1.4s"), "rendered:\n{rendered}");
+
+    // Verify bold modifier on "bold" and inline code bg on "inline_code"
+    let palette = ThemePalette::for_preset_with_no_color(ThemePreset::Titanium, false);
+    let mut found_bold = false;
+    let mut found_code_pill = false;
+    for y in 0..buf.area.height {
+        let row_str: String = (0..buf.area.width)
+            .map(|x| buf.cell((x, y)).expect("cell").symbol())
+            .collect();
+        if let Some(pos) = row_str.find("bold") {
+            let cell = buf.cell((pos as u16, y)).expect("cell");
+            if cell.modifier.contains(ratatui::style::Modifier::BOLD) {
+                found_bold = true;
+            }
+        }
+        if let Some(pos) = row_str.find("inline_code") {
+            let cell = buf.cell((pos as u16, y)).expect("cell");
+            if cell.bg == palette.selection_bg && cell.fg == palette.accent {
+                found_code_pill = true;
+            }
+        }
+    }
+    assert!(found_bold, "expected BOLD modifier on **bold**");
+    assert!(found_code_pill, "expected selection_bg/accent on `inline_code`");
+}
+
+#[test]
+fn chat_scrollbar_renders_on_overflow_and_click_updates_scroll_offset() {
+    let dir = TempDir::new().expect("tempdir");
+    let mut state = make_test_state(&dir);
+    state.prefs.sidebar = SidebarMode::Closed;
+    for i in 0..45 {
+        state.push_timeline_item(
+            "direct",
+            ChatTimelineItem::AssistantMessage {
+                text: format!("Message line {i}"),
+                duration_ms: None,
+                timestamp_ms: i as u64,
+            },
+        );
+    }
+
+    let mut effects = TuiEffects::new();
+    let mut hit = HitRegions::default();
+    let viewport = Rect::new(0, 0, 100, 24);
+    let term = render_headless(viewport.width, viewport.height, &state, &mut effects, &mut hit);
+    let buf = term.backend().buffer();
+
+    let sb_rect = hit.chat_scrollbar.expect("chat_scrollbar recorded");
+    assert!(hit.chat_total_lines > hit.chat_visible_lines);
+
+    let mut has_thumb = false;
+    let mut has_track = false;
+    for y in sb_rect.y..sb_rect.y + sb_rect.height {
+        let sym = buf.cell((sb_rect.x, y)).expect("cell").symbol();
+        if sym == "┃" {
+            has_thumb = true;
+        } else if sym == "│" {
+            has_track = true;
+        }
+    }
+    assert!(has_thumb && has_track, "expected both ┃ thumb and │ track on overflowing chat");
+
+    // Click near top of scrollbar -> scrolls up and disables auto_scroll
+    state.handle_mouse_event(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: sb_rect.x,
+            row: sb_rect.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        &hit,
+        viewport,
+    );
+    assert!(!state.auto_scroll);
+    assert_eq!(state.chat_scroll, 0);
+
+    // Click at bottom of scrollbar -> scrolls to max_scroll and re-enables auto_scroll
+    state.handle_mouse_event(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: sb_rect.x,
+            row: sb_rect.y + sb_rect.height - 1,
+            modifiers: KeyModifiers::NONE,
+        },
+        &hit,
+        viewport,
+    );
+    assert!(state.auto_scroll);
+    assert_eq!(
+        state.chat_scroll,
+        hit.chat_total_lines.saturating_sub(hit.chat_visible_lines)
+    );
+}
+
+#[test]
+fn plugin_detail_back_button_tab_exit_and_three_color_status_dot() {
+    let dir = TempDir::new().expect("tempdir");
+    let mut state = make_test_state(&dir);
+
+    let cases = [
+        (PluginUiState::Running, Color::Green, "●"),
+        (PluginUiState::Starting, Color::Yellow, "◐"),
+        (PluginUiState::Stopped, Color::Red, "●"),
+    ];
+
+    let mut effects = TuiEffects::new();
+    let mut hit = HitRegions::default();
+    let viewport = Rect::new(0, 0, 120, 32);
+
+    // Open whatsapp plugin detail by clicking it in sidebar
+    let _ = render_headless(viewport.width, viewport.height, &state, &mut effects, &mut hit);
+    let plugin_rect = hit
+        .sidebar_plugins
+        .iter()
+        .find(|(_, id)| id == "whatsapp")
+        .expect("whatsapp rect")
+        .0;
+    state.handle_mouse_event(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: plugin_rect.x + 1,
+            row: plugin_rect.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        &hit,
+        viewport,
+    );
+    assert!(state.settings.plugin_detail.is_some());
+
+    for (pstate, expected_color, expected_glyph) in cases {
+        state.set_plugin_state("whatsapp", pstate);
+        let term = render_headless(viewport.width, viewport.height, &state, &mut effects, &mut hit);
+        let buf = term.backend().buffer();
+        let text = buffer_text(buf);
+        assert!(text.contains("[ ← Plugins ]"), "missing back pill:\n{text}");
+        let back_rect = hit.settings_back.expect("settings_back hit rect");
+
+        let mut dot_found = false;
+        for x in back_rect.x..hit.settings_area.x + hit.settings_area.width {
+            let cell = buf.cell((x, back_rect.y)).expect("cell");
+            if cell.symbol() == expected_glyph && cell.fg == expected_color {
+                dot_found = true;
+            }
+        }
+        assert!(dot_found, "expected {expected_glyph} ({expected_color:?}) in plugin detail header");
+    }
+
+    // 1. Clicking [ ← Plugins ] exits plugin_detail back to Plugins tab list
+    let back_rect = hit.settings_back.expect("settings_back");
+    state.handle_mouse_event(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: back_rect.x + 2,
+            row: back_rect.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        &hit,
+        viewport,
+    );
+    assert!(state.settings.open);
+    assert_eq!(state.settings.tab, SettingsTab::Plugins);
+    assert!(state.settings.plugin_detail.is_none());
+
+    // 2. Re-open plugin detail from the Plugins list, then click the Plugins tab pill -> also exits plugin_detail
+    let _ = render_headless(viewport.width, viewport.height, &state, &mut effects, &mut hit);
+    let first_plugin_row = hit.settings_options[0].0;
+    state.handle_mouse_event(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: first_plugin_row.x + 2,
+            row: first_plugin_row.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        &hit,
+        viewport,
+    );
+    assert!(state.settings.plugin_detail.is_some());
+    let _ = render_headless(viewport.width, viewport.height, &state, &mut effects, &mut hit);
+    let plugins_tab_rect = hit
+        .settings_tabs
+        .iter()
+        .find(|(_, t)| *t == SettingsTab::Plugins)
+        .expect("plugins tab rect")
+        .0;
+    state.handle_mouse_event(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: plugins_tab_rect.x + 1,
+            row: plugins_tab_rect.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        &hit,
+        viewport,
+    );
+    assert!(state.settings.open);
+    assert_eq!(state.settings.tab, SettingsTab::Plugins);
+    assert!(state.settings.plugin_detail.is_none());
+}
+
+#[test]
+fn empty_chat_renders_welcome_and_expressive_chrome() {
+    let dir = TempDir::new().expect("tempdir");
+    let state = make_test_state(&dir);
+
+    let mut effects = TuiEffects::new();
+    let mut hit = HitRegions::default();
+    let term = render_headless(130, 30, &state, &mut effects, &mut hit);
+    let rendered = buffer_text(term.backend().buffer());
+
+    assert!(rendered.contains("✦ Mono"), "sidebar header:\n{rendered}");
+    assert!(rendered.contains("💬 CHATS"), "chats header:\n{rendered}");
+    assert!(rendered.contains("🔌 PLUGINS"), "plugins header:\n{rendered}");
+    assert!(rendered.contains("✨") && rendered.contains("ready"), "welcome card:\n{rendered}");
+    assert!(rendered.contains("🛡️ Valve:"), "status valve badge:\n{rendered}");
+}
+
+#[test]
+fn chat_history_persists_across_restarts_with_new_chat_default_and_short_commands() {
+    let dir = TempDir::new().expect("tempdir");
+    let mut state = make_test_state(&dir);
+
+    // Default initial chat is consistently titled "New Chat"
+    assert_eq!(state.chats.active_chat().title, "New Chat");
+
+    // Push user + assistant messages and verify persistence to tui_chats.json
+    let active_id = state.chats.active_chat_id.clone();
+    state.push_timeline_item(
+        &active_id,
+        ChatTimelineItem::UserMessage {
+            sender: "owner".to_owned(),
+            text: "Halo Mono, simpan chat ini ya".to_owned(),
+            timestamp_ms: 1000,
+            is_group: false,
+        },
+    );
+    state.push_timeline_item(
+        &active_id,
+        ChatTimelineItem::AssistantMessage {
+            text: "Siap, sudah tersimpan rapi!".to_owned(),
+            duration_ms: Some(1450),
+            timestamp_ms: 2450,
+        },
+    );
+
+    // Short commands: /rename, /new, /delete
+    state.composer.text = "/rename Obrolan Utama".to_owned();
+    state.composer.cursor = state.composer.text.len();
+    state.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(state.chats.active_chat().title, "Obrolan Utama");
+    assert!(state.chats.active_chat().title_locked);
+
+    state.composer.text = "/new".to_owned();
+    state.composer.cursor = state.composer.text.len();
+    state.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(state.chats.chats.len(), 2);
+    assert_eq!(state.chats.active_chat().title, "New Chat");
+
+    // Reload LocalChatStore from disk and hydrate a fresh TuiAppState (simulating restart)
+    let chats_path = LocalChatStore::path_for_data_dir(&state.paths.data_dir);
+    let reloaded_chats = LocalChatStore::load_from_path(&chats_path).expect("reload chats");
+    assert_eq!(reloaded_chats.chats.len(), 2);
+    let restored = TuiAppState::new(
+        state.paths.clone(),
+        state.gateway_cfg.clone(),
+        TuiPreferences::default(),
+        reloaded_chats,
+        SecretsUiSummary::default(),
+        ActorId::new("owner"),
+    );
+    let restored_timeline = restored.timelines.get(&active_id).expect("restored timeline");
+    assert_eq!(restored_timeline.len(), 2);
+    assert!(matches!(
+        &restored_timeline[0],
+        ChatTimelineItem::UserMessage { text, .. } if text == "Halo Mono, simpan chat ini ya"
+    ));
+    assert!(matches!(
+        &restored_timeline[1],
+        ChatTimelineItem::AssistantMessage { text, duration_ms: Some(1450), .. } if text == "Siap, sudah tersimpan rapi!"
+    ));
+
+    // /delete removes extra chat cleanly
+    state.composer.text = "/delete".to_owned();
+    state.composer.cursor = state.composer.text.len();
+    state.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(state.chats.chats.len(), 1);
+    assert_eq!(state.chats.active_chat().title, "Obrolan Utama");
+
+    // Settings overlay renders expressive icons, pill switches, and description footer
+    state.settings.open_tab(SettingsTab::Appearance);
+    let mut effects = TuiEffects::new();
+    let mut hit = HitRegions::default();
+    let term = render_headless(140, 36, &state, &mut effects, &mut hit);
+    let rendered = buffer_text(term.backend().buffer());
+    assert!(rendered.contains("⚙️ Settings"), "settings title:\n{rendered}");
+    assert!(rendered.contains("🎨 Appearance"), "tab icon:\n{rendered}");
+    assert!(rendered.contains("🔍 Search:"), "search icon:\n{rendered}");
+    assert!(rendered.contains("● ON"), "pill switch:\n{rendered}");
+    assert!(rendered.contains("💡"), "description hint:\n{rendered}");
+    assert!(rendered.contains("✨ Live Preview:"), "live preview:\n{rendered}");
+}

@@ -6,6 +6,7 @@ pub mod attachments;
 pub mod clipboard;
 pub mod config;
 pub mod effects;
+pub mod markdown;
 pub mod render;
 pub mod runtime;
 pub mod settings;

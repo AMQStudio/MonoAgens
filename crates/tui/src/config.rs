@@ -246,13 +246,15 @@ impl TuiPreferences {
     }
 }
 
-/// Compact stored preview of a message in a local chat.
+/// Stored message in a local chat persisted across TUI restarts in `tui_chats.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredChatMessagePreview {
     pub role: String,
     pub sender: String,
     pub text_preview: String,
     pub timestamp_ms: u64,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
 }
 
 /// Metadata for a single local terminal chat (one persistent Mono soul across all local chats).
@@ -272,13 +274,13 @@ pub struct LocalChatEntry {
 }
 
 impl LocalChatEntry {
-    /// Default seeded `Direct` chat mapped to `cli:terminal`.
+    /// Default seeded initial chat (`New Chat`) mapped to `cli:terminal`.
     #[must_use]
     pub fn direct_default() -> Self {
         Self {
             id: "direct".to_owned(),
             place_id: "cli:terminal".to_owned(),
-            title: "Direct".to_owned(),
+            title: "New Chat".to_owned(),
             title_locked: false,
             turns_since_retitle: 0,
             topic_ngrams: Vec::new(),
@@ -332,10 +334,15 @@ impl LocalChatStore {
         Ok(store)
     }
 
-    /// Ensures the default `Direct` chat (`place_id = "cli:terminal"`) is always present.
+    /// Ensures the initial default chat (`place_id = "cli:terminal"`) is always present.
     pub fn ensure_direct_seeded(&mut self) {
         if !self.chats.iter().any(|c| c.place_id == "cli:terminal") {
             self.chats.insert(0, LocalChatEntry::direct_default());
+        }
+        for chat in &mut self.chats {
+            if !chat.title_locked && chat.title == "Direct" {
+                chat.title = "New Chat".to_owned();
+            }
         }
         if self.active_chat_id.is_empty()
             || !self.chats.iter().any(|c| c.id == self.active_chat_id)
@@ -421,6 +428,41 @@ impl LocalChatStore {
             return true;
         }
         false
+    }
+
+    /// Appends a message to `chat_id` for persistence across restarts (keeping up to 500 messages).
+    pub fn append_message(&mut self, chat_id: &str, msg: StoredChatMessagePreview) {
+        const MAX_PERSISTED_MESSAGES_PER_CHAT: usize = 500;
+        if let Some(chat) = self.chats.iter_mut().find(|c| c.id == chat_id) {
+            chat.messages.push(msg);
+            if chat.messages.len() > MAX_PERSISTED_MESSAGES_PER_CHAT {
+                let overflow = chat.messages.len() - MAX_PERSISTED_MESSAGES_PER_CHAT;
+                chat.messages.drain(..overflow);
+            }
+        }
+    }
+
+    /// Clears all persisted messages for `chat_id`.
+    pub fn clear_messages(&mut self, chat_id: &str) {
+        if let Some(chat) = self.chats.iter_mut().find(|c| c.id == chat_id) {
+            chat.messages.clear();
+        }
+    }
+
+    /// Deletes a chat when more than one local chat exists, switching `active_chat_id` cleanly.
+    pub fn delete_chat(&mut self, chat_id: &str) -> bool {
+        if self.chats.len() <= 1 {
+            return false;
+        }
+        let Some(idx) = self.chats.iter().position(|c| c.id == chat_id) else {
+            return false;
+        };
+        self.chats.remove(idx);
+        if self.active_chat_id == chat_id {
+            let next_idx = idx.min(self.chats.len().saturating_sub(1));
+            self.active_chat_id = self.chats[next_idx].id.clone();
+        }
+        true
     }
 }
 
