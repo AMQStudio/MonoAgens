@@ -1,0 +1,26 @@
+[package]
+name = "body-whatsapp"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[lib]
+name = "body_whatsapp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "body-whatsapp"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.22"
+monoagens-body-kit = { path = "../body-kit" }
+monoagens-body-sdk = { path = "../../sdk/rust" }
+qrcode = { version = "0.14", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "io-std", "sync", "time", "signal"] }
+whatsapp-rust = { version = "0.7.0", default-features = false, features = ["sqlite-storage", "tokio-transport", "tokio-runtime", "ureq-client", "tokio-native", "signal"] }
+
+[dev-dependencies]
+tempfile = "3"

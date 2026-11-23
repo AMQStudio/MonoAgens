@@ -69,9 +69,47 @@ Messaging bridges do not know every future DM or group chat at startup:
 
 ---
 
-## 6. Example `monoagens.toml` & Running `monoagens serve`
+## 6. Built-In Messaging Bodies (`body-telegram` & `body-whatsapp`)
 
-Declare external bodies in `[[bodies]]` and static owner/member account bindings in `[[person]]` inside `monoagens.toml` (keep all bot tokens, session keys, and LLM API keys strictly in `secrets.toml` or environment variables — never in `monoagens.toml`):
+MonoAgens ships two pure-Rust Waist-2 messaging bodies:
+
+- **`bodies/body-telegram`** (workspace member) — Telegram Bot API (`reqwest` + `tokio`), passing `monoagens-conformance body --level should` (`10/10`).
+- **`bodies/body-whatsapp`** (standalone excluded crate powered by `whatsapp-rust 0.7`, isolated from root `libsqlite3-sys 0.40`), passing `monoagens-conformance body --level should`.
+
+### Native Capability Matrix
+
+| Capability | `body-telegram` | `body-whatsapp` |
+|---|---|---|
+| `chat.speak` | Text, `parse_mode`, `reply_to_message_id`, split-bubble (`4096`), auto `typing`, optional `buttons` | Text, quote-reply (`reply_to_message_id`), `mentions`, split-bubble (`4096`), auto `composing`/`paused` |
+| `chat.send_buttons` | Native `inline_keyboard` + inbound `callback_query` auto-ack & percept | — |
+| `chat.react` | Native `setMessageReaction` | Native `ReactionMessage` (`""` clears reaction) |
+| `chat.typing` | Native `sendChatAction` (`typing`, `upload_photo`, `upload_document`, `record_voice`, `upload_video`, `choose_sticker`) | Native `chatstate` (`composing`, `recording`, `paused`) |
+| `chat.send_media` | Single (`sendPhoto`/`sendDocument`/`sendVideo`/`sendAudio`/`sendVoice`) + multi-attachment **`sendMediaGroup`** album | Single & multi-attachment batch (`image`, `video`, `document`, `audio`, `voice`/PTT) |
+| `chat.send_sticker` | Native `sendSticker` | Native WebP `StickerMessage` |
+| `chat.send_poll` | Native `sendPoll` (regular / quiz) | Native `PollCreationMessage` + encrypted vote decryption |
+| `chat.mark_read` | — | Native `mark_as_read` read receipts |
+| `chat.edit` | Native `editMessageText` | Native message edit (`edit_message`) |
+| `chat.delete` | Native `deleteMessage` | Native revoke/delete (`revoke_message`) |
+
+### Building & Pairing
+
+```sh
+source "$HOME/.cargo/env"
+
+# Build Telegram body (workspace member)
+cargo build --release -p body-telegram -p monoagens-cli
+
+# Build WhatsApp body (standalone crate)
+cargo build --release --manifest-path bodies/body-whatsapp/Cargo.toml
+
+# Pair WhatsApp once (QR code in terminal, or --phone 6281234567890 for pairing code)
+./bodies/body-whatsapp/target/release/body-whatsapp pair \
+  --db "$HOME/.local/share/monoagens/whatsapp/session.db"
+```
+
+### Example `monoagens.toml` & Running `monoagens serve`
+
+Declare both bodies in `[[bodies]]` and static owner/member account bindings in `[[person]]` inside `monoagens.toml` (keep `TELEGRAM_BOT_TOKEN` and LLM `model_api_key` strictly in `secrets.toml` or environment variables — never in `monoagens.toml`):
 
 ```toml
 version = 1
@@ -81,30 +119,31 @@ name = "Mono"
 seed = 1
 
 [[bodies]]
-id = "body:whatsapp"
+id = "body-telegram"
 transport = "stdio"
-command = "/usr/local/bin/monoagens-body-whatsapp"
-args = ["--state-dir", "/var/lib/monoagens/wa"]
+command = "/path/to/Mono/target/release/body-telegram"
+args = ["--token-env", "TELEGRAM_BOT_TOKEN"]
 
 [[bodies]]
-id = "body:telegram"
-transport = "unix_socket"
-socket_path = "/run/monoagens/telegram.sock"
+id = "body-whatsapp"
+transport = "stdio"
+command = "/path/to/Mono/bodies/body-whatsapp/target/release/body-whatsapp"
+args = ["--live", "--db", "/home/you/.local/share/monoagens/whatsapp/session.db"]
 
 [[person]]
 actor_id = "owner"
 owner = true
 accounts = [
-  { body_id = "body:whatsapp", account_id = "628123456789@s.whatsapp.net" },
-  { body_id = "body:telegram", account_id = "123456789" },
+  { body_id = "body-whatsapp", account_id = "wa:user:628123456789@s.whatsapp.net" },
+  { body_id = "body-telegram", account_id = "tg:user:123456789" },
 ]
 ```
 
-Start the multi-body Gateway daemon:
+Start the multi-body Gateway daemon (with `TELEGRAM_BOT_TOKEN` exported or sourced from `.env` and `model_api_key` in `~/.config/monoagens/secrets.toml`):
 
 ```sh
 source "$HOME/.cargo/env"
-monoagens serve --config /path/to/monoagens.toml
+./target/release/monoagens serve --config "$HOME/.config/monoagens/monoagens.toml"
 ```
 
 ---

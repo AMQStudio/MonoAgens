@@ -17,9 +17,10 @@ members = [
     "bodies/plugin-a2a-bridge",
     "bodies/plugin-ros2-bridge",
     "bodies/body-voice",
+    "bodies/body-telegram",
     "examples/cleanroom-body",
 ]
-exclude = ["sdk/rust"]
+exclude = ["sdk/rust", "bodies/body-whatsapp"]
 
 [workspace.package]
 edition = "2024"
