@@ -7,8 +7,8 @@
 pub mod commands;
 mod common;
 
-use std::io::Write;
-use std::path::PathBuf;
+use std::io::{IsTerminal, Write};
+use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use monoagens_conformance::ConformanceLevel;
@@ -33,11 +33,13 @@ pub struct Cli {
     pub json: bool,
 
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
+    /// Launch the interactive terminal chat TUI (also the default when running `monoagens` in a TTY).
+    Tui(TuiArgs),
     /// Boot Gateway + Valve + body-cli for interactive or single-message chat.
     Chat(ChatArgs),
     /// Run a long-lived Gateway daemon connected to configured plugins (`[plugins.<id>]` / `[[bodies]]`).
@@ -62,6 +64,22 @@ pub enum Commands {
     Pair(PairArgs),
     /// Manage secrets in `secrets.toml` (`list`, `set`, `unset`) without printing secret values.
     Secret(SecretArgs),
+}
+
+#[derive(Debug, Default, Args)]
+pub struct TuiArgs {
+    /// Optional data/store directory override for this session.
+    #[arg(long)]
+    pub data_dir: Option<PathBuf>,
+    /// Optional neural controller `.safetensors` model override (`soul.model_path`).
+    #[arg(long)]
+    pub model: Option<PathBuf>,
+    /// Start directly in `/lab` simulation mode.
+    #[arg(long)]
+    pub lab: bool,
+    /// Auto-start configured enabled plugins on TUI launch.
+    #[arg(long)]
+    pub with_plugins: bool,
 }
 
 #[derive(Debug, Default, Args)]
@@ -395,30 +413,69 @@ pub struct CliOutcome {
     pub exit_code: u8,
 }
 
+/// Returns `true` when `cli` invokes the interactive TUI (bare `monoagens` or `monoagens tui`).
+pub fn is_tui_invocation(cli: &Cli) -> bool {
+    cli.command.is_none() || matches!(cli.command, Some(Commands::Tui(_)))
+}
+
 /// Runs the parsed [`Cli`] command, writing stdout to `out` and errors/cues to `err`.
 pub fn execute_cli(cli: Cli, out: &mut dyn Write, err: &mut dyn Write) -> CliOutcome {
     let config_opt = cli.config.as_deref();
     let json_mode = cli.json;
 
     let res = match cli.command {
-        Commands::Chat(args) => commands::chat::cmd_chat(config_opt, json_mode, args, None, out, err),
-        Commands::Serve(args) => commands::serve::cmd_serve(config_opt, json_mode, args, out, err),
-        Commands::Log(args) => commands::inspect::cmd_log(config_opt, json_mode, args, out),
-        Commands::Replay(args) => {
+        None => {
+            if json_mode || !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+                Err("interactive TUI requires a TTY (without --json); pass a subcommand such as 'monoagens chat --message ...', 'monoagens serve', or 'monoagens --help'".to_owned())
+            } else {
+                monoagens_tui::run_tui(monoagens_tui::TuiLaunchOptions {
+                    config_path: config_opt.map(Path::to_path_buf),
+                    data_dir: None,
+                    model_override: None,
+                    start_in_lab: false,
+                    with_plugins: false,
+                })
+            }
+        }
+        Some(Commands::Tui(args)) => {
+            if json_mode {
+                Err("--json is not supported with interactive TUI".to_owned())
+            } else {
+                monoagens_tui::run_tui(monoagens_tui::TuiLaunchOptions {
+                    config_path: config_opt.map(Path::to_path_buf),
+                    data_dir: args.data_dir,
+                    model_override: args.model,
+                    start_in_lab: args.lab,
+                    with_plugins: args.with_plugins,
+                })
+            }
+        }
+        Some(Commands::Chat(args)) => {
+            commands::chat::cmd_chat(config_opt, json_mode, args, None, out, err)
+        }
+        Some(Commands::Serve(args)) => commands::serve::cmd_serve(config_opt, json_mode, args, out, err),
+        Some(Commands::Log(args)) => commands::inspect::cmd_log(config_opt, json_mode, args, out),
+        Some(Commands::Replay(args)) => {
             commands::inspect::cmd_replay(config_opt, json_mode, args, out, err)
         }
-        Commands::Approvals(args) => commands::approvals::cmd_approvals(config_opt, json_mode, args, out),
-        Commands::Link(args) => commands::link::cmd_link(config_opt, json_mode, args, out),
-        Commands::Conformance(args) => commands::inspect::cmd_conformance(args, out),
-        Commands::Inspector(args) => {
+        Some(Commands::Approvals(args)) => {
+            commands::approvals::cmd_approvals(config_opt, json_mode, args, out)
+        }
+        Some(Commands::Link(args)) => commands::link::cmd_link(config_opt, json_mode, args, out),
+        Some(Commands::Conformance(args)) => commands::inspect::cmd_conformance(args, out),
+        Some(Commands::Inspector(args)) => {
             commands::inspect::cmd_inspector(config_opt, json_mode, args, out)
         }
-        Commands::ExportLearning(args) => {
+        Some(Commands::ExportLearning(args)) => {
             commands::export_learning::cmd_export_learning(config_opt, json_mode, args, out)
         }
-        Commands::Plugin(args) => commands::plugin::cmd_plugin(config_opt, json_mode, args, out, err),
-        Commands::Pair(args) => commands::plugin::cmd_pair(config_opt, args),
-        Commands::Secret(args) => commands::secret::cmd_secret(config_opt, json_mode, args, out),
+        Some(Commands::Plugin(args)) => {
+            commands::plugin::cmd_plugin(config_opt, json_mode, args, out, err)
+        }
+        Some(Commands::Pair(args)) => commands::plugin::cmd_pair(config_opt, args),
+        Some(Commands::Secret(args)) => {
+            commands::secret::cmd_secret(config_opt, json_mode, args, out)
+        }
     };
 
     match res {

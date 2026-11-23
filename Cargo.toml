@@ -9,6 +9,7 @@ members = [
     "crates/gateway",
     "crates/lab",
     "crates/conformance",
+    "crates/tui",
     "crates/cli",
     "plugins/kit",
     "plugins/cli",
@@ -47,6 +48,7 @@ monoagens-core = { path = "crates/core" }
 monoagens-store = { path = "crates/store" }
 monoagens-reason = { path = "crates/reason" }
 monoagens-gateway = { path = "crates/gateway" }
+monoagens-tui = { path = "crates/tui" }
 monoagens-body-kit = { path = "plugins/kit" }
 
 # Keep debug artifacts small on the 14 GiB / btrfs laptop: our own crates carry

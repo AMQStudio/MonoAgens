@@ -19,6 +19,7 @@ monoagens-gateway = { workspace = true }
 monoagens-protocol = { workspace = true }
 monoagens-reason = { workspace = true }
 monoagens-store = { workspace = true }
+monoagens-tui = { workspace = true }
 monoagens-valve = { path = "../../crates/valve" }
 serde = { workspace = true }
 serde_json = { workspace = true }

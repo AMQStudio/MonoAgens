@@ -3,7 +3,11 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 
-use monoagens_cli::{ChatArgs, canonical_h_act_details, run_chat_with_provider};
+use clap::Parser;
+use monoagens_cli::{
+    ChatArgs, Cli, Commands, TuiArgs, canonical_h_act_details, execute_cli, is_tui_invocation,
+    run_chat_with_provider,
+};
 use monoagens_core::{
     Core, CoreConfig, EventDetail, EventKind, EventRecord, Input, NoopDoors, NumericFeatures, Store,
 };
@@ -1247,4 +1251,83 @@ fn cli_export_learning_is_bit_identical_and_respects_privacy_and_hard_forget() {
     assert!(!md_forgotten.contains("dm:secret_eve"));
     assert!(!md_forgotten.contains("secret_dm_lesson"));
     assert!(!md_forgotten.contains("private_ops"));
+}
+
+#[test]
+fn bare_cli_invocation_parses_as_none_and_is_tui_invocation() {
+    let cli = Cli::try_parse_from(["monoagens"]).expect("bare monoagens must parse");
+    assert!(cli.command.is_none());
+    assert!(is_tui_invocation(&cli));
+}
+
+#[test]
+fn tui_subcommand_parses_flags_accurately() {
+    let cli = Cli::try_parse_from([
+        "monoagens",
+        "tui",
+        "--lab",
+        "--with-plugins",
+        "--data-dir",
+        "/tmp/d",
+    ])
+    .expect("monoagens tui flags must parse");
+    assert!(is_tui_invocation(&cli));
+    match cli.command {
+        Some(Commands::Tui(TuiArgs {
+            data_dir,
+            model,
+            lab,
+            with_plugins,
+        })) => {
+            assert_eq!(data_dir, Some(PathBuf::from("/tmp/d")));
+            assert_eq!(model, None);
+            assert!(lab);
+            assert!(with_plugins);
+        }
+        other => panic!("expected Commands::Tui, got {other:?}"),
+    }
+}
+
+#[test]
+fn bare_cli_with_json_fails_cleanly_with_helpful_error() {
+    let cli = Cli::try_parse_from(["monoagens", "--json"]).expect("parse --json");
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let outcome = execute_cli(cli, &mut out, &mut err);
+    assert_eq!(outcome.exit_code, 1);
+    assert!(out.is_empty());
+    let stderr = String::from_utf8(err).expect("utf8 stderr");
+    assert!(
+        stderr.contains("interactive TUI requires a TTY (without --json)"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn tui_subcommand_with_json_fails_cleanly() {
+    let cli = Cli::try_parse_from(["monoagens", "--json", "tui"]).expect("parse --json tui");
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let outcome = execute_cli(cli, &mut out, &mut err);
+    assert_eq!(outcome.exit_code, 1);
+    assert!(out.is_empty());
+    let stderr = String::from_utf8(err).expect("utf8 stderr");
+    assert!(
+        stderr.contains("--json is not supported with interactive TUI"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn bare_binary_non_tty_fails_cleanly_without_hanging() {
+    let out = Command::new(monoagens_bin())
+        .output()
+        .expect("run bare monoagens without tty");
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("interactive TUI requires a TTY (without --json)"),
+        "unexpected stderr: {stderr}"
+    );
 }
