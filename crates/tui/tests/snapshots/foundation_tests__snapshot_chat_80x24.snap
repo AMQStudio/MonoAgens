@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/foundation_tests.rs
+expression: "text_of(&render(80, 24, &snapshot_state(&dir)))"
+---
+                                                                  Hello Mono   │
+                                                                               │
+ Hello! How can I help today?                                                  │
+   ◷ 1.2s                                                                      │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+ ● gpt-4o-mini · ◆  Valve: enforcing · $0.00 ── 0% · »  New Chat
+────────────────────────────────────────────────────────────────────────────────
+ >  Message Mono or type / for commands…
+────────────────────────────────────────────────────────────────────────────────
+ esc to clear · enter send · shift+enter newline · / commands · ctrl+b sidebar …

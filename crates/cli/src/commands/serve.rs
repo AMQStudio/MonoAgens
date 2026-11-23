@@ -5,7 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use monoagens_gateway::{
-    PluginConfig, PluginEnvContext, PluginKind, load_plugin_env_secrets,
+    LockError, PluginConfig, PluginEnvContext, PluginKind, acquire_data_dir_lock,
+    load_plugin_env_secrets,
 };
 use monoagens_protocol::ActorId;
 use monoagens_reason::ModelProvider;
@@ -149,6 +150,30 @@ pub fn run_serve_with_provider(
         .iter()
         .map(|p| p.actor_id.clone())
         .collect();
+
+    // One gateway per data dir: hold `<data_dir>/gateway.lock` for the life of this process.
+    let lock_dir = args
+        .data_dir
+        .clone()
+        .unwrap_or_else(|| loaded.paths.data_dir.clone());
+    let _data_dir_lock = match acquire_data_dir_lock(&lock_dir) {
+        Ok(lock) => lock,
+        Err(LockError::Held(held)) => {
+            let who = held
+                .pid
+                .map_or_else(|| "another process".to_owned(), |pid| format!("pid {pid}"));
+            let _ = writeln!(
+                err,
+                "error: data dir '{}' is already hosted by {who} (lock '{}'). \
+                 Attach to it (open the TUI on the same data dir) or stop that process first.",
+                lock_dir.display(),
+                held.path.display()
+            );
+            let _ = err.flush();
+            return Ok(1);
+        }
+        Err(other) => return Err(format!("failed to take the data-dir lock: {other}")),
+    };
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

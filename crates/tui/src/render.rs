@@ -12,7 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph, Widget, Wrap};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::config::MessageLayout;
+use crate::config::{IconMode, MessageLayout};
 use crate::effects::TuiEffects;
 use crate::markdown::render_markdown_lines;
 use crate::settings::{
@@ -23,6 +23,16 @@ use crate::state::{
     ChatTimelineItem, HitRegions, PendingApprovalCard, TuiAppState, normalize_selection,
 };
 use crate::theme::ThemePalette;
+use crate::width::{chrome_label, chrome_text, fit_prefix, sanitize};
+use unicode_segmentation::UnicodeSegmentation;
+
+/// Below this width the sidebar is hidden and cannot open.
+pub const MIN_SIDEBAR_COLS: u16 = 80;
+/// Below this height the hint line is hidden and overlays use the full height.
+pub const COMPACT_ROWS: u16 = 20;
+/// Smallest terminal that is drawn; anything smaller shows a size message.
+pub const MIN_COLS: u16 = 40;
+pub const MIN_ROWS: u16 = 10;
 
 /// Renders the full MonoAgens TUI into `frame`, updating `hit` rectangles and processing `effects`.
 pub fn render_app(
@@ -54,7 +64,8 @@ pub fn render_to_buffer(
     let palette = ThemePalette::for_preset(state.prefs.theme);
     fill_bg(buf, area, palette.bg, palette.fg);
 
-    if area.width < 10 || area.height < 6 {
+    if area.width < MIN_COLS || area.height < MIN_ROWS {
+        render_too_small(area, buf, &palette);
         return;
     }
 
@@ -75,11 +86,15 @@ pub fn render_to_buffer(
     }
 
     hit.chat_area = main_rect;
-    render_main_pane(main_rect, buf, state, effects, &palette, hit);
+    let feed_rect = render_main_pane(main_rect, buf, state, effects, &palette, hit);
 
     let mut modal_rect = None;
     if state.settings.open {
-        let mr = centered_rect(88, 86, area);
+        let mr = if area.height < COMPACT_ROWS {
+            area
+        } else {
+            centered_rect(88, 86, area)
+        };
         modal_rect = Some(mr);
         hit.settings_area = mr;
         render_settings_modal(mr, buf, state, &palette, hit);
@@ -90,11 +105,60 @@ pub fn render_to_buffer(
     }
 
     if let Some(toast) = &state.toast {
-        render_toast(area, buf, &toast.text, toast.is_error, &palette);
+        render_toast(area, buf, &toast.text, toast.is_error, &palette, state.prefs.icons);
     }
 
     let fx_area = modal_rect.unwrap_or(main_rect);
     effects.process(elapsed_ms, buf, fx_area);
+
+    // Chat content keeps its emoji; everything else is normalised for terminal width safety.
+    let content_rect = if modal_rect.is_some() { None } else { Some(feed_rect) };
+    normalize_chrome(buf, area, content_rect, state.prefs.icons);
+}
+
+fn render_too_small(area: Rect, buf: &mut Buffer, palette: &ThemePalette) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let msg = format!("terminal too small (needs {MIN_COLS}x{MIN_ROWS})");
+    let lines = wrap_text_lines(&msg, area.width as usize);
+    let top = area.y + area.height.saturating_sub(lines.len() as u16) / 2;
+    for (i, line) in lines.iter().enumerate() {
+        let y = top + i as u16;
+        if y >= area.y + area.height {
+            break;
+        }
+        let w = line.width() as u16;
+        let x = area.x + area.width.saturating_sub(w) / 2;
+        buf.set_string(x, y, line, Style::default().fg(palette.status_red).bg(palette.bg));
+    }
+}
+
+/// Drops U+FE0F and (in `Symbols` mode) swaps chrome emoji for single-width symbols, cell by cell,
+/// leaving `skip` (the chat feed) untouched.
+fn normalize_chrome(buf: &mut Buffer, area: Rect, skip: Option<Rect>, mode: IconMode) {
+    for y in area.y..area.y.saturating_add(area.height) {
+        for x in area.x..area.x.saturating_add(area.width) {
+            if skip.is_some_and(|r| rect_has(r, x, y)) {
+                continue;
+            }
+            let Some(cell) = buf.cell_mut((x, y)) else {
+                continue;
+            };
+            let sym = cell.symbol();
+            if sym.is_ascii() {
+                continue;
+            }
+            let fixed = chrome_text(sym, mode);
+            if fixed != sym {
+                cell.set_symbol(&fixed);
+            }
+        }
+    }
+}
+
+const fn rect_has(r: Rect, x: u16, y: u16) -> bool {
+    x >= r.x && x < r.x.saturating_add(r.width) && y >= r.y && y < r.y.saturating_add(r.height)
 }
 
 fn fill_bg(buf: &mut Buffer, area: Rect, bg: ratatui::style::Color, fg: ratatui::style::Color) {
@@ -344,7 +408,8 @@ fn render_main_pane(
     effects: &TuiEffects,
     palette: &ThemePalette,
     hit: &mut HitRegions,
-) {
+) -> Rect {
+    let compact_rows = area.height < COMPACT_ROWS;
     let approval_height = if state.pending_approval.is_some() { 4 } else { 0 };
     let busy_height = if state.is_busy() { 1 } else { 0 };
     let attachment_height = if state.composer.pending_attachments.is_empty() {
@@ -352,13 +417,23 @@ fn render_main_pane(
     } else {
         4
     };
+    let max_composer_lines = if compact_rows { 3 } else { 5 };
+    let composer_lines = state
+        .composer
+        .text
+        .split('\n')
+        .count()
+        .clamp(1, max_composer_lines) as u16;
+    // top rule + lines + bottom rule (+ footer hint unless the terminal is short)
+    let composer_height = composer_lines + if compact_rows { 2 } else { 3 };
+    let fixed_rows = approval_height + busy_height + 1 + attachment_height + composer_height;
     let autocomplete_height = if state.composer.is_slash_mode() && !state.autocomplete.is_empty() {
-        (state.autocomplete.len() as u16).min(8)
+        (state.autocomplete.len() as u16)
+            .min(8)
+            .min(area.height.saturating_sub(fixed_rows + 1))
     } else {
         0
     };
-    let composer_lines = state.composer.text.split('\n').count().clamp(1, 5) as u16;
-    let composer_height = composer_lines + 3; // top rule + lines + bottom rule + footer hint
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -398,11 +473,62 @@ fn render_main_pane(
     if attachment_height > 0 {
         render_attachment_strip(attachment_rect, buf, state, palette, hit);
     }
-    render_composer(composer_rect, buf, state, palette);
+    render_composer(composer_rect, buf, state, palette, !compact_rows);
 
     if autocomplete_height > 0 {
         render_autocomplete(ac_rect, buf, state, palette, hit);
     }
+    feed_rect
+}
+
+/// Dim bubble for a message typed while a turn runs; it moves into the timeline when submitted.
+fn push_queued_bubble(
+    lines: &mut Vec<Line<'static>>,
+    text: &str,
+    content_w: usize,
+    state: &TuiAppState,
+    palette: &ThemePalette,
+) {
+    let dim = Style::default().fg(palette.dim).bg(palette.bubble_bg);
+    let tag = " queued · alt+↑ to edit";
+    if state.prefs.message_layout == MessageLayout::Chat {
+        let max_bubble_w = ((content_w * 72) / 100).max(14).min(content_w);
+        let inner_max = max_bubble_w.saturating_sub(4).max(4);
+        let wrapped = wrap_text_lines(text, inner_max);
+        let text_w = wrapped
+            .iter()
+            .map(|l| l.width())
+            .max()
+            .unwrap_or(1)
+            .min(inner_max);
+        let left_pad = content_w.saturating_sub(text_w + 4);
+        for wline in wrapped {
+            let trail = text_w.saturating_sub(wline.width());
+            lines.push(Line::from(vec![
+                Span::raw(" ".repeat(left_pad)),
+                Span::styled(format!("  {wline}{}  ", " ".repeat(trail)), dim),
+            ]));
+        }
+    } else {
+        for wline in wrap_text_lines(text, content_w.saturating_sub(2)) {
+            lines.push(Line::from(vec![
+                Span::styled("▎ ", dim),
+                Span::styled(wline, dim),
+            ]));
+        }
+    }
+    let tag = truncate_to_width(tag, content_w);
+    let pad = content_w.saturating_sub(tag.width());
+    lines.push(Line::from(vec![
+        Span::raw(" ".repeat(pad)),
+        Span::styled(
+            tag,
+            Style::default()
+                .fg(palette.dim)
+                .add_modifier(Modifier::ITALIC),
+        ),
+    ]));
+    lines.push(Line::default());
 }
 
 fn render_chat_feed(
@@ -482,11 +608,11 @@ fn render_chat_feed(
             ChatTimelineItem::AssistantMessage {
                 text, duration_ms, ..
             } => {
-                rendered_lines.extend(render_markdown_lines(text, content_w, palette));
+                rendered_lines.extend(render_markdown_lines(&sanitize(text, true), content_w, palette));
                 if state.prefs.show_turn_duration
                     && let Some(ms) = duration_ms
                 {
-                    let label = format!("  ⏱ {}", format_turn_duration(*ms));
+                    let label = chrome_label(&format!("  ⏱ {}", format_turn_duration(*ms)), state.prefs.icons);
                     rendered_lines.push(Line::from(Span::styled(
                         label,
                         Style::default().fg(palette.dim),
@@ -545,12 +671,19 @@ fn render_chat_feed(
         }
     }
 
+    for queued in state.turn.queued() {
+        push_queued_bubble(&mut rendered_lines, &queued.text, content_w, state, palette);
+    }
+
     if rendered_lines.is_empty() {
         let top_pad = (area.height as usize).saturating_sub(6) / 3;
         for _ in 0..top_pad {
             rendered_lines.push(Line::default());
         }
-        let header = format!("  ✨ {} · ready", state.gateway_cfg.soul.name);
+        let header = chrome_label(
+            &format!("  ✨ {} · ready", state.gateway_cfg.soul.name),
+            state.prefs.icons,
+        );
         rendered_lines.push(Line::from(Span::styled(
             truncate_to_width(&header, content_w),
             Style::default()
@@ -567,10 +700,11 @@ fn render_chat_feed(
             )));
         }
         rendered_lines.push(Line::default());
-        for wline in wrap_text_lines(
+        let tips = chrome_label(
             "  💬 Start chatting · ✨ /new · 📎 /attach · ⚙️ /settings · 📋 drag to copy · Ctrl+B sidebar",
-            content_w,
-        ) {
+            state.prefs.icons,
+        );
+        for wline in wrap_text_lines(&tips, content_w) {
             rendered_lines.push(Line::from(Span::styled(
                 wline,
                 Style::default().fg(palette.dim),
@@ -741,14 +875,15 @@ fn render_busy_phase_line(
     effects: &TuiEffects,
     palette: &ThemePalette,
 ) {
-    let spinner = effects.spinner_glyph(state.prefs.motion);
+    // The status bar owns the spinner and elapsed time; this line only names the phase.
     let mut spans = vec![Span::styled(
-        format!(" {spinner} ✨ "),
+        "   ",
         Style::default().fg(palette.accent),
     )];
-    for (idx, ch) in state.thinking_phase.chars().enumerate() {
+    let phase = chrome_label(&state.thinking_phase, state.prefs.icons);
+    for (idx, g) in phase.graphemes(true).enumerate() {
         let style = effects.shimmer_style(idx, state.prefs.shimmer, state.prefs.motion, palette);
-        spans.push(Span::styled(ch.to_string(), style));
+        spans.push(Span::styled(g.to_owned(), style));
     }
     let line = Line::from(spans);
     buf.set_line(area.x, area.y, &line, area.width);
@@ -785,21 +920,22 @@ fn render_status_bar(
         Style::default().fg(palette.fg).bg(palette.status_bg),
     ));
 
-    if state.prefs.show_valve_badge {
+    let compact = area.width < MIN_SIDEBAR_COLS;
+    if state.prefs.show_valve_badge && !compact {
         spans.push(Span::styled(
             format!(" · 🛡️ Valve: {}", state.valve_mode),
             Style::default().fg(palette.muted).bg(palette.status_bg),
         ));
     }
 
-    if state.prefs.show_cost_estimate {
+    if state.prefs.show_cost_estimate && !compact {
         spans.push(Span::styled(
             format!(" · ${:.2}", state.estimated_cost_usd),
             Style::default().fg(palette.muted).bg(palette.status_bg),
         ));
     }
 
-    if state.prefs.show_token_budget {
+    if state.prefs.show_token_budget && !compact {
         let pct = ((state.daily_tokens_used as f64 / state.daily_token_budget.max(1) as f64)
             * 100.0)
             .round()
@@ -810,10 +946,15 @@ fn render_status_bar(
         ));
     }
 
-    spans.push(Span::styled(
-        format!(" · 💬 {}", state.chats.active_chat().title),
-        Style::default().fg(palette.dim).bg(palette.status_bg),
-    ));
+    if !compact {
+        spans.push(Span::styled(
+            format!(
+                " · 💬 {}",
+                sanitize(&state.chats.active_chat().title, false)
+            ),
+            Style::default().fg(palette.dim).bg(palette.status_bg),
+        ));
+    }
 
     if state.lab_mode {
         spans.push(Span::raw(" "));
@@ -916,11 +1057,12 @@ fn render_composer(
     buf: &mut Buffer,
     state: &TuiAppState,
     palette: &ThemePalette,
+    show_hint: bool,
 ) {
     if area.height < 3 || area.width < 6 {
         return;
     }
-    let has_footer = area.height >= 4;
+    let has_footer = show_hint && area.height >= 4;
     let bottom_rule_y = if has_footer {
         area.y + area.height - 2
     } else {
@@ -1724,7 +1866,14 @@ fn render_setup_wizard(
     }
 }
 
-fn render_toast(area: Rect, buf: &mut Buffer, text: &str, is_error: bool, palette: &ThemePalette) {
+fn render_toast(
+    area: Rect,
+    buf: &mut Buffer,
+    text: &str,
+    is_error: bool,
+    palette: &ThemePalette,
+    icons: IconMode,
+) {
     let prefixed = if text.starts_with('📋') || text.starts_with('✅') || text.starts_with('⚠') {
         text.to_owned()
     } else if is_error {
@@ -1734,6 +1883,7 @@ fn render_toast(area: Rect, buf: &mut Buffer, text: &str, is_error: bool, palett
     } else {
         format!("✅ {text}")
     };
+    let prefixed = chrome_label(&prefixed, icons);
     let w = (prefixed.width() as u16 + 4).min(area.width.saturating_sub(4)).max(12);
     let x = area.x + area.width.saturating_sub(w + 2);
     let y = area.y + 1;
@@ -1776,20 +1926,12 @@ fn truncate_to_width(s: &str, max_w: usize) -> String {
     if max_w == 0 {
         return String::new();
     }
+    let s = sanitize(s, false);
     if s.width() <= max_w {
-        return s.to_owned();
+        return s;
     }
-    let mut out = String::new();
-    let mut cur_w = 0usize;
-    for ch in s.chars() {
-        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if cur_w + cw + 1 > max_w {
-            out.push('…');
-            break;
-        }
-        out.push(ch);
-        cur_w += cw;
-    }
+    let mut out = fit_prefix(&s, max_w.saturating_sub(1));
+    out.push('…');
     out
 }
 
@@ -1797,6 +1939,7 @@ fn wrap_text_lines(text: &str, max_w: usize) -> Vec<String> {
     if max_w == 0 {
         return vec![String::new()];
     }
+    let text = sanitize(text, true);
     let mut lines = Vec::new();
     for raw_line in text.split('\n') {
         if raw_line.is_empty() {
@@ -1813,14 +1956,14 @@ fn wrap_text_lines(text: &str, max_w: usize) -> Vec<String> {
                 current_w = 0;
             }
             if word.width() > max_w {
-                for ch in word.chars() {
-                    let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                for g in word.graphemes(true) {
+                    let cw = crate::width::grapheme_width(g);
                     if current_w + cw > max_w && !current.is_empty() {
                         lines.push(current.clone());
                         current.clear();
                         current_w = 0;
                     }
-                    current.push(ch);
+                    current.push_str(g);
                     current_w += cw;
                 }
             } else {
@@ -1921,18 +2064,5 @@ fn slice_display_window(s: &str, h_scroll: usize, max_w: usize) -> String {
 }
 
 fn truncate_to_width_no_ellipsis(s: &str, max_w: usize) -> String {
-    if max_w == 0 {
-        return String::new();
-    }
-    let mut out = String::new();
-    let mut cur_w = 0usize;
-    for ch in s.chars() {
-        let cw = ch.width().unwrap_or(0);
-        if cur_w + cw > max_w {
-            break;
-        }
-        out.push(ch);
-        cur_w += cw;
-    }
-    out
+    fit_prefix(&sanitize(s, false), max_w)
 }

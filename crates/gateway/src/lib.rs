@@ -6,21 +6,27 @@
 
 #![forbid(unsafe_code)]
 
+pub mod admin;
 pub mod attachments;
 pub mod clock;
 pub mod commands;
 pub mod config;
 pub mod cues;
 pub mod identity;
+pub mod lock;
 pub mod logging;
+pub mod owner;
 pub mod plugins;
 pub mod prequeue;
 pub mod provider;
+pub mod runlog;
 pub mod runtime;
 pub mod seams;
 pub mod secrets;
+pub mod supervisor;
 pub mod waist2;
 
+pub use admin::{ADMIN_SOCKET_FILENAME, AdminClient, AdminServer, admin_socket_path};
 pub use attachments::{
     AttachmentCustodyError, AttachmentMasterKey, AttachmentStore, DEFAULT_CUSTODY_TTL_MS,
     GatewayAttachmentBridge, HardForgetAttachmentReport, STAGING_TTL_MS,
@@ -47,7 +53,12 @@ pub use identity::{
     IdentityError, IdentityLinkEvent, IdentityResolver, IssuedLinkChallenge,
     LINK_NONCE_DOMAIN_PREFIX, OWNER_ESCALATION_GUARD, canonical_kappa, derive_per_actor_id,
 };
+pub use lock::{
+    DataDirLock, FileLock, GATEWAY_LOCK_FILENAME, LockError, LockHeld, acquire_data_dir_lock,
+    acquire_file_lock, acquire_plugin_lock, read_data_dir_lock_pid,
+};
 pub use logging::{DiagnosticRecord, DiagnosticSink, LogLevel};
+pub use owner::{AdminError, GatewayOwner, OwnerMode, OwnerParams, ReloadReport};
 pub use plugins::{
     ENV_BODY_STATE_DIR, ENV_PLUGIN_CONFIG, ENV_PLUGIN_STATE_DIR, ENV_RBAC_ENABLED,
     PluginBootPlan, PluginEnvContext, PluginStartupReport, SkippedPlugin, build_plugin_env,
@@ -58,8 +69,11 @@ pub use prequeue::{
     ToolRagQueryResult, build_embedder_from_config, build_embedder_from_config_async,
 };
 pub use provider::{
-    DailyBudgetTracker, GatewayModelExecutor, ProviderInitError, build_provider_from_config,
+    CANCELLED_BY_OWNER, DailyBudgetTracker, GatewayModelExecutor, ProviderInitError, TurnRegistry, build_provider_from_config,
     build_provider_from_config_async,
+};
+pub use runlog::{
+    LogBuffer, LogEntry, LogLevel as RunLogLevel, RunLog, RotatingLogFile,
 };
 pub use runtime::{
     BodyConnectOutcome, GatewayError, GatewayHandle, GatewayOptions, GatewayRuntime,
@@ -75,6 +89,10 @@ pub use secrets::{
     load_attachment_secrets, load_gateway_secrets, load_plugin_env_secrets, load_provider_secrets,
     load_secrets_toml_file, parse_plugin_env_secrets_str, parse_secrets_toml_str,
     resolve_approval_mac_key, validate_no_inline_secrets_in_toml, validate_non_secret_file,
+};
+pub use supervisor::{
+    FirstOutcome, PluginInfo, PluginState, PluginStateEvent, PluginSupervisor, RestartPolicy,
+    SupervisorError,
 };
 pub use waist2::{
     ActionSettlementTracker, ApprovalPromptRequest, BodyConnection, BodyRouter, BodyRpcError,

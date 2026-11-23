@@ -107,6 +107,37 @@ impl MotionMode {
     }
 }
 
+/// Icon set used in UI chrome (status bar, hints, sidebar); chat content keeps its emoji.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IconMode {
+    /// Single-width symbols that every terminal measures the same way.
+    #[default]
+    Symbols,
+    /// Emoji (terminals disagree about their width; stray cells may appear).
+    Emoji,
+}
+
+impl IconMode {
+    /// Display label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Symbols => "Symbols",
+            Self::Emoji => "Emoji",
+        }
+    }
+
+    /// Cycles to the next icon mode.
+    #[must_use]
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Symbols => Self::Emoji,
+            Self::Emoji => Self::Symbols,
+        }
+    }
+}
+
 /// Status-line thinking shimmer style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -160,6 +191,8 @@ pub struct TuiPreferences {
     pub motion: MotionMode,
     #[serde(default)]
     pub shimmer: ShimmerMode,
+    #[serde(default)]
+    pub icons: IconMode,
     #[serde(default = "default_true")]
     pub mouse_support: bool,
     #[serde(default = "default_true")]
@@ -190,6 +223,7 @@ impl Default for TuiPreferences {
             sidebar: SidebarMode::Auto,
             motion: MotionMode::Full,
             shimmer: ShimmerMode::Classic,
+            icons: IconMode::Symbols,
             mouse_support: true,
             copy_on_select: true,
             auto_chat_title: true,

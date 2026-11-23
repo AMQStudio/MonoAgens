@@ -6,7 +6,7 @@ use monoagens_gateway::{GatewayConfig, PluginConfig, PluginKind, ResolvedPaths, 
 use monoagens_protocol::{ActionId, ActorId, HAct, ModalitySlot, Time};
 use monoagens_reason::{ModelProvider, ProviderFailureClass, ScriptedModelProvider, ScriptedReply};
 use monoagens_tui::{
-    AppAction, ChatTimelineItem, DynamicTomlDoc, DynamicTomlValue, HitRegions, LocalChatEntry,
+    AppAction, ChatTimelineItem, DynamicTomlDoc, DynamicTomlValue, HitRegions, IconMode, LocalChatEntry,
     LocalChatStore, MAX_TUI_PERCEPT_INLINE_BYTES, MessageLayout, MotionMode, PendingApprovalCard,
     PluginUiState, SecretsUiSummary, SettingsTab, SetupWizardState, ShimmerMode, SidebarMode,
     ThemePalette, ThemePreset, TitleTrigger, TuiAppState, TuiEffects, TuiPreferences, WizardStep,
@@ -716,6 +716,7 @@ fn image_dimension_parser_and_rounded_attachment_card_rendering() {
 
     let mut effects = TuiEffects::new();
     let mut hit = HitRegions::default();
+    state.prefs.icons = IconMode::Emoji;
     let term = render_headless(120, 30, &state, &mut effects, &mut hit);
     let rendered = buffer_text(term.backend().buffer());
     assert!(rendered.contains("╭─ 📷 #1"), "rendered:\n{rendered}");
@@ -800,6 +801,7 @@ fn pdf_requires_pdf_reader_or_workspace_and_streams_on_submit() {
     let mut effects = TuiEffects::new();
     let mut hit = HitRegions::default();
     let viewport = Rect::new(0, 0, 120, 30);
+    state.prefs.icons = IconMode::Emoji;
     let term = render_headless(viewport.width, viewport.height, &state, &mut effects, &mut hit);
     let rendered = buffer_text(term.backend().buffer());
     assert!(rendered.contains("╭─ 📄 #1"), "rendered:\n{rendered}");
@@ -1392,10 +1394,11 @@ fn plugin_detail_back_button_tab_exit_and_three_color_status_dot() {
 #[test]
 fn empty_chat_renders_welcome_and_expressive_chrome() {
     let dir = TempDir::new().expect("tempdir");
-    let state = make_test_state(&dir);
+    let mut state = make_test_state(&dir);
 
     let mut effects = TuiEffects::new();
     let mut hit = HitRegions::default();
+    state.prefs.icons = IconMode::Emoji;
     let term = render_headless(130, 30, &state, &mut effects, &mut hit);
     let rendered = buffer_text(term.backend().buffer());
 
@@ -1403,7 +1406,7 @@ fn empty_chat_renders_welcome_and_expressive_chrome() {
     assert!(rendered.contains("💬 CHATS"), "chats header:\n{rendered}");
     assert!(rendered.contains("🔌 PLUGINS"), "plugins header:\n{rendered}");
     assert!(rendered.contains("✨") && rendered.contains("ready"), "welcome card:\n{rendered}");
-    assert!(rendered.contains("🛡️ Valve:"), "status valve badge:\n{rendered}");
+    assert!(rendered.contains("🛡") && rendered.contains("Valve:") && !rendered.contains('\u{FE0F}'), "status valve badge:\n{rendered}");
 }
 
 #[test]
@@ -1481,9 +1484,10 @@ fn chat_history_persists_across_restarts_with_new_chat_default_and_short_command
     state.settings.open_tab(SettingsTab::Appearance);
     let mut effects = TuiEffects::new();
     let mut hit = HitRegions::default();
+    state.prefs.icons = IconMode::Emoji;
     let term = render_headless(140, 36, &state, &mut effects, &mut hit);
     let rendered = buffer_text(term.backend().buffer());
-    assert!(rendered.contains("⚙️ Settings"), "settings title:\n{rendered}");
+    assert!(rendered.contains("⚙") && rendered.contains("Settings  (←/→ Tab"), "settings title:\n{rendered}");
     assert!(rendered.contains("🎨 Appearance"), "tab icon:\n{rendered}");
     assert!(rendered.contains("🔍 Search:"), "search icon:\n{rendered}");
     assert!(rendered.contains("● ON"), "pill switch:\n{rendered}");

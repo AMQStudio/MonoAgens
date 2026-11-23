@@ -2,12 +2,14 @@
 //! daily token budget tracking, and bounded async execution over `crates/reason`.
 
 use core::fmt;
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use monoagens_core::{ContextPlan, Input, ModelPurpose, Store};
 use monoagens_protocol::{EventId, Time};
 use monoagens_reason::{
-    CallOutcome, ModelCallRecord, ModelOutput, ModelProvider, OpenAiModelConfig,
+    CallOutcome, ModelCallFailure, ModelCallRecord, ModelCallSuccess, ModelOutput, ModelProvider, OpenAiModelConfig,
     OpenAiModelProvider, ProviderFailureClass, ProviderSecrets, RenderExtras,
     ScriptedModelProvider, build_model_request_from_plan,
 };
@@ -16,6 +18,7 @@ use crate::clock::{Clock, run_with_clock_timeout};
 use crate::config::{DEFAULT_OPENAI_ENDPOINT, GatewayConfig, ModelProviderKind};
 use crate::cues::{CueRecorder, spawn_wait_cue_monitor};
 use crate::logging::{DiagnosticSink, LogLevel};
+use crate::runtime::IngressQueue;
 
 /// Errors constructing a [`ModelProvider`] from Gateway configuration and secrets.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,6 +141,123 @@ pub async fn build_provider_from_config_async(
         })?
 }
 
+
+/// Reason code recorded in `Input::ModelFailure` when the owner cancels an in-flight turn.
+pub const CANCELLED_BY_OWNER: &str = "cancelled_by_owner";
+
+/// One in-flight model call. Exactly one of {result, cancel, timeout} may *claim* it and
+/// submit an `Input` for its request id (atomic compare-and-set).
+#[derive(Debug)]
+struct InFlightCall {
+    request_id: EventId,
+    purpose: ModelPurpose,
+    claimed: AtomicBool,
+    cancelled: tokio::sync::Notify,
+}
+
+impl InFlightCall {
+    fn try_claim(&self) -> bool {
+        self.claimed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+}
+
+/// Registry of in-flight model calls, shared by the executor and the owner-facing handle.
+#[derive(Debug, Clone, Default)]
+pub struct TurnRegistry {
+    calls: Arc<Mutex<BTreeMap<u64, Arc<InFlightCall>>>>,
+    next_key: Arc<AtomicU64>,
+}
+
+struct InFlightGuard {
+    registry: TurnRegistry,
+    key: u64,
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        self.registry
+            .calls
+            .lock()
+            .expect("turn registry lock")
+            .remove(&self.key);
+    }
+}
+
+impl TurnRegistry {
+    fn register(&self, request_id: EventId, purpose: ModelPurpose) -> (Arc<InFlightCall>, InFlightGuard) {
+        let key = self.next_key.fetch_add(1, Ordering::Relaxed);
+        let call = Arc::new(InFlightCall {
+            request_id,
+            purpose,
+            claimed: AtomicBool::new(false),
+            cancelled: tokio::sync::Notify::new(),
+        });
+        self.calls
+            .lock()
+            .expect("turn registry lock")
+            .insert(key, Arc::clone(&call));
+        (
+            call,
+            InFlightGuard {
+                registry: self.clone(),
+                key,
+            },
+        )
+    }
+
+    /// Number of model calls currently in flight.
+    #[must_use]
+    pub fn in_flight(&self) -> usize {
+        self.calls.lock().expect("turn registry lock").len()
+    }
+
+    /// Cancels every in-flight `Reason` model call that has not been settled yet: each one
+    /// wins its claim, gets `Input::ModelFailure { reason: "cancelled_by_owner" }` submitted
+    /// into `ingress`, and stops being awaited. Returns the cancelled request ids.
+    pub fn cancel_reasoning(&self, ingress: &IngressQueue, diagnostics: &DiagnosticSink, now: Time) -> Vec<EventId> {
+        let candidates: Vec<Arc<InFlightCall>> = self
+            .calls
+            .lock()
+            .expect("turn registry lock")
+            .values()
+            .filter(|c| c.purpose == ModelPurpose::Reason)
+            .cloned()
+            .collect();
+        let mut cancelled = Vec::new();
+        for call in candidates {
+            if !call.try_claim() {
+                continue;
+            }
+            match ingress.try_submit(Input::ModelFailure {
+                request_id: call.request_id,
+                reason: CANCELLED_BY_OWNER.to_owned(),
+            }) {
+                Ok(_) => {
+                    diagnostics.log(
+                        now,
+                        LogLevel::Info,
+                        "gateway.model",
+                        &format!("model call {} cancelled by owner", call.request_id),
+                    );
+                    cancelled.push(call.request_id);
+                }
+                Err(err) => {
+                    diagnostics.log(
+                        now,
+                        LogLevel::Error,
+                        "gateway.model",
+                        &format!("failed to enqueue cancel for {}: {err}", call.request_id),
+                    );
+                }
+            }
+            call.cancelled.notify_one();
+        }
+        cancelled
+    }
+}
+
 /// Guard ensuring any underlying blocking HTTP client (e.g. `reqwest::blocking::Client`)
 /// is never dropped directly inside a Tokio async runtime context.
 #[derive(Clone)]
@@ -171,6 +291,7 @@ pub struct GatewayModelExecutor {
     diagnostics: DiagnosticSink,
     cues: CueRecorder,
     clock: Arc<dyn Clock>,
+    turns: TurnRegistry,
 }
 
 impl GatewayModelExecutor {
@@ -198,7 +319,14 @@ impl GatewayModelExecutor {
             diagnostics,
             cues,
             clock,
+            turns: TurnRegistry::default(),
         }
+    }
+
+    /// Returns the registry of in-flight model calls (used by `turn.cancel`).
+    #[must_use]
+    pub fn turns(&self) -> &TurnRegistry {
+        &self.turns
     }
 
     /// Renders `plan` synchronously against `store` inside the Core owner task, returning a
@@ -246,7 +374,31 @@ impl GatewayModelExecutor {
 
     /// Executes `req` off the Core owner task under `model_timeout_ms` and returns the
     /// resulting Core [`Input`] (`ModelResult`, `ClassifyResult`, or `ModelFailure`).
+    ///
+    /// If the call is cancelled by the owner meanwhile (see [`TurnRegistry::cancel_reasoning`],
+    /// which submits the `ModelFailure` itself) this returns the same cancel failure; callers
+    /// that submit the returned input must use [`Self::execute_prepared_cancellable`] instead
+    /// to avoid submitting it twice.
     pub async fn execute_prepared(&self, req: monoagens_reason::ModelRequest) -> Input {
+        let request_id = req.request_id;
+        match self.execute_prepared_cancellable(req).await {
+            Some(input) => input,
+            None => Input::ModelFailure {
+                request_id,
+                reason: CANCELLED_BY_OWNER.to_owned(),
+            },
+        }
+    }
+
+    /// Like [`Self::execute_prepared`] but returns `None` when the owner cancelled the call:
+    /// the cancel path already submitted `Input::ModelFailure { cancelled_by_owner }`, and a
+    /// result that still arrives from the abandoned blocking call is discarded (logged
+    /// "late result discarded"). Cancel, completion and timeout race through one atomic
+    /// compare-and-set, so exactly one of them submits an input for the request.
+    pub async fn execute_prepared_cancellable(
+        &self,
+        req: monoagens_reason::ModelRequest,
+    ) -> Option<Input> {
         let request_id = req.request_id;
         let purpose = req.purpose;
         let model = req.model.clone();
@@ -269,34 +421,57 @@ impl GatewayModelExecutor {
             self.progress_note_ms,
         );
 
+        let (call, _in_flight_guard) = self.turns.register(request_id, purpose);
+        let (res_tx, mut res_rx) =
+            tokio::sync::oneshot::channel::<Result<ModelCallSuccess, ModelCallFailure>>();
         let provider = Arc::clone(provider_ref);
-        let join = tokio::task::spawn_blocking(move || provider.invoke(&req));
-
-        match run_with_clock_timeout(self.clock.as_ref(), timeout_ms, join).await {
-            Err(_timed_out) => {
-                let elapsed = self.clock.now().saturating_sub_ms(started_at);
-                let record = ModelCallRecord {
-                    request_id,
-                    purpose,
-                    provider: provider_name,
-                    model: model.clone(),
-                    usage: None,
-                    latency_ms: elapsed,
-                    outcome: CallOutcome::Failed(ProviderFailureClass::Timeout),
-                    strict_schema: true,
-                };
-                self.diagnostics.record_model_call(record);
-                let msg = format!(
-                    "model call timed out after {timeout_ms}ms (model '{model}', purpose {purpose:?})"
+        let call_for_worker = Arc::clone(&call);
+        let diagnostics = self.diagnostics.clone();
+        let clock = Arc::clone(&self.clock);
+        // The blocking HTTP call cannot be interrupted; on cancel/timeout it is abandoned and
+        // finishes on its own thread, where losing the claim means its result is dropped.
+        let _detached = tokio::task::spawn_blocking(move || {
+            let outcome = provider.invoke(&req);
+            if call_for_worker.try_claim() {
+                let _ = res_tx.send(outcome);
+            } else {
+                diagnostics.log(
+                    clock.now(),
+                    LogLevel::Info,
+                    "gateway.model",
+                    &format!("late result discarded (request {})", call_for_worker.request_id),
                 );
-                self.diagnostics
-                    .log(self.clock.now(), LogLevel::Warn, "gateway.model", &msg);
-                Input::ModelFailure {
-                    request_id,
-                    reason: self.diagnostics.redact(&msg),
+            }
+        });
+
+        let waited = tokio::select! {
+            biased;
+            () = call.cancelled.notified() => return None,
+            res = run_with_clock_timeout(self.clock.as_ref(), timeout_ms, &mut res_rx) => res,
+        };
+
+        let waited = match waited {
+            Err(_timed_out) => {
+                if call.try_claim() {
+                    return Some(self.timeout_failure(
+                        request_id, purpose, provider_name, model, timeout_ms, started_at,
+                    ));
+                }
+                // Lost the claim: either the owner cancelled, or the worker just delivered.
+                tokio::select! {
+                    biased;
+                    () = call.cancelled.notified() => return None,
+                    res = &mut res_rx => res,
                 }
             }
-            Ok(Err(join_err)) => {
+            Ok(res) => res,
+        };
+
+        match waited {
+            Err(_worker_dropped) => {
+                if !call.try_claim() {
+                    return None;
+                }
                 let elapsed = self.clock.now().saturating_sub_ms(started_at);
                 let record = ModelCallRecord {
                     request_id,
@@ -309,15 +484,15 @@ impl GatewayModelExecutor {
                     strict_schema: true,
                 };
                 self.diagnostics.record_model_call(record);
-                let msg = format!("model worker panicked: {join_err}");
+                let msg = "model worker panicked".to_owned();
                 self.diagnostics
                     .log(self.clock.now(), LogLevel::Error, "gateway.model", &msg);
-                Input::ModelFailure {
+                Some(Input::ModelFailure {
                     request_id,
                     reason: self.diagnostics.redact(&msg),
-                }
+                })
             }
-            Ok(Ok(Ok(success))) => {
+            Ok(Ok(success)) => {
                 let tokens = success.record.usage.map_or(0, |u| u.total_tokens);
                 let (_used, _limit) = self.budget.record_tokens(self.clock.now(), tokens);
                 self.diagnostics.record_model_call(success.record.clone());
@@ -335,7 +510,7 @@ impl GatewayModelExecutor {
                         success.record.latency_ms
                     ),
                 );
-                match success.output {
+                Some(match success.output {
                     ModelOutput::ThoughtActs(parsed) => Input::ModelResult {
                         request_id,
                         acts: parsed.acts,
@@ -344,9 +519,9 @@ impl GatewayModelExecutor {
                         request_id,
                         verdict,
                     },
-                }
+                })
             }
-            Ok(Ok(Err(failure))) => {
+            Ok(Err(failure)) => {
                 let mut record = *failure.record.clone();
                 record.model = self.diagnostics.redact(&record.model);
                 self.diagnostics.record_model_call(record);
@@ -357,11 +532,43 @@ impl GatewayModelExecutor {
                     "gateway.model",
                     &redacted_reason,
                 );
-                Input::ModelFailure {
+                Some(Input::ModelFailure {
                     request_id,
                     reason: redacted_reason,
-                }
+                })
             }
+        }
+    }
+
+    fn timeout_failure(
+        &self,
+        request_id: EventId,
+        purpose: ModelPurpose,
+        provider_name: String,
+        model: String,
+        timeout_ms: u64,
+        started_at: Time,
+    ) -> Input {
+        let elapsed = self.clock.now().saturating_sub_ms(started_at);
+        let record = ModelCallRecord {
+            request_id,
+            purpose,
+            provider: provider_name,
+            model: model.clone(),
+            usage: None,
+            latency_ms: elapsed,
+            outcome: CallOutcome::Failed(ProviderFailureClass::Timeout),
+            strict_schema: true,
+        };
+        self.diagnostics.record_model_call(record);
+        let msg = format!(
+            "model call timed out after {timeout_ms}ms (model '{model}', purpose {purpose:?})"
+        );
+        self.diagnostics
+            .log(self.clock.now(), LogLevel::Warn, "gateway.model", &msg);
+        Input::ModelFailure {
+            request_id,
+            reason: self.diagnostics.redact(&msg),
         }
     }
 

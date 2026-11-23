@@ -12,6 +12,7 @@ monoagens-protocol = { workspace = true }
 monoagens-reason = { workspace = true }
 monoagens-store = { workspace = true }
 monoagens-valve = { path = "../valve" }
+rustix = { version = "1", default-features = false, features = ["process", "std"] }
 ratatui = { version = "0.30", default-features = false, features = ["all-widgets", "crossterm_0_29", "layout-cache", "macros", "underline-color"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -19,7 +20,9 @@ tachyonfx = { version = "0.25", default-features = false, features = ["std"] }
 tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 toml = "0.9"
 toml_edit = "0.25.19"
+unicode-segmentation = "1"
 unicode-width = "0.2"
 
 [dev-dependencies]
+insta = "1.49"
 tempfile = { workspace = true }

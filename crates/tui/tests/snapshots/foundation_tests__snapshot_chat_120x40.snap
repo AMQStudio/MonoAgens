@@ -1,0 +1,44 @@
+---
+source: crates/tui/tests/foundation_tests.rs
+expression: "text_of(&render(120, 40, &snapshot_state(&dir)))"
+---
+ ✦ Mono  *                   │                                                                            Hello Mono   │
+ ────────────────────────────│                                                                                         │
+ »  CHATS                    │ Hello! How can I help today?                                                            │
+ ▸ New Chat                  │   ◷ 1.2s                                                                                │
+                             │                                                                                         │
+ ¤  PLUGINS                  │                                                                                         │
+ ● telegram (Adapter)        │                                                                                         │
+ ● whatsapp (Adapter)        │                                                                                         │
+ ● cli (Adapter)             │                                                                                         │
+ ● voice (Adapter)           │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │                                                                                         │
+                             │ ● gpt-4o-mini · ◆  Valve: enforcing · $0.00 ── 0% · »  New Chat
+                             │──────────────────────────────────────────────────────────────────────────────────────────
+                             │ >  Message Mono or type / for commands…
+                             │──────────────────────────────────────────────────────────────────────────────────────────
+                             │ esc to clear · enter send · shift+enter newline · / commands · ctrl+b sidebar · ctrl+v p…

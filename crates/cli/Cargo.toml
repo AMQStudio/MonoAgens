@@ -27,4 +27,6 @@ tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "io-util", 
 toml_edit = "0.25.19"
 
 [dev-dependencies]
+portable-pty = "0.9"
 tempfile = { workspace = true }
+vt100 = "0.18"

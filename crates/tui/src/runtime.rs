@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, Event,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -85,12 +86,12 @@ impl TerminalGuard {
         install_panic_hook();
         enable_raw_mode().map_err(|e| format!("failed to enable raw mode: {e}"))?;
         let mut stdout = io::stdout();
-        if let Err(e) = execute!(stdout, EnterAlternateScreen, EnableBracketedPaste) {
+        if let Err(e) = execute!(stdout, EnterAlternateScreen, EnableBracketedPaste, EnableFocusChange) {
             let _ = disable_raw_mode();
             return Err(format!("failed to enter alternate screen: {e}"));
         }
         if mouse_enabled && let Err(e) = execute!(stdout, EnableMouseCapture) {
-            let _ = execute!(stdout, DisableBracketedPaste, LeaveAlternateScreen);
+            let _ = execute!(stdout, DisableFocusChange, DisableBracketedPaste, LeaveAlternateScreen);
             let _ = disable_raw_mode();
             return Err(format!("failed to enable mouse capture: {e}"));
         }
@@ -130,7 +131,7 @@ impl TerminalGuard {
         }
         enable_raw_mode().map_err(|e| format!("failed to re-enable raw mode: {e}"))?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)
+        execute!(stdout, EnterAlternateScreen, EnableBracketedPaste, EnableFocusChange)
             .map_err(|e| format!("failed to re-enter alternate screen: {e}"))?;
         if self.mouse_enabled {
             execute!(stdout, EnableMouseCapture)
@@ -154,6 +155,7 @@ fn restore_terminal_raw() {
     let mut stdout = io::stdout();
     let _ = execute!(
         stdout,
+        DisableFocusChange,
         DisableBracketedPaste,
         DisableMouseCapture,
         LeaveAlternateScreen
@@ -263,6 +265,28 @@ pub fn run_tui_with_provider(
     exit_res
 }
 
+/// How much of the display the event loop must repaint after an action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Redraw {
+    None,
+    /// Clear and repaint.
+    Clear,
+    /// Clear, repaint and drop pending input (after the interactive `pair` child used the tty).
+    ClearAndDrain,
+}
+
+/// Suspends the process like a shell `Ctrl+Z`: leave the alternate screen, stop, restore on resume.
+fn suspend_process(guard: &mut TerminalGuard) {
+    guard.suspend_for_subprocess();
+    #[cfg(unix)]
+    {
+        use rustix::process::{Signal, getpid, kill_process};
+        // Stops here until the shell sends SIGCONT, then execution continues below.
+        let _ = kill_process(getpid(), Signal::TSTP);
+    }
+    let _ = guard.resume_after_subprocess();
+}
+
 enum RuntimeEvent {
     AssistantReply {
         chat_id: Option<String>,
@@ -270,8 +294,8 @@ enum RuntimeEvent {
         duration_ms: u64,
     },
     ApprovalPrompt(PendingApprovalCard),
-    TurnError(String),
-    TurnFinished,
+    TurnError { turn: u64, error: String },
+    TurnFinished { turn: u64 },
     PluginState {
         id: String,
         state: PluginUiState,
@@ -356,7 +380,6 @@ async fn run_tui_event_loop(
     let mut tick_interval = tokio::time::interval(Duration::from_millis(80));
     tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_draw = Instant::now();
-    let mut last_busy_start: Option<Instant> = None;
     let mut active_turn_chat_id: Option<String> = None;
     let mut needs_redraw = true;
 
@@ -365,8 +388,8 @@ async fn run_tui_event_loop(
             let now = Instant::now();
             let elapsed_ms = now.duration_since(last_draw).as_millis().clamp(1, 250) as u32;
             last_draw = now;
-            if let Some(started) = last_busy_start {
-                state.thinking_elapsed_ms = started.elapsed().as_millis() as u64;
+            if state.is_busy() {
+                state.thinking_elapsed_ms = state.turn.elapsed_ms();
             }
             terminal
                 .draw(|frame| {
@@ -392,17 +415,11 @@ async fn run_tui_event_loop(
             maybe_ev = key_rx.recv() => {
                 let Some(ev) = maybe_ev else { break; };
                 let viewport = terminal.size().map(|s| ratatui::layout::Rect::new(0, 0, s.width, s.height)).unwrap_or_default();
-                let actions = match ev {
-                    Event::Key(k) => state.handle_key_event(k),
-                    Event::Mouse(m) => state.handle_mouse_event(m, &hit, viewport),
-                    Event::Paste(text) => state.handle_paste(&text),
-                    _ => Vec::new(),
-                };
-                needs_redraw = true;
-
-                let mut need_full_redraw = false;
-                for action in actions {
-                    if handle_app_action(
+                let outcome = state.handle_terminal_event(ev, &hit, viewport);
+                needs_redraw = outcome.redraw;
+                let mut redraw = if outcome.clear { Redraw::Clear } else { Redraw::None };
+                for action in outcome.actions {
+                    let r = handle_app_action(
                         action,
                         state,
                         guard,
@@ -413,20 +430,20 @@ async fn run_tui_event_loop(
                         &mut cue_rx,
                         &mut seen_events_len,
                         &mut plugin_children,
-                        &mut last_busy_start,
                         &mut active_turn_chat_id,
                         &tx,
                         &mut effects,
                     )
-                    .await
-                    {
-                        need_full_redraw = true;
-                    }
+                    .await;
+                    redraw = redraw.max(r);
                 }
-                if need_full_redraw {
-                    while key_rx.try_recv().is_ok() {}
-                    while crossterm::event::poll(Duration::ZERO).unwrap_or(false) {
-                        let _ = crossterm::event::read();
+                if redraw >= Redraw::Clear {
+                    if redraw == Redraw::ClearAndDrain {
+                        // The interactive child consumed the terminal; drop whatever it left behind.
+                        while key_rx.try_recv().is_ok() {}
+                        while crossterm::event::poll(Duration::ZERO).unwrap_or(false) {
+                            let _ = crossterm::event::read();
+                        }
                     }
                     let _ = terminal.clear();
                     needs_redraw = true;
@@ -437,7 +454,6 @@ async fn run_tui_event_loop(
                     handle_runtime_event(
                         rt_ev,
                         state,
-                        &mut last_busy_start,
                         &mut active_turn_chat_id,
                         &mut effects,
                     );
@@ -468,6 +484,10 @@ async fn run_tui_event_loop(
                 }
                 if state.is_busy() {
                     effects.advance_tick();
+                    if state.tick_turn() {
+                        // `turn.no_reply` log entry arrives with the runtime log (task 3.1).
+                        active_turn_chat_id = None;
+                    }
                     if let Some(b) = &booted {
                         poll_new_gateway_events(
                             &b.handle,
@@ -475,7 +495,6 @@ async fn run_tui_event_loop(
                             state,
                             &mut seen_events_len,
                             &mut resolved_approvals,
-                            &mut last_busy_start,
                             &mut active_turn_chat_id,
                         )
                         .await;
@@ -485,6 +504,27 @@ async fn run_tui_event_loop(
                     needs_redraw = true;
                 }
             }
+        }
+
+        // Submit queued messages (typed while busy) in order once the running turn ended.
+        while let Some(action) = state.next_queued_action() {
+            needs_redraw = true;
+            handle_app_action(
+                action,
+                state,
+                guard,
+                &mut loaded,
+                &options,
+                &provider_override,
+                &mut booted,
+                &mut cue_rx,
+                &mut seen_events_len,
+                &mut plugin_children,
+                &mut active_turn_chat_id,
+                &tx,
+                &mut effects,
+            )
+            .await;
         }
     }
 
@@ -510,12 +550,11 @@ async fn handle_app_action(
     cue_rx: &mut Option<mpsc::UnboundedReceiver<LifecycleCueEvent>>,
     seen_events_len: &mut usize,
     plugin_children: &mut HashMap<String, (Child, Option<BodyId>)>,
-    last_busy_start: &mut Option<Instant>,
     active_turn_chat_id: &mut Option<String>,
     tx: &mpsc::UnboundedSender<RuntimeEvent>,
     effects: &mut TuiEffects,
-) -> bool {
-    let mut needs_full_redraw = false;
+) -> Redraw {
+    let mut needs_full_redraw = Redraw::None;
     match action {
         AppAction::ToggleMouseCapture(enabled) => {
             guard.set_mouse_capture(enabled);
@@ -553,7 +592,6 @@ async fn handle_app_action(
             text,
             attachments,
         } => {
-            *last_busy_start = Some(Instant::now());
             *active_turn_chat_id = Some(chat_id.clone());
             // Check non-blocking background auto-titler
             let trigger = {
@@ -604,8 +642,7 @@ async fn handle_app_action(
             }
 
             let Some(b) = booted.as_ref() else {
-                state.thinking = false;
-                *last_busy_start = None;
+                state.finish_busy();
                 *active_turn_chat_id = None;
                 state.push_timeline_item(
                     &chat_id,
@@ -623,14 +660,18 @@ async fn handle_app_action(
             let mut percept = build_tui_percept(state, &b.owner_actor, &text, &attachments, now);
             let handle = b.handle.clone();
             let tx_msg = tx.clone();
+            let turn = state.turn.seq();
             tokio::spawn(async move {
                 if let Some(pq) = handle.pre_queue_service() {
                     let _ = pq.enrich_percept_async(&mut percept).await;
                 }
                 if let Err(err) = handle.submit_and_wait(Input::Percept(Box::new(percept))).await {
-                    let _ = tx_msg.send(RuntimeEvent::TurnError(err.to_string()));
+                    let _ = tx_msg.send(RuntimeEvent::TurnError {
+                        turn,
+                        error: err.to_string(),
+                    });
                 } else {
-                    let _ = tx_msg.send(RuntimeEvent::TurnFinished);
+                    let _ = tx_msg.send(RuntimeEvent::TurnFinished { turn });
                 }
             });
         }
@@ -732,7 +773,7 @@ async fn handle_app_action(
             }
             let palette = crate::theme::ThemePalette::for_preset(state.prefs.theme);
             effects.trigger_modal_dissolve(state.prefs.motion, &palette);
-            needs_full_redraw = true;
+            needs_full_redraw = Redraw::ClearAndDrain;
         }
         AppAction::SubmitGatewayCommand(raw) => {
             if let Some(b) = booted.as_ref() {
@@ -798,6 +839,13 @@ async fn handle_app_action(
                 state.set_toast(format!("Clipboard copy failed: {err}"), true);
             }
         }
+        AppAction::ResetDisplay => {
+            needs_full_redraw = Redraw::Clear;
+        }
+        AppAction::Suspend => {
+            suspend_process(guard);
+            needs_full_redraw = Redraw::Clear;
+        }
         AppAction::PasteFromClipboard => match read_clipboard_image_or_text() {
             Some(ClipboardContent::ImagePng(bytes)) => {
                 let dims = parse_image_dimensions(&bytes);
@@ -832,7 +880,6 @@ async fn handle_app_action(
 fn handle_runtime_event(
     rt_ev: RuntimeEvent,
     state: &mut TuiAppState,
-    last_busy_start: &mut Option<Instant>,
     active_turn_chat_id: &mut Option<String>,
     effects: &mut TuiEffects,
 ) {
@@ -843,16 +890,12 @@ fn handle_runtime_event(
             text,
             duration_ms,
         } => {
-            state.thinking = false;
             let elapsed_ms = if duration_ms > 0 {
                 duration_ms
             } else {
-                last_busy_start
-                    .take()
-                    .map(|t| t.elapsed().as_millis() as u64)
-                    .unwrap_or(0)
+                state.turn.elapsed_ms()
             };
-            *last_busy_start = None;
+            state.finish_busy();
             state.thinking_elapsed_ms = elapsed_ms;
             let target_chat_id = active_turn_chat_id
                 .take()
@@ -871,22 +914,26 @@ fn handle_runtime_event(
         RuntimeEvent::ApprovalPrompt(card) => {
             state.pending_approval = Some(card);
         }
-        RuntimeEvent::TurnError(err) => {
-            state.thinking = false;
-            *last_busy_start = None;
-            let cid = active_turn_chat_id
-                .take()
-                .unwrap_or_else(|| state.chats.active_chat_id.clone());
+        RuntimeEvent::TurnError { turn, error } => {
+            let cid = match state.on_turn_error(turn) {
+                Some(chat) => {
+                    *active_turn_chat_id = None;
+                    chat
+                }
+                None => state.chats.active_chat_id.clone(),
+            };
             state.push_timeline_item(
                 &cid,
                 ChatTimelineItem::SystemNotice {
-                    text: format!("Turn error: {err}"),
+                    text: format!("Turn error: {error}"),
                     is_error: true,
                 },
             );
         }
-        RuntimeEvent::TurnFinished => {
-            // Replies arrive asynchronously via chat.speak; only clear if no ModelCall pending.
+        RuntimeEvent::TurnFinished { turn } => {
+            // Replies arrive asynchronously via chat.speak; arm the grace window, `tick_turn`
+            // ends a silent turn once it passes.
+            state.on_turn_finished(turn);
         }
         RuntimeEvent::PluginState { id, state: pstate } => {
             state.set_plugin_state(&id, pstate);
@@ -917,7 +964,6 @@ async fn poll_new_gateway_events(
     state: &mut TuiAppState,
     seen_len: &mut usize,
     resolved_approvals: &mut BTreeSet<ActionId>,
-    last_busy_start: &mut Option<Instant>,
     active_turn_chat_id: &mut Option<String>,
 ) {
     let (used, limit) = handle.budget().snapshot(clock.now());
@@ -945,8 +991,7 @@ async fn poll_new_gateway_events(
                         state.push_timeline_item(&active_id, ChatTimelineItem::BrainTrace { summary: line });
                     }
                     if *outcome == DecisionOutcome::Silent || *outcome == DecisionOutcome::DoorBlocked {
-                        state.thinking = false;
-                        *last_busy_start = None;
+                        state.finish_busy();
                         *active_turn_chat_id = None;
                     }
                 }
@@ -982,8 +1027,7 @@ async fn poll_new_gateway_events(
                     );
                 }
                 EventDetail::Failure { component, detail, .. } => {
-                    state.thinking = false;
-                    *last_busy_start = None;
+                    state.finish_busy();
                     *active_turn_chat_id = None;
                     state.push_timeline_item(
                         &active_id,
@@ -1020,7 +1064,7 @@ async fn poll_new_gateway_events(
                             }),
                             selected_approve: true,
                         });
-                        state.thinking = false;
+                        state.finish_busy();
                     }
                 }
                 ApprovalLogRecord::Resolved { action_id, .. } => {

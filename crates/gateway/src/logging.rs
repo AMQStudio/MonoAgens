@@ -31,7 +31,11 @@ pub struct DiagnosticSink {
     records: Arc<Mutex<Vec<DiagnosticRecord>>>,
     model_calls: Arc<Mutex<Vec<ModelCallRecord>>>,
     emit_stderr: bool,
+    mirror: Arc<Mutex<Option<DiagnosticMirror>>>,
 }
+
+/// Callback receiving every redacted [`DiagnosticRecord`] as it is logged.
+pub type DiagnosticMirror = Arc<dyn Fn(&DiagnosticRecord) + Send + Sync>;
 
 impl std::fmt::Debug for DiagnosticSink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -58,7 +62,13 @@ impl DiagnosticSink {
             records: Arc::new(Mutex::new(Vec::new())),
             model_calls: Arc::new(Mutex::new(Vec::new())),
             emit_stderr: false,
+            mirror: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Installs a callback mirroring every future redacted record (e.g. into the runtime log).
+    pub fn set_mirror(&self, mirror: DiagnosticMirror) {
+        *self.mirror.lock().expect("diagnostic mirror lock") = Some(mirror);
     }
 
     /// Creates a sink that also mirrors redacted diagnostic lines to stderr.
@@ -133,15 +143,20 @@ impl DiagnosticSink {
                 timestamp_ms.as_millis()
             );
         }
+        let record = DiagnosticRecord {
+            timestamp_ms,
+            level,
+            component,
+            message: redacted_msg,
+        };
+        let mirror = self.mirror.lock().expect("diagnostic mirror lock").clone();
+        if let Some(mirror) = mirror {
+            mirror(&record);
+        }
         self.records
             .lock()
             .expect("diagnostic records lock")
-            .push(DiagnosticRecord {
-                timestamp_ms,
-                level,
-                component,
-                message: redacted_msg,
-            });
+            .push(record);
     }
 
     /// Records a completed or failed [`ModelCallRecord`] (with model name scrubbed defensively).

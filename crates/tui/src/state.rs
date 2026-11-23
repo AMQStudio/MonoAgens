@@ -3,7 +3,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use monoagens_gateway::{
     CommandSpec, EmbedBackendKind, GatewayConfig, ModelProviderKind, PluginConfig, ResolvedPaths,
 };
@@ -30,6 +30,7 @@ use crate::settings::{
     ValveRuleTogglesState, WizardStep, build_settings_rows,
 };
 use crate::theme::ThemePreset;
+use crate::turn::{NO_REPLY_NOTICE, QueuedMessage, TurnState};
 
 /// A single item rendered inside a chat timeline.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +110,10 @@ impl Default for ComposerState {
 impl ComposerState {
     /// Inserts a character at the byte cursor.
     pub fn insert_char(&mut self, ch: char) {
+        let ch = if ch == '\t' { ' ' } else { ch };
+        if ch.is_control() && ch != '\n' {
+            return;
+        }
         let idx = self.cursor.min(self.text.len());
         self.text.insert(idx, ch);
         self.cursor = idx + ch.len_utf8();
@@ -116,6 +121,8 @@ impl ComposerState {
 
     /// Inserts a string slice at the byte cursor.
     pub fn insert_str(&mut self, s: &str) {
+        let s = crate::width::sanitize(s, true);
+        let s = s.as_str();
         if s.is_empty() {
             return;
         }
@@ -389,6 +396,20 @@ pub enum AppAction {
     SubmitGatewayCommand(String),
     CopyToClipboard(String),
     PasteFromClipboard,
+    /// `Alt+L`: clear the terminal and repaint everything.
+    ResetDisplay,
+    /// `Ctrl+Z`: leave the alternate screen, stop the process, restore on `SIGCONT`.
+    Suspend,
+}
+
+/// Result of feeding one terminal event to [`TuiAppState::handle_terminal_event`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EventOutcome {
+    pub actions: Vec<AppAction>,
+    /// The screen must be redrawn.
+    pub redraw: bool,
+    /// The terminal must be cleared first (full display reset).
+    pub clear: bool,
 }
 
 /// Root state for the interactive MonoAgens TUI.
@@ -414,6 +435,7 @@ pub struct TuiAppState {
     pub thinking: bool,
     pub thinking_phase: String,
     pub thinking_elapsed_ms: u64,
+    pub turn: TurnState,
     pub last_decision_trace: Option<String>,
     pub daily_tokens_used: u64,
     pub daily_token_budget: u64,
@@ -492,6 +514,7 @@ impl TuiAppState {
             thinking: false,
             thinking_phase: "Reasoning…".to_owned(),
             thinking_elapsed_ms: 0,
+            turn: TurnState::default(),
             last_decision_trace: None,
             daily_tokens_used: 0,
             daily_token_budget: gateway_cfg.model.daily_token_budget.max(1),
@@ -512,6 +535,9 @@ impl TuiAppState {
     /// Returns whether the sidebar is currently visible for `viewport_width`.
     #[must_use]
     pub fn sidebar_visible(&self, viewport_width: u16) -> bool {
+        if viewport_width < crate::render::MIN_SIDEBAR_COLS {
+            return false;
+        }
         match self.prefs.sidebar {
             SidebarMode::Open => true,
             SidebarMode::Closed => false,
@@ -1018,6 +1044,44 @@ impl TuiAppState {
         Vec::new()
     }
 
+    /// Routes one terminal event. Resize and focus-gain only force a redraw (focus-gain also
+    /// clears, since another program may have painted over the screen); no state changes.
+    pub fn handle_terminal_event(
+        &mut self,
+        ev: Event,
+        hit: &HitRegions,
+        viewport: Rect,
+    ) -> EventOutcome {
+        match ev {
+            Event::Key(k) => EventOutcome {
+                actions: self.handle_key_event(k),
+                redraw: true,
+                clear: false,
+            },
+            Event::Mouse(m) => EventOutcome {
+                actions: self.handle_mouse_event(m, hit, viewport),
+                redraw: true,
+                clear: false,
+            },
+            Event::Paste(text) => EventOutcome {
+                actions: self.handle_paste(&text),
+                redraw: true,
+                clear: false,
+            },
+            Event::Resize(..) => EventOutcome {
+                actions: Vec::new(),
+                redraw: true,
+                clear: false,
+            },
+            Event::FocusGained => EventOutcome {
+                actions: Vec::new(),
+                redraw: true,
+                clear: true,
+            },
+            Event::FocusLost => EventOutcome::default(),
+        }
+    }
+
     /// Handles a key event across Wizard, Settings modal, Approval card, or Chat composer.
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Vec<AppAction> {
         let mut actions = Vec::new();
@@ -1031,9 +1095,28 @@ impl TuiAppState {
             return actions;
         }
 
+        // Global Ctrl+Z suspend and Alt+L display reset
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('z') {
+            return vec![AppAction::Suspend];
+        }
+        if key.modifiers.contains(KeyModifiers::ALT)
+            && matches!(key.code, KeyCode::Char('l') | KeyCode::Char('L'))
+        {
+            return vec![AppAction::ResetDisplay];
+        }
+
         // First-run Setup Wizard intercepts input until completed or skipped
         if self.wizard.is_some() {
             return self.handle_wizard_key(key);
+        }
+
+        // Alt+Up pulls the last queued message back into the composer
+        if key.modifiers.contains(KeyModifiers::ALT)
+            && key.code == KeyCode::Up
+            && !self.settings.open
+        {
+            self.unqueue_last();
+            return actions;
         }
 
         // Global Ctrl+B sidebar toggle
@@ -1195,7 +1278,31 @@ impl TuiAppState {
             }
         }
 
-        let active = self.chats.active_chat().clone();
+        if self.is_busy() {
+            let active = self.chats.active_chat();
+            let msg = QueuedMessage {
+                chat_id: active.id.clone(),
+                place_id: active.place_id.clone(),
+                text: display_text,
+                attachments,
+            };
+            self.turn.push_queued(msg);
+            return Vec::new();
+        }
+
+        let active = self.chats.active_chat();
+        let (chat_id, place_id) = (active.id.clone(), active.place_id.clone());
+        vec![self.begin_user_turn(chat_id, place_id, display_text, attachments)]
+    }
+
+    /// Pushes the user bubble, marks the turn busy and returns the action that submits it.
+    fn begin_user_turn(
+        &mut self,
+        chat_id: String,
+        place_id: String,
+        text: String,
+        attachments: Vec<PendingAttachment>,
+    ) -> AppAction {
         let sender = if self.lab_mode && self.lab_session.is_group {
             self.lab_session.current_actor.as_str().to_owned()
         } else {
@@ -1203,10 +1310,10 @@ impl TuiAppState {
         };
         let is_group = self.lab_mode && self.lab_session.is_group;
         self.push_timeline_item(
-            &active.id,
+            &chat_id,
             ChatTimelineItem::UserMessage {
                 sender,
-                text: display_text.clone(),
+                text: text.clone(),
                 timestamp_ms: 0,
                 is_group,
             },
@@ -1214,13 +1321,97 @@ impl TuiAppState {
         self.thinking = true;
         self.thinking_phase = "Reasoning…".to_owned();
         self.thinking_elapsed_ms = 0;
+        self.turn.begin(&chat_id);
 
-        vec![AppAction::SendUserMessage {
-            chat_id: active.id,
-            place_id: active.place_id,
-            text: display_text,
+        AppAction::SendUserMessage {
+            chat_id,
+            place_id,
+            text,
             attachments,
-        }]
+        }
+    }
+
+    /// Ends the busy state (reply, error, silent turn, door block, ...).
+    pub fn finish_busy(&mut self) {
+        self.thinking = false;
+        self.turn.end();
+    }
+
+    /// Records that the owner step of turn `seq` returned; a reply may still follow within the
+    /// grace window.
+    pub fn on_turn_finished(&mut self, seq: u64) {
+        if self.thinking {
+            self.turn.mark_finished(seq);
+        }
+    }
+
+    /// Ends busy because turn `seq` failed; stale turn numbers are ignored. Returns the chat to
+    /// show the error in.
+    pub fn on_turn_error(&mut self, seq: u64) -> Option<String> {
+        if !self.turn.is_current(seq) {
+            return None;
+        }
+        let chat = self.turn.chat_id().map(str::to_owned);
+        self.finish_busy();
+        chat
+    }
+
+    /// Refreshes the elapsed counter and ends a silent turn once the grace window passed.
+    /// Returns `true` when the silent-turn notice was just pushed (caller logs `turn.no_reply`).
+    pub fn tick_turn(&mut self) -> bool {
+        if !self.thinking {
+            return false;
+        }
+        self.thinking_elapsed_ms = self.turn.elapsed_ms();
+        if self.turn.grace_expired() {
+            let chat = self
+                .turn
+                .chat_id()
+                .map_or_else(|| self.chats.active_chat_id.clone(), str::to_owned);
+            self.finish_busy();
+            self.push_timeline_item(
+                &chat,
+                ChatTimelineItem::SystemNotice {
+                    text: NO_REPLY_NOTICE.to_owned(),
+                    is_error: false,
+                },
+            );
+            return true;
+        }
+        false
+    }
+
+    /// When idle, pops the oldest queued message and starts its turn.
+    pub fn next_queued_action(&mut self) -> Option<AppAction> {
+        if self.is_busy() {
+            return None;
+        }
+        let msg = self.turn.pop_front_queued()?;
+        Some(self.begin_user_turn(msg.chat_id, msg.place_id, msg.text, msg.attachments))
+    }
+
+    /// `Alt+Up`: moves the newest queued message back into the composer (ahead of any draft).
+    pub fn unqueue_last(&mut self) {
+        let Some(msg) = self.turn.pop_back_queued() else {
+            return;
+        };
+        let draft = std::mem::take(&mut self.composer.text);
+        self.composer.text = if draft.is_empty() {
+            msg.text
+        } else {
+            format!("{}\n{draft}", msg.text)
+        };
+        self.composer.cursor = self.composer.text.len();
+        // The text already carries the inline tokens, so restore attachments without re-inserting them.
+        self.composer.pending_attachments.extend(msg.attachments);
+        self.composer.next_attachment_id = self
+            .composer
+            .pending_attachments
+            .iter()
+            .map(|a| a.id)
+            .max()
+            .map_or(1, |m| m + 1);
+        self.filter_autocomplete();
     }
 
     /// Executes a local TUI slash command or forwards a Gateway/plugin command.
@@ -2645,6 +2836,11 @@ impl TuiAppState {
             }
             "tui.shimmer" => {
                 self.prefs.shimmer = self.prefs.shimmer.next();
+                self.persist_prefs();
+                return Vec::new();
+            }
+            "tui.icons" => {
+                self.prefs.icons = self.prefs.icons.next();
                 self.persist_prefs();
                 return Vec::new();
             }

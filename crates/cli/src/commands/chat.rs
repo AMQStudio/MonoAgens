@@ -367,6 +367,10 @@ impl Doors for CliInteractiveDoorController {
 }
 
 impl DoorController for CliInteractiveDoorController {
+    fn reload_valve(&mut self, config: &monoagens_gateway::GatewayConfig) -> bool {
+        self.inner.reload_valve(config)
+    }
+
     fn sync_runtime_state(
         &mut self,
         log_seq: LogSeq,

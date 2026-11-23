@@ -847,3 +847,61 @@ args = ["{}", "--body-id", "env-mock", "--log-file", "{}", "--log-env", "TEST_PL
         json!("from-process-env")
     );
 }
+
+#[test]
+fn cli_serve_refuses_a_second_host_on_the_same_data_dir_naming_the_holder_pid() {
+    let tmp = TempDir::new().expect("tempdir");
+    let (cfg_path, _data_dir) = write_serve_config(tmp.path(), "", "");
+
+    let mut first = Command::new(monoagens_bin())
+        .args([
+            "--config",
+            cfg_path.to_str().unwrap(),
+            "serve",
+            "--allow-empty",
+            "--exit-after-ms",
+            "20000",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn first serve");
+    let mut line = String::new();
+    BufReader::new(first.stdout.as_mut().expect("stdout"))
+        .read_line(&mut line)
+        .expect("first serve startup line");
+    assert!(line.contains("monoagens serve running"), "line={line}");
+
+    let second = Command::new(monoagens_bin())
+        .args(["--config", cfg_path.to_str().unwrap(), "serve", "--allow-empty"])
+        .output()
+        .expect("run second serve");
+    assert_eq!(second.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    assert!(
+        stderr.contains(&format!("pid {}", first.id())),
+        "stderr must name the holder pid {}: {stderr}",
+        first.id()
+    );
+    assert!(stderr.contains("Attach"), "stderr must carry a hint: {stderr}");
+
+    // The lock dies with its holder, and a new serve boots normally.
+    first.kill().expect("kill first");
+    first.wait().expect("reap first");
+    let third = Command::new(monoagens_bin())
+        .args([
+            "--config",
+            cfg_path.to_str().unwrap(),
+            "serve",
+            "--allow-empty",
+            "--exit-after-ms",
+            "50",
+        ])
+        .output()
+        .expect("run third serve");
+    assert!(
+        third.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&third.stderr)
+    );
+}

@@ -131,6 +131,13 @@ pub trait DoorController: Doors + Send {
         Vec::new()
     }
 
+    /// Hot-reloads door settings (Valve mode, chain-wake cap, budget, RBAC) from a freshly
+    /// validated `config`; takes effect for the next door evaluation. Returns `true` when a
+    /// Valve was reloaded.
+    fn reload_valve(&mut self, _config: &crate::config::GatewayConfig) -> bool {
+        false
+    }
+
     /// Takes an approved [`Action`] ready for re-evaluation and dispatch after event persistence.
     fn take_approved_action(&mut self, _action_id: &ActionId) -> Option<Action> {
         None
@@ -323,6 +330,21 @@ impl Doors for ValveDoorController {
 }
 
 impl DoorController for ValveDoorController {
+    fn reload_valve(&mut self, config: &crate::config::GatewayConfig) -> bool {
+        use monoagens_valve::ValveMode;
+        let mut next = self.valve.config().clone();
+        next.mode = match config.valve.mode.as_str() {
+            "partial" => ValveMode::Partial,
+            "off" => ValveMode::Off,
+            _ => ValveMode::Enforcing,
+        };
+        next.max_chain_wakes = config.valve.max_chain_wakes;
+        next.daily_token_budget = config.model.daily_token_budget;
+        next.rbac = config.rbac.clone();
+        self.valve.set_config(next);
+        true
+    }
+
     fn sync_runtime_state(
         &mut self,
         log_seq: LogSeq,

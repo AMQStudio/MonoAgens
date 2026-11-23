@@ -30,7 +30,9 @@ use crate::plugins::{
     resolve_plugin_boot_order,
 };
 use crate::prequeue::{PreQueueService, build_embedder_from_config_async};
-use crate::provider::{DailyBudgetTracker, GatewayModelExecutor, build_provider_from_config_async};
+use crate::provider::{
+    DailyBudgetTracker, GatewayModelExecutor, TurnRegistry, build_provider_from_config_async,
+};
 use crate::seams::{DoorController, GatewaySeams};
 use crate::waist2::{BodyRouter, BodyRpcError};
 
@@ -194,6 +196,10 @@ pub(crate) enum ControlCommand {
         from_in_band_body: Option<BodyId>,
         reply: oneshot::Sender<Result<ApprovalResolveResult, Waist2Error>>,
     },
+    ReloadValve {
+        config: Box<GatewayConfig>,
+        reply: oneshot::Sender<bool>,
+    },
     Shutdown {
         reply: oneshot::Sender<()>,
     },
@@ -250,6 +256,7 @@ pub struct GatewayHandle {
     seams: GatewaySeams,
     ownership_stats: OwnershipStats,
     shutdown_grace_ms: u64,
+    turns: TurnRegistry,
 }
 
 impl GatewayHandle {
@@ -520,6 +527,37 @@ impl GatewayHandle {
         self.seams.pre_queue_service.as_ref()
     }
 
+    /// Cancels every in-flight turn model call: each gets `Input::ModelFailure` with reason
+    /// `cancelled_by_owner` submitted (recorded as an event, so replay stays identical) and
+    /// stops being awaited; a late result from the abandoned call is discarded.
+    ///
+    /// Returns the number of cancelled calls (`0` means nothing was in flight and nothing
+    /// was submitted).
+    pub fn cancel_turn(&self) -> usize {
+        self.turns
+            .cancel_reasoning(&self.ingress, &self.diagnostics, self.clock.now())
+            .len()
+    }
+
+    /// Number of model calls currently in flight.
+    #[must_use]
+    pub fn in_flight_model_calls(&self) -> usize {
+        self.turns.in_flight()
+    }
+
+    /// Hot-reloads Valve settings from `config` inside the Core owner task (applies from the
+    /// next door evaluation). Returns `false` when the door controller has no Valve.
+    pub async fn reload_valve(&self, config: &GatewayConfig) -> Result<bool, GatewayError> {
+        let (tx, rx) = oneshot::channel();
+        self.control_tx
+            .send(ControlCommand::ReloadValve {
+                config: Box::new(config.clone()),
+                reply: tx,
+            })
+            .map_err(|_| GatewayError::OwnerExited)?;
+        rx.await.map_err(|_| GatewayError::OwnerExited)
+    }
+
     /// Gracefully shuts down connected bodies and stops the Core owner task.
     pub async fn shutdown(&self) {
         self.router.shutdown_all(self.shutdown_grace_ms).await;
@@ -625,6 +663,7 @@ impl GatewayRuntime {
             Arc::clone(&options.clock),
         );
 
+        let turns = model_exec.turns().clone();
         let seams_for_handle = options.seams.clone();
         let pre_queue_for_owner = options.seams.pre_queue_service.clone();
         let ingress = IngressQueue::new();
@@ -675,6 +714,7 @@ impl GatewayRuntime {
             seams: seams_for_handle,
             ownership_stats,
             shutdown_grace_ms: config.runtime.body_shutdown_grace_ms,
+            turns,
         };
 
         Ok(Self {
@@ -1099,6 +1139,11 @@ fn handle_control_command<S: Store, D: DoorController>(
             let _ = reply.send(res);
             false
         }
+        ControlCommand::ReloadValve { config, reply } => {
+            let applied = ctx.doors.reload_valve(&config);
+            let _ = reply.send(applied);
+            false
+        }
         ControlCommand::Shutdown { reply } => {
             let _ = reply.send(());
             true
@@ -1133,8 +1178,10 @@ fn spawn_effects<S: Store, D: DoorController>(
                 let diagnostics = ctx.diagnostics.clone();
                 let clock = Arc::clone(&ctx.clock);
                 tokio::spawn(async move {
-                    let input = exec.execute_prepared(req).await;
-                    if let Err(err) = ingress.try_submit(input) {
+                    // `None`: the owner cancelled; the cancel path already submitted the failure.
+                    if let Some(input) = exec.execute_prepared_cancellable(req).await
+                        && let Err(err) = ingress.try_submit(input)
+                    {
                         diagnostics.log(
                             clock.now(),
                             LogLevel::Error,

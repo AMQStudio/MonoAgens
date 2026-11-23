@@ -429,6 +429,13 @@ pub fn build_settings_rows(
                 value: SettingValueKind::Cycle(prefs.shimmer.label().to_owned()),
             },
             SettingRow {
+                id: "tui.icons".to_owned(),
+                section: "Theme & Layout",
+                label: "Icons".to_owned(),
+                description: "Chrome icons: Symbols (single-width) or Emoji".to_owned(),
+                value: SettingValueKind::Cycle(prefs.icons.label().to_owned()),
+            },
+            SettingRow {
                 id: "tui.mouse_support".to_owned(),
                 section: "Motion & Shimmer",
                 label: "Mouse Support".to_owned(),

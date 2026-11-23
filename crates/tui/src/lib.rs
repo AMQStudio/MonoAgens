@@ -13,6 +13,8 @@ pub mod settings;
 pub mod state;
 pub mod theme;
 pub mod titler;
+pub mod width;
+pub mod turn;
 
 pub use attachments::{
     FileAttachmentOutcome, MAX_INLINE_DOCUMENT_BYTES, MAX_TUI_PERCEPT_INLINE_BYTES, PasteItem,
@@ -27,7 +29,7 @@ pub use clipboard::{
 };
 pub use config::{
     BuiltinPluginPreset, DynamicTomlDoc, DynamicTomlEntry, DynamicTomlValue, LocalChatEntry,
-    LocalChatStore, MessageLayout, MotionMode, ShimmerMode, SidebarMode, StoredChatMessagePreview,
+    IconMode, LocalChatStore, MessageLayout, MotionMode, ShimmerMode, SidebarMode, StoredChatMessagePreview,
     TuiPreferences,
 };
 pub use effects::TuiEffects;
@@ -39,7 +41,7 @@ pub use settings::{
     SetupWizardState, ValveRuleTogglesState, WizardStep, build_settings_rows,
 };
 pub use state::{
-    AppAction, ChatSelection, ChatTimelineItem, ComposerState, HitRegions, LabSimulationState,
+    AppAction, ChatSelection, ChatTimelineItem, ComposerState, EventOutcome, HitRegions, LabSimulationState,
     PendingApprovalCard, SlashCommandItem, ToastMessage, TuiAppState,
 };
 pub use theme::{ThemePalette, ThemePreset, no_color_active};

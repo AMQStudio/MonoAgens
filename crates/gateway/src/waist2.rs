@@ -449,6 +449,32 @@ impl BodyRouter {
             .collect()
     }
 
+    /// Returns `true` while `body_id` is registered and its stream is alive.
+    #[must_use]
+    pub fn is_body_connected(&self, body_id: &BodyId) -> bool {
+        self.inner
+            .lock()
+            .expect("router lock")
+            .bodies
+            .get(body_id)
+            .is_some_and(BodyConnection::is_alive)
+    }
+
+    /// Sends `body/shutdown` to one body (best effort, bounded by `timeout_ms`) and marks it dead.
+    pub async fn shutdown_body(&self, body_id: &BodyId, reason: &str, timeout_ms: u64) {
+        let conn = self
+            .inner
+            .lock()
+            .expect("router lock")
+            .bodies
+            .get(body_id)
+            .cloned();
+        if let Some(conn) = conn {
+            conn.shutdown(Some(reason.to_owned()), timeout_ms, self.clock.as_ref())
+                .await;
+        }
+    }
+
     /// Returns currently connected [`BodyId`]s.
     #[must_use]
     pub fn connected_bodies(&self) -> Vec<BodyId> {
