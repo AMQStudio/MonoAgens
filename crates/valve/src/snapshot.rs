@@ -61,6 +61,10 @@ pub struct ValveSnapshot {
     pub state_epoch: u64,
     pub owner_actor_id: Option<ActorId>,
     pub known_actors: BTreeSet<ActorId>,
+    /// Unregistered senders seen in the event log (guests); rebuilt by replay, never kept only
+    /// in process memory.
+    #[serde(default)]
+    pub guest_actors: BTreeSet<ActorId>,
     pub capabilities: BTreeMap<CapabilityId, CapabilityDescriptor>,
     pub place_presences: Vec<AttestedPlacePresence>,
     pub physical_presences: Vec<AttestedPhysicalPresence>,
@@ -108,6 +112,7 @@ impl ValveSnapshot {
             state_epoch: 0,
             owner_actor_id: None,
             known_actors: BTreeSet::new(),
+            guest_actors: BTreeSet::new(),
             capabilities: BTreeMap::new(),
             place_presences: Vec::new(),
             physical_presences: Vec::new(),
@@ -152,6 +157,21 @@ impl ValveSnapshot {
     /// Registers an item's [`Audience`] for Absolute Line 2 enforcement.
     pub fn register_item_audience(&mut self, event_id: EventId, audience: Audience) {
         self.item_audiences.insert(event_id, audience);
+    }
+
+    /// Rebuilds `guest_actors` from the event log: every sender of a recorded percept that is
+    /// neither the owner, a registered person, the soul, nor an automated peer.
+    pub fn replay_guests_from_events(&mut self, events: &[EventRecord], soul_actor_id: &ActorId) {
+        for rec in events {
+            if rec.kind == EventKind::Percept
+                && &rec.actor != soul_actor_id
+                && !self.is_owner(&rec.actor)
+                && !self.known_actors.contains(&rec.actor)
+                && !self.automated_actors.contains(&rec.actor)
+            {
+                self.guest_actors.insert(rec.actor.clone());
+            }
+        }
     }
 
     /// Derives `automated_actors` and `consecutive_automated_turns_by_place` purely from

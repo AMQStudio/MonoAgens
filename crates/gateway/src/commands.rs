@@ -79,6 +79,14 @@ impl CommandRegistry {
                 owner_plugin: None,
             },
             CommandSpec {
+                name: "link".to_owned(),
+                summary: "Show how to link this account to a person".to_owned(),
+                usage: Some("/link".to_owned()),
+                permission: "command.link".to_owned(),
+                base_tier: Some(RoleTier::Guest),
+                owner_plugin: None,
+            },
+            CommandSpec {
                 name: "roles".to_owned(),
                 summary: "Inspect configured RBAC roles and caller bindings".to_owned(),
                 usage: Some("/roles".to_owned()),

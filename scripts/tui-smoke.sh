@@ -12,7 +12,9 @@
 # `monoagens serve`, the governance panels (/status, /approvals, /events, /activity, /policy)
 # against the attached daemon, and detach leaving serve running. Conversation checks
 # (`tui-conversation`): live draft bubble from a delayed SSE stream, Esc Esc interrupt and F5 retry,
-# Ctrl+O what-happened block, /why, Ctrl+R history search, /export.
+# Ctrl+O what-happened block, /why, Ctrl+R history search, /export. Guest access
+# (`guest-access-and-people-editor`): a fake adapter's unregistered sender gets a gateway-answered
+# `/whoami` (role guest) and /people registers it as the owner's account via config.apply.
 #
 # Usage: scripts/tui-smoke.sh   (after `cargo build -p monoagens-cli`; the fake plugin is built on
 # demand with `cargo build --example fake_plugin -p monoagens-gateway`)
@@ -433,6 +435,24 @@ echo "ok: Esc goes back one level (selector, search, overlay)"
 quit_tui
 
 # 7. attach to `monoagens serve`, then detach: serve (and its plugin) keep running
+GUEST_PLUGIN="$HOME_DIR/guest-plugin.sh"
+cat > "$GUEST_PLUGIN" <<SH
+#!/bin/sh
+if [ "\$1" = status ]; then exit 2; fi
+exec '$FAKE_PLUGIN' --body-id body-guest --chat-place wa:dm:62811@s.whatsapp.net \
+  --emit-percepts 'wa:user:62811@s.whatsapp.net|/whoami;;wa:user:62811@s.whatsapp.net|halo' \
+  --record-file '$HOME_DIR/guest-replies.txt'
+SH
+chmod +x "$GUEST_PLUGIN"
+cat >> "$HOME_DIR/monoagens.toml" <<TOML
+
+[plugins.guest]
+kind = "adapter"
+enabled = true
+transport = "stdio"
+command = "$GUEST_PLUGIN"
+args = []
+TOML
 SERVE_OUT="$HOME_DIR/serve.out"
 env HOME="$HOME_DIR" XDG_CONFIG_HOME="$HOME_DIR" "$BIN" --config "$HOME_DIR/monoagens.toml" serve \
   >"$SERVE_OUT" 2>"$HOME_DIR/serve.err" &
@@ -460,6 +480,45 @@ wait_for_absent "not final" 40
 echo 0 > "$HOME_DIR/stream_delay"
 echo "ok: attached TUI shows the draft bubble over the socket"
 
+# 7a. guest access: a fake adapter (body-guest) delivers `/whoami` and `halo` from an
+# unregistered WhatsApp-style sender. The gateway answers `/whoami` itself (no model call) and
+# `halo` is refused because a guest lacks agent.converse. A fake adapter is started through the
+# daemon's config, so it must be enabled before serve starts: see GUEST_PLUGIN below.
+# the fake adapter records each reply payload as a JSON byte array: decode to text
+guest_text() {
+  python3 -I - "$HOME_DIR/guest-replies.txt" <<'PY'
+import json, sys
+try:
+    for line in open(sys.argv[1]):
+        v = json.loads(line)
+        print(json.loads(bytes(v).decode())["text"] if isinstance(v, list) else v)
+except FileNotFoundError:
+    pass
+PY
+}
+for _ in $(seq 1 100); do guest_text | grep -q "role: guest" && break; sleep 0.1; done
+guest_text > "$HOME_DIR/guest-decoded.txt"
+grep -q "role: guest" "$HOME_DIR/guest-decoded.txt" || fail "guest /whoami got no gateway reply: $(cat "$HOME_DIR/guest-decoded.txt")"
+grep -q "wa:user:62811@s.whatsapp.net" "$HOME_DIR/guest-decoded.txt" || fail "whoami reply does not name the account"
+grep -q "use the agent: no" "$HOME_DIR/guest-decoded.txt" || fail "whoami reply does not say the guest may not use the agent"
+echo "ok: guest /whoami answered by the gateway (role guest, agent not permitted)"
+
+# 7a2. /people: the recent guest is listed and registered as the owner's account through the
+# editor; config.apply writes [[person]] to the daemon's monoagens.toml.
+tmux send-keys -t "$SESSION" "/people" Enter
+wait_for "Recent senders"
+wait_for "wa:user:62811@s.whatsapp.net"
+tmux send-keys -t "$SESSION" Down Down
+tmux send-keys -t "$SESSION" Enter
+wait_for "register body-guest wa:user:62811@s.whatsapp.net"
+tmux send-keys -t "$SESSION" "per_owner" Enter
+for _ in $(seq 1 100); do grep -q "wa:user:62811@s.whatsapp.net" "$HOME_DIR/monoagens.toml" && break; sleep 0.1; done
+grep -q "wa:user:62811@s.whatsapp.net" "$HOME_DIR/monoagens.toml" || fail "/people did not write the account: $(cat "$HOME_DIR/monoagens.toml")"
+grep -q "owner = true" "$HOME_DIR/monoagens.toml" || fail "owner flag missing in [[person]]"
+echo "ok: /people registered the recent sender as the owner's account"
+tmux send-keys -t "$SESSION" Escape
+wait_for_absent "Recent senders" 5
+
 # 7b. governance panels against the attached daemon: /status (mode serve, the daemon pid and its
 # plugins), /approvals (nothing held), /events (the turns just recorded), /activity (no adapter
 # traffic from the fake plugin), /policy and /people. A held action and an adapter row need
@@ -481,9 +540,9 @@ wait_for "percept"
 echo "ok: /events lists the recorded turns"
 close_overlay "Events  "
 tmux send-keys -t "$SESSION" "/activity" Enter
-wait_for "No adapter activity yet."
-echo "ok: /activity opens read-only (empty)"
-close_overlay "No adapter activity yet."
+wait_for "Adapter activity (read-only)"
+echo "ok: /activity opens read-only"
+close_overlay "Adapter activity (read-only)"
 tmux send-keys -t "$SESSION" "/policy" Enter
 wait_for "Cedar rules"
 wait_for "default_cedar_rule_01"

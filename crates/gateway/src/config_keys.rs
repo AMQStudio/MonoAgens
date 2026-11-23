@@ -50,6 +50,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     "model.usage_paths.cost",
     "valve.mode",
     "valve.max_chain_wakes",
+    "valve.guest_access",
     "embed.backend",
     "embed.model_ver",
     "embed.dim_d",

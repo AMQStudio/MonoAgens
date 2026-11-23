@@ -217,6 +217,7 @@ pub fn run_tui_with_provider(
                         secrets: ProviderSecrets::default(),
                         paths,
                         created_default: false,
+                        migration: None,
                     },
                     Some(e),
                 )
@@ -260,6 +261,7 @@ pub fn run_tui_with_provider(
     if let Some(err) = &config_error {
         state.set_config_error(err.to_string(), config_error_key(err));
     }
+    announce_migration(&mut state, &loaded);
     if options.start_in_lab {
         state.lab_mode = true;
     }
@@ -297,6 +299,22 @@ pub fn run_tui_with_provider(
     drop(terminal);
     drop(guard);
     exit_res
+}
+
+/// Tells the owner, once, that this start migrated the legacy provider files: what changed and
+/// where the backups are. The next start finds nothing left to migrate, so nothing repeats.
+pub(crate) fn announce_migration(state: &mut TuiAppState, loaded: &LoadedGatewayEnv) {
+    let Some(migration) = &loaded.migration else {
+        return;
+    };
+    let chat_id = state.chats.active_chat_id.clone();
+    state.push_timeline_item(
+        &chat_id,
+        ChatTimelineItem::SystemNotice {
+            text: migration.notice(&loaded.paths),
+            is_error: false,
+        },
+    );
 }
 
 /// How much of the display the event loop must repaint after an action.
@@ -789,6 +807,7 @@ async fn handle_app_action(
                         cur_title.as_deref(),
                         &recent,
                         classify_limit,
+                        &cid,
                         &first_message,
                         &mut |m| failures.push(m.to_owned()),
                     );
@@ -1441,6 +1460,9 @@ async fn host_gateway(
         ..ValveSnapshot::default()
     };
     snapshot.known_actors.insert(owner_actor.clone());
+    for person in &loaded.config.persons {
+        snapshot.known_actors.insert(person.actor_id.clone());
+    }
 
     let mut valve =
         tokio::task::spawn_blocking(move || Valve::with_default_policies(valve_cfg, snapshot))
@@ -1566,6 +1588,7 @@ fn build_valve_config(cfg: &GatewayConfig, toggles: &ValveRuleTogglesState) -> V
         max_chain_wakes: cfg.valve.max_chain_wakes,
         daily_token_budget: cfg.model.daily_token_budget,
         rbac: cfg.rbac.clone(),
+        guest_access: cfg.valve.guest_access,
         ..ValveConfig::default()
     }
 }
@@ -1880,6 +1903,60 @@ mod tests {
         .to_string()
     }
 
+    /// A migrated start shows one notice naming the new provider and the backups; a start with
+    /// nothing migrated shows none.
+    #[test]
+    fn migration_notice_is_announced_once() {
+        let dir = target_tmp();
+        let paths = ResolvedPaths {
+            config_path: dir.path().join("monoagens.toml"),
+            secrets_path: dir.path().join("secrets.toml"),
+            data_dir: dir.path().join("data"),
+        };
+        let mut loaded = LoadedGatewayEnv {
+            config: GatewayConfig::default(),
+            secrets: ProviderSecrets::default(),
+            paths: paths.clone(),
+            created_default: false,
+            migration: Some(monoagens_gateway::LegacyMigration {
+                provider: "opencode-go".to_owned(),
+                created_custom: false,
+                key_moved: true,
+            }),
+        };
+        let new_state = |loaded: &LoadedGatewayEnv| {
+            TuiAppState::new(
+                paths.clone(),
+                loaded.config.clone(),
+                TuiPreferences::default(),
+                crate::config::LocalChatStore::default(),
+                SecretsUiSummary::default(),
+                ActorId::new("per_owner"),
+            )
+        };
+        let notices = |state: &TuiAppState| -> Vec<String> {
+            state
+                .timelines
+                .values()
+                .flatten()
+                .filter_map(|i| match i {
+                    ChatTimelineItem::SystemNotice { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut first = new_state(&loaded);
+        announce_migration(&mut first, &loaded);
+        let shown = notices(&first);
+        assert_eq!(shown.len(), 1, "{shown:?}");
+        assert!(shown[0].contains("opencode-go") && shown[0].contains("monoagens.toml.bak"), "{}", shown[0]);
+
+        loaded.migration = None; // the next start: nothing left to migrate
+        let mut second = new_state(&loaded);
+        announce_migration(&mut second, &loaded);
+        assert!(notices(&second).is_empty());
+    }
+
     /// Two real turns through a hosted gateway: each reply's `chat.speak` action maps back to the
     /// turn that submitted it, so a late reply cannot be taken for the next turn's reply.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1902,6 +1979,7 @@ mod tests {
             secrets: ProviderSecrets::default(),
             paths: paths.clone(),
             created_default: false,
+            migration: None,
         };
         let mut provider = ScriptedModelProvider::new();
         provider.set_fallback(ScriptedReply::text(speak_reply("pong")));
@@ -1982,6 +2060,7 @@ mod tests {
             secrets: ProviderSecrets::default(),
             paths,
             created_default: false,
+            migration: None,
         };
         let options = TuiLaunchOptions {
             data_dir: Some(data_dir.clone()),

@@ -25,6 +25,7 @@ pub mod notify;
 pub mod pairing;
 pub mod plugin_detail;
 pub mod palette;
+pub mod people_editor;
 pub mod rbac_editor;
 pub mod render;
 pub mod runtime;

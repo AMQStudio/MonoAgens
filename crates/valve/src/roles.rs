@@ -19,6 +19,8 @@ pub const PHYSICAL_ROOM_RADIUS_M: f64 = 4.0;
 pub struct AttestedRoles {
     pub is_owner: bool,
     pub known_actor: bool,
+    /// Admitted only through guest access: not the owner and not a registered person.
+    pub guest: bool,
     pub room_present: bool,
     pub physically_present: bool,
 }
@@ -52,12 +54,16 @@ pub fn compile_attested_roles(
     config: &ValveConfig,
 ) -> AttestedRoles {
     let is_owner = snapshot.is_owner(actor);
-    let known_actor = is_owner || snapshot.known_actors.contains(actor);
+    let known_actor =
+        is_owner || snapshot.known_actors.contains(actor) || config.guest_access;
+
+    let guest = known_actor && !is_owner && !snapshot.known_actors.contains(actor);
 
     if !config.attested_roles_enabled {
         return AttestedRoles {
             is_owner,
             known_actor,
+            guest,
             room_present: false,
             physically_present: false,
         };
@@ -92,6 +98,7 @@ pub fn compile_attested_roles(
     AttestedRoles {
         is_owner,
         known_actor,
+        guest,
         room_present,
         physically_present,
     }

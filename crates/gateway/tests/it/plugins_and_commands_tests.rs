@@ -357,7 +357,7 @@ sleep 2"#;
 fn command_registry_help_and_execution_filter_by_rbac_without_llm() {
     let mut reg = CommandRegistry::new();
     let builtin_names: Vec<&str> = reg.all_commands().iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(builtin_names, vec!["help", "roles", "whoami"]);
+    assert_eq!(builtin_names, vec!["help", "link", "roles", "whoami"]);
     assert!(reg.get("approve").is_none());
     assert!(reg.get("deny").is_none());
     assert!(reg.get("/approve").is_none());

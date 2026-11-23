@@ -5,8 +5,8 @@ use core::fmt;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 
 use monoagens_core::Input;
 use monoagens_protocol::{
@@ -29,6 +29,7 @@ use tokio::sync::{Notify, mpsc, oneshot};
 
 use crate::clock::{Clock, run_with_clock_timeout};
 use crate::commands::{CommandRegistry, CommandSpec};
+use crate::percept_commands::{self, CommandContext};
 use crate::cues::{CueRecorder, WaitCueGuard, spawn_wait_cue_monitor};
 use crate::logging::{DiagnosticSink, LogLevel};
 use crate::runtime::{ControlCommand, IngressQueue};
@@ -350,6 +351,7 @@ pub struct BodyRouter {
     inner: Arc<Mutex<RouterState>>,
     settlement: ActionSettlementTracker,
     commands: Arc<Mutex<CommandRegistry>>,
+    command_ctx: Arc<RwLock<CommandContext>>,
     ingress: IngressQueue,
     seams: GatewaySeams,
     diagnostics: DiagnosticSink,
@@ -391,6 +393,7 @@ impl BodyRouter {
             inner: Arc::new(Mutex::new(RouterState::default())),
             settlement: ActionSettlementTracker::new(),
             commands: Arc::new(Mutex::new(CommandRegistry::new())),
+            command_ctx: Arc::new(RwLock::new(CommandContext::default())),
             ingress,
             seams,
             diagnostics,
@@ -408,6 +411,76 @@ impl BodyRouter {
     #[must_use]
     pub fn command_registry(&self) -> Arc<Mutex<CommandRegistry>> {
         Arc::clone(&self.commands)
+    }
+
+    /// Replaces the facts adapter slash commands are answered from.
+    pub fn set_command_context(&self, ctx: CommandContext) {
+        *self.command_ctx.write().expect("command ctx lock") = ctx;
+    }
+
+    /// Applies an edited configuration live: `[[person]]` account mappings (identity) and the
+    /// command facts (owner, RBAC, guest access).
+    pub fn apply_config(&self, config: &crate::config::GatewayConfig) {
+        if let Some(identity) = &self.seams.identity {
+            identity.reload_persons(&config.persons);
+        }
+        self.set_command_context(CommandContext::from_config(config));
+    }
+
+    /// Sends `text` to `actor` at `place` through the body owning the place, bypassing the core
+    /// (no model call, no event). Used for gateway-answered slash commands.
+    fn spawn_direct_reply(&self, place: PlaceId, actor: monoagens_protocol::ActorId, text: String) {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let conn = {
+            let st = self.inner.lock().expect("router lock");
+            st.place_to_body
+                .get(&place)
+                .and_then(|bid| st.bodies.get(bid))
+                .cloned()
+        };
+        let Some(conn) = conn else { return };
+        let Some(capability_id) = conn
+            .capabilities()
+            .iter()
+            .find(|c| c.id.as_str() == "chat.speak")
+            .map(|c| c.id.clone())
+        else {
+            return;
+        };
+        let n = NEXT.fetch_add(1, Ordering::SeqCst);
+        let params = ActionExecuteParams {
+            headers: Waist2Headers::new(format!("cmd-{n}")),
+            action_id: ActionId::new(format!("cmd-{n}")),
+            capability_id,
+            places: vec![place],
+            audience: monoagens_protocol::Audience::new([actor]),
+            payload: monoagens_protocol::OpaquePayload::from_bytes(
+                serde_json::json!({ "text": text }).to_string().as_bytes(),
+            ),
+            timeout_ms: Some(self.action_timeout_ms.max(1)),
+            h_act: None,
+        };
+        let clock = Arc::clone(&self.clock);
+        let timeout_ms = self.action_timeout_ms.max(1);
+        let diagnostics = self.diagnostics.clone();
+        tokio::spawn(async move {
+            if let Err(err) = conn
+                .call::<ActionExecuteParams, ActionExecuteResult>(
+                    Waist2Method::ActionExecute,
+                    params,
+                    timeout_ms,
+                    clock.as_ref(),
+                )
+                .await
+            {
+                diagnostics.log(
+                    clock.now(),
+                    LogLevel::Warn,
+                    "gateway.commands",
+                    &format!("slash command reply failed: {err}"),
+                );
+            }
+        });
     }
 
     pub(crate) fn set_control_tx(&self, tx: mpsc::UnboundedSender<ControlCommand>) {
@@ -492,6 +565,17 @@ impl BodyRouter {
             .iter()
             .filter_map(|(place, owner)| (owner == body_id).then_some(place.clone()))
             .collect()
+    }
+
+    /// The body that owns `place`, if one is connected.
+    #[must_use]
+    pub fn body_of_place(&self, place: &PlaceId) -> Option<BodyId> {
+        self.inner
+            .lock()
+            .expect("router lock")
+            .place_to_body
+            .get(place)
+            .cloned()
     }
 
     /// Returns all currently registered [`CapabilityDescriptor`]s across live bodies.
@@ -923,7 +1007,11 @@ impl BodyRouter {
         // Seam 4.3: canonical κ(b, a) identity resolution if wired.
         if let (Some(id_seam), Some(bid)) = (&self.seams.identity, body_id) {
             let raw_actor = percept.actor.clone();
-            let resolved = id_seam.resolve_actor(bid, &raw_actor);
+            // Registered people resolve to their canonical actor; an unregistered sender is a
+            // guest and keeps the account's own actor id (readable, and pickable in /people).
+            let resolved = id_seam
+                .resolve_registered(bid, &raw_actor)
+                .unwrap_or_else(|| raw_actor.clone());
             if resolved != raw_actor {
                 percept.actor = resolved.clone();
                 if let Some(origin) = &percept.origin_actor
@@ -935,6 +1023,29 @@ impl BodyRouter {
                 if percept.audience.members.remove(&raw_actor) {
                     percept.audience.members.insert(resolved);
                 }
+            }
+        }
+
+        // Slash commands from an adapter are answered here, with no model call, for every
+        // admitted sender (guests included) and filtered by their permissions.
+        if body_id.is_some()
+            && let Some(text) = percept_commands::percept_text(&percept)
+            && text.trim_start().starts_with('/')
+        {
+            let capabilities: Vec<CapabilityId> =
+                self.all_capabilities().into_iter().map(|c| c.id).collect();
+            let reply = {
+                let ctx = self.command_ctx.read().expect("command ctx lock");
+                let registry = self.commands.lock().expect("commands lock");
+                percept_commands::answer(&registry, &ctx, &percept, &text, &capabilities)
+            };
+            if let Some(reply) = reply {
+                self.spawn_direct_reply(percept.place.clone(), percept.actor.clone(), reply);
+                return serde_json::to_string(&Waist2Response::ok(
+                    rpc_id,
+                    PerceptEmitResult { accepted: true },
+                ))
+                .ok();
             }
         }
 
@@ -1142,11 +1253,11 @@ impl BodyRouter {
             );
         };
 
-        if let (Some(id_seam), Some(bid)) = (&self.seams.identity, body_id) {
-            let resolved = id_seam.resolve_actor(bid, &parsed.resolver);
-            if resolved != parsed.resolver {
-                parsed.resolver = resolved;
-            }
+        if let (Some(id_seam), Some(bid)) = (&self.seams.identity, body_id)
+            && let Some(resolved) = id_seam.resolve_registered(bid, &parsed.resolver)
+            && resolved != parsed.resolver
+        {
+            parsed.resolver = resolved;
         }
 
         let is_attested_oob = body_id.is_some_and(|bid| {

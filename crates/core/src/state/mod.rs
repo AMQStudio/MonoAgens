@@ -1128,6 +1128,17 @@ impl CoreState {
                     h_act,
                 }) = &record.detail
                 {
+                    // A refusal recorded by the core itself (door or guard) has no `Action`
+                    // event, so the id it used must still be consumed: otherwise the next real
+                    // action is allocated the same id and its receipt is a duplicate.
+                    if !self.in_flight_actions.contains_key(action_id)
+                        && let Some(n) = action_id
+                            .as_str()
+                            .strip_prefix("act-")
+                            .and_then(|n| n.parse::<u64>().ok())
+                    {
+                        self.next_action_seq = self.next_action_seq.max(n.saturating_add(1));
+                    }
                     let receipt = Receipt {
                         action_id: action_id.clone(),
                         capability_id: capability_id.clone(),
@@ -2656,6 +2667,36 @@ mod wave_c_track1_tests {
         );
         core.state_mut().apply_event(&act_rec);
         assert!(core.state().actor_exchanges.contains_key(&ActorId::new("dave")));
+    }
+
+    #[test]
+    fn a_core_refusal_without_an_action_event_consumes_its_action_id() {
+        let mut core = Core::open(MemStore::new(), CoreConfig::default(), None).expect("open");
+        let refused = EventRecord::new_root(
+            EventKind::Receipt,
+            Time::from_millis(1_000),
+            ActorId::new("core"),
+            PlaceId::new("room:a"),
+            Audience::new([ActorId::new("alice"), ActorId::new("soul")]),
+            OriginActor::new(ActorId::new("core")),
+            Taint::Trusted,
+            NumericFeatures::default(),
+            OpaquePayload::default(),
+            Vec::new(),
+            Some(EventDetail::Receipt {
+                action_id: ActionId::new("act-1"),
+                capability_id: CapabilityId::new("chat.speak"),
+                outcome: ReceiptOutcome::Refused,
+                termination_reason: Some(TerminationReason::Normal),
+                progress: None,
+                delivered_units: None,
+                h_act: None,
+            }),
+        );
+        core.state_mut().apply_event(&refused);
+        // The next action must not be allocated `act-1` again: its receipt would be a
+        // duplicate of the refusal above.
+        assert_eq!(core.state().next_action_seq, 2);
     }
 
     #[test]

@@ -37,6 +37,7 @@ pub use jobs::Jobs;
 pub const GOVERNANCE_METHODS: &[&str] = &[
     "approvals.list",
     "people.list",
+    "people.recent",
     "links.initiate",
     "links.verify",
     "links.unlink",
@@ -113,6 +114,50 @@ pub async fn governance_call(
             }
             list["fallback_role"] = json!(cfg.rbac.as_ref().and_then(|r| r.fallback_role.clone()));
             Ok(list)
+        }
+        "people.recent" => {
+            // Senders seen in the event log that are not registered persons: the picker of
+            // the people editor. `body_id` is the adapter that owns the place they wrote in.
+            let cfg = owner.config_snapshot();
+            let events = owner
+                .handle()
+                .read_events()
+                .await
+                .map_err(|e| AdminError::server(e.to_string()))?;
+            let registered: std::collections::BTreeSet<&str> = cfg
+                .persons
+                .iter()
+                .map(|p| p.actor_id.as_str())
+                .chain([owner.owner_actor().as_str(), "soul"])
+                .collect();
+            let mut seen: std::collections::BTreeMap<(String, String), (String, u64, u64)> =
+                std::collections::BTreeMap::new();
+            for ev in events.iter().filter(|e| e.kind == monoagens_core::EventKind::Percept) {
+                let actor = ev.actor.as_str();
+                if registered.contains(actor) {
+                    continue;
+                }
+                let Some(body) = owner.handle().router().body_of_place(&ev.place) else {
+                    continue;
+                };
+                let entry = seen
+                    .entry((body.as_str().to_owned(), actor.to_owned()))
+                    .or_insert_with(|| (ev.place.as_str().to_owned(), 0, 0));
+                entry.0 = ev.place.as_str().to_owned();
+                entry.1 += 1;
+                entry.2 = ev.timestamp_ms.as_millis();
+            }
+            let mut rows: Vec<_> = seen.into_iter().collect();
+            rows.sort_by_key(|(_, (_, _, last))| std::cmp::Reverse(*last));
+            let recent: Vec<Value> = rows
+                .into_iter()
+                .take(20)
+                .map(|((body, account), (place, count, last))| {
+                    json!({ "body_id": body, "account_id": account, "place": place,
+                            "count": count, "last_ms": last })
+                })
+                .collect();
+            Ok(json!({ "recent": recent }))
         }
         "links.initiate" => {
             require_owner(owner, params)?;

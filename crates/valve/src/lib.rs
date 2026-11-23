@@ -45,8 +45,8 @@ pub use quiet_hours::{
     evaluate_recipient_local_time, is_hour_in_quiet_window, next_digest_slot_ms,
 };
 pub use rbac::{
-    ApprovalMode, PlaceAccessRule, RbacConfig, RbacDecision, RoleDefinition, RoleTier,
-    matches_pattern,
+    ApprovalMode, PERMISSION_AGENT_CONVERSE, PlaceAccessRule, RbacConfig, RbacDecision,
+    RoleDefinition, RoleTier, agent_converse_permitted, matches_pattern,
 };
 pub use reason_tags::{
     ValveGuideEntry, ValveReasonTag, build_valve_self_snapshot, valve_guide_entry,

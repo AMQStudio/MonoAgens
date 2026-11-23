@@ -11,6 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use monoagens_protocol::{ActorId, PlaceId};
 use serde::{Deserialize, Serialize};
 
+/// RBAC permission that lets a message wake the agent (`agent.converse`).
+pub const PERMISSION_AGENT_CONVERSE: &str = "agent.converse";
+
 /// Ordered privilege tiers (`Guest < Member < Trusted < Admin < Owner`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -242,6 +245,21 @@ impl RbacConfig {
         place: Option<&PlaceId>,
         capability_or_permission: &str,
     ) -> RbacDecision {
+        self.evaluate_with_default_base(actor, owner, place, capability_or_permission, None)
+    }
+
+    /// Like [`Self::evaluate_with_optional_owner`], but `default_base` is the minimum tier
+    /// required when `[permission_bases]` has no entry for the permission (an explicit entry
+    /// always wins).
+    #[must_use]
+    pub fn evaluate_with_default_base(
+        &self,
+        actor: &ActorId,
+        owner: Option<&ActorId>,
+        place: Option<&PlaceId>,
+        capability_or_permission: &str,
+        default_base: Option<RoleTier>,
+    ) -> RbacDecision {
         let is_owner = owner.is_some_and(|o| o == actor);
 
         // 1. Owner is above every tier unless explicitly assigned an `ApprovalMode::Strict` role.
@@ -257,7 +275,11 @@ impl RbacConfig {
         }
 
         // 2. Owner-only permission bases (`None`) always deny non-owners.
-        let required_base = self.permission_bases.get(capability_or_permission);
+        let required_base: Option<Option<RoleTier>> = self
+            .permission_bases
+            .get(capability_or_permission)
+            .copied()
+            .or(default_base.map(Some));
         if matches!(required_base, Some(None)) {
             return RbacDecision::Deny {
                 reason: format!("permission '{capability_or_permission}' is restricted to owner"),
@@ -324,7 +346,7 @@ impl RbacConfig {
         // 6. Tier-base comparison against `permission_bases`.
         let tier = self.effective_tier_opt(actor, owner);
         if let Some(Some(required_tier)) = required_base
-            && tier < *required_tier
+            && tier < required_tier
         {
             return RbacDecision::Deny {
                 reason: format!(
@@ -413,4 +435,44 @@ pub fn matches_pattern(pattern: &str, target: &str) -> bool {
         return target.starts_with(prefix);
     }
     pattern == target
+}
+
+/// `true` when `actor` may wake the agent (`agent.converse`).
+///
+/// The owner always may. With an RBAC table the permission is resolved like any other; an
+/// unregistered sender (a guest) additionally needs at least tier `member` unless
+/// `[permission_bases]` says otherwise. Without a table only registered senders are served once
+/// guest access is on.
+#[must_use]
+pub fn agent_converse_permitted(
+    rbac: Option<&RbacConfig>,
+    owner: Option<&ActorId>,
+    actor: &ActorId,
+    place: Option<&PlaceId>,
+    registered: bool,
+    guest_access: bool,
+) -> bool {
+    if owner.is_some_and(|o| o == actor) {
+        return true;
+    }
+    match rbac {
+        Some(cfg) => {
+            let default_base = if registered || !guest_access {
+                None
+            } else {
+                Some(RoleTier::Member)
+            };
+            !matches!(
+                cfg.evaluate_with_default_base(
+                    actor,
+                    owner,
+                    place,
+                    PERMISSION_AGENT_CONVERSE,
+                    default_base,
+                ),
+                RbacDecision::Deny { .. }
+            )
+        }
+        None => registered || !guest_access,
+    }
 }

@@ -126,6 +126,12 @@ pub struct ValveConfig {
     pub rbac_enabled: bool,
     #[serde(default)]
     pub rbac: Option<RbacConfig>,
+
+    /// Admits unregistered senders as guests (attested role from the RBAC fallback) instead of
+    /// refusing them as `unknown_audience`. Whether a guest may wake the agent is the RBAC
+    /// permission `agent.converse`.
+    #[serde(default)]
+    pub guest_access: bool,
 }
 
 impl Default for ValveConfig {
@@ -163,6 +169,7 @@ impl Default for ValveConfig {
             digest_hours_local: DIGEST_HOURS_LOCAL,
             rbac_enabled: true,
             rbac: None,
+            guest_access: false,
         }
     }
 }

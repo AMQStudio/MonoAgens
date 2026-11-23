@@ -180,6 +180,7 @@ fn title_request(
     current_title: Option<&str>,
     recent_messages: &[String],
     classify_limit: u32,
+    conversation_key: &str,
 ) -> ModelRequest {
     let context_block = recent_messages
         .iter()
@@ -214,6 +215,9 @@ fn title_request(
     req.max_output_tokens = Some(classify_limit.max(1));
     req.timeout_ms = TITLER_TIMEOUT_MS;
     req.temperature = Some(0.2);
+    // Fills `{conversation_id}` in `[model.extra_headers]` like any other model request (a
+    // provider such as OpenCode refuses a request without its session header).
+    req.conversation_id = Some(monoagens_gateway::conversation_id_for(conversation_key));
     req
 }
 
@@ -228,11 +232,18 @@ pub fn request_chat_title(
     current_title: Option<&str>,
     recent_messages: &[String],
     classify_limit: u32,
+    conversation_key: &str,
 ) -> Result<Option<String>, String> {
     if recent_messages.is_empty() {
         return Ok(None);
     }
-    let req = title_request(model_name, current_title, recent_messages, classify_limit);
+    let req = title_request(
+        model_name,
+        current_title,
+        recent_messages,
+        classify_limit,
+        conversation_key,
+    );
     let res = provider.invoke(&req).map_err(|e| e.to_string())?;
     Ok(match res.output {
         ModelOutput::Verdict(verdict) => clean_generated_title(&verdict.label),
@@ -295,16 +306,25 @@ fn title_case(word: &str) -> String {
 /// A provider failure is reported through `log_failure` (the caller files it under `titler` at
 /// warn level). For the initial title a failure falls back to [`fallback_title`] of
 /// `first_message`; a topic-shift failure leaves the current title alone.
+#[allow(clippy::too_many_arguments)]
 pub fn run_titler(
     provider: &Arc<dyn ModelProvider>,
     model_name: &str,
     current_title: Option<&str>,
     recent_messages: &[String],
     classify_limit: u32,
+    conversation_key: &str,
     first_message: &str,
     log_failure: &mut dyn FnMut(&str),
 ) -> Option<String> {
-    match request_chat_title(provider, model_name, current_title, recent_messages, classify_limit) {
+    match request_chat_title(
+        provider,
+        model_name,
+        current_title,
+        recent_messages,
+        classify_limit,
+        conversation_key,
+    ) {
         Ok(Some(title)) => Some(title),
         Ok(None) if current_title.is_some() => None, // KEEP
         Ok(None) => {
@@ -339,6 +359,7 @@ pub fn generate_chat_title(
         current_title,
         recent_messages,
         monoagens_reason::OutputLimitProfile::default().classify,
+        "titler",
     )
     .ok()
     .flatten()
@@ -365,6 +386,7 @@ mod tests {
             None,
             &["tolong jelaskan cara kerja valve rbac".to_owned()],
             1024,
+            "chat-1",
             "tolong jelaskan cara kerja valve rbac",
             &mut |m| logged.push(m.to_owned()),
         )
@@ -379,7 +401,7 @@ mod tests {
     #[test]
     fn topic_shift_failure_keeps_the_current_title() {
         let mut logged = Vec::new();
-        let title = run_titler(&failing(), "m", Some("Old"), &["x".to_owned()], 1024, "x", &mut |m| {
+        let title = run_titler(&failing(), "m", Some("Old"), &["x".to_owned()], 1024, "chat-1", "x", &mut |m| {
             logged.push(m.to_owned());
         });
         assert_eq!(title, None);
@@ -388,19 +410,93 @@ mod tests {
 
     #[test]
     fn model_title_is_cleaned_and_request_uses_the_classify_limit_and_30s() {
-        let req = title_request("m", None, &["hello world".to_owned()], 777);
+        let req = title_request("m", None, &["hello world".to_owned()], 777, "chat-1");
         assert_eq!(req.max_output_tokens, Some(777));
         assert_eq!(req.timeout_ms, 30_000);
         let ok: Arc<dyn ModelProvider> = Arc::new(ScriptedModelProvider::from_replies([
             ScriptedReply::text(r#"{"label":"\"Valve RBAC Guide\"","score":0.9}"#),
         ]));
-        let got = request_chat_title(&ok, "m", None, &["hello".to_owned()], 1024);
+        let got = request_chat_title(&ok, "m", None, &["hello".to_owned()], 1024, "chat-1");
         // Whatever the verdict shape, a failure to parse is an error, never a silent drop.
         match got {
             Ok(Some(t)) => assert_eq!(t, "Valve RBAC Guide"),
             Ok(None) => panic!("no title"),
             Err(e) => assert!(!e.is_empty()),
         }
+    }
+
+    /// The title request carries `[model.extra_headers]` with `{conversation_id}` filled, like
+    /// any other model request (a provider such as OpenCode answers 400 without it).
+    #[test]
+    fn title_request_sends_the_configured_session_header() {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let (hdr_tx, hdr_rx) = std::sync::mpsc::channel::<String>();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut headers = String::new();
+            let mut len = 0_usize;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).expect("read") == 0 || line == "\r\n" {
+                    break;
+                }
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    len = v.trim().parse().unwrap_or(0);
+                }
+                headers.push_str(&line);
+            }
+            let mut body = vec![0_u8; len];
+            reader.read_exact(&mut body).expect("body");
+            hdr_tx.send(headers).expect("send");
+            let content = serde_json::json!({ "label": "Valve Guide", "score": 0.9, "rationale": null })
+                .to_string();
+            let resp = serde_json::json!({
+                "model": "m",
+                "choices": [{ "index": 0, "finish_reason": "stop",
+                              "message": { "role": "assistant", "content": content } }],
+                "usage": { "prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8 }
+            })
+            .to_string();
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{resp}",
+                    resp.len()
+                )
+                .as_bytes(),
+            );
+        });
+        let text = format!(
+            "version = 1\n[providers.custom.mock]\nbase_url = \"http://{addr}/v1\"\n\
+             [model]\nprovider = \"mock\"\nmodel = \"m\"\n\
+             [model.extra_headers]\nx-opencode-session = \"{{conversation_id}}\"\n"
+        );
+        let cfg = monoagens_gateway::parse_config_str(
+            &text,
+            std::path::Path::new("m.toml"),
+            std::path::Path::new("s.toml"),
+        )
+        .expect("config");
+        let provider = monoagens_gateway::build_provider_from_config(
+            &cfg,
+            &monoagens_reason::ProviderSecrets::default(),
+        )
+        .expect("provider");
+        let title = request_chat_title(&provider, "m", None, &["tell me about valves".to_owned()], 256, "chat-7")
+            .expect("title request");
+        assert_eq!(title.as_deref(), Some("Valve Guide"));
+        let headers = hdr_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("captured headers")
+            .to_ascii_lowercase();
+        server.join().expect("server");
+        let expected = monoagens_gateway::conversation_id_for("chat-7");
+        assert!(
+            headers.contains(&format!("x-opencode-session: {expected}")),
+            "session header missing: {headers}"
+        );
     }
 
     fn old_chat() -> LocalChatEntry {

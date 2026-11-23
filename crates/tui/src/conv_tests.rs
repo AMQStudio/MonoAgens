@@ -585,6 +585,7 @@ async fn host(provider: Arc<dyn ModelProvider>) -> Hosted {
         secrets: ProviderSecrets::default(),
         paths: paths.clone(),
         created_default: false,
+        migration: None,
     };
     let options = TuiLaunchOptions {
         data_dir: Some(paths.data_dir.clone()),

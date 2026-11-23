@@ -15,7 +15,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use monoagens_core::EventRecord;
@@ -527,6 +527,10 @@ impl InProcessClient {
             .connect_ndjson_body(gw_read, gw_write, Some(BodyId::new(TUI_BODY_ID)))
             .await
             .map_err(|e| format!("failed to connect body-tui over Waist 2: {e}"))?;
+        // `connect_ndjson_body` only queues body-tui's `BodyState`; a round trip through the
+        // core owner task (which drains the ingress queue first) proves it is applied before
+        // the first turn can be submitted.
+        let _ = handle.read_events().await;
 
         // Forward plugin state, log entries and cues.
         let mut plugin_rx = parts.owner.supervisor().subscribe();
@@ -742,6 +746,11 @@ impl GatewayClient for InProcessClient {
             if method == "capabilities.list" {
                 return Ok(self.owner.capabilities_list());
             }
+            if method == "config.apply" {
+                let patch = params.get("patch").cloned().unwrap_or(Value::Null);
+                let report = self.owner.config_apply(&patch).await?;
+                return Ok(json!({ "ok": true, "reloaded": report }));
+            }
             monoagens_gateway::governance::governance_call(&self.owner, &method, &params).await
         })
     }
@@ -815,6 +824,8 @@ pub struct SocketClient {
     clock: Arc<SystemClock>,
     local_log: RunLog,
     chat_error: Option<String>,
+    /// Set once body-tui's capabilities are registered with the owner (turns wait for it).
+    body_ready: AtomicBool,
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
@@ -930,6 +941,7 @@ impl SocketClient {
             clock: clock.clone(),
             local_log,
             chat_error: None,
+            body_ready: AtomicBool::new(false),
             tasks: Mutex::new(tasks),
         };
 
@@ -983,6 +995,30 @@ impl SocketClient {
             serve_tui_body(reader, wr, tx.clone(), clock).await;
             let _ = tx.send(RuntimeEvent::OwnerGone);
         }))
+    }
+
+    /// Queues a turn until the owner has body-tui's capabilities registered: `body.attach` is
+    /// answered before the owner has run `body/discover`, so the first turn could otherwise
+    /// reach the core without `chat.speak`.
+    async fn await_chat_body(&self) {
+        if self.chat_error.is_some() || self.body_ready.load(Ordering::SeqCst) {
+            return;
+        }
+        for _ in 0..400 {
+            let registered = self
+                .call("status", json!({}))
+                .await
+                .ok()
+                .and_then(|s| s.get("bodies").and_then(Value::as_array).cloned())
+                .is_some_and(|b| b.iter().any(|v| v.as_str() == Some(TUI_BODY_ID)));
+            if registered {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        // A request answered by the core owner task is processed after the queued `BodyState`.
+        let _ = self.call("events.since", json!({ "from": u64::MAX })).await;
+        self.body_ready.store(true, Ordering::SeqCst);
     }
 
     /// Calls an admin method.
@@ -1105,6 +1141,7 @@ impl GatewayClient for SocketClient {
 
     fn submit_turn(&self, percept: Percept) -> Fut<'_, ClientResult<usize>> {
         Box::pin(async move {
+            self.await_chat_body().await;
             let p = serde_json::to_value(&percept)
                 .map_err(|e| ClientError::server(format!("failed to encode percept: {e}")))?;
             let v = self.call("turn.submit", json!({ "percept": p })).await?;

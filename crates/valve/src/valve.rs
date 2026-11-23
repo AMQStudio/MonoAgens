@@ -26,7 +26,7 @@ use crate::quiet_hours::{
     DigestBatch, DigestItem, DigestQueue, ProactiveCapTracker, ProactiveEvaluation,
     evaluate_proactive_notification,
 };
-use crate::rbac::{RbacConfig, RbacDecision};
+use crate::rbac::{RbacConfig, RbacDecision, agent_converse_permitted};
 use crate::reason_tags::{ValveReasonTag, build_valve_self_snapshot};
 use crate::roles::compile_attested_roles;
 use crate::snapshot::{MemoryWriteRequest, ValveSnapshot};
@@ -35,6 +35,9 @@ use crate::taint::{
     is_cross_audience_action, is_memory_write_taint_blocked,
 };
 use crate::verdict::{ValveAuditLog, ValveDoorKind};
+
+/// Inbound refusal reason recorded when a sender lacks `agent.converse`.
+pub const AGENT_NOT_PERMITTED: &str = "agent_not_permitted";
 
 /// Deterministic Gateway policy engine implementing [`monoagens_core::Doors`] and the
 /// memory-write door.
@@ -301,6 +304,8 @@ impl Valve {
         self.snapshot.state_epoch = self.snapshot.state_epoch.max(replayed_epoch);
         self.digest_queue.replay_from_events(events);
         self.sync_event_audiences(events);
+        self.snapshot
+            .replay_guests_from_events(events, &ActorId::new("soul"));
         self.snapshot.state_epoch
     }
 
@@ -520,6 +525,23 @@ impl Valve {
         final_decision
     }
 
+    /// `true` when the percept's sender may wake the agent (`agent.converse`).
+    fn agent_converse_permitted(&self, percept: &Percept) -> bool {
+        let rbac = if self.config.is_rule_active(ValveRuleToggle::Rbac) {
+            self.config.rbac.as_ref()
+        } else {
+            None
+        };
+        agent_converse_permitted(
+            rbac,
+            self.snapshot.owner_actor_id.as_ref(),
+            &percept.actor,
+            Some(&percept.place),
+            self.snapshot.known_actors.contains(&percept.actor),
+            self.config.guest_access,
+        )
+    }
+
     fn pass1_inbound(
         &mut self,
         percept: &Percept,
@@ -606,6 +628,20 @@ impl Valve {
                     "valve.inbound.cedar".to_owned(),
                 );
             }
+        }
+
+        // Waking the agent is the RBAC permission `agent.converse`. An unregistered sender
+        // (a guest) needs it granted explicitly or through a tier at least `member`; a
+        // registered person keeps today's access unless a role or place rule denies it.
+        if self.config.mode != ValveMode::Off && !self.agent_converse_permitted(percept) {
+            return (
+                DoorDecision::Refuse {
+                    rule: "valve.inbound.rbac".to_owned(),
+                    reason: AGENT_NOT_PERMITTED.to_owned(),
+                },
+                Some(ValveReasonTag::CedarDenied),
+                "valve.inbound.rbac".to_owned(),
+            );
         }
 
         // Propagate monotonic taint from admitted inbound percept across the 3-door boundary.

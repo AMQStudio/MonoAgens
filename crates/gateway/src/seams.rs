@@ -51,6 +51,15 @@ impl std::error::Error for SeamError {}
 pub trait IdentitySeam: Send + Sync {
     /// Resolves `(body_id, account_id)` to a canonical `ActorId` (e.g., `per_...`).
     fn resolve_actor(&self, body_id: &BodyId, account_id: &ActorId) -> ActorId;
+
+    /// Resolves only accounts that belong to a registered person (`[[person]]` or an active
+    /// link). `None` means a guest: the percept keeps the account's own actor id.
+    fn resolve_registered(&self, body_id: &BodyId, account_id: &ActorId) -> Option<ActorId> {
+        Some(self.resolve_actor(body_id, account_id))
+    }
+
+    /// Applies edited `[[person]]` mappings without a restart.
+    fn reload_persons(&self, _persons: &[crate::config::PersonMappingConfig]) {}
 }
 
 /// Seam for task `4.4`: scope-keyed `BLAKE3` attachment custody, `blob/put`/`blob/get`,
@@ -178,6 +187,8 @@ pub struct ValveDoorController {
     pending_events: Vec<EventRecord>,
     approved_actions: BTreeMap<ActionId, Action>,
     denial_receipts: BTreeMap<ActionId, Receipt>,
+    /// `[[person]]` actors last applied to the snapshot, so a removed person stops being known.
+    config_persons: std::collections::BTreeSet<ActorId>,
 }
 
 impl fmt::Debug for ValveDoorController {
@@ -193,11 +204,19 @@ impl ValveDoorController {
     /// Creates a [`ValveDoorController`] around `valve`.
     #[must_use]
     pub fn new(valve: Valve) -> Self {
+        let config_persons = valve
+            .snapshot()
+            .known_actors
+            .iter()
+            .filter(|a| !valve.snapshot().is_owner(a))
+            .cloned()
+            .collect();
         Self {
             valve,
             pending_events: Vec::new(),
             approved_actions: BTreeMap::new(),
             denial_receipts: BTreeMap::new(),
+            config_persons,
         }
     }
 
@@ -341,7 +360,25 @@ impl DoorController for ValveDoorController {
         next.max_chain_wakes = config.valve.max_chain_wakes;
         next.daily_token_budget = config.model.daily_token_budget;
         next.rbac = config.rbac.clone();
+        next.guest_access = config.valve.guest_access;
         self.valve.set_config(next);
+        // `[[person]]` edits take effect on the next message: registered people and the owner
+        // come from the configuration, so guests are everyone else.
+        let snap = self.valve.snapshot_mut();
+        for gone in std::mem::take(&mut self.config_persons) {
+            snap.known_actors.remove(&gone);
+        }
+        for person in &config.persons {
+            snap.known_actors.insert(person.actor_id.clone());
+            self.config_persons.insert(person.actor_id.clone());
+            if person.is_owner {
+                snap.owner_actor_id = Some(person.actor_id.clone());
+                snap.known_actors.insert(person.actor_id.clone());
+            }
+        }
+        if let Some(owner) = snap.owner_actor_id.clone() {
+            snap.known_actors.insert(owner);
+        }
         true
     }
 

@@ -592,6 +592,7 @@ impl GatewayHandle {
     /// Hot-reloads Valve settings from `config` inside the Core owner task (applies from the
     /// next door evaluation). Returns `false` when the door controller has no Valve.
     pub async fn reload_valve(&self, config: &GatewayConfig) -> Result<bool, GatewayError> {
+        self.router.apply_config(config);
         let (tx, rx) = oneshot::channel();
         self.control_tx
             .send(ControlCommand::ReloadValve {
@@ -652,7 +653,7 @@ impl GatewayRuntime {
         let neural_model = load_neural_model_at_edge(&config, &core_config)?;
         options.diagnostics.register_secrets(secrets);
 
-        if options.seams.identity.is_none() && !config.persons.is_empty() {
+        if options.seams.identity.is_none() {
             let log_path = config
                 .data_dir
                 .as_ref()
@@ -724,6 +725,7 @@ impl GatewayRuntime {
 
         let (control_tx, control_rx) = mpsc::unbounded_channel();
         router.set_control_tx(control_tx.clone());
+        router.set_command_context(crate::percept_commands::CommandContext::from_config(&config));
         let (ready_tx, ready_rx) = oneshot::channel();
         let ownership_stats = OwnershipStats::default();
 

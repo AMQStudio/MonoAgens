@@ -265,6 +265,8 @@ impl Default for SoulConfig {
 pub struct ValveSectionConfig {
     pub mode: String,
     pub max_chain_wakes: u32,
+    /// Admit unregistered senders as guests (`[valve] guest_access`, default on).
+    pub guest_access: bool,
 }
 
 impl Default for ValveSectionConfig {
@@ -272,6 +274,7 @@ impl Default for ValveSectionConfig {
         Self {
             mode: "enforcing".to_owned(),
             max_chain_wakes: 8,
+            guest_access: true,
         }
     }
 }
@@ -520,6 +523,9 @@ pub struct LoadedGatewayEnv {
     pub secrets: ProviderSecrets,
     pub paths: ResolvedPaths,
     pub created_default: bool,
+    /// Set only on the start that migrated the legacy provider files (the next start finds
+    /// nothing left to migrate), so a notice built from it is shown once.
+    pub migration: Option<LegacyMigration>,
 }
 
 impl LoadedGatewayEnv {
@@ -813,6 +819,7 @@ pub fn default_config_document(cfg: &GatewayConfig) -> DocumentMut {
     let mut valve = Table::new();
     valve["mode"] = value(cfg.valve.mode.clone());
     valve["max_chain_wakes"] = value(i64::from(cfg.valve.max_chain_wakes));
+    valve["guest_access"] = value(cfg.valve.guest_access);
     doc["valve"] = Item::Table(valve);
 
     doc
@@ -876,9 +883,10 @@ where
 {
     let mut paths = resolve_paths_with(cli_config, &env_lookup)?;
     let mut created_default = false;
+    let mut migration = None;
     let config = if paths.config_path.exists() {
         // The legacy `openai_compatible` endpoint/key is migrated once, with `.bak` files.
-        migrate_legacy_provider_files(&paths.config_path, &paths.secrets_path)?;
+        migration = migrate_legacy_provider_files(&paths.config_path, &paths.secrets_path)?;
         load_config_file(&paths.config_path, &paths.secrets_path)?
     } else {
         let default_cfg = GatewayConfig::default();
@@ -898,7 +906,27 @@ where
         secrets,
         paths,
         created_default,
+        migration,
     })
+}
+
+impl LegacyMigration {
+    /// The one-line notice for the owner: what changed and where the backups are.
+    #[must_use]
+    pub fn notice(&self, paths: &ResolvedPaths) -> String {
+        let bak = |p: &Path| format!("{}.bak", p.display());
+        let mut backups = vec![bak(&paths.config_path)];
+        if paths.secrets_path.exists() {
+            backups.push(bak(&paths.secrets_path));
+        }
+        format!(
+            "Configuration migrated: the removed openai_compatible provider is now {}'{}'{}. Backups: {}.",
+            if self.created_custom { "the custom provider " } else { "provider " },
+            self.provider,
+            if self.key_moved { " (API key moved to secrets.toml)" } else { "" },
+            backups.join(" and ")
+        )
+    }
 }
 
 /// Outcome of [`migrate_legacy_provider_files`].
@@ -1496,6 +1524,9 @@ fn parse_config_document(doc: &DocumentMut) -> Result<GatewayConfig, ConfigError
         if let Some(mcw) = get_opt_i64(valve_tbl, "max_chain_wakes", "valve.max_chain_wakes")? {
             let v = check_u64_range("valve.max_chain_wakes", mcw, 1, 1_000, "1..=1000")?;
             cfg.valve.max_chain_wakes = v as u32;
+        }
+        if let Some(ga) = get_opt_bool(valve_tbl, "guest_access", "valve.guest_access")? {
+            cfg.valve.guest_access = ga;
         }
     }
 

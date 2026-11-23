@@ -18,6 +18,7 @@ pub mod identity;
 pub mod lock;
 pub mod logging;
 pub mod owner;
+pub mod percept_commands;
 pub mod plugins;
 pub mod preview;
 pub mod prequeue;
@@ -41,7 +42,7 @@ pub use commands::{CommandOutcome, CommandRegistry, CommandSpec};
 pub use config::{
     BodyPluginConfig, BodyTransportConfig, CONFIG_FILENAME, CURRENT_CONFIG_VERSION, ConfigError,
     DEFAULT_OPENAI_ENDPOINT, EmbedBackendKind, EmbedConfig, GatewayConfig, IdentityConfig,
-    LoadedGatewayEnv, ModelConfig, ModelPrice, ModelProviderKind, PurposeModelConfig, PersonAccountConfig, PersonMappingConfig,
+    LegacyMigration, LoadedGatewayEnv, ModelConfig, ModelPrice, ModelProviderKind, PurposeModelConfig, PersonAccountConfig, PersonMappingConfig,
     PluginConfig, PluginKind, ResolvedPaths, RuntimeConfig, SECRETS_FILENAME, SoulConfig,
     ValveSectionConfig, default_config_document, extract_cli_config_arg, load_config_file,
     load_or_init_gateway_env, parse_config_str, resolve_paths, resolve_paths_with,
@@ -77,7 +78,7 @@ pub use prequeue::{
     ToolRagQueryResult, build_embedder_from_config, build_embedder_from_config_async,
 };
 pub use provider::{
-    CANCELLED_BY_OWNER, DailyBudgetTracker, GatewayModelExecutor, LiveModel, ModelRoutes,
+    CANCELLED_BY_OWNER, DailyBudgetTracker, conversation_id_for, GatewayModelExecutor, LiveModel, ModelRoutes,
     ProviderInitError, TurnRegistry, UsageCounts, UsageRow, build_model_routes, build_model_routes_async,
     build_provider_from_config, build_provider_from_config_async, purpose_from_name, purpose_name,
 };

@@ -58,6 +58,8 @@ impl Panel {
 pub enum GovTag {
     Approvals,
     People,
+    PeopleRecent,
+    PeopleApply,
     Policy,
     Activity,
     Events,
@@ -184,6 +186,10 @@ pub enum PromptFor {
     ActivitySearch,
     LinkInitiate { primary: Option<(String, String)> },
     LinkVerify,
+    PersonCreate,
+    PersonAddAccount { actor: String },
+    PersonRoles { actor: String },
+    PersonFromRecent { body: String, account: String },
 }
 
 /// A read-only text overlay (explain output, rule source, link instructions, job result).
@@ -287,13 +293,16 @@ impl GovState {
         self.prompt = None;
         match panel {
             Panel::Approvals => self.approvals.confirm = None,
-            Panel::People => self.people.confirm = None,
+            Panel::People => {
+                self.people.confirm = None;
+                self.people.confirm_edit = None;
+            }
             _ => {}
         }
         let now = self.now();
         let reqs = match panel {
             Panel::Approvals => vec![approvals::request()],
-            Panel::People => vec![people::request()],
+            Panel::People => vec![people::request(), people::recent_request()],
             Panel::Policy => vec![policy::request()],
             Panel::Activity => vec![activity::request()],
             Panel::Events => vec![self.events.query_request(now, false)],
@@ -325,7 +334,10 @@ impl GovState {
         if self.tick.is_multiple_of(25) {
             out.push(approvals::request());
             match self.panel {
-                Some(Panel::People) if self.prompt.is_none() => out.push(people::request()),
+                Some(Panel::People) if self.prompt.is_none() => {
+                    out.push(people::request());
+                    out.push(people::recent_request());
+                }
                 Some(Panel::Activity) => out.push(activity::request()),
                 Some(Panel::Status) => out.push(status::request()),
                 _ => {}
@@ -349,6 +361,13 @@ impl GovState {
                 self.pending_count = self.approvals.items.len();
             }
             (GovTag::People, Ok(v)) => self.people.set(&v),
+            (GovTag::PeopleRecent, Ok(v)) => self.people.set_recent(&v),
+            (GovTag::PeopleApply, Ok(_)) => {
+                follow_up.push(AppAction::Gov(people::request()));
+                follow_up.push(AppAction::Gov(people::recent_request()));
+                self.inflight.insert(GovTag::People);
+                self.inflight.insert(GovTag::PeopleRecent);
+            }
             (GovTag::Policy, Ok(v)) => self.policy.set(&v),
             (GovTag::Activity, Ok(v)) => self.activity.set(&v),
             (GovTag::Events | GovTag::EventsMore, Ok(v)) => {
@@ -389,7 +408,7 @@ impl GovState {
             (tag, Err(e)) => {
                 let msg = format!("{}: {e}", tag_label(tag));
                 match tag {
-                    GovTag::Approvals | GovTag::Status | GovTag::Activity | GovTag::People
+                    GovTag::Approvals | GovTag::Status | GovTag::Activity | GovTag::People | GovTag::PeopleRecent
                         if self.panel.is_none() =>
                     {
                         // Background poll while no panel is open: stay quiet.
@@ -519,6 +538,16 @@ impl GovState {
                     Vec::new()
                 }
             },
+            p @ (PromptFor::PersonCreate
+            | PromptFor::PersonAddAccount { .. }
+            | PromptFor::PersonRoles { .. }
+            | PromptFor::PersonFromRecent { .. }) => match self.people.prompt_request(&p, &text) {
+                Ok(r) => vec![AppAction::Gov(r)],
+                Err(e) => {
+                    self.detail = Some(Detail { title: "People".to_owned(), lines: vec![e], offset: 0 });
+                    Vec::new()
+                }
+            },
             PromptFor::LinkVerify => match people::verify_request(&text) {
                 Ok(r) => vec![AppAction::Gov(r)],
                 Err(e) => {
@@ -580,7 +609,7 @@ impl GovState {
 fn tag_label(tag: GovTag) -> &'static str {
     match tag {
         GovTag::Approvals => "approvals",
-        GovTag::People => "people",
+        GovTag::People | GovTag::PeopleRecent | GovTag::PeopleApply => "people",
         GovTag::Policy => "policy",
         GovTag::Activity => "activity",
         GovTag::Events | GovTag::EventsMore => "events",

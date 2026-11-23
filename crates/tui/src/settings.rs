@@ -784,6 +784,7 @@ pub fn build_settings_rows_with(tab: SettingsTab, search_query: &str, ctx: &Rows
             let mut v = vec![
                 row("valve.mode", "Enforcement", "valve.mode", "enforcing | partial | off", sel(&cfg.valve.mode)),
                 row("valve.max_chain_wakes", "Enforcement", "max_chain_wakes", "Circuit-breaker limit for chained wakes", V::Number(cfg.valve.max_chain_wakes.to_string())),
+                row("valve.guest_access", "Enforcement", "guest_access", "Admit unregistered senders as guests; RBAC agent.converse decides whether they may use the agent", V::Bool(cfg.valve.guest_access)),
             ];
             let on = |k: &str| match k {
                 "cedar_abac" => valve_toggles.cedar_abac,

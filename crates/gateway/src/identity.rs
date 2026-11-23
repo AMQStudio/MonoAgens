@@ -385,6 +385,53 @@ impl IdentityResolver {
         Ok(resolver)
     }
 
+    /// Resolves `(body_id, account_id)` only when it belongs to a registered person: a
+    /// `[[person]]` account or a non-revoked link. Everything else is a guest (`None`).
+    #[must_use]
+    pub fn resolve_registered(&self, body_id: &BodyId, account_id: &str) -> Option<ActorId> {
+        let st = self.inner.read().expect("identity lock");
+        let key = (body_id.clone(), account_id.to_owned());
+        st.config_map
+            .get(&key)
+            .cloned()
+            .or_else(|| st.active_links.get(&key).map(|l| l.to_actor.clone()))
+    }
+
+    /// Replaces the static `[[person]]` mapping (and re-reads the link log) so edits made in
+    /// the TUI take effect on the next message.
+    pub fn reload_persons(&self, persons: &[PersonMappingConfig]) {
+        let mut st = self.inner.write().expect("identity lock");
+        st.config_map.clear();
+        st.owner_accounts.clear();
+        st.owner_actors.clear();
+        for person in persons {
+            if person.is_owner {
+                st.owner_actors.insert(person.actor_id.clone());
+            }
+            for acct in &person.accounts {
+                let key = (acct.body_id.clone(), acct.account_id.clone());
+                st.config_map.insert(key.clone(), person.actor_id.clone());
+                if person.is_owner {
+                    st.owner_accounts.insert(key);
+                }
+            }
+        }
+        if let Some(path) = st.log_path.clone()
+            && path.exists()
+            && let Ok(loaded) = read_identity_events_jsonl(&path)
+        {
+            st.active_links.clear();
+            st.challenges.clear();
+            st.events.clear();
+            st.next_challenge_seq = 1;
+            for ev in loaded {
+                if apply_identity_event(&mut st, ev).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+
     /// Returns `false` always (`T_μ = +∞`).
     #[must_use]
     pub const fn heuristic_merge_enabled(&self) -> bool {
@@ -700,6 +747,14 @@ impl IdentityResolver {
 impl IdentitySeam for IdentityResolver {
     fn resolve_actor(&self, body_id: &BodyId, account_id: &ActorId) -> ActorId {
         self.resolve(body_id, account_id.as_str())
+    }
+
+    fn resolve_registered(&self, body_id: &BodyId, account_id: &ActorId) -> Option<ActorId> {
+        IdentityResolver::resolve_registered(self, body_id, account_id.as_str())
+    }
+
+    fn reload_persons(&self, persons: &[PersonMappingConfig]) {
+        IdentityResolver::reload_persons(self, persons);
     }
 }
 

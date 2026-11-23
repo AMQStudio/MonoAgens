@@ -10,15 +10,15 @@ expression: "render_text(100, 30, &state)"
       │──────────────────────────────────────────────────────────────────────────────────────│     │
    * M│   Enforcement         │  valve.mode                   ✦ enforcing                    │     │
    Rea│ ▸ Rule Toggles        │  max_chain_wakes              8                              │     │
-      │                       │  cedar_abac                   ● ON                           │     │
-   » S│                       │  line2_scope                  ● ON                           │     │
+      │                       │  guest_access                 ● ON                           │     │
+   » S│                       │  cedar_abac                   ● ON                           │     │
+      │                       │  line2_scope                  ● ON                           │     │
       │                       │  taint_blocking               ● ON                           │     │
       │                       │  pending_approval             ● ON                           │     │
       │                       │  budget_guard                 ● ON                           │     │
       │                       │❯ chain_brake                  ● ON                           │     │
       │                       │  quiet_hours                  ○ off                          │     │
       │                       │  proactive_cap                ● ON                           │     │
-      │                       │                                                              │     │
       │                       │                                                              │     │
       │                       │                                                              │     │
       │                       │                                                              │     │

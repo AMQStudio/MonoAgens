@@ -722,12 +722,7 @@ impl GatewayModelExecutor {
                     .as_ref()
                     .and_then(|s| s.target_place.as_ref())
             })
-            .map(|p| {
-                format!(
-                    "conv_{}",
-                    &blake3::hash(p.as_str().as_bytes()).to_hex()[..32]
-                )
-            });
+            .map(|p| conversation_id_for(p.as_str()));
         req.temperature = self.temperature;
         // A draft preview is only ever offered for a reasoning call triggered at the TUI's own
         // place while a TUI listens; nothing else is allowed to stream.
@@ -990,4 +985,11 @@ impl GatewayModelExecutor {
     pub fn budget(&self) -> &DailyBudgetTracker {
         &self.budget
     }
+}
+
+/// Stable provider-visible conversation id for `key` (a place, or a TUI chat id): the value
+/// that fills `{conversation_id}` in `[model.extra_headers]` for every model request.
+#[must_use]
+pub fn conversation_id_for(key: &str) -> String {
+    format!("conv_{}", &blake3::hash(key.as_bytes()).to_hex()[..32])
 }

@@ -13,12 +13,18 @@
 //! | `FAKE_BODY_ID`           | `--body-id`        | body id answered in discover (default `fake`)  |
 //! | `FAKE_NEEDS`             | `--needs`          | `status --json` reports these missing items    |
 //! | `FAKE_NEEDS_FILE`        | `--needs-file`     | `status --json` is ready once this file exists |
+//! | `FAKE_CHAT_PLACE`        | `--chat-place`     | also declare `chat.speak` on this place        |
+//! | `FAKE_EMIT_PERCEPTS`     | `--emit-percepts`  | `actor\|text` pairs split by `;;`, emitted    |
+//! |                          |                    | right after `body/discover` (needs chat place) |
+//! | `FAKE_RECORD_FILE`       | `--record-file`    | `action/execute` payloads are appended here    |
 
 use std::io::{BufRead, Write};
 use std::time::Duration;
 
 use monoagens_protocol::{
-    BodyDiscoverResult, BodyId, BodyShutdownResult, CURRENT_PROTOCOL_VERSION, PlaceId,
+    ActorId, Audience, BodyDiscoverResult, BodyId, BodyShutdownResult, CURRENT_PROTOCOL_VERSION,
+    CapabilityDescriptor, CapabilityFlags, CapabilityId, CapabilitySchemaHash, OpaquePayload,
+    Percept, PerceptEmitParams, PlaceId, Time, Waist2Headers, Waist2Method, Waist2Request,
 };
 use serde_json::{Value, json};
 
@@ -74,6 +80,17 @@ fn main() {
     }
     let body_id = setting("FAKE_BODY_ID", "--body-id").unwrap_or_else(|| "fake".to_owned());
 
+    let chat_place = setting("FAKE_CHAT_PLACE", "--chat-place");
+    let record_file = setting("FAKE_RECORD_FILE", "--record-file");
+    let emits: Vec<(String, String)> = setting("FAKE_EMIT_PERCEPTS", "--emit-percepts")
+        .map(|v| {
+            v.split(";;")
+                .filter_map(|p| p.split_once('|'))
+                .map(|(a, t)| (a.to_owned(), t.to_owned()))
+                .collect()
+        })
+        .unwrap_or_default();
+
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout().lock();
     for line in stdin.lock().lines() {
@@ -86,15 +103,48 @@ fn main() {
         };
         let id = req.get("id").cloned().unwrap_or(Value::Null);
         let (result, stop) = match method {
-            "body/discover" => (
-                Some(json!(BodyDiscoverResult {
-                    body_id: BodyId::new(body_id.clone()),
-                    protocol_version: CURRENT_PROTOCOL_VERSION,
-                    capabilities: Vec::new(),
-                    places: vec![PlaceId::new(format!("fake:{body_id}"))],
-                })),
-                false,
-            ),
+            "body/discover" => {
+                let mut places = vec![PlaceId::new(format!("fake:{body_id}"))];
+                let mut capabilities = Vec::new();
+                if let Some(place) = &chat_place {
+                    places.push(PlaceId::new(place.clone()));
+                    capabilities.push(CapabilityDescriptor {
+                        id: CapabilityId::new("chat.speak"),
+                        description: "Speak in the fake chat".to_owned(),
+                        places: vec![PlaceId::new(place.clone())],
+                        flags: CapabilityFlags {
+                            communicative: true,
+                            identity_changing: false,
+                            irreversible: false,
+                        },
+                        typical_latency_ms: 0,
+                        capability_schema_hash: CapabilitySchemaHash::new("fake-chat-speak"),
+                        sensed_effect: None,
+                    });
+                }
+                (
+                    Some(json!(BodyDiscoverResult {
+                        body_id: BodyId::new(body_id.clone()),
+                        protocol_version: CURRENT_PROTOCOL_VERSION,
+                        capabilities,
+                        places,
+                    })),
+                    false,
+                )
+            }
+            "action/execute" => {
+                if let Some(path) = &record_file {
+                    let text = req
+                        .get("params")
+                        .and_then(|p| p.get("payload"))
+                        .map(Value::to_string)
+                        .unwrap_or_default();
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                        let _ = writeln!(f, "{text}");
+                    }
+                }
+                (Some(json!({ "accepted": true, "receipt": null })), false)
+            }
             "body/heartbeat" => (Some(json!({ "ok": true })), false),
             "body/shutdown" => (Some(json!(BodyShutdownResult { accepted: true })), true),
             _ => (None, false),
@@ -109,6 +159,31 @@ fn main() {
         };
         let _ = writeln!(stdout, "{resp}");
         let _ = stdout.flush();
+        if method == "body/discover"
+            && let Some(place) = &chat_place
+        {
+            // Let the gateway finish registering this body before the first message.
+            std::thread::sleep(Duration::from_millis(800));
+            for (n, (actor, text)) in emits.iter().enumerate() {
+                let mut p = Percept::minimal(
+                    ActorId::new(actor.clone()),
+                    PlaceId::new(place.clone()),
+                    Audience::new([ActorId::new(actor.clone()), ActorId::new("soul")]),
+                    Time::from_millis(1),
+                    OpaquePayload::from_bytes(text.as_bytes()),
+                );
+                p.addressees = vec![ActorId::new("soul")];
+                let req = Waist2Request::new(
+                    Some(monoagens_protocol::RpcId::Int(1000 + n as i64)),
+                    Waist2Method::PerceptEmit,
+                    PerceptEmitParams::from_percept(Waist2Headers::new(format!("fake-{n}")), p),
+                );
+                if let Ok(line) = serde_json::to_string(&req) {
+                    let _ = writeln!(stdout, "{line}");
+                }
+            }
+            let _ = stdout.flush();
+        }
         if stop {
             std::process::exit(0);
         }

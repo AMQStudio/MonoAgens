@@ -916,6 +916,7 @@ mod gateway_tests {
             secrets: ProviderSecrets::default(),
             paths: paths.clone(),
             created_default: false,
+            migration: None,
         };
         let options = TuiLaunchOptions {
             data_dir: Some(data_dir),

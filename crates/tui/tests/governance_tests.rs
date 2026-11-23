@@ -559,3 +559,61 @@ fn panels_never_overflow_the_terminal_width() {
     }
     let _ = Panel::Status;
 }
+
+
+// ---- people editor ---------------------------------------------------------------------------
+
+fn applied_patch(acts: &[AppAction]) -> Value {
+    let AppAction::Gov(r) = acts.first().expect("an action") else { panic!("not a gov action") };
+    assert_eq!(r.tag, GovTag::PeopleApply);
+    assert_eq!(r.method, "config.apply");
+    r.params_value()["patch"].clone()
+}
+
+#[test]
+fn owner_adds_a_recent_sender_account_through_config_apply() {
+    let dir = temp_dir();
+    let mut s = make_state(&dir);
+    s.execute_slash_command("/people");
+    respond(&mut s, GovTag::People, json!({ "configured_persons": [], "active_links": [], "fallback_role": null }));
+    respond(&mut s, GovTag::PeopleRecent, json!({ "recent": [
+        { "body_id": "body-whatsapp", "account_id": "wa:user:6285111242960@s.whatsapp.net", "place": "wa:dm:x", "count": 2, "last_ms": 1 }
+    ]}));
+    // The implicit owner row is first: `a` prefills the most recent sender, Enter applies it.
+    ch(&mut s, 'a');
+    let acts = press(&mut s, KeyCode::Enter);
+    let patch = applied_patch(&acts);
+    assert_eq!(patch["person"][0]["actor_id"], json!("per_owner"));
+    assert_eq!(patch["person"][0]["owner"], json!(true));
+    assert_eq!(
+        patch["person"][0]["accounts"][0],
+        json!({ "body_id": "body-whatsapp", "account_id": "wa:user:6285111242960@s.whatsapp.net" })
+    );
+}
+
+#[test]
+fn promoting_a_recent_guest_creates_a_person_with_the_chosen_role() {
+    let dir = temp_dir();
+    let mut s = make_state(&dir);
+    s.execute_slash_command("/people");
+    respond(&mut s, GovTag::People, json!({ "configured_persons": [
+        { "actor_id": "per_owner", "is_owner": true, "accounts": [], "roles": [] }
+    ], "active_links": [], "fallback_role": "guest" }));
+    respond(&mut s, GovTag::PeopleRecent, json!({ "recent": [
+        { "body_id": "body-whatsapp", "account_id": "wa:user:1@s.whatsapp.net", "place": "wa:dm:1", "count": 1, "last_ms": 1 }
+    ]}));
+    ch(&mut s, 'j'); // no-op key; then move to the recent row
+    press(&mut s, KeyCode::Down);
+    press(&mut s, KeyCode::Down); // header row, then the sender
+    press(&mut s, KeyCode::Enter);
+    for c in "per_ibu family".chars() {
+        ch(&mut s, c);
+    }
+    let acts = press(&mut s, KeyCode::Enter);
+    let patch = applied_patch(&acts);
+    let arr = patch["person"].as_array().unwrap();
+    let ibu = arr.iter().find(|p| p["actor_id"] == json!("per_ibu")).expect("new person");
+    assert_eq!(ibu["roles"], json!(["family"]));
+    assert_eq!(ibu["accounts"][0]["account_id"], json!("wa:user:1@s.whatsapp.net"));
+    assert!(ibu.get("owner").is_none());
+}

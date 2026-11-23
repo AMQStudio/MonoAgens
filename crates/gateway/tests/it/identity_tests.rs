@@ -456,8 +456,8 @@ async fn gateway_waist2_percept_emit_resolves_canonical_kappa_actors() {
             .filter(|e| e.kind == monoagens_core::EventKind::Percept)
             .collect();
         if percepts.len() == 2 {
-            let expected_alice =
-                derive_per_actor_id(&BodyId::new("body-matrix"), "@alice:matrix.org");
+            // An unregistered sender is a guest and keeps its own account id.
+            let expected_alice = ActorId::new("@alice:matrix.org");
             assert_eq!(percepts[0].actor, expected_alice);
             assert!(percepts[0].audience.contains(&expected_alice));
             assert_eq!(percepts[1].actor, ActorId::new("per_owner"));

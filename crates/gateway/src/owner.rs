@@ -276,6 +276,7 @@ impl GatewayOwner {
                 "state": p.state,
                 "reason": p.reason,
             })).collect::<Vec<_>>(),
+            "bodies": self.handle.router().connected_bodies().iter().map(|b| b.as_str().to_owned()).collect::<Vec<_>>(),
             "queue_depth": self.handle.ingress().len(),
             "model_calls_in_flight": self.handle.in_flight_model_calls(),
             "budget": self.budget_json(),
@@ -755,6 +756,7 @@ impl GatewayOwner {
         let mut report = ReloadReport::default();
         if old.valve != new_cfg.valve
             || old.rbac != new_cfg.rbac
+            || old.persons != new_cfg.persons
             || old.model.daily_token_budget != new_cfg.model.daily_token_budget
         {
             report.valve = self
