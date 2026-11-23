@@ -367,6 +367,8 @@ struct RouterState {
     bodies: BTreeMap<BodyId, BodyConnection>,
     place_to_body: BTreeMap<PlaceId, BodyId>,
     attested_oob_bodies: BTreeSet<BodyId>,
+    /// Bodies asked to shut down on purpose: their disconnect is logged as a stop, not a crash.
+    stopping: BTreeSet<BodyId>,
     children: Vec<Child>,
 }
 
@@ -462,13 +464,14 @@ impl BodyRouter {
 
     /// Sends `body/shutdown` to one body (best effort, bounded by `timeout_ms`) and marks it dead.
     pub async fn shutdown_body(&self, body_id: &BodyId, reason: &str, timeout_ms: u64) {
-        let conn = self
-            .inner
-            .lock()
-            .expect("router lock")
-            .bodies
-            .get(body_id)
-            .cloned();
+        let conn = {
+            let mut st = self.inner.lock().expect("router lock");
+            let conn = st.bodies.get(body_id).cloned();
+            if conn.is_some() {
+                st.stopping.insert(body_id.clone());
+            }
+            conn
+        };
         if let Some(conn) = conn {
             conn.shutdown(Some(reason.to_owned()), timeout_ms, self.clock.as_ref())
                 .await;
@@ -1235,11 +1238,11 @@ impl BodyRouter {
     /// Removes a crashed/disconnected body from routing, logs the failure for the owner,
     /// settles all its pending actions ONCE as `unknown`, and notifies Core (`BodyStatus::Stopped`).
     pub fn handle_body_disconnect(&self, body_id: &BodyId, reason: &str) {
-        let removed = {
+        let (removed, intentional) = {
             let mut st = self.inner.lock().expect("router lock");
             let conn = st.bodies.remove(body_id);
             st.place_to_body.retain(|_, owner| owner != body_id);
-            conn.is_some()
+            (conn.is_some(), st.stopping.remove(body_id))
         };
 
         if removed {
@@ -1258,12 +1261,15 @@ impl BodyRouter {
             }
 
             let now = self.clock.now();
-            self.diagnostics.log(
-                now,
-                LogLevel::Error,
-                "gateway.body",
-                &format!("body '{body_id}' disconnected/crashed: {reason}"),
-            );
+            if !intentional {
+                // An intentional stop is reported once by the supervisor (info), not here.
+                self.diagnostics.log(
+                    now,
+                    LogLevel::Error,
+                    "gateway.body",
+                    &format!("body '{body_id}' disconnected/crashed: {reason}"),
+                );
+            }
 
             let unknown_receipts = self.settlement.settle_crashed_body(body_id, now, reason);
             for receipt in unknown_receipts {

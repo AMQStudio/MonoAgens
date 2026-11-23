@@ -78,6 +78,7 @@ impl TuiAppState {
                 label: p.label.clone(),
                 keyless: p.keyless,
                 key_set: p.key_set,
+                logged_in: p.logged_in,
                 key_source: p.key_source.clone(),
             })
             .collect()
@@ -461,7 +462,7 @@ impl TuiAppState {
             return self.plugin_field_committed(id, raw);
         }
         if let Some(name) = id.strip_prefix("secrets.") {
-            if raw.is_empty() && name != "model_endpoint" {
+            if raw.is_empty() {
                 self.set_toast("secret value must not be empty", true);
                 return Vec::new();
             }

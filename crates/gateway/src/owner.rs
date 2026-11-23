@@ -253,9 +253,8 @@ impl GatewayOwner {
         &self.runlog
     }
 
-    /// Installs the provider-rebuild hook run by `config.apply` when `[model]` / `[embed]`
-    /// changed. The rebuild itself belongs to `model-provider-catalog`; until a hook is set
-    /// the change is only logged.
+    /// Installs an optional observer run by `config.apply` after `[model]` / `[embed]`
+    /// changed. The live provider rebuild itself always happens in `config.apply`.
     pub fn set_provider_rebuild_hook(&self, hook: ProviderHook) {
         *self.provider_hook.lock().expect("provider hook lock") = Some(hook);
     }
@@ -377,18 +376,40 @@ impl GatewayOwner {
             .flatten()
     }
 
+    /// `true` when `entry` counts as logged in: it has its own key (secrets or env), or it is a
+    /// keyless provider the owner enabled in `/provider`.
+    fn is_logged_in(&self, entry: &CatalogEntry, secrets: &ProviderSecrets) -> bool {
+        secrets.api_key_for(entry, |n| std::env::var(n).ok()).is_some()
+            || (entry.keyless
+                && self
+                    .config
+                    .lock()
+                    .expect("owner config lock")
+                    .enabled_providers
+                    .iter()
+                    .any(|p| p == &entry.id))
+    }
+
     /// `providers.list`: `{current:{provider,model}, providers:[{id,label,keyless,key_set,
-    /// key_source,discovery,default_model,current}]}` from the catalog plus key state. Never
-    /// returns key material.
+    /// key_source,logged_in,custom,base_url,discovery,default_model,current}]}` from the
+    /// catalog, the named custom providers and key state. Never returns key material.
     pub fn providers_list(&self) -> Result<Value, AdminError> {
         let secrets = self.load_secrets()?;
-        let (current, model) = {
+        let (current, model, custom_ids, enabled) = {
             let cfg = self.config.lock().expect("owner config lock");
-            (cfg.model.catalog_provider.clone(), cfg.model.model.clone())
+            (
+                cfg.model.catalog_provider.clone(),
+                cfg.model.model.clone(),
+                cfg.custom_providers.iter().map(|e| e.id.clone()).collect::<Vec<_>>(),
+                cfg.enabled_providers.clone(),
+            )
         };
-        let providers: Vec<Value> = catalog::entries()
-            .iter()
+        let mut all: Vec<&'static CatalogEntry> = catalog::entries().iter().collect();
+        all.extend(custom_ids.iter().filter_map(|id| catalog::find(id)));
+        let providers: Vec<Value> = all
+            .into_iter()
             .map(|e| {
+                let is_custom = custom_ids.contains(&e.id);
                 let from_secrets = secrets.provider_keys.get(&e.id).is_some_and(|k| !k.is_empty());
                 let from_env = e
                     .api_key_env
@@ -398,8 +419,6 @@ impl GatewayOwner {
                     Some("secrets")
                 } else if from_env {
                     Some("env")
-                } else if !e.keyless && secrets.model_api_key.is_some() {
-                    Some("legacy")
                 } else {
                     None
                 };
@@ -409,6 +428,10 @@ impl GatewayOwner {
                     "keyless": e.keyless,
                     "key_set": source.is_some(),
                     "key_source": source,
+                    "logged_in": self.is_logged_in(e, &secrets),
+                    "enabled": enabled.contains(&e.id),
+                    "custom": is_custom,
+                    "base_url": if is_custom { Value::String(e.base_url.clone()) } else { Value::Null },
                     "discovery": e.discovery != catalog::DiscoveryMode::None,
                     "default_model": e.default_model,
                     "current": current.as_deref() == Some(e.id.as_str()),
@@ -438,17 +461,38 @@ impl GatewayOwner {
                 }),
             });
         }
-        let key = self.load_secrets()?.api_key_for(entry, |n| std::env::var(n).ok());
+        let secrets = self.load_secrets()?;
+        // Never ask a provider that is not logged in (no key, or a local provider the owner
+        // has not enabled): no request is made, no key is sent anywhere.
+        if !self.is_logged_in(entry, &secrets) {
+            let cached = discovery::read_cache(&cache_dir, &entry.id);
+            return Ok(json!({
+                "provider": entry.id,
+                "models": cached.as_ref().map_or_else(Vec::new, |l| l.models.clone()),
+                "fetched_at_ms": cached.as_ref().map_or(0, |l| l.fetched_at_ms),
+                "stale": cached.is_some(), "cached": true, "error": "not logged in",
+            }));
+        }
+        let key = secrets.api_key_for(entry, |n| std::env::var(n).ok());
         let base = self.base_override(&entry.id);
         let (list, err) = tokio::task::spawn_blocking(move || {
             discovery::list_models_cached(entry, key.as_ref(), base.as_deref(), &cache_dir)
         })
         .await
         .map_err(|e| AdminError::server(format!("discovery task failed: {e}")))?;
-        let error = err.map(|e| e.to_string());
+        let unreachable_local = entry.keyless && matches!(err, Some(discovery::DiscoveryError::Network(_)));
+        let error = if unreachable_local {
+            Some("not running".to_owned())
+        } else {
+            err.map(|e| e.to_string())
+        };
         if let Some(e) = &error {
-            self.runlog
-                .warn("discovery", &format!("model discovery for '{}' failed: {e}", entry.id));
+            if unreachable_local {
+                self.runlog.info("discovery", &format!("'{}' is not running", entry.id));
+            } else {
+                self.runlog
+                    .warn("discovery", &format!("model discovery for '{}' failed: {e}", entry.id));
+            }
         }
         Ok(json!({
             "provider": entry.id, "models": list.models, "fetched_at_ms": list.fetched_at_ms,
@@ -676,6 +720,24 @@ impl GatewayOwner {
             return Err(AdminError::invalid_params("config.apply patch must be an object"));
         };
         let obj = obj.clone();
+        // Turning a plugin on is refused while it cannot start (not paired, secret missing).
+        for id in enabling_plugins(&obj) {
+            let was_enabled = self
+                .supervisor
+                .info(&id)
+                .is_some_and(|i| i.enabled);
+            if was_enabled {
+                continue;
+            }
+            if let Some(r) = self.supervisor.readiness(&id).await
+                && !r.ready
+            {
+                return Err(AdminError::invalid_params(format!(
+                    "cannot enable '{id}': {}",
+                    r.reason()
+                )));
+            }
+        }
         update_config_with_backup(&self.config_path, &self.secrets_path, |doc| {
             merge_table(doc.as_table_mut(), &obj, "")
         })
@@ -741,10 +803,13 @@ impl GatewayOwner {
             let hook = self.provider_hook.lock().expect("provider hook lock").clone();
             match hook {
                 Some(h) => h(&new_cfg),
-                None => self.runlog.info(
+                // The live model providers were rebuilt above (identically for `serve` and
+                // a TUI-hosted gateway); the hook is only an extra observer.
+                None if old.embed != new_cfg.embed => self.runlog.info(
                     "settings",
-                    "model/embed settings changed; provider rebuild hook not wired yet",
+                    "embedder settings changed; they take effect on the next start",
                 ),
+                None => {}
             }
         }
         self.runlog.info(
@@ -767,8 +832,25 @@ impl GatewayOwner {
 
     /// `plugins.start`.
     pub async fn plugins_start(&self, id: &str) -> Result<(), AdminError> {
-        self.supervisor.start(id).await?;
-        Ok(())
+        let outcome = self.supervisor.start(id).await?;
+        self.refuse_if_needs_setup(id, outcome)
+    }
+
+    /// Turns a `needs_setup` start into an error carrying the reason (`needs pairing`).
+    fn refuse_if_needs_setup(
+        &self,
+        id: &str,
+        outcome: crate::supervisor::FirstOutcome,
+    ) -> Result<(), AdminError> {
+        if outcome != crate::supervisor::FirstOutcome::NeedsSetup {
+            return Ok(());
+        }
+        let reason = self
+            .supervisor
+            .info(id)
+            .and_then(|i| i.reason)
+            .unwrap_or_else(|| "needs setup".to_owned());
+        Err(AdminError::invalid_params(format!("cannot start '{id}': {reason}")))
     }
 
     /// `plugins.stop`.
@@ -779,8 +861,8 @@ impl GatewayOwner {
 
     /// `plugins.restart`.
     pub async fn plugins_restart(&self, id: &str) -> Result<(), AdminError> {
-        self.supervisor.restart(id).await?;
-        Ok(())
+        let outcome = self.supervisor.restart(id).await?;
+        self.refuse_if_needs_setup(id, outcome)
     }
 
     /// `turn.submit`: sends `text` into the inbound door as a trusted percept from the owner
@@ -958,6 +1040,21 @@ pub fn apply_config_patch_to_file(
     update_config_with_backup(config_path, secrets_path, |doc| {
         merge_table(doc.as_table_mut(), obj, "")
     })
+}
+
+/// Ids of plugins a `config.apply` patch turns on (`{"plugins":{"<id>":{"enabled":true}}}`).
+fn enabling_plugins(patch: &Map<String, Value>) -> Vec<String> {
+    patch
+        .get("plugins")
+        .and_then(Value::as_object)
+        .map(|plugins| {
+            plugins
+                .iter()
+                .filter(|(_, v)| v.get("enabled") == Some(&Value::Bool(true)))
+                .map(|(id, _)| id.clone())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn merge_table(

@@ -1003,3 +1003,128 @@ async fn body_attach_turns_the_connection_into_a_body_and_refuses_taken_ids_and_
     server.shutdown();
     booted.rt.shutdown().await;
 }
+
+// ---------------------------------------------------------------- hotfixes: stops and readiness
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn intentional_restart_logs_stopped_once_and_no_crash_error() {
+    let dir = test_dir();
+    let booted = boot_with(NoopDoors, None).await;
+    let log = runlog_for(&booted.handle);
+    let sup = supervisor(
+        &booted.handle,
+        dir.path(),
+        Arc::new(SystemClock::new()),
+        &log,
+        vec![plugin("fake", &[], &[])],
+    );
+    assert_eq!(sup.start("fake").await.unwrap(), FirstOutcome::Running);
+    sup.restart("fake").await.unwrap();
+    assert_eq!(sup.info("fake").unwrap().state, PluginState::Running);
+    sup.stop("fake").await.unwrap();
+
+    let entries = log.snapshot();
+    let stopped = entries
+        .iter()
+        .filter(|e| e.message == "plugin 'fake' stopped")
+        .count();
+    // One stop for the restart and one for the final stop: never two per stop.
+    assert_eq!(stopped, 2, "{entries:?}");
+    let errors: Vec<_> = entries
+        .iter()
+        .filter(|e| format!("{:?}", e.level).to_lowercase().contains("error"))
+        .collect();
+    assert!(errors.is_empty(), "no error entries for intentional stops: {errors:?}");
+    assert!(!entries.iter().any(|e| e.message.contains("disconnected/crashed")));
+    booted.rt.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unready_adapter_is_not_spawned_and_starts_by_itself_once_ready() {
+    let dir = test_dir();
+    let flag = dir.path().join("paired.flag");
+    let booted = boot_with(NoopDoors, None).await;
+    let log = runlog_for(&booted.handle);
+    let sup = supervisor(
+        &booted.handle,
+        dir.path(),
+        Arc::new(SystemClock::new()),
+        &log,
+        vec![plugin(
+            "fake",
+            &[],
+            &["--needs", "pairing", "--needs-file", flag.to_str().unwrap()],
+        )],
+    );
+    assert_eq!(sup.start("fake").await.unwrap(), FirstOutcome::NeedsSetup);
+    let info = sup.info("fake").unwrap();
+    assert_eq!(info.state, PluginState::NeedsSetup);
+    assert_eq!(info.needs, vec!["pairing".to_owned()]);
+    assert_eq!(info.reason.as_deref(), Some("needs pairing"));
+    assert_eq!(info.pid, None, "no process may be spawned");
+
+    // Pairing finishes: the readiness check passes and the gateway starts it by itself.
+    std::fs::write(&flag, "paired").unwrap();
+    for _ in 0..400 {
+        if sup.info("fake").unwrap().state == PluginState::Running {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(sup.info("fake").unwrap().state, PluginState::Running);
+    sup.stop("fake").await.unwrap();
+    booted.rt.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn secret_named_by_arguments_gates_start_without_a_status_command() {
+    let dir = test_dir();
+    let booted = boot_with(NoopDoors, None).await;
+    let log = runlog_for(&booted.handle);
+    // `/bin/true status --json ...` exits 0 without JSON: the argument-named secret decides.
+    let cfg = PluginConfig {
+        id: "tg".to_owned(),
+        enabled: true,
+        kind: PluginKind::Adapter,
+        transport: BodyTransportConfig::Stdio {
+            command: "true".to_owned(),
+            args: vec!["--token-env".to_owned(), "MONO_TEST_NO_SUCH_TOKEN_9".to_owned()],
+        },
+        dependencies: Vec::new(),
+        optional_dependencies: Vec::new(),
+    };
+    let sup = supervisor(&booted.handle, dir.path(), Arc::new(SystemClock::new()), &log, vec![cfg]);
+    assert_eq!(sup.start("tg").await.unwrap(), FirstOutcome::NeedsSetup);
+    let info = sup.info("tg").unwrap();
+    assert_eq!(info.reason.as_deref(), Some("needs MONO_TEST_NO_SUCH_TOKEN_9"));
+    assert_eq!(info.needs, vec!["secret:MONO_TEST_NO_SUCH_TOKEN_9".to_owned()]);
+    sup.stop("tg").await.unwrap();
+    booted.rt.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_and_enable_are_refused_with_the_reason_while_the_adapter_needs_setup() {
+    let dir = test_dir();
+    let mut cfg = plugin("fake", &[], &["--needs", "secret:FAKE_TOKEN"]);
+    cfg.enabled = false;
+    let (booted, owner, sup, _log, _lock) = start_owner(
+        dir.path(),
+        vec![cfg],
+        Some("version = 1\n[plugins.fake]\nenabled = false\ncommand = \"x\"\n"),
+    )
+    .await;
+
+    let err = owner.plugins_start("fake").await.unwrap_err();
+    assert!(err.message.contains("needs FAKE_TOKEN"), "{}", err.message);
+    assert_eq!(sup.info("fake").unwrap().state, PluginState::NeedsSetup);
+    sup.stop("fake").await.unwrap();
+
+    let before = std::fs::read_to_string(dir.path().join("monoagens.toml")).unwrap();
+    let err = owner
+        .config_apply(&json!({ "plugins": { "fake": { "enabled": true } } }))
+        .await
+        .unwrap_err();
+    assert!(err.message.contains("cannot enable 'fake'") && err.message.contains("needs FAKE_TOKEN"), "{}", err.message);
+    assert_eq!(std::fs::read_to_string(dir.path().join("monoagens.toml")).unwrap(), before);
+    booted.rt.shutdown().await;
+}

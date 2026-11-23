@@ -316,15 +316,3 @@ discovery = "models_list"
 default_model = ""
 docs_url = ""
 seed_models = []
-
-[[provider]]
-id = "custom"
-label = "Custom (OpenAI-compatible)"
-dialect = "openai_chat"
-base_url = ""
-api_key_env = []
-keyless = false
-discovery = "models_list"
-default_model = ""
-docs_url = ""
-seed_models = []

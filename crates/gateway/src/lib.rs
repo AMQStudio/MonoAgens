@@ -21,6 +21,7 @@ pub mod owner;
 pub mod plugins;
 pub mod preview;
 pub mod prequeue;
+pub mod readiness;
 pub mod provider;
 pub mod runlog;
 pub mod runtime;
@@ -69,6 +70,7 @@ pub use plugins::{
     PluginBootPlan, PluginEnvContext, PluginStartupReport, SkippedPlugin, build_plugin_env,
     resolve_plugin_boot_order,
 };
+pub use readiness::{Readiness, check_readiness, describe_needs, env_names_from_args};
 pub use preview::{DraftExtractor, PreviewEnd, PreviewEvent, PreviewHub, PreviewSubscription, draft_text_of};
 pub use prequeue::{
     EmbedInitError, PreQueueEnrichReport, PreQueueService, ToolRagHit, ToolRagIndex,

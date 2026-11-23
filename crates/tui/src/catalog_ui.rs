@@ -1,4 +1,4 @@
-//! `/model`, `/login` and `/usage`: shared state, data types and the gateway round trips.
+//! `/model`, `/provider` and `/usage`: shared state, data types and the gateway round trips.
 //!
 //! The reducers stay synchronous like the rest of the TUI: a key press returns
 //! [`AppAction::Catalog`] values, the runtime runs them with [`run_action`] against the
@@ -63,7 +63,7 @@ pub struct ModelChoice {
     pub provider_changed: bool,
 }
 
-/// Requests to the gateway made by the `/model`, `/login` and `/usage` screens.
+/// Requests to the gateway made by the `/model`, `/provider` and `/usage` screens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CatalogAction {
     /// `providers.list`, then every configured provider's cached model list, then a background
@@ -82,6 +82,13 @@ pub enum CatalogAction {
         provider: String,
         key: Secret,
         then: Option<ModelChoice>,
+    },
+    /// Adds a named custom provider (`[providers.custom.<name>]` plus its optional key).
+    AddCustom {
+        name: String,
+        base_url: String,
+        messages_api: bool,
+        key: Secret,
     },
     /// Switches the live model through `config.apply`.
     SelectModel(ModelChoice),
@@ -110,6 +117,10 @@ pub enum CatalogEvent {
         choice: ModelChoice,
         result: Result<(), String>,
     },
+    CustomAdded {
+        name: String,
+        result: Result<(), String>,
+    },
     Usage(Result<Value, String>),
 }
 
@@ -121,6 +132,7 @@ pub enum Screen {
     Picker,
     LoginList,
     KeyEntry,
+    CustomForm,
     Usage,
 }
 
@@ -133,13 +145,20 @@ pub struct ProviderRow {
     pub key_set: bool,
     pub key_source: Option<String>,
     pub discovery: bool,
+    /// Own key set, or a local keyless provider the owner enabled.
+    pub logged_in: bool,
+    /// A named custom provider (`[providers.custom.<name>]`).
+    pub custom: bool,
+    pub base_url: Option<String>,
+    /// A local keyless provider listed in `[providers] enabled`.
+    pub enabled: bool,
 }
 
 impl ProviderRow {
     /// Usable without asking for a key.
     #[must_use]
     pub fn configured(&self) -> bool {
-        self.key_set || self.keyless
+        self.logged_in
     }
 }
 
@@ -175,6 +194,7 @@ pub struct CatalogUi {
     pub current_model: String,
     pub picker: ModelPicker,
     pub login: LoginView,
+    pub custom: crate::login::CustomForm,
     pub usage: UsageView,
     /// Rows available to lists (kept in sync with the terminal size).
     pub view_rows: usize,
@@ -210,13 +230,13 @@ impl CatalogUi {
         self.provider(id).map_or_else(|| id.to_owned(), |p| p.label.clone())
     }
 
-    /// Short key state of `current` for the `/login` menu row.
+    /// Short key state of `current` for the `/provider` menu row.
     #[must_use]
     pub fn login_status(&self, current: Option<&str>) -> Option<String> {
         let row = self.provider(current?)?;
         Some(
-            if row.keyless {
-                "no key needed"
+            if row.keyless && !row.key_set {
+                if row.logged_in { "enabled" } else { "not enabled" }
             } else if row.key_set {
                 "key set"
             } else {
@@ -253,6 +273,7 @@ impl CatalogUi {
             Screen::Picker => self.picker_key(key),
             Screen::LoginList => self.login_list_key(key),
             Screen::KeyEntry => self.key_entry_key(key),
+            Screen::CustomForm => self.custom_form_key(key),
             Screen::Usage => self.usage_key(key),
         }
     }
@@ -261,6 +282,7 @@ impl CatalogUi {
     pub fn handle_paste(&mut self, raw: &str) {
         match self.screen {
             Screen::KeyEntry => self.key_entry_paste(raw),
+            Screen::CustomForm => self.custom_form_paste(raw),
             Screen::Picker => {
                 for c in raw.chars().filter(|c| !c.is_control()) {
                     self.picker.search.push(c);
@@ -325,6 +347,7 @@ impl CatalogUi {
                     }
                 };
             }
+            CatalogEvent::CustomAdded { name, result } => self.on_custom_added(&name, result),
             CatalogEvent::Usage(res) => self.usage.on_loaded(res),
         }
         None
@@ -371,6 +394,12 @@ pub fn parse_providers(v: &Value) -> Vec<ProviderRow> {
                         key_set: p.get("key_set").and_then(Value::as_bool).unwrap_or(false),
                         key_source: p.get("key_source").and_then(Value::as_str).map(str::to_owned),
                         discovery: p.get("discovery").and_then(Value::as_bool).unwrap_or(true),
+                        logged_in: p.get("logged_in").and_then(Value::as_bool).unwrap_or_else(|| {
+                            p.get("key_set").and_then(Value::as_bool).unwrap_or(false)
+                        }),
+                        custom: p.get("custom").and_then(Value::as_bool).unwrap_or(false),
+                        base_url: p.get("base_url").and_then(Value::as_str).map(str::to_owned),
+                        enabled: p.get("enabled").and_then(Value::as_bool).unwrap_or(false),
                     })
                 })
                 .collect()
@@ -431,7 +460,8 @@ async fn save_key(
     then: Option<ModelChoice>,
 ) {
     let result = if key.is_empty() {
-        Ok(())
+        // A keyless local provider is "logged in" once the owner enables it.
+        enable_keyless(client, &provider).await
     } else {
         client
             .secrets_set(provider.clone(), key.to_owned())
@@ -447,6 +477,37 @@ async fn save_key(
     if saved && let Some(choice) = then {
         select_model(client, tx, choice).await;
     }
+}
+
+/// Adds `provider` to `[providers] enabled` (keeping the ones already enabled).
+async fn enable_keyless(client: &Arc<dyn GatewayClient>, provider: &str) -> Result<(), String> {
+    let list = client.providers_list().await.map_err(|e| e.message)?;
+    let mut enabled: Vec<String> = parse_providers(&list)
+        .into_iter()
+        .filter(|r| r.enabled)
+        .map(|r| r.id)
+        .collect();
+    if !enabled.iter().any(|e| e == provider) {
+        enabled.push(provider.to_owned());
+    }
+    client
+        .config_apply(json!({ "providers": { "enabled": enabled } }))
+        .await
+        .map(|_| ())
+        .map_err(|e| e.message)
+}
+
+/// The `config.apply` patch for a named custom provider.
+#[must_use]
+pub fn custom_provider_patch(name: &str, base_url: &str, messages_api: bool, keyless: bool) -> Value {
+    let mut entry = json!({
+        "base_url": base_url,
+        "dialect": if messages_api { "messages_api" } else { "openai_chat" },
+    });
+    if keyless {
+        entry["keyless"] = json!(true);
+    }
+    json!({ "providers": { "custom": { name: entry } } })
 }
 
 /// Runs one request against the gateway and reports back through `tx`.
@@ -529,6 +590,23 @@ pub async fn run_action(
             let k = key.expose().trim().to_owned();
             save_key(&client, &tx, provider, &k, then).await;
         }
+        CatalogAction::AddCustom { name, base_url, messages_api, key } => {
+            let k = key.expose().trim().to_owned();
+            let patch = custom_provider_patch(&name, &base_url, messages_api, k.is_empty());
+            let mut result = client.config_apply(patch).await.map(|_| ()).map_err(|e| e.message);
+            if result.is_ok() && !k.is_empty() {
+                result = client
+                    .secrets_set(name.clone(), k)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.message);
+            }
+            let ok = result.is_ok();
+            send(CatalogEvent::CustomAdded { name, result });
+            if ok && let Ok(v) = client.providers_list().await {
+                send(CatalogEvent::Providers(Ok(v)));
+            }
+        }
         CatalogAction::SelectModel(choice) => select_model(&client, &tx, choice).await,
         CatalogAction::LoadUsage => {
             let res = client.usage_get().await.map_err(|e| e.message);
@@ -574,7 +652,7 @@ pub fn provider_failure_notice(component: &str, detail: &str) -> Option<String> 
     Some(match class.as_str() {
         "rate_limit" => format!("Rate limited by the provider{code}{message}. See /log."),
         "authentication" => {
-            format!("The provider rejected the API key{code}{message}. See /log, or run /login to set a key.")
+            format!("The provider rejected the API key{code}{message}. See /log, or run /provider to set a key.")
         }
         "timeout" => format!("The provider timed out{code}{message}. See /log."),
         other => format!("Model call failed ({other}){code}{message}. See /log."),
@@ -631,6 +709,7 @@ pub fn render_overlay(
         Screen::Picker => crate::model_picker::render(area, buf, ui, palette, icons),
         Screen::LoginList => crate::login::render_list(area, buf, ui, palette, icons),
         Screen::KeyEntry => crate::login::render_key_entry(area, buf, ui, palette, icons),
+        Screen::CustomForm => crate::login::render_custom_form(area, buf, ui, palette, icons),
         Screen::Usage => crate::usage::render(area, buf, ui, palette, icons),
     }
 }
@@ -731,7 +810,7 @@ mod tests {
             "model call failed (authentication, model 'm', latency 5ms): HTTP 401: bad key",
         )
         .unwrap();
-        assert!(a.contains("rejected the API key") && a.contains("/login") && a.contains("bad key"));
+        assert!(a.contains("rejected the API key") && a.contains("/provider") && a.contains("bad key"));
         let t = provider_failure_notice(
             "model",
             "model call timed out after 100ms (model 'm', purpose Reason)",

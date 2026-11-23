@@ -1635,3 +1635,159 @@ async fn live_mock_http_approval_prompt_and_callback_resolve() {
 
     assert!(calls.iter().any(|c| c.path.ends_with("/editMessageText")));
 }
+
+type SeenRequests = Arc<Mutex<Vec<(String, std::time::Instant)>>>;
+
+/// Fake Telegram HTTP server on a std listener: `handler(path)` returns `(status, body)`;
+/// every request path and arrival time is recorded.
+fn fake_telegram(
+    handler: impl Fn(&str, usize) -> Option<(u16, String)> + Send + Sync + 'static,
+) -> (String, SeenRequests) {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen: SeenRequests = Arc::default();
+    let seen_bg = Arc::clone(&seen);
+    let handler = Arc::new(handler);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let seen = Arc::clone(&seen_bg);
+            let handler = Arc::clone(&handler);
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    return;
+                }
+                let path = line.split_whitespace().nth(1).unwrap_or("/").to_owned();
+                let mut len = 0usize;
+                loop {
+                    let mut h = String::new();
+                    reader.read_line(&mut h).unwrap();
+                    let h = h.trim_end().to_owned();
+                    if h.is_empty() {
+                        break;
+                    }
+                    if let Some((k, v)) = h.split_once(':')
+                        && k.eq_ignore_ascii_case("content-length")
+                    {
+                        len = v.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0u8; len];
+                let _ = reader.read_exact(&mut body);
+                let n = {
+                    let mut s = seen.lock().unwrap();
+                    s.push((path.clone(), std::time::Instant::now()));
+                    s.len()
+                };
+                match handler(&path, n) {
+                    Some((status, body)) => {
+                        let resp = format!(
+                            "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = stream.write_all(resp.as_bytes());
+                    }
+                    None => std::thread::sleep(std::time::Duration::from_secs(30)),
+                }
+            });
+        }
+    });
+    (format!("http://{addr}"), seen)
+}
+
+#[test]
+fn rate_limited_calls_carry_retry_after_and_set_the_poll_backoff() {
+    let body = r#"{"ok":false,"error_code":429,"description":"Too Many Requests: retry after 14","parameters":{"retry_after":14}}"#;
+    let (base, _seen) = fake_telegram(move |_, _| Some((429, body.to_owned())));
+    let mut t = LiveTelegramTransport::new(base, "123:abc").unwrap();
+    let err = t.get_updates(None, 0).unwrap_err();
+    assert_eq!(body_telegram::retry_after_secs(&err), Some(14), "{err}");
+    assert_eq!(body_telegram::poll_error_backoff(&err), std::time::Duration::from_secs(14));
+    let err = t.get_me().unwrap_err();
+    assert_eq!(body_telegram::retry_after_secs(&err), Some(14), "{err}");
+    assert!(!err.contains("123:abc"), "token redacted: {err}");
+    // Errors without retry_after keep the short pause.
+    assert_eq!(
+        body_telegram::poll_error_backoff("telegram getUpdates request error: timeout"),
+        std::time::Duration::from_secs(2)
+    );
+}
+
+#[test]
+fn handshake_is_answered_while_getme_never_returns() {
+    use std::io::{BufRead, BufReader, Write as _};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    // The fake Telegram accepts every request and never answers (like a stuck network).
+    let (base, seen) = fake_telegram(|_, _| None);
+    let temp = tempfile::tempdir().unwrap();
+    let state_dir = temp.path().join("state");
+    let discover = serde_json::to_string(&Waist2Request::new(
+        Some(monoagens_body_sdk::RpcId::Int(1)),
+        Waist2Method::BodyDiscover,
+        BodyDiscoverParams {
+            headers: Waist2Headers::new("d-hs"),
+            body_id: None,
+        },
+    ))
+    .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_body-telegram"))
+        .args(["--api-base", &base, "--token-env", "TG_TEST_TOKEN"])
+        .env("TG_TEST_TOKEN", "123:abc")
+        .env("MONOAGENS_PLUGIN_CONFIG", temp.path().join("tg.toml"))
+        .env("MONOAGENS_PLUGIN_STATE_DIR", &state_dir)
+        .env_remove("MONOAGENS_BODY_STATE_DIR")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let started = Instant::now();
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "{discover}").unwrap();
+    stdin.flush().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let stdout = child.stdout.take().unwrap();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = BufReader::new(stdout).read_line(&mut line);
+        let _ = tx.send(line);
+    });
+    let line = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("body.discover answered within 10 s despite a stuck getMe");
+    assert!(line.contains("capabilities"), "{line}");
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "handshake took {:?}",
+        started.elapsed()
+    );
+    assert!(seen.lock().unwrap().iter().any(|(p, _)| p.ends_with("/getMe")));
+    drop(stdin);
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn status_json_reports_the_missing_token_secret() {
+    use std::process::Command;
+    let out = Command::new(env!("CARGO_BIN_EXE_body-telegram"))
+        .args(["status", "--json", "--token-env", "TG_STATUS_NO_SUCH_TOKEN"])
+        .env_remove("TG_STATUS_NO_SUCH_TOKEN")
+        .output()
+        .unwrap();
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["ready"], json!(false));
+    assert_eq!(v["needs"], json!(["secret:TG_STATUS_NO_SUCH_TOKEN"]));
+    let out = Command::new(env!("CARGO_BIN_EXE_body-telegram"))
+        .args(["status", "--json", "--token-env", "TG_STATUS_TOKEN"])
+        .env("TG_STATUS_TOKEN", "x")
+        .output()
+        .unwrap();
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["ready"], json!(true));
+}

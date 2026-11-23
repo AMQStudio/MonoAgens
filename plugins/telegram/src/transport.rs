@@ -562,6 +562,24 @@ impl TelegramTransport for RecordingTelegramTransport {
     }
 }
 
+/// Seconds Telegram asked us to wait, read from a transport error produced for a 429
+/// response (`... [retry_after=14]`).
+#[must_use]
+pub fn retry_after_secs(err: &str) -> Option<u64> {
+    let rest = err.split("[retry_after=").nth(1)?;
+    rest.split(']').next()?.trim().parse().ok()
+}
+
+/// How long the poller waits after a failed Bot API call: at least the `retry_after`
+/// Telegram returned, else a short fixed pause.
+#[must_use]
+pub fn poll_error_backoff(err: &str) -> Duration {
+    match retry_after_secs(err) {
+        Some(secs) => Duration::from_secs(secs.max(1)),
+        None => Duration::from_secs(2),
+    }
+}
+
 /// Live Telegram Bot API HTTP transport powered by `reqwest::blocking::Client`.
 #[derive(Clone)]
 pub struct LiveTelegramTransport {
@@ -644,7 +662,12 @@ impl LiveTelegramTransport {
             let desc = parsed
                 .description
                 .unwrap_or_else(|| "unknown error".to_owned());
-            return Err(format!("telegram {method} error ({code}): {desc}"));
+            let retry = parsed
+                .parameters
+                .and_then(|p| p.retry_after)
+                .map(|n| format!(" [retry_after={n}]"))
+                .unwrap_or_default();
+            return Err(format!("telegram {method} error ({code}): {desc}{retry}"));
         }
         parsed
             .result

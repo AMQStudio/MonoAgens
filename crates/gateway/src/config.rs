@@ -18,7 +18,9 @@ use serde::{Deserialize, Serialize};
 use toml_edit::{DocumentMut, Item, Table, TableLike, Value as TomlValue, value};
 
 use crate::cues::{DEFAULT_PROGRESS_NOTE_MS, DEFAULT_WORKING_CUE_MS};
-use crate::secrets::{SecretsLoadError, load_provider_secrets, validate_no_inline_secrets_in_toml};
+use crate::secrets::{
+    SecretsLoadError, load_provider_secrets, load_secrets_toml_file, validate_no_inline_secrets_in_toml,
+};
 
 /// Current supported `monoagens.toml` schema version.
 pub const CURRENT_CONFIG_VERSION: u32 = 1;
@@ -399,6 +401,11 @@ pub struct GatewayConfig {
     pub bodies: Vec<BodyPluginConfig>,
     pub plugins: Vec<PluginConfig>,
     pub rbac: Option<RbacConfig>,
+    /// Named custom providers from `[providers.custom.<name>]` (also registered with the
+    /// process-wide catalog lookup).
+    pub custom_providers: Vec<monoagens_reason::model::catalog::CatalogEntry>,
+    /// `[providers] enabled = [..]`: local keyless providers the owner turned on in `/provider`.
+    pub enabled_providers: Vec<String>,
 }
 
 impl Default for GatewayConfig {
@@ -417,6 +424,8 @@ impl Default for GatewayConfig {
             bodies: Vec::new(),
             plugins: Vec::new(),
             rbac: None,
+            custom_providers: Vec::new(),
+            enabled_providers: Vec::new(),
         }
     }
 }
@@ -517,16 +526,13 @@ impl LoadedGatewayEnv {
     /// `true` when the configured HTTP provider has what it needs to start: a catalog entry with
     /// a key (or keyless / base URL given), or the legacy API key / endpoint from secrets.
     fn model_credentials_present(&self) -> bool {
-        let legacy = self.secrets.model_api_key.is_some() || self.secrets.model_endpoint.is_some();
         let Some(id) = self.config.model.catalog_provider.as_deref() else {
-            return legacy;
+            return false;
         };
         let Some(entry) = monoagens_reason::model::catalog::find(id) else {
             return false;
         };
         entry.keyless
-            || (entry.id == monoagens_reason::model::catalog::CUSTOM_PROVIDER_ID
-                && self.config.model.provider_base_url.is_some())
             || self
                 .secrets
                 .api_key_for(entry, |n| std::env::var(n).ok())
@@ -871,6 +877,8 @@ where
     let mut paths = resolve_paths_with(cli_config, &env_lookup)?;
     let mut created_default = false;
     let config = if paths.config_path.exists() {
+        // The legacy `openai_compatible` endpoint/key is migrated once, with `.bak` files.
+        migrate_legacy_provider_files(&paths.config_path, &paths.secrets_path)?;
         load_config_file(&paths.config_path, &paths.secrets_path)?
     } else {
         let default_cfg = GatewayConfig::default();
@@ -891,6 +899,176 @@ where
         paths,
         created_default,
     })
+}
+
+/// Outcome of [`migrate_legacy_provider_files`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyMigration {
+    /// Catalog id or named custom provider the legacy endpoint became.
+    pub provider: String,
+    /// `true` when a new `[providers.custom.<name>]` was created (the owner may rename it).
+    pub created_custom: bool,
+    /// Whether an API key was moved to `[providers.<id>] api_key`.
+    pub key_moved: bool,
+}
+
+fn backup_file(path: &Path) -> Result<(), ConfigError> {
+    let mut bak = path.as_os_str().to_owned();
+    bak.push(".bak");
+    let bak = PathBuf::from(bak);
+    if !bak.exists() {
+        std::fs::copy(path, &bak).map_err(|e| ConfigError::Io {
+            path: bak.display().to_string(),
+            detail: e.to_string(),
+        })?;
+    }
+    Ok(())
+}
+
+/// One-time migration of the removed `openai_compatible` provider plus `model_endpoint` /
+/// `model_api_key` secrets to a catalog provider (matched by base URL) or a named custom
+/// provider. Writes `monoagens.toml.bak` and `secrets.toml.bak` first. Does nothing (and
+/// returns `None`) when no legacy configuration is present or a file is not TOML.
+pub fn migrate_legacy_provider_files(
+    config_path: &Path,
+    secrets_path: &Path,
+) -> Result<Option<LegacyMigration>, ConfigError> {
+    use monoagens_reason::model::catalog;
+    let io = |p: &Path, e: std::io::Error| ConfigError::Io {
+        path: p.display().to_string(),
+        detail: e.to_string(),
+    };
+    let raw_cfg = std::fs::read_to_string(config_path).map_err(|e| io(config_path, e))?;
+    let Ok(mut cfg_doc) = raw_cfg.parse::<DocumentMut>() else {
+        return Ok(None);
+    };
+    let provider = cfg_doc
+        .get("model")
+        .and_then(|m| m.get("provider"))
+        .and_then(|p| p.as_str())
+        .map(|p| p.trim().to_owned());
+    if !matches!(provider.as_deref(), Some("openai_compatible" | "openai")) {
+        return Ok(None);
+    }
+    let raw_sec = if secrets_path.exists() {
+        std::fs::read_to_string(secrets_path).map_err(|e| io(secrets_path, e))?
+    } else {
+        String::new()
+    };
+    let Ok(mut sec_doc) = raw_sec.parse::<DocumentMut>() else {
+        return Ok(None);
+    };
+    // Values come from the same flattening the runtime used (top-level keys, `[model]`,
+    // `[openai]`, bare `api_key` / `endpoint`), file contents only.
+    let legacy = if secrets_path.exists() {
+        load_secrets_toml_file(secrets_path)
+            .map_err(|e| ConfigError::Io {
+                path: secrets_path.display().to_string(),
+                detail: e.to_string(),
+            })?
+    } else {
+        ProviderSecrets::default()
+    };
+    let endpoint = legacy
+        .model_endpoint
+        .clone()
+        .map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| DEFAULT_OPENAI_ENDPOINT.to_owned());
+    let key = legacy
+        .model_api_key
+        .as_ref()
+        .map(|k| k.expose().trim().to_owned())
+        .filter(|v| !v.is_empty());
+
+    backup_file(config_path)?;
+    if secrets_path.exists() {
+        backup_file(secrets_path)?;
+    }
+
+    let (id, created_custom) = if let Some(entry) = catalog::find_by_endpoint(&endpoint) {
+        (entry.id.clone(), false)
+    } else {
+        let name = catalog::custom_name_from_url(&endpoint);
+        let base = endpoint
+            .trim()
+            .trim_end_matches('/')
+            .trim_end_matches("/chat/completions")
+            .trim_end_matches('/')
+            .to_owned();
+        let root = cfg_doc.as_table_mut();
+        let providers = root
+            .entry("providers")
+            .or_insert_with(|| Item::Table(Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| ConfigError::InvalidType { key: "providers".to_owned(), expected: "table" })?;
+        providers.set_implicit(true);
+        let custom = providers
+            .entry("custom")
+            .or_insert_with(|| Item::Table(Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| ConfigError::InvalidType { key: "providers.custom".to_owned(), expected: "table" })?;
+        custom.set_implicit(true);
+        let mut t = Table::new();
+        t["base_url"] = value(base);
+        t["dialect"] = value("openai_chat");
+        if key.is_none() {
+            t["keyless"] = value(true);
+        }
+        custom.insert(&name, Item::Table(t));
+        (name, true)
+    };
+    cfg_doc["model"]["provider"] = value(id.clone());
+    std::fs::write(config_path, cfg_doc.to_string()).map_err(|e| io(config_path, e))?;
+
+    for k in [
+        "model_endpoint",
+        "model_api_key",
+        "api_key",
+        "endpoint",
+        "openai_api_key",
+        "openai_base_url",
+        "MONOAGENS_MODEL_API_KEY",
+        "MONOAGENS_MODEL_ENDPOINT",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+    ] {
+        sec_doc.remove(k);
+    }
+    for (table, keys) in [
+        ("model", &["api_key", "endpoint", "endpoint_url"][..]),
+        ("openai", &["api_key", "base_url"][..]),
+    ] {
+        let empty = if let Some(t) = sec_doc.get_mut(table).and_then(Item::as_table_like_mut) {
+            for k in keys {
+                t.remove(k);
+            }
+            t.is_empty()
+        } else {
+            false
+        };
+        if empty {
+            sec_doc.remove(table);
+        }
+    }
+    let key_moved = key.is_some();
+    if let Some(k) = key {
+        let root = sec_doc.as_table_mut();
+        let providers = root
+            .entry("providers")
+            .or_insert_with(|| Item::Table(Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| ConfigError::InvalidType { key: "providers".to_owned(), expected: "table" })?;
+        providers.set_implicit(true);
+        let prov = providers
+            .entry(&id)
+            .or_insert_with(|| Item::Table(Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| ConfigError::InvalidType { key: "providers.<id>".to_owned(), expected: "table" })?;
+        prov["api_key"] = value(k);
+    }
+    std::fs::write(secrets_path, sec_doc.to_string()).map_err(|e| io(secrets_path, e))?;
+    Ok(Some(LegacyMigration { provider: id, created_custom, key_moved }))
 }
 
 /// Loads and strictly validates an existing `monoagens.toml` file.
@@ -1032,6 +1210,56 @@ fn parse_config_document(doc: &DocumentMut) -> Result<GatewayConfig, ConfigError
             value: cfg.runtime.progress_note_ms.to_string(),
             range: ">= runtime.working_cue_ms",
         });
+    }
+
+    if let Some(providers_tbl) = get_opt_table(root, "providers")? {
+        cfg.enabled_providers = get_opt_str_array(providers_tbl, "enabled", "providers.enabled")?;
+    }
+    if let Some(providers_tbl) = get_opt_table(root, "providers")?
+        && let Some(custom_tbl) = get_opt_table(providers_tbl, "custom")?
+    {
+        for (name, item) in custom_tbl.iter() {
+            let key = format!("providers.custom.{name}");
+            let valid_name = !name.is_empty()
+                && name.len() <= 64
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+            if !valid_name {
+                return Err(ConfigError::InvalidValue {
+                    key,
+                    value: name.to_owned(),
+                    expected: "a name of 1..=64 characters of A-Z, a-z, 0-9, '-' or '_'",
+                });
+            }
+            let tbl = item.as_table_like().ok_or_else(|| ConfigError::InvalidType {
+                key: key.clone(),
+                expected: "table",
+            })?;
+            let base_url = get_opt_str(tbl, "base_url", &format!("{key}.base_url"))?
+                .map(|u| u.trim().to_owned())
+                .filter(|u| !u.is_empty())
+                .ok_or_else(|| ConfigError::InvalidValue {
+                    key: format!("{key}.base_url"),
+                    value: String::new(),
+                    expected: "a non-empty base URL",
+                })?;
+            let dialect = match get_opt_str(tbl, "dialect", &format!("{key}.dialect"))?.as_deref() {
+                None | Some("openai_chat") => monoagens_reason::model::catalog::Dialect::OpenAiChat,
+                Some("messages_api") => monoagens_reason::model::catalog::Dialect::MessagesApi,
+                Some(other) => {
+                    return Err(ConfigError::InvalidValue {
+                        key: format!("{key}.dialect"),
+                        value: other.to_owned(),
+                        expected: "'openai_chat' or 'messages_api'",
+                    });
+                }
+            };
+            let keyless = get_opt_bool(tbl, "keyless", &format!("{key}.keyless"))?.unwrap_or(false);
+            let entry = monoagens_reason::model::catalog::custom_entry(name, &base_url, dialect, keyless);
+            monoagens_reason::model::catalog::register_custom(entry.clone());
+            cfg.custom_providers.push(entry);
+        }
     }
 
     if let Some(model_tbl) = get_opt_table(root, "model")? {

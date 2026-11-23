@@ -572,6 +572,8 @@ fn settings_search_toml_backup_masked_secrets_dynamic_plugin_toml_and_wizard() {
         vec!["whatsapp".to_owned(), "telegram".to_owned()],
     );
     wizard.api_key = "sk-super-secret-value-12345".to_owned();
+    wizard.provider = Some("groq".to_owned());
+    wizard.model = "llama-test".to_owned();
     wizard.step = WizardStep::Step2Plugins;
     wizard.plugin_enabled[0] = true;
     state.wizard = Some(wizard);
@@ -588,10 +590,10 @@ fn settings_search_toml_backup_masked_secrets_dynamic_plugin_toml_and_wizard() {
     let actions = state.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(actions.contains(&AppAction::CompleteSetupWizard));
     assert!(state.wizard.is_none());
-    assert!(state.secrets_summary.model_api_key_set);
 
     let secrets_raw = std::fs::read_to_string(&state.paths.secrets_path).expect("secrets.toml");
-    assert!(secrets_raw.contains("model_api_key"));
+    assert!(secrets_raw.contains("[providers.groq]"), "{secrets_raw}");
+    assert!(!secrets_raw.contains("model_api_key"));
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

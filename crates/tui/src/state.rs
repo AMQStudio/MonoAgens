@@ -459,7 +459,7 @@ pub enum AppAction {
     ResetDisplay,
     /// `Ctrl+Z`: leave the alternate screen, stop the process, restore on `SIGCONT`.
     Suspend,
-    /// `/model`, `/login` and `/usage` requests to the gateway (see `catalog_ui`).
+    /// `/model`, `/provider` and `/usage` requests to the gateway (see `catalog_ui`).
     Catalog(crate::catalog_ui::CatalogAction),
     /// A governance / observability admin call for the panels in `crate::views`.
     Gov(crate::views::GovRequest),
@@ -520,7 +520,7 @@ pub struct TuiAppState {
     pub secrets_summary: SecretsUiSummary,
     /// `/log` overlay state and received runtime log entries.
     pub log: crate::log::LogView,
-    /// `/model` picker, `/login` and `/usage` overlays plus the provider/model data behind them.
+    /// `/model` picker, `/provider` and `/usage` overlays plus the provider/model data behind them.
     pub catalog: crate::catalog_ui::CatalogUi,
     /// Set while the gateway could not boot because of a configuration error.
     pub config_error: Option<ConfigErrorState>,
@@ -976,9 +976,9 @@ impl TuiAppState {
         }
 
         cmds.push(SlashCommandItem {
-            name: "login".to_owned(),
-            usage: "/login".to_owned(),
-            description: "Set or change provider API keys".to_owned(),
+            name: "provider".to_owned(),
+            usage: "/provider".to_owned(),
+            description: "Log in to providers, add a custom provider, enable local ones".to_owned(),
             current_value: self.catalog.login_status(self.gateway_cfg.model.catalog_provider.as_deref()),
             icon: "⚿",
             lab_only: false,
@@ -1406,7 +1406,7 @@ impl TuiAppState {
             return self.log.handle_key(key);
         }
 
-        // The `/model`, `/login` and `/usage` overlays own the keyboard while open
+        // The `/model`, `/provider` and `/usage` overlays own the keyboard while open
         if self.catalog.is_open() {
             return self.catalog.handle_key(key);
         }
@@ -1931,7 +1931,7 @@ impl TuiAppState {
                 let provider = self.gateway_cfg.model.catalog_provider.clone();
                 self.catalog.open_picker(provider, self.model_name.clone())
             }
-            "/login" => {
+            "/provider" => {
                 let provider = self.gateway_cfg.model.catalog_provider.clone();
                 self.catalog.open_login(provider, self.model_name.clone())
             }

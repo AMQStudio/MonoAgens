@@ -86,7 +86,7 @@ pub enum RuntimeEvent {
     Cue(LifecycleCueEvent),
     /// The gateway owner went away (socket closed).
     OwnerGone,
-    /// Result of a `/model`, `/login` or `/usage` request.
+    /// Result of a `/model`, `/provider` or `/usage` request.
     Catalog(crate::catalog_ui::CatalogEvent),
     /// Result of a governance / observability admin call (`crate::views`).
     Gov(crate::views::GovResponse),
@@ -265,6 +265,7 @@ pub fn plugin_ui_state(state: PluginState, reason: Option<&str>, retrying: bool)
         PluginState::Starting => PluginUiState::Starting,
         PluginState::Running => PluginUiState::Running,
         PluginState::RunningElsewhere => PluginUiState::RunningElsewhere,
+        PluginState::NeedsSetup => PluginUiState::NeedsSetup(reason.unwrap_or("needs setup").to_owned()),
         PluginState::Failed => {
             let r = reason.unwrap_or("failed");
             PluginUiState::Failed(if retrying {

@@ -36,7 +36,7 @@ use serde_json::{Value, json};
 pub use config::{TelegramPluginConfig, resolve_state_dir_from_env};
 pub use transport::{
     DEFAULT_TELEGRAM_API_BASE, LiveTelegramTransport, OfflineTelegramTransport, RecordedCall,
-    RecordingTelegramTransport, TelegramTransport,
+    RecordingTelegramTransport, TelegramTransport, poll_error_backoff, retry_after_secs,
 };
 pub use types::{
     ApprovalPromptPayload, DEFAULT_TELEGRAM_SYSTEM_PLACE, DeletePayload, EditPayload, InlineButton, MediaAttachmentInput,

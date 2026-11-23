@@ -36,6 +36,8 @@ const BODY_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const STOP_GRACE: Duration = Duration::from_secs(2);
 const FIRST_OUTCOME_TIMEOUT: Duration = Duration::from_secs(20);
 const STDERR_DRAIN: Duration = Duration::from_millis(500);
+/// How often a `needs_setup` plugin is re-checked (auto-start after pairing / secret set).
+const READINESS_POLL: Duration = Duration::from_secs(2);
 
 /// Lifecycle state of a supervised plugin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +49,8 @@ pub enum PluginState {
     Failed,
     /// Another process holds `<data_dir>/plugins/<id>.lock`; nothing is spawned here.
     RunningElsewhere,
+    /// The adapter cannot start yet (not paired, secret missing); see `needs`.
+    NeedsSetup,
 }
 
 impl PluginState {
@@ -59,6 +63,7 @@ impl PluginState {
             Self::Running => "running",
             Self::Failed => "failed",
             Self::RunningElsewhere => "running_elsewhere",
+            Self::NeedsSetup => "needs_setup",
         }
     }
 }
@@ -80,6 +85,9 @@ pub struct PluginInfo {
     pub retry_at_ms: Option<u64>,
     #[serde(default)]
     pub stderr_tail: Vec<String>,
+    /// What a `needs_setup` plugin is missing: `pairing`, `secret:<NAME>`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub needs: Vec<String>,
 }
 
 /// Plugin state change published on [`PluginSupervisor::subscribe`].
@@ -95,6 +103,8 @@ pub struct PluginStateEvent {
     pub retry_at_ms: Option<u64>,
     #[serde(default)]
     pub ts_ms: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub needs: Vec<String>,
 }
 
 /// Restart backoff policy.
@@ -151,6 +161,8 @@ pub enum FirstOutcome {
     Running,
     RunningElsewhere,
     Failed,
+    /// The adapter is not ready (pairing / secret missing); nothing was spawned.
+    NeedsSetup,
     /// Still starting when the wait gave up, or already running before this call.
     Pending,
 }
@@ -168,6 +180,7 @@ struct Slot {
     body_id: Option<String>,
     retry_at_ms: Option<u64>,
     tail: VecDeque<String>,
+    needs: Vec<String>,
     run: Option<RunCtl>,
 }
 
@@ -181,6 +194,7 @@ impl Slot {
             body_id: None,
             retry_at_ms: None,
             tail: VecDeque::new(),
+            needs: Vec::new(),
             run: None,
         }
     }
@@ -195,6 +209,7 @@ impl Slot {
             body_id: self.body_id.clone(),
             retry_at_ms: self.retry_at_ms,
             stderr_tail: self.tail.iter().cloned().collect(),
+            needs: self.needs.clone(),
         }
     }
 }
@@ -272,6 +287,19 @@ impl PluginSupervisor {
             .collect()
     }
 
+    /// Runs the readiness check of plugin `id` (used to refuse enabling an unready adapter).
+    pub async fn readiness(&self, id: &str) -> Option<crate::readiness::Readiness> {
+        let config = self
+            .inner
+            .table
+            .lock()
+            .expect("supervisor table lock")
+            .slots
+            .get(id)
+            .map(|s| s.config.clone())?;
+        Some(crate::readiness::check_readiness(&config, &self.inner.env_ctx).await)
+    }
+
     /// Snapshot of one plugin.
     #[must_use]
     pub fn info(&self, id: &str) -> Option<PluginInfo> {
@@ -324,7 +352,7 @@ impl PluginSupervisor {
                 bad.insert(plugin.id.clone());
                 continue;
             }
-            if let Ok(FirstOutcome::Failed) = self.start(&plugin.id).await {
+            if let Ok(FirstOutcome::Failed | FirstOutcome::NeedsSetup) = self.start(&plugin.id).await {
                 bad.insert(plugin.id.clone());
             }
         }
@@ -372,8 +400,20 @@ impl PluginSupervisor {
             let _ = run.stop.send(true);
             let _ = run.join.await;
         }
-        self.inner
-            .set_state(id, PluginState::Stopped, None, None, None, None);
+        // The run loop already reported `stopped`; only a plugin that was never started (or
+        // failed and gave up) still needs the state reset. Log the stop once.
+        let already_stopped = self
+            .inner
+            .table
+            .lock()
+            .expect("supervisor table lock")
+            .slots
+            .get(id)
+            .is_some_and(|s| s.state == PluginState::Stopped);
+        if !already_stopped {
+            self.inner
+                .set_state(id, PluginState::Stopped, None, None, None, None);
+        }
         Ok(())
     }
 
@@ -482,6 +522,20 @@ impl SupInner {
         body_id: Option<String>,
         retry_at_ms: Option<u64>,
     ) {
+        self.set_state_needs(id, state, reason, pid, body_id, retry_at_ms, Vec::new());
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn set_state_needs(
+        &self,
+        id: &str,
+        state: PluginState,
+        reason: Option<String>,
+        pid: Option<u32>,
+        body_id: Option<String>,
+        retry_at_ms: Option<u64>,
+        needs: Vec<String>,
+    ) {
         {
             let mut t = self.table.lock().expect("supervisor table lock");
             let Some(slot) = t.slots.get_mut(id) else {
@@ -492,6 +546,7 @@ impl SupInner {
             slot.pid = pid;
             slot.body_id = body_id;
             slot.retry_at_ms = retry_at_ms;
+            slot.needs = needs.clone();
         }
         let msg = match (&reason, state) {
             (Some(r), _) => format!("plugin '{id}' {}: {r}", state.as_str()),
@@ -509,6 +564,7 @@ impl SupInner {
             pid,
             retry_at_ms,
             ts_ms: self.clock.now().as_millis(),
+            needs,
         });
     }
 
@@ -561,6 +617,37 @@ async fn supervise(
     let mut failures: VecDeque<u64> = VecDeque::new();
 
     loop {
+        // Readiness gate: an adapter that cannot work yet (not paired, secret missing) is not
+        // spawned. It waits in `needs_setup` and starts by itself once the check passes.
+        let mut announced = false;
+        loop {
+            let ready = crate::readiness::check_readiness(&config, &inner.env_ctx).await;
+            if ready.ready {
+                break;
+            }
+            if !announced {
+                announced = true;
+                inner.set_state_needs(
+                    &id,
+                    PluginState::NeedsSetup,
+                    Some(ready.reason()),
+                    None,
+                    None,
+                    None,
+                    ready.needs.clone(),
+                );
+                signal_first(&mut first, FirstOutcome::NeedsSetup);
+            }
+            tokio::select! {
+                biased;
+                () = wait_stop(&mut stop) => {
+                    inner.set_state(&id, PluginState::Stopped, None, None, None, None);
+                    return;
+                }
+                () = tokio::time::sleep(READINESS_POLL) => {}
+            }
+        }
+
         // Second guard: a plugin started outside the gateway keeps its own lock.
         let _plugin_lock: Option<FileLock> = match inner.env_ctx.data_dir.as_deref() {
             Some(data_dir) => match acquire_plugin_lock(data_dir, &id) {

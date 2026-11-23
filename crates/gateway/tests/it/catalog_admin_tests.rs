@@ -96,7 +96,7 @@ fn serve(models: &'static str, chat: (u16, &'static str)) -> (String, Seen) {
 
 fn config_text(base: &str, model: &str, extra: &str) -> String {
     format!(
-        "version = 1\n[model]\nprovider = \"ollama\"\nmodel = \"{model}\"\n[model.provider_options]\nbase_url = \"{base}/v1\"\n{extra}"
+        "version = 1\n[model]\nprovider = \"ollama\"\nmodel = \"{model}\"\n[model.provider_options]\nbase_url = \"{base}/v1\"\n[providers]\nenabled = [\"ollama\"]\n{extra}"
     )
 }
 
@@ -544,6 +544,104 @@ async fn rate_limited_turn_records_failure_with_message_and_a_provider_log_entry
             .iter()
             .any(|e| e.source == "provider" && e.message.contains("429")),
         "provider log entry with status 429"
+    );
+    env.rt.shutdown().await;
+}
+
+fn plain_config(base: &str, model: &str) -> String {
+    format!(
+        "version = 1\n[model]\nprovider = \"ollama\"\nmodel = \"{model}\"\n[model.provider_options]\nbase_url = \"{base}/v1\"\n"
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn discovery_is_refused_without_a_request_for_providers_that_are_not_logged_in() {
+    let (base, seen) = serve(MODELS_REPLY, (200, CHAT_REPLY));
+    // `ollama` is keyless but not enabled; `openai` has no key of its own.
+    let env = boot(&plain_config(&base, "alpha")).await;
+    for id in ["ollama", "openai", "anthropic"] {
+        let r = env.owner.models_discover(id, true).await.expect("discover");
+        assert_eq!(r["error"], json!("not logged in"), "{id}");
+        assert_eq!(r["models"], json!([]), "{id}");
+    }
+    let list = env.owner.providers_list().expect("list");
+    let rows = list["providers"].as_array().unwrap();
+    assert!(rows.iter().all(|p| p["logged_in"] == json!(false)), "{list}");
+    assert!(seen.lock().unwrap().is_empty(), "no provider request may be made");
+    env.rt.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn only_the_logged_in_provider_is_discovered_and_key_never_goes_elsewhere() {
+    let (base, seen) = serve(MODELS_REPLY, (200, CHAT_REPLY));
+    let text = format!(
+        "version = 1\n[providers.custom.my-gateway]\nbase_url = \"{base}/v1\"\n[model]\nprovider = \"my-gateway\"\nmodel = \"alpha\"\n"
+    );
+    let env = boot(&text).await;
+    std::fs::write(
+        env.dir.path().join("secrets.toml"),
+        "model_api_key = \"legacy-should-never-be-sent\"\n[providers.my-gateway]\napi_key = \"gw-key\"\n",
+    )
+    .unwrap();
+    let list = env.owner.providers_list().expect("list");
+    let rows = list["providers"].as_array().unwrap();
+    let logged_in: Vec<&str> = rows
+        .iter()
+        .filter(|p| p["logged_in"] == json!(true))
+        .filter_map(|p| p["id"].as_str())
+        .collect();
+    assert_eq!(logged_in, ["my-gateway"]);
+    let custom = rows.iter().find(|p| p["id"] == json!("my-gateway")).unwrap();
+    assert_eq!(custom["custom"], json!(true));
+
+    for p in rows {
+        let id = p["id"].as_str().unwrap();
+        env.owner.models_discover(id, true).await.expect("discover");
+    }
+    {
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "exactly one discovery request: {seen:?}");
+        assert!(seen[0].0.starts_with("GET /v1/models"), "{}", seen[0].0);
+        assert!(seen[0].1.iter().any(|(k, v)| k == "authorization" && v == "Bearer gw-key"));
+        assert!(!format!("{seen:?}").contains("legacy-should-never-be-sent"));
+    }
+    env.rt.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn unreachable_keyless_provider_reports_not_running_without_a_warning() {
+    // Reserve a port, then close it so nothing listens there.
+    let port = {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let base = format!("http://127.0.0.1:{port}");
+    let env = boot(&config_text(&base, "alpha", "")).await;
+    let r = env.owner.models_discover("ollama", true).await.expect("discover");
+    assert_eq!(r["error"], json!("not running"));
+    let warns: Vec<_> = env
+        .log
+        .snapshot()
+        .into_iter()
+        .filter(|e| e.source == "discovery" && format!("{:?}", e.level).to_lowercase().contains("warn"))
+        .collect();
+    assert!(warns.is_empty(), "{warns:?}");
+    env.rt.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn model_switch_through_config_apply_applies_live_without_a_hook_warning() {
+    let (base, _seen) = serve(MODELS_REPLY, (200, CHAT_REPLY));
+    let env = boot(&config_text(&base, "alpha", "")).await;
+    env.owner
+        .config_apply(&json!({ "model": { "model": "beta" } }))
+        .await
+        .expect("apply");
+    let (_p, model) = env.owner.handle().live_model().route_for(ModelPurpose::Reason);
+    assert_eq!(model, "beta");
+    assert!(
+        env.log.snapshot().iter().all(|e| !e.message.contains("rebuild hook not wired")),
+        "stale hook message logged"
     );
     env.rt.shutdown().await;
 }

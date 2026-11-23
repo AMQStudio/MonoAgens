@@ -113,6 +113,9 @@ pub enum PluginUiState {
     Failed(String),
     /// Another MonoAgens process holds the plugin lock; nothing is spawned here.
     RunningElsewhere,
+    /// The adapter cannot start yet; the text is what it needs (`needs pairing`,
+    /// `needs TELEGRAM_BOT_TOKEN`).
+    NeedsSetup(String),
 }
 
 impl PluginUiState {
@@ -126,6 +129,17 @@ impl PluginUiState {
             Self::Stopped => "stopped",
             Self::Failed(_) => "failed",
             Self::RunningElsewhere => "running in another MonoAgens",
+            Self::NeedsSetup(what) => what,
+        }
+    }
+
+    /// The action that fixes a `NeedsSetup` state.
+    #[must_use]
+    pub fn fix_hint(&self) -> Option<&'static str> {
+        match self {
+            Self::NeedsSetup(what) if what.contains("pairing") => Some("use [ Pair device ] below"),
+            Self::NeedsSetup(_) => Some("set the missing secret below"),
+            _ => None,
         }
     }
 
@@ -136,6 +150,7 @@ impl PluginUiState {
             Self::Starting | Self::Stopping => "◐",
             Self::Running | Self::Stopped | Self::Failed(_) => "●",
             Self::RunningElsewhere => "◉",
+            Self::NeedsSetup(_) => "◌",
         }
     }
 }
@@ -555,6 +570,7 @@ pub struct ProviderSummary {
     pub label: String,
     pub keyless: bool,
     pub key_set: bool,
+    pub logged_in: bool,
     pub key_source: Option<String>,
 }
 
@@ -586,8 +602,8 @@ fn opt_path(p: Option<&PathBuf>, none: &str) -> String {
 }
 
 fn key_status(p: &ProviderSummary) -> String {
-    if p.keyless {
-        "keyless".to_owned()
+    if p.keyless && !p.key_set {
+        if p.logged_in { "enabled".to_owned() } else { "not enabled".to_owned() }
     } else if p.key_set {
         match &p.key_source {
             Some(src) if src != "secrets" => format!("key set ({src})"),
@@ -855,7 +871,7 @@ pub fn build_settings_rows_with(tab: SettingsTab, search_query: &str, ctx: &Rows
         SettingsTab::Providers => {
             let mut out = Vec::new();
             let (configured, available): (Vec<_>, Vec<_>) =
-                providers.iter().partition(|p| p.keyless || p.key_set);
+                providers.iter().partition(|p| p.logged_in);
             for (group, list) in [("Configured", configured), ("Available", available)] {
                 for p in list {
                     out.push(row(
@@ -868,9 +884,7 @@ pub fn build_settings_rows_with(tab: SettingsTab, search_query: &str, ctx: &Rows
                 }
             }
             out.extend([
-                row("secrets.model_endpoint", "Legacy Endpoint & Key", "model_endpoint", "OpenAI-compatible completions URL (secrets.toml, legacy providers)", V::Text(secrets.model_endpoint.clone().unwrap_or_else(|| monoagens_gateway::DEFAULT_OPENAI_ENDPOINT.to_owned()))),
-                row("secrets.model_api_key", "Legacy Endpoint & Key", "model_api_key", "Stored in secrets.toml (0600, always masked)", V::MaskedSecret { is_set: secrets.model_api_key_set }),
-                row("secrets.embed_api_key", "Legacy Endpoint & Key", "embed_api_key", "API key of a remote embeddings backend (secrets.toml, masked)", V::MaskedSecret { is_set: secrets.top_level_keys.iter().any(|k| k == "embed_api_key") }),
+                row("secrets.embed_api_key", "Embeddings Key", "embed_api_key", "API key of a remote embeddings backend (secrets.toml, masked)", V::MaskedSecret { is_set: secrets.top_level_keys.iter().any(|k| k == "embed_api_key") }),
                 row("secrets.add_env", "Plugin [env] Secrets", "[ + Add / Update [env] Secret ]", "Write masked secret into secrets.toml [env] (0600)", V::Action("Add Key".to_owned())),
             ]);
             for env_key in &secrets.env_keys {

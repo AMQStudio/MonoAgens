@@ -364,7 +364,9 @@ fn render_sidebar(
                 hit.sidebar_plugins.push((row_rect, id.clone()));
                 let dot_color = match pstate {
                     PluginUiState::Running | PluginUiState::RunningElsewhere => palette.status_green,
-                    PluginUiState::Starting | PluginUiState::Stopping => palette.status_yellow,
+                    PluginUiState::Starting | PluginUiState::Stopping | PluginUiState::NeedsSetup(_) => {
+                        palette.status_yellow
+                    }
                     PluginUiState::Stopped | PluginUiState::Failed(_) => palette.status_red,
                 };
                 let kind_label = match kind {

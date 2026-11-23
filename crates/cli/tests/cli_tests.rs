@@ -189,11 +189,8 @@ fn cli_chat_first_run_unconfigured_bootstraps_without_secrets_and_exits_nonzero(
     assert!(!cfg_text.contains("sk-"));
 
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("MONOAGENS_MODEL_API_KEY"),
-        "stderr={stderr}"
-    );
-    assert!(stderr.contains("OPENAI_API_KEY"), "stderr={stderr}");
+    assert!(stderr.contains("[providers.<id>] api_key"), "stderr={stderr}");
+    assert!(stderr.contains("/provider"), "stderr={stderr}");
     assert!(stderr.contains("monoagens.toml"), "stderr={stderr}");
 }
 

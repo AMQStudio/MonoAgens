@@ -924,7 +924,10 @@ async fn handle_app_action(
                         let _ = c.config_apply(serde_json::json!({})).await;
                         res = c.plugins_start(pid.clone()).await;
                     }
-                    if let Err(e) = res {
+                    // An adapter that needs pairing / a secret already published `NeedsSetup`.
+                    if let Err(e) = res
+                        && !e.message.contains(": needs ")
+                    {
                         let _ = tx_p.send(RuntimeEvent::PluginState {
                             id: pid,
                             state: PluginUiState::Failed(e.message),

@@ -431,7 +431,11 @@ pub const EDITOR_COVERAGE: &[(&str, &str)] = &[
     ("model.prices.<id>.input_per_mtok", "model tab map row model.prices"),
     ("model.prices.<id>.output_per_mtok", "model tab map row model.prices"),
     ("env.<NAME>", "providers tab [env] secret rows"),
-    ("providers.<id>.api_key", "providers tab provider page and /login"),
+    ("providers.enabled", "provider page: enable a local provider"),
+    ("providers.custom.<name>.base_url", "provider page: Add custom provider"),
+    ("providers.custom.<name>.dialect", "provider page: Add custom provider"),
+    ("providers.custom.<name>.keyless", "provider page: Add custom provider"),
+    ("providers.<id>.api_key", "providers tab provider page and /provider"),
 ];
 
 #[cfg(test)]

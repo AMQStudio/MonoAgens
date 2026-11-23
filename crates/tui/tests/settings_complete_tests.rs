@@ -888,17 +888,16 @@ async fn wizard_walks_provider_key_test_model_picker_without_an_endpoint_field()
 }
 
 #[test]
-fn wizard_asks_for_an_endpoint_only_for_the_custom_provider() {
+fn wizard_no_longer_offers_an_unnamed_custom_provider() {
     let dir = temp_dir();
     let mut state = make_state(&dir);
     state.wizard = Some(monoagens_tui::SetupWizardState::new(&state.gateway_cfg, None, vec![]));
     type_text(&mut state, "custom");
-    press(&mut state, KeyCode::Enter);
     let text = render_text(100, 30, &state);
-    assert!(text.to_lowercase().contains("endpoint"), "{text}");
+    assert!(!text.contains("Custom (OpenAI-compatible)"), "{text}");
 }
 
-// ---- model / providers tabs reuse the /model and /login screens -----------------------------
+// ---- model / providers tabs reuse the /model and /provider screens -----------------------------
 
 #[test]
 fn model_and_providers_tabs_open_the_catalog_screens() {
@@ -940,7 +939,7 @@ mod attached {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn valve_toggle_and_secret_reach_the_daemon_through_the_admin_socket() {
         let dir = temp_dir();
-        let mut state = make_state_with(&dir, "# daemon config\nversion = 1\n");
+        let mut state = make_state_with(&dir, "# daemon config\nversion = 1\n[model]\nprovider = \"scripted\"\nmodel = \"mock\"\n");
         let mut cfg = GatewayConfig::default();
         cfg.model.provider = ModelProviderKind::Scripted;
         cfg.model.model = "mock".to_owned();

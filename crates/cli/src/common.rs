@@ -61,7 +61,7 @@ pub(crate) fn print_startup_not_ready(
     let _ = writeln!(err, "{startup_err}");
     let _ = writeln!(
         err,
-        "config path: {}\nsecrets path: {}\nrequired env vars (when using openai_compatible): MONOAGENS_MODEL_API_KEY (or OPENAI_API_KEY), MONOAGENS_MODEL_ENDPOINT",
+        "config path: {}\nsecrets path: {}\nset a provider key in secrets.toml under [providers.<id>] api_key (or the provider's own env variable); choose the provider with /provider in the TUI",
         loaded.paths.config_path.display(),
         loaded.paths.secrets_path.display(),
     );

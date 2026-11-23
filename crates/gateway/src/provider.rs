@@ -17,7 +17,7 @@ use monoagens_reason::{
 };
 
 use crate::clock::{Clock, run_with_clock_timeout};
-use crate::config::{DEFAULT_OPENAI_ENDPOINT, GatewayConfig, ModelProviderKind};
+use crate::config::{GatewayConfig, ModelProviderKind};
 use crate::cues::{CueRecorder, spawn_wait_cue_monitor};
 use crate::logging::{DiagnosticSink, LogLevel};
 use crate::runtime::IngressQueue;
@@ -190,7 +190,7 @@ fn openai_config(
 }
 
 /// Builds a provider for catalog entry `id`: dialect, endpoint (catalog base URL or
-/// `[model.provider_options] base_url`) and key (secrets, then env names, then legacy key).
+/// `[model.provider_options] base_url`) and key (secrets, then env names; never another provider's key).
 fn build_catalog_provider(
     config: &GatewayConfig,
     secrets: &ProviderSecrets,
@@ -256,14 +256,11 @@ pub fn build_provider_from_config(
             if let Some(id) = config.model.catalog_provider.as_deref() {
                 return build_catalog_provider(config, secrets, id);
             }
-            let endpoint = secrets
-                .model_endpoint
-                .clone()
-                .unwrap_or_else(|| DEFAULT_OPENAI_ENDPOINT.to_owned());
-            let oa_cfg = openai_config(config, endpoint, secrets.model_api_key.clone());
-            let provider =
-                OpenAiModelProvider::new(oa_cfg).map_err(|detail| ProviderInitError { detail })?;
-            Ok(Arc::new(provider))
+            Err(ProviderInitError {
+                detail: "no model provider configured: pick one with /provider and /model \
+                         (the legacy openai_compatible endpoint was migrated on load)"
+                    .to_owned(),
+            })
         }
     }
 }

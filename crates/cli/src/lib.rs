@@ -382,7 +382,7 @@ pub enum SecretSubcommand {
     List,
     /// Set a secret key in `secrets.toml` (top-level or `[env]` with `--env`).
     Set {
-        /// Secret key name (e.g. `model_api_key` or `TELEGRAM_BOT_TOKEN`).
+        /// Secret key name (e.g. `embed_api_key` or `TELEGRAM_BOT_TOKEN`).
         key: String,
         /// Secret value provided inline.
         #[arg(long, conflicts_with_all = ["from_env", "stdin"])]

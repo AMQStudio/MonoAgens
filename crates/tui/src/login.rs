@@ -1,4 +1,4 @@
-//! `/login`: a searchable provider list with key state per row, the masked key entry and the
+//! `/provider`: a searchable provider list with key state per row, the masked key entry and the
 //! connection test. The same key page opens from the model picker when a model of a provider
 //! without a key is chosen; `Esc` returns to where the user came from.
 //!
@@ -60,7 +60,28 @@ impl KeyEntry {
     }
 }
 
-/// `/login` list state.
+/// The "Add custom provider" form.
+#[derive(Debug, Clone, Default)]
+pub struct CustomForm {
+    /// 0 name, 1 base URL, 2 dialect, 3 key (optional).
+    pub field: usize,
+    pub name: String,
+    pub base_url: String,
+    pub messages_api: bool,
+    key: String,
+    pub error: Option<String>,
+    pub busy: bool,
+}
+
+impl CustomForm {
+    /// Characters typed in the (masked) key field.
+    #[must_use]
+    pub fn key_len(&self) -> usize {
+        self.key.chars().count()
+    }
+}
+
+/// `/provider` list state.
 #[derive(Debug, Clone, Default)]
 pub struct LoginView {
     pub search: String,
@@ -70,7 +91,7 @@ pub struct LoginView {
 }
 
 impl CatalogUi {
-    /// `/login`: opens the provider list.
+    /// `/provider`: opens the provider list.
     pub fn open_login(&mut self, provider: Option<String>, model: String) -> Vec<AppAction> {
         self.screen = Screen::LoginList;
         self.return_to = Screen::Closed;
@@ -123,6 +144,11 @@ impl CatalogUi {
                 self.login.sel = (self.login.sel + self.rows().saturating_sub(1).max(1)).min(total - 1);
                 self.login.off = scroll_window(self.login.sel, self.login.off, self.rows(), total);
             }
+            KeyCode::Char('n') if ctrl => {
+                self.custom = CustomForm::default();
+                self.return_to = Screen::LoginList;
+                self.screen = Screen::CustomForm;
+            }
             KeyCode::Enter => {
                 let id = self.login_rows().get(self.login.sel).map(|p| p.id.clone());
                 if let Some(id) = id {
@@ -149,6 +175,110 @@ impl CatalogUi {
             _ => {}
         }
         Vec::new()
+    }
+
+    pub(crate) fn custom_form_paste(&mut self, raw: &str) {
+        let f = &mut self.custom;
+        if f.busy {
+            return;
+        }
+        for c in raw.chars().filter(|c| !c.is_control() && !c.is_whitespace()) {
+            match f.field {
+                0 if f.name.chars().count() < 64 => f.name.push(c),
+                1 if f.base_url.chars().count() < 300 => f.base_url.push(c),
+                3 if f.key.chars().count() < MAX_KEY_CHARS => f.key.push(c),
+                _ => {}
+            }
+        }
+    }
+
+    pub(crate) fn custom_form_key(&mut self, key: KeyEvent) -> Vec<AppAction> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let f = &mut self.custom;
+        if f.busy {
+            return Vec::new();
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.screen = Screen::LoginList;
+            }
+            KeyCode::Tab | KeyCode::Down => f.field = (f.field + 1) % 4,
+            KeyCode::BackTab | KeyCode::Up => f.field = (f.field + 3) % 4,
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if f.field == 2 => {
+                f.messages_api = !f.messages_api;
+            }
+            KeyCode::Enter if f.field < 3 => f.field += 1,
+            KeyCode::Enter => return self.submit_custom(),
+            KeyCode::Char('s') if ctrl => return self.submit_custom(),
+            KeyCode::Backspace => {
+                f.error = None;
+                match f.field {
+                    0 => {
+                        f.name.pop();
+                    }
+                    1 => {
+                        f.base_url.pop();
+                    }
+                    3 => {
+                        f.key.pop();
+                    }
+                    _ => {}
+                }
+            }
+            KeyCode::Char('u') if ctrl => match f.field {
+                0 => f.name.clear(),
+                1 => f.base_url.clear(),
+                3 => f.key.clear(),
+                _ => {}
+            },
+            KeyCode::Char(c) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => {
+                f.error = None;
+                self.custom_form_paste(&c.to_string());
+            }
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    fn submit_custom(&mut self) -> Vec<AppAction> {
+        let name = self.custom.name.trim().to_owned();
+        let base = self.custom.base_url.trim().trim_end_matches('/').to_owned();
+        let name_ok = !name.is_empty()
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        let err = if !name_ok {
+            Some("Name: letters, digits, '-' and '_' only.".to_owned())
+        } else if monoagens_reason::model::catalog::entries().iter().any(|e| e.id == name)
+            || self.providers.iter().any(|p| p.id == name)
+        {
+            Some(format!("A provider named '{name}' already exists."))
+        } else if !(base.starts_with("http://") || base.starts_with("https://")) {
+            Some("Base URL must start with http:// or https://".to_owned())
+        } else {
+            None
+        };
+        if let Some(e) = err {
+            self.custom.error = Some(e);
+            return Vec::new();
+        }
+        self.custom.busy = true;
+        vec![AppAction::Catalog(CatalogAction::AddCustom {
+            name,
+            base_url: base,
+            messages_api: self.custom.messages_api,
+            key: Secret::new(self.custom.key.trim()),
+        })]
+    }
+
+    pub(crate) fn on_custom_added(&mut self, name: &str, result: Result<(), String>) {
+        self.custom.busy = false;
+        match result {
+            Ok(()) => {
+                self.custom = CustomForm::default();
+                self.screen = Screen::LoginList;
+                self.set_toast_internal(&format!("Custom provider '{name}' added"), false);
+            }
+            Err(e) => self.custom.error = Some(format!("Could not add the provider: {e}")),
+        }
     }
 
     pub(crate) fn key_entry_paste(&mut self, raw: &str) {
@@ -212,7 +342,7 @@ impl CatalogUi {
             }
             KeyCode::Char('s') if ctrl => {
                 let e = &mut self.login.entry;
-                if e.buffer.trim().is_empty() || matches!(e.phase, KeyPhase::Testing) {
+                if (e.buffer.trim().is_empty() && !keyless) || matches!(e.phase, KeyPhase::Testing) {
                     return Vec::new();
                 }
                 e.phase = KeyPhase::Testing;
@@ -272,11 +402,14 @@ impl CatalogUi {
         match result {
             Ok(()) => {
                 let typed = self.login.entry.typed_len() > 0;
-                if let Some(row) = self.providers.iter_mut().find(|p| p.id == provider)
-                    && (!row.keyless || typed)
-                {
-                    row.key_set = true;
-                    row.key_source = Some("secrets".to_owned());
+                if let Some(row) = self.providers.iter_mut().find(|p| p.id == provider) {
+                    row.logged_in = true;
+                    if !row.keyless || typed {
+                        row.key_set = true;
+                        row.key_source = Some("secrets".to_owned());
+                    } else {
+                        row.enabled = true;
+                    }
                 }
                 if self.login.entry.provider == provider {
                     let e = &mut self.login.entry;
@@ -329,14 +462,17 @@ pub fn render_list(area: Rect, buf: &mut Buffer, ui: &CatalogUi, palette: &Theme
     let list_w = w.saturating_sub(1);
     for (i, p) in rows.iter().skip(offset).take(visible).enumerate() {
         let y = list_top + i as u16;
-        let (dot, state, fg) = if p.keyless {
-            ("◌", "no key needed".to_owned(), palette.dim)
+        let (dot, state, fg) = if p.keyless && !p.key_set {
+            if p.logged_in {
+                ("●", "enabled (no key needed)".to_owned(), palette.status_green)
+            } else {
+                ("◌", "not enabled".to_owned(), palette.dim)
+            }
         } else if p.key_set {
             (
                 "●",
                 match p.key_source.as_deref() {
                     Some("env") => "key set (environment)".to_owned(),
-                    Some("legacy") => "key set (legacy)".to_owned(),
                     _ => "key set".to_owned(),
                 },
                 palette.status_green,
@@ -345,7 +481,12 @@ pub fn render_list(area: Rect, buf: &mut Buffer, ui: &CatalogUi, palette: &Theme
             ("○", "not set".to_owned(), palette.dim)
         };
         let current = ui.current_provider.as_deref() == Some(p.id.as_str());
-        let label = format!("{}{}", p.label, if current { "  (current)" } else { "" });
+        let label = format!(
+            "{}{}{}",
+            p.label,
+            if p.custom { "  [custom]" } else { "" },
+            if current { "  (current)" } else { "" }
+        );
         let name_w = list_w.saturating_sub(24).max(10);
         let line = format!(" {dot} {}  {state}", crate::catalog_ui::pad(&label, name_w));
         let mut style = Style::default().fg(fg).bg(palette.bg);
@@ -373,7 +514,7 @@ pub fn render_list(area: Rect, buf: &mut Buffer, ui: &CatalogUi, palette: &Theme
         visible,
         palette,
     );
-    footer_bar(area, buf, " ⏎ set key · ↑/↓ · type to search · ⎋ close", palette, icons);
+    footer_bar(area, buf, " ⏎ set key / enable · ^N add custom provider · ↑/↓ · type to search · ⎋ close", palette, icons);
 }
 
 /// Draws the key page.
@@ -405,7 +546,7 @@ pub fn render_key_entry(area: Rect, buf: &mut Buffer, ui: &CatalogUi, palette: &
     y += 2;
     let (text, style) = match &e.phase {
         KeyPhase::Editing if keyless => (
-            " This provider needs no key. Press Enter to test the connection.".to_owned(),
+            " This provider needs no key. Press Enter to test the connection and enable it (^S enables without testing).".to_owned(),
             dim,
         ),
         KeyPhase::Editing => (
@@ -445,4 +586,45 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
         lines.push(cur);
     }
     lines
+}
+
+/// Draws the "Add custom provider" form.
+pub fn render_custom_form(area: Rect, buf: &mut Buffer, ui: &CatalogUi, palette: &ThemePalette, icons: IconMode) {
+    let w = area.width as usize;
+    let f = &ui.custom;
+    title_bar(area, buf, " Add custom provider", palette, icons);
+    let normal = Style::default().fg(palette.fg).bg(palette.bg);
+    let sel = Style::default().fg(palette.accent).bg(palette.bg).add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(palette.dim).bg(palette.bg);
+    let dots = "•".repeat(f.key_len().min(w.saturating_sub(16)));
+    let lines = [
+        format!(" Name:     {}", f.name),
+        format!(" Base URL: {}", f.base_url),
+        format!(
+            " Dialect:  {} (Space toggles)",
+            if f.messages_api { "messages_api" } else { "openai_chat" }
+        ),
+        format!(" Key:      {dots}  (optional; empty = no key needed)"),
+    ];
+    for (i, l) in lines.iter().enumerate() {
+        let cursor = if i == f.field && i != 2 { "▏" } else { "" };
+        put(
+            buf,
+            area.x,
+            area.y + 2 + i as u16 * 2,
+            w,
+            &format!("{l}{cursor}"),
+            if i == f.field { sel } else { normal },
+            icons,
+        );
+    }
+    let y = area.y + 11;
+    if let Some(e) = &f.error {
+        put(buf, area.x, y, w, &format!(" ✗ {e}"), Style::default().fg(palette.status_red).bg(palette.bg), icons);
+    } else if f.busy {
+        put(buf, area.x, y, w, " Saving…", normal, icons);
+    } else {
+        put(buf, area.x, y, w, " The key is stored only for this provider (secrets.toml, mode 0600).", dim, icons);
+    }
+    footer_bar(area, buf, " Tab next field · ⏎ next / save · ^S save · ⎋ back", palette, icons);
 }

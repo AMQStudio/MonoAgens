@@ -357,6 +357,17 @@ pub fn run_serve_with_provider(
                         error: Some("running in another MonoAgens (plugin lock held)".to_owned()),
                     }
                 }
+                PluginState::NeedsSetup => {
+                    skipped_count += 1;
+                    ServeBodyReport {
+                        config_id: plugin.id.clone(),
+                        kind,
+                        status: "skipped",
+                        body_id: None,
+                        places: Vec::new(),
+                        error: Some(reason),
+                    }
+                }
                 PluginState::Stopped | PluginState::Starting => {
                     skipped_count += 1;
                     ServeBodyReport {

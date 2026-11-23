@@ -390,6 +390,16 @@ pub struct TgApiResponse<T> {
     pub error_code: Option<i64>,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
+    pub parameters: Option<TgResponseParameters>,
+}
+
+/// `parameters` of a failed Bot API response (rate limits, chat migration).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TgResponseParameters {
+    /// Seconds to wait before the next request (HTTP 429).
+    #[serde(default)]
+    pub retry_after: Option<u64>,
 }
 
 /// Telegram `User` object.

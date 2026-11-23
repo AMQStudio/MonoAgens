@@ -127,6 +127,10 @@ impl TuiAppState {
         let mut rows = Vec::new();
         let (state_text, running) = match entry.map(|p| &p.state) {
             Some(PluginUiState::Failed(why)) => (format!("{} failed: {why}", "●"), false),
+            Some(s @ PluginUiState::NeedsSetup(_)) => (
+                format!("{} {} - {}", s.dot_glyph(), s.label(), s.fix_hint().unwrap_or("")),
+                false,
+            ),
             Some(s) => (
                 format!("{} {}", s.dot_glyph(), s.label()),
                 matches!(s, PluginUiState::Running | PluginUiState::Starting | PluginUiState::RunningElsewhere),
@@ -543,7 +547,9 @@ pub fn render_plugin_detail(
         Some(p) => {
             let color = match &p.state {
                 PluginUiState::Running | PluginUiState::RunningElsewhere => palette.status_green,
-                PluginUiState::Starting | PluginUiState::Stopping => palette.status_yellow,
+                PluginUiState::Starting | PluginUiState::Stopping | PluginUiState::NeedsSetup(_) => {
+                    palette.status_yellow
+                }
                 PluginUiState::Stopped | PluginUiState::Failed(_) => palette.status_red,
             };
             (p.state.dot_glyph(), color, p.state.label())

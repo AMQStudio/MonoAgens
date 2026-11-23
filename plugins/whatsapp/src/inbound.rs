@@ -1,7 +1,7 @@
 //! Inbound WhatsApp event translation, history/pre-boot filtering, self-echo
 //! suppression, group audience caching, poll vote decryption, and attachment staging.
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -89,7 +89,17 @@ impl GroupAudienceCache {
         if !self.groups.contains_key(&key)
             && let Ok(participants) = transport.get_group_participants(group_jid)
         {
-            self.seed(group_jid, participants);
+            let stable: Vec<Jid> = participants
+                .into_iter()
+                .map(|p| {
+                    if p.is_lid() {
+                        transport.phone_for_lid(&p).unwrap_or(p)
+                    } else {
+                        p
+                    }
+                })
+                .collect();
+            self.seed(group_jid, stable);
         }
         let set = self.groups.entry(key).or_default();
         set.insert(sender_actor.clone());
@@ -222,6 +232,8 @@ pub struct InboundTranslator {
     grace_ms: u64,
     pub group_audience: GroupAudienceCache,
     pub poll_secrets: PollSecretCache,
+    /// LIDs already reported once as having no known phone number.
+    unmapped_lids_logged: HashSet<String>,
 }
 
 impl InboundTranslator {
@@ -233,7 +245,40 @@ impl InboundTranslator {
             grace_ms: PRE_BOOT_GRACE_MS,
             group_audience: GroupAudienceCache::default(),
             poll_secrets: PollSecretCache::default(),
+            unmapped_lids_logged: HashSet::new(),
         }
+    }
+
+    /// Resolves `jid` to its stable phone-number JID when WhatsApp addressed it by LID.
+    ///
+    /// Order: the message's alternate JID (when it is a phone-number JID), then the
+    /// client's LID-to-phone mapping, else the LID itself with one info line per LID.
+    fn stable_jid(
+        &mut self,
+        jid: &Jid,
+        alt: Option<&Jid>,
+        transport: &mut dyn WhatsAppTransport,
+    ) -> Jid {
+        if !jid.is_lid() {
+            return jid.to_non_ad();
+        }
+        if let Some(alt) = alt
+            && alt.is_pn()
+        {
+            return alt.to_non_ad();
+        }
+        if let Some(pn) = transport.phone_for_lid(jid)
+            && pn.is_pn()
+        {
+            return pn.to_non_ad();
+        }
+        let lid = bare_jid_string(jid);
+        if self.unmapped_lids_logged.insert(lid.clone()) {
+            eprintln!(
+                "whatsapp: no phone number known for {lid}; using the LID account (link it to the owner to restore identity)"
+            );
+        }
+        jid.to_non_ad()
     }
 
     /// Overrides the clock-skew grace window (useful in deterministic tests).
@@ -298,8 +343,20 @@ impl InboundTranslator {
             return None;
         }
 
-        let chat_jid = &inbound.info.source.chat;
-        let sender_jid = &inbound.info.source.sender;
+        let source = &inbound.info.source;
+        let is_group = source.is_group || source.chat.is_group();
+        let sender_jid = &self.stable_jid(&source.sender, source.sender_alt.as_ref(), transport);
+        // A DM chat addressed by the sender's own LID shares that LID's alternate JID.
+        let chat_alt = if !is_group && source.chat.user == source.sender.user {
+            source.sender_alt.as_ref()
+        } else {
+            None
+        };
+        let chat_jid = &if is_group {
+            source.chat.clone()
+        } else {
+            self.stable_jid(&source.chat, chat_alt, transport)
+        };
         let base = inbound.message.get_base_message();
 
         if let Some(react) = base.reaction_message.as_option()
@@ -332,7 +389,7 @@ impl InboundTranslator {
         let place = jid_to_place(chat_jid);
         let actor = jid_to_actor(sender_jid);
 
-        let audience = if inbound.info.source.is_group || chat_jid.is_group() {
+        let audience = if is_group {
             self.group_audience.resolve(chat_jid, &actor, transport)
         } else {
             let mut set = BTreeSet::new();
@@ -365,7 +422,8 @@ impl InboundTranslator {
                 CachedPoll {
                     question: poll_creation.name.clone().unwrap_or_default(),
                     options,
-                    creator_jid: Some(sender_jid.to_non_ad()),
+                    // Poll vote crypto binds to the raw wire address, not the stable account.
+                    creator_jid: Some(source.sender.to_non_ad()),
                     message_secret: secret.clone(),
                 },
             );
@@ -373,14 +431,18 @@ impl InboundTranslator {
 
         let mut attachments = Vec::new();
         let (payload_json, named_jids, reply_to_pid) =
-            self.extract_payload(inbound, base, transport, blob_stager, &mut attachments)?;
+            self.extract_payload(inbound, base, &place, transport, blob_stager, &mut attachments)?;
 
         let payload_bytes = serde_json::to_vec(&payload_json).ok()?;
         let length = payload_bytes.len() as u64;
 
         let named: Vec<ActorId> = named_jids
             .into_iter()
-            .filter_map(|raw| parse_user_jid(&raw).ok().map(|j| jid_to_actor(&j)))
+            .filter_map(|raw| parse_user_jid(&raw).ok())
+            .map(|j| {
+                let j = self.stable_jid(&j, None, transport);
+                jid_to_actor(&j)
+            })
             .collect();
 
         let correlation_id = reply_to_pid
@@ -422,12 +484,12 @@ impl InboundTranslator {
         &self,
         inbound: &InboundMessage,
         base: &wa::Message,
+        place_str: &monoagens_body_sdk::PlaceId,
         transport: &mut dyn WhatsAppTransport,
         blob_stager: &mut dyn BlobStager,
         attachments: &mut Vec<AttachmentHandle>,
     ) -> Option<(Value, Vec<String>, Option<String>)> {
         let msg_id = &inbound.info.id;
-        let place_str = jid_to_place(&inbound.info.source.chat);
 
         if let Some(text) = base.conversation.as_deref() {
             return Some((

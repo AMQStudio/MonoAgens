@@ -283,9 +283,9 @@ impl ProviderSecrets {
 
     /// Resolves the API key for catalog provider `entry`.
     ///
-    /// Lookup order: `[providers.<id>] api_key` -> the entry's env names (via `env`) -> legacy
-    /// `model_api_key`. Keyless entries still honour an explicit key but never fall back to the
-    /// legacy one.
+    /// Lookup order: `[providers.<id>] api_key` -> the entry's env names (via `env`). A key is
+    /// only ever resolved for the provider it belongs to; the legacy `model_api_key` is never
+    /// used (it is migrated to a per-provider key on load).
     #[must_use]
     pub fn api_key_for<F>(&self, entry: &CatalogEntry, env: F) -> Option<SecretString>
     where
@@ -299,10 +299,7 @@ impl ProviderSecrets {
                 return Some(SecretString::new(v));
             }
         }
-        if entry.keyless {
-            return None;
-        }
-        self.model_api_key.clone()
+        None
     }
 
     /// Loads secrets and endpoints from a separate dedicated secrets file (JSON object or `KEY=VALUE` lines).
@@ -575,7 +572,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_key_lookup_order_secrets_then_env_then_legacy() {
+    fn provider_key_lookup_order_secrets_then_env_never_legacy() {
         let entry = crate::model::catalog::find("groq").expect("entry");
         let env = |name: &str| (name == "GROQ_API_KEY").then(|| "env-key".to_owned());
         let no_env = |_: &str| None;
@@ -588,10 +585,7 @@ mod tests {
 
         let legacy_only = ProviderSecrets::from_flat_map(&flat(&[("model_api_key", "legacy-key")]));
         assert_eq!(legacy_only.api_key_for(entry, env).unwrap().expose(), "env-key");
-        assert_eq!(
-            legacy_only.api_key_for(entry, no_env).unwrap().expose(),
-            "legacy-key"
-        );
+        assert!(legacy_only.api_key_for(entry, no_env).is_none());
         assert!(ProviderSecrets::default().api_key_for(entry, no_env).is_none());
 
         let local = crate::model::catalog::find("lm-studio").expect("lm-studio");

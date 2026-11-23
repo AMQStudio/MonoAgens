@@ -118,7 +118,7 @@ MonoAgens keeps `monoagens.toml` lean and internationalized:
 - **Gateway Command Registry (`/help`)**: Gateway indexes built-in commands (`/help`, `/whoami`, `/roles`, `/approve`, `/deny`) alongside plugin-declared `discover._meta.commands`, executing `/help` and built-ins with zero LLM calls and RBAC-filtered visibility per caller.
 - **Generic `approval.prompt` -> `approval/resolve`**: When Valve holds an action (`PendingApproval`), Gateway dispatches `approval.prompt` to the target place's adapter and deterministically verifies the resulting `approval/resolve` against `owner`, `h_act`, `state_epoch`, and TTL.
 
-Keep `TELEGRAM_BOT_TOKEN` and LLM `model_api_key` strictly in `secrets.toml` or environment variables — never in `monoagens.toml`:
+Keep `TELEGRAM_BOT_TOKEN` and provider keys (`[providers.<id>] api_key`) strictly in `secrets.toml` or environment variables — never in `monoagens.toml`:
 
 ```toml
 version = 1

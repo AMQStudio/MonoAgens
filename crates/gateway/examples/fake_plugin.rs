@@ -11,6 +11,8 @@
 //! | `FAKE_CRASH_AFTER_MS`    | `--crash-after-ms` | exit this long after startup (default: never)  |
 //! | `FAKE_EXIT_CODE`         | `--exit-code`      | exit code used for the crash (default 1)       |
 //! | `FAKE_BODY_ID`           | `--body-id`        | body id answered in discover (default `fake`)  |
+//! | `FAKE_NEEDS`             | `--needs`          | `status --json` reports these missing items    |
+//! | `FAKE_NEEDS_FILE`        | `--needs-file`     | `status --json` is ready once this file exists |
 
 use std::io::{BufRead, Write};
 use std::time::Duration;
@@ -34,7 +36,24 @@ fn setting_u64(name: &str, arg: &str) -> Option<u64> {
     setting(name, arg).and_then(|v| v.trim().parse().ok())
 }
 
+/// `status --json`: readiness report. `FAKE_NEEDS` (or `--needs`) is a `,`-separated list of
+/// missing items (`pairing`, `secret:NAME`); a file named by `FAKE_NEEDS_FILE` (or `--needs-file`)
+/// that exists means "set up", so tests can flip readiness while the gateway runs.
+fn status_report() {
+    let needs: Vec<String> = setting("FAKE_NEEDS", "--needs")
+        .map(|v| v.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect())
+        .unwrap_or_default();
+    let satisfied = setting("FAKE_NEEDS_FILE", "--needs-file")
+        .is_some_and(|p| std::path::Path::new(&p).exists());
+    let needs = if satisfied { Vec::new() } else { needs };
+    println!("{}", json!({ "ready": needs.is_empty(), "needs": needs, "detail": "fake" }));
+}
+
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("status") {
+        status_report();
+        return;
+    }
     if let Some(ms) = setting_u64("FAKE_STARTUP_MS", "--startup-ms") {
         std::thread::sleep(Duration::from_millis(ms));
     }

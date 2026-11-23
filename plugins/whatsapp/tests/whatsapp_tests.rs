@@ -1445,3 +1445,157 @@ fn inbound_reaction_translates_bound_approval_prompts_and_preserves_normal_react
         other => panic!("expected PerceptEmit, got {other:?}"),
     }
 }
+
+fn lid_inbound(chat: &str, sender: &str, alt: Option<&str>, is_group: bool, ts_ms: i64) -> InboundMessage {
+    let mut info = MessageInfo {
+        id: format!("lid-{ts_ms}"),
+        timestamp: Utc.timestamp_millis_opt(ts_ms).unwrap(),
+        ..Default::default()
+    };
+    info.source = MessageSource {
+        chat: chat.parse().unwrap(),
+        sender: sender.parse().unwrap(),
+        sender_alt: alt.map(|a| a.parse().unwrap()),
+        is_group,
+        ..Default::default()
+    };
+    InboundMessage::builder()
+        .message(Arc::new(wa::Message {
+            conversation: Some("hello".to_owned()),
+            ..Default::default()
+        }))
+        .info(Arc::new(info))
+        .build()
+}
+
+#[test]
+fn lid_dm_with_alternate_sender_uses_phone_account_and_reply_reaches_chat() {
+    let boot_ms = 1_700_000_100_000u64;
+    let mut translator = InboundTranslator::new(boot_ms);
+    let mut transport = OfflineWhatsAppTransport::new();
+    let echo = EchoRegistry::default();
+    let mut stager = MemoryBlobStager::default();
+    let msg = lid_inbound(
+        "130799689031758@lid",
+        "130799689031758@lid",
+        Some("6285111242960@s.whatsapp.net"),
+        false,
+        (boot_ms + 1_000) as i64,
+    );
+    let p = translator
+        .translate_inbound(&msg, &mut transport, &echo, &mut stager, "k")
+        .expect("translates");
+    assert_eq!(p.actor.as_str(), "wa:user:6285111242960@s.whatsapp.net");
+    assert_eq!(p.place.as_str(), "wa:dm:6285111242960@s.whatsapp.net");
+    assert!(
+        p.audience
+            .unwrap()
+            .contains(&ActorId::new("wa:user:6285111242960@s.whatsapp.net"))
+    );
+
+    // Outbound chat.speak to that place goes to the phone-number chat.
+    let mut body = WhatsAppBody::offline(default_body_id());
+    body.set_now_ms(1_700_000_000_000);
+    let res = body
+        .execute(exec_params(
+            "act-lid-reply",
+            CAP_CHAT_SPEAK,
+            p.place.as_str(),
+            b"pong".to_vec(),
+        ))
+        .unwrap();
+    assert!(res.accepted);
+    assert!(body.transport().recorded.iter().any(|a| matches!(
+        a,
+        RecordedOutboundAction::Text { chat, text, .. }
+            if chat == "6285111242960@s.whatsapp.net" && text == "pong"
+    )));
+}
+
+#[test]
+fn lid_dm_without_alternate_uses_stored_mapping_else_lid() {
+    let boot_ms = 1_700_000_100_000u64;
+    let mut translator = InboundTranslator::new(boot_ms);
+    let mut transport = OfflineWhatsAppTransport::new();
+    transport
+        .lid_to_phone
+        .insert("130799689031758".to_owned(), "6285111242960".to_owned());
+    let echo = EchoRegistry::default();
+    let mut stager = MemoryBlobStager::default();
+    let mapped = lid_inbound(
+        "130799689031758@lid",
+        "130799689031758@lid",
+        None,
+        false,
+        (boot_ms + 1_000) as i64,
+    );
+    let p = translator
+        .translate_inbound(&mapped, &mut transport, &echo, &mut stager, "k1")
+        .unwrap();
+    assert_eq!(p.actor.as_str(), "wa:user:6285111242960@s.whatsapp.net");
+    assert_eq!(p.place.as_str(), "wa:dm:6285111242960@s.whatsapp.net");
+
+    let unknown = lid_inbound(
+        "999000111222@lid",
+        "999000111222@lid",
+        None,
+        false,
+        (boot_ms + 2_000) as i64,
+    );
+    let p = translator
+        .translate_inbound(&unknown, &mut transport, &echo, &mut stager, "k2")
+        .unwrap();
+    assert_eq!(p.actor.as_str(), "wa:user:999000111222@lid");
+    assert_eq!(p.place.as_str(), "wa:dm:999000111222@lid");
+}
+
+#[test]
+fn lid_group_sender_and_participants_use_phone_accounts() {
+    let boot_ms = 1_700_000_100_000u64;
+    let mut translator = InboundTranslator::new(boot_ms);
+    let mut transport = OfflineWhatsAppTransport::new();
+    transport.group_participants.insert(
+        "1203630123456@g.us".to_owned(),
+        vec!["777888999@lid".parse().unwrap()],
+    );
+    transport
+        .lid_to_phone
+        .insert("777888999".to_owned(), "6282222222".to_owned());
+    let echo = EchoRegistry::default();
+    let mut stager = MemoryBlobStager::default();
+    let msg = lid_inbound(
+        "1203630123456@g.us",
+        "130799689031758@lid",
+        Some("6285111242960@s.whatsapp.net"),
+        true,
+        (boot_ms + 1_000) as i64,
+    );
+    let p = translator
+        .translate_inbound(&msg, &mut transport, &echo, &mut stager, "k")
+        .unwrap();
+    assert_eq!(p.place.as_str(), "wa:group:1203630123456@g.us");
+    assert_eq!(p.actor.as_str(), "wa:user:6285111242960@s.whatsapp.net");
+    let aud = p.audience.unwrap();
+    assert!(aud.contains(&ActorId::new("wa:user:6285111242960@s.whatsapp.net")));
+    assert!(aud.contains(&ActorId::new("wa:user:6282222222@s.whatsapp.net")));
+    assert!(!aud.contains(&ActorId::new("wa:user:130799689031758@lid")));
+}
+
+#[test]
+fn status_json_reports_needs_pairing_without_a_session_and_opens_no_network() {
+    let dir = TempDir::new().unwrap();
+    let state_dir = dir.path().join("state");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_body-whatsapp"))
+        .env("MONOAGENS_PLUGIN_STATE_DIR", &state_dir)
+        .env_remove("MONOAGENS_PLUGIN_CONFIG")
+        .args(["status", "--json"])
+        .output()
+        .expect("run status");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let v: Value = serde_json::from_slice(&out.stdout).expect("json on stdout");
+    assert_eq!(v["ready"], json!(false));
+    assert_eq!(v["needs"], json!(["pairing"]));
+    // The command must not have created a session database.
+    assert!(!state_dir.join("session.db").exists());
+}

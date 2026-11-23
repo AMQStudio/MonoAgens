@@ -12,7 +12,7 @@ use std::time::Duration;
 use body_telegram::{
     BlobResolver, BlobStager, DEFAULT_BODY_ID, DEFAULT_TELEGRAM_API_BASE, LiveTelegramTransport,
     OfflineTelegramTransport, OutboundTelegramEvent, StagedBlob, TelegramBody, TelegramPluginConfig,
-    TelegramTransport, resolve_state_dir_from_env,
+    TelegramTransport, poll_error_backoff, resolve_state_dir_from_env,
 };
 use clap::Parser;
 use monoagens_body_kit::PersistentBodyRuntime;
@@ -152,6 +152,44 @@ fn run_offline(args: CliArgs) -> Result<(), String> {
         .map_err(|e| format!("body-telegram stdio error: {e}"))
 }
 
+/// Sleeps `total`, waking early when `shutdown` is set.
+fn sleep_unless_shutdown(shutdown: &AtomicBool, total: Duration) {
+    let deadline = std::time::Instant::now() + total;
+    while !shutdown.load(Ordering::SeqCst) {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        std::thread::sleep(left.min(Duration::from_millis(250)));
+    }
+}
+
+/// `status --json [--token-env NAME]`: readiness report, no network.
+fn run_status(args: &[String]) {
+    let mut token_env = "TELEGRAM_BOT_TOKEN".to_owned();
+    let mut iter = args.iter();
+    while let Some(a) = iter.next() {
+        if a == "--token-env"
+            && let Some(v) = iter.next()
+        {
+            token_env.clone_from(v);
+        } else if let Some(v) = a.strip_prefix("--token-env=") {
+            token_env = v.to_owned();
+        }
+    }
+    let present = env::var(&token_env).is_ok_and(|v| !v.trim().is_empty());
+    let report = if present {
+        serde_json::json!({ "ready": true, "needs": [], "detail": "bot token present" })
+    } else {
+        serde_json::json!({
+            "ready": false,
+            "needs": [format!("secret:{token_env}")],
+            "detail": format!("set the secret {token_env}"),
+        })
+    };
+    println!("{report}");
+}
+
 fn run_live(args: CliArgs, token: String) -> Result<(), String> {
     let config = load_plugin_config();
     let poll_timeout_secs = config.poll_timeout_secs;
@@ -177,9 +215,8 @@ fn run_live(args: CliArgs, token: String) -> Result<(), String> {
     if !args.place.is_empty() {
         body = body.with_places(args.place.into_iter().map(PlaceId::new).collect());
     }
-    if let Err(err) = body.init_bot_identity() {
-        eprintln!("body-telegram warning: bot identity unavailable ({err})");
-    }
+    // The bot identity (`getMe`) is fetched by the poller thread, never before the Waist-2
+    // handshake: a slow or rate-limited Telegram must not delay `body.discover`.
 
     let state_runtime = Arc::new(Mutex::new(PersistentBodyRuntime::new(
         resolve_state_dir_from_env(),
@@ -195,6 +232,19 @@ fn run_live(args: CliArgs, token: String) -> Result<(), String> {
         .name("tg-poller".to_owned())
         .spawn(move || {
             let mut offset: Option<i64> = None;
+            // Bot identity first (own thread, outside the body lock), honouring `retry_after`.
+            while !shutdown_poll.load(Ordering::SeqCst) {
+                match poll_transport.get_me() {
+                    Ok(user) => {
+                        body_poll.lock().expect("body lock").set_bot_user(user);
+                        break;
+                    }
+                    Err(err) => {
+                        eprintln!("body-telegram warning: bot identity unavailable ({err})");
+                        sleep_unless_shutdown(&shutdown_poll, poll_error_backoff(&err));
+                    }
+                }
+            }
             while !shutdown_poll.load(Ordering::SeqCst) {
                 match poll_transport.get_updates(offset, poll_timeout_secs) {
                     Ok(updates) => {
@@ -260,7 +310,7 @@ fn run_live(args: CliArgs, token: String) -> Result<(), String> {
                     }
                     Err(err) => {
                         eprintln!("body-telegram getUpdates error: {err}");
-                        std::thread::sleep(Duration::from_secs(2));
+                        sleep_unless_shutdown(&shutdown_poll, poll_error_backoff(&err));
                     }
                 }
             }
@@ -365,6 +415,11 @@ fn run_live(args: CliArgs, token: String) -> Result<(), String> {
 }
 
 fn main() {
+    let raw: Vec<String> = env::args().skip(1).collect();
+    if raw.first().is_some_and(|a| a == "status") {
+        run_status(&raw[1..]);
+        return;
+    }
     let args = CliArgs::parse();
     let token = env::var(&args.token_env)
         .ok()

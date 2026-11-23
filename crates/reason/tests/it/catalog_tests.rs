@@ -36,7 +36,6 @@ fn catalog_lists_every_provider_with_dialect_and_base_url() {
         ("lm-studio", oa, "http://127.0.0.1:1234/v1"),
         ("llama-cpp", oa, "http://127.0.0.1:8080/v1"),
         ("vllm", oa, "http://127.0.0.1:8000/v1"),
-        ("custom", oa, ""),
     ];
     assert_eq!(got, expected);
 }

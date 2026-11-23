@@ -1,4 +1,4 @@
-//! `/model` picker, `/login`, key detour, `/usage`, cost display and slash descriptions
+//! `/model` picker, `/provider`, key detour, `/usage`, cost display and slash descriptions
 //! (change `model-provider-catalog`, groups 4 and 5). Gateway answers are synthetic
 //! [`CatalogEvent`]s; the real round trips are covered in `catalog_ui::tests`.
 
@@ -54,8 +54,8 @@ fn providers_json() -> serde_json::Value {
     json!({
         "current": { "provider": "alpha", "model": "deepseek-v4.1-flash" },
         "providers": [
-            { "id": "alpha", "label": "Alpha Cloud", "keyless": false, "key_set": true, "key_source": "secrets", "discovery": true },
-            { "id": "local", "label": "Local Box", "keyless": true, "key_set": false, "key_source": null, "discovery": true },
+            { "id": "alpha", "label": "Alpha Cloud", "keyless": false, "key_set": true, "key_source": "secrets", "logged_in": true, "discovery": true },
+            { "id": "local", "label": "Local Box", "keyless": true, "key_set": false, "key_source": null, "logged_in": true, "enabled": true, "discovery": true },
             { "id": "beta", "label": "Beta AI", "keyless": false, "key_set": false, "key_source": null, "discovery": true },
         ]
     })
@@ -221,7 +221,7 @@ fn choosing_a_model_of_an_unconfigured_provider_opens_the_key_page_first() {
 fn login_list_shows_key_state_searches_and_esc_returns() {
     let dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let mut s = make_state(&dir);
-    let actions = s.execute_slash_command("/login");
+    let actions = s.execute_slash_command("/provider");
     assert_eq!(actions, vec![AppAction::Catalog(CatalogAction::LoadProviders)]);
     s.catalog.apply(CatalogEvent::Providers(Ok(providers_json())));
     let text = text_of(&render(100, 30, &mut s));
@@ -248,7 +248,7 @@ fn login_list_shows_key_state_searches_and_esc_returns() {
 fn failed_test_is_shown_and_not_saved() {
     let dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let mut s = make_state(&dir);
-    s.execute_slash_command("/login");
+    s.execute_slash_command("/provider");
     s.catalog.apply(CatalogEvent::Providers(Ok(providers_json())));
     type_text(&mut s, "beta");
     s.handle_key_event(key(KeyCode::Enter));
@@ -270,7 +270,7 @@ fn slash_menu_descriptions_show_live_state() {
     let cmds = s.available_slash_commands();
     let model = cmds.iter().find(|c| c.name == "model").unwrap();
     assert!(model.description.contains("deepseek-v4.1-flash"), "{model:?}");
-    assert!(cmds.iter().any(|c| c.name == "login"));
+    assert!(cmds.iter().any(|c| c.name == "provider"));
     assert!(cmds.iter().any(|c| c.name == "usage"));
 }
 
@@ -327,4 +327,50 @@ fn snapshot_picker_at_two_sizes() {
         let mut s = open_picker(&dir);
         insta::assert_snapshot!(format!("picker_{w}x{h}"), text_of(&render(w, h, &mut s)));
     }
+}
+
+#[test]
+fn login_is_not_a_command_and_provider_is_listed_in_the_slash_menu() {
+    let dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let mut s = make_state(&dir);
+    let cmds = s.available_slash_commands();
+    assert!(cmds.iter().any(|c| c.name == "provider" && c.usage == "/provider"));
+    assert!(!cmds.iter().any(|c| c.name == "login"));
+    s.execute_slash_command("/login");
+    assert!(!s.catalog.is_open(), "/login must not open the provider list");
+}
+
+#[test]
+fn add_custom_provider_form_collects_fields_and_emits_one_action() {
+    let dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let mut s = make_state(&dir);
+    s.execute_slash_command("/provider");
+    s.catalog.apply(CatalogEvent::Providers(Ok(providers_json())));
+    s.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+    assert_eq!(s.catalog.screen, Screen::CustomForm);
+    type_text(&mut s, "my-gateway");
+    s.handle_key_event(key(KeyCode::Tab));
+    type_text(&mut s, "https://gw.example/v1");
+    s.handle_key_event(key(KeyCode::Tab)); // dialect
+    s.handle_key_event(key(KeyCode::Tab)); // key
+    s.handle_paste("sk-secret-key");
+    let text = text_of(&render(100, 30, &mut s));
+    assert!(!text.contains("sk-secret-key"), "key must be masked: {text}");
+    let actions = s.handle_key_event(key(KeyCode::Enter));
+    let [AppAction::Catalog(CatalogAction::AddCustom { name, base_url, messages_api, .. })] = actions.as_slice()
+    else {
+        panic!("{actions:?}")
+    };
+    assert_eq!((name.as_str(), base_url.as_str(), *messages_api), ("my-gateway", "https://gw.example/v1", false));
+    assert_eq!(
+        monoagens_tui::catalog_ui::custom_provider_patch("my-gateway", "https://gw.example/v1", false, false),
+        json!({"providers": {"custom": {"my-gateway": {"base_url": "https://gw.example/v1", "dialect": "openai_chat"}}}})
+    );
+
+    // A name clash with a built-in provider is refused in the form.
+    s.catalog.apply(CatalogEvent::CustomAdded { name: "my-gateway".into(), result: Err("x".into()) });
+    s.catalog.custom.name = "groq".into();
+    let actions = s.handle_key_event(key(KeyCode::Enter));
+    assert!(actions.is_empty());
+    assert!(s.catalog.custom.error.as_deref().unwrap_or("").contains("already exists"));
 }

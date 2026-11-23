@@ -10,7 +10,7 @@ use serde_json::json;
 
 use monoagens_reason::model::catalog;
 
-use crate::config::{install_builtin_plugin, save_secret_key, write_or_update_gateway_config};
+use crate::config::{install_builtin_plugin, write_or_update_gateway_config};
 use crate::settings::{SetupWizardState, WizardKeyPhase, WizardStep};
 use crate::settings_runtime::{SecretText, SettingsAction};
 use crate::state::{AppAction, HitRegions, TuiAppState};
@@ -320,17 +320,9 @@ impl TuiAppState {
             .map_err(|e| e.to_string())
     }
 
+    /// No provider was picked: only the model name is kept (the legacy endpoint/key secrets
+    /// were removed; keys are stored per provider).
     fn save_wizard_legacy(&mut self, w: &SetupWizardState) -> Result<(), String> {
-        if !w.endpoint.trim().is_empty() {
-            save_secret_key(&self.paths.secrets_path, "model_endpoint", &w.endpoint)?;
-        }
-        if !w.api_key.trim().is_empty() {
-            save_secret_key(&self.paths.secrets_path, "model_api_key", &w.api_key)?;
-            self.secrets_summary.model_api_key_set = true;
-        }
-        if !w.endpoint.trim().is_empty() {
-            self.secrets_summary.model_endpoint = Some(w.endpoint.trim().to_owned());
-        }
         if !w.model.trim().is_empty() {
             self.gateway_cfg.model.model = w.model.trim().to_owned();
             self.model_name = self.gateway_cfg.model.model.clone();

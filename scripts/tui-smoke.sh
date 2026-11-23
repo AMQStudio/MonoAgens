@@ -218,6 +218,7 @@ PORT="$(cat "$HOME_DIR/port")"
 # --- plugin: crashes once (2.5 s after start, stderr `boom`), then runs normally ---------------
 cat > "$HOME_DIR/flaky-plugin.sh" <<SH
 #!/bin/sh
+if [ "\$1" = status ]; then exit 2; fi
 if [ -e '$HOME_DIR/crashed-once' ]; then
   exec '$FAKE_PLUGIN' --body-id body-fake --stderr-lines 'hello-from-plugin'
 fi
@@ -363,6 +364,9 @@ cat > "$HOME_DIR/monoagens-catalog.toml" <<TOML
 version = 1
 data_dir = "$HOME_DIR/data"
 
+[providers]
+enabled = ["ollama"]
+
 [model]
 provider = "ollama"
 model = "fake-model"
@@ -384,6 +388,13 @@ echo "ok: search narrows the list"
 tmux send-keys -t "$SESSION" Escape   # clears the search
 sleep 0.3
 close_overlay "Select model"
+# /provider opens the provider list; /login is no longer a command
+tmux send-keys -t "$SESSION" "/provider" Enter
+wait_for "Providers" 10
+wait_for "enabled" 10
+echo "ok: /provider opens the provider list"
+tmux send-keys -t "$SESSION" Escape
+sleep 0.3
 quit_tui
 
 # 6c. scrolling slash menu, settings scrollbar, selector, nested Esc

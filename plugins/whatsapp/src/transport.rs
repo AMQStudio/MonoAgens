@@ -105,6 +105,12 @@ pub trait WhatsAppTransport {
 
     /// Downloads decrypted media bytes from an inbound WhatsApp message if downloadable.
     fn download_media(&mut self, message: &wa::Message) -> Result<Option<Vec<u8>>, String>;
+
+    /// Looks up the phone-number JID (`<digits>@s.whatsapp.net`) the client knows for a
+    /// LID JID. `None` when no mapping is stored.
+    fn phone_for_lid(&mut self, _lid: &Jid) -> Option<Jid> {
+        None
+    }
 }
 
 /// Live WhatsApp Web E2EE transport backed by `Arc<whatsapp_rust::Client>`.
@@ -351,8 +357,20 @@ impl WhatsAppTransport for LiveWhatsAppTransport {
         Ok(meta
             .participants
             .into_iter()
-            .map(|p| p.jid.to_non_ad())
+            .map(|p| p.phone_number.unwrap_or(p.jid).to_non_ad())
             .collect())
+    }
+
+    fn phone_for_lid(&mut self, lid: &Jid) -> Option<Jid> {
+        if !lid.is_lid() {
+            return None;
+        }
+        let entry = self
+            .rt
+            .block_on(self.client.get_lid_pn_entry(lid))
+            .ok()
+            .flatten()?;
+        Some(Jid::pn(entry.phone_number.to_string()))
     }
 
     fn download_media(&mut self, message: &wa::Message) -> Result<Option<Vec<u8>>, String> {
@@ -455,6 +473,8 @@ pub struct OfflineWhatsAppTransport {
     pub next_seq: u64,
     pub recorded: Vec<RecordedOutboundAction>,
     pub group_participants: HashMap<String, Vec<Jid>>,
+    /// LID user part -> phone-number user part (offline stand-in for the client mapping).
+    pub lid_to_phone: HashMap<String, String>,
     pub mock_media_bytes: Option<Vec<u8>>,
     pub fail_next_send: Option<String>,
 }
@@ -635,5 +655,14 @@ impl WhatsAppTransport for OfflineWhatsAppTransport {
 
     fn download_media(&mut self, _message: &wa::Message) -> Result<Option<Vec<u8>>, String> {
         Ok(self.mock_media_bytes.clone())
+    }
+
+    fn phone_for_lid(&mut self, lid: &Jid) -> Option<Jid> {
+        if !lid.is_lid() {
+            return None;
+        }
+        self.lid_to_phone
+            .get(&lid.user.to_string())
+            .map(|p| Jid::pn(p.clone()))
     }
 }

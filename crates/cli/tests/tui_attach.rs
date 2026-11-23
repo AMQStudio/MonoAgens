@@ -262,7 +262,7 @@ fn plugin_autostarts_logs_stderr_and_recovers_after_a_crash() {
     std::fs::write(
         &script,
         format!(
-            "#!/bin/sh\nif [ -e '{m}' ]; then exec '{p}' --body-id body-fake --stderr-lines 'hello-from-plugin'; fi\ntouch '{m}'\nexec '{p}' --body-id body-fake --stderr-lines 'hello-from-plugin|boom' --crash-after-ms 2500\n",
+            "#!/bin/sh\nif [ \"$1\" = status ]; then exit 2; fi\nif [ -e '{m}' ]; then exec '{p}' --body-id body-fake --stderr-lines 'hello-from-plugin'; fi\ntouch '{m}'\nexec '{p}' --body-id body-fake --stderr-lines 'hello-from-plugin|boom' --crash-after-ms 2500\n",
             m = marker.display(),
             p = plugin.display()
         ),

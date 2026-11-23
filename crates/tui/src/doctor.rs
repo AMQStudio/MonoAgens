@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use monoagens_gateway::{
-    BodyTransportConfig, DEFAULT_OPENAI_ENDPOINT, EmbedBackendKind, GatewayConfig,
-    ModelProviderKind, ResolvedPaths, load_config_file, load_provider_secrets,
+    BodyTransportConfig, EmbedBackendKind, GatewayConfig,
+    ModelProviderKind, ResolvedPaths, load_config_file,
     read_data_dir_lock_pid,
 };
 
@@ -75,7 +75,7 @@ pub fn run_doctor(input: &DoctorInput) -> Vec<DoctorCheck> {
     };
     let provider_kind = cfg.as_ref().map(|c| c.model.provider);
     out.push(check_secrets(&input.paths.secrets_path, provider_kind));
-    out.push(check_provider(&input.paths.secrets_path, provider_kind));
+    out.push(check_provider(cfg.as_ref()));
     out.extend(check_plugins(cfg.as_ref()));
     out.push(check_embedder(cfg.as_ref()));
     out.push(check_data_dir(&input.paths.data_dir));
@@ -108,31 +108,38 @@ fn check_secrets(path: &Path, provider: Option<ModelProviderKind>) -> DoctorChec
             "secrets",
             DoctorStatus::Fail,
             format!("{} not found", path.display()),
-            "create it with: monoagens secret set model_api_key",
+            "log in with /provider (writes a per-provider key to secrets.toml)",
         ),
     }
 }
 
-fn check_provider(secrets_path: &Path, provider: Option<ModelProviderKind>) -> DoctorCheck {
-    match provider {
-        Some(ModelProviderKind::Scripted) => {
-            return check("provider", DoctorStatus::Skipped, "scripted provider (no network)", "");
-        }
-        None => {
-            return check("provider", DoctorStatus::Skipped, "configuration is invalid", "");
-        }
-        Some(_) => {}
+fn check_provider(cfg: Option<&monoagens_gateway::GatewayConfig>) -> DoctorCheck {
+    let Some(cfg) = cfg else {
+        return check("provider", DoctorStatus::Skipped, "configuration is invalid", "");
+    };
+    if cfg.model.provider == ModelProviderKind::Scripted {
+        return check("provider", DoctorStatus::Skipped, "scripted provider (no network)", "");
     }
-    let endpoint = load_provider_secrets(Some(secrets_path), |k| std::env::var(k).ok())
-        .ok()
-        .and_then(|s| s.model_endpoint)
-        .unwrap_or_else(|| DEFAULT_OPENAI_ENDPOINT.to_owned());
+    let entry = cfg
+        .model
+        .catalog_provider
+        .as_deref()
+        .and_then(monoagens_reason::model::catalog::find);
+    let Some(entry) = entry else {
+        return check(
+            "provider",
+            DoctorStatus::Fail,
+            "no provider selected",
+            "run /provider to log in, then /model to pick a model",
+        );
+    };
+    let endpoint = entry.effective_base_url(cfg.model.provider_base_url.as_deref());
     let Some((host, port)) = host_port(&endpoint) else {
         return check(
             "provider",
             DoctorStatus::Fail,
             format!("cannot read a host from endpoint '{endpoint}'"),
-            "set a valid model_endpoint in /settings -> Providers",
+            "check the provider base URL in /provider",
         );
     };
     let addr = (host.as_str(), port).to_socket_addrs().ok().and_then(|mut a| a.next());
@@ -145,7 +152,7 @@ fn check_provider(secrets_path: &Path, provider: Option<ModelProviderKind>) -> D
             "provider",
             DoctorStatus::Fail,
             format!("cannot connect to {host}:{port}"),
-            "check the network, the endpoint in /settings -> Providers, or a proxy",
+            "check the network, the provider base URL, or a proxy",
         )
     }
 }

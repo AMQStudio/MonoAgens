@@ -78,24 +78,15 @@ fn header<'a>(h: &'a [(String, String)], name: &str) -> Option<&'a str> {
 }
 
 #[test]
-fn legacy_openai_compatible_config_behaves_as_before() {
+fn legacy_openai_compatible_kind_has_no_runtime_provider() {
     let c = cfg("version = 1\n[model]\nprovider = \"openai_compatible\"\nmodel = \"m\"\n");
-    assert_eq!(c.model.provider, ModelProviderKind::OpenAiCompatible);
-    assert_eq!(c.model.catalog_provider, None);
-    assert_eq!(c.model.provider_base_url, None);
-
-    let (base, seen) = serve(1, OPENAI_REPLY);
     let secrets = ProviderSecrets {
-        model_endpoint: Some(format!("{base}/v1/chat/completions")),
+        model_endpoint: Some("http://127.0.0.1:1/v1/chat/completions".to_owned()),
         model_api_key: Some(SecretString::new("legacy-key")),
         ..ProviderSecrets::default()
     };
-    let provider = build_provider_from_config(&c, &secrets).expect("provider");
-    assert_eq!(provider.provider_name(), "openai_compatible");
-    invoke(provider.as_ref());
-    let seen = seen.lock().unwrap();
-    assert!(seen[0].0.starts_with("POST /v1/chat/completions"), "{}", seen[0].0);
-    assert_eq!(header(&seen[0].1, "authorization"), Some("Bearer legacy-key"));
+    let err = build_provider_from_config(&c, &secrets).err().expect("no legacy provider");
+    assert!(err.to_string().contains("/provider"), "{err}");
 }
 
 #[test]
@@ -174,10 +165,88 @@ fn messages_dialect_catalog_provider_uses_x_api_key() {
 }
 
 #[test]
-fn custom_provider_without_base_url_is_a_clear_error() {
-    let c = cfg("version = 1\n[model]\nprovider = \"custom\"\nmodel = \"m\"\n");
-    let err = build_provider_from_config(&c, &ProviderSecrets::default())
-        .err()
-        .expect("error");
-    assert!(err.to_string().contains("base_url"), "{err}");
+fn named_custom_provider_uses_its_own_base_url_and_only_its_own_key() {
+    let (base, seen) = serve(1, OPENAI_REPLY);
+    let c = cfg(&format!(
+        "version = 1\n[providers.custom.my-gw]\nbase_url = \"{base}/v1\"\ndialect = \"openai_chat\"\n[model]\nprovider = \"my-gw\"\nmodel = \"m\"\n"
+    ));
+    assert_eq!(c.model.catalog_provider.as_deref(), Some("my-gw"));
+    let secrets = monoagens_gateway::parse_secrets_toml_str(
+        "model_api_key = \"legacy\"\n[providers.my-gw]\napi_key = \"gw-key\"\n[providers.groq]\napi_key = \"groq-key\"\n",
+        Path::new("secrets.toml"),
+    )
+    .expect("secrets");
+    let provider = build_provider_from_config(&c, &secrets).expect("provider");
+    invoke(provider.as_ref());
+    let seen = seen.lock().unwrap();
+    assert!(seen[0].0.starts_with("POST /v1/chat/completions"), "{}", seen[0].0);
+    assert_eq!(header(&seen[0].1, "authorization"), Some("Bearer gw-key"));
+    assert!(!seen[0].2.contains("groq-key"));
+}
+
+#[test]
+fn legacy_key_is_never_resolved_for_a_catalog_provider() {
+    let secrets = ProviderSecrets {
+        model_api_key: Some(SecretString::new("legacy-key")),
+        ..ProviderSecrets::default()
+    };
+    for id in ["openai", "anthropic", "groq", "opencode-go"] {
+        let entry = monoagens_reason::model::catalog::find(id).expect("entry");
+        assert!(secrets.api_key_for(entry, |_| None).is_none(), "{id}");
+    }
+}
+
+#[test]
+fn legacy_opencode_go_config_is_migrated_once_with_backups() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let cfg_path = dir.path().join("monoagens.toml");
+    let sec_path = dir.path().join("secrets.toml");
+    let cfg_text = "version = 1\n[model]\nprovider = \"openai_compatible\"\nmodel = \"deepseek-v4.1-flash\"\n";
+    let sec_text = "model_endpoint = \"https://opencode.ai/inference/go/openai/v1/chat/completions\"\nmodel_api_key = \"oc_sk_test_key\"\n";
+    std::fs::write(&cfg_path, cfg_text).unwrap();
+    std::fs::write(&sec_path, sec_text).unwrap();
+
+    let env = monoagens_gateway::load_or_init_gateway_env(Some(&cfg_path), |_| None).expect("load");
+    assert_eq!(env.config.model.catalog_provider.as_deref(), Some("opencode-go"));
+    assert_eq!(env.config.model.model, "deepseek-v4.1-flash");
+    let sec_after = std::fs::read_to_string(&sec_path).unwrap();
+    assert!(!sec_after.contains("model_endpoint") && !sec_after.contains("model_api_key"), "{sec_after}");
+    assert!(sec_after.contains("[providers.opencode-go]") && sec_after.contains("oc_sk_test_key"));
+    assert_eq!(std::fs::read_to_string(dir.path().join("monoagens.toml.bak")).unwrap(), cfg_text);
+    assert_eq!(std::fs::read_to_string(dir.path().join("secrets.toml.bak")).unwrap(), sec_text);
+    let entry = monoagens_reason::model::catalog::find("opencode-go").unwrap();
+    assert_eq!(
+        entry.chat_endpoint(None),
+        "https://opencode.ai/inference/go/openai/v1/chat/completions"
+    );
+    assert_eq!(
+        env.secrets.api_key_for(entry, |_| None).unwrap().expose(),
+        "oc_sk_test_key"
+    );
+
+    // Second load: nothing left to migrate, files unchanged.
+    let cfg_after = std::fs::read_to_string(&cfg_path).unwrap();
+    monoagens_gateway::load_or_init_gateway_env(Some(&cfg_path), |_| None).expect("reload");
+    assert_eq!(std::fs::read_to_string(&cfg_path).unwrap(), cfg_after);
+    assert_eq!(std::fs::read_to_string(&sec_path).unwrap(), sec_after);
+}
+
+#[test]
+fn unknown_legacy_endpoint_becomes_a_host_named_custom_provider() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let cfg_path = dir.path().join("monoagens.toml");
+    let sec_path = dir.path().join("secrets.toml");
+    std::fs::write(&cfg_path, "version = 1\n[model]\nprovider = \"openai_compatible\"\nmodel = \"m\"\n").unwrap();
+    std::fs::write(
+        &sec_path,
+        "model_endpoint = \"https://gw.example.com/v1/chat/completions\"\nmodel_api_key = \"k-1\"\n",
+    )
+    .unwrap();
+    let env = monoagens_gateway::load_or_init_gateway_env(Some(&cfg_path), |_| None).expect("load");
+    assert_eq!(env.config.model.catalog_provider.as_deref(), Some("gw-example-com"));
+    assert_eq!(env.config.custom_providers.len(), 1);
+    assert_eq!(env.config.custom_providers[0].base_url, "https://gw.example.com/v1");
+    let entry = monoagens_reason::model::catalog::find("gw-example-com").unwrap();
+    assert_eq!(entry.chat_endpoint(None), "https://gw.example.com/v1/chat/completions");
+    assert_eq!(env.secrets.api_key_for(entry, |_| None).unwrap().expose(), "k-1");
 }

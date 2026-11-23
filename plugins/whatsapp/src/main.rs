@@ -50,12 +50,15 @@ enum CliCommand {
         force_live: bool,
         force_offline: bool,
     },
+    /// `status --json`: readiness report (no network).
+    Status { db_path: PathBuf },
 }
 
 fn parse_cli_args(args: &[String], config: &WhatsAppPluginConfig) -> Result<CliCommand, String> {
     let mut iter = args.iter().peekable();
     let is_pair = iter.peek().is_some_and(|a| a.as_str() == "pair");
-    if is_pair {
+    let is_status = iter.peek().is_some_and(|a| a.as_str() == "status");
+    if is_pair || is_status {
         iter.next();
     }
 
@@ -107,12 +110,14 @@ fn parse_cli_args(args: &[String], config: &WhatsAppPluginConfig) -> Result<CliC
                     .ok_or_else(|| "--body-id requires an identifier".to_owned())?;
                 body_id = val.clone();
             }
+            "--json" if is_status => {}
             "--live" => force_live = true,
             "--offline" => force_offline = true,
             "--help" | "-h" => {
                 eprintln!(
                     "Usage:\n  \
                      body-whatsapp [--db <path>] [--live] [--offline] [--body-id <id>]\n  \
+                     body-whatsapp status --json [--db <path>]\n  \
                      body-whatsapp pair [--db <path>] [--phone <number>] [--code <8char>] [--timeout-secs <secs>] [--fresh]"
                 );
                 std::process::exit(0);
@@ -123,7 +128,9 @@ fn parse_cli_args(args: &[String], config: &WhatsAppPluginConfig) -> Result<CliC
         }
     }
 
-    if is_pair {
+    if is_status {
+        Ok(CliCommand::Status { db_path })
+    } else if is_pair {
         Ok(CliCommand::Pair {
             db_path,
             phone,
@@ -328,6 +335,31 @@ fn ensure_parent_dir(path: &Path) -> Result<(), String> {
             .map_err(|e| format!("failed to create directory '{}': {e}", parent.display()))?;
     }
     Ok(())
+}
+
+/// Readiness of the WhatsApp session at `db_path` as the JSON the gateway reads
+/// (`{"ready", "needs", "detail"}`). Opens the local store only: never touches the network.
+async fn readiness_report(db_path: &Path) -> Value {
+    let unpaired = |detail: &str| {
+        serde_json::json!({ "ready": false, "needs": ["pairing"], "detail": detail })
+    };
+    if !db_path.exists() {
+        return unpaired("no WhatsApp session yet: pair a device");
+    }
+    let Some(db_str) = db_path.to_str() else {
+        return unpaired("session path is not valid UTF-8");
+    };
+    let store = match SqliteStore::new(db_str).await {
+        Ok(s) => s,
+        Err(e) => return unpaired(&format!("cannot open the WhatsApp session store: {e}")),
+    };
+    match store.load_device_data_for_device(1).await {
+        Ok(Some(device)) if device.pn.is_some() || device.lid.is_some() => {
+            serde_json::json!({ "ready": true, "needs": [], "detail": "paired" })
+        }
+        Ok(_) => unpaired("the session exists but no device is paired"),
+        Err(e) => unpaired(&format!("cannot read the WhatsApp session: {e}")),
+    }
 }
 
 async fn run_pair_command(
@@ -981,6 +1013,14 @@ fn main() {
     };
 
     match cmd {
+        CliCommand::Status { db_path } => {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build tokio runtime");
+            let report = rt.block_on(readiness_report(&db_path));
+            println!("{report}");
+        }
         CliCommand::Pair {
             db_path,
             phone,

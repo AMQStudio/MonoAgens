@@ -1908,11 +1908,13 @@ async fn gateway_sends_configured_headers_and_per_purpose_limits_via_mock_provid
         }
     });
 
-    let cfg = monoagens_gateway::parse_config_str(
+    let cfg_text = format!(
         r#"
 version = 1
+[providers.custom.mock-gw]
+base_url = "http://{addr}/v1"
 [model]
-provider = "openai_compatible"
+provider = "mock-gw"
 model = "neutral-model"
 output_limit_param = "max_output_tokens"
 
@@ -1922,18 +1924,18 @@ classify = 1024
 consolidate = 8192
 
 [model.extra_headers]
-x-conv-id = "{conversation_id}"
+x-conv-id = "{{conversation_id}}"
 x-static-hdr = "secret-gw-hdr-val"
-"#,
+"#
+    );
+    let cfg = monoagens_gateway::parse_config_str(
+        &cfg_text,
         std::path::Path::new("monoagens.toml"),
         std::path::Path::new("."),
     )
     .expect("valid config");
 
-    let secrets = ProviderSecrets {
-        model_endpoint: Some(format!("http://{addr}/v1/chat/completions")),
-        ..ProviderSecrets::default()
-    };
+    let secrets = ProviderSecrets::default();
     let provider = build_provider_from_config_async(&cfg, &secrets)
         .await
         .expect("build provider");

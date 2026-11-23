@@ -22,7 +22,7 @@ pub fn write_scripted_config(home: &Path) -> PathBuf {
     cfg_path
 }
 
-/// Config for the `openai_compatible` provider pointed at a fake provider server (no network),
+/// Legacy `openai_compatible` config (migrated to a named custom provider on load) pointed at a fake provider server (no network),
 /// with extra top-level TOML appended (for example `[plugins.x]` tables). Also writes a 0600
 /// `secrets.toml` next to it.
 pub fn write_fake_provider_config(home: &Path, base_url: &str, extra_toml: &str) -> PathBuf {

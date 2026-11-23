@@ -24,6 +24,10 @@ pub const CONFIG_KEYS: &[&str] = &[
     "runtime.progress_note_ms",
     "runtime.body_shutdown_grace_ms",
     "model.provider",
+    "providers.enabled",
+    "providers.custom.<name>.base_url",
+    "providers.custom.<name>.dialect",
+    "providers.custom.<name>.keyless",
     "model.provider_options.base_url",
     "model.purposes.<purpose>.model",
     "model.purposes.<purpose>.provider",
@@ -92,8 +96,6 @@ pub const CONFIG_KEYS: &[&str] = &[
 
 /// Keys of `secrets.toml` (never in `monoagens.toml`).
 pub const SECRET_KEYS: &[&str] = &[
-    "model_api_key",
-    "model_endpoint",
     "embed_api_key",
     "attachment_master_key",
     "attestation_key",
