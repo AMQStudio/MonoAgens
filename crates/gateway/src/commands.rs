@@ -86,22 +86,6 @@ impl CommandRegistry {
                 base_tier: Some(RoleTier::Admin),
                 owner_plugin: None,
             },
-            CommandSpec {
-                name: "approve".to_owned(),
-                summary: "Approve a pending held action (owner-only)".to_owned(),
-                usage: Some("/approve <action_id>".to_owned()),
-                permission: "approval.resolve".to_owned(),
-                base_tier: None,
-                owner_plugin: None,
-            },
-            CommandSpec {
-                name: "deny".to_owned(),
-                summary: "Deny a pending held action (owner-only)".to_owned(),
-                usage: Some("/deny <action_id>".to_owned()),
-                permission: "approval.resolve".to_owned(),
-                base_tier: None,
-                owner_plugin: None,
-            },
         ] {
             reg.commands.insert(spec.name.clone(), spec);
         }
@@ -267,20 +251,6 @@ impl CommandRegistry {
             "help" => self.render_help(actor, owner, place, rbac, capabilities),
             "whoami" => render_whoami(actor, owner, rbac),
             "roles" => render_roles(actor, owner, rbac),
-            "approve" => {
-                if args.is_empty() {
-                    "Usage: /approve <action_id>".to_owned()
-                } else {
-                    format!("Approval command authorized for action '{args}'.")
-                }
-            }
-            "deny" => {
-                if args.is_empty() {
-                    "Usage: /deny <action_id>".to_owned()
-                } else {
-                    format!("Denial command authorized for action '{args}'.")
-                }
-            }
             _ => format!("Executed /{}", spec.name),
         };
 

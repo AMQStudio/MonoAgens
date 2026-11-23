@@ -72,9 +72,9 @@ pub use seams::{
 pub use secrets::{
     ApprovalSecrets, AttachmentSecrets, ENV_APPROVAL_ATTESTATION_KEY, ENV_ATTACHMENT_MASTER_KEY,
     GatewaySecrets, SecretsLoadError, is_forbidden_secret_key, load_approval_secrets,
-    load_attachment_secrets, load_gateway_secrets, load_provider_secrets, load_secrets_toml_file,
-    parse_secrets_toml_str, resolve_approval_mac_key, validate_no_inline_secrets_in_toml,
-    validate_non_secret_file,
+    load_attachment_secrets, load_gateway_secrets, load_plugin_env_secrets, load_provider_secrets,
+    load_secrets_toml_file, parse_plugin_env_secrets_str, parse_secrets_toml_str,
+    resolve_approval_mac_key, validate_no_inline_secrets_in_toml, validate_non_secret_file,
 };
 pub use waist2::{
     ActionSettlementTracker, ApprovalPromptRequest, BodyConnection, BodyRouter, BodyRpcError,

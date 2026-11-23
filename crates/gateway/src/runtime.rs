@@ -13,7 +13,7 @@ use monoagens_core::{
 use monoagens_protocol::{
     ApprovalResolveParams, ApprovalResolveResult, BodyId, Time, Waist2Error,
 };
-use monoagens_reason::{InfoGapClassifier, ModelProvider, ReasoningEffort};
+use monoagens_reason::{InfoGapClassifier, ModelProvider, ReasoningEffort, SecretString};
 use monoagens_store::{ConfigLoadError, SegmentedStore, StoreConfig};
 use tokio::sync::{Notify, mpsc, oneshot};
 
@@ -314,6 +314,8 @@ impl GatewayHandle {
         plugins: &[PluginConfig],
         env_ctx: &PluginEnvContext,
     ) -> PluginStartupReport {
+        self.diagnostics
+            .register_secret_values(env_ctx.plugin_env.values().map(SecretString::expose));
         let builtin_features: &[&str] = if env_ctx.rbac_enabled { &["rbac"] } else { &[] };
         let plan = resolve_plugin_boot_order(plugins, builtin_features);
         let mut report = PluginStartupReport {

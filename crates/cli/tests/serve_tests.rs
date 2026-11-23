@@ -36,6 +36,7 @@ parser.add_argument("--emit-place", default="")
 parser.add_argument("--emit-actor", default="alice")
 parser.add_argument("--meta-kind", default="")
 parser.add_argument("--meta-cmd", default="")
+parser.add_argument("--log-env", action="append", default=[])
 args = parser.parse_args()
 
 write_lock = threading.Lock()
@@ -95,6 +96,7 @@ for raw in sys.stdin:
             "plugin_state_dir": os.environ.get("MONOAGENS_PLUGIN_STATE_DIR"),
             "body_state_dir": os.environ.get("MONOAGENS_BODY_STATE_DIR"),
             "rbac_enabled": os.environ.get("MONOAGENS_RBAC_ENABLED"),
+            "env": {k: os.environ.get(k) for k in args.log_env},
         })
         discover_result = {
             "body_id": args.body_id,
@@ -679,8 +681,8 @@ args = ["{}", "--body-id", "cap-missing-mock", "--cap-id", "missing.run", "--log
     assert!(cmds.contains(&"help"), "expected 'help' in {cmds:?}");
     assert!(cmds.contains(&"whoami"), "expected 'whoami' in {cmds:?}");
     assert!(cmds.contains(&"roles"), "expected 'roles' in {cmds:?}");
-    assert!(cmds.contains(&"approve"), "expected 'approve' in {cmds:?}");
-    assert!(cmds.contains(&"deny"), "expected 'deny' in {cmds:?}");
+    assert!(!cmds.contains(&"approve"), "unexpected 'approve' in {cmds:?}");
+    assert!(!cmds.contains(&"deny"), "unexpected 'deny' in {cmds:?}");
     assert!(cmds.contains(&"search"), "expected 'search' in {cmds:?}");
 
     let entries = report["bodies"].as_array().expect("bodies array");
@@ -773,4 +775,75 @@ args = ["{}", "--body-id", "cap-missing-mock", "--cap-id", "missing.run", "--log
     assert_eq!(single_report["skipped_count"], 0);
     assert_eq!(single_report["bodies"].as_array().unwrap().len(), 1);
     assert_eq!(single_report["bodies"][0]["config_id"], "tg-adapter");
+}
+
+#[test]
+fn cli_serve_forwards_secrets_toml_env_into_spawned_plugins_without_shell_export() {
+    let tmp = TempDir::new().expect("tempdir");
+    let script = write_mock_stdio_body_script(tmp.path());
+    let log_file = tmp.path().join("env_plugin.jsonl");
+
+    let extra_toml = format!(
+        r#"
+[plugins.env-check]
+kind = "adapter"
+transport = "stdio"
+command = "python3"
+args = ["{}", "--body-id", "env-mock", "--log-file", "{}", "--log-env", "TEST_PLUGIN_TOKEN", "--log-env", "TEST_OVERRIDE_VAR"]
+"#,
+        script.display(),
+        log_file.display(),
+    );
+    let (cfg_path, _data_dir) = write_serve_config(tmp.path(), "", &extra_toml);
+
+    let secrets_path = tmp.path().join("secrets.toml");
+    let secret_val = "tg-secret-from-secrets-toml-998877";
+    fs::write(
+        &secrets_path,
+        format!(
+            "[env]\nTEST_PLUGIN_TOKEN = \"{secret_val}\"\nTEST_OVERRIDE_VAR = \"from-secrets-toml\"\n"
+        ),
+    )
+    .expect("write secrets.toml");
+
+    let out = Command::new(monoagens_bin())
+        .env_remove("TEST_PLUGIN_TOKEN")
+        .env("TEST_OVERRIDE_VAR", "from-process-env")
+        .args([
+            "--config",
+            cfg_path.to_str().unwrap(),
+            "--json",
+            "serve",
+            "--exit-after-ms",
+            "250",
+        ])
+        .output()
+        .expect("run serve with [env] secrets");
+
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout_str = String::from_utf8_lossy(&out.stdout);
+    let stderr_str = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stdout_str.contains(secret_val) && !stderr_str.contains(secret_val),
+        "serve output must never leak [env] secret value"
+    );
+
+    let report: Value = serde_json::from_slice(&out.stdout).expect("json report");
+    assert_eq!(report["connected_count"], 1);
+    assert_eq!(report["failed_count"], 0);
+
+    let events = read_mock_log(&log_file);
+    let discover = events
+        .iter()
+        .find(|e| e["type"] == "discover")
+        .unwrap_or_else(|| panic!("expected discover event in {events:?}"));
+    assert_eq!(discover["env"]["TEST_PLUGIN_TOKEN"], json!(secret_val));
+    assert_eq!(
+        discover["env"]["TEST_OVERRIDE_VAR"],
+        json!("from-process-env")
+    );
 }

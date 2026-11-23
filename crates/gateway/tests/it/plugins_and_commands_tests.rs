@@ -4,9 +4,10 @@ use monoagens_core::{CoreConfig, EventDetail, MemStore, NoopDoors};
 use monoagens_gateway::{
     ApprovalPromptRequest, BodyTransportConfig, CAPABILITY_APPROVAL_PROMPT, Clock, CommandOutcome,
     CommandRegistry, CommandSpec, CueRecorder, DiagnosticSink, DoorsAdapter, GatewayConfig,
-    GatewayOptions, GatewayRuntime, GatewaySeams, IdentityResolver, IdentitySeam,
-    ModelProviderKind, PluginConfig, PluginEnvContext, PluginKind, ValveDoorController,
-    VirtualClock, parse_config_str, resolve_plugin_boot_order,
+    GatewayOptions, GatewayRuntime, GatewaySeams, IdentityResolver, IdentitySeam, LogLevel,
+    ModelProviderKind, PluginConfig, PluginEnvContext, PluginKind, SecretsLoadError,
+    ValveDoorController, VirtualClock, build_plugin_env, load_plugin_env_secrets,
+    load_provider_secrets, parse_config_str, resolve_plugin_boot_order,
 };
 use monoagens_protocol::{
     ActionExecuteParams, ActionExecuteResult, ActorId, ApprovalResolveParams,
@@ -16,7 +17,7 @@ use monoagens_protocol::{
     ReceiptOutcome, RpcId, Taint, TerminationReason, Time, Waist2Headers, Waist2Method,
     Waist2Request, Waist2Response,
 };
-use monoagens_reason::{ProviderSecrets, ScriptedModelProvider, ScriptedReply};
+use monoagens_reason::{ProviderSecrets, ScriptedModelProvider, ScriptedReply, SecretString};
 use monoagens_valve::{
     ApprovalMode, RoleTier, Valve, ValveConfig, ValveSnapshot, derive_approval_mac_key,
     sign_approval_resolution,
@@ -319,6 +320,7 @@ sleep 2"#;
         config_dir: Some(cfg_dir.clone()),
         data_dir: Some(data_dir.clone()),
         rbac_enabled: true,
+        ..Default::default()
     };
 
     let report = handle.connect_configured_plugins(&plugins, &env_ctx).await;
@@ -354,6 +356,13 @@ sleep 2"#;
 #[test]
 fn command_registry_help_and_execution_filter_by_rbac_without_llm() {
     let mut reg = CommandRegistry::new();
+    let builtin_names: Vec<&str> = reg.all_commands().iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(builtin_names, vec!["help", "roles", "whoami"]);
+    assert!(reg.get("approve").is_none());
+    assert!(reg.get("deny").is_none());
+    assert!(reg.get("/approve").is_none());
+    assert!(reg.get("/deny").is_none());
+
     let tg_body = BodyId::new("body-telegram");
     reg.register_plugin_commands(
         &tg_body,
@@ -431,18 +440,42 @@ roles = ["guest"]
     assert!(owner_help.contains("/help"));
     assert!(owner_help.contains("/whoami"));
     assert!(owner_help.contains("/roles"));
-    assert!(owner_help.contains("/approve"));
-    assert!(owner_help.contains("/deny"));
+    assert!(!owner_help.contains("/approve"));
+    assert!(!owner_help.contains("/deny"));
     assert!(owner_help.contains("/status"));
     assert!(owner_help.contains("/admin_reset"));
 
-    // Unauthorized command for guest is deterministically denied with zero LLM calls.
+    // Guest and owner can both run /whoami.
+    assert!(matches!(
+        reg.try_handle_slash_command("/whoami", &guest, &owner, None, Some(rbac), &caps),
+        Some(CommandOutcome::Handled { .. })
+    ));
+    assert!(matches!(
+        reg.try_handle_slash_command("/whoami", &owner, &owner, None, Some(rbac), &caps),
+        Some(CommandOutcome::Handled { .. })
+    ));
+
+    // Unauthorized command for guest is deterministically denied with zero LLM calls, while owner succeeds.
     let denied_roles = reg.try_handle_slash_command("/roles", &guest, &owner, None, Some(rbac), &caps);
     assert!(matches!(denied_roles, Some(CommandOutcome::Denied { .. })));
-    let denied_approve = reg.try_handle_slash_command("/approve act-1", &guest, &owner, None, Some(rbac), &caps);
-    assert!(matches!(denied_approve, Some(CommandOutcome::Denied { .. })));
+    let owner_roles = reg.try_handle_slash_command("/roles", &owner, &owner, None, Some(rbac), &caps);
+    assert!(matches!(owner_roles, Some(CommandOutcome::Handled { .. })));
 
-    // Permitted plugin command returns ForwardToPlugin.
+    // `/approve` and `/deny` are no longer built-in commands.
+    assert_eq!(
+        reg.try_handle_slash_command("/approve act-1", &guest, &owner, None, Some(rbac), &caps),
+        None
+    );
+    assert_eq!(
+        reg.try_handle_slash_command("/approve act-1", &owner, &owner, None, Some(rbac), &caps),
+        None
+    );
+    assert_eq!(
+        reg.try_handle_slash_command("/deny act-1", &owner, &owner, None, Some(rbac), &caps),
+        None
+    );
+
+    // Permitted plugin command returns ForwardToPlugin; admin-only plugin command is denied for guest.
     let fwd = reg.try_handle_slash_command("/status verbose", &guest, &owner, None, Some(rbac), &caps);
     assert_eq!(
         fwd,
@@ -452,11 +485,155 @@ roles = ["guest"]
             args: "verbose".to_owned(),
         })
     );
+    let denied_admin_reset =
+        reg.try_handle_slash_command("/admin_reset", &guest, &owner, None, Some(rbac), &caps);
+    assert!(matches!(denied_admin_reset, Some(CommandOutcome::Denied { .. })));
+    let fwd_admin_reset =
+        reg.try_handle_slash_command("/admin_reset now", &owner, &owner, None, Some(rbac), &caps);
+    assert_eq!(
+        fwd_admin_reset,
+        Some(CommandOutcome::ForwardToPlugin {
+            body_id: tg_body.clone(),
+            command: "admin_reset".to_owned(),
+            args: "now".to_owned(),
+        })
+    );
 
     // Disconnecting plugin unregisters only its commands.
     reg.unregister_plugin_commands(&tg_body);
     assert!(reg.get("status").is_none());
     assert!(reg.get("help").is_some());
+}
+
+#[tokio::test]
+async fn secrets_toml_env_forwards_into_plugins_respects_process_env_and_redacts_logs() {
+    let tmp = TempDir::new().expect("tempdir");
+    let missing_path = tmp.path().join("missing-secrets.toml");
+    assert!(
+        load_plugin_env_secrets(&missing_path)
+            .expect("missing secrets file returns empty")
+            .is_empty()
+    );
+
+    let json_path = tmp.path().join("json-secrets.toml");
+    std::fs::write(&json_path, r#"{"model_api_key":"sk-test-json-123456"}"#).expect("write json");
+    assert!(
+        load_plugin_env_secrets(&json_path)
+            .expect("json secrets returns empty env")
+            .is_empty()
+    );
+
+    let bad_env_path = tmp.path().join("bad-env-secrets.toml");
+    std::fs::write(&bad_env_path, "[env]\nTELEGRAM_BOT_TOKEN = 123\n").expect("write bad env");
+    assert!(matches!(
+        load_plugin_env_secrets(&bad_env_path),
+        Err(SecretsLoadError::Parse { .. })
+    ));
+
+    let secrets_path = tmp.path().join("secrets.toml");
+    std::fs::write(
+        &secrets_path,
+        r#"
+model_api_key = "provider-key-abc-999"
+
+[env]
+TELEGRAM_BOT_TOKEN = "tg-bot-token-secret-12345"
+TAVILY_API_KEY = "tvly-secret-67890"
+EMPTY_IGNORED = "   "
+"#,
+    )
+    .expect("write secrets.toml");
+
+    // `[env]` entries do not break ProviderSecrets loading.
+    let provider_secrets =
+        load_provider_secrets(Some(&secrets_path), |_| None).expect("load provider secrets");
+    assert_eq!(
+        provider_secrets
+            .model_api_key
+            .as_ref()
+            .map(SecretString::expose),
+        Some("provider-key-abc-999")
+    );
+
+    let mut plugin_env = load_plugin_env_secrets(&secrets_path).expect("load [env] secrets");
+    assert_eq!(plugin_env.len(), 2);
+    assert_eq!(
+        plugin_env.get("TELEGRAM_BOT_TOKEN").map(SecretString::expose),
+        Some("tg-bot-token-secret-12345")
+    );
+    assert_eq!(
+        plugin_env.get("TAVILY_API_KEY").map(SecretString::expose),
+        Some("tvly-secret-67890")
+    );
+
+    // Explicit process env takes precedence over `[env]` from secrets.toml.
+    let existing_env_key = std::env::vars_os()
+        .find_map(|(k, _)| k.into_string().ok())
+        .expect("at least one process env var");
+    plugin_env.insert(
+        existing_env_key.clone(),
+        SecretString::new("should-not-override-process-env"),
+    );
+
+    let env_ctx = PluginEnvContext {
+        config_dir: Some(tmp.path().join("cfg")),
+        data_dir: Some(tmp.path().join("data")),
+        rbac_enabled: false,
+        plugin_env,
+    };
+    let built_envs = build_plugin_env("telegram", &env_ctx);
+    assert!(
+        built_envs
+            .iter()
+            .any(|(k, v)| k == "TELEGRAM_BOT_TOKEN" && v == "tg-bot-token-secret-12345")
+    );
+    assert!(
+        !built_envs.iter().any(|(k, _)| k == &existing_env_key),
+        "process env key '{existing_env_key}' must take precedence over secrets.toml [env]"
+    );
+
+    // Spawn a stdio plugin via `connect_configured_plugins` and verify both env forwarding and redaction.
+    let (rt, clock, diagnostics) = start_test_gateway().await;
+    let handle = rt.handle();
+    let script = r#"IFS= read -r _line
+printf '{"jsonrpc":"2.0","id":1,"result":{"body_id":"tg-env-body","protocol_version":{"major":1,"minor":0},"capabilities":[{"id":"tg.env.check","description":"tok=%s","places":["tg:chat:1"],"flags":{"communicative":false,"identity_changing":false,"irreversible":false},"typical_latency_ms":5,"capability_schema_hash":"h1"}],"places":["tg:chat:1"]}}\n' "$TELEGRAM_BOT_TOKEN"
+sleep 2"#;
+    let plugins = vec![PluginConfig {
+        id: "telegram".to_owned(),
+        enabled: true,
+        kind: PluginKind::Adapter,
+        transport: BodyTransportConfig::Stdio {
+            command: "/bin/sh".to_owned(),
+            args: vec!["-c".to_owned(), script.to_owned()],
+        },
+        dependencies: Vec::new(),
+        optional_dependencies: Vec::new(),
+    }];
+
+    let report = handle.connect_configured_plugins(&plugins, &env_ctx).await;
+    assert_eq!(report.connected.len(), 1);
+    assert!(report.failed.is_empty());
+
+    let caps = handle.router().all_capabilities();
+    let check_cap = caps
+        .iter()
+        .find(|c| c.id == CapabilityId::new("tg.env.check"))
+        .expect("tg.env.check capability");
+    assert_eq!(check_cap.description, "tok=tg-bot-token-secret-12345");
+
+    diagnostics.log(
+        clock.now(),
+        LogLevel::Warn,
+        "test.redaction",
+        "leaked token tg-bot-token-secret-12345 and tvly-secret-67890",
+    );
+    let recs = diagnostics.records();
+    let last = recs.last().expect("diagnostic record");
+    assert!(!last.message.contains("tg-bot-token-secret-12345"));
+    assert!(!last.message.contains("tvly-secret-67890"));
+    assert!(last.message.contains("[REDACTED]"));
+
+    rt.shutdown().await;
 }
 
 struct MockAdapterEndpoint {

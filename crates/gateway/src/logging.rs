@@ -90,6 +90,20 @@ impl DiagnosticSink {
         }
     }
 
+    /// Registers multiple raw secret string values (such as `[env]` plugin secrets) for output redaction.
+    pub fn register_secret_values<'a>(&self, values: impl IntoIterator<Item = &'a str>) {
+        let mut guard = self.secrets.lock().expect("diagnostic secrets lock");
+        for raw in values {
+            if raw.is_empty() {
+                continue;
+            }
+            let secret = SecretString::new(raw.to_owned());
+            if !guard.iter().any(|existing| existing == &secret) {
+                guard.push(secret);
+            }
+        }
+    }
+
     /// Scrubs all registered secrets and common token shapes from `text`.
     #[must_use]
     pub fn redact(&self, text: &str) -> String {

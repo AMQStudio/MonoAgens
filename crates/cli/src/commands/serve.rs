@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use monoagens_gateway::{PluginConfig, PluginEnvContext, PluginKind};
+use monoagens_gateway::{
+    PluginConfig, PluginEnvContext, PluginKind, load_plugin_env_secrets,
+};
 use monoagens_protocol::ActorId;
 use monoagens_reason::ModelProvider;
 use serde::Serialize;
@@ -162,6 +164,8 @@ pub fn run_serve_with_provider(
         .map(Path::to_path_buf)
         .or_else(|| Some(PathBuf::from(".")));
     let rbac_enabled = loaded.config.rbac.is_some();
+    let plugin_env =
+        load_plugin_env_secrets(&loaded.paths.secrets_path).map_err(|e| e.to_string())?;
     let exit_after_ms = args.exit_after_ms;
 
     rt.block_on(async move {
@@ -189,6 +193,7 @@ pub fn run_serve_with_provider(
             config_dir,
             data_dir: Some(store_dir.clone()),
             rbac_enabled,
+            plugin_env,
         };
 
         let handle = runtime.handle();

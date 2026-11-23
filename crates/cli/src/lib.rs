@@ -56,6 +56,12 @@ pub enum Commands {
     Inspector(InspectorArgs),
     /// Deterministically replay state offline and export learned tables to canonical Markdown.
     ExportLearning(ExportLearningArgs),
+    /// Manage plugins in `monoagens.toml` (`list`, `install`, `enable`, `disable`, `remove`).
+    Plugin(PluginArgs),
+    /// Run interactive pairing for a plugin (e.g. `monoagens pair whatsapp`).
+    Pair(PairArgs),
+    /// Manage secrets in `secrets.toml` (`list`, `set`, `unset`) without printing secret values.
+    Secret(SecretArgs),
 }
 
 #[derive(Debug, Default, Args)]
@@ -289,6 +295,100 @@ pub struct ExportLearningArgs {
     pub include_private: bool,
 }
 
+#[derive(Debug, Args)]
+pub struct PluginArgs {
+    #[command(subcommand)]
+    pub action: PluginSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PluginSubcommand {
+    /// List configured plugins in `monoagens.toml` and discovered built-in plugins.
+    List,
+    /// Install one or more built-in or custom plugins into `monoagens.toml`.
+    Install {
+        /// Plugin id(s) to install (e.g. `telegram whatsapp web-search` or a custom id with `--command`/`--socket`).
+        #[arg(required = true)]
+        names: Vec<String>,
+        /// Custom command or binary path (for third-party plugins or overriding a built-in).
+        #[arg(long)]
+        command: Option<String>,
+        /// Plugin kind (`adapter` or `capability`).
+        #[arg(long)]
+        kind: Option<String>,
+        /// Extra command arguments (repeatable).
+        #[arg(long = "arg")]
+        args: Vec<String>,
+        /// Required dependencies (repeatable).
+        #[arg(long = "dep")]
+        deps: Vec<String>,
+        /// Optional dependencies (repeatable).
+        #[arg(long = "opt-dep")]
+        opt_deps: Vec<String>,
+        /// Unix domain socket path for `unix_socket` transport.
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
+    /// Enable a configured `[plugins.<id>]` entry in `monoagens.toml`.
+    Enable { id: String },
+    /// Disable a configured `[plugins.<id>]` entry in `monoagens.toml`.
+    Disable { id: String },
+    /// Remove a configured `[plugins.<id>]` entry from `monoagens.toml`.
+    Remove { id: String },
+}
+
+#[derive(Debug, Args)]
+pub struct PairArgs {
+    /// Plugin id to pair (e.g. `whatsapp`).
+    pub plugin: String,
+    /// Phone number for phone-number pairing code flow instead of QR code.
+    #[arg(long)]
+    pub phone: Option<String>,
+    /// Override session database path (defaults to `<data_dir>/plugins/<id>/session.db`).
+    #[arg(long)]
+    pub db: Option<PathBuf>,
+    /// Extra trailing arguments forwarded to the plugin binary.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub extra_args: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct SecretArgs {
+    #[command(subcommand)]
+    pub action: SecretSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SecretSubcommand {
+    /// List configured secret key names (NEVER prints secret values).
+    List,
+    /// Set a secret key in `secrets.toml` (top-level or `[env]` with `--env`).
+    Set {
+        /// Secret key name (e.g. `model_api_key` or `TELEGRAM_BOT_TOKEN`).
+        key: String,
+        /// Secret value provided inline.
+        #[arg(long, conflicts_with_all = ["from_env", "stdin"])]
+        value: Option<String>,
+        /// Read secret value from the named environment variable.
+        #[arg(long, conflicts_with_all = ["value", "stdin"])]
+        from_env: Option<String>,
+        /// Read secret value from stdin (single trimmed line).
+        #[arg(long, conflicts_with_all = ["value", "from_env"])]
+        stdin: bool,
+        /// Store under `[env].<key>` (forwarded to spawned plugins) instead of top-level.
+        #[arg(long)]
+        env: bool,
+    },
+    /// Remove a secret key from `secrets.toml`.
+    Unset {
+        /// Secret key name to remove.
+        key: String,
+        /// Remove from `[env].<key>` instead of top-level.
+        #[arg(long)]
+        env: bool,
+    },
+}
+
 /// Result returned by [`execute_cli`] indicating exit status (0 = success, non-zero = error).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CliOutcome {
@@ -316,6 +416,9 @@ pub fn execute_cli(cli: Cli, out: &mut dyn Write, err: &mut dyn Write) -> CliOut
         Commands::ExportLearning(args) => {
             commands::export_learning::cmd_export_learning(config_opt, json_mode, args, out)
         }
+        Commands::Plugin(args) => commands::plugin::cmd_plugin(config_opt, json_mode, args, out, err),
+        Commands::Pair(args) => commands::plugin::cmd_pair(config_opt, args),
+        Commands::Secret(args) => commands::secret::cmd_secret(config_opt, json_mode, args, out),
     };
 
     match res {

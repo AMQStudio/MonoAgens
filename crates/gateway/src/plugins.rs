@@ -3,6 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+use monoagens_reason::SecretString;
+
 use crate::config::PluginConfig;
 use crate::runtime::BodyConnectOutcome;
 
@@ -32,12 +34,22 @@ pub struct PluginBootPlan {
     pub skipped: Vec<SkippedPlugin>,
 }
 
-/// Environment paths and RBAC flags injected into spawned stdio plugins.
+/// Environment paths, RBAC flags, and plugin secrets injected into spawned stdio plugins.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PluginEnvContext {
     pub config_dir: Option<PathBuf>,
     pub data_dir: Option<PathBuf>,
     pub rbac_enabled: bool,
+    pub plugin_env: BTreeMap<String, SecretString>,
+}
+
+impl PluginEnvContext {
+    /// Attaches `[env]` plugin secrets to this environment context.
+    #[must_use]
+    pub fn with_plugin_env(mut self, plugin_env: BTreeMap<String, SecretString>) -> Self {
+        self.plugin_env = plugin_env;
+        self
+    }
 }
 
 /// Summary of connecting all configured plugins in topological dependency order.
@@ -69,6 +81,12 @@ pub fn build_plugin_env(plugin_id: &str, ctx: &PluginEnvContext) -> Vec<(String,
         ENV_RBAC_ENABLED.to_owned(),
         if ctx.rbac_enabled { "1" } else { "0" }.to_owned(),
     ));
+    for (key, secret) in &ctx.plugin_env {
+        let value = secret.expose();
+        if !value.is_empty() && std::env::var_os(key).is_none() {
+            envs.push((key.clone(), value.to_owned()));
+        }
+    }
     envs
 }
 

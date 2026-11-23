@@ -290,6 +290,72 @@ pub fn parse_secrets_toml_str(raw: &str, path: &Path) -> Result<ProviderSecrets,
     Ok(ProviderSecrets::from_flat_map(&flat))
 }
 
+/// Loads optional `[env]` plugin environment secrets from `secrets.toml`.
+///
+/// Returns an empty map if `path` does not exist, is empty, or is JSON-formatted.
+pub fn load_plugin_env_secrets(path: &Path) -> Result<BTreeMap<String, SecretString>, SecretsLoadError> {
+    if !path.exists() {
+        return Ok(BTreeMap::new());
+    }
+    let raw = std::fs::read_to_string(path).map_err(|err| SecretsLoadError::Io {
+        path: path.display().to_string(),
+        detail: err.to_string(),
+    })?;
+    parse_plugin_env_secrets_str(&raw, path)
+}
+
+/// Parses optional `[env]` plugin environment secrets from `secrets.toml` contents.
+///
+/// Empty or JSON-formatted inputs return an empty map for backward compatibility.
+pub fn parse_plugin_env_secrets_str(
+    raw: &str,
+    path: &Path,
+) -> Result<BTreeMap<String, SecretString>, SecretsLoadError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.starts_with('{') {
+        return Ok(BTreeMap::new());
+    }
+
+    let doc = raw
+        .parse::<DocumentMut>()
+        .map_err(|err| SecretsLoadError::Parse {
+            path: path.display().to_string(),
+            detail: err.to_string(),
+        })?;
+
+    let mut out = BTreeMap::new();
+    let Some(env_item) = doc.get("env") else {
+        return Ok(out);
+    };
+    if env_item.is_none() {
+        return Ok(out);
+    }
+    let Some(env_table) = env_item.as_table_like() else {
+        return Err(SecretsLoadError::Parse {
+            path: path.display().to_string(),
+            detail: "secret section '[env]' must be a table".to_owned(),
+        });
+    };
+
+    for (key, item) in env_table.iter() {
+        if item.is_none() {
+            continue;
+        }
+        let Some(val_str) = item.as_str() else {
+            return Err(SecretsLoadError::Parse {
+                path: path.display().to_string(),
+                detail: format!("secret entry 'env.{key}' must be a string"),
+            });
+        };
+        let v = val_str.trim();
+        if !v.is_empty() {
+            out.insert(key.to_owned(), SecretString::new(v.to_owned()));
+        }
+    }
+
+    Ok(out)
+}
+
 /// Secret key material for AEAD-at-rest attachment custody (`4.4`), loaded exclusively
 /// from `secrets.toml` or environment variables (never from `monoagens.toml` or source code).
 #[derive(Clone, Default, PartialEq, Eq)]
