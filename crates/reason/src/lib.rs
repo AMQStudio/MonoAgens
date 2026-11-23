@@ -29,7 +29,7 @@ pub use embed::{
 };
 pub use info_gap_clf::{InfoGapClassifier, InfoGapError, InfoGapEvaluation};
 pub use model::{
-    CallOutcome, DEFAULT_OUTPUT_LIMIT_PARAM, ExtraHeaderValue, MessagePart, MessageRole,
+    CallOutcome, DEFAULT_OUTPUT_LIMIT_PARAM, ExtraHeaderValue, MessagePart, MessageRole, MessagesModelConfig, MessagesModelProvider,
     ModelCallFailure, ModelCallRecord, ModelCallSuccess, ModelMessage, ModelOutput, ModelProvider,
     ModelRequest, OpenAiModelConfig, OpenAiModelProvider, OutputFormatFailureRecord,
     OutputLimitProfile, PRODUCT_DEFAULT_MAX_OUTPUT_TOKENS, ProviderFailureClass, ReasoningEffort,

@@ -1,0 +1,330 @@
+# Embedded provider catalog (data, not code). Base URLs probed 2026-11-23; see
+# openspec/changes/model-provider-catalog/design.md (D6).
+
+[[provider]]
+id = "openai"
+label = "OpenAI"
+dialect = "openai_chat"
+base_url = "https://api.openai.com/v1"
+api_key_env = ["OPENAI_API_KEY"]
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "anthropic"
+label = "Anthropic"
+dialect = "messages_api"
+base_url = "https://api.anthropic.com/v1"
+api_key_env = ["ANTHROPIC_API_KEY"]
+keyless = false
+discovery = "models_list_header_key"
+key_header = "x-api-key"
+extra_headers = { "anthropic-version" = "2023-06-01" }
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "gemini"
+label = "Google Gemini"
+dialect = "openai_chat"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+api_key_env = ["GEMINI_API_KEY"]
+keyless = false
+discovery = "native_models_list_query_key"
+discovery_url = "https://generativelanguage.googleapis.com/v1beta"
+model_id_prefix = "models/"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "openrouter"
+label = "OpenRouter"
+dialect = "openai_chat"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = ["OPENROUTER_API_KEY"]
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "groq"
+label = "Groq"
+dialect = "openai_chat"
+base_url = "https://api.groq.com/openai/v1"
+api_key_env = ["GROQ_API_KEY"]
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "mistral"
+label = "Mistral"
+dialect = "openai_chat"
+base_url = "https://api.mistral.ai/v1"
+api_key_env = ["MISTRAL_API_KEY"]
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "xai"
+label = "xAI"
+dialect = "openai_chat"
+base_url = "https://api.x.ai/v1"
+api_key_env = ["XAI_API_KEY"]
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "deepseek"
+label = "DeepSeek"
+dialect = "openai_chat"
+base_url = "https://api.deepseek.com/v1"
+api_key_env = ["DEEPSEEK_API_KEY"]
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "together"
+label = "Together AI"
+dialect = "openai_chat"
+base_url = "https://api.together.xyz/v1"
+api_key_env = ["TOGETHER_API_KEY"]
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "fireworks"
+label = "Fireworks AI"
+dialect = "openai_chat"
+base_url = "https://api.fireworks.ai/inference/v1"
+api_key_env = ["FIREWORKS_API_KEY"]
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "cerebras"
+label = "Cerebras"
+dialect = "openai_chat"
+base_url = "https://api.cerebras.ai/v1"
+api_key_env = ["CEREBRAS_API_KEY"]
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "deepinfra"
+label = "DeepInfra"
+dialect = "openai_chat"
+base_url = "https://api.deepinfra.com/v1/openai"
+api_key_env = ["DEEPINFRA_API_KEY"]
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "nvidia"
+label = "NVIDIA NIM"
+dialect = "openai_chat"
+base_url = "https://integrate.api.nvidia.com/v1"
+api_key_env = ["NVIDIA_API_KEY"]
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "moonshot"
+label = "Moonshot AI"
+dialect = "openai_chat"
+base_url = "https://api.moonshot.ai/v1"
+api_key_env = ["MOONSHOT_API_KEY"]
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "zai"
+label = "Z.AI"
+dialect = "openai_chat"
+base_url = "https://api.z.ai/api/paas/v4"
+api_key_env = ["ZAI_API_KEY"]
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "minimax"
+label = "MiniMax"
+dialect = "openai_chat"
+base_url = "https://api.minimax.io/v1"
+api_key_env = ["MINIMAX_API_KEY"]
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "dashscope"
+label = "Alibaba DashScope"
+dialect = "openai_chat"
+base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+api_key_env = ["DASHSCOPE_API_KEY"]
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "huggingface"
+label = "Hugging Face"
+dialect = "openai_chat"
+base_url = "https://router.huggingface.co/v1"
+api_key_env = ["HF_TOKEN"]
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "sambanova"
+label = "SambaNova"
+dialect = "openai_chat"
+base_url = "https://api.sambanova.ai/v1"
+api_key_env = ["SAMBANOVA_API_KEY"]
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "novita"
+label = "Novita AI"
+dialect = "openai_chat"
+base_url = "https://api.novita.ai/v3/openai"
+api_key_env = ["NOVITA_API_KEY"]
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "opencode-go"
+label = "OpenCode Go"
+dialect = "openai_chat"
+base_url = "https://opencode.ai/inference/go/openai/v1"
+api_key_env = ["OPENCODE_API_KEY"]
+keyless = false
+discovery = "models_list"
+default_model = "deepseek-v4.1-flash"
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "opencode-zen"
+label = "OpenCode Zen"
+dialect = "openai_chat"
+base_url = "https://opencode.ai/inference/openai/v1"
+api_key_env = ["OPENCODE_API_KEY"]
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "ollama"
+label = "Ollama"
+dialect = "openai_chat"
+base_url = "http://127.0.0.1:11434/v1"
+api_key_env = []
+keyless = true
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "lm-studio"
+label = "LM Studio"
+dialect = "openai_chat"
+base_url = "http://127.0.0.1:1234/v1"
+api_key_env = []
+keyless = true
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "llama-cpp"
+label = "llama.cpp"
+dialect = "openai_chat"
+base_url = "http://127.0.0.1:8080/v1"
+api_key_env = []
+keyless = true
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "vllm"
+label = "vLLM"
+dialect = "openai_chat"
+base_url = "http://127.0.0.1:8000/v1"
+api_key_env = []
+keyless = true
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []
+
+[[provider]]
+id = "custom"
+label = "Custom (OpenAI-compatible)"
+dialect = "openai_chat"
+base_url = ""
+api_key_env = []
+keyless = false
+discovery = "models_list"
+default_model = ""
+docs_url = ""
+seed_models = []

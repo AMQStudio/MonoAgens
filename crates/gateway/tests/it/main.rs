@@ -1,4 +1,5 @@
 mod attachment_tests;
+mod catalog_provider_tests;
 mod gateway_tests;
 mod identity_tests;
 mod multi_body_tests;

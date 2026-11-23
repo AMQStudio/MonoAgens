@@ -91,7 +91,12 @@ pub struct TurnState {
     started_ms: Option<u64>,
     finished_ms: Option<u64>,
     queue: VecDeque<QueuedMessage>,
+    /// Chat of each recent turn (so a late reply can still be shown in its own chat).
+    chats_by_seq: VecDeque<(u64, String)>,
 }
+
+/// How many past turns remember their chat.
+const TURN_CHAT_HISTORY: usize = 64;
 
 impl TurnState {
     #[must_use]
@@ -103,6 +108,7 @@ impl TurnState {
             started_ms: None,
             finished_ms: None,
             queue: VecDeque::new(),
+            chats_by_seq: VecDeque::new(),
         }
     }
 
@@ -123,7 +129,21 @@ impl TurnState {
         self.chat_id = Some(chat_id.to_owned());
         self.started_ms = Some(self.clock.now_ms());
         self.finished_ms = None;
+        if self.chats_by_seq.len() == TURN_CHAT_HISTORY {
+            self.chats_by_seq.pop_front();
+        }
+        self.chats_by_seq.push_back((self.seq, chat_id.to_owned()));
         self.seq
+    }
+
+    /// Chat a (possibly finished) turn belongs to.
+    #[must_use]
+    pub fn chat_of(&self, seq: u64) -> Option<&str> {
+        self.chats_by_seq
+            .iter()
+            .rev()
+            .find(|(s, _)| *s == seq)
+            .map(|(_, c)| c.as_str())
     }
 
     /// Clears running-turn timing.

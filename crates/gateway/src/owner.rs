@@ -11,12 +11,14 @@ use std::sync::{Arc, Mutex};
 
 use monoagens_core::Input;
 use monoagens_protocol::{
-    ActorId, Audience, ChannelId, OpaquePayload, Percept, PlaceId, Taint,
+    ActorId, ApprovalResolveParams, Audience, CapabilityId, ChannelId, OpaquePayload, Percept,
+    PlaceId, Taint,
 };
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use toml_edit::{ArrayOfTables, Item, TableLike, value};
 
+use crate::commands::CommandOutcome;
 use crate::config::{ConfigError, GatewayConfig, load_config_file, update_config_with_backup};
 use crate::runlog::RunLog;
 use crate::runtime::GatewayHandle;
@@ -171,7 +173,87 @@ impl GatewayOwner {
                 "reason": p.reason,
             })).collect::<Vec<_>>(),
             "queue_depth": self.handle.ingress().len(),
+            "budget": self.budget_json(),
         })
+    }
+
+    fn budget_json(&self) -> Value {
+        let (used, limit) = self.handle.budget().snapshot(self.handle.clock().now());
+        json!({ "used": used, "limit": limit })
+    }
+
+    /// `events.since`: `{total, events, budget}` with the log entries at index `from..`.
+    pub async fn events_since(&self, from: usize) -> Result<Value, AdminError> {
+        let events = self
+            .handle
+            .read_events()
+            .await
+            .map_err(|e| AdminError::server(e.to_string()))?;
+        let total = events.len();
+        let tail = events.get(from..).unwrap_or_default();
+        let events_json = serde_json::to_value(tail)
+            .map_err(|e| AdminError::server(format!("failed to encode events: {e}")))?;
+        Ok(json!({ "total": total, "events": events_json, "budget": self.budget_json() }))
+    }
+
+    /// `commands.list`: `{commands:[CommandSpec]}` of the gateway slash-command registry.
+    #[must_use]
+    pub fn commands_list(&self) -> Value {
+        let reg = self.handle.command_registry();
+        let specs: Vec<_> = reg
+            .lock()
+            .expect("cmd reg lock")
+            .all_commands()
+            .into_iter()
+            .cloned()
+            .collect();
+        json!({ "commands": specs })
+    }
+
+    /// `commands.run`: runs a slash command from `actor` at `place`. The result is
+    /// `{outcome:"handled",reply_text}`, `{outcome:"denied",reason}`,
+    /// `{outcome:"forward",body_id,command,args}` or `{outcome:"unknown"}`.
+    #[must_use]
+    pub fn command_run(&self, raw: &str, actor: Option<&str>, place: Option<&str>) -> Value {
+        let actor = actor.map_or_else(|| self.owner_actor.clone(), ActorId::new);
+        let place = place.map(PlaceId::new);
+        let caps: Vec<CapabilityId> = self
+            .handle
+            .router()
+            .all_capabilities()
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        let rbac = self.config.lock().expect("owner config lock").rbac.clone();
+        let outcome = self
+            .handle
+            .command_registry()
+            .lock()
+            .expect("cmd reg lock")
+            .try_handle_slash_command(raw, &actor, &self.owner_actor, place.as_ref(), rbac.as_ref(), &caps);
+        match outcome {
+            Some(CommandOutcome::Handled { reply_text }) => {
+                json!({ "outcome": "handled", "reply_text": reply_text })
+            }
+            Some(CommandOutcome::Denied { reason }) => json!({ "outcome": "denied", "reason": reason }),
+            Some(CommandOutcome::ForwardToPlugin { body_id, command, args }) => json!({
+                "outcome": "forward", "body_id": body_id.as_str(), "command": command, "args": args,
+            }),
+            None => json!({ "outcome": "unknown" }),
+        }
+    }
+
+    /// `approvals.resolve`: submits an attested out-of-band `approval/resolve` into the owner.
+    pub async fn approvals_resolve(
+        &self,
+        params: ApprovalResolveParams,
+    ) -> Result<Value, AdminError> {
+        let res = self
+            .handle
+            .resolve_approval(params)
+            .await
+            .map_err(|e| AdminError::server(e.message))?;
+        Ok(json!({ "applied": res.applied }))
     }
 
     /// `config.get`: `{path, toml}` with the raw file text (comments included).
@@ -288,6 +370,21 @@ impl GatewayOwner {
         percept.addressees = vec![ActorId::new("soul")];
         percept.length = Some(text.len() as u64);
         percept.channel = channel.map(ChannelId::new);
+        if let Some(pq) = self.handle.pre_queue_service() {
+            let _ = pq.enrich_percept_async(&mut percept).await;
+        }
+        let outcome = self
+            .handle
+            .submit_and_wait(Input::Percept(Box::new(percept)))
+            .await
+            .map_err(|e| AdminError::server(e.to_string()))?;
+        Ok(json!({ "ok": true, "effects_spawned": outcome.effects_spawned }))
+    }
+
+    /// `turn.submit` with a complete client-built percept (the TUI attaches files and lab
+    /// actors). It still enters through the inbound door like any body's percept; the admin
+    /// socket is owner-only, so the client is trusted to build it.
+    pub async fn turn_submit_percept(&self, mut percept: Percept) -> Result<Value, AdminError> {
         if let Some(pq) = self.handle.pre_queue_service() {
             let _ = pq.enrich_percept_async(&mut percept).await;
         }

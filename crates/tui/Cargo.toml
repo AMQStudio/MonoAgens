@@ -17,7 +17,7 @@ ratatui = { version = "0.30", default-features = false, features = ["all-widgets
 serde = { workspace = true }
 serde_json = { workspace = true }
 tachyonfx = { version = "0.25", default-features = false, features = ["std"] }
-tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "net", "io-util"] }
 toml = "0.9"
 toml_edit = "0.25.19"
 unicode-segmentation = "1"

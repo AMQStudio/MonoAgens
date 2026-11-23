@@ -10,15 +10,15 @@
 - Read `design.md` first; the shared audit is [audit.md](../tui-foundation/audit.md).
 
 ## 1. Catalog and keys (`crates/reason`, `crates/gateway`)
-- [ ] 1.1 `crates/reason/src/model/catalog.rs` + embedded `catalog.toml` with the D6 table (27 providers + `custom`). Acceptance: test lists every id with dialect and base URL.
-- [ ] 1.2 Config: `provider = <catalog id>`, `[model.provider_options] base_url`, legacy `openai_compatible` unchanged (`crates/gateway/src/config.rs`). Acceptance: legacy-config test and catalog-id config test.
-- [ ] 1.3 Per-provider keys in `crates/reason/src/secrets.rs` with lookup order and masking. Acceptance: lookup-order test; key never appears in log output.
-- [ ] 1.4 `openai_chat` dialect parameterised by entry; keyless sends no Authorization header. Acceptance: tests against the fake provider server (`ollama` path, header absent; base URL override).
+- [x] 1.1 `crates/reason/src/model/catalog.rs` + embedded `catalog.toml` with the D6 table (27 providers + `custom`). Acceptance: test lists every id with dialect and base URL.
+- [x] 1.2 Config: `provider = <catalog id>`, `[model.provider_options] base_url`, legacy `openai_compatible` unchanged (`crates/gateway/src/config.rs`). Acceptance: legacy-config test and catalog-id config test.
+- [x] 1.3 Per-provider keys in `crates/reason/src/secrets.rs` with lookup order and masking. Acceptance: lookup-order test; key never appears in log output.
+- [x] 1.4 `openai_chat` dialect parameterised by entry; keyless sends no Authorization header. Acceptance: tests against the fake provider server (`ollama` path, header absent; base URL override).
 
 ## 2. Anthropic dialect and discovery (`crates/reason`)
-- [ ] 2.1 `anthropic_messages` dialect (check docs with context7). Acceptance: shared-decode test with the OpenAI dialect; request header/body test on the fake server.
-- [ ] 2.2 `discovery.rs`: openai_models / anthropic_models / gemini_native, 10 s timeout, per-provider cache with fetch time, `models/` prefix strip. Acceptance: tests with the fake server incl. offline-with-cache.
-- [ ] 2.3 Provider error classification (429/auth/timeout) and `provider` log entries. Acceptance: first a test recording today's behaviour, then fake-server 429 test.
+- [x] 2.1 `anthropic_messages` dialect (check docs with context7). Acceptance: shared-decode test with the OpenAI dialect; request header/body test on the fake server.
+- [x] 2.2 `discovery.rs`: openai_models / anthropic_models / gemini_native, 10 s timeout, per-provider cache with fetch time, `models/` prefix strip. Acceptance: tests with the fake server incl. offline-with-cache.
+- [x] 2.3 Provider error classification (429/auth/timeout) and `provider` log entries. Acceptance: first a test recording today's behaviour, then fake-server 429 test.
 
 ## 3. Live rebuild and admin method (`crates/gateway`)
 - [ ] 3.1 Provider rebuild hook called by `config.apply` (main and titler provider). Acceptance: test switches model and sees the new id in the next request.

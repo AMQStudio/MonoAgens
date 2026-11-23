@@ -302,6 +302,39 @@ impl LabSimulationState {
     }
 }
 
+/// A configuration error that kept the gateway from booting: the TUI still opens and shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigErrorState {
+    /// Full error text.
+    pub message: String,
+    /// Offending config key (`model.provider`) when it can be named.
+    pub key: Option<String>,
+}
+
+/// Settings tab that owns a config key.
+#[must_use]
+pub fn settings_tab_for_key(key: &str) -> SettingsTab {
+    match key.split('.').next().unwrap_or("") {
+        "soul" | "embed" => SettingsTab::SoulBrain,
+        "model" => SettingsTab::Model,
+        "valve" => SettingsTab::Valve,
+        "rbac" | "person" | "persons" | "identity" => SettingsTab::Rbac,
+        "runtime" => SettingsTab::Runtime,
+        "plugins" | "plugin" | "bodies" => SettingsTab::Plugins,
+        "secrets" | "api_key" | "endpoint" => SettingsTab::Providers,
+        _ => SettingsTab::Appearance,
+    }
+}
+
+/// Result of routing an assistant reply (see [`TuiAppState::on_assistant_reply`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplyDisposition {
+    /// The reply belongs to the running (or latest) turn and ended its busy state.
+    CurrentTurn,
+    /// The reply belongs to an earlier turn; the running turn stays busy.
+    LateReply,
+}
+
 /// Brief transient status toast.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToastMessage {
@@ -336,6 +369,9 @@ pub struct HitRegions {
     pub approval_deny: Option<Rect>,
     pub autocomplete_rows: Vec<(Rect, usize)>,
     pub settings_area: Rect,
+    pub log_area: Rect,
+    pub log_total: usize,
+    pub log_visible: usize,
     pub settings_back: Option<Rect>,
     pub settings_tabs: Vec<(Rect, SettingsTab)>,
     pub settings_sections: Vec<(Rect, usize)>,
@@ -361,6 +397,9 @@ impl HitRegions {
         self.approval_deny = None;
         self.autocomplete_rows.clear();
         self.settings_area = Rect::default();
+        self.log_area = Rect::default();
+        self.log_total = 0;
+        self.log_visible = 0;
         self.settings_back = None;
         self.settings_tabs.clear();
         self.settings_sections.clear();
@@ -396,6 +435,10 @@ pub enum AppAction {
     SubmitGatewayCommand(String),
     CopyToClipboard(String),
     PasteFromClipboard,
+    /// `/doctor`: run the diagnostic checks.
+    RunDoctor,
+    /// `/retry` or `Ctrl+R` in the config-error state: reload the config and boot the gateway.
+    RetryBoot,
     /// `Alt+L`: clear the terminal and repaint everything.
     ResetDisplay,
     /// `Ctrl+Z`: leave the alternate screen, stop the process, restore on `SIGCONT`.
@@ -448,6 +491,17 @@ pub struct TuiAppState {
     pub paths: ResolvedPaths,
     pub gateway_cfg: GatewayConfig,
     pub secrets_summary: SecretsUiSummary,
+    /// `/log` overlay state and received runtime log entries.
+    pub log: crate::log::LogView,
+    /// Set while the gateway could not boot because of a configuration error.
+    pub config_error: Option<ConfigErrorState>,
+    /// Set when chat cannot be used although the gateway is reachable (attached while another
+    /// TUI owns the terminal place).
+    pub chat_disabled_reason: Option<String>,
+    /// How this TUI reaches the gateway (`hosting`, `attached`), for the status line and `/doctor`.
+    pub gateway_link: String,
+    /// Effects the owner step of the latest finished turn spawned (for `turn.no_reply`).
+    pub turn_effects: usize,
 }
 
 impl TuiAppState {
@@ -527,6 +581,11 @@ impl TuiAppState {
             paths,
             gateway_cfg,
             secrets_summary,
+            log: crate::log::LogView::default(),
+            config_error: None,
+            chat_disabled_reason: None,
+            gateway_link: String::new(),
+            turn_effects: 0,
         };
         app.filter_autocomplete();
         app
@@ -733,6 +792,33 @@ impl TuiAppState {
                 description: "Open 8-tab Settings overlay".to_owned(),
                 current_value: None,
                 icon: "⚙",
+                lab_only: false,
+                from_plugin: None,
+            },
+            SlashCommandItem {
+                name: "log".to_owned(),
+                usage: "/log".to_owned(),
+                description: "Open the runtime log (levels, sources, search)".to_owned(),
+                current_value: None,
+                icon: "§",
+                lab_only: false,
+                from_plugin: None,
+            },
+            SlashCommandItem {
+                name: "doctor".to_owned(),
+                usage: "/doctor".to_owned(),
+                description: "Check config, secrets, provider, plugins, embedder and data dir".to_owned(),
+                current_value: None,
+                icon: "+",
+                lab_only: false,
+                from_plugin: None,
+            },
+            SlashCommandItem {
+                name: "retry".to_owned(),
+                usage: "/retry".to_owned(),
+                description: "Reload the configuration and boot the gateway again".to_owned(),
+                current_value: None,
+                icon: "↻",
                 lab_only: false,
                 from_plugin: None,
             },
@@ -1052,6 +1138,10 @@ impl TuiAppState {
         hit: &HitRegions,
         viewport: Rect,
     ) -> EventOutcome {
+        self.log.view_rows = viewport
+            .height
+            .saturating_sub(crate::log::LOG_CHROME_ROWS)
+            .max(1) as usize;
         match ev {
             Event::Key(k) => EventOutcome {
                 actions: self.handle_key_event(k),
@@ -1105,9 +1195,23 @@ impl TuiAppState {
             return vec![AppAction::ResetDisplay];
         }
 
+        // The `/log` overlay owns the keyboard while open
+        if self.log.open {
+            return self.log.handle_key(key);
+        }
+
         // First-run Setup Wizard intercepts input until completed or skipped
         if self.wizard.is_some() {
             return self.handle_wizard_key(key);
+        }
+
+        // Config-error state: Ctrl+R retries the gateway boot
+        if self.config_error.is_some()
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('r')
+            && !self.settings.open
+        {
+            return vec![AppAction::RetryBoot];
         }
 
         // Alt+Up pulls the last queued message back into the composer
@@ -1267,6 +1371,18 @@ impl TuiAppState {
             return Vec::new();
         }
 
+        if self.config_error.is_some() {
+            self.set_toast(
+                "Chat is disabled: fix the configuration in /settings, then /retry",
+                true,
+            );
+            return Vec::new();
+        }
+        if let Some(reason) = self.chat_disabled_reason.clone() {
+            self.set_toast(format!("Chat is disabled: {reason}"), true);
+            return Vec::new();
+        }
+
         let mut display_text = trimmed.to_owned();
         for att in &attachments {
             let tok = att.inline_token();
@@ -1328,6 +1444,83 @@ impl TuiAppState {
             place_id,
             text,
             attachments,
+        }
+    }
+
+    /// Routes an assistant reply. `turn` is the turn the reply belongs to when known: a reply of
+    /// an earlier turn is shown in that turn's chat without touching the running turn's busy state.
+    pub fn on_assistant_reply(
+        &mut self,
+        turn: Option<u64>,
+        chat_id: Option<String>,
+        text: String,
+        duration_ms: u64,
+    ) -> ReplyDisposition {
+        let late = turn.is_some_and(|t| t != self.turn.seq());
+        if late {
+            let target = turn
+                .and_then(|t| self.turn.chat_of(t).map(str::to_owned))
+                .or(chat_id)
+                .unwrap_or_else(|| self.chats.active_chat_id.clone());
+            self.push_timeline_item(
+                &target,
+                ChatTimelineItem::AssistantMessage {
+                    text,
+                    duration_ms: (duration_ms > 0).then_some(duration_ms),
+                    timestamp_ms: 0,
+                },
+            );
+            return ReplyDisposition::LateReply;
+        }
+        let elapsed_ms = if duration_ms > 0 {
+            duration_ms
+        } else {
+            self.turn.elapsed_ms()
+        };
+        let target = self
+            .turn
+            .chat_id()
+            .map(str::to_owned)
+            .or(chat_id)
+            .unwrap_or_else(|| self.chats.active_chat_id.clone());
+        self.finish_busy();
+        self.thinking_elapsed_ms = elapsed_ms;
+        self.push_timeline_item(
+            &target,
+            ChatTimelineItem::AssistantMessage {
+                text,
+                duration_ms: Some(elapsed_ms),
+                timestamp_ms: 0,
+            },
+        );
+        ReplyDisposition::CurrentTurn
+    }
+
+    /// Stores a runtime log entry; an error entry raises a toast pointing at `/log`.
+    pub fn on_log_entry(&mut self, entry: monoagens_gateway::LogEntry) {
+        if let Some(toast) = self.log.push(entry) {
+            self.set_toast(toast, true);
+        }
+    }
+
+    /// Enters the "config error" state: banner, chat disabled, `/settings` on the offending key.
+    pub fn set_config_error(&mut self, message: String, key: Option<String>) {
+        self.config_error = Some(ConfigErrorState { message, key });
+    }
+
+    /// Opens `/settings` on the tab and row of the offending key when it is known.
+    pub fn open_settings_on_error_key(&mut self) {
+        let key = self.config_error.as_ref().and_then(|e| e.key.clone());
+        match key {
+            Some(key) => {
+                self.settings.open_tab(settings_tab_for_key(&key));
+                let rows = self.current_settings_rows();
+                if let Some(pos) = rows.iter().position(|r| r.id == key) {
+                    self.settings.selected_index = pos;
+                    self.settings.scroll_offset = pos;
+                }
+            }
+            None => self.settings.open_tab(SettingsTab::Appearance),
         }
     }
 
@@ -1463,8 +1656,25 @@ impl TuiAppState {
                 Vec::new()
             }
             "/settings" => {
-                self.settings.open_tab(SettingsTab::Appearance);
+                if self.config_error.is_some() {
+                    self.open_settings_on_error_key();
+                } else {
+                    self.settings.open_tab(SettingsTab::Appearance);
+                }
                 Vec::new()
+            }
+            "/log" => {
+                self.log.open();
+                Vec::new()
+            }
+            "/doctor" => vec![AppAction::RunDoctor],
+            "/retry" => {
+                if self.config_error.is_some() {
+                    vec![AppAction::RetryBoot]
+                } else {
+                    self.set_toast("Nothing to retry: the gateway is running", false);
+                    Vec::new()
+                }
             }
             "/plugins" => {
                 self.settings.open_tab(SettingsTab::Plugins);
@@ -1755,6 +1965,15 @@ impl TuiAppState {
         let mut actions = Vec::new();
         let x = mouse.column;
         let y = mouse.row;
+
+        if self.log.open {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => self.log.scroll_by(-3),
+                MouseEventKind::ScrollDown => self.log.scroll_by(3),
+                _ => {}
+            }
+            return actions;
+        }
 
         match mouse.kind {
             MouseEventKind::ScrollUp => {

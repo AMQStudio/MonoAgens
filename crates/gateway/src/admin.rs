@@ -6,15 +6,21 @@
 //! so framing here is the same plain one-JSON-object-per-line convention, with a line cap.
 //!
 //! Methods: `status`, `config.get`, `config.apply`, `plugins.list`, `plugins.start`,
-//! `plugins.stop`, `plugins.restart`, `plugins.subscribe`, `logs.subscribe`, `turn.submit`,
-//! `turn.cancel`. Anything else answers `-32601`.
+//! `plugins.stop`, `plugins.restart`, `plugins.subscribe`, `logs.subscribe`, `cues.subscribe`,
+//! `turn.submit` (text, or a full client-built `percept`), `turn.cancel`, `events.since`,
+//! `commands.list`, `commands.run`, `approvals.resolve` and `body.attach`. `body.attach` turns
+//! the connection itself into a Waist-2 body stream (the attached TUI's chat body); it is
+//! refused while another body already owns the requested id or places. Anything else answers
+//! `-32601`.
 
 use std::collections::VecDeque;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
+use monoagens_protocol::{ApprovalResolveParams, BodyId, Percept};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
@@ -128,6 +134,7 @@ async fn read_limited_line<R: tokio::io::AsyncBufRead + Unpin>(
 async fn serve_connection(stream: UnixStream, owner: Arc<GatewayOwner>) {
     let (rd, mut wr) = stream.into_split();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<String>();
+    // The writer hands the write half back so `body.attach` can reuse the stream.
     let writer = tokio::spawn(async move {
         while let Some(line) = out_rx.recv().await {
             if wr.write_all(line.as_bytes()).await.is_err()
@@ -137,6 +144,7 @@ async fn serve_connection(stream: UnixStream, owner: Arc<GatewayOwner>) {
                 break;
             }
         }
+        wr
     });
 
     let sub_ids = Arc::new(AtomicU64::new(1));
@@ -158,6 +166,36 @@ async fn serve_connection(stream: UnixStream, owner: Arc<GatewayOwner>) {
                 continue;
             }
         };
+        if parsed.get("method").and_then(Value::as_str) == Some("body.attach") {
+            let rid = parsed.get("id").cloned().unwrap_or(Value::Null);
+            match check_body_attach(&owner, parsed.get("params").unwrap_or(&Value::Null)) {
+                Ok(body_id) => {
+                    let _ = out_tx.send(ok_line(&rid, json!({ "ok": true, "body_id": body_id.as_str() })));
+                    drop(out_tx);
+                    let Ok(Ok(wr)) = tokio::time::timeout(Duration::from_secs(2), writer).await
+                    else {
+                        return;
+                    };
+                    match owner
+                        .handle()
+                        .connect_ndjson_body(reader.into_inner(), wr, Some(body_id.clone()))
+                        .await
+                    {
+                        Ok(_) => owner
+                            .runlog()
+                            .info("gateway", &format!("body '{body_id}' attached over the admin socket")),
+                        Err(e) => owner
+                            .runlog()
+                            .warn("gateway", &format!("body.attach for '{body_id}' failed: {e}")),
+                    }
+                    return;
+                }
+                Err(e) => {
+                    let _ = out_tx.send(err_line(&rid, e.code, &e.message));
+                    continue;
+                }
+            }
+        }
         let owner = Arc::clone(&owner);
         let out = out_tx.clone();
         let subs = Arc::clone(&sub_ids);
@@ -167,6 +205,37 @@ async fn serve_connection(stream: UnixStream, owner: Arc<GatewayOwner>) {
     }
     // Connection closed: stop the writer; subscription tasks end when `out_tx` closes.
     writer.abort();
+}
+
+/// Validates a `body.attach` request: the body id and every requested place must be free.
+fn check_body_attach(owner: &GatewayOwner, params: &Value) -> Result<BodyId, AdminError> {
+    let body_id = BodyId::new(
+        params
+            .get("body_id")
+            .and_then(Value::as_str)
+            .unwrap_or("body-attached"),
+    );
+    let places: Vec<String> = params
+        .get("places")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+        .unwrap_or_default();
+    let router = owner.handle().router();
+    if router.is_body_connected(&body_id) {
+        return Err(AdminError::server(format!(
+            "body '{body_id}' is already connected (another TUI owns it)"
+        )));
+    }
+    for other in router.connected_bodies() {
+        for place in router.owned_places(&other) {
+            if places.iter().any(|p| p == place.as_str()) {
+                return Err(AdminError::server(format!(
+                    "place '{place}' is already owned by body '{other}'"
+                )));
+            }
+        }
+    }
+    Ok(body_id)
 }
 
 async fn handle_request(
@@ -211,6 +280,27 @@ async fn handle_request(
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {}
                     Err(broadcast::error::RecvError::Closed) => break,
+                },
+            }
+        }
+        return;
+    }
+    if method == "cues.subscribe" {
+        let mut rx = owner.handle().cues().subscribe();
+        let sub = sub_ids.fetch_add(1, Ordering::Relaxed);
+        if id.is_some() {
+            let _ = out.send(ok_line(&respond_id, json!({ "subscription": sub })));
+        }
+        loop {
+            tokio::select! {
+                () = out.closed() => break,
+                got = rx.recv() => match got {
+                    Some(cue) => {
+                        if out.send(notification("cues.event", &cue)).is_err() {
+                            break;
+                        }
+                    }
+                    None => break,
                 },
             }
         }
@@ -282,6 +372,29 @@ async fn dispatch(owner: &GatewayOwner, method: &str, params: &Value) -> Result<
         "plugins.restart" => {
             owner.plugins_restart(param_str(params, "id")?).await?;
             Ok(json!({ "ok": true }))
+        }
+        "turn.submit" if params.get("percept").is_some() => {
+            let percept: Percept = serde_json::from_value(params["percept"].clone())
+                .map_err(|e| AdminError::invalid_params(format!("invalid percept: {e}")))?;
+            owner.turn_submit_percept(percept).await
+        }
+        "events.since" => {
+            let from = params
+                .get("from")
+                .and_then(Value::as_u64)
+                .map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX));
+            owner.events_since(from).await
+        }
+        "commands.list" => Ok(owner.commands_list()),
+        "commands.run" => Ok(owner.command_run(
+            param_str(params, "text")?,
+            params.get("actor").and_then(Value::as_str),
+            params.get("place").and_then(Value::as_str),
+        )),
+        "approvals.resolve" => {
+            let p: ApprovalResolveParams = serde_json::from_value(params.clone())
+                .map_err(|e| AdminError::invalid_params(format!("invalid approval params: {e}")))?;
+            owner.approvals_resolve(p).await
         }
         "turn.submit" => {
             let text = param_str(params, "text")?;

@@ -104,6 +104,11 @@ pub fn render_to_buffer(
         render_setup_wizard(wr, buf, wizard, &palette, hit);
     }
 
+    if state.log.open {
+        modal_rect = Some(area);
+        crate::log::render_log_overlay(area, buf, &state.log, &palette, state.prefs.icons, hit);
+    }
+
     if let Some(toast) = &state.toast {
         render_toast(area, buf, &toast.text, toast.is_error, &palette, state.prefs.icons);
     }
@@ -338,7 +343,7 @@ fn render_sidebar(
                 let row_rect = Rect::new(area.x, y, area.width.saturating_sub(1), 1);
                 hit.sidebar_plugins.push((row_rect, id.clone()));
                 let dot_color = match pstate {
-                    PluginUiState::Running => palette.status_green,
+                    PluginUiState::Running | PluginUiState::RunningElsewhere => palette.status_green,
                     PluginUiState::Starting | PluginUiState::Stopping => palette.status_yellow,
                     PluginUiState::Stopped | PluginUiState::Failed(_) => palette.status_red,
                 };
@@ -448,7 +453,17 @@ fn render_main_pane(
         ])
         .split(area);
 
-    let feed_rect = chunks[0];
+    let mut feed_rect = chunks[0];
+    if let Some(banner) = banner_lines(state, feed_rect.width as usize) {
+        let bh = (banner.len() as u16).min(feed_rect.height.saturating_sub(1));
+        render_banner(Rect::new(feed_rect.x, feed_rect.y, feed_rect.width, bh), buf, &banner, palette);
+        feed_rect = Rect::new(
+            feed_rect.x,
+            feed_rect.y + bh,
+            feed_rect.width,
+            feed_rect.height - bh,
+        );
+    }
     let approval_rect = chunks[1];
     let busy_rect = chunks[2];
     let status_rect = chunks[3];
@@ -479,6 +494,45 @@ fn render_main_pane(
         render_autocomplete(ac_rect, buf, state, palette, hit);
     }
     feed_rect
+}
+
+/// Lines of the top banner (config error, or why chat is unavailable), if any.
+fn banner_lines(state: &TuiAppState, width: usize) -> Option<Vec<String>> {
+    let inner = width.saturating_sub(2).max(1);
+    if let Some(err) = &state.config_error {
+        let mut lines: Vec<String> = wrap_text_lines(&format!("Configuration error: {}", err.message), inner)
+            .into_iter()
+            .take(2)
+            .collect();
+        let fix = match &err.key {
+            Some(key) => format!("Fix '{key}' in /settings, then /retry (Ctrl+R) to boot the gateway."),
+            None => "Fix the configuration in /settings, then /retry (Ctrl+R) to boot the gateway."
+                .to_owned(),
+        };
+        lines.push(fix);
+        return Some(lines);
+    }
+    state
+        .chat_disabled_reason
+        .as_ref()
+        .map(|r| vec![format!("Chat is disabled: {r}")])
+}
+
+fn render_banner(rect: Rect, buf: &mut Buffer, lines: &[String], palette: &ThemePalette) {
+    if rect.height == 0 {
+        return;
+    }
+    let style = Style::default().fg(palette.status_red).bg(palette.status_bg);
+    for (i, line) in lines.iter().enumerate().take(rect.height as usize) {
+        let y = rect.y + i as u16;
+        for x in rect.x..rect.x + rect.width {
+            if let Some(c) = buf.cell_mut((x, y)) {
+                c.reset();
+                c.set_style(style);
+            }
+        }
+        buf.set_string(rect.x + 1, y, truncate_to_width(line, rect.width.saturating_sub(2) as usize), style);
+    }
 }
 
 /// Dim bubble for a message typed while a turn runs; it moves into the timeline when submitted.
@@ -1606,7 +1660,7 @@ fn render_plugin_detail(
     let (dot_glyph, dot_color, status_label) = match plugin {
         Some(p) => {
             let color = match &p.state {
-                PluginUiState::Running => palette.status_green,
+                PluginUiState::Running | PluginUiState::RunningElsewhere => palette.status_green,
                 PluginUiState::Starting | PluginUiState::Stopping => palette.status_yellow,
                 PluginUiState::Stopped | PluginUiState::Failed(_) => palette.status_red,
             };
@@ -1636,7 +1690,7 @@ fn render_plugin_detail(
     ]);
     buf.set_line(back_x, area.y, &header, area.width.saturating_sub(2));
 
-    let running = plugin.is_some_and(|p| matches!(p.state, PluginUiState::Running | PluginUiState::Starting));
+    let running = plugin.is_some_and(|p| matches!(p.state, PluginUiState::Running | PluginUiState::Starting | PluginUiState::RunningElsewhere));
     let enabled = plugin.is_some_and(|p| p.enabled);
     let mut rows: Vec<(String, String)> = vec![
         (
@@ -1979,6 +2033,37 @@ fn wrap_text_lines(text: &str, max_w: usize) -> Vec<String> {
         lines.push(String::new());
     }
     lines
+}
+
+/// Shared list helper: returns the new first-visible index so that `selected` is on screen
+/// (`visible` rows of `total`); the result never leaves `0..=total-visible`.
+#[must_use]
+pub fn scroll_window(selected: usize, offset: usize, visible: usize, total: usize) -> usize {
+    if visible == 0 || total <= visible {
+        return 0;
+    }
+    let max = total - visible;
+    let selected = selected.min(total - 1);
+    let mut offset = offset.min(max);
+    if selected < offset {
+        offset = selected;
+    } else if selected >= offset + visible {
+        offset = selected + 1 - visible;
+    }
+    offset.min(max)
+}
+
+/// Shared list helper: draws a vertical scrollbar in `area` (one column) for `total` rows with
+/// `visible` on screen starting at `offset`; nothing is drawn when everything fits.
+pub fn render_scrollbar(
+    area: Rect,
+    buf: &mut Buffer,
+    total: usize,
+    offset: usize,
+    visible: usize,
+    palette: &ThemePalette,
+) {
+    render_vertical_scrollbar(buf, area, total, visible, offset, palette.bg, palette, false);
 }
 
 #[allow(clippy::too_many_arguments)]

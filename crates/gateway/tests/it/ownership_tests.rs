@@ -435,7 +435,7 @@ async fn crash_is_visible_logged_and_restarted_after_the_first_backoff() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn gives_up_after_three_failures_and_a_manual_start_resets() {
+async fn gives_up_after_four_failures_and_a_manual_start_resets() {
     let dir = test_dir();
     let booted = boot_with(NoopDoors, None).await;
     let log = runlog_for(&booted.handle);
@@ -457,7 +457,10 @@ async fn gives_up_after_three_failures_and_a_manual_start_resets() {
     assert_eq!(f2.retry_at_ms.map(|t| t - 5_001_000), Some(5_000), "second backoff is 5 s");
     vclock.advance_to(Time::from_millis(f2.retry_at_ms.unwrap()));
     let f3 = next_event_where(&mut ev, |e| e.state == PluginState::Failed).await;
-    assert_eq!(f3.retry_at_ms, None, "third failure in the window gives up");
+    assert_eq!(f3.retry_at_ms.map(|t| t - 5_006_000), Some(30_000), "third backoff is 30 s");
+    vclock.advance_to(Time::from_millis(f3.retry_at_ms.unwrap()));
+    let f4 = next_event_where(&mut ev, |e| e.state == PluginState::Failed).await;
+    assert_eq!(f4.retry_at_ms, None, "fourth failure in the window gives up");
 
     // No further restart, however far the clock moves.
     vclock.advance_by(10_000_000);
@@ -845,5 +848,118 @@ async fn turn_cancel_records_one_failure_discards_the_late_result_and_replays_id
 
     // Silence unused-import lints for helper types used only in other tests.
     let _ = (RunLogLevel::Info, ModelProviderKind::Scripted);
+    booted.rt.shutdown().await;
+}
+
+// ---------------------------------------------------------------- 2.7 / 2.8 admin extras
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn admin_serves_events_commands_and_full_percept_submits() {
+    let dir = test_dir();
+    let (booted, owner, _sup, _log, lock) = start_owner(dir.path(), vec![], None).await;
+    let server = AdminServer::start(&lock, dir.path(), owner).await.expect("serve");
+    let mut client = AdminClient::connect(dir.path()).await.expect("connect");
+
+    let status = client.call("status", Value::Null).await.unwrap();
+    assert!(status["budget"]["limit"].as_u64().is_some());
+
+    let cmds = client.call("commands.list", Value::Null).await.unwrap();
+    let names: Vec<&str> = cmds["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"help"), "{names:?}");
+    let help = client.call("commands.run", json!({ "text": "/help" })).await.unwrap();
+    assert_eq!(help["outcome"], "handled");
+    let unknown = client.call("commands.run", json!({ "text": "/nope" })).await.unwrap();
+    assert_eq!(unknown["outcome"], "unknown");
+
+    // A client-built percept enters through the inbound door like any other.
+    let p = serde_json::to_value(percept("hello from a client")).unwrap();
+    let res = client.call("turn.submit", json!({ "percept": p })).await.unwrap();
+    assert_eq!(res["ok"], true);
+    let page = client.call("events.since", json!({ "from": 0 })).await.unwrap();
+    let total = page["total"].as_u64().unwrap();
+    assert!(page["events"].as_array().unwrap().len() as u64 >= total.min(1));
+    assert!(page["events"].as_array().unwrap().iter().any(|e| e["kind"] == "percept"));
+    let tail = client.call("events.since", json!({ "from": total })).await.unwrap();
+    // the turn keeps appending events in the background, so compare against the new total
+    let tail_total = tail["total"].as_u64().unwrap();
+    assert!(tail_total >= total);
+    assert_eq!(tail["events"].as_array().unwrap().len() as u64, tail_total - total);
+    let bad = client
+        .call("turn.submit", json!({ "percept": { "nonsense": true } }))
+        .await
+        .unwrap_err();
+    assert_eq!(bad.code, -32602);
+
+    server.shutdown();
+    booted.rt.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn body_attach_turns_the_connection_into_a_body_and_refuses_taken_ids_and_places() {
+    use monoagens_protocol::{BodyDiscoverResult, BodyId};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let dir = test_dir();
+    let (booted, owner, _sup, _log, lock) = start_owner(dir.path(), vec![], None).await;
+    let server = AdminServer::start(&lock, dir.path(), owner).await.expect("serve");
+    let router = booted.handle.router().clone();
+
+    let stream = tokio::net::UnixStream::connect(server.path()).await.unwrap();
+    let (rd, mut wr) = stream.into_split();
+    let mut rd = BufReader::new(rd);
+    let req = json!({"jsonrpc":"2.0","id":1,"method":"body.attach",
+        "params":{"body_id":"body-x","places":["x:place"]}});
+    wr.write_all(format!("{req}\n").as_bytes()).await.unwrap();
+    let mut line = String::new();
+    rd.read_line(&mut line).await.unwrap();
+    let ok: Value = serde_json::from_str(line.trim()).unwrap();
+    assert_eq!(ok["result"]["ok"], true);
+
+    // The gateway now speaks Waist 2 to us: answer its discover request.
+    line.clear();
+    rd.read_line(&mut line).await.unwrap();
+    let discover: Value = serde_json::from_str(line.trim()).unwrap();
+    assert_eq!(discover["method"], "body/discover");
+    let reply = json!({"jsonrpc":"2.0","id":discover["id"],"result": BodyDiscoverResult {
+        body_id: BodyId::new("body-x"),
+        protocol_version: CURRENT_PROTOCOL_VERSION,
+        capabilities: vec![],
+        places: vec![PlaceId::new("x:place")],
+    }});
+    wr.write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+    wait_until("body-x connected", || router.is_body_connected(&BodyId::new("body-x"))).await;
+
+    // A second attach with the same id, or a different id on the same place, is refused.
+    let mut other = AdminClient::connect(dir.path()).await.unwrap();
+    let _ = &mut other;
+    for (id, place, needle) in [("body-x", "y:place", "already connected"), ("body-y", "x:place", "already owned")] {
+        let s2 = tokio::net::UnixStream::connect(server.path()).await.unwrap();
+        let (rd2, mut wr2) = s2.into_split();
+        let mut rd2 = BufReader::new(rd2);
+        let req = json!({"jsonrpc":"2.0","id":7,"method":"body.attach",
+            "params":{"body_id":id,"places":[place]}});
+        wr2.write_all(format!("{req}\n").as_bytes()).await.unwrap();
+        let mut l2 = String::new();
+        rd2.read_line(&mut l2).await.unwrap();
+        let v: Value = serde_json::from_str(l2.trim()).unwrap();
+        assert!(
+            v["error"]["message"].as_str().unwrap_or("").contains(needle),
+            "refusal for {id}/{place}: {v}"
+        );
+    }
+
+    // Closing the attached connection removes the body (detach), nothing else breaks.
+    drop(wr);
+    drop(rd);
+    wait_until("body-x gone", || !router.is_body_connected(&BodyId::new("body-x"))).await;
+    let mut client = AdminClient::connect(dir.path()).await.unwrap();
+    assert!(client.call("status", Value::Null).await.is_ok());
+
+    server.shutdown();
     booted.rt.shutdown().await;
 }

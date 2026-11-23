@@ -1415,6 +1415,7 @@ pub fn load_lab_provider_secrets(secrets_path: Option<&Path>) -> Result<Provider
         model_endpoint: env_secrets.model_endpoint.or(file_secrets.model_endpoint),
         embed_api_key: env_secrets.embed_api_key.or(file_secrets.embed_api_key),
         embed_endpoint: env_secrets.embed_endpoint.or(file_secrets.embed_endpoint),
+        provider_keys: file_secrets.provider_keys,
     })
 }
 

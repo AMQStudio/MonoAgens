@@ -22,6 +22,71 @@ pub fn write_scripted_config(home: &Path) -> PathBuf {
     cfg_path
 }
 
+/// Config for the `openai_compatible` provider pointed at a fake provider server (no network),
+/// with extra top-level TOML appended (for example `[plugins.x]` tables). Also writes a 0600
+/// `secrets.toml` next to it.
+pub fn write_fake_provider_config(home: &Path, base_url: &str, extra_toml: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let cfg_path = home.join("monoagens.toml");
+    let data_dir = home.join("data");
+    std::fs::create_dir_all(&data_dir).expect("mkdir data");
+    let toml = format!(
+        "version = 1\ndata_dir = \"{}\"\n\n[soul]\nname = \"MonoPty\"\nseed = 1\n\n[model]\nprovider = \"openai_compatible\"\nmodel = \"fake-model\"\ndaily_token_budget = 100000\n\n[valve]\nmode = \"enforcing\"\nmax_chain_wakes = 8\n\n{extra_toml}\n",
+        data_dir.display()
+    );
+    std::fs::write(&cfg_path, toml).expect("write config");
+    let secrets = home.join("secrets.toml");
+    std::fs::write(
+        &secrets,
+        format!("[model]\napi_key = \"test-key-not-real\"\nendpoint = \"{base_url}/chat/completions\"\n"),
+    )
+    .expect("write secrets");
+    std::fs::set_permissions(&secrets, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    cfg_path
+}
+
+/// Model output that makes the soul answer `text` at the TUI place.
+pub fn speak_reply_json(text: &str) -> String {
+    serde_json::json!({
+        "protocol_version": { "major": 1, "minor": 0 },
+        "acts": [
+            {
+                "act": "think", "thought": "answer the owner", "motivation": 4,
+                "confidence_0_20": 18, "used_ids": [], "importance": 0.6,
+                "basis": "observed", "value": null, "cost": null, "domain": null
+            },
+            {
+                "act": "act", "capability_id": "chat.speak", "places": ["cli:terminal"],
+                "people": ["per_owner"], "payload": text.as_bytes(), "motivation": 4,
+                "confidence_0_20": 18, "used_ids": [], "expected": null, "domain": null
+            }
+        ]
+    })
+    .to_string()
+}
+
+/// Model output with a thought but no `chat.speak` (a silent turn).
+pub fn silent_reply_json() -> String {
+    serde_json::json!({
+        "protocol_version": { "major": 1, "minor": 0 },
+        "acts": [{
+            "act": "think", "thought": "nothing to say", "motivation": 2,
+            "confidence_0_20": 18, "used_ids": [], "importance": 0.3,
+            "basis": "observed", "value": null, "cost": null, "domain": null
+        }]
+    })
+    .to_string()
+}
+
+/// Colour class of a status dot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dot {
+    Green,
+    Yellow,
+    Red,
+    Other,
+}
+
 fn nz(v: u16) -> std::num::NonZeroU16 {
     std::num::NonZeroU16::new(v).expect("non-zero size")
 }
@@ -133,6 +198,50 @@ impl PtySession {
             assert!(
                 Instant::now() < deadline,
                 "timed out after {timeout:?} waiting for {needle:?} to disappear; last screen:\n{screen}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Colour of the status dot on the sidebar row that shows `plugin_id` (`None` when no row).
+    pub fn plugin_dot(&self, plugin_id: &str) -> Option<Dot> {
+        let parser = self.parser.lock().expect("parser");
+        let screen = parser.screen();
+        let (rows, cols) = screen.size();
+        for row in 0..rows.get() {
+            let text: String = screen.rows(0, cols.get()).nth(row as usize)?;
+            if !text.contains(plugin_id) || !text.contains(" (") {
+                continue;
+            }
+            for col in 0..cols.get() {
+                let Some(cell) = screen.cell(row, col) else {
+                    continue;
+                };
+                if matches!(cell.contents(), "●" | "◐" | "◉") {
+                    return Some(match cell.fgcolor() {
+                        vt100::Color::Idx(2) => Dot::Green,
+                        vt100::Color::Idx(3) => Dot::Yellow,
+                        vt100::Color::Idx(1) => Dot::Red,
+                        _ => Dot::Other,
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    /// Polls until the dot of `plugin_id` has colour `want`; panics with the screen on timeout.
+    pub fn wait_for_plugin_dot(&self, plugin_id: &str, want: Dot, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if self.plugin_dot(plugin_id) == Some(want) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out after {timeout:?} waiting for {plugin_id}'s dot to be {want:?} (now {:?}); screen:\n{}",
+                self.plugin_dot(plugin_id),
+                self.screen_text()
             );
             std::thread::sleep(Duration::from_millis(50));
         }

@@ -3,7 +3,7 @@
 //! The supervisor owns every plugin child process: it autostarts `enabled = true` plugins in
 //! dependency order, pipes stderr into the runtime log (`plugin:<id>`) and a last-20-lines
 //! buffer, watches for exit or body-RPC disconnect, restarts with backoff (1 s / 5 s / 30 s,
-//! giving up after 3 failures in 10 minutes), and guards each plugin with an advisory lock
+//! giving up at the 4th failure in 10 minutes), and guards each plugin with an advisory lock
 //! `<data_dir>/plugins/<id>.lock` (state `running_elsewhere` when another process holds it).
 //! Backoff uses the injected [`Clock`], so tests advance a [`crate::VirtualClock`] instead of
 //! sleeping.
@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use monoagens_protocol::BodyId;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{broadcast, oneshot, watch};
@@ -38,7 +38,7 @@ const FIRST_OUTCOME_TIMEOUT: Duration = Duration::from_secs(20);
 const STDERR_DRAIN: Duration = Duration::from_millis(500);
 
 /// Lifecycle state of a supervised plugin.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginState {
     Stopped,
@@ -64,34 +64,36 @@ impl PluginState {
 }
 
 /// Snapshot of one plugin for `plugins.list` / `status`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginInfo {
     pub id: String,
     pub enabled: bool,
     pub state: PluginState,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body_id: Option<String>,
     /// Clock time (epoch ms) of the next scheduled restart while backing off.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_at_ms: Option<u64>,
+    #[serde(default)]
     pub stderr_tail: Vec<String>,
 }
 
 /// Plugin state change published on [`PluginSupervisor::subscribe`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginStateEvent {
     pub id: String,
     pub state: PluginState,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_at_ms: Option<u64>,
+    #[serde(default)]
     pub ts_ms: u64,
 }
 
@@ -100,7 +102,8 @@ pub struct PluginStateEvent {
 pub struct RestartPolicy {
     /// Delay before restart number `n` (1-based, clamped to the last entry).
     pub delays_ms: Vec<u64>,
-    /// Give up when this many failures happened inside `window_ms`.
+    /// Give up when this many failures happened inside `window_ms` (the 4th failure: delays
+    /// 1 s, 5 s, 30 s are used, then no further restart).
     pub max_failures: usize,
     pub window_ms: u64,
 }
@@ -109,7 +112,7 @@ impl Default for RestartPolicy {
     fn default() -> Self {
         Self {
             delays_ms: vec![1_000, 5_000, 30_000],
-            max_failures: 3,
+            max_failures: 4,
             window_ms: 600_000,
         }
     }

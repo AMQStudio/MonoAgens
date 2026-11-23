@@ -81,7 +81,7 @@ Audit and owner decisions: [audit.md](audit.md).
 - stderr is piped; a reader task forwards each line to the log as `source = plugin:<id>` and keeps the last
   20 lines per plugin.
 - A watcher task awaits `child.wait()`. Exit while not stopping -> `Failed("exited <code>: <last stderr line>")`,
-  then restart with backoff 1 s, 5 s, 30 s; after 3 failures inside 10 minutes stop retrying and stay red.
+  then restart with backoff 1 s, 5 s, 30 s; the 4th failure inside 10 minutes stops retrying and stays red (so all three delays are used).
   A user Stop cancels the restart loop. A body RPC disconnect is treated like an exit.
 - **One owner per plugin**: with the data-dir lock, only the lock holder spawns plugins. The per-plugin
   advisory lock `<data_dir>/plugins/<id>.lock` (held for the child's life) stays as a second guard for a plugin
@@ -168,3 +168,19 @@ Audit and owner decisions: [audit.md](audit.md).
 - Queued messages survive an interrupt (tui-conversation).
 - All other items labelled "proposed — confirm in review" in the five changes are accepted as written;
   implementers may refine them and must report what they changed.
+
+## Implementation notes (2026-11-23, finishing wave)
+- **Late replies.** The TUI puts `correlation_id = tui-turn-<n>` on every percept; the percept event keeps it
+  (`PerceptMeta`), and the `caused_by` chain maps the later `chat.speak` action back to turn `n`. A reply of an
+  earlier turn is shown in that turn's chat and does not end the running turn's busy state.
+- **Admin methods added** (beyond the first set): `events.since {from}`, `commands.list`, `commands.run`,
+  `approvals.resolve`, `cues.subscribe`, `turn.submit` with a full client-built `percept` (still enters through the
+  inbound door; the socket is owner-only), and `body.attach {body_id, places}` (the connection becomes a Waist-2 body
+  stream; refused while the id or a requested place is owned).
+- **Second TUI on a hosting TUI.** The hosting TUI's `body-tui` already owns `cli:terminal`, so the attached TUI is a
+  monitor (status, plugins, log) with chat disabled and a banner saying why. Attached to `serve` there is no such
+  body and chat works.
+- **Attached TUI limits.** No chat titler (it needs a provider in the process) and no lab-actor registration with the
+  valve; `owner went away` clears the client and shows a notice (restart to host or re-attach).
+- **Log files.** The hosting TUI logs to `<data_dir>/logs/tui.log`, `monoagens serve` to `gateway.log`.
+- **Provider check in `/doctor`.** A TCP connect to the endpoint host and port; no request is sent.

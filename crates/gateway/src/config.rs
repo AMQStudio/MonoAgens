@@ -179,6 +179,12 @@ pub struct ModelConfig {
     pub extra_headers: Vec<(String, String)>,
     pub usage_paths: monoagens_reason::UsageFieldPaths,
     pub temperature: Option<f32>,
+    /// Catalog provider id when `[model] provider` names a catalog entry (for example
+    /// a catalog id); `provider` is then [`ModelProviderKind::OpenAiCompatible`] (HTTP kinds).
+    /// `None` keeps the legacy `openai_compatible` behaviour (endpoint from secrets/env).
+    pub catalog_provider: Option<String>,
+    /// `[model.provider_options] base_url` override for any provider.
+    pub provider_base_url: Option<String>,
 }
 
 impl Default for ModelConfig {
@@ -193,6 +199,8 @@ impl Default for ModelConfig {
             extra_headers: Vec::new(),
             usage_paths: monoagens_reason::UsageFieldPaths::default(),
             temperature: None,
+            catalog_provider: None,
+            provider_base_url: None,
         }
     }
 }
@@ -477,6 +485,25 @@ pub struct LoadedGatewayEnv {
 }
 
 impl LoadedGatewayEnv {
+    /// `true` when the configured HTTP provider has what it needs to start: a catalog entry with
+    /// a key (or keyless / base URL given), or the legacy API key / endpoint from secrets.
+    fn model_credentials_present(&self) -> bool {
+        let legacy = self.secrets.model_api_key.is_some() || self.secrets.model_endpoint.is_some();
+        let Some(id) = self.config.model.catalog_provider.as_deref() else {
+            return legacy;
+        };
+        let Some(entry) = monoagens_reason::model::catalog::find(id) else {
+            return false;
+        };
+        entry.keyless
+            || (entry.id == monoagens_reason::model::catalog::CUSTOM_PROVIDER_ID
+                && self.config.model.provider_base_url.is_some())
+            || self
+                .secrets
+                .api_key_for(entry, |n| std::env::var(n).ok())
+                .is_some()
+    }
+
     /// Verifies that the environment is ready to start the Gateway.
     ///
     /// On first run (when a default `monoagens.toml` was just created) or when the selected
@@ -490,11 +517,15 @@ impl LoadedGatewayEnv {
             });
         }
         if self.config.model.provider == ModelProviderKind::OpenAiCompatible
-            && self.secrets.model_api_key.is_none()
-            && self.secrets.model_endpoint.is_none()
+            && !self.model_credentials_present()
         {
             return Err(ConfigError::MissingCredentials {
-                provider: self.config.model.provider.as_str().to_owned(),
+                provider: self
+                    .config
+                    .model
+                    .catalog_provider
+                    .clone()
+                    .unwrap_or_else(|| self.config.model.provider.as_str().to_owned()),
                 secrets_path: self.paths.secrets_path.display().to_string(),
             });
         }
@@ -734,7 +765,12 @@ pub fn default_config_document(cfg: &GatewayConfig) -> DocumentMut {
     doc["runtime"] = Item::Table(runtime);
 
     let mut model = Table::new();
-    model["provider"] = value(cfg.model.provider.as_str());
+    model["provider"] = value(
+        cfg.model
+            .catalog_provider
+            .as_deref()
+            .unwrap_or_else(|| cfg.model.provider.as_str()),
+    );
     model["model"] = value(cfg.model.model.clone());
     model["daily_token_budget"] = value(cfg.model.daily_token_budget as i64);
     doc["model"] = Item::Table(model);
@@ -971,12 +1007,25 @@ fn parse_config_document(doc: &DocumentMut) -> Result<GatewayConfig, ConfigError
 
     if let Some(model_tbl) = get_opt_table(root, "model")? {
         if let Some(prov) = get_opt_str(model_tbl, "provider", "model.provider")? {
-            cfg.model.provider =
-                ModelProviderKind::parse(&prov).ok_or_else(|| ConfigError::InvalidValue {
+            if let Some(kind) = ModelProviderKind::parse(&prov) {
+                cfg.model.provider = kind;
+                cfg.model.catalog_provider = None;
+            } else if let Some(entry) = monoagens_reason::model::catalog::find(&prov) {
+                cfg.model.provider = ModelProviderKind::OpenAiCompatible;
+                cfg.model.catalog_provider = Some(entry.id.clone());
+            } else {
+                return Err(ConfigError::InvalidValue {
                     key: "model.provider".to_owned(),
                     value: prov,
-                    expected: "'openai_compatible' or 'scripted'",
-                })?;
+                    expected: "'openai_compatible', 'scripted' or a catalog provider id",
+                });
+            }
+        }
+        if let Some(opts) = get_opt_table(model_tbl, "provider_options")?
+            && let Some(url) = get_opt_str(opts, "base_url", "model.provider_options.base_url")?
+        {
+            let url = url.trim();
+            cfg.model.provider_base_url = (!url.is_empty()).then(|| url.to_owned());
         }
         if let Some(model_name) = get_opt_str(model_tbl, "model", "model.model")? {
             if model_name.trim().is_empty() {

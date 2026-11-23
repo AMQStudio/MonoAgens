@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex};
 
 use monoagens_core::{ContextPlan, Input, ModelPurpose, Store};
 use monoagens_protocol::{EventId, Time};
+use monoagens_reason::model::catalog::{self, Dialect};
 use monoagens_reason::{
+    MessagesModelConfig, MessagesModelProvider,
     CallOutcome, ModelCallFailure, ModelCallRecord, ModelCallSuccess, ModelOutput, ModelProvider, OpenAiModelConfig,
     OpenAiModelProvider, ProviderFailureClass, ProviderSecrets, RenderExtras,
     ScriptedModelProvider, build_model_request_from_plan,
@@ -89,6 +91,80 @@ const fn utc_day_of(time: Time) -> u64 {
     time.as_millis() / 86_400_000
 }
 
+/// Shared `openai_chat` config from `[model]` settings.
+fn openai_config(
+    config: &GatewayConfig,
+    endpoint: String,
+    key: Option<monoagens_reason::SecretString>,
+) -> OpenAiModelConfig {
+    let mut oa_cfg = OpenAiModelConfig::new(endpoint, key);
+    oa_cfg.default_timeout_ms = config.runtime.model_timeout_ms.max(1);
+    oa_cfg.output_limits = config.model.output_limits.clone();
+    oa_cfg.output_limit_param = config.model.output_limit_param.clone();
+    oa_cfg.usage_paths = config.model.usage_paths.clone();
+    oa_cfg.profile_name = Some(config.model.model.clone());
+    oa_cfg.extra_headers = config
+        .model
+        .extra_headers
+        .iter()
+        .map(|(k, v)| (k.clone(), monoagens_reason::ExtraHeaderValue::parse(v)))
+        .collect();
+    oa_cfg
+}
+
+/// Builds a provider for catalog entry `id`: dialect, endpoint (catalog base URL or
+/// `[model.provider_options] base_url`) and key (secrets, then env names, then legacy key).
+fn build_catalog_provider(
+    config: &GatewayConfig,
+    secrets: &ProviderSecrets,
+    id: &str,
+) -> Result<Arc<dyn ModelProvider>, ProviderInitError> {
+    let entry = catalog::find(id).ok_or_else(|| ProviderInitError {
+        detail: format!("unknown catalog provider '{id}'"),
+    })?;
+    let base = config.model.provider_base_url.as_deref();
+    if entry.effective_base_url(base).is_empty() {
+        return Err(ProviderInitError {
+            detail: format!(
+                "provider '{id}' needs [model.provider_options] base_url (no catalog default)"
+            ),
+        });
+    }
+    let endpoint = entry.chat_endpoint(base);
+    let key = secrets.api_key_for(entry, |n| std::env::var(n).ok());
+    match entry.dialect {
+        Dialect::OpenAiChat => {
+            let mut oa_cfg = openai_config(config, endpoint, key);
+            // Catalog entry's limit parameter applies unless the user set one explicitly.
+            if let Some(param) = &entry.output_limit_param
+                && config.model.output_limit_param == monoagens_reason::DEFAULT_OUTPUT_LIMIT_PARAM
+            {
+                oa_cfg.output_limit_param = param.clone();
+            }
+            let provider =
+                OpenAiModelProvider::new(oa_cfg).map_err(|detail| ProviderInitError { detail })?;
+            Ok(Arc::new(provider))
+        }
+        Dialect::MessagesApi => {
+            let mut a_cfg = MessagesModelConfig::new(endpoint, key);
+            if let Some(h) = &entry.key_header {
+                a_cfg.key_header = h.clone();
+            }
+            a_cfg.extra_headers = entry
+                .extra_headers
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            a_cfg.default_timeout_ms = config.runtime.model_timeout_ms.max(1);
+            a_cfg.output_limits = config.model.output_limits.clone();
+            a_cfg.profile_name = Some(config.model.model.clone());
+            let provider = MessagesModelProvider::new(a_cfg)
+                .map_err(|detail| ProviderInitError { detail })?;
+            Ok(Arc::new(provider))
+        }
+    }
+}
+
 /// Builds the configured [`ModelProvider`] (`scripted` or stateless `OpenAiModelProvider`).
 ///
 /// For `scripted`, an empty [`ScriptedModelProvider`] is returned when callers don't inject one
@@ -100,22 +176,14 @@ pub fn build_provider_from_config(
     match config.model.provider {
         ModelProviderKind::Scripted => Ok(Arc::new(ScriptedModelProvider::new())),
         ModelProviderKind::OpenAiCompatible => {
+            if let Some(id) = config.model.catalog_provider.as_deref() {
+                return build_catalog_provider(config, secrets, id);
+            }
             let endpoint = secrets
                 .model_endpoint
                 .clone()
                 .unwrap_or_else(|| DEFAULT_OPENAI_ENDPOINT.to_owned());
-            let mut oa_cfg = OpenAiModelConfig::new(endpoint, secrets.model_api_key.clone());
-            oa_cfg.default_timeout_ms = config.runtime.model_timeout_ms.max(1);
-            oa_cfg.output_limits = config.model.output_limits.clone();
-            oa_cfg.output_limit_param = config.model.output_limit_param.clone();
-            oa_cfg.usage_paths = config.model.usage_paths.clone();
-            oa_cfg.profile_name = Some(config.model.model.clone());
-            oa_cfg.extra_headers = config
-                .model
-                .extra_headers
-                .iter()
-                .map(|(k, v)| (k.clone(), monoagens_reason::ExtraHeaderValue::parse(v)))
-                .collect();
+            let oa_cfg = openai_config(config, endpoint, secrets.model_api_key.clone());
             let provider =
                 OpenAiModelProvider::new(oa_cfg).map_err(|detail| ProviderInitError { detail })?;
             Ok(Arc::new(provider))

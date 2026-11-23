@@ -11,6 +11,19 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use crate::model::catalog::CatalogEntry;
+
+/// Collects `providers.<id>.api_key` entries from a flattened secrets map.
+fn provider_keys_from_flat_map(flat: &BTreeMap<String, String>) -> BTreeMap<String, SecretString> {
+    flat.iter()
+        .filter_map(|(k, v)| {
+            let id = k.strip_prefix("providers.")?.strip_suffix(".api_key")?;
+            let v = v.trim();
+            (!id.is_empty() && !v.is_empty()).then(|| (id.to_owned(), SecretString::new(v)))
+        })
+        .collect()
+}
+
 /// Redacted secret string wrapper whose `Debug` and `Display` never print secret material.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SecretString(String);
@@ -134,6 +147,8 @@ pub struct ProviderSecrets {
     pub model_endpoint: Option<String>,
     pub embed_api_key: Option<SecretString>,
     pub embed_endpoint: Option<String>,
+    /// Per-provider keys from `secrets.toml` `[providers.<id>] api_key`, keyed by catalog id.
+    pub provider_keys: BTreeMap<String, SecretString>,
 }
 
 impl fmt::Debug for ProviderSecrets {
@@ -149,6 +164,10 @@ impl fmt::Debug for ProviderSecrets {
                 &self.embed_api_key.as_ref().map(|_| "[REDACTED]"),
             )
             .field("embed_endpoint", &self.embed_endpoint)
+            .field(
+                "provider_keys",
+                &self.provider_keys.keys().collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -190,6 +209,7 @@ impl ProviderSecrets {
             model_endpoint,
             embed_api_key,
             embed_endpoint,
+            provider_keys: BTreeMap::new(),
         }
     }
 
@@ -257,7 +277,32 @@ impl ProviderSecrets {
             model_endpoint,
             embed_api_key,
             embed_endpoint,
+            provider_keys: provider_keys_from_flat_map(flat),
         }
+    }
+
+    /// Resolves the API key for catalog provider `entry`.
+    ///
+    /// Lookup order: `[providers.<id>] api_key` -> the entry's env names (via `env`) -> legacy
+    /// `model_api_key`. Keyless entries still honour an explicit key but never fall back to the
+    /// legacy one.
+    #[must_use]
+    pub fn api_key_for<F>(&self, entry: &CatalogEntry, env: F) -> Option<SecretString>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        if let Some(k) = self.provider_keys.get(&entry.id).filter(|k| !k.is_empty()) {
+            return Some(k.clone());
+        }
+        for name in &entry.api_key_env {
+            if let Some(v) = env(name).map(|v| v.trim().to_owned()).filter(|v| !v.is_empty()) {
+                return Some(SecretString::new(v));
+            }
+        }
+        if entry.keyless {
+            return None;
+        }
+        self.model_api_key.clone()
     }
 
     /// Loads secrets and endpoints from a separate dedicated secrets file (JSON object or `KEY=VALUE` lines).
@@ -329,6 +374,7 @@ impl ProviderSecrets {
         if let Some(k) = &self.embed_api_key {
             out.push(k);
         }
+        out.extend(self.provider_keys.values());
         out
     }
 
@@ -520,6 +566,50 @@ fn scrub_bearer_tokens(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn flat(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn provider_key_lookup_order_secrets_then_env_then_legacy() {
+        let entry = crate::model::catalog::find("groq").expect("entry");
+        let env = |name: &str| (name == "GROQ_API_KEY").then(|| "env-key".to_owned());
+        let no_env = |_: &str| None;
+
+        let all = ProviderSecrets::from_flat_map(&flat(&[
+            ("providers.groq.api_key", "file-key"),
+            ("model_api_key", "legacy-key"),
+        ]));
+        assert_eq!(all.api_key_for(entry, env).unwrap().expose(), "file-key");
+
+        let legacy_only = ProviderSecrets::from_flat_map(&flat(&[("model_api_key", "legacy-key")]));
+        assert_eq!(legacy_only.api_key_for(entry, env).unwrap().expose(), "env-key");
+        assert_eq!(
+            legacy_only.api_key_for(entry, no_env).unwrap().expose(),
+            "legacy-key"
+        );
+        assert!(ProviderSecrets::default().api_key_for(entry, no_env).is_none());
+
+        let local = crate::model::catalog::find("lm-studio").expect("lm-studio");
+        assert!(legacy_only.api_key_for(local, no_env).is_none());
+    }
+
+    #[test]
+    fn provider_keys_never_appear_in_debug_or_redacted_text() {
+        let secrets = ProviderSecrets::from_flat_map(&flat(&[(
+            "providers.openai.api_key",
+            "sk-super-secret-value-123",
+        )]));
+        let dbg = format!("{secrets:?}");
+        assert!(!dbg.contains("sk-super-secret-value-123"), "{dbg}");
+        assert!(dbg.contains("openai"));
+        let scrubbed = secrets.redact_text("error with sk-super-secret-value-123 inside");
+        assert!(!scrubbed.contains("sk-super-secret-value-123"), "{scrubbed}");
+    }
 
     #[test]
     fn from_flat_map_respects_precedence_and_skips_blank_values() {

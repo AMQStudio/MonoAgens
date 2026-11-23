@@ -10,14 +10,14 @@ The lock-holding process SHALL start every plugin with `enabled = true` at gatew
 - **THEN** `b` starts before `a`, `c` is shown red with a reason naming `x`, and `a` and `b` run.
 
 ### Requirement: Plugin Crashes Are Visible and Recovered
-The supervisor SHALL capture each plugin's stderr into the runtime log as `plugin:<id>`, mark an unexpected exit `Failed("exited <code>: <last stderr line>")`, and restart with backoff 1 s, 5 s, 30 s, giving up after 3 failures in 10 minutes; a user Stop SHALL cancel the restart loop.
+The supervisor SHALL capture each plugin's stderr into the runtime log as `plugin:<id>`, mark an unexpected exit `Failed("exited <code>: <last stderr line>")`, and restart with backoff 1 s, 5 s, 30 s, giving up at the 4th failure in 10 minutes (so the 1 s, 5 s and 30 s delays are all used); a user Stop SHALL cancel the restart loop.
 
 #### Scenario: Crash then recovery
 - **WHEN** the fake plugin writes `boom` to stderr and exits with code 1
 - **THEN** its dot turns red with reason `exited 1: boom`, the log has `boom` under `plugin:fake`, and it is green again after the first backoff.
 
 #### Scenario: Give up after repeated crashes
-- **WHEN** the fake plugin exits three times within 10 minutes
+- **WHEN** the fake plugin exits four times within 10 minutes
 - **THEN** no further restart is attempted and its dot stays red until the user starts it.
 
 ### Requirement: A Plugin Held Elsewhere Is Not Spawned

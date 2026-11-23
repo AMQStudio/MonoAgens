@@ -13,6 +13,9 @@ use crate::parse::{
     parse_thought_output_with_options,
 };
 
+pub mod messages;
+pub mod catalog;
+pub mod discovery;
 pub mod openai;
 pub mod scripted;
 
@@ -21,6 +24,9 @@ pub use openai::{
     OutputLimitProfile, PRODUCT_DEFAULT_MAX_OUTPUT_TOKENS, ReasoningEffort, UsageFieldPaths,
     validate_extra_header_name,
 };
+pub use messages::{MessagesModelConfig, MessagesModelProvider};
+pub use catalog::{CatalogEntry, Dialect, DiscoveryMode};
+pub use discovery::{DiscoveryError, ModelInfo, ModelList};
 pub use scripted::{ScriptedModelProvider, ScriptedReply};
 
 /// Message role inside a [`ModelRequest`].
@@ -315,6 +321,18 @@ pub trait ModelProvider: Send + Sync {
 
     /// Executes a stateless model call under `request.timeout_ms`.
     fn invoke(&self, request: &ModelRequest) -> Result<ModelCallSuccess, ModelCallFailure>;
+}
+
+/// Maps a non-success HTTP status code to a [`ProviderFailureClass`] (shared by HTTP dialects).
+#[must_use]
+pub(crate) const fn classify_http_status(code: u16) -> ProviderFailureClass {
+    match code {
+        401 | 403 => ProviderFailureClass::Authentication,
+        429 => ProviderFailureClass::RateLimit,
+        408 | 504 => ProviderFailureClass::Timeout,
+        500..=599 => ProviderFailureClass::Server,
+        _ => ProviderFailureClass::InvalidOutput,
+    }
 }
 
 /// Shared parser entrypoint used identically by `scripted` and HTTP providers (`9.6`).

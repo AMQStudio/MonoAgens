@@ -101,6 +101,8 @@ pub enum PluginUiState {
     Stopping,
     Stopped,
     Failed(String),
+    /// Another MonoAgens process holds the plugin lock; nothing is spawned here.
+    RunningElsewhere,
 }
 
 impl PluginUiState {
@@ -113,6 +115,7 @@ impl PluginUiState {
             Self::Stopping => "stopping",
             Self::Stopped => "stopped",
             Self::Failed(_) => "failed",
+            Self::RunningElsewhere => "running in another MonoAgens",
         }
     }
 
@@ -122,6 +125,7 @@ impl PluginUiState {
         match self {
             Self::Starting | Self::Stopping => "◐",
             Self::Running | Self::Stopped | Self::Failed(_) => "●",
+            Self::RunningElsewhere => "◉",
         }
     }
 }

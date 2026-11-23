@@ -1228,13 +1228,15 @@ async fn mock_http_provider_sends_store_false_tracks_usage_and_redacts_canary_on
             .submit_and_wait(Input::Percept(Box::new(p)))
             .await
             .expect("submit percept");
+        // `submit_and_wait` returns before the model call finishes: wait for this call's
+        // record so the mock server sees the three calls in submit order.
+        let want = usize::try_from(i).expect("small index") + 1;
+        poll_until(|| {
+            let d = diagnostics.clone();
+            async move { d.model_calls().len() == want }
+        })
+        .await;
     }
-
-    poll_until(|| {
-        let d = diagnostics.clone();
-        async move { d.model_calls().len() == 3 }
-    })
-    .await;
 
     // Wait for both ModelFailure events to hit Core's log as well.
     poll_until(|| {

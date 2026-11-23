@@ -1,5 +1,7 @@
-//! Panic-safe terminal guard, Gateway runtime bridge, live plugin management,
-//! non-blocking LLM titler tasks, and interactive pairing subprocess handoff.
+//! Panic-safe terminal guard and the TUI event loop. The gateway is reached only through the
+//! [`GatewayClient`] trait (`crate::client`): this TUI either hosts the gateway (it won the
+//! data-dir lock; plugins are started by the gateway's supervisor) or attaches to the process
+//! that holds the lock. Also: non-blocking LLM titler tasks and the interactive pairing handoff.
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::{self, IsTerminal};
@@ -18,48 +20,48 @@ use crossterm::terminal::{
 };
 use monoagens_core::{
     ContextPlan, DecisionOutcome, DecisionReason, DecisionTrace, DoorDecision, Doors, EventDetail,
-    EventKind, EventRecord, Input, LogSeq,
+    EventKind, EventRecord, LogSeq,
 };
 use monoagens_gateway::{
-    ApprovalPromptRequest, BodyTransportConfig, CAPABILITY_APPROVAL_PROMPT, Clock,
-    CommandOutcome, CueRecorder, DiagnosticSink, DoorController, EmbedBackendKind, GatewayConfig,
-    GatewayHandle, GatewayOptions, GatewayRuntime, GatewaySeams, LifecycleCueEvent,
-    LifecycleCueKind, LoadedGatewayEnv, PluginConfig, PluginEnvContext, ResolvedPaths, SystemClock,
-    ValveDoorController, build_plugin_env, build_provider_from_config_async,
+    AdminServer, BodyTransportConfig, CAPABILITY_APPROVAL_PROMPT, Clock, ConfigError, CueRecorder, DiagnosticSink,
+    DoorController, EmbedBackendKind, GatewayConfig, GatewayOptions, GatewayOwner, GatewayRuntime,
+    GatewaySeams, LoadedGatewayEnv, LockError, OwnerMode, OwnerParams, PluginEnvContext,
+    PluginSupervisor, ResolvedPaths, RestartPolicy, RunLog, RunLogLevel, SystemClock,
+    ValveDoorController, acquire_data_dir_lock, build_provider_from_config_async,
     load_approval_secrets, load_or_init_gateway_env, load_plugin_env_secrets,
-    resolve_approval_mac_key, resolve_paths,
+    read_data_dir_lock_pid, resolve_approval_mac_key, resolve_paths, resolve_paths_with,
 };
 use monoagens_protocol::{
-    Action, ActionExecuteParams, ActionExecuteResult, ActionId, ActorId, ApprovalResolveParams,
-    Audience, BodyDiscoverParams, BodyDiscoverResult, BodyHeartbeatResult, BodyId,
-    BodyShutdownResult, CURRENT_PROTOCOL_VERSION, CapabilityDescriptor, CapabilityFlags,
-    CapabilityId, ChannelId, OpaquePayload, OriginActor, Percept, PlaceId, Receipt,
-    ReceiptOutcome, RpcId, Taint, TerminationReason, Time, Waist2Error, Waist2Method,
-    Waist2Request, Waist2Response, sort_capabilities,
+    Action, ActionId, ActorId, ApprovalResolveParams, Audience, CURRENT_PROTOCOL_VERSION,
+    CapabilityDescriptor, ChannelId, CorrelationId, OpaquePayload, OriginActor, Percept, PlaceId,
+    Receipt, Taint, Time, Waist2Error,
 };
-use monoagens_reason::{LocalEmbedSidecar, ModelProvider};
-use monoagens_valve::{ApprovalLogRecord, Valve, ValveConfig, ValveMode, ValveSnapshot, sign_approval_resolution};
+use monoagens_reason::{LocalEmbedSidecar, ModelProvider, ProviderSecrets};
+use monoagens_valve::{
+    ApprovalLogRecord, Valve, ValveConfig, ValveMode, ValveSnapshot, sign_approval_resolution,
+};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as TokioBufReader};
-use tokio::process::{Child, Command as TokioCommand};
 use tokio::sync::mpsc;
 
 use crate::attachments::{
     PendingAttachment, PendingAttachmentKind, build_percept_payload_and_attachments,
     parse_image_dimensions,
 };
+use crate::client::{
+    ClientKind, CommandReply, GatewayClient, InProcessClient, InProcessParts, RuntimeEvent,
+    SocketClient, plugin_info_state,
+};
 use crate::clipboard::{ClipboardContent, copy_to_clipboard, read_clipboard_image_or_text};
 use crate::config::{
     BUILTIN_PLUGIN_PRESETS, LocalChatStore, TuiPreferences, discover_builtin_binary,
     find_builtin_preset, list_secret_keys, merged_plugin_ids,
 };
+use crate::doctor::{DoctorInput, format_report, run_doctor};
 use crate::effects::TuiEffects;
 use crate::render::render_to_buffer;
 use crate::settings::{PluginUiState, SecretsUiSummary, SetupWizardState, ValveRuleTogglesState};
-use crate::state::{
-    AppAction, ChatTimelineItem, HitRegions, PendingApprovalCard, TuiAppState,
-};
+use crate::state::{AppAction, ChatTimelineItem, HitRegions, PendingApprovalCard, TuiAppState};
 use crate::titler::{
     TitleTrigger, extract_topic_ngrams, generate_chat_title, should_request_title,
 };
@@ -179,6 +181,18 @@ pub fn run_tui(options: TuiLaunchOptions) -> Result<u8, String> {
     run_tui_with_provider(options, None)
 }
 
+/// Offending config key of a configuration error, when it can be named.
+#[must_use]
+pub fn config_error_key(err: &ConfigError) -> Option<String> {
+    match err {
+        ConfigError::MissingField { key }
+        | ConfigError::InvalidType { key, .. }
+        | ConfigError::InvalidValue { key, .. } => Some(key.clone()),
+        ConfigError::OutOfRange { key, .. } => Some((*key).to_owned()),
+        _ => None,
+    }
+}
+
 /// Launches the interactive MonoAgens TUI with an optional injected [`ModelProvider`].
 pub fn run_tui_with_provider(
     options: TuiLaunchOptions,
@@ -188,10 +202,26 @@ pub fn run_tui_with_provider(
         return Err("monoagens TUI requires an interactive TTY (stdin/stdout)".to_owned());
     }
 
-    let mut loaded = load_or_init_gateway_env(options.config_path.as_deref(), |k| {
-        std::env::var(k).ok()
-    })
-    .map_err(|e| e.to_string())?;
+    // A configuration error no longer exits: the TUI opens on it (banner, /settings, /retry).
+    let (mut loaded, config_error) =
+        match load_or_init_gateway_env(options.config_path.as_deref(), |k| std::env::var(k).ok()) {
+            Ok(l) => (l, None),
+            Err(e) => {
+                let paths = resolve_paths_with(options.config_path.as_deref(), |k| {
+                    std::env::var(k).ok()
+                })
+                .map_err(|_| e.to_string())?;
+                (
+                    LoadedGatewayEnv {
+                        config: GatewayConfig::default(),
+                        secrets: ProviderSecrets::default(),
+                        paths,
+                        created_default: false,
+                    },
+                    Some(e),
+                )
+            }
+        };
 
     if let Some(custom_data) = &options.data_dir {
         loaded.paths.data_dir = custom_data.clone();
@@ -215,8 +245,9 @@ pub fn run_tui_with_provider(
     };
 
     let owner_actor = owner_actor_from_cfg(Some(&loaded.config));
-    let needs_wizard =
-        provider_override.is_none() && loaded.ensure_startup_ready().is_err();
+    let needs_wizard = provider_override.is_none()
+        && config_error.is_none()
+        && loaded.ensure_startup_ready().is_err();
 
     let mut state = TuiAppState::new(
         loaded.paths.clone(),
@@ -226,6 +257,9 @@ pub fn run_tui_with_provider(
         secrets_summary,
         owner_actor.clone(),
     );
+    if let Some(err) = &config_error {
+        state.set_config_error(err.to_string(), config_error_key(err));
+    }
     if options.start_in_lab {
         state.lab_mode = true;
     }
@@ -287,37 +321,110 @@ fn suspend_process(guard: &mut TerminalGuard) {
     let _ = guard.resume_after_subprocess();
 }
 
-enum RuntimeEvent {
-    AssistantReply {
-        chat_id: Option<String>,
-        text: String,
-        duration_ms: u64,
-    },
-    ApprovalPrompt(PendingApprovalCard),
-    TurnError { turn: u64, error: String },
-    TurnFinished { turn: u64 },
-    PluginState {
-        id: String,
-        state: PluginUiState,
-    },
-    ChatTitleReady {
-        chat_id: String,
-        title: String,
-        keywords: Vec<String>,
-        is_topic_shift: bool,
-    },
+/// Maps log events and actions back to the TUI turn that caused them, using the correlation id
+/// the TUI puts on every percept (`tui-turn-<n>`) and the `caused_by` chain.
+#[derive(Debug, Default)]
+pub(crate) struct TurnTracker {
+    events: HashMap<u64, u64>,
+    actions: HashMap<String, u64>,
 }
 
-struct BootedTuiGateway {
-    runtime: GatewayRuntime,
-    handle: GatewayHandle,
-    owner_actor: ActorId,
-    mac_key: [u8; 32],
-    clock: Arc<SystemClock>,
-    dynamic_actors: Arc<Mutex<BTreeSet<ActorId>>>,
-    titler_provider: Option<Arc<dyn ModelProvider>>,
-    body_task: tokio::task::JoinHandle<()>,
-    _embed_sidecar: Option<LocalEmbedSidecar>,
+const TURN_CORRELATION_PREFIX: &str = "tui-turn-";
+
+impl TurnTracker {
+    fn observe(&mut self, ev: &EventRecord) {
+        let turn = match &ev.detail {
+            Some(EventDetail::PerceptMeta {
+                correlation_id: Some(c),
+                ..
+            }) => c
+                .as_str()
+                .strip_prefix(TURN_CORRELATION_PREFIX)
+                .and_then(|n| n.parse::<u64>().ok()),
+            _ => ev
+                .caused_by
+                .iter()
+                .find_map(|c| self.events.get(&c.0).copied()),
+        };
+        let Some(turn) = turn else {
+            return;
+        };
+        self.events.insert(ev.id.0, turn);
+        if let Some(EventDetail::Action { action_id, .. }) = &ev.detail {
+            self.actions.insert(action_id.as_str().to_owned(), turn);
+        }
+    }
+
+    /// Turn that caused `action_id`, when the log already shows it.
+    pub(crate) fn turn_of_action(&self, action_id: &str) -> Option<u64> {
+        self.actions.get(action_id).copied()
+    }
+}
+
+/// Mutable bookkeeping of the event loop that follows the gateway's event log.
+#[derive(Default)]
+struct LogFollower {
+    seen_len: usize,
+    resolved_approvals: BTreeSet<ActionId>,
+    tracker: TurnTracker,
+}
+
+/// Everything the event loop needs to boot (or re-boot) the gateway connection.
+struct BootInputs<'a> {
+    loaded: &'a mut LoadedGatewayEnv,
+    options: &'a TuiLaunchOptions,
+    provider_override: &'a Option<Arc<dyn ModelProvider>>,
+    tx: &'a mpsc::UnboundedSender<RuntimeEvent>,
+}
+
+/// Boots or attaches and syncs the initial state (commands, plugin states, link, notices).
+async fn connect_gateway(
+    state: &mut TuiAppState,
+    inputs: &mut BootInputs<'_>,
+    follower: &mut LogFollower,
+) -> Option<Arc<dyn GatewayClient>> {
+    match boot_gateway(inputs.loaded, inputs.options, inputs.provider_override.clone(), inputs.tx.clone()).await {
+        Ok(client) => {
+            state.gateway_link = match client.kind() {
+                ClientKind::Hosting => "hosting",
+                ClientKind::Attached => "attached",
+            }
+            .to_owned();
+            if let Ok(cmds) = client.commands().await {
+                state.gateway_commands = cmds;
+            }
+            if let Ok(plugins) = client.plugins_list().await {
+                for p in plugins {
+                    state.set_plugin_state(&p.id, plugin_info_state(&p));
+                }
+            }
+            follower.seen_len = client.events_since(usize::MAX).await.map_or(0, |p| p.total);
+            state.chat_disabled_reason = client.chat_unavailable_reason();
+            if client.kind() == ClientKind::Attached {
+                let who = read_data_dir_lock_pid(&state.paths.data_dir)
+                    .map_or_else(|| "another process".to_owned(), |p| format!("pid {p}"));
+                state.push_timeline_item(
+                    &state.chats.active_chat_id.clone(),
+                    ChatTimelineItem::SystemNotice {
+                        text: format!("Attached to the gateway hosted by {who}. Closing this TUI leaves it running."),
+                        is_error: false,
+                    },
+                );
+            }
+            Some(client)
+        }
+        Err(err) => {
+            state.set_toast(err.clone(), true);
+            state.push_timeline_item(
+                &state.chats.active_chat_id.clone(),
+                ChatTimelineItem::SystemNotice {
+                    text: format!("Gateway boot notice: {err}"),
+                    is_error: true,
+                },
+            );
+            None
+        }
+    }
 }
 
 async fn run_tui_event_loop(
@@ -331,32 +438,17 @@ async fn run_tui_event_loop(
     let (tx, mut rx) = mpsc::unbounded_channel::<RuntimeEvent>();
     let mut effects = TuiEffects::new();
     let mut hit = HitRegions::default();
-    let mut booted: Option<BootedTuiGateway> = None;
-    let mut plugin_children: HashMap<String, (Child, Option<BodyId>)> = HashMap::new();
-    let mut seen_events_len: usize = 0;
-    let mut resolved_approvals: BTreeSet<ActionId> = BTreeSet::new();
+    let mut client: Option<Arc<dyn GatewayClient>> = None;
+    let mut follower = LogFollower::default();
 
-    if state.wizard.is_none() {
-        match boot_tui_gateway(&loaded, &options, provider_override.clone(), tx.clone()).await {
-            Ok(b) => {
-                sync_gateway_commands(state, &b.handle);
-                seen_events_len = b.handle.read_events().await.map_or(0, |e| e.len());
-                if options.with_plugins {
-                    spawn_auto_plugins(state, &b.handle, &loaded.paths, &tx, &mut plugin_children);
-                }
-                booted = Some(b);
-            }
-            Err(err) => {
-                state.set_toast(err.clone(), true);
-                state.push_timeline_item(
-                    &state.chats.active_chat_id.clone(),
-                    ChatTimelineItem::SystemNotice {
-                        text: format!("Gateway boot notice: {err}"),
-                        is_error: true,
-                    },
-                );
-            }
-        }
+    if state.wizard.is_none() && state.config_error.is_none() {
+        let mut inputs = BootInputs {
+            loaded: &mut loaded,
+            options: &options,
+            provider_override: &provider_override,
+            tx: &tx,
+        };
+        client = connect_gateway(state, &mut inputs, &mut follower).await;
     }
 
     let (key_tx, mut key_rx) = mpsc::unbounded_channel::<Event>();
@@ -376,7 +468,6 @@ async fn run_tui_event_loop(
         }
     });
 
-    let mut cue_rx = booted.as_ref().map(|b| b.handle.cues().subscribe());
     let mut tick_interval = tokio::time::interval(Duration::from_millis(80));
     tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_draw = Instant::now();
@@ -426,10 +517,8 @@ async fn run_tui_event_loop(
                         &mut loaded,
                         &options,
                         &provider_override,
-                        &mut booted,
-                        &mut cue_rx,
-                        &mut seen_events_len,
-                        &mut plugin_children,
+                        &mut client,
+                        &mut follower,
                         &mut active_turn_chat_id,
                         &tx,
                         &mut effects,
@@ -451,26 +540,21 @@ async fn run_tui_event_loop(
             }
             maybe_rt = rx.recv() => {
                 if let Some(rt_ev) = maybe_rt {
+                    // A reply is routed by the turn that caused its action: bring the log up to
+                    // date first so the action is known.
+                    if matches!(&rt_ev, RuntimeEvent::AssistantReply { action_id: Some(_), .. })
+                        && let Some(c) = &client
+                    {
+                        poll_new_gateway_events(c, state, &mut follower, &mut active_turn_chat_id).await;
+                    }
                     handle_runtime_event(
                         rt_ev,
                         state,
                         &mut active_turn_chat_id,
                         &mut effects,
+                        &follower.tracker,
+                        &mut client,
                     );
-                    needs_redraw = true;
-                }
-            }
-            cue_opt = async {
-                match &mut cue_rx {
-                    Some(rx_cues) => rx_cues.recv().await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                if let Some(cue) = cue_opt {
-                    state.thinking_phase = match cue.kind {
-                        LifecycleCueKind::WorkingCue => "Working…".to_owned(),
-                        LifecycleCueKind::ProgressNote => "Still working…".to_owned(),
-                    };
                     needs_redraw = true;
                 }
             }
@@ -484,20 +568,22 @@ async fn run_tui_event_loop(
                 }
                 if state.is_busy() {
                     effects.advance_tick();
+                    let turn_seq = state.turn.seq();
                     if state.tick_turn() {
-                        // `turn.no_reply` log entry arrives with the runtime log (task 3.1).
+                        if let Some(c) = &client {
+                            c.log(
+                                RunLogLevel::Info,
+                                "turn",
+                                &format!(
+                                    "turn.no_reply: turn {turn_seq} finished without a reply (effects_spawned={})",
+                                    state.turn_effects
+                                ),
+                            );
+                        }
                         active_turn_chat_id = None;
                     }
-                    if let Some(b) = &booted {
-                        poll_new_gateway_events(
-                            &b.handle,
-                            &b.clock,
-                            state,
-                            &mut seen_events_len,
-                            &mut resolved_approvals,
-                            &mut active_turn_chat_id,
-                        )
-                        .await;
+                    if let Some(c) = &client {
+                        poll_new_gateway_events(c, state, &mut follower, &mut active_turn_chat_id).await;
                     }
                     needs_redraw = true;
                 } else if effects.is_running() {
@@ -516,10 +602,8 @@ async fn run_tui_event_loop(
                 &mut loaded,
                 &options,
                 &provider_override,
-                &mut booted,
-                &mut cue_rx,
-                &mut seen_events_len,
-                &mut plugin_children,
+                &mut client,
+                &mut follower,
                 &mut active_turn_chat_id,
                 &tx,
                 &mut effects,
@@ -528,12 +612,8 @@ async fn run_tui_event_loop(
         }
     }
 
-    for (_, (mut child, _)) in plugin_children.drain() {
-        let _ = child.kill().await;
-    }
-    if let Some(b) = booted {
-        b.body_task.abort();
-        b.runtime.shutdown().await;
+    if let Some(c) = client {
+        c.shutdown().await;
     }
     Ok(0)
 }
@@ -546,10 +626,8 @@ async fn handle_app_action(
     loaded: &mut LoadedGatewayEnv,
     options: &TuiLaunchOptions,
     provider_override: &Option<Arc<dyn ModelProvider>>,
-    booted: &mut Option<BootedTuiGateway>,
-    cue_rx: &mut Option<mpsc::UnboundedReceiver<LifecycleCueEvent>>,
-    seen_events_len: &mut usize,
-    plugin_children: &mut HashMap<String, (Child, Option<BodyId>)>,
+    client: &mut Option<Arc<dyn GatewayClient>>,
+    follower: &mut LogFollower,
     active_turn_chat_id: &mut Option<String>,
     tx: &mpsc::UnboundedSender<RuntimeEvent>,
     effects: &mut TuiEffects,
@@ -559,32 +637,34 @@ async fn handle_app_action(
         AppAction::ToggleMouseCapture(enabled) => {
             guard.set_mouse_capture(enabled);
         }
-        AppAction::CompleteSetupWizard => {
-            if booted.is_none()
-                && let Ok(reloaded) = load_or_init_gateway_env(options.config_path.as_deref(), |k| {
-                    std::env::var(k).ok()
-                })
-            {
-                *loaded = reloaded;
-                if let Some(custom_data) = &options.data_dir {
-                    loaded.paths.data_dir = custom_data.clone();
-                }
-                if loaded.ensure_startup_ready().is_ok() || provider_override.is_some() {
-                    match boot_tui_gateway(loaded, options, provider_override.clone(), tx.clone())
-                        .await
-                    {
-                        Ok(b) => {
-                            sync_gateway_commands(state, &b.handle);
-                            *cue_rx = Some(b.handle.cues().subscribe());
-                            *seen_events_len = b.handle.read_events().await.map_or(0, |e| e.len());
-                            *booted = Some(b);
-                        }
-                        Err(err) => {
-                            state.set_toast(err, true);
-                        }
-                    }
+        AppAction::CompleteSetupWizard | AppAction::RetryBoot => {
+            if client.is_none() && reload_config(state, loaded, options) {
+                let mut inputs = BootInputs {
+                    loaded,
+                    options,
+                    provider_override,
+                    tx,
+                };
+                *client = connect_gateway(state, &mut inputs, follower).await;
+                if client.is_some() {
+                    state.set_toast("Gateway booted", false);
                 }
             }
+        }
+        AppAction::RunDoctor => {
+            let input = DoctorInput {
+                paths: state.paths.clone(),
+                link: if state.gateway_link.is_empty() {
+                    "none".to_owned()
+                } else {
+                    state.gateway_link.clone()
+                },
+            };
+            let tx_d = tx.clone();
+            tokio::task::spawn_blocking(move || {
+                let _ = tx_d.send(RuntimeEvent::Doctor(format_report(&run_doctor(&input))));
+            });
+            state.set_toast("Running /doctor checks…", false);
         }
         AppAction::SendUserMessage {
             chat_id,
@@ -613,10 +693,9 @@ async fn handle_app_action(
             state.persist_chats();
 
             if trigger != TitleTrigger::None
-                && let Some(b) = booted.as_ref()
-                && let Some(tp) = &b.titler_provider
+                && let Some(c) = client.as_ref()
+                && let Some(tp) = c.titler_provider()
             {
-                let tp = Arc::clone(tp);
                 let model = state.model_name.clone();
                 let cur_title = if trigger == TitleTrigger::TopicShift {
                     Some(state.chats.active_chat().title.clone())
@@ -641,7 +720,7 @@ async fn handle_app_action(
                 });
             }
 
-            let Some(b) = booted.as_ref() else {
+            let Some(c) = client.clone() else {
                 state.finish_busy();
                 *active_turn_chat_id = None;
                 state.push_timeline_item(
@@ -655,23 +734,33 @@ async fn handle_app_action(
                 return needs_full_redraw;
             };
 
-            sync_dynamic_actors(&b.dynamic_actors, state);
-            let now = b.clock.now();
-            let mut percept = build_tui_percept(state, &b.owner_actor, &text, &attachments, now);
-            let handle = b.handle.clone();
-            let tx_msg = tx.clone();
+            let known: Vec<ActorId> = state
+                .lab_session
+                .known_actors
+                .iter()
+                .filter(|a| a.as_str() != "soul")
+                .map(ActorId::new)
+                .collect();
+            c.register_actors(&known);
             let turn = state.turn.seq();
+            let now = c.now();
+            let mut percept = build_tui_percept(state, &c.owner_actor(), &text, &attachments, now);
+            percept.correlation_id = Some(CorrelationId::new(format!("{TURN_CORRELATION_PREFIX}{turn}")));
+            let tx_msg = tx.clone();
             tokio::spawn(async move {
-                if let Some(pq) = handle.pre_queue_service() {
-                    let _ = pq.enrich_percept_async(&mut percept).await;
-                }
-                if let Err(err) = handle.submit_and_wait(Input::Percept(Box::new(percept))).await {
-                    let _ = tx_msg.send(RuntimeEvent::TurnError {
-                        turn,
-                        error: err.to_string(),
-                    });
-                } else {
-                    let _ = tx_msg.send(RuntimeEvent::TurnFinished { turn });
+                match c.submit_turn(percept).await {
+                    Err(err) => {
+                        let _ = tx_msg.send(RuntimeEvent::TurnError {
+                            turn,
+                            error: err.message,
+                        });
+                    }
+                    Ok(effects_spawned) => {
+                        let _ = tx_msg.send(RuntimeEvent::TurnFinished {
+                            turn,
+                            effects_spawned,
+                        });
+                    }
                 }
             });
         }
@@ -681,10 +770,10 @@ async fn handle_app_action(
             state_epoch,
             approved,
         } => {
-            if let Some(b) = booted.as_ref() {
-                let now = b.clock.now();
+            if let Some(c) = client.as_ref() {
+                let now = c.now();
                 let sig = sign_approval_resolution(
-                    &b.mac_key,
+                    &c.approval_mac_key(),
                     &action_id,
                     &h_act,
                     state_epoch,
@@ -700,13 +789,13 @@ async fn handle_app_action(
                     h_act,
                     state_epoch,
                     approved,
-                    resolver: b.owner_actor.clone(),
+                    resolver: c.owner_actor(),
                     resolved_at_ms: now,
                     signature: Some(sig),
                     out_of_band_channel: true,
                 };
-                match b.handle.resolve_approval(params).await {
-                    Ok(_) => {
+                match c.resolve_approval(params).await {
+                    Ok(()) => {
                         state.set_toast(
                             if approved {
                                 "Approval granted"
@@ -723,38 +812,39 @@ async fn handle_app_action(
             }
         }
         AppAction::StartPlugin(pid) => {
-            if let Some(b) = booted.as_ref()
-                && let Some(p) = state.plugins.iter().find(|p| p.id == pid).cloned()
-            {
-                let spec = state
-                    .gateway_cfg
-                    .effective_plugins()
-                    .into_iter()
-                    .find(|c| c.id == pid);
-                if let Some(cfg) = spec {
-                    let handle = b.handle.clone();
-                    let tx_p = tx.clone();
-                    let paths = loaded.paths.clone();
-                    let rbac_enabled = state.gateway_cfg.rbac.is_some();
-                    spawn_single_plugin(cfg, handle, paths, rbac_enabled, tx_p, plugin_children);
-                } else {
-                    state.set_plugin_state(
-                        &pid,
-                        PluginUiState::Failed(format!("plugin '{}' not configured", p.id)),
-                    );
-                }
+            if let Some(c) = client.clone() {
+                let tx_p = tx.clone();
+                tokio::spawn(async move {
+                    let mut res = c.plugins_start(pid.clone()).await;
+                    if res.is_err() {
+                        // A plugin installed in the UI is not known to the gateway yet: let the
+                        // owner reload the config file (starts enabled new plugins), then retry.
+                        let _ = c.config_apply(serde_json::json!({})).await;
+                        res = c.plugins_start(pid.clone()).await;
+                    }
+                    if let Err(e) = res {
+                        let _ = tx_p.send(RuntimeEvent::PluginState {
+                            id: pid,
+                            state: PluginUiState::Failed(e.message),
+                        });
+                    }
+                });
             } else {
                 state.set_plugin_state(&pid, PluginUiState::Stopped);
             }
         }
         AppAction::StopPlugin(pid) => {
-            if let Some((mut child, body_id)) = plugin_children.remove(&pid) {
-                let _ = child.kill().await;
-                if let (Some(b), Some(bid)) = (booted.as_ref(), body_id) {
-                    b.handle
-                        .router()
-                        .handle_body_disconnect(&bid, "stopped by user");
-                }
+            if let Some(c) = client.clone() {
+                let tx_p = tx.clone();
+                let id = pid.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = c.plugins_stop(id.clone()).await {
+                        let _ = tx_p.send(RuntimeEvent::PluginState {
+                            id,
+                            state: PluginUiState::Failed(e.message),
+                        });
+                    }
+                });
             }
             state.set_plugin_state(&pid, PluginUiState::Stopped);
             state.set_toast(format!("Stopped plugin '{pid}'"), false);
@@ -776,62 +866,26 @@ async fn handle_app_action(
             needs_full_redraw = Redraw::ClearAndDrain;
         }
         AppAction::SubmitGatewayCommand(raw) => {
-            if let Some(b) = booted.as_ref() {
-                let reg = b.handle.command_registry();
-                let caps: Vec<CapabilityId> = b
-                    .handle
-                    .router()
-                    .all_capabilities()
-                    .into_iter()
-                    .map(|c| c.id)
-                    .collect();
-                let outcome = reg.lock().expect("cmd reg lock").try_handle_slash_command(
-                    &raw,
-                    &state.lab_session.current_actor,
-                    &b.owner_actor,
-                    Some(&PlaceId::new(&state.chats.active_chat().place_id)),
-                    state.gateway_cfg.rbac.as_ref(),
-                    &caps,
-                );
+            if let Some(c) = client.as_ref() {
+                let actor = state.lab_session.current_actor.as_str().to_owned();
+                let place = state.chats.active_chat().place_id.clone();
+                let reply = c.run_command(raw.clone(), Some(actor), Some(place)).await;
                 let active_id = state.chats.active_chat_id.clone();
-                match outcome {
-                    Some(CommandOutcome::Handled { reply_text }) => {
-                        state.push_timeline_item(
-                            &active_id,
-                            ChatTimelineItem::SystemNotice {
-                                text: reply_text,
-                                is_error: false,
-                            },
-                        );
+                let (text, is_error) = match reply {
+                    Ok(CommandReply::Handled(reply_text)) => (reply_text, false),
+                    Ok(CommandReply::Denied(reason)) => (reason, true),
+                    Ok(CommandReply::Forward { body_id, command, args }) => {
+                        (format!("Forwarded /{command} {args} to {body_id}"), false)
                     }
-                    Some(CommandOutcome::Denied { reason }) => {
-                        state.push_timeline_item(
-                            &active_id,
-                            ChatTimelineItem::SystemNotice {
-                                text: reason,
-                                is_error: true,
-                            },
-                        );
+                    Ok(CommandReply::Unknown) => {
+                        (format!("Unknown command '{raw}'. Type /help for commands."), true)
                     }
-                    Some(CommandOutcome::ForwardToPlugin { body_id, command, args }) => {
-                        state.push_timeline_item(
-                            &active_id,
-                            ChatTimelineItem::SystemNotice {
-                                text: format!("Forwarded /{command} {args} to {}", body_id.as_str()),
-                                is_error: false,
-                            },
-                        );
-                    }
-                    None => {
-                        state.push_timeline_item(
-                            &active_id,
-                            ChatTimelineItem::SystemNotice {
-                                text: format!("Unknown command '{raw}'. Type /help for commands."),
-                                is_error: true,
-                            },
-                        );
-                    }
-                }
+                    Err(e) => (format!("Command failed: {e}"), true),
+                };
+                state.push_timeline_item(
+                    &active_id,
+                    ChatTimelineItem::SystemNotice { text, is_error },
+                );
             }
         }
         AppAction::CopyToClipboard(text) => {
@@ -877,11 +931,41 @@ async fn handle_app_action(
     needs_full_redraw
 }
 
+/// Reloads the config for a wizard completion or `/retry`. Returns `true` when the gateway
+/// should be booted now, `false` when the config is still not usable (the banner is updated).
+fn reload_config(
+    state: &mut TuiAppState,
+    loaded: &mut LoadedGatewayEnv,
+    options: &TuiLaunchOptions,
+) -> bool {
+    match load_or_init_gateway_env(options.config_path.as_deref(), |k| std::env::var(k).ok()) {
+        Ok(reloaded) => {
+            *loaded = reloaded;
+            if let Some(custom_data) = &options.data_dir {
+                loaded.paths.data_dir = custom_data.clone();
+            }
+            state.gateway_cfg = loaded.config.clone();
+            state.model_name = loaded.config.model.model.clone();
+            state.valve_mode = loaded.config.valve.mode.clone();
+            state.refresh_secrets_summary();
+            state.config_error = None;
+            loaded.ensure_startup_ready().is_ok()
+        }
+        Err(e) => {
+            state.set_config_error(e.to_string(), config_error_key(&e));
+            state.set_toast("Configuration is still invalid", true);
+            false
+        }
+    }
+}
+
 fn handle_runtime_event(
     rt_ev: RuntimeEvent,
     state: &mut TuiAppState,
     active_turn_chat_id: &mut Option<String>,
     effects: &mut TuiEffects,
+    tracker: &TurnTracker,
+    client: &mut Option<Arc<dyn GatewayClient>>,
 ) {
     let palette = crate::theme::ThemePalette::for_preset(state.prefs.theme);
     match rt_ev {
@@ -889,26 +973,13 @@ fn handle_runtime_event(
             chat_id,
             text,
             duration_ms,
+            action_id,
         } => {
-            let elapsed_ms = if duration_ms > 0 {
-                duration_ms
-            } else {
-                state.turn.elapsed_ms()
-            };
-            state.finish_busy();
-            state.thinking_elapsed_ms = elapsed_ms;
-            let target_chat_id = active_turn_chat_id
-                .take()
-                .or(chat_id)
-                .unwrap_or_else(|| state.chats.active_chat_id.clone());
-            state.push_timeline_item(
-                &target_chat_id,
-                ChatTimelineItem::AssistantMessage {
-                    text,
-                    duration_ms: Some(elapsed_ms),
-                    timestamp_ms: 0,
-                },
-            );
+            let turn = action_id.as_deref().and_then(|a| tracker.turn_of_action(a));
+            let disposition = state.on_assistant_reply(turn, chat_id, text, duration_ms);
+            if disposition == crate::state::ReplyDisposition::CurrentTurn {
+                *active_turn_chat_id = None;
+            }
             effects.trigger_message_fade_in(state.prefs.motion, &palette);
         }
         RuntimeEvent::ApprovalPrompt(card) => {
@@ -930,9 +1001,15 @@ fn handle_runtime_event(
                 },
             );
         }
-        RuntimeEvent::TurnFinished { turn } => {
+        RuntimeEvent::TurnFinished {
+            turn,
+            effects_spawned,
+        } => {
             // Replies arrive asynchronously via chat.speak; arm the grace window, `tick_turn`
             // ends a silent turn once it passes.
+            if state.turn.is_current(turn) {
+                state.turn_effects = effects_spawned;
+            }
             state.on_turn_finished(turn);
         }
         RuntimeEvent::PluginState { id, state: pstate } => {
@@ -955,133 +1032,177 @@ fn handle_runtime_event(
                 state.persist_chats();
             }
         }
+        RuntimeEvent::Log(entry) => state.on_log_entry(entry),
+        RuntimeEvent::Cue(cue) => {
+            state.thinking_phase = match cue.kind {
+                monoagens_gateway::LifecycleCueKind::WorkingCue => "Working…".to_owned(),
+                monoagens_gateway::LifecycleCueKind::ProgressNote => "Still working…".to_owned(),
+            };
+        }
+        RuntimeEvent::Doctor(report) => {
+            let active = state.chats.active_chat_id.clone();
+            state.push_timeline_item(
+                &active,
+                ChatTimelineItem::SystemNotice {
+                    text: report,
+                    is_error: false,
+                },
+            );
+        }
+        RuntimeEvent::OwnerGone => {
+            if client.take().is_some() {
+                state.finish_busy();
+                *active_turn_chat_id = None;
+                state.chat_disabled_reason =
+                    Some("the gateway owner went away; restart the TUI to host or re-attach".to_owned());
+                let active = state.chats.active_chat_id.clone();
+                state.push_timeline_item(
+                    &active,
+                    ChatTimelineItem::SystemNotice {
+                        text: "The gateway owner went away (owner went away). Restart the TUI to host a gateway or attach again."
+                            .to_owned(),
+                        is_error: true,
+                    },
+                );
+                state.set_toast("Gateway owner went away", true);
+            }
+        }
     }
 }
 
 async fn poll_new_gateway_events(
-    handle: &GatewayHandle,
-    clock: &Arc<SystemClock>,
+    client: &Arc<dyn GatewayClient>,
     state: &mut TuiAppState,
-    seen_len: &mut usize,
-    resolved_approvals: &mut BTreeSet<ActionId>,
+    follower: &mut LogFollower,
     active_turn_chat_id: &mut Option<String>,
 ) {
-    let (used, limit) = handle.budget().snapshot(clock.now());
-    state.daily_tokens_used = used;
-    state.daily_token_budget = limit.max(1);
-
-    let Ok(events) = handle.read_events().await else {
+    let Ok(page) = client.events_since(follower.seen_len).await else {
         return;
     };
-    if events.len() <= *seen_len {
+    state.daily_tokens_used = page.budget_used;
+    state.daily_token_budget = page.budget_limit.max(1);
+    if page.events.is_empty() {
+        follower.seen_len = page.total;
         return;
     }
     let active_id = active_turn_chat_id
         .clone()
         .unwrap_or_else(|| state.chats.active_chat_id.clone());
-    for ev in &events[*seen_len..] {
-        if let Some(detail) = &ev.detail {
-            match detail {
-                EventDetail::Decision {
-                    outcome, trace, ..
-                } => {
-                    if let Some(tr) = trace {
-                        let line = format_decision_trace(tr);
-                        state.last_decision_trace = Some(line.clone());
-                        state.push_timeline_item(&active_id, ChatTimelineItem::BrainTrace { summary: line });
-                    }
-                    if *outcome == DecisionOutcome::Silent || *outcome == DecisionOutcome::DoorBlocked {
-                        state.finish_busy();
-                        *active_turn_chat_id = None;
-                    }
+    for ev in &page.events {
+        follower.tracker.observe(ev);
+        process_event(ev, state, &mut follower.resolved_approvals, active_turn_chat_id, &active_id);
+    }
+    follower.seen_len = page.total;
+}
+
+fn process_event(
+    ev: &EventRecord,
+    state: &mut TuiAppState,
+    resolved_approvals: &mut BTreeSet<ActionId>,
+    active_turn_chat_id: &mut Option<String>,
+    active_id: &str,
+) {
+    let active_id = active_id.to_owned();
+    if let Some(detail) = &ev.detail {
+        match detail {
+            EventDetail::Decision {
+                outcome, trace, ..
+            } => {
+                if let Some(tr) = trace {
+                    let line = format_decision_trace(tr);
+                    state.last_decision_trace = Some(line.clone());
+                    state.push_timeline_item(&active_id, ChatTimelineItem::BrainTrace { summary: line });
                 }
-                EventDetail::Action {
-                    capability_id, ..
-                } if capability_id.as_str() != "chat.speak"
-                    && capability_id.as_str() != CAPABILITY_APPROVAL_PROMPT =>
-                {
-                    state.thinking_phase = format!("Running {}…", capability_id.as_str());
-                    state.push_timeline_item(
-                        &active_id,
-                        ChatTimelineItem::CapabilityStep {
-                            capability: capability_id.as_str().to_owned(),
-                            status: "running".to_owned(),
-                            detail: String::new(),
-                        },
-                    );
-                }
-                EventDetail::Receipt {
-                    capability_id,
-                    outcome,
-                    ..
-                } if capability_id.as_str() != "chat.speak"
-                    && capability_id.as_str() != CAPABILITY_APPROVAL_PROMPT =>
-                {
-                    state.push_timeline_item(
-                        &active_id,
-                        ChatTimelineItem::CapabilityStep {
-                            capability: capability_id.as_str().to_owned(),
-                            status: format!("{outcome:?}").to_lowercase(),
-                            detail: String::new(),
-                        },
-                    );
-                }
-                EventDetail::Failure { component, detail, .. } => {
+                if *outcome == DecisionOutcome::Silent || *outcome == DecisionOutcome::DoorBlocked {
                     state.finish_busy();
                     *active_turn_chat_id = None;
-                    state.push_timeline_item(
-                        &active_id,
-                        ChatTimelineItem::SystemNotice {
-                            text: format!("[{component}] {detail}"),
-                            is_error: true,
-                        },
-                    );
                 }
-                _ => {}
             }
-        }
-        if ev.kind == EventKind::DoorVerdict
-            && let Ok(rec) = serde_json::from_slice::<ApprovalLogRecord>(ev.payload.as_bytes())
-        {
-            match rec {
-                ApprovalLogRecord::Held { pending, .. } => {
-                    if !resolved_approvals.contains(&pending.action_id) {
-                        state.pending_approval = Some(PendingApprovalCard {
-                            action_id: pending.action_id,
-                            h_act: pending.h_act,
-                            state_epoch: pending.state_epoch,
-                            capability_id: pending.capability_id.as_str().to_owned(),
-                            summary: pending.reason.unwrap_or_else(|| {
-                                format!(
-                                    "Place(s): {}",
-                                    pending
-                                        .places
-                                        .iter()
-                                        .map(PlaceId::as_str)
-                                        .collect::<Vec<_>>()
-                                        .join(", ")
-                                )
-                            }),
-                            selected_approve: true,
-                        });
-                        state.finish_busy();
-                    }
-                }
-                ApprovalLogRecord::Resolved { action_id, .. } => {
-                    resolved_approvals.insert(action_id.clone());
-                    if state
-                        .pending_approval
-                        .as_ref()
-                        .is_some_and(|c| c.action_id == action_id)
-                    {
-                        state.pending_approval = None;
-                    }
-                }
-                ApprovalLogRecord::GrantConsumed { .. } => {}
+            EventDetail::Action {
+                capability_id, ..
+            } if capability_id.as_str() != "chat.speak"
+                && capability_id.as_str() != CAPABILITY_APPROVAL_PROMPT =>
+            {
+                state.thinking_phase = format!("Running {}…", capability_id.as_str());
+                state.push_timeline_item(
+                    &active_id,
+                    ChatTimelineItem::CapabilityStep {
+                        capability: capability_id.as_str().to_owned(),
+                        status: "running".to_owned(),
+                        detail: String::new(),
+                    },
+                );
             }
+            EventDetail::Receipt {
+                capability_id,
+                outcome,
+                ..
+            } if capability_id.as_str() != "chat.speak"
+                && capability_id.as_str() != CAPABILITY_APPROVAL_PROMPT =>
+            {
+                state.push_timeline_item(
+                    &active_id,
+                    ChatTimelineItem::CapabilityStep {
+                        capability: capability_id.as_str().to_owned(),
+                        status: format!("{outcome:?}").to_lowercase(),
+                        detail: String::new(),
+                    },
+                );
+            }
+            EventDetail::Failure { component, detail, .. } => {
+                state.finish_busy();
+                *active_turn_chat_id = None;
+                state.push_timeline_item(
+                    &active_id,
+                    ChatTimelineItem::SystemNotice {
+                        text: format!("[{component}] {detail}"),
+                        is_error: true,
+                    },
+                );
+            }
+            _ => {}
         }
     }
-    *seen_len = events.len();
+    if ev.kind == EventKind::DoorVerdict
+        && let Ok(rec) = serde_json::from_slice::<ApprovalLogRecord>(ev.payload.as_bytes())
+    {
+        match rec {
+            ApprovalLogRecord::Held { pending, .. } => {
+                if !resolved_approvals.contains(&pending.action_id) {
+                    state.pending_approval = Some(PendingApprovalCard {
+                        action_id: pending.action_id,
+                        h_act: pending.h_act,
+                        state_epoch: pending.state_epoch,
+                        capability_id: pending.capability_id.as_str().to_owned(),
+                        summary: pending.reason.unwrap_or_else(|| {
+                            format!(
+                                "Place(s): {}",
+                                pending
+                                    .places
+                                    .iter()
+                                    .map(PlaceId::as_str)
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        }),
+                        selected_approve: true,
+                    });
+                    state.finish_busy();
+                }
+            }
+            ApprovalLogRecord::Resolved { action_id, .. } => {
+                resolved_approvals.insert(action_id.clone());
+                if state
+                    .pending_approval
+                    .as_ref()
+                    .is_some_and(|c| c.action_id == action_id)
+                {
+                    state.pending_approval = None;
+                }
+            }
+            ApprovalLogRecord::GrantConsumed { .. } => {}
+        }
+    }
 }
 
 fn format_decision_trace(trace: &DecisionTrace) -> String {
@@ -1108,13 +1229,69 @@ fn format_decision_trace(trace: &DecisionTrace) -> String {
     s
 }
 
-async fn boot_tui_gateway(
+/// Hosts the gateway when this process wins the data-dir lock, otherwise attaches to the holder.
+async fn boot_gateway(
     loaded: &LoadedGatewayEnv,
     options: &TuiLaunchOptions,
     provider_override: Option<Arc<dyn ModelProvider>>,
     tx: mpsc::UnboundedSender<RuntimeEvent>,
-) -> Result<BootedTuiGateway, String> {
+) -> Result<Arc<dyn GatewayClient>, String> {
     let owner_actor = owner_actor_from_cfg(Some(&loaded.config));
+    let approval_secrets =
+        load_approval_secrets(Some(&loaded.paths.secrets_path), |k| std::env::var(k).ok())
+            .map_err(|e| e.to_string())?;
+    let mac_key = resolve_approval_mac_key(&approval_secrets);
+
+    let store_dir = options
+        .data_dir
+        .clone()
+        .or_else(|| loaded.config.data_dir.clone())
+        .unwrap_or_else(|| loaded.paths.data_dir.clone());
+
+    match acquire_data_dir_lock(&store_dir) {
+        Ok(lock) => {
+            let client = host_gateway(
+                loaded,
+                options,
+                provider_override,
+                tx,
+                lock,
+                store_dir,
+                owner_actor,
+                mac_key,
+            )
+            .await?;
+            Ok(Arc::new(client))
+        }
+        Err(LockError::Held(held)) => {
+            let who = held
+                .pid
+                .map_or_else(|| "another process".to_owned(), |p| format!("pid {p}"));
+            let client = SocketClient::connect(&store_dir, owner_actor, mac_key, &loaded.secrets, tx)
+                .await
+                .map_err(|e| {
+                    format!(
+                        "data dir '{}' is hosted by {who} but attaching failed: {e}",
+                        store_dir.display()
+                    )
+                })?;
+            Ok(Arc::new(client))
+        }
+        Err(other) => Err(format!("failed to take the data-dir lock: {other}")),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn host_gateway(
+    loaded: &LoadedGatewayEnv,
+    options: &TuiLaunchOptions,
+    provider_override: Option<Arc<dyn ModelProvider>>,
+    tx: mpsc::UnboundedSender<RuntimeEvent>,
+    lock: monoagens_gateway::DataDirLock,
+    store_dir: PathBuf,
+    owner_actor: ActorId,
+    mac_key: [u8; 32],
+) -> Result<InProcessClient, String> {
     let toggles = ValveRuleTogglesState::load_from_config(&loaded.paths.config_path);
     let valve_cfg = build_valve_config(&loaded.config, &toggles);
     let mut snapshot = ValveSnapshot {
@@ -1124,11 +1301,6 @@ async fn boot_tui_gateway(
     };
     snapshot.known_actors.insert(owner_actor.clone());
 
-    let approval_secrets =
-        load_approval_secrets(Some(&loaded.paths.secrets_path), |k| std::env::var(k).ok())
-            .map_err(|e| e.to_string())?;
-    let mac_key = resolve_approval_mac_key(&approval_secrets);
-
     let mut valve =
         tokio::task::spawn_blocking(move || Valve::with_default_policies(valve_cfg, snapshot))
             .await
@@ -1137,18 +1309,12 @@ async fn boot_tui_gateway(
     valve.set_approval_attestation_key(mac_key);
 
     let dynamic_actors = Arc::new(Mutex::new(BTreeSet::new()));
-    let actors_for_doors = Arc::clone(&dynamic_actors);
     let door_controller = TuiDoorController {
         inner: ValveDoorController::new(valve),
-        dynamic_actors: actors_for_doors,
+        dynamic_actors: Arc::clone(&dynamic_actors),
     };
 
     let mut cfg = loaded.config.clone();
-    let store_dir = options
-        .data_dir
-        .clone()
-        .or_else(|| cfg.data_dir.clone())
-        .unwrap_or_else(|| loaded.paths.data_dir.clone());
     cfg.data_dir = Some(store_dir.clone());
     if let Some(model_path) = &options.model_override {
         cfg.soul.model_path = Some(model_path.clone());
@@ -1169,18 +1335,16 @@ async fn boot_tui_gateway(
 
     let clock = Arc::new(SystemClock::new());
     let diagnostics = DiagnosticSink::new(&loaded.secrets);
-    let cues = CueRecorder::new();
-
     let runtime = GatewayRuntime::start_segmented_with_configured_core(
         cfg.clone(),
         &loaded.secrets,
-        store_dir,
+        store_dir.clone(),
         door_controller,
         GatewayOptions {
             clock: clock.clone(),
             provider: provider_override,
             diagnostics,
-            cues,
+            cues: CueRecorder::new(),
             seams: GatewaySeams::default(),
         },
     )
@@ -1188,196 +1352,67 @@ async fn boot_tui_gateway(
     .map_err(|e| format!("gateway startup failed: {e}"))?;
 
     let handle = runtime.handle();
-    let (gw_stream, body_stream) = tokio::io::duplex(64 * 1024);
-    let (gw_read, gw_write) = tokio::io::split(gw_stream);
-    let (body_read, mut body_write) = tokio::io::split(body_stream);
-
-    let tx_body = tx.clone();
-    let clock_body = Arc::clone(&clock);
-    let body_task = tokio::spawn(async move {
-        let mut reader = TokioBufReader::new(body_read);
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match reader.read_line(&mut line).await {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {
-                    if let Some(resp) = handle_tui_waist2_line(&line, &tx_body, clock_body.now())
-                        && (body_write.write_all(resp.as_bytes()).await.is_err()
-                            || body_write.write_all(b"\n").await.is_err()
-                            || body_write.flush().await.is_err())
-                    {
-                        break;
-                    }
-                }
-            }
-        }
-    });
-
-    handle
-        .connect_ndjson_body(gw_read, gw_write, Some(BodyId::new("body-tui")))
-        .await
-        .map_err(|e| format!("failed to connect body-tui over Waist 2: {e}"))?;
-
-    Ok(BootedTuiGateway {
-        runtime,
-        handle,
-        owner_actor,
-        mac_key,
-        clock,
-        dynamic_actors,
-        titler_provider,
-        body_task,
-        _embed_sidecar: embed_sidecar,
-    })
-}
-
-fn handle_tui_waist2_line(
-    line: &str,
-    tx: &mpsc::UnboundedSender<RuntimeEvent>,
-    now: Time,
-) -> Option<String> {
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let req: Waist2Request<serde_json::Value> = serde_json::from_str(trimmed).ok()?;
-    let id = req.id?;
-
-    let result_val = match req.method {
-        Waist2Method::BodyDiscover => {
-            let params: BodyDiscoverParams = match serde_json::from_value(req.params) {
-                Ok(p) => p,
-                Err(e) => {
-                    return serialize_waist2_err(
-                        id,
-                        Waist2Error::invalid_receipt_transition(e.to_string()),
-                    );
-                }
-            };
-            let mut caps = vec![
-                CapabilityDescriptor {
-                    id: CapabilityId::new("chat.speak"),
-                    description: "Render chat reply in interactive TUI".to_owned(),
-                    places: vec![PlaceId::new("cli:terminal")],
-                    flags: CapabilityFlags {
-                        communicative: true,
-                        identity_changing: false,
-                        irreversible: false,
-                    },
-                    typical_latency_ms: 0,
-                    capability_schema_hash: monoagens_protocol::CapabilitySchemaHash::new(
-                        "tui-chat-speak",
-                    ),
-                    sensed_effect: None,
-                },
-                CapabilityDescriptor {
-                    id: CapabilityId::new(CAPABILITY_APPROVAL_PROMPT),
-                    description: "Render interactive Valve approval card in TUI".to_owned(),
-                    places: vec![PlaceId::new("cli:terminal")],
-                    flags: CapabilityFlags {
-                        communicative: true,
-                        identity_changing: false,
-                        irreversible: false,
-                    },
-                    typical_latency_ms: 0,
-                    capability_schema_hash: monoagens_protocol::CapabilitySchemaHash::new(
-                        "tui-approval-prompt",
-                    ),
-                    sensed_effect: None,
-                },
-            ];
-            sort_capabilities(&mut caps);
-            let res = BodyDiscoverResult {
-                body_id: params.body_id.unwrap_or_else(|| BodyId::new("body-tui")),
-                protocol_version: CURRENT_PROTOCOL_VERSION,
-                capabilities: caps,
-                places: vec![PlaceId::new("cli:terminal")],
-            };
-            serde_json::to_value(res).ok()?
-        }
-        Waist2Method::BodyHeartbeat => {
-            let res = BodyHeartbeatResult {
-                acknowledged_at_ms: now,
-            };
-            serde_json::to_value(res).ok()?
-        }
-        Waist2Method::BodyShutdown => {
-            let res = BodyShutdownResult { accepted: true };
-            serde_json::to_value(res).ok()?
-        }
-        Waist2Method::ActionExecute => {
-            let params: ActionExecuteParams = match serde_json::from_value(req.params) {
-                Ok(p) => p,
-                Err(e) => {
-                    return serialize_waist2_err(
-                        id,
-                        Waist2Error::invalid_receipt_transition(e.to_string()),
-                    );
-                }
-            };
-            if params.capability_id.as_str() == "chat.speak" {
-                let text = extract_chat_speak_text(params.payload.as_bytes());
-                let _ = tx.send(RuntimeEvent::AssistantReply {
-                    chat_id: None,
-                    text,
-                    duration_ms: 0,
-                });
-            } else if params.capability_id.as_str() == CAPABILITY_APPROVAL_PROMPT
-                && let Ok(prompt) =
-                    serde_json::from_slice::<ApprovalPromptRequest>(params.payload.as_bytes())
-            {
-                let _ = tx.send(RuntimeEvent::ApprovalPrompt(PendingApprovalCard {
-                    action_id: prompt.action_id,
-                    h_act: prompt.h_act,
-                    state_epoch: prompt.state_epoch,
-                    capability_id: prompt.capability_id.as_str().to_owned(),
-                    summary: prompt.summary,
-                    selected_approve: true,
-                }));
-            }
-            let receipt = Receipt {
-                action_id: params.action_id,
-                capability_id: params.capability_id,
-                outcome: ReceiptOutcome::Done,
-                reason_code: None,
-                detail: None,
-                termination_reason: Some(TerminationReason::Normal),
-                progress: Some(1.0),
-                delivered_units: Some(1),
-                h_act: params.h_act,
-                timestamp_ms: now,
-            };
-            let res = ActionExecuteResult {
-                accepted: true,
-                receipt: Some(receipt),
-            };
-            serde_json::to_value(res).ok()?
-        }
-        _ => {
-            return serialize_waist2_err(
-                id,
-                Waist2Error::invalid_receipt_transition("unsupported method"),
-            );
+    let clock_dyn: Arc<dyn Clock> = clock.clone();
+    let runlog = RunLog::new(
+        Arc::clone(&clock_dyn),
+        handle.diagnostics().clone(),
+        Some(store_dir.join("logs").join("tui.log")),
+    );
+    runlog.attach_diagnostics(handle.diagnostics());
+    let supervisor = PluginSupervisor::new(
+        handle.clone(),
+        PluginEnvContext {
+            config_dir: Some(crate::config::config_dir_from_path(&loaded.paths.config_path)),
+            data_dir: Some(store_dir.clone()),
+            plugin_env: load_plugin_env_secrets(&loaded.paths.secrets_path).unwrap_or_default(),
+            rbac_enabled: cfg.rbac.is_some(),
+        },
+        clock_dyn,
+        runlog.clone(),
+        RestartPolicy::default(),
+        cfg.effective_plugins(),
+    );
+    let owner = Arc::new(GatewayOwner::new(OwnerParams {
+        handle: handle.clone(),
+        supervisor,
+        runlog: runlog.clone(),
+        mode: OwnerMode::Tui,
+        config: cfg,
+        config_path: loaded.paths.config_path.clone(),
+        secrets_path: loaded.paths.secrets_path.clone(),
+        data_dir: store_dir.clone(),
+        owner_actor: owner_actor.clone(),
+    }));
+    // This TUI also serves the admin socket so another TUI can attach to it.
+    let admin = match AdminServer::start(&lock, &store_dir, Arc::clone(&owner)).await {
+        Ok(a) => Some(a),
+        Err(e) => {
+            runlog.warn("gateway", &format!("admin socket not served: {e}"));
+            None
         }
     };
 
-    let resp = Waist2Response::ok(Some(id), result_val);
-    serde_json::to_string(&resp).ok()
-}
+    let client = InProcessClient::new(
+        InProcessParts {
+            owner: Arc::clone(&owner),
+            runtime,
+            lock,
+            admin,
+            owner_actor,
+            mac_key,
+            clock,
+            dynamic_actors,
+            titler_provider,
+            embed_sidecar,
+        },
+        tx,
+    )
+    .await?;
 
-fn serialize_waist2_err(id: RpcId, err: Waist2Error) -> Option<String> {
-    let resp = Waist2Response::<serde_json::Value>::err(Some(id), err);
-    serde_json::to_string(&resp).ok()
-}
-
-fn extract_chat_speak_text(bytes: &[u8]) -> String {
-    if let Ok(val) = serde_json::from_slice::<serde_json::Value>(bytes)
-        && let Some(t) = val.get("text").and_then(|v| v.as_str())
-    {
-        return t.to_owned();
-    }
-    String::from_utf8_lossy(bytes).to_string()
+    // Enabled plugins start now (dependency order, crash backoff); states arrive as events.
+    let supervisor = owner.supervisor().clone();
+    tokio::spawn(async move { supervisor.start_enabled().await });
+    Ok(client)
 }
 
 fn build_valve_config(cfg: &GatewayConfig, toggles: &ValveRuleTogglesState) -> ValveConfig {
@@ -1477,132 +1512,6 @@ fn build_tui_percept(
         attachments: attachment_handles,
         dialogue_act_gap: None,
         peer_expertise_margin: None,
-    }
-}
-
-fn sync_dynamic_actors(dynamic_actors: &Arc<Mutex<BTreeSet<ActorId>>>, state: &TuiAppState) {
-    let mut guard = dynamic_actors.lock().expect("dynamic actors lock");
-    for a in &state.lab_session.known_actors {
-        if a != "soul" {
-            guard.insert(ActorId::new(a));
-        }
-    }
-}
-
-fn sync_gateway_commands(state: &mut TuiAppState, handle: &GatewayHandle) {
-    let reg = handle.command_registry();
-    let specs = reg
-        .lock()
-        .expect("cmd reg lock")
-        .all_commands()
-        .into_iter()
-        .cloned()
-        .collect();
-    state.gateway_commands = specs;
-}
-
-fn spawn_auto_plugins(
-    state: &mut TuiAppState,
-    handle: &GatewayHandle,
-    paths: &ResolvedPaths,
-    tx: &mpsc::UnboundedSender<RuntimeEvent>,
-    children: &mut HashMap<String, (Child, Option<BodyId>)>,
-) {
-    let rbac_enabled = state.gateway_cfg.rbac.is_some();
-    for cfg in state.gateway_cfg.effective_plugins() {
-        if cfg.enabled {
-            state.set_plugin_state(&cfg.id, PluginUiState::Starting);
-            spawn_single_plugin(
-                cfg,
-                handle.clone(),
-                paths.clone(),
-                rbac_enabled,
-                tx.clone(),
-                children,
-            );
-        }
-    }
-}
-
-fn spawn_single_plugin(
-    cfg: PluginConfig,
-    handle: GatewayHandle,
-    paths: ResolvedPaths,
-    rbac_enabled: bool,
-    tx: mpsc::UnboundedSender<RuntimeEvent>,
-    children: &mut HashMap<String, (Child, Option<BodyId>)>,
-) {
-    let pid = cfg.id.clone();
-    match cfg.transport {
-        BodyTransportConfig::Stdio { command, args } => {
-            let env_ctx = PluginEnvContext {
-                config_dir: Some(crate::config::config_dir_from_path(&paths.config_path)),
-                data_dir: Some(paths.data_dir.clone()),
-                plugin_env: load_plugin_env_secrets(&paths.secrets_path).unwrap_or_default(),
-                rbac_enabled,
-            };
-            let extra_envs = build_plugin_env(&pid, &env_ctx);
-            let mut cmd = TokioCommand::new(&command);
-            cmd.args(&args)
-                .envs(extra_envs)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null());
-            match cmd.spawn() {
-                Ok(mut child) => {
-                    let stdin = child.stdin.take();
-                    let stdout = child.stdout.take();
-                    children.insert(pid.clone(), (child, None));
-                    if let (Some(stdin), Some(stdout)) = (stdin, stdout) {
-                        tokio::spawn(async move {
-                            match handle.connect_ndjson_body(stdout, stdin, None).await {
-                                Ok(_body_id) => {
-                                    let _ = tx.send(RuntimeEvent::PluginState {
-                                        id: pid,
-                                        state: PluginUiState::Running,
-                                    });
-                                }
-                                Err(err) => {
-                                    let _ = tx.send(RuntimeEvent::PluginState {
-                                        id: pid,
-                                        state: PluginUiState::Failed(err.to_string()),
-                                    });
-                                }
-                            }
-                        });
-                    } else {
-                        let _ = tx.send(RuntimeEvent::PluginState {
-                            id: pid,
-                            state: PluginUiState::Failed("missing stdio pipes".to_owned()),
-                        });
-                    }
-                }
-                Err(e) => {
-                    let _ = tx.send(RuntimeEvent::PluginState {
-                        id: pid,
-                        state: PluginUiState::Failed(format!("spawn '{command}' failed: {e}")),
-                    });
-                }
-            }
-        }
-        BodyTransportConfig::UnixSocket { path } => {
-            tokio::spawn(async move {
-                match handle.connect_unix_body(&path).await {
-                    Ok(_) => {
-                        let _ = tx.send(RuntimeEvent::PluginState {
-                            id: pid,
-                            state: PluginUiState::Running,
-                        });
-                    }
-                    Err(err) => {
-                        let _ = tx.send(RuntimeEvent::PluginState {
-                            id: pid,
-                            state: PluginUiState::Failed(err.to_string()),
-                        });
-                    }
-                }
-            });
-        }
     }
 }
 
@@ -1744,6 +1653,10 @@ impl Doors for TuiDoorController {
 }
 
 impl DoorController for TuiDoorController {
+    fn reload_valve(&mut self, config: &GatewayConfig) -> bool {
+        self.inner.reload_valve(config)
+    }
+
     fn sync_runtime_state(
         &mut self,
         log_seq: LogSeq,
@@ -1800,4 +1713,175 @@ pub fn resolve_tui_paths(config_path: Option<&Path>) -> Result<ResolvedPaths, St
 #[must_use]
 pub const fn builtin_plugin_count() -> usize {
     BUILTIN_PLUGIN_PRESETS.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::LocalChatStore;
+    use monoagens_reason::{ScriptedModelProvider, ScriptedReply};
+    use serde_json::json;
+
+    fn target_tmp() -> tempfile::TempDir {
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tui-unit-tests");
+        std::fs::create_dir_all(&base).expect("mkdir target tmp");
+        tempfile::TempDir::new_in(base).expect("tempdir on disk")
+    }
+
+    fn speak_reply(text: &str) -> String {
+        json!({
+            "protocol_version": { "major": 1, "minor": 0 },
+            "acts": [
+                {
+                    "act": "think", "thought": "answer the owner", "motivation": 4,
+                    "confidence_0_20": 18, "used_ids": [], "importance": 0.6,
+                    "basis": "observed", "value": null, "cost": null, "domain": null
+                },
+                {
+                    "act": "act", "capability_id": "chat.speak", "places": ["cli:terminal"],
+                    "people": ["per_owner"], "payload": text.as_bytes(), "motivation": 4,
+                    "confidence_0_20": 18, "used_ids": [], "expected": null, "domain": null
+                }
+            ]
+        })
+        .to_string()
+    }
+
+    /// Two real turns through a hosted gateway: each reply's `chat.speak` action maps back to the
+    /// turn that submitted it, so a late reply cannot be taken for the next turn's reply.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn chat_speak_actions_map_back_to_their_submitting_turn() {
+        let dir = target_tmp();
+        let cfg_dir = dir.path().join("config");
+        let data_dir = dir.path().join("data");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let mut config = GatewayConfig::default();
+        config.model.provider = monoagens_gateway::ModelProviderKind::Scripted;
+        config.runtime.model_timeout_ms = 20_000;
+        let paths = ResolvedPaths {
+            config_path: cfg_dir.join("monoagens.toml"),
+            secrets_path: cfg_dir.join("secrets.toml"),
+            data_dir: data_dir.clone(),
+        };
+        let loaded = LoadedGatewayEnv {
+            config: config.clone(),
+            secrets: ProviderSecrets::default(),
+            paths: paths.clone(),
+            created_default: false,
+        };
+        let mut provider = ScriptedModelProvider::new();
+        provider.set_fallback(ScriptedReply::text(speak_reply("pong")));
+        let options = TuiLaunchOptions {
+            data_dir: Some(data_dir),
+            ..TuiLaunchOptions::default()
+        };
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let client = boot_gateway(&loaded, &options, Some(Arc::new(provider)), tx)
+            .await
+            .expect("host gateway");
+        assert_eq!(client.kind(), ClientKind::Hosting);
+
+        let mut state = TuiAppState::new(
+            paths,
+            config,
+            TuiPreferences::default(),
+            LocalChatStore::default(),
+            SecretsUiSummary::default(),
+            client.owner_actor(),
+        );
+        let mut follower = LogFollower::default();
+        let mut active = None;
+        let mut seen: Vec<(u64, String)> = Vec::new();
+        for text in ["ping one", "ping two"] {
+            state.finish_busy();
+            let chat_id = state.chats.active_chat_id.clone();
+            let turn = state.turn.begin(&chat_id);
+            let mut percept =
+                build_tui_percept(&state, &client.owner_actor(), text, &[], client.now());
+            percept.correlation_id =
+                Some(CorrelationId::new(format!("{TURN_CORRELATION_PREFIX}{turn}")));
+            client.submit_turn(percept).await.expect("submit turn");
+            let action_id = loop {
+                let ev = tokio::time::timeout(Duration::from_secs(20), rx.recv())
+                    .await
+                    .expect("reply in time")
+                    .expect("channel open");
+                if let RuntimeEvent::AssistantReply {
+                    action_id: Some(a), ..
+                } = ev
+                {
+                    break a;
+                }
+            };
+            poll_new_gateway_events(&client, &mut state, &mut follower, &mut active).await;
+            seen.push((turn, action_id));
+        }
+        for (turn, action_id) in &seen {
+            assert_eq!(
+                follower.tracker.turn_of_action(action_id),
+                Some(*turn),
+                "action {action_id} must map to turn {turn}"
+            );
+        }
+        assert_ne!(seen[0].1, seen[1].1);
+        client.shutdown().await;
+    }
+
+    /// The same call through `SocketClient` (attached) and `InProcessClient` (hosting) answers
+    /// alike: the TUI code cannot tell the implementations apart.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn socket_client_status_matches_the_in_process_client() {
+        let dir = target_tmp();
+        let cfg_dir = dir.path().join("config");
+        let data_dir = dir.path().join("data");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let mut config = GatewayConfig::default();
+        config.model.provider = monoagens_gateway::ModelProviderKind::Scripted;
+        let paths = ResolvedPaths {
+            config_path: cfg_dir.join("monoagens.toml"),
+            secrets_path: cfg_dir.join("secrets.toml"),
+            data_dir: data_dir.clone(),
+        };
+        let loaded = LoadedGatewayEnv {
+            config,
+            secrets: ProviderSecrets::default(),
+            paths,
+            created_default: false,
+        };
+        let options = TuiLaunchOptions {
+            data_dir: Some(data_dir.clone()),
+            ..TuiLaunchOptions::default()
+        };
+        let provider: Arc<dyn ModelProvider> = Arc::new(ScriptedModelProvider::new());
+        let (tx_host, _rx_host) = mpsc::unbounded_channel();
+        let host = boot_gateway(&loaded, &options, Some(Arc::clone(&provider)), tx_host)
+            .await
+            .expect("host");
+        assert_eq!(host.kind(), ClientKind::Hosting);
+
+        // A second boot on the same data dir cannot take the lock and attaches instead.
+        let (tx_att, _rx_att) = mpsc::unbounded_channel();
+        let attached = boot_gateway(&loaded, &options, Some(provider), tx_att)
+            .await
+            .expect("attach");
+        assert_eq!(attached.kind(), ClientKind::Attached);
+
+        let local = host.status().await.expect("in-process status");
+        let remote = attached.status().await.expect("socket status");
+        assert_eq!(local, remote);
+        assert_eq!(remote["owner"]["pid"], serde_json::json!(std::process::id()));
+        assert_eq!(remote["owner"]["mode"], serde_json::json!("tui"));
+        assert_eq!(
+            host.plugins_list().await.unwrap(),
+            attached.plugins_list().await.unwrap()
+        );
+        assert_eq!(
+            host.commands().await.unwrap(),
+            attached.commands().await.unwrap()
+        );
+        attached.shutdown().await;
+        host.shutdown().await;
+    }
 }

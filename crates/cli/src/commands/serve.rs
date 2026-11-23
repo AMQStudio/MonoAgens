@@ -5,10 +5,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use monoagens_gateway::{
-    LockError, PluginConfig, PluginEnvContext, PluginKind, acquire_data_dir_lock,
-    load_plugin_env_secrets,
+    AdminServer, Clock, GatewayOwner, LockError, OwnerMode, OwnerParams, PluginConfig,
+    PluginEnvContext, PluginKind, PluginState, PluginSupervisor, RestartPolicy, RunLog,
+    acquire_data_dir_lock, load_plugin_env_secrets, resolve_plugin_boot_order,
 };
-use monoagens_protocol::ActorId;
+use monoagens_protocol::{ActorId, BodyId};
 use monoagens_reason::ModelProvider;
 use serde::Serialize;
 use tokio::sync::oneshot;
@@ -136,7 +137,13 @@ pub fn run_serve_with_provider(
     };
 
     let effective_plugins = loaded.config.effective_plugins();
-    let selected_plugins = select_plugins(&effective_plugins, &args.bodies)?;
+    let mut selected_plugins = select_plugins(&effective_plugins, &args.bodies)?;
+    if !args.bodies.is_empty() {
+        // Naming a plugin with `--plugin` starts it even when it is disabled in the config.
+        for p in &mut selected_plugins {
+            p.enabled = true;
+        }
+    }
     if selected_plugins.is_empty() && !args.allow_empty {
         return Err(
             "no plugins or [[bodies]] configured (declare [plugins.<id>] or [[bodies]] in monoagens.toml or pass --allow-empty)"
@@ -156,7 +163,7 @@ pub fn run_serve_with_provider(
         .data_dir
         .clone()
         .unwrap_or_else(|| loaded.paths.data_dir.clone());
-    let _data_dir_lock = match acquire_data_dir_lock(&lock_dir) {
+    let data_dir_lock = match acquire_data_dir_lock(&lock_dir) {
         Ok(lock) => lock,
         Err(LockError::Held(held)) => {
             let who = held
@@ -197,6 +204,9 @@ pub fn run_serve_with_provider(
         let BootedGateway {
             runtime,
             store_dir,
+            owner_actor,
+            cfg,
+            clock,
             _embed_sidecar,
             ..
         } = boot_gateway_runtime(
@@ -222,9 +232,40 @@ pub fn run_serve_with_provider(
         };
 
         let handle = runtime.handle();
-        let startup = handle
-            .connect_configured_plugins(&selected_plugins, &env_ctx)
-            .await;
+        let clock_dyn: Arc<dyn Clock> = clock;
+        let runlog = RunLog::new(
+            Arc::clone(&clock_dyn),
+            handle.diagnostics().clone(),
+            Some(RunLog::default_file(&store_dir)),
+        );
+        runlog.attach_diagnostics(handle.diagnostics());
+        let supervisor = PluginSupervisor::new(
+            handle.clone(),
+            env_ctx,
+            clock_dyn,
+            runlog.clone(),
+            RestartPolicy::default(),
+            selected_plugins.clone(),
+        );
+        let owner = Arc::new(GatewayOwner::new(OwnerParams {
+            handle: handle.clone(),
+            supervisor: supervisor.clone(),
+            runlog: runlog.clone(),
+            mode: OwnerMode::Serve,
+            config: cfg,
+            config_path: loaded.paths.config_path.clone(),
+            secrets_path: loaded.paths.secrets_path.clone(),
+            data_dir: store_dir.clone(),
+            owner_actor,
+        }));
+        // Serve the owner-only admin socket so a TUI can attach (and detach) at will.
+        let admin = AdminServer::start(&data_dir_lock, &store_dir, Arc::clone(&owner))
+            .await
+            .map_err(|e| format!("failed to serve the admin socket: {e}"))?;
+
+        // Dependency order, stderr capture, crash backoff and per-plugin locks live in the
+        // supervisor; the report below is read from its state.
+        supervisor.start_enabled().await;
 
         let kind_by_id: BTreeMap<String, PluginKind> = selected_plugins
             .iter()
@@ -237,90 +278,113 @@ pub fn run_serve_with_provider(
                 .unwrap_or(PluginKind::Adapter)
                 .as_str()
         };
+        let builtin: &[&str] = if rbac_enabled { &["rbac"] } else { &[] };
+        let plan_skipped: BTreeMap<String, String> = resolve_plugin_boot_order(
+            &selected_plugins
+                .iter()
+                .filter(|p| p.enabled)
+                .cloned()
+                .collect::<Vec<_>>(),
+            builtin,
+        )
+        .skipped
+        .into_iter()
+        .map(|s| (s.id, s.reason))
+        .collect();
 
-        let connected_count = startup.connected.len();
-        let failed_count = startup.failed.len();
-        let skipped_count = startup.skipped.len();
-
-        let mut reports_by_id: BTreeMap<String, ServeBodyReport> = BTreeMap::new();
-        for outcome in startup.connected {
-            if let Ok(body_id) = outcome.result {
-                let places = handle
-                    .router()
-                    .owned_places(&body_id)
-                    .into_iter()
-                    .map(|p| p.as_str().to_owned())
-                    .collect();
-                let kind = kind_str(&outcome.config_id);
-                reports_by_id.insert(
-                    outcome.config_id.clone(),
+        let mut connected_count = 0usize;
+        let mut failed_count = 0usize;
+        let mut skipped_count = 0usize;
+        let mut body_reports = Vec::with_capacity(selected_plugins.len());
+        for plugin in &selected_plugins {
+            let kind = kind_str(&plugin.id);
+            let Some(info) = supervisor.info(&plugin.id) else {
+                continue;
+            };
+            let reason = info.reason.clone().unwrap_or_default();
+            let report = match info.state {
+                PluginState::Running => {
+                    connected_count += 1;
+                    let body_id = info.body_id.clone().unwrap_or_default();
+                    let places = handle
+                        .router()
+                        .owned_places(&BodyId::new(&body_id))
+                        .into_iter()
+                        .map(|p| p.as_str().to_owned())
+                        .collect();
                     ServeBodyReport {
-                        config_id: outcome.config_id,
+                        config_id: plugin.id.clone(),
                         kind,
                         status: "connected",
-                        body_id: Some(body_id.as_str().to_owned()),
+                        body_id: Some(body_id),
                         places,
                         error: None,
-                    },
-                );
-            }
-        }
-        for outcome in startup.failed {
-            if let Err(err_val) = outcome.result {
-                let msg = err_val.to_string();
-                let kind = kind_str(&outcome.config_id);
-                if !json_mode {
-                    let _ = writeln!(
-                        err,
-                        "[warn] plugin '{}' ({kind}) failed to connect: {msg}",
-                        outcome.config_id
-                    );
-                    let _ = err.flush();
+                    }
                 }
-                reports_by_id.insert(
-                    outcome.config_id.clone(),
+                PluginState::Failed
+                    if plan_skipped.contains_key(&plugin.id)
+                        || reason.starts_with("required dependency") =>
+                {
+                    skipped_count += 1;
                     ServeBodyReport {
-                        config_id: outcome.config_id,
+                        config_id: plugin.id.clone(),
+                        kind,
+                        status: "skipped",
+                        body_id: None,
+                        places: Vec::new(),
+                        error: Some(reason),
+                    }
+                }
+                PluginState::Failed => {
+                    failed_count += 1;
+                    ServeBodyReport {
+                        config_id: plugin.id.clone(),
                         kind,
                         status: "failed",
                         body_id: None,
                         places: Vec::new(),
-                        error: Some(msg),
-                    },
-                );
-            }
-        }
-        for skip in startup.skipped {
-            let kind = kind_str(&skip.id);
-            if !json_mode {
+                        error: Some(reason),
+                    }
+                }
+                PluginState::RunningElsewhere => {
+                    skipped_count += 1;
+                    ServeBodyReport {
+                        config_id: plugin.id.clone(),
+                        kind,
+                        status: "skipped",
+                        body_id: None,
+                        places: Vec::new(),
+                        error: Some("running in another MonoAgens (plugin lock held)".to_owned()),
+                    }
+                }
+                PluginState::Stopped | PluginState::Starting => {
+                    skipped_count += 1;
+                    ServeBodyReport {
+                        config_id: plugin.id.clone(),
+                        kind,
+                        status: "skipped",
+                        body_id: None,
+                        places: Vec::new(),
+                        error: Some(if plugin.enabled {
+                            "not started".to_owned()
+                        } else {
+                            "disabled in the configuration".to_owned()
+                        }),
+                    }
+                }
+            };
+            if !json_mode && report.status != "connected" {
                 let _ = writeln!(
                     err,
-                    "[warn] plugin '{}' ({kind}) skipped: {}",
-                    skip.id, skip.reason
+                    "[warn] plugin '{}' ({kind}) {}: {}",
+                    report.config_id,
+                    if report.status == "failed" { "failed to connect" } else { "skipped" },
+                    report.error.as_deref().unwrap_or("")
                 );
                 let _ = err.flush();
             }
-            reports_by_id.insert(
-                skip.id.clone(),
-                ServeBodyReport {
-                    config_id: skip.id,
-                    kind,
-                    status: "skipped",
-                    body_id: None,
-                    places: Vec::new(),
-                    error: Some(skip.reason),
-                },
-            );
+            body_reports.push(report);
         }
-
-        // Preserve declared configuration order in the emitted report.
-        let mut body_reports = Vec::with_capacity(reports_by_id.len());
-        for plugin in &selected_plugins {
-            if let Some(entry) = reports_by_id.remove(&plugin.id) {
-                body_reports.push(entry);
-            }
-        }
-        body_reports.extend(reports_by_id.into_values());
 
         let indexed_commands: Vec<String> = {
             let reg = handle.command_registry();
@@ -404,6 +468,8 @@ pub fn run_serve_with_provider(
 
         wait_for_shutdown(exit_after_ms, shutdown_rx).await;
 
+        supervisor.shutdown().await;
+        admin.shutdown();
         runtime.shutdown().await;
         if !json_mode {
             let _ = writeln!(err, "monoagens serve shut down cleanly");

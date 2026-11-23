@@ -3,9 +3,12 @@
 #![forbid(unsafe_code)]
 
 pub mod attachments;
+pub mod client;
 pub mod clipboard;
 pub mod config;
+pub mod doctor;
 pub mod effects;
+pub mod log;
 pub mod markdown;
 pub mod render;
 pub mod runtime;
@@ -33,7 +36,9 @@ pub use config::{
     TuiPreferences,
 };
 pub use effects::TuiEffects;
-pub use render::{render_app, render_to_buffer};
+pub use client::{ClientKind, GatewayClient, InProcessClient, RuntimeEvent, SocketClient};
+pub use log::LogView;
+pub use render::{render_app, render_scrollbar, render_to_buffer, scroll_window};
 pub use runtime::{TerminalGuard, TuiLaunchOptions, run_tui, run_tui_with_provider};
 pub use settings::{
     InlineEditState, InlineEditTarget, PluginDetailState, PluginUiEntry, PluginUiState,

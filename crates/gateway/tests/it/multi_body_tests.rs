@@ -400,10 +400,15 @@ async fn dynamic_place_anti_hijack_guard_refuses_cross_body_claim() {
     );
     assert!(handle.router().owned_places(&body_b).is_empty());
 
+    // Body A's turn keeps appending derived events (decision, thought, ...) in the background, so
+    // compare percept events only: the spoofed one must never reach Core.
     let events_after = handle.read_events().await.expect("events after");
+    let percepts = |evs: &[monoagens_core::EventRecord]| {
+        evs.iter().filter(|e| e.kind == EventKind::Percept).count()
+    };
     assert_eq!(
-        events_before.len(),
-        events_after.len(),
+        percepts(&events_before),
+        percepts(&events_after),
         "hijacked percept must not be submitted to Core"
     );
 
