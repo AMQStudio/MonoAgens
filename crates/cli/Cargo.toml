@@ -9,7 +9,7 @@ name = "monoagens"
 path = "src/main.rs"
 
 [dependencies]
-body-cli = { path = "../../bodies/body-cli" }
+body-cli = { path = "../../plugins/cli" }
 clap = { version = "4.6", features = ["derive"] }
 monoagens-body-kit = { workspace = true }
 monoagens-body-sdk = { path = "../../sdk/rust" }

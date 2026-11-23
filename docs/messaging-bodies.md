@@ -62,19 +62,19 @@ Messaging bridges do not know every future DM or group chat at startup:
 
 ## 5. Chat UX Hygiene
 
-- **Self-echo suppression (`R-09`)**: Record outbound platform message IDs (`pid_1..pid_M`) using [`EchoRegistry`](../bodies/body-kit/src/split_bubble.rs) (`monoagens-body-kit`) or an equivalent bounded map in your bridge, and drop inbound webhook/socket echoes matching your own sent `pid`s so Mono never triggers feedback loops on its own replies.
-- **`working_cue` -> native typing indicator**: Gateway and `body-kit` enforce `d_art = 0 ms` (zero artificial delay, [`bodies/body-kit/src/cues.rs`](../bodies/body-kit/src/cues.rs)). When a genuine turn/action wait crosses `working_cue_ms` (`1_000 ms` default), forward the `working_cue` signal to WhatsApp `composing` presence or Telegram `sendChatAction("typing")`.
-- **Split-bubble delivery**: Platform messages have character/byte limits (`L_cap`). Use `deliver_split_bubbles` / `split_text_chunks` in [`bodies/body-kit/src/split_bubble.rs`](../bodies/body-kit/src/split_bubble.rs) to split long replies cleanly across whitespace/newline boundaries while tracking `delivered_units`, supporting mid-stream `action/cancel` barge-in, and returning a single combined `Receipt`.
+- **Self-echo suppression (`R-09`)**: Record outbound platform message IDs (`pid_1..pid_M`) using [`EchoRegistry`](../plugins/kit/src/split_bubble.rs) (`monoagens-body-kit`) or an equivalent bounded map in your bridge, and drop inbound webhook/socket echoes matching your own sent `pid`s so Mono never triggers feedback loops on its own replies.
+- **`working_cue` -> native typing indicator**: Gateway and `plugins/kit` enforce `d_art = 0 ms` (zero artificial delay, [`plugins/kit/src/cues.rs`](../plugins/kit/src/cues.rs)). When a genuine turn/action wait crosses `working_cue_ms` (`1_000 ms` default), forward the `working_cue` signal to WhatsApp `composing` presence or Telegram `sendChatAction("typing")`.
+- **Split-bubble delivery**: Platform messages have character/byte limits (`L_cap`). Use `deliver_split_bubbles` / `split_text_chunks` in [`plugins/kit/src/split_bubble.rs`](../plugins/kit/src/split_bubble.rs) to split long replies cleanly across whitespace/newline boundaries while tracking `delivered_units`, supporting mid-stream `action/cancel` barge-in, and returning a single combined `Receipt`.
 - **Media & attachment handling (`<= 256 KiB` inline vs `blob/put|get`)**: Inline payloads are bounded by `MAX_INLINE_ATTACHMENT_BYTES` (`262_144` bytes / `256 KiB` in [`crates/protocol/src/facts.rs`](../crates/protocol/src/facts.rs)). Any image, voice note, or document exceeding `256 KiB` must be staged out-of-band via `blob/put` / `blob/get` (`60 s` staging TTL, verified by `byte_len` and SHA-256 hex digest; mismatches fail with `-32005 ERR_HASH_MISMATCH`).
 
 ---
 
-## 6. Built-In Messaging Bodies (`body-telegram` & `body-whatsapp`)
+## 6. Built-In Messaging Plugins (`plugins/telegram` & `plugins/whatsapp`)
 
-MonoAgens ships two pure-Rust Waist-2 messaging bodies:
+MonoAgens ships two pure-Rust Waist-2 messaging adapter plugins under `plugins/`:
 
-- **`bodies/body-telegram`** (workspace member) — Telegram Bot API (`reqwest` + `tokio`), passing `monoagens-conformance body --level should` (`10/10`).
-- **`bodies/body-whatsapp`** (standalone excluded crate powered by `whatsapp-rust 0.7`, isolated from root `libsqlite3-sys 0.40`), passing `monoagens-conformance body --level should`.
+- **`plugins/telegram`** (workspace member, binary `body-telegram`) — Telegram Bot API (`reqwest` + `tokio`), passing `monoagens-conformance body --level should` (`10/10`, `capabilities=10`).
+- **`plugins/whatsapp`** (standalone excluded crate, binary `body-whatsapp`, powered by `whatsapp-rust 0.7`, isolated from root `libsqlite3-sys 0.40`), passing `monoagens-conformance body --level should` (`10/10`, `capabilities=10`).
 
 ### Native Capability Matrix
 
@@ -100,11 +100,11 @@ source "$HOME/.cargo/env"
 # Build Telegram body (workspace member)
 cargo build --release -p body-telegram -p monoagens-cli
 
-# Build WhatsApp body (standalone crate)
-cargo build --release --manifest-path bodies/body-whatsapp/Cargo.toml
+# Build WhatsApp plugin (standalone crate)
+cargo build --release --manifest-path plugins/whatsapp/Cargo.toml
 
 # Pair WhatsApp once (QR code in terminal, or --phone 6281234567890 for pairing code)
-./bodies/body-whatsapp/target/release/body-whatsapp pair \
+./plugins/whatsapp/target/release/body-whatsapp pair \
   --db "$HOME/.local/share/monoagens/plugins/body-whatsapp/session.db"
 ```
 
@@ -158,15 +158,26 @@ args = ["--token-env", "TELEGRAM_BOT_TOKEN"]
 
 [plugins.whatsapp]
 kind = "adapter"
-command = "/path/to/Mono/bodies/body-whatsapp/target/release/body-whatsapp"
+command = "/path/to/Mono/plugins/whatsapp/target/release/body-whatsapp"
 args = ["--live"]
 
-# Example capability plugin depending on rbac + an adapter
-# [plugins.web-search]
-# kind = "capability"
-# dependencies = ["rbac"]
-# optional_dependencies = ["telegram", "whatsapp"]
-# command = "/path/to/web-search-plugin"
+# Built-in capability plugins (`plugins/plugin-*`), each self-managing plugins/<id>.toml
+[plugins.web-search]
+kind = "capability"
+command = "/path/to/Mono/target/release/plugin-web-search"
+
+[plugins.workspace]
+kind = "capability"
+optional_dependencies = ["rbac"]
+command = "/path/to/Mono/target/release/plugin-workspace"
+
+[plugins.pdf-reader]
+kind = "capability"
+command = "/path/to/Mono/target/release/plugin-pdf-reader"
+
+[plugins.soul-tuning]
+kind = "capability"
+command = "/path/to/Mono/target/release/plugin-soul-tuning"
 
 [[person]]
 actor_id = "owner"

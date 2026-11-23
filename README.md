@@ -11,7 +11,7 @@ An autonomous agent runtime built around a tiny, inspectable four-layer core (`B
 MonoAgens is governed by canonical behavior specifications in [`openspec/specs/`](openspec/specs/) (including archived V3 Neural Cognitive Controller `v3-synaptic-active-inference`, `cli-interactive-chat`, `proactive-group-embed-s1`, `lab-live-eval-hygiene`, `context-chronological-recall-and-hygiene`, `lab-e2e-conversation-samples`, `hitl-governance`, `multi-agent-coordination`, `multiday-chat-lab`, `neural-controller`, `neural-training-pipeline`, and `slim-core-harness`), while active feature and infrastructure changes go through [`openspec/changes/`](openspec/changes/) (including [`gateway-multi-body-daemon`](openspec/changes/gateway-multi-body-daemon/proposal.md) for WhatsApp/Telegram multi-body readiness, [`waist-valve-and-bodies`](openspec/changes/waist-valve-and-bodies/proposal.md), [`lab-datasets`](openspec/changes/lab-datasets/proposal.md), and [`lab-memory-comparison`](openspec/changes/lab-memory-comparison/proposal.md)).
 
 ```text
-Bodies / Adapters (bodies/, examples/, sdk/ — e.g. body-cli, WhatsApp/Telegram bridges)
+Plugins — Adapters & Capabilities (plugins/, examples/, sdk/ — e.g. cli, telegram, whatsapp, web-search, workspace, pdf-reader, soul-tuning)
    │  NDJSON JSON-RPC 2.0 (Waist-2: monoagens.body.v1)
    ▼
 Gateway (crates/gateway) ── kappa(b,a) identity · <=256 KiB strip · Tool RAG · EmbeddingGemma 2 (256d)
@@ -43,7 +43,7 @@ Key runtime capabilities:
 | [`crates/conformance/`](crates/conformance/) | Black-box `monoagens-conformance` runner (`B-MUST/SHOULD/MAY`, `C-MUST/SHOULD/MAY`) |
 | [`crates/lab/`](crates/lab/) | 22-row mechanism ablation, seeded offline replay, external dataset converters, Pareto scorecard & live conversation sampling |
 | [`crates/cli/`](crates/cli/) | `monoagens` operator CLI (`chat [--interactive]`, `serve`, `log`, `replay`, `approvals`, `link`, `conformance`, `inspector`, `export-learning`) |
-| [`bodies/`](bodies/) | `body-kit`, `body-cli`, `body-mcp-bridge`, `body-sim-actuator`, `body-voice`, `plugin-a2a-bridge`, `plugin-ros2-bridge` |
+| [`plugins/`](plugins/) | `kit`, adapters (`cli`, `telegram`, `whatsapp`, `voice`, `sim-actuator`), bridges (`mcp-bridge`, `a2a-bridge`, `ros2-bridge`), and capability plugins (`web-search`, `workspace`, `pdf-reader`, `soul-tuning`) |
 | [`sdk/`](sdk/) | Clean-room Waist-2 SDK shims for Rust (`sdk/rust`), TypeScript (`sdk/typescript`), and Python (`sdk/python`) |
 | [`examples/cleanroom-body/`](examples/cleanroom-body/) | 181 LOC clean-room Waist-2 body passing `monoagens-conformance body --level must` |
 | [`docs/`](docs/) | [`docs/README.md`](docs/README.md), [`docs/messaging-bodies.md`](docs/messaging-bodies.md), [`docs/waist2.md`](docs/waist2.md), [`docs/valve.md`](docs/valve.md), [`docs/conformance.md`](docs/conformance.md), [`docs/lab-datasets.md`](docs/lab-datasets.md), and [`docs/eval-logs/`](docs/eval-logs/hasil-percakapan-live-v3-chrono.md) |

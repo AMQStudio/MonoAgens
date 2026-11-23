@@ -48,7 +48,7 @@ Schema definitions: [`Waist2Call.schema.json`](../crates/protocol/jsonschema/Wai
 - On disconnect or crash (`handle_body_disconnect` in [`crates/gateway/src/waist2.rs`](../crates/gateway/src/waist2.rs)), Gateway removes all static and dynamic place bindings belonging to that `body_id` (`st.place_to_body.retain(|_, owner| owner != body_id)`).
 
 ### Idempotency & `SIGKILL` Crash Recovery
-- Bodies cache `(method, headers.idempotency_key)` responses on disk (`MONOAGENS_BODY_STATE_DIR` in [`bodies/body-kit/src/runtime.rs`](../bodies/body-kit/src/runtime.rs) and [`examples/cleanroom-body/src/main.rs`](../examples/cleanroom-body/src/main.rs)) so replaying `action/execute` returns the identical result and receipt without re-executing side effects.
+- Bodies cache `(method, headers.idempotency_key)` responses on disk (`MONOAGENS_BODY_STATE_DIR` in [`plugins/kit/src/runtime.rs`](../plugins/kit/src/runtime.rs) and [`examples/cleanroom-body/src/main.rs`](../examples/cleanroom-body/src/main.rs)) so replaying `action/execute` returns the identical result and receipt without re-executing side effects.
 - After an abrupt crash (`SIGKILL`), Gateway restarts the body (`body/discover`) and issues `state/query` within the `5000 ms` TCK recovery bound (`B-MUST-03`), receiving `InFlight`, `Terminal { receipt }`, or `Unknown`. Gateway also records `Unknown` once on timeout/crash and rejects late conflicting receipts (`gateway_tests::crash_and_timeout_settle_once_as_unknown_while_sibling_runs_and_late_receipt_rejected`).
 
 ### Inline Media Strip (`<= 256 KiB`) & `blob/put` / `blob/get`
@@ -79,7 +79,7 @@ Every [`Receipt`](../crates/protocol/src/facts.rs) carries one of the five canon
 - `delivered_units?: u64`
 - `h_act?: HAct`, `reason_code?: string`, `detail?: string`, `timestamp_ms: Time`
 
-Honest delivery timing (`bodies/body-kit/src/cues.rs`): Gateway/body cue trackers enforce `d_art_ms = 0` (zero artificial typing delay), emit a non-verbal `working_cue` after `1000 ms`, and a `progress_note` at `10_000 ms` (`gateway_tests::lifecycle_cues_respect_1s_and_10s_boundaries_with_virtual_clock`, `B-SHOULD-02`).
+Honest delivery timing (`plugins/kit/src/cues.rs`): Gateway/body cue trackers enforce `d_art_ms = 0` (zero artificial typing delay), emit a non-verbal `working_cue` after `1000 ms`, and a `progress_note` at `10_000 ms` (`gateway_tests::lifecycle_cues_respect_1s_and_10s_boundaries_with_virtual_clock`, `B-SHOULD-02`).
 
 ---
 

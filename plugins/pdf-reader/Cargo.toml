@@ -1,0 +1,22 @@
+[package]
+name = "plugin-pdf-reader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "plugin-pdf-reader"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.23"
+lopdf = { version = "0.47", default-features = false }
+monoagens-body-kit = { workspace = true }
+monoagens-body-sdk = { path = "../../sdk/rust" }
+reqwest = { version = "0.13", features = ["blocking", "json"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.9"
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -10,17 +10,21 @@ members = [
     "crates/lab",
     "crates/conformance",
     "crates/cli",
-    "bodies/body-kit",
-    "bodies/body-cli",
-    "bodies/body-mcp-bridge",
-    "bodies/body-sim-actuator",
-    "bodies/plugin-a2a-bridge",
-    "bodies/plugin-ros2-bridge",
-    "bodies/body-voice",
-    "bodies/body-telegram",
+    "plugins/kit",
+    "plugins/cli",
+    "plugins/mcp-bridge",
+    "plugins/sim-actuator",
+    "plugins/a2a-bridge",
+    "plugins/ros2-bridge",
+    "plugins/voice",
+    "plugins/telegram",
+    "plugins/web-search",
+    "plugins/workspace",
+    "plugins/pdf-reader",
+    "plugins/soul-tuning",
     "examples/cleanroom-body",
 ]
-exclude = ["sdk/rust", "bodies/body-whatsapp"]
+exclude = ["sdk/rust", "plugins/whatsapp"]
 
 [workspace.package]
 edition = "2024"
@@ -43,7 +47,7 @@ monoagens-core = { path = "crates/core" }
 monoagens-store = { path = "crates/store" }
 monoagens-reason = { path = "crates/reason" }
 monoagens-gateway = { path = "crates/gateway" }
-monoagens-body-kit = { path = "bodies/body-kit" }
+monoagens-body-kit = { path = "plugins/kit" }
 
 # Keep debug artifacts small on the 14 GiB / btrfs laptop: our own crates carry
 # line tables only, dependencies carry none. `profile.test` inherits `dev`.
